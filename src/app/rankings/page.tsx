@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
-import { sortRatingsByTierThenRecency } from '@/lib/ratings';
+import { sortRatingsByScore } from '@/lib/pairwise';
 import { bars } from '@/lib/bars';
 import type { Bar } from '@/types';
 import type { BarRating, Rating } from '@/types/ratings';
@@ -56,7 +56,10 @@ export default function RankingsPage(): JSX.Element {
   const [filter, setFilter] = useState<FilterValue>('all');
 
   const sortedEntries: RatedEntry[] = useMemo(() => {
-    const sorted = sortRatingsByTierThenRecency(ratings);
+    // sortRatingsByScore puts pairwise-scored bars first (score desc), then
+    // falls back to tier-then-recency for bars that haven't had a
+    // comparison yet (BarRating.score === null/undefined).
+    const sorted = sortRatingsByScore(ratings);
     const result: RatedEntry[] = [];
     for (const r of sorted) {
       const bar = findBarById(r.barId);
@@ -80,8 +83,9 @@ export default function RankingsPage(): JSX.Element {
         </p>
         <h1 className="font-display text-3xl md:text-4xl mb-2">Rankings</h1>
         <p className="text-muted text-sm max-w-md mx-auto">
-          Bars you&apos;ve rated, ordered Loved → Liked → Pass. Pairwise
-          comparison scoring lands with the native app.
+          Bars you&apos;ve rated, ordered by your personal 0–10 score.
+          Unscored bars fall back to Loved → Liked → Pass; score firms up
+          as you answer comparison prompts.
         </p>
       </header>
 
@@ -133,41 +137,59 @@ export default function RankingsPage(): JSX.Element {
               No bars rated {filter} yet.
             </p>
           ) : (
-            visibleEntries.map(({ rating, bar }, idx) => (
-              <article
-                key={rating.barId}
-                className="bg-surface border border-border rounded-3xl p-5 flex flex-col gap-2"
-              >
-                <div className="flex items-baseline justify-between gap-3">
-                  <h2 className="font-display text-xl leading-tight">
-                    <span className="text-accent mr-2 tabular-nums">
-                      {idx + 1}.
+            visibleEntries.map(({ rating, bar }, idx) => {
+              const hasScore = typeof rating.score === 'number';
+              return (
+                <article
+                  key={rating.barId}
+                  className="bg-surface border border-border rounded-3xl p-5 flex flex-col gap-2"
+                >
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h2 className="font-display text-xl leading-tight">
+                      <span className="text-accent mr-2 tabular-nums">
+                        {idx + 1}.
+                      </span>
+                      {bar.name}
+                    </h2>
+                    <div className="flex items-baseline gap-3 shrink-0">
+                      {hasScore ? (
+                        <span
+                          className="font-display text-2xl tabular-nums text-accent"
+                          aria-label={`Score ${(rating.score as number).toFixed(1)} out of 10`}
+                        >
+                          {(rating.score as number).toFixed(1)}
+                        </span>
+                      ) : null}
+                      <span className="text-muted text-xs">
+                        {'$'.repeat(bar.priceTier)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-muted text-xs uppercase tracking-wider">
+                      {bar.neighborhood}
                     </span>
-                    {bar.name}
-                  </h2>
-                  <span className="text-muted text-xs shrink-0">
-                    {'$'.repeat(bar.priceTier)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-muted text-xs uppercase tracking-wider">
-                    {bar.neighborhood}
-                  </span>
-                  <span
-                    className={[
-                      'text-xs font-display px-2 py-0.5 rounded-full',
-                      RATING_BADGE_CLASSES[rating.rating],
-                    ].join(' ')}
-                  >
-                    {RATING_LABEL[rating.rating]}
-                  </span>
-                </div>
-                <p className="text-sm italic">{bar.blurb}</p>
-                <p className="text-xs text-muted pt-1">
-                  Rated {formatRatedAt(rating.ratedAt)}
-                </p>
-              </article>
-            ))
+                    <span
+                      className={[
+                        'text-xs font-display px-2 py-0.5 rounded-full',
+                        RATING_BADGE_CLASSES[rating.rating],
+                      ].join(' ')}
+                    >
+                      {RATING_LABEL[rating.rating]}
+                    </span>
+                    {!hasScore ? (
+                      <span className="text-muted text-xs italic">
+                        Rank as you compare
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-sm italic">{bar.blurb}</p>
+                  <p className="text-xs text-muted pt-1">
+                    Rated {formatRatedAt(rating.ratedAt)}
+                  </p>
+                </article>
+              );
+            })
           )}
         </section>
       )}
