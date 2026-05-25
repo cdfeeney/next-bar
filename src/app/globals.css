@@ -5,3 +5,8 @@
 html, body { height: 100%; }
 
 .leaflet-container { background: #0a0a0a; }
+
+.touch-card {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}

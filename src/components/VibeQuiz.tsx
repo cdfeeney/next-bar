@@ -4,28 +4,45 @@ import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { quiz, deriveArchetype } from '@/lib/quiz';
 import type { QuizOption } from '@/lib/quiz';
-import type { VibeProfile, VibeTag } from '@/types';
+import NeighborhoodPicker from '@/components/NeighborhoodPicker';
+import type { ManhattanNeighborhood, VibeProfile, VibeTag } from '@/types';
 
 type VibeQuizProps = { onComplete: (profile: VibeProfile) => void };
 
 export default function VibeQuiz({ onComplete }: VibeQuizProps) {
   const [step, setStep] = useState(0);
   const [tags, setTags] = useState<VibeTag[]>([]);
+  const [preferredNeighborhoods, setPreferredNeighborhoods] = useState<
+    ManhattanNeighborhood[]
+  >([]);
 
   const question = quiz[step];
   const progress = ((step + 1) / quiz.length) * 100;
 
+  const finalize = (
+    finalTags: VibeTag[],
+    finalNeighborhoods: ManhattanNeighborhood[],
+  ) => {
+    const deduped = Array.from(new Set(finalTags));
+    onComplete({
+      tags: deduped,
+      archetype: deriveArchetype(deduped),
+      preferredNeighborhoods: finalNeighborhoods,
+    });
+  };
+
   const handlePick = (option: QuizOption) => {
     const nextTags = [...tags, ...option.tags];
-
-    if (step === quiz.length - 1) {
-      const deduped = Array.from(new Set(nextTags));
-      onComplete({ tags: deduped, archetype: deriveArchetype(deduped) });
-      return;
-    }
-
     setTags(nextTags);
     setStep(step + 1);
+  };
+
+  const handleDone = () => {
+    finalize(tags, preferredNeighborhoods);
+  };
+
+  const handleSkip = () => {
+    finalize(tags, []);
   };
 
   return (
@@ -50,6 +67,19 @@ export default function VibeQuiz({ onComplete }: VibeQuizProps) {
             <p className="text-muted uppercase tracking-widest text-xs mb-4 text-center">
               Question {step + 1} of {quiz.length}
             </p>
+
+            {renderQuestion()}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </section>
+  );
+
+  function renderQuestion() {
+    switch (question.kind) {
+      case 'single':
+        return (
+          <>
             <h2 className="font-display text-3xl md:text-5xl text-center mb-10 leading-tight">
               {question.prompt}
             </h2>
@@ -59,15 +89,51 @@ export default function VibeQuiz({ onComplete }: VibeQuizProps) {
                   key={idx}
                   type="button"
                   onClick={() => handlePick(option)}
-                  className="border border-border hover:border-accent hover:bg-surface transition-colors rounded-2xl p-6 font-display text-xl text-left"
+                  className="min-h-[44px] touch-manipulation border border-border hover:border-accent hover:bg-surface transition-colors rounded-2xl p-6 font-display text-xl text-left"
                 >
                   {option.label}
                 </button>
               ))}
             </div>
-          </motion.div>
-        </AnimatePresence>
-      </div>
-    </section>
-  );
+          </>
+        );
+
+      case 'neighborhoodMultiSelect': {
+        const hasSelection = preferredNeighborhoods.length > 0;
+        return (
+          <>
+            <NeighborhoodPicker
+              multi
+              selected={preferredNeighborhoods}
+              onChange={setPreferredNeighborhoods}
+              title={question.prompt}
+            />
+            <div className="max-w-2xl mx-auto px-6 mt-8 flex flex-col md:flex-row gap-3 md:gap-4">
+              <button
+                type="button"
+                onClick={handleSkip}
+                className="min-h-[44px] touch-manipulation bg-surface border border-border text-text rounded-full px-6 py-3 font-display text-lg w-full md:flex-1"
+              >
+                {question.skipLabel}
+              </button>
+              {hasSelection ? (
+                <button
+                  type="button"
+                  onClick={handleDone}
+                  className="min-h-[44px] touch-manipulation bg-accent text-bg rounded-full px-6 py-3 font-display text-lg w-full md:flex-1"
+                >
+                  {question.doneLabel}
+                </button>
+              ) : null}
+            </div>
+          </>
+        );
+      }
+
+      default: {
+        const _exhaustive: never = question;
+        return _exhaustive;
+      }
+    }
+  }
 }

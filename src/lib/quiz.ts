@@ -1,53 +1,43 @@
-import type { VibeTag } from '@/types';
+import type { ManhattanNeighborhood, VibeTag } from '@/types';
 
 export type QuizOption = { label: string; tags: VibeTag[] };
-export type QuizQuestion = { prompt: string; options: QuizOption[] };
+
+export type SinglePickQuestion = {
+  kind: 'single';
+  prompt: string;
+  options: QuizOption[];
+};
+
+export type NeighborhoodMultiSelectQuestion = {
+  kind: 'neighborhoodMultiSelect';
+  prompt: string;
+  skipLabel: string;
+  doneLabel: string;
+  options: ManhattanNeighborhood[];
+};
+
+export type QuizQuestion = SinglePickQuestion | NeighborhoodMultiSelectQuestion;
 
 export const quiz: QuizQuestion[] = [
   {
-    prompt: 'Friday, 11pm. You want…',
+    kind: 'single',
+    prompt: 'Friday, 11pm. What sounds good?',
     options: [
       { label: 'A dive with a jukebox', tags: ['dive', 'rough', 'old-nyc'] },
-      { label: 'A speakeasy with $22 cocktails', tags: ['speakeasy', 'cocktail', 'polished'] },
+      { label: 'A hidden cocktail spot', tags: ['speakeasy', 'cocktail', 'polished'] },
     ],
   },
   {
-    prompt: 'How loud should it be?',
+    kind: 'single',
+    prompt: 'What energy are you bringing?',
     options: [
-      { label: 'Yelling over the music', tags: ['loud', 'buzzy'] },
-      { label: 'Quiet enough to hear each other', tags: ['chill'] },
+      { label: 'Loud — bring the noise', tags: ['loud', 'buzzy'] },
+      { label: 'Mellow — we wanna talk', tags: ['chill'] },
     ],
   },
   {
-    prompt: 'Best part of a bar is…',
-    options: [
-      { label: 'The crowd', tags: ['buzzy', 'post-work'] },
-      { label: 'The drinks', tags: ['cocktail', 'wine'] },
-    ],
-  },
-  {
-    prompt: 'Lights.',
-    options: [
-      { label: 'Dim — can barely see', tags: ['rough', 'romantic'] },
-      { label: 'Bright and alive', tags: ['buzzy', 'pub'] },
-    ],
-  },
-  {
-    prompt: 'How you arrive.',
-    options: [
-      { label: 'Walk in, no plan', tags: ['dive', 'pub', 'locals'] },
-      { label: 'Reservation, dressed up', tags: ['cocktail', 'polished', 'date'] },
-    ],
-  },
-  {
-    prompt: 'Worst thing.',
-    options: [
-      { label: 'Empty', tags: ['buzzy', 'loud'] },
-      { label: 'Too packed', tags: ['chill', 'lounge'] },
-    ],
-  },
-  {
-    prompt: 'Music.',
+    kind: 'single',
+    prompt: 'Soundtrack of the night?',
     options: [
       { label: 'Indie / rock', tags: ['indie', 'rough'] },
       { label: 'Hip-hop', tags: ['hiphop', 'buzzy'] },
@@ -56,28 +46,37 @@ export const quiz: QuizQuestion[] = [
     ],
   },
   {
-    prompt: 'Crowd you want.',
+    kind: 'single',
+    prompt: 'Who do you wanna be around?',
     options: [
-      { label: 'Old-school regulars', tags: ['locals', 'old-nyc', 'dive'] },
-      { label: 'Trendy 20-somethings', tags: ['trendy', 'instagrammable'] },
+      { label: 'Locals & regulars', tags: ['locals', 'old-nyc', 'dive'] },
+      { label: 'Trendy and lively', tags: ['trendy', 'instagrammable'] },
       { label: 'Industry / creative', tags: ['industry', 'cocktail'] },
     ],
   },
   {
-    prompt: 'Drink budget per round.',
+    kind: 'single',
+    prompt: 'Spending vibe tonight?',
     options: [
-      { label: '$10–14', tags: ['cheap', 'dive'] },
-      { label: '$15–19', tags: ['mid'] },
-      { label: '$20+', tags: ['pricey', 'cocktail'] },
+      { label: 'Cheap and cheerful', tags: ['cheap', 'dive'] },
+      { label: 'Solid middle', tags: ['mid'] },
+      { label: 'Treating myself', tags: ['pricey', 'cocktail'] },
     ],
   },
   {
-    prompt: 'Dealbreaker.',
+    kind: 'neighborhoodMultiSelect',
+    prompt: 'Any neighborhoods you love?',
+    skipLabel: 'Anywhere works',
+    doneLabel: 'Done',
     options: [
-      { label: 'Tourists', tags: ['locals'] },
-      { label: 'Smug crowd', tags: ['dive', 'pub'] },
-      { label: 'Too loud', tags: ['chill', 'lounge'] },
-      { label: 'Too sleepy', tags: ['buzzy', 'loud'] },
+      'FiDi',
+      'LES',
+      'East Village',
+      'West Village',
+      'Chelsea',
+      'Midtown',
+      'UWS',
+      'UES',
     ],
   },
 ];
@@ -85,13 +84,15 @@ export const quiz: QuizQuestion[] = [
 export function deriveArchetype(tags: VibeTag[]): string {
   const has = (tag: VibeTag) => tags.includes(tag);
 
-  if (has('dive') && has('locals')) return 'East Village dive devotee';
+  if (has('dive') && has('locals')) return 'Dive devotee';
   if (has('cocktail') && has('polished')) return 'Cocktail connoisseur';
   if (has('speakeasy') && has('romantic')) return 'Hidden-door romantic';
   if (has('dance') && has('house')) return 'Late-night dancefloor';
   if (has('jazz') && has('lounge')) return 'Jazz lounge sophisticate';
   if (has('rough') && has('cheap')) return 'No-frills regular';
-  if (has('trendy') && has('instagrammable')) return 'Williamsburg new-wave';
+  if (has('trendy') && has('instagrammable')) return 'New-wave trendsetter';
   if (has('industry') && has('cocktail')) return 'Industry-crowd insider';
+  if (has('rooftop')) return 'Skyline-view chaser';
+  if (has('wine') && has('romantic')) return 'Wine-bar romantic';
   return 'NYC vibe explorer';
 }

@@ -1,22 +1,34 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { useEffect, useMemo } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { bars } from '@/lib/bars';
-import { haversineMiles, formatDistance } from '@/lib/distance';
-import { matchScore } from '@/lib/matching';
-import type { Coords, VibeProfile } from '@/types';
+import 'leaflet-gesture-handling/dist/leaflet-gesture-handling.css';
+import { GestureHandling } from 'leaflet-gesture-handling';
+import { haversineMiles } from '@/lib/distance';
+import { leadCopy } from '@/lib/travelTime';
+import type { Bar, Coords } from '@/types';
 
-type BarMapProps = { profile: VibeProfile };
+type BarMapProps = {
+  bars: Bar[];
+  userCoords?: Coords | null;
+  highlightIds?: string[];
+};
 
-const FALLBACK_CENTER: Coords = { lat: 40.7250, lng: -73.9850 };
+const NYC_FALLBACK_CENTER: Coords = { lat: 40.7250, lng: -73.9850 };
 
 const barIcon = L.divIcon({
   className: '',
   html: '<div style="width:14px;height:14px;background:#ff5b3a;border:2px solid #fff;border-radius:9999px;box-shadow:0 0 12px rgba(255,91,58,0.8);"></div>',
   iconSize: [14, 14],
   iconAnchor: [7, 7],
+});
+
+const highlightIcon = L.divIcon({
+  className: '',
+  html: '<div style="width:20px;height:20px;background:#ff5b3a;border:3px solid #fff;border-radius:9999px;box-shadow:0 0 20px rgba(255,91,58,1),0 0 36px rgba(255,91,58,0.6);"></div>',
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
 });
 
 const userIcon = L.divIcon({
@@ -26,93 +38,96 @@ const userIcon = L.divIcon({
   iconAnchor: [9, 9],
 });
 
-export default function BarMap({ profile }: BarMapProps) {
-  const [userPos, setUserPos] = useState<Coords | null>(null);
+function computeCentroid(items: Bar[]): Coords {
+  if (items.length === 0) return NYC_FALLBACK_CENTER;
+  let latSum = 0;
+  let lngSum = 0;
+  for (const b of items) {
+    latSum += b.lat;
+    lngSum += b.lng;
+  }
+  return { lat: latSum / items.length, lng: lngSum / items.length };
+}
 
+/**
+ * Registers the gesture-handling Leaflet handler on mount. This forces the
+ * iOS Safari user to use two fingers to pan/zoom the map so that single-finger
+ * vertical swipes scroll the page instead of accidentally panning the map.
+ */
+function GestureController() {
+  const map = useMap();
   useEffect(() => {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => setUserPos(null),
-      { timeout: 5000 },
-    );
-  }, []);
+    map.addHandler('gestureHandling', GestureHandling);
+    // @ts-expect-error: plugin extends L.Map at runtime; type defs don't expose gestureHandling
+    map.gestureHandling.enable();
+  }, [map]);
+  return null;
+}
 
-  const center = userPos ?? FALLBACK_CENTER;
+export default function BarMap({ bars, userCoords, highlightIds }: BarMapProps) {
+  const center: Coords = useMemo(() => {
+    if (userCoords) return userCoords;
+    return computeCentroid(bars);
+  }, [userCoords, bars]);
 
-  const ranked = useMemo(() => {
-    return bars
-      .map((b) => ({
-        bar: b,
-        distance: haversineMiles(center, { lat: b.lat, lng: b.lng }),
-        score: matchScore(profile, b),
-      }))
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return a.distance - b.distance;
-      });
-  }, [center, profile]);
+  const highlightSet = useMemo(
+    () => new Set(highlightIds ?? []),
+    [highlightIds],
+  );
 
   return (
-    <section className="px-6 py-12">
+    <section className="px-4 py-8 md:px-6 md:py-12">
       <div className="max-w-5xl mx-auto">
-        <div className="rounded-2xl border border-border overflow-hidden" style={{ height: 420 }}>
+        <div
+          className="rounded-2xl border border-border overflow-hidden"
+          style={{
+            aspectRatio: '4 / 5',
+            touchAction: 'pan-y',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+        >
           <MapContainer
             center={[center.lat, center.lng]}
             zoom={13}
             scrollWheelZoom={false}
+            doubleClickZoom={false}
+            tap={true}
             style={{ height: '100%', width: '100%' }}
           >
+            <GestureController />
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              attribution='&copy; OpenStreetMap &copy; CARTO'
+              attribution="&copy; OpenStreetMap &copy; CARTO"
             />
-            {userPos && (
-              <Marker position={[userPos.lat, userPos.lng]} icon={userIcon}>
+            {userCoords && (
+              <Marker position={[userCoords.lat, userCoords.lng]} icon={userIcon}>
                 <Popup>You are here</Popup>
               </Marker>
             )}
-            {ranked.map(({ bar, distance, score }) => (
-              <Marker key={bar.id} position={[bar.lat, bar.lng]} icon={barIcon}>
-                <Popup>
-                  <div className="font-bold">{bar.name}</div>
-                  <div className="text-xs">
-                    {bar.neighborhood} · {formatDistance(distance)} away
-                  </div>
-                  <div className="text-xs">{score}% vibe match</div>
-                </Popup>
-              </Marker>
-            ))}
+            {bars.map((bar) => {
+              const isHighlighted = highlightSet.has(bar.id);
+              const miles = userCoords
+                ? haversineMiles(userCoords, { lat: bar.lat, lng: bar.lng })
+                : null;
+              const travelLabel = miles !== null ? leadCopy(miles, bar.neighborhood).text : null;
+              return (
+                <Marker
+                  key={bar.id}
+                  position={[bar.lat, bar.lng]}
+                  icon={isHighlighted ? highlightIcon : barIcon}
+                >
+                  <Popup>
+                    <div className="font-bold">{bar.name}</div>
+                    <div className="text-xs">
+                      {travelLabel
+                        ? `${bar.neighborhood} · ${travelLabel}`
+                        : bar.neighborhood}
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
           </MapContainer>
-        </div>
-
-        <div className="mt-10 mb-6">
-          <h2 className="font-display text-3xl md:text-4xl">Bars near you, ranked.</h2>
-          <p className="text-muted text-sm mt-2">
-            {userPos
-              ? 'Using your location.'
-              : 'Showing NYC center — allow location for distances from you.'}
-          </p>
-        </div>
-
-        <div className="grid gap-3">
-          {ranked.slice(0, 8).map(({ bar, distance, score }, idx) => (
-            <div
-              key={bar.id}
-              className="flex items-start gap-4 bg-surface border border-border rounded-2xl p-5"
-            >
-              <div className="font-display text-2xl text-accent w-8 shrink-0">{idx + 1}</div>
-              <div className="flex-1 min-w-0">
-                <div className="font-display text-lg">{bar.name}</div>
-                <div className="text-muted text-xs">{bar.neighborhood}</div>
-                <div className="text-muted text-sm mt-1">{bar.blurb}</div>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="text-accent">{score}% match</div>
-                <div className="text-muted text-xs">{formatDistance(distance)}</div>
-              </div>
-            </div>
-          ))}
         </div>
       </div>
     </section>
