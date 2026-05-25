@@ -87,7 +87,10 @@ export default function PairwiseSheet({
       role="dialog"
       aria-modal="true"
       aria-labelledby="pairwise-prompt"
-      className="fixed inset-0 z-50 flex flex-col bg-bg/95 backdrop-blur-sm overscroll-contain"
+      // z-[1100] sits above the BottomNav (z-[1000]) so the nav doesn't
+      // intercept pointer events on the Skip button at the bottom of the
+      // sheet, and isn't visually peeking through the overlay.
+      className="fixed inset-0 z-[1100] flex flex-col bg-bg/95 backdrop-blur-sm overscroll-contain"
     >
       <div
         className="absolute inset-0"

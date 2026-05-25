@@ -1,7 +1,11 @@
 'use client';
 
+import { useMemo } from 'react';
 import type { Rating } from '@/types/ratings';
 import { useRatings } from '@/hooks/useRatings';
+import { usePairwise } from '@/hooks/usePairwise';
+import { bars } from '@/lib/bars';
+import PairwiseSheet from '@/components/PairwiseSheet';
 
 type RatingControlProps = {
   barId: string;
@@ -36,7 +40,24 @@ function selectedClassesFor(rating: Rating): string {
 
 export default function RatingControl({ barId }: RatingControlProps) {
   const { getRating, setRating, clearRating } = useRatings();
+  const { pendingPrompt, requestPrompt, addComparison, dismissPrompt } =
+    usePairwise();
   const current = getRating(barId);
+
+  // Resolve the prompt's bar pair into actual Bar objects so PairwiseSheet
+  // has names + neighborhoods to render. Hook only stores ids to keep the
+  // state shape small + serializable.
+  const promptForThisBar =
+    pendingPrompt && pendingPrompt.justRatedBarId === barId
+      ? pendingPrompt
+      : null;
+  const promptPair = useMemo(() => {
+    if (!promptForThisBar) return null;
+    const justRated = bars.find((b) => b.id === promptForThisBar.justRatedBarId);
+    const peer = bars.find((b) => b.id === promptForThisBar.peerBarId);
+    if (!justRated || !peer) return null;
+    return { justRated, peer, tier: promptForThisBar.tier };
+  }, [promptForThisBar]);
 
   const handleTap = (rating: Rating) => {
     if (current === rating) {
@@ -44,6 +65,10 @@ export default function RatingControl({ barId }: RatingControlProps) {
       return;
     }
     setRating(barId, rating);
+    // requestPrompt is a no-op for 'pass', for signed-in users (server-mode
+    // pairwise lands later), and when no same-tier peer exists. The hook
+    // gates internally — RatingControl just always asks.
+    requestPrompt(barId, rating);
   };
 
   return (
@@ -69,6 +94,17 @@ export default function RatingControl({ barId }: RatingControlProps) {
           );
         })}
       </div>
+      {promptPair ? (
+        <PairwiseSheet
+          justRated={promptPair.justRated}
+          peer={promptPair.peer}
+          tier={promptPair.tier}
+          onPick={(winnerBarId, loserBarId) =>
+            addComparison(winnerBarId, loserBarId)
+          }
+          onSkip={dismissPrompt}
+        />
+      ) : null}
     </div>
   );
 }

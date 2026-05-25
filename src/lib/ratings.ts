@@ -45,6 +45,20 @@ function writeAll(items: BarRating[]): void {
   }
 }
 
+/**
+ * Bulk-write a complete BarRating[] to localStorage and notify other
+ * useRatings consumers. Exposed for pairwise score updates — `applyComparison`
+ * returns a new array with refreshed scores, and the caller commits it
+ * here in one shot rather than iterating `setRating` per bar.
+ *
+ * No validation: input must already be well-formed BarRating[]. The hook
+ * always derives it from `loadRatings()` so corruption isn't a worry.
+ */
+export function writeRatings(items: BarRating[]): void {
+  writeAll(items);
+  notifyChange();
+}
+
 export function loadRatings(): BarRating[] {
   if (typeof window === 'undefined') return [];
   try {
