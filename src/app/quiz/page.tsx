@@ -12,7 +12,7 @@ import type {
 import VibeQuiz from '@/components/VibeQuiz';
 import LocationPrompt from '@/components/LocationPrompt';
 import ResultsView from '@/components/ResultsView';
-import AppStoreCta from '@/components/AppStoreCta';
+import InstallNudge from '@/components/InstallNudge';
 import { bars } from '@/lib/bars';
 import { matches } from '@/lib/matching';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
@@ -114,7 +114,7 @@ function QuizResults({ profile, location }: QuizResultsProps) {
         maxResults={QUIZ_TOP_N}
       />
       <BarMap bars={bars} userCoords={userCoords} highlightIds={highlightIds} />
-      <AppStoreCta variant="quiz" />
+      <InstallNudge />
       <div className="px-6 py-6 text-center">
         <Link
           href="/"

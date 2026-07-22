@@ -40,17 +40,24 @@ async function completeQuiz(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Anywhere works' }).click();
 }
 
+async function reachQuizResults(page: Page): Promise<void> {
+  await page.goto('/quiz');
+  await completeQuiz(page);
+
+  await expect(page.getByRole('button', { name: /Or pick a neighborhood/i })).toBeVisible();
+  await page.getByRole('button', { name: /Or pick a neighborhood/i }).click();
+
+  await expect(page.getByRole('button', { name: 'East Village' })).toBeVisible();
+  await page.getByRole('button', { name: 'East Village' }).click();
+
+  await expect(
+    page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+  ).toBeVisible();
+}
+
 test.describe('Quiz path', () => {
   test('navigates to /quiz, completes 6-question quiz, picks neighborhood, sees 3 result cards', async ({ page }) => {
-    await page.goto('/quiz');
-
-    await completeQuiz(page);
-
-    await expect(page.getByRole('button', { name: /Or pick a neighborhood/i })).toBeVisible();
-    await page.getByRole('button', { name: /Or pick a neighborhood/i }).click();
-
-    await expect(page.getByRole('button', { name: 'East Village' })).toBeVisible();
-    await page.getByRole('button', { name: 'East Village' }).click();
+    await reachQuizResults(page);
 
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
     // Quiz path shows top 10. East Village + cocktail-leaning currently
@@ -59,5 +66,26 @@ test.describe('Quiz path', () => {
     const count = await cards.count();
     expect(count).toBeGreaterThanOrEqual(3);
     expect(count).toBeLessThanOrEqual(10);
+  });
+
+  test('results show a subtle dismissible install nudge, not the full marketing CTA', async ({ page }) => {
+    await reachQuizResults(page);
+
+    // The subtle nudge is present...
+    const nudge = page.getByTestId('install-nudge');
+    await expect(nudge).toBeVisible();
+    await expect(nudge).toContainText('Add Next Bar to your home screen');
+
+    // ...but the heavy AppStoreCta marketing block must NOT bleed into this
+    // functional flow (it belongs only on /install + Settings).
+    await expect(page.getByText('Install now · App Store coming')).toHaveCount(0);
+
+    // Dismissing hides it and persists so it never nags again.
+    await page.getByRole('button', { name: 'Dismiss install prompt' }).click();
+    await expect(nudge).toHaveCount(0);
+    const dismissed = await page.evaluate(() =>
+      window.localStorage.getItem('next-bar:install-nudge-dismissed:v1'),
+    );
+    expect(dismissed).toBe('1');
   });
 });
