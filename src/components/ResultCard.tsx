@@ -5,6 +5,7 @@ import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
 import { formatVerified, isFresh } from '@/lib/freshness';
 import RatingControl from '@/components/RatingControl';
+import OpenNowBadge from '@/components/OpenNowBadge';
 
 type ResultCardProps = {
   bar: Bar;
@@ -31,7 +32,10 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
           {'$'.repeat(bar.priceTier)}
         </span>
       </div>
-      <p className="text-muted text-xs uppercase tracking-wider">{bar.neighborhood}</p>
+      <div className="flex items-center gap-3">
+        <p className="text-muted text-xs uppercase tracking-wider">{bar.neighborhood}</p>
+        <OpenNowBadge bar={bar} />
+      </div>
       <p className="font-display text-accent text-3xl">{lead.text}</p>
       <p className="text-sm text-muted">
         Vibe match · {badge.num} of {badge.den}
