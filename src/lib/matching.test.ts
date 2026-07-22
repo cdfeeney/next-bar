@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { jaccard, matches, vibeMatchBadge } from '@/lib/matching';
+import { jaccard, matches, scoreBar, vibeMatchBadge } from '@/lib/matching';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
 
 // Fixed "now" used for the 180-day staleness filter.
@@ -284,6 +284,155 @@ describe('matches() — threshold relaxation', () => {
 
     // Floor hit, nothing matches, function still returns (possibly empty) array.
     expect(result).toHaveLength(0);
+  });
+});
+
+describe('matches() — blended ranking (vibe + proximity + loved affinity)', () => {
+  const profile = baseProfile(['cocktail', 'speakeasy', 'polished', 'industry']);
+  const ORIGIN = { lat: 40.7550, lng: -73.9840 }; // Midtown centroid
+
+  it('a strong vibe match slightly farther outranks a weak vibe match that is closer', () => {
+    // weakNear: jaccard 0.25 (only 'cocktail' shared), ~0 mi from origin.
+    const weakNear = makeBar({
+      id: 'weakNear',
+      lat: 40.7551,
+      lng: -73.984,
+      tags: ['cocktail'],
+    });
+    // strongFar: jaccard 1.0 (all four shared), ~0.6 mi from origin.
+    const strongFar = makeBar({
+      id: 'strongFar',
+      lat: 40.764,
+      lng: -73.984,
+      tags: ['cocktail', 'speakeasy', 'polished', 'industry'],
+    });
+
+    const result = matches({
+      profile,
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [weakNear, strongFar],
+      now: NOW,
+    });
+
+    // OLD behavior (pure-distance sort) ranked weakNear first. The blended
+    // score must now put the far-but-far-better vibe match ahead of it.
+    expect(result.map((b) => b.id)).toEqual(['strongFar', 'weakNear']);
+  });
+
+  it('among equal-vibe bars, the closer one still wins (proximity breaks the tie)', () => {
+    const near = makeBar({
+      id: 'near',
+      lat: 40.7551,
+      lng: -73.984,
+      tags: ['cocktail', 'speakeasy', 'polished', 'industry'],
+    });
+    const far = makeBar({
+      id: 'far',
+      lat: 40.764,
+      lng: -73.984,
+      tags: ['cocktail', 'speakeasy', 'polished', 'industry'],
+    });
+    const result = matches({
+      profile,
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [far, near],
+      now: NOW,
+    });
+    expect(result.map((b) => b.id)).toEqual(['near', 'far']);
+  });
+
+  it('loved-tag affinity breaks ties between otherwise equal bars', () => {
+    // Both bars have identical jaccard vs the profile (2/6 = 0.333) and no
+    // coords, so vibe and proximity tie. Only lovedTags differ.
+    const matchesLoved = makeBar({
+      id: 'matchesLoved',
+      tags: ['cocktail', 'speakeasy', 'dive', 'rough'],
+    });
+    const noLovedOverlap = makeBar({
+      id: 'noLovedOverlap',
+      tags: ['cocktail', 'speakeasy', 'dive', 'cheap'],
+    });
+    const result = matches({
+      profile,
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [noLovedOverlap, matchesLoved],
+      lovedTags: ['dive', 'rough', 'old-nyc'],
+      now: NOW,
+    });
+    expect(result.map((b) => b.id)).toEqual(['matchesLoved', 'noLovedOverlap']);
+  });
+
+  it('omitting lovedTags is a no-op (backward compatible)', () => {
+    const a = makeBar({
+      id: 'a',
+      tags: ['cocktail', 'speakeasy', 'dive', 'rough'],
+    });
+    const b = makeBar({
+      id: 'b',
+      tags: ['cocktail', 'speakeasy', 'dive', 'cheap'],
+    });
+    // Equal vibe, no coords, no lovedTags → stable order, neither boosted.
+    const withLoved = matches({
+      profile,
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [a, b],
+      lovedTags: [],
+      now: NOW,
+    });
+    const withoutLoved = matches({
+      profile,
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [a, b],
+      now: NOW,
+    });
+    expect(withLoved.map((x) => x.id)).toEqual(withoutLoved.map((x) => x.id));
+  });
+});
+
+describe('scoreBar', () => {
+  const makeBar = (tags: VibeTag[], lat = 40.755, lng = -73.984): Bar => ({
+    id: 's',
+    name: 'S',
+    neighborhood: 'Midtown',
+    address: '1 Main St',
+    lat,
+    lng,
+    priceTier: 2,
+    tags,
+    blurb: 'A bar.',
+    lastVerified: FRESH,
+  });
+  const userTags: VibeTag[] = ['cocktail', 'speakeasy', 'polished', 'industry'];
+
+  it('with no coords, score = VIBE_WEIGHT·jaccard + DIST_WEIGHT (proximity=1)', () => {
+    // jaccard = 1.0 → 0.5·1 + 0.4·1 + 0 = 0.9
+    const score = scoreBar(makeBar(userTags), userTags, null, []);
+    expect(score).toBeCloseTo(0.9, 10);
+  });
+
+  it('proximity decays with distance so a closer equal-vibe bar scores higher', () => {
+    const origin = { lat: 40.755, lng: -73.984 };
+    const near = scoreBar(makeBar(userTags, 40.7551), userTags, origin, []);
+    const far = scoreBar(makeBar(userTags, 40.764), userTags, origin, []);
+    expect(near).toBeGreaterThan(far);
+    expect(near).toBeLessThanOrEqual(0.9); // never exceeds the no-distance-penalty max
+  });
+
+  it('stays within [0, 1] even at max vibe, zero distance, full loved affinity', () => {
+    const origin = { lat: 40.755, lng: -73.984 };
+    const score = scoreBar(makeBar(userTags), userTags, origin, userTags);
+    expect(score).toBeGreaterThanOrEqual(0);
+    expect(score).toBeLessThanOrEqual(1);
   });
 });
 

@@ -6,6 +6,7 @@ import type {
   Coords,
   ManhattanNeighborhood,
   VibeProfile,
+  VibeTag,
 } from '@/types';
 import { bars } from '@/lib/bars';
 import { matches } from '@/lib/matching';
@@ -53,6 +54,22 @@ export default function ResultsView({
     return Array.from(merged);
   }, [excludeIds, ratings]);
 
+  // Flatten the vibe tags of every bar the user has Loved, so matches() can
+  // nudge bars with a similar taste profile up the rank (loved-affinity term).
+  const lovedTags = useMemo(() => {
+    const lovedBarIds = new Set(
+      ratings.filter((r) => r.rating === 'loved').map((r) => r.barId),
+    );
+    if (lovedBarIds.size === 0) return [] as VibeTag[];
+    const tags = new Set<VibeTag>();
+    for (const b of bars) {
+      if (lovedBarIds.has(b.id)) {
+        for (const t of b.tags) tags.add(t);
+      }
+    }
+    return Array.from(tags);
+  }, [ratings]);
+
   const ranked = useMemo(
     () =>
       matches({
@@ -63,8 +80,9 @@ export default function ResultsView({
         bars,
         excludeIds: effectiveExcludeIds,
         maxResults,
+        lovedTags,
       }),
-    [profile, userCoords, preferredNeighborhoods, maxMiles, effectiveExcludeIds, maxResults],
+    [profile, userCoords, preferredNeighborhoods, maxMiles, effectiveExcludeIds, maxResults, lovedTags],
   );
 
   const locationLabel =

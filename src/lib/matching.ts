@@ -8,12 +8,16 @@ import type {
 import { haversineMiles } from '@/lib/distance';
 import { daysAgo } from '@/lib/freshness';
 import {
+  DIST_DECAY_MILES,
+  DIST_WEIGHT,
   JACCARD_FLOOR,
   JACCARD_START,
   JACCARD_STEP,
   LAST_VERIFIED_HARD_FILTER_DAYS,
   MAX_RESULTS,
   MIN_CANDIDATES,
+  RATING_WEIGHT,
+  VIBE_WEIGHT,
 } from '@/lib/constants';
 
 export function jaccard(a: VibeTag[], b: VibeTag[]): number {
@@ -52,7 +56,41 @@ export type MatchesArgs = {
   excludeIds?: string[];
   maxResults?: number;
   now?: Date;
+  /**
+   * Flattened vibe tags from the bars the user has Loved, used to nudge
+   * bars with a similar taste profile up the rank. Optional — when omitted
+   * or empty, the affinity term is 0 and ranking falls back to vibe +
+   * proximity only (fully backward-compatible).
+   */
+  lovedTags?: VibeTag[];
 };
+
+/**
+ * Blended ranking score in [0, 1]. Replaces the old pure-distance / pure-jaccard
+ * sort so vibe strength is never discarded from the final order once GPS is on.
+ *
+ *   score = VIBE_WEIGHT·jaccard(user, bar)
+ *         + DIST_WEIGHT·proximity            (exp decay; 1 when no coords)
+ *         + RATING_WEIGHT·lovedAffinity      (jaccard(bar tags, loved tags))
+ *
+ * All three terms are in [0, 1] and the weights sum to 1, so no axis can
+ * dominate by scale. With coords === null the proximity term is a constant 1
+ * for every bar, so it drops out of the ordering and the rank reduces to vibe
+ * (+ loved affinity) — matching the pre-GPS behavior.
+ */
+export function scoreBar(
+  bar: Bar,
+  userTags: VibeTag[],
+  coords: Coords | null,
+  lovedTags: VibeTag[],
+): number {
+  const vibe = jaccard(userTags, bar.tags);
+  const proximity = coords
+    ? Math.exp(-haversineMiles(coords, bar) / DIST_DECAY_MILES)
+    : 1;
+  const affinity = lovedTags.length > 0 ? jaccard(bar.tags, lovedTags) : 0;
+  return VIBE_WEIGHT * vibe + DIST_WEIGHT * proximity + RATING_WEIGHT * affinity;
+}
 
 export function matches(args: MatchesArgs): Bar[] {
   const {
@@ -64,6 +102,7 @@ export function matches(args: MatchesArgs): Bar[] {
     excludeIds,
     maxResults,
     now,
+    lovedTags = [],
   } = args;
 
   const exclude = new Set(excludeIds ?? []);
@@ -88,16 +127,12 @@ export function matches(args: MatchesArgs): Bar[] {
     threshold = Math.round((threshold - JACCARD_STEP) * 100) / 100;
   }
 
-  if (coords) {
-    candidates = [...candidates].sort(
-      (a, b) => haversineMiles(coords, a) - haversineMiles(coords, b),
-    );
-  } else {
-    candidates = [...candidates].sort(
-      (a, b) => jaccard(profile.tags, b.tags) - jaccard(profile.tags, a.tags),
-    );
-  }
+  // Rank by the blended score (vibe + proximity + loved affinity). Compute each
+  // bar's score once, then sort, rather than recomputing inside the comparator.
+  const ranked = candidates
+    .map((bar) => ({ bar, score: scoreBar(bar, profile.tags, coords, lovedTags) }))
+    .sort((a, b) => b.score - a.score);
 
   const cap = maxResults ?? MAX_RESULTS;
-  return candidates.slice(0, cap);
+  return ranked.slice(0, cap).map((r) => r.bar);
 }
