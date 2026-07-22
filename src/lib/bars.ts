@@ -3,6 +3,7 @@ import { extraBars } from './bars.extra';
 import { expansionBars } from './bars.expansion';
 import { expansion2Bars } from './bars.expansion2';
 import { expansion3Bars } from './bars.expansion3';
+import { placesData } from './bars.places';
 
 // IMPORTANT: lastVerified dates below are PLACEHOLDERS so all bars pass the
 // 180-day hard filter and the app remains functional. Hours/specials/blurbs
@@ -512,4 +513,27 @@ const coreBars: Bar[] = [
 ];
 
 // Core Manhattan set + the curated Manhattan-depth/Brooklyn expansion.
-export const bars: Bar[] = [...coreBars, ...extraBars, ...expansionBars, ...expansion2Bars, ...expansion3Bars];
+// Overlay the Google Places refresh data (coords / hours / status) onto the
+// curated catalog by id. Empty until scripts/refresh-places.mjs runs, so this
+// is a no-op today.
+function applyPlaces(list: Bar[]): Bar[] {
+  return list.map((b) => {
+    const p = placesData[b.id];
+    if (!p) return b;
+    return {
+      ...b,
+      ...(p.lat != null && p.lng != null ? { lat: p.lat, lng: p.lng } : {}),
+      googlePlaceId: p.googlePlaceId ?? b.googlePlaceId,
+      businessStatus: p.businessStatus ?? b.businessStatus,
+      hours: p.hours ?? b.hours,
+    };
+  });
+}
+
+export const bars: Bar[] = applyPlaces([
+  ...coreBars,
+  ...extraBars,
+  ...expansionBars,
+  ...expansion2Bars,
+  ...expansion3Bars,
+]);
