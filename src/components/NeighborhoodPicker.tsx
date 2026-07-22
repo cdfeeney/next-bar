@@ -11,6 +11,7 @@ type NeighborhoodPickerProps = {
 };
 
 const ALL: ManhattanNeighborhood[] = [
+  // Manhattan
   'FiDi',
   'LES',
   'East Village',
@@ -19,6 +20,11 @@ const ALL: ManhattanNeighborhood[] = [
   'Midtown',
   'UWS',
   'UES',
+  // Brooklyn
+  'Williamsburg',
+  'Greenpoint',
+  'Bushwick',
+  'Park Slope',
 ];
 
 export default function NeighborhoodPicker({

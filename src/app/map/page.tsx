@@ -8,9 +8,6 @@ import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 
 const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
 
-// Manhattan-centroid-ish view: midtown.
-const DEFAULT_CENTER = NEIGHBORHOOD_CENTROIDS['Midtown'];
-
 export default function MapPage(): JSX.Element {
   const { ratings } = useRatings();
 
@@ -26,21 +23,17 @@ export default function MapPage(): JSX.Element {
     <main className="min-h-screen">
       <header className="px-6 pt-8 pb-4 text-center">
         <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
-          The whole island
+          Manhattan + Brooklyn
         </p>
         <h1 className="font-display text-3xl md:text-4xl mb-2">Map</h1>
         <p className="text-muted text-sm max-w-md mx-auto">
-          Every curated Manhattan bar, plotted. Bars you&apos;ve Loved or Liked
+          Every curated bar, plotted. Bars you&apos;ve Loved or Liked
           glow in accent.
         </p>
       </header>
 
       <section className="px-0 md:px-6">
-        <BarMap
-          bars={bars}
-          userCoords={DEFAULT_CENTER}
-          highlightIds={highlightIds}
-        />
+        <BarMap bars={bars} highlightIds={highlightIds} fitToBars />
       </section>
 
       <p className="text-muted text-xs text-center mt-6 pb-24">

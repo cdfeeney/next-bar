@@ -1,6 +1,10 @@
 export type Coords = { lat: number; lng: number };
 
-export type ManhattanNeighborhood =
+// Service-area neighborhoods. Manhattan shipped first; Brooklyn added in the
+// catalog-expansion pass. `ManhattanNeighborhood` is kept as a back-compat
+// alias so existing imports keep working — it now spans both boroughs.
+export type Neighborhood =
+  // Manhattan
   | 'FiDi'
   | 'LES'
   | 'East Village'
@@ -8,7 +12,15 @@ export type ManhattanNeighborhood =
   | 'Chelsea'
   | 'Midtown'
   | 'UWS'
-  | 'UES';
+  | 'UES'
+  // Brooklyn
+  | 'Williamsburg'
+  | 'Greenpoint'
+  | 'Bushwick'
+  | 'Park Slope';
+
+/** @deprecated Use `Neighborhood`. Alias kept for back-compat; spans Manhattan + Brooklyn. */
+export type ManhattanNeighborhood = Neighborhood;
 
 export type VibeTag =
   | 'dive' | 'cocktail' | 'wine' | 'beer' | 'dance' | 'lounge' | 'speakeasy' | 'pub' | 'rooftop' | 'garden'
@@ -21,13 +33,13 @@ export type VibeTag =
 export type VibeProfile = {
   tags: VibeTag[];
   archetype: string;
-  preferredNeighborhoods: ManhattanNeighborhood[];
+  preferredNeighborhoods: Neighborhood[];
 };
 
 export type Bar = {
   id: string;
   name: string;
-  neighborhood: ManhattanNeighborhood;
+  neighborhood: Neighborhood;
   address: string;
   lat: number;
   lng: number;

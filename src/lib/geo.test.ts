@@ -1,23 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { isInsideManhattan, snapToNeighborhoodCentroid } from '@/lib/geo';
+import { isInServiceArea, snapToNeighborhoodCentroid } from '@/lib/geo';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 import type { Coords } from '@/types';
 
-describe('isInsideManhattan', () => {
+describe('isInServiceArea', () => {
   it('returns true for a Midtown coord', () => {
     const midtown: Coords = { lat: 40.7549, lng: -73.984 };
-    expect(isInsideManhattan(midtown)).toBe(true);
+    expect(isInServiceArea(midtown)).toBe(true);
   });
 
-  it('returns false for a Brooklyn coord (below the southern BBox edge)', () => {
-    const brooklyn: Coords = { lat: 40.65, lng: -73.95 };
-    expect(isInsideManhattan(brooklyn)).toBe(false);
+  it('returns true for a Williamsburg (Brooklyn) coord', () => {
+    const williamsburg: Coords = { lat: 40.7140, lng: -73.9570 };
+    expect(isInServiceArea(williamsburg)).toBe(true);
+  });
+
+  it('returns false for a coord well outside the served boroughs', () => {
+    // Newark, NJ — west of the western BBox edge.
+    const newark: Coords = { lat: 40.7357, lng: -74.1724 };
+    expect(isInServiceArea(newark)).toBe(false);
   });
 
   it('returns true at the exact SW BBox corner (bounds inclusive)', () => {
-    const corner: Coords = { lat: 40.700, lng: -74.030 };
-    expect(isInsideManhattan(corner)).toBe(true);
+    const corner: Coords = { lat: 40.640, lng: -74.030 };
+    expect(isInServiceArea(corner)).toBe(true);
   });
 });
 
@@ -28,23 +34,29 @@ describe('snapToNeighborhoodCentroid', () => {
     const snap = snapToNeighborhoodCentroid(justOffMidtown);
 
     expect(snap).not.toBeNull();
-    // Non-null narrowing
     if (snap === null) return;
     expect(snap.neighborhood).toBe('Midtown');
   });
 
-  it('returns null for a Brooklyn coord (outside the Manhattan BBox)', () => {
-    const brooklyn: Coords = { lat: 40.65, lng: -73.95 };
-    expect(snapToNeighborhoodCentroid(brooklyn)).toBeNull();
+  it('snaps a Brooklyn coord to its nearest Brooklyn centroid', () => {
+    // Just off the Williamsburg centroid (40.7140, -73.9570).
+    const offWilliamsburg: Coords = { lat: 40.7155, lng: -73.9555 };
+    const snap = snapToNeighborhoodCentroid(offWilliamsburg);
+
+    expect(snap).not.toBeNull();
+    if (snap === null) return;
+    expect(snap.neighborhood).toBe('Williamsburg');
+  });
+
+  it('returns null for a coord outside the service area', () => {
+    const newark: Coords = { lat: 40.7357, lng: -74.1724 };
+    expect(snapToNeighborhoodCentroid(newark)).toBeNull();
   });
 
   it('returns null when inside the BBox but > MAX_SNAP_MILES from every centroid', () => {
-    // Upper Manhattan (~Harlem/Inwood-ish). Inside BBox, > 2mi from every
-    // centroid (the northernmost is UWS at 40.787 — this coord is ~4.7mi away).
+    // Upper Manhattan (~Harlem/Inwood-ish). Inside BBox, > 2mi from every centroid.
     const farNorth: Coords = { lat: 40.85, lng: -73.94 };
 
-    // Sanity-check the fixture: every centroid must be > 2mi away, otherwise
-    // the test would be asserting the wrong branch.
     for (const key of Object.keys(NEIGHBORHOOD_CENTROIDS) as Array<
       keyof typeof NEIGHBORHOOD_CENTROIDS
     >) {

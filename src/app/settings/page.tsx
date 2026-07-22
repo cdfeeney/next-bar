@@ -6,15 +6,28 @@ import { useAuth } from '@/hooks/useAuth';
 import { loadProfile, clearProfile } from '@/lib/storedProfile';
 import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
+import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 
 export default function SettingsPage(): JSX.Element {
   const { ratings } = useRatings();
   const auth = useAuth();
   const [hasProfile, setHasProfile] = useState(false);
+  const [seeded, setSeeded] = useState(false);
 
   useEffect(() => {
     setHasProfile(loadProfile() !== null);
-  }, []);
+    setSeeded(isDemoSeeded());
+  }, [ratings.length]);
+
+  const handleSeed = () => {
+    seedSampleNight();
+    setSeeded(true);
+  };
+
+  const handleUnseed = () => {
+    clearSampleNight();
+    setSeeded(false);
+  };
 
   const lovedCount = ratings.filter((r) => r.rating === 'loved').length;
   const likedCount = ratings.filter((r) => r.rating === 'liked').length;
@@ -31,6 +44,10 @@ export default function SettingsPage(): JSX.Element {
     if (typeof window === 'undefined') return;
     if (!window.confirm('Clear ALL bar ratings? This cannot be undone.')) return;
     window.localStorage.removeItem('next-bar:ratings:v1');
+    // Clearing all ratings also clears the sample night, so reset the demo-seeded flags — otherwise the
+    // Settings "Demo" section still shows "Remove sample night" while Rankings is empty (Codex review).
+    window.localStorage.removeItem('next-bar:demo:seeded:v1');
+    window.localStorage.removeItem('next-bar:demo:seeded-ids:v1');
     // useRatings reads on next mount; a hard reload is the simplest correct refresh.
     window.location.reload();
   };
@@ -147,6 +164,44 @@ export default function SettingsPage(): JSX.Element {
 
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+            Demo
+          </h2>
+          <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
+            <p className="text-xs text-muted leading-relaxed">
+              Load a sample night of ratings to see Rankings and the group
+              &ldquo;Where should we go?&rdquo; picks come alive — no sign-in
+              needed.
+            </p>
+            {seeded ? (
+              <div className="flex items-center gap-4 flex-wrap">
+                <Link
+                  href="/rankings"
+                  className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
+                >
+                  View rankings →
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleUnseed}
+                  className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                >
+                  Remove sample night
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSeed}
+                className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
+              >
+                Load sample night →
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Data
           </h2>
           <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
@@ -170,9 +225,10 @@ export default function SettingsPage(): JSX.Element {
             About
           </h2>
           <div className="text-xs text-muted space-y-2 pl-1">
-            <p>Next Bar · Manhattan · 2026</p>
+            <p>Next Bar · NYC · 2026</p>
             <p>
-              Coverage: Manhattan only. Outer boroughs ship with the native app.
+              Coverage: Manhattan and parts of Brooklyn. More neighborhoods
+              rolling out.
             </p>
             <p>
               Hours and specials are best-effort.{' '}

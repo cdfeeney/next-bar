@@ -56,11 +56,29 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/rankings');
   });
 
-  test('/friends renders the placeholder pitch', async ({ page }) => {
+  test('/friends renders the social feed with curators', async ({ page }) => {
     await page.goto('/friends');
     await expect(page.getByRole('heading', { name: /^Friends$/ })).toBeVisible();
-    await expect(page.getByText(/The social layer ships/i)).toBeVisible();
+    // Marquee consensus CTA.
+    await expect(page.getByRole('link', { name: /Where should we go\?/i })).toBeVisible();
+    // A default-followed curator card is present.
+    await expect(page.getByRole('heading', { name: /Maya R\./i })).toBeVisible();
     await expectNoConsoleErrors(page, '/friends');
+  });
+
+  test('/friends/consensus renders the group picker', async ({ page }) => {
+    await page.goto('/friends/consensus');
+    await expect(
+      page.getByRole('heading', { name: /Where should we go\?/i }),
+    ).toBeVisible();
+    await expectNoConsoleErrors(page, '/friends/consensus');
+  });
+
+  test('/u/[handle] renders a friend profile', async ({ page }) => {
+    await page.goto('/u/maya');
+    await expect(page.getByRole('heading', { name: /Maya R\./i })).toBeVisible();
+    await expect(page.getByText(/Cocktail Romantic/i)).toBeVisible();
+    await expectNoConsoleErrors(page, '/u/maya');
   });
 
   test('/settings renders signed-out account card', async ({ page }) => {

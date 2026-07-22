@@ -19,6 +19,10 @@ const NEIGHBORHOOD_ORDER: ManhattanNeighborhood[] = [
   'UWS',
   'UES',
   'FiDi',
+  'Williamsburg',
+  'Greenpoint',
+  'Bushwick',
+  'Park Slope',
 ];
 
 export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {

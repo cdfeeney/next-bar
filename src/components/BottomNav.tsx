@@ -30,7 +30,8 @@ const TABS: Tab[] = [
   {
     href: '/friends',
     label: 'Friends',
-    isActive: (pathname) => pathname.startsWith('/friends'),
+    isActive: (pathname) =>
+      pathname.startsWith('/friends') || pathname.startsWith('/u/'),
   },
   {
     href: '/settings',

@@ -13,6 +13,8 @@ type BarMapProps = {
   bars: Bar[];
   userCoords?: Coords | null;
   highlightIds?: string[];
+  /** When set, the map zooms to fit every bar marker (used by the full catalog view). */
+  fitToBars?: boolean;
 };
 
 const NYC_FALLBACK_CENTER: Coords = { lat: 40.7250, lng: -73.9850 };
@@ -64,7 +66,18 @@ function GestureController() {
   return null;
 }
 
-export default function BarMap({ bars, userCoords, highlightIds }: BarMapProps) {
+/** Fits the viewport to every bar marker — keeps a two-borough catalog in frame. */
+function FitBounds({ bars }: { bars: Bar[] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (bars.length === 0) return;
+    const bounds = L.latLngBounds(bars.map((b) => [b.lat, b.lng] as [number, number]));
+    map.fitBounds(bounds, { padding: [32, 32] });
+  }, [map, bars]);
+  return null;
+}
+
+export default function BarMap({ bars, userCoords, highlightIds, fitToBars }: BarMapProps) {
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -95,6 +108,7 @@ export default function BarMap({ bars, userCoords, highlightIds }: BarMapProps) 
             style={{ height: '100%', width: '100%' }}
           >
             <GestureController />
+            {fitToBars ? <FitBounds bars={bars} /> : null}
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
               attribution="&copy; OpenStreetMap &copy; CARTO"

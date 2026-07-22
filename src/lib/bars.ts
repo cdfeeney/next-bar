@@ -1,4 +1,5 @@
 import type { Bar } from '@/types';
+import { extraBars } from './bars.extra';
 
 // IMPORTANT: lastVerified dates below are PLACEHOLDERS so all bars pass the
 // 180-day hard filter and the app remains functional. Hours/specials/blurbs
@@ -9,7 +10,7 @@ import type { Bar } from '@/types';
 
 const PLACEHOLDER_VERIFIED = '2026-04-01';
 
-export const bars: Bar[] = [
+const coreBars: Bar[] = [
   // ---- LES (5) ----
   {
     id: 'attaboy',
@@ -506,3 +507,6 @@ export const bars: Bar[] = [
     lastVerified: PLACEHOLDER_VERIFIED,
   },
 ];
+
+// Core Manhattan set + the curated Manhattan-depth/Brooklyn expansion.
+export const bars: Bar[] = [...coreBars, ...extraBars];

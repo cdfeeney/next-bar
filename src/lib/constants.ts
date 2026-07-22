@@ -1,4 +1,4 @@
-import type { Coords, ManhattanNeighborhood } from '@/types';
+import type { Coords, Neighborhood } from '@/types';
 
 export const JACCARD_START = 0.25;
 export const JACCARD_FLOOR = 0.10;
@@ -24,7 +24,8 @@ export const WALK_MIN_PER_MILE = 20;
 export const UBER_MIN_PER_MILE = 6;
 
 // Starting centroids — verify against a map before locking.
-export const NEIGHBORHOOD_CENTROIDS: Record<ManhattanNeighborhood, Coords> = {
+export const NEIGHBORHOOD_CENTROIDS: Record<Neighborhood, Coords> = {
+  // Manhattan
   'FiDi':         { lat: 40.7060, lng: -74.0090 },
   'LES':          { lat: 40.7170, lng: -73.9870 },
   'East Village': { lat: 40.7270, lng: -73.9840 },
@@ -33,11 +34,20 @@ export const NEIGHBORHOOD_CENTROIDS: Record<ManhattanNeighborhood, Coords> = {
   'Midtown':      { lat: 40.7550, lng: -73.9840 },
   'UWS':          { lat: 40.7870, lng: -73.9750 },
   'UES':          { lat: 40.7740, lng: -73.9610 },
+  // Brooklyn
+  'Williamsburg': { lat: 40.7140, lng: -73.9570 },
+  'Greenpoint':   { lat: 40.7300, lng: -73.9510 },
+  'Bushwick':     { lat: 40.6940, lng: -73.9210 },
+  'Park Slope':   { lat: 40.6720, lng: -73.9790 },
 };
 
-export const MANHATTAN_BBOX = {
-  minLat: 40.700,
-  maxLat: 40.880,
+// Service area now spans lower/mid Manhattan + north/central Brooklyn.
+export const SERVICE_AREA_BBOX = {
+  minLat: 40.640,
+  maxLat: 40.885,
   minLng: -74.030,
-  maxLng: -73.910,
+  maxLng: -73.890,
 };
+
+/** @deprecated Use `SERVICE_AREA_BBOX`. */
+export const MANHATTAN_BBOX = SERVICE_AREA_BBOX;

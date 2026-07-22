@@ -11,3 +11,6 @@ out
 playwright-report/
 test-results/
 tsconfig.tsbuildinfo
+
+# Generated ingestion candidates (regenerable via scripts/ingest-bars.ts)
+scripts/data/

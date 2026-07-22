@@ -28,20 +28,34 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 ## What's built
 
-- 10-question vibe quiz with archetype derivation
-- 15 hand-curated bars across LES, East Village, and Williamsburg
+- Vibe quiz with archetype derivation
+- 40 hand-curated bars across 8 Manhattan neighborhoods
+- "Where next?" in-the-moment flow (seed bar → GPS → radius → matches → map)
 - Match scoring against the user's vibe profile
+- Personal **Rankings** with 0–10 pairwise scoring (Beli-style)
+- **Friends** social layer — follow curators, see their ranked lists, profiles
+- **"Where should we go?"** group consensus — bars the whole group rated highly
 - Distance estimation (haversine + human-friendly formatting)
+- PWA install (manifest + icons + service worker) for Add-to-Home-Screen
 - Tailwind theme with dark surface + warm accent
 - Supabase schema for profiles, bars, visits, saves, and waitlist (with RLS)
+
+### Demo mode (no backend required)
+
+The Friends, profiles, and consensus features are seeded with realistic curator
+data so the full product is demonstrable with **zero setup** — no Supabase, no
+account. Load a "sample night" of your own ratings from **Settings → Demo** (or
+the Rankings empty state) to light up Rankings and add yourself to the group
+consensus. See **[docs/DEMO-GUIDE.md](docs/DEMO-GUIDE.md)** for a 5-minute
+client walkthrough.
 
 ## What's next
 
 - Bar detail pages with photos and hours
 - Real-time hours / busy-ness signals
-- Auth + saved bars per user
-- Friend match (compare profiles)
-- Expand catalog beyond LES / East Village / Williamsburg
+- Real accounts + cross-device sync (Supabase wired; magic-link ready)
+- Phone-contact friend discovery (native app)
+- Expand catalog to the outer boroughs
 
 ## iOS roadmap
 

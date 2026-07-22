@@ -3,10 +3,65 @@
 @tailwind utilities;
 
 html, body { height: 100%; }
+html { scroll-behavior: smooth; }
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Ambient warm glow behind the dark surface — gives the flat black depth.
+   Fixed so it stays put while content scrolls. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 40rem at 50% -10%, rgba(255, 91, 58, 0.10), transparent 70%),
+    radial-gradient(40rem 30rem at 100% 100%, rgba(122, 92, 255, 0.06), transparent 70%);
+}
 
 .leaflet-container { background: #0a0a0a; }
 
 .touch-card {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+}
+
+/* Visible, on-brand keyboard focus ring (accessibility + polish). */
+:where(a, button, input, [tabindex]):focus-visible {
+  outline: 2px solid #ff5b3a;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: rgba(255, 91, 58, 0.30);
+  color: #f5f5f0;
+}
+
+/* Entrance animation — elements rise + fade in on mount. Stagger via an
+   inline --rise-delay custom property. Honors reduced-motion. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.rise {
+  animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--rise-delay, 0ms);
+}
+
+/* Soft accent glow used to spotlight the top consensus pick. */
+.glow-accent {
+  box-shadow: 0 0 0 1px rgba(255, 91, 58, 0.45),
+    0 8px 40px -8px rgba(255, 91, 58, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .rise { animation: none; }
+  * { transition-duration: 0.01ms !important; }
 }

@@ -1,31 +1,35 @@
-import type { Coords, ManhattanNeighborhood } from '@/types';
+import type { Coords, Neighborhood } from '@/types';
 import { haversineMiles } from '@/lib/distance';
 import {
-  MANHATTAN_BBOX,
+  SERVICE_AREA_BBOX,
   MAX_SNAP_MILES,
   NEIGHBORHOOD_CENTROIDS,
 } from '@/lib/constants';
 
-export function isInsideManhattan(c: Coords): boolean {
+/** True when a coord falls inside the served area (Manhattan + Brooklyn). */
+export function isInServiceArea(c: Coords): boolean {
   return (
-    c.lat >= MANHATTAN_BBOX.minLat &&
-    c.lat <= MANHATTAN_BBOX.maxLat &&
-    c.lng >= MANHATTAN_BBOX.minLng &&
-    c.lng <= MANHATTAN_BBOX.maxLng
+    c.lat >= SERVICE_AREA_BBOX.minLat &&
+    c.lat <= SERVICE_AREA_BBOX.maxLat &&
+    c.lng >= SERVICE_AREA_BBOX.minLng &&
+    c.lng <= SERVICE_AREA_BBOX.maxLng
   );
 }
 
+/** @deprecated Use `isInServiceArea`. */
+export const isInsideManhattan = isInServiceArea;
+
 export type CentroidSnap = {
-  neighborhood: ManhattanNeighborhood;
+  neighborhood: Neighborhood;
   centroid: Coords;
   miles: number;
 };
 
 export function snapToNeighborhoodCentroid(c: Coords): CentroidSnap | null {
-  if (!isInsideManhattan(c)) return null;
+  if (!isInServiceArea(c)) return null;
 
   let best: CentroidSnap | null = null;
-  for (const key of Object.keys(NEIGHBORHOOD_CENTROIDS) as ManhattanNeighborhood[]) {
+  for (const key of Object.keys(NEIGHBORHOOD_CENTROIDS) as Neighborhood[]) {
     const centroid = NEIGHBORHOOD_CENTROIDS[key];
     const miles = haversineMiles(c, centroid);
     if (best === null || miles < best.miles) {

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
 import { sortRatingsByScore } from '@/lib/pairwise';
+import { seedSampleNight } from '@/lib/demo';
 import { bars } from '@/lib/bars';
 import type { Bar } from '@/types';
 import type { BarRating, Rating } from '@/types/ratings';
@@ -117,11 +118,12 @@ export default function RankingsPage(): JSX.Element {
       </div>
 
       {hasNoRatings ? (
-        <section className="flex flex-col items-center justify-center text-center px-6 py-[160px]">
+        <section className="flex flex-col items-center justify-center text-center px-6 py-[120px]">
           <h2 className="font-display text-2xl mb-2">Nothing here yet.</h2>
           <p className="text-muted text-sm mb-6 max-w-sm">
-            Rate a bar after you check it out and it&apos;ll show up here. Your
-            rankings stay on this device until the app ships with sync.
+            Rate a bar after you check it out and it&apos;ll show up here, scored
+            0–10 by your own taste. Your rankings stay on this device until the
+            app ships with sync.
           </p>
           <Link
             href="/"
@@ -129,6 +131,13 @@ export default function RankingsPage(): JSX.Element {
           >
             Find a bar →
           </Link>
+          <button
+            type="button"
+            onClick={() => seedSampleNight()}
+            className="mt-4 text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+          >
+            Or load a sample night to see it in action →
+          </button>
         </section>
       ) : (
         <section className="max-w-2xl mx-auto px-6 flex flex-col gap-4">
@@ -142,7 +151,8 @@ export default function RankingsPage(): JSX.Element {
               return (
                 <article
                   key={rating.barId}
-                  className="bg-surface border border-border rounded-3xl p-5 flex flex-col gap-2"
+                  className="rise bg-surface border border-border rounded-3xl p-5 flex flex-col gap-2"
+                  style={{ ['--rise-delay' as string]: `${Math.min(idx, 10) * 50}ms` }}
                 >
                   <div className="flex items-baseline justify-between gap-3">
                     <h2 className="font-display text-xl leading-tight">
