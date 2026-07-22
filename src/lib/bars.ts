@@ -2,6 +2,7 @@ import type { Bar } from '@/types';
 import { extraBars } from './bars.extra';
 import { expansionBars } from './bars.expansion';
 import { expansion2Bars } from './bars.expansion2';
+import { expansion3Bars } from './bars.expansion3';
 
 // IMPORTANT: lastVerified dates below are PLACEHOLDERS so all bars pass the
 // 180-day hard filter and the app remains functional. Hours/specials/blurbs
@@ -511,4 +512,4 @@ const coreBars: Bar[] = [
 ];
 
 // Core Manhattan set + the curated Manhattan-depth/Brooklyn expansion.
-export const bars: Bar[] = [...coreBars, ...extraBars, ...expansionBars, ...expansion2Bars];
+export const bars: Bar[] = [...coreBars, ...extraBars, ...expansionBars, ...expansion2Bars, ...expansion3Bars];
