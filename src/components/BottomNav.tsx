@@ -49,10 +49,14 @@ export default function BottomNav(): JSX.Element | null {
   const pathname = usePathname();
 
   // Waitlist + install pitch + api routes get no bottom nav — they're either
-  // pre-funnel marketing surfaces or system endpoints.
+  // pre-funnel marketing surfaces or system endpoints. Auth + share are
+  // full-screen focus surfaces: the raised center pill overlaps the form on
+  // phone viewports, and a recipient opening a share link isn't in the app yet.
   if (
     pathname === '/install' ||
     pathname === '/join' ||
+    pathname === '/auth' ||
+    pathname.startsWith('/share') ||
     pathname.startsWith('/api')
   ) {
     return null;
@@ -77,9 +81,14 @@ export default function BottomNav(): JSX.Element | null {
                   className={[
                     'flex flex-col items-center justify-center text-center touch-manipulation',
                     'min-h-[60px] min-w-[84px] -mt-7 px-6 py-3 rounded-full',
-                    'bg-accent text-bg font-display text-[13px] uppercase tracking-wider',
-                    'shadow-lg shadow-accent/40 transition-transform active:scale-95',
-                    active ? 'ring-2 ring-accent/50 ring-offset-2 ring-offset-bg' : '',
+                    'font-display text-[13px] uppercase tracking-wider',
+                    'transition-all active:scale-95',
+                    // Accent fill only when it IS the current page — otherwise
+                    // a quieter raised pill, so it stops reading as
+                    // permanently selected.
+                    active
+                      ? 'bg-accent text-bg shadow-lg shadow-accent/40 ring-2 ring-accent/50 ring-offset-2 ring-offset-bg'
+                      : 'bg-surface text-accent border border-accent/50 shadow-lg shadow-black/40',
                   ].join(' ')}
                 >
                   {tab.label}

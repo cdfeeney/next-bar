@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { loadProfile, clearProfile } from '@/lib/storedProfile';
 import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
+import SetPassword from '@/components/SetPassword';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deriveTasteProfile } from '@/lib/tasteProfile';
 import { deriveBadges } from '@/lib/badges';
@@ -76,22 +77,27 @@ export default function SettingsPage(): JSX.Element {
             {auth.status === 'loading' ? (
               <p className="text-muted text-sm">Loading…</p>
             ) : auth.status === 'signed-in' ? (
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-xs text-muted uppercase tracking-widest mb-1">
-                    Signed in as
-                  </p>
-                  <p className="font-display text-base truncate">
-                    {auth.user.email}
-                  </p>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted uppercase tracking-widest mb-1">
+                      Signed in as
+                    </p>
+                    <p className="font-display text-base truncate">
+                      {auth.user.email}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => auth.signOut()}
+                    className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
+                  >
+                    Sign out
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => auth.signOut()}
-                  className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
-                >
-                  Sign out
-                </button>
+                <div className="pt-3 border-t border-border">
+                  <SetPassword />
+                </div>
               </div>
             ) : auth.status === 'unavailable' ? (
               <p className="text-muted text-xs leading-relaxed">
