@@ -67,13 +67,14 @@ export async function upsertServerRating(
   rating: Rating,
   score?: number | null,
 ): Promise<void> {
+  const now = new Date().toISOString();
   await supabase.from('ratings').upsert(
     {
       user_id: userId,
       bar_id: barId,
       tier: rating,
-      rated_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      rated_at: now,
+      updated_at: now,
       ...(score === undefined ? {} : { score }),
     },
     { onConflict: 'user_id,bar_id' },

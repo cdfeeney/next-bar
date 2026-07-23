@@ -38,6 +38,27 @@ export function clearAccountCache(): void {
 }
 
 /**
+ * Wipe residue left by a signed-in session that ended WITHOUT our sign-out
+ * button (refresh-token expiry, revocation, SDK sign-out in another tab).
+ * Gated on the merged-for flags: they exist only after a sign-in, so a
+ * genuinely anonymous browser — which resolves to signed-out on every
+ * mount — never has its local ratings wiped by this.
+ * Returns true when residue was cleared.
+ */
+export function clearResidualAccountCache(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const hadOwner =
+      window.localStorage.getItem(RATINGS_MERGED_KEY) !== null ||
+      window.localStorage.getItem(PAIRWISE_MERGED_KEY) !== null;
+    if (hadOwner) clearAccountCache();
+    return hadOwner;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Wipe the cache if it demonstrably belongs to a different account.
  * Returns true when a foreign cache was cleared.
  *

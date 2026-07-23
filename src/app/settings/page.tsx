@@ -58,11 +58,20 @@ export default function SettingsPage(): JSX.Element {
     if (auth.status === 'signed-in') {
       const supabase = getBrowserSupabase();
       if (supabase) {
-        await deleteAllServerRatings(supabase, auth.user.id);
-        // The server comparison transcript must die with the ratings it
-        // ranked — orphaned judgments would re-derive stale scores onto
-        // re-rated bars on the next mount (santa-loop round-1 finding).
-        await deleteAllServerComparisons(supabase, auth.user.id);
+        try {
+          await deleteAllServerRatings(supabase, auth.user.id);
+          // The server comparison transcript must die with the ratings it
+          // ranked — orphaned judgments would re-derive stale scores onto
+          // re-rated bars on the next mount (santa-loop round-1 finding).
+          await deleteAllServerComparisons(supabase, auth.user.id);
+        } catch {
+          // Surface the failure instead of a silent no-op: clearing only
+          // locally would just re-fetch everything after the reload.
+          window.alert(
+            "Couldn't reach the server, so your ratings were NOT cleared. Try again in a moment.",
+          );
+          return;
+        }
       }
     }
     window.localStorage.removeItem('next-bar:ratings:v1');

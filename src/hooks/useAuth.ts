@@ -3,7 +3,10 @@
 import { useEffect, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { clearAccountCache } from '@/lib/accountCache';
+import {
+  clearAccountCache,
+  clearResidualAccountCache,
+} from '@/lib/accountCache';
 
 export type AuthState =
   | { status: 'loading'; user: null; session: null }
@@ -33,6 +36,11 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
       if (session) {
         setState({ status: 'signed-in', user: session.user, session });
       } else {
+        // A session that ended while the app was closed (expiry/revocation)
+        // never went through signOut() — clear its cache residue so one
+        // account's data can't render as "anonymous" data on a shared
+        // device. No-op for genuinely anonymous browsers (flag-gated).
+        clearResidualAccountCache();
         setState(SIGNED_OUT);
       }
     });
@@ -42,6 +50,9 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
       if (session) {
         setState({ status: 'signed-in', user: session.user, session });
       } else {
+        // Non-button sign-outs (expiry, revocation, another tab's SDK
+        // sign-out) land here — same residue rule as above.
+        clearResidualAccountCache();
         setState(SIGNED_OUT);
       }
     });

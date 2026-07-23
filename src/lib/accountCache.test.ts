@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearAccountCache, guardAgainstForeignCache } from './accountCache';
+import {
+  clearAccountCache,
+  clearResidualAccountCache,
+  guardAgainstForeignCache,
+} from './accountCache';
 
 const RATINGS_KEY = 'next-bar:ratings:v1';
 const RATINGS_MERGED_KEY = 'next-bar:ratings:merged-for:v1';
@@ -29,6 +33,23 @@ describe('clearAccountCache', () => {
     window.localStorage.setItem('next-bar:profile:v1', '{"tags":[]}');
     clearAccountCache();
     expect(window.localStorage.getItem('next-bar:profile:v1')).not.toBeNull();
+  });
+});
+
+describe('clearResidualAccountCache', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('wipes the cache when a merged-for flag shows a past sign-in (expired session residue)', () => {
+    seedFullCache('user-a');
+    expect(clearResidualAccountCache()).toBe(true);
+    expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+    expect(window.localStorage.getItem(PAIRWISE_KEY)).toBeNull();
+  });
+
+  it('leaves a genuinely anonymous cache alone (no flags → no past sign-in)', () => {
+    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    expect(clearResidualAccountCache()).toBe(false);
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
   });
 });
 
