@@ -14,6 +14,7 @@
 
 import { useState } from 'react';
 import { barById, type ConsensusParticipant } from '@/lib/demo';
+import { buildPickPath, sharePickText } from '@/lib/share';
 import {
   createSession,
   castVote,
@@ -187,7 +188,8 @@ function ResultScreen({
         })}
       </div>
 
-      <div className="text-center mt-6">
+      <div className="text-center mt-6 flex items-center justify-center gap-6">
+        <SharePickButton barId={bar.id} />
         <button
           type="button"
           onClick={onReset}
@@ -197,5 +199,41 @@ function ResultScreen({
         </button>
       </div>
     </section>
+  );
+}
+
+function SharePickButton({ barId }: { barId: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const bar = barById(barId);
+
+  const share = async (): Promise<void> => {
+    if (!bar) return;
+    const url = `${window.location.origin}${buildPickPath(barId)}`;
+    const text = sharePickText(bar);
+    // Native share sheet where available (iOS PWA); clipboard elsewhere.
+    if (typeof navigator.share === 'function') {
+      try {
+        await navigator.share({ title: text, text, url });
+        return;
+      } catch {
+        // Dismissed or unsupported payload — fall through to clipboard.
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(`${text} ${url}`);
+      setCopied(true);
+    } catch {
+      // Clipboard blocked — nothing sensible left to do silently.
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void share()}
+      className="bg-accent text-bg font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation"
+    >
+      {copied ? 'Link copied ✓' : 'Share the pick'}
+    </button>
   );
 }
