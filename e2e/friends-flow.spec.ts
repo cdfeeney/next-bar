@@ -72,6 +72,10 @@ test.describe('Friends + consensus', () => {
   });
 
   test('tonight intent toggles, persists, and shows circle signals', async ({ page }) => {
+    // Demo intents are day-varying since F3/F5 (no more "Maya goes out every
+    // night") — pin the clock to a Friday night, where the classic trio
+    // (maya going / jordan maybe) is guaranteed by the rhythm table.
+    await page.clock.install({ time: new Date('2026-07-24T22:00:00') });
     await page.goto('/friends');
 
     // Default circle (maya + jordan) has seeded demo signals.

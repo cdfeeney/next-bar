@@ -205,7 +205,7 @@ test.describe('/auth — callback errors (?error=... from /auth/callback)', () =
       '/auth?error=Email%20link%20is%20invalid%20or%20has%20expired',
     );
 
-    const banner = page.locator('div[role="alert"]');
+    const banner = page.locator('div[role="alert"]').filter({ hasText: /\S/ });
     await expect(banner).toBeVisible();
     await expect(banner).toContainText(/expired or was already used/i);
 
@@ -213,7 +213,7 @@ test.describe('/auth — callback errors (?error=... from /auth/callback)', () =
     // a stale error.
     await expect(page).toHaveURL(/\/auth$/);
     await page.reload();
-    await expect(page.locator('div[role="alert"]')).not.toBeVisible();
+    await expect(page.locator('div[role="alert"]').filter({ hasText: /\S/ })).not.toBeVisible();
   });
 
   test('resend path drops into the existing forgot-password flow', async ({ page }) => {
@@ -221,7 +221,7 @@ test.describe('/auth — callback errors (?error=... from /auth/callback)', () =
     // back without a code — treated as expired/invalid too.
     await page.goto('/auth?error=missing_code');
 
-    const banner = page.locator('div[role="alert"]');
+    const banner = page.locator('div[role="alert"]').filter({ hasText: /\S/ });
     await expect(banner).toContainText(/expired or was already used/i);
     await banner.getByRole('button', { name: /send a new link/i }).click();
 
@@ -234,7 +234,7 @@ test.describe('/auth — callback errors (?error=... from /auth/callback)', () =
   test('generic callback failure shows a retry banner without the resend path', async ({ page }) => {
     await page.goto('/auth?error=server_error');
 
-    const banner = page.locator('div[role="alert"]');
+    const banner = page.locator('div[role="alert"]').filter({ hasText: /\S/ });
     await expect(banner).toBeVisible();
     await expect(banner).toContainText(/didn't complete/i);
     await expect(

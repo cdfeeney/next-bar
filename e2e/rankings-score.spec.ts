@@ -111,7 +111,7 @@ test.describe('/rankings — score column + sort', () => {
     expect(names).toEqual(['Death & Co', 'Employees Only', 'Attaboy']);
   });
 
-  test('falls back to tier-then-recency among unscored bars after scored ones', async ({
+  test('tier precedence is absolute — a scored Pass bar never outranks higher tiers (B0.2)', async ({
     page,
   }) => {
     await seed(page, [
@@ -119,13 +119,13 @@ test.describe('/rankings — score column + sort', () => {
         barId: 'attaboy',
         rating: 'liked',
         ratedAt: '2026-05-20T00:00:00.000Z',
-        // unscored Liked, newer
+        // unscored Liked → band midpoint 6.5
       },
       {
         barId: 'death-and-co',
         rating: 'loved',
         ratedAt: '2026-05-15T00:00:00.000Z',
-        // unscored Loved
+        // unscored Loved → band midpoint 9.0
       },
       {
         barId: 'employees-only',
@@ -144,8 +144,10 @@ test.describe('/rankings — score column + sort', () => {
     const texts = await headings.allTextContents();
     const names = texts.map((t) => t.replace(/^\d+\.\s*/, '').trim());
 
-    // Scored Pass-tier bar wins because score-presence trumps tier ordering.
-    // Then the unscored bars sort by tier (Loved > Liked > Pass).
-    expect(names).toEqual(['Employees Only', 'Death & Co', 'Attaboy']);
+    // Rank-order model: every Loved ≥ every Liked ≥ every Pass, scored or
+    // not (unscored bars sit at their tier's band midpoint). The old
+    // "score-presence trumps tier" behavior was the cross-tier inversion
+    // bug fixed by B0.2.
+    expect(names).toEqual(['Death & Co', 'Attaboy', 'Employees Only']);
   });
 });
