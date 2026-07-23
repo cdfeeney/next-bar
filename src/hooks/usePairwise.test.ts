@@ -30,7 +30,7 @@ vi.mock('@/lib/pairwise.server', () => ({
 vi.mock('@/lib/ratings.server', () => ({
   fetchServerRatings: vi.fn(async () => []),
   upsertServerRating: vi.fn(async () => undefined),
-  upsertServerRatingScores: vi.fn(async () => undefined),
+  updateServerScores: vi.fn(async () => undefined),
   deleteServerRating: vi.fn(async () => undefined),
   deleteAllServerRatings: vi.fn(async () => undefined),
   mergeLocalRatingsToServer: vi.fn(async () => 0),
@@ -43,13 +43,13 @@ import {
   insertServerComparison,
   mergeLocalComparisonsToServer,
 } from '@/lib/pairwise.server';
-import { upsertServerRatingScores } from '@/lib/ratings.server';
+import { updateServerScores } from '@/lib/ratings.server';
 const useAuthMock = vi.mocked(useAuth);
 const getBrowserSupabaseMock = vi.mocked(getBrowserSupabase);
 const fetchServerComparisonsMock = vi.mocked(fetchServerComparisons);
 const insertServerComparisonMock = vi.mocked(insertServerComparison);
 const mergeLocalComparisonsToServerMock = vi.mocked(mergeLocalComparisonsToServer);
-const upsertServerRatingScoresMock = vi.mocked(upsertServerRatingScores);
+const updateServerScoresMock = vi.mocked(updateServerScores);
 
 function seedRatings(rs: BarRating[]) {
   window.localStorage.setItem(RATINGS_KEY, JSON.stringify(rs));
@@ -318,11 +318,13 @@ describe('usePairwise — server mode (B0.4)', () => {
     expect(sent.winnerBarId).toBe('a');
     expect(sent.loserBarId).toBe('b');
     expect(sessionId === null || typeof sessionId === 'string').toBe(true);
-    expect(readComparisons()).toEqual([]);
+    // Write-through: the local transcript cache mirrors the server append
+    // so a later failed fetch has a usable fallback (Codex review).
+    expect(readComparisons()).toHaveLength(1);
 
-    // Transcript-derived scores were bulk-upserted for the changed rows...
-    expect(upsertServerRatingScoresMock).toHaveBeenCalledTimes(1);
-    const entries = upsertServerRatingScoresMock.mock.calls[0][2];
+    // Transcript-derived scores were persisted (score-only) for changed rows...
+    expect(updateServerScoresMock).toHaveBeenCalledTimes(1);
+    const entries = updateServerScoresMock.mock.calls[0][2];
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.every((e) => typeof e.score === 'number')).toBe(true);
     // ...and the write-through ratings cache carries the same scores.

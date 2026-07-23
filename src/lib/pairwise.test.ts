@@ -6,6 +6,7 @@ import {
   buildRankOrderForTier,
   computeScoresForTier,
   pickComparisonTarget,
+  reconcileScores,
   roundScore,
   sortRatingsByScore,
   tierMidpoint,
@@ -448,5 +449,56 @@ describe('sortRatingsByScore', () => {
     const before = [...ratings];
     sortRatingsByScore(ratings);
     expect(ratings).toEqual(before);
+  });
+});
+
+describe('reconcileScores (self-healing pass)', () => {
+  const at = '2026-05-20T00:00:00.000Z';
+  function r(barId: string, tier: 'loved' | 'liked' | 'pass', score?: number) {
+    return {
+      barId,
+      rating: tier,
+      ratedAt: at,
+      ...(score !== undefined ? { score } : {}),
+    };
+  }
+  const abc: PairwiseComparison[] = [
+    { winnerBarId: 'a', loserBarId: 'b', comparedAt: at },
+    { winnerBarId: 'b', loserBarId: 'c', comparedAt: at },
+  ];
+
+  it('heals stale interpolation after a bar leaves the tier (Codex scenario)', () => {
+    // Transcript ordered a > b > c in Loved (scores 10 / 9 / 8), then c was
+    // moved to Liked. b's persisted 9.0 is stale: over the 2-bar list it
+    // should re-interpolate to the band edges (a=10, b=8).
+    const ratings = [
+      r('a', 'loved', 10),
+      r('b', 'loved', 9),
+      r('c', 'liked'),
+    ];
+    const healed = reconcileScores(ratings, abc);
+    expect(healed.find((x) => x.barId === 'a')?.score).toBe(10);
+    expect(healed.find((x) => x.barId === 'b')?.score).toBe(8);
+    // c's tier (Liked) has no same-tier comparisons → untouched.
+    expect(healed.find((x) => x.barId === 'c')?.score).toBeUndefined();
+  });
+
+  it('is a no-op (referentially) when persisted scores already match the transcript', () => {
+    const ratings = [r('a', 'loved', 10), r('b', 'loved', 9), r('c', 'loved', 8)];
+    const healed = reconcileScores(ratings, abc);
+    healed.forEach((entry, i) => expect(entry).toBe(ratings[i]));
+  });
+
+  it('never stamps scores onto a tier with no comparisons', () => {
+    const ratings = [r('a', 'loved'), r('b', 'liked'), r('c', 'pass')];
+    const healed = reconcileScores(ratings, []);
+    expect(healed.every((x) => x.score === undefined)).toBe(true);
+  });
+
+  it('repairs divergence from a partially-failed score write', () => {
+    // Transcript says a > b, but b’s persisted score never landed.
+    const ratings = [r('a', 'loved', 10), r('b', 'loved')];
+    const healed = reconcileScores(ratings, [abc[0]]);
+    expect(healed.find((x) => x.barId === 'b')?.score).toBe(8);
   });
 });

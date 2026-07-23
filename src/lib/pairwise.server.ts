@@ -111,9 +111,12 @@ export async function mergeLocalComparisonsToServer(
 export async function deleteAllServerComparisons(
   supabase: SupabaseClient,
   userId: string,
-): Promise<void> {
-  await supabase
+): Promise<boolean> {
+  // Resolves with { error }, never throws — return success explicitly so
+  // the Settings failure path actually fires (Codex review).
+  const { error } = await supabase
     .from('pairwise_comparisons')
     .delete()
     .eq('user_id', userId);
+  return error === null;
 }

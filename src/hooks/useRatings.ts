@@ -209,7 +209,14 @@ export function useRatings(): UseRatingsReturn {
       if (!cancelled && server !== null && getCacheEpoch() === epoch) {
         // Keep any rating tapped while this fetch was in flight (it sits in
         // the write-through cache with a newer ratedAt than the snapshot).
-        const merged = mergeFreshest(server, loadRatings());
+        // Seeded demo entries are EXCLUDED from the local side (Codex
+        // review): without the filter, hydrate re-merges demo rows into
+        // signed-in state/cache, from where a pairwise answer would upload
+        // them — recreating the pollution migration 0003 cleaned up.
+        const merged = mergeFreshest(
+          server,
+          loadRatings().filter((r) => !isSeededDemoRating(r)),
+        );
         setRatings(merged);
         // Hydrate the localStorage cache with the authoritative rows
         // (including rows written on other devices) so usePairwise and the

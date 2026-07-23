@@ -6,16 +6,18 @@ import { loadRatings, writeRatings } from '@/lib/ratings';
 import {
   appendComparison,
   loadComparisons,
+  writeComparisons,
 } from '@/lib/pairwise.local';
 import {
   fetchServerComparisons,
   insertServerComparison,
   mergeLocalComparisonsToServer,
 } from '@/lib/pairwise.server';
-import { upsertServerRatingScores } from '@/lib/ratings.server';
+import { updateServerScores } from '@/lib/ratings.server';
 import {
   applyComparison,
   pickComparisonTarget,
+  reconcileScores,
 } from '@/lib/pairwise';
 import { useAuth } from '@/hooks/useAuth';
 import { broadcastServerRatingSet } from '@/hooks/useRatings';
@@ -144,10 +146,29 @@ export function usePairwise(): UsePairwiseReturn {
       // pretending the user has never compared anything.
       if (!cancelled && server !== null) {
         setComparisons(server);
-        // OWNERSHIP marker (santa round-3, mirrors useRatings): the session
-        // now works this account's transcript, so latch the flag even when
-        // no merge ran — the residual/foreign guards key off it.
-        if (getCacheEpoch() === epoch) writeMergedFlag(userId);
+        if (getCacheEpoch() === epoch) {
+          // OWNERSHIP marker (santa round-3, mirrors useRatings): latch the
+          // flag even when no merge ran — the guards key off it.
+          writeMergedFlag(userId);
+          // Write-through the transcript cache (Codex review): without it a
+          // later failed fetch falls back to an empty/stale transcript.
+          writeComparisons(server);
+          // Self-healing pass (Codex review): persisted scores are a
+          // denormalization of (ratings, transcript) and can drift — tier
+          // changes shrink a tier without re-interpolating, and a partial
+          // fire-and-forget failure diverges them. Repair from the
+          // authoritative transcript on every hydrate.
+          const cached = loadRatings();
+          const corrected = reconcileScores(cached, server);
+          const repaired = corrected.filter(
+            (r, i) => r !== cached[i],
+          );
+          if (repaired.length > 0) {
+            writeRatings(corrected);
+            void updateServerScores(supabase, userId, repaired);
+            for (const entry of repaired) broadcastServerRatingSet(entry);
+          }
+        }
       }
     })();
 
@@ -206,8 +227,11 @@ export function usePairwise(): UsePairwiseReturn {
         const supabase = getBrowserSupabase();
         if (supabase) {
           const userId = auth.user.id;
-          // Optimistic transcript append (server assigns no fields we need).
+          // Optimistic transcript append (server assigns no fields we need),
+          // mirrored into the local transcript cache so a later failed
+          // fetch still has a usable fallback (Codex review).
           setComparisons((prev) => [...prev, newComparison]);
+          appendComparison(newComparison);
           void insertServerComparison(
             supabase,
             userId,
@@ -215,13 +239,15 @@ export function usePairwise(): UsePairwiseReturn {
             sessionIdRef.current,
           );
 
-          // Persist only the rows whose score actually changed, then let
-          // every mounted useRatings instance know.
+          // Persist only the rows whose score actually changed (score-ONLY
+          // updates — full-row upserts could roll back a newer tier change
+          // from another device), then let every mounted useRatings
+          // instance know.
           const changed = updatedRatings.filter((r) => {
             const before = currentRatings.find((c) => c.barId === r.barId);
             return before === undefined || before.score !== r.score;
           });
-          void upsertServerRatingScores(supabase, userId, changed);
+          void updateServerScores(supabase, userId, changed);
           writeRatings(updatedRatings); // keep the write-through cache coherent
           for (const entry of changed) broadcastServerRatingSet(entry);
 

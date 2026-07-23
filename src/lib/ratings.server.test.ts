@@ -200,11 +200,14 @@ describe('deleteAllServerRatings', () => {
     expect(calls.eq).toEqual([{ column: 'user_id', value: 'user-1' }]);
   });
 
-  it('does not throw on Supabase error', async () => {
+  it('resolves false (not throw) on Supabase error so callers can react', async () => {
     const { client } = fakeSupabase({ deleteError: { message: 'RLS denied' } });
-    await expect(
-      deleteAllServerRatings(client, 'user-1'),
-    ).resolves.toBeUndefined();
+    await expect(deleteAllServerRatings(client, 'user-1')).resolves.toBe(false);
+  });
+
+  it('resolves true on success', async () => {
+    const { client } = fakeSupabase({});
+    await expect(deleteAllServerRatings(client, 'user-1')).resolves.toBe(true);
   });
 });
 

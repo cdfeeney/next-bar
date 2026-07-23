@@ -237,6 +237,41 @@ export function applyComparison(
 }
 
 /**
+ * Recompute every tier's scores from the authoritative transcript and
+ * return a corrected array (referentially equal entries where unchanged).
+ *
+ * This is the self-healing pass (Codex review): persisted scores are a
+ * denormalization of (ratings, transcript) and can drift — a tier change
+ * shrinks a tier's list without re-interpolating the remaining bars, and a
+ * partially-failed fire-and-forget write can leave transcript and scores
+ * diverged. Running this on hydrate repairs both.
+ *
+ * A tier with NO same-tier comparisons is left untouched — reconciliation
+ * must not stamp midpoint scores onto bars the user never compared.
+ */
+export function reconcileScores(
+  ratings: ReadonlyArray<BarRating>,
+  comparisons: ReadonlyArray<PairwiseComparison>,
+): BarRating[] {
+  const tiers: Tier[] = ['loved', 'liked', 'pass'];
+  const correctedByBar = new Map<string, number>();
+  for (const tier of tiers) {
+    const order = buildRankOrderForTier(ratings, comparisons, tier);
+    if (order.orderedBarIds.length === 0) continue; // no comparisons → skip
+    for (const rating of ratings) {
+      if (rating.rating !== tier) continue;
+      const score = order.scores.get(rating.barId);
+      if (score !== undefined) correctedByBar.set(rating.barId, score);
+    }
+  }
+  return ratings.map((r) => {
+    const corrected = correctedByBar.get(r.barId);
+    if (corrected === undefined || r.score === corrected) return r;
+    return { ...r, score: corrected };
+  });
+}
+
+/**
  * Sort ratings for /rankings:
  *   - Tier precedence is absolute: Loved, then Liked, then Pass.
  *   - Within a tier, bars sort by score desc; unscored bars use the midpoint.

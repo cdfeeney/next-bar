@@ -82,27 +82,32 @@ export async function upsertServerRating(
 }
 
 /**
- * Bulk-write transcript-derived scores after a pairwise answer (B0.4).
- * Sends full rows (tier + rated_at included) so the upsert can never hit a
- * NOT NULL violation even if a row vanished server-side between reads.
+ * Write transcript-derived scores after a pairwise answer (B0.4).
+ *
+ * Score-ONLY updates, never full-row upserts (Codex review): a stale device
+ * sending its cached tier/rated_at alongside a fresh updated_at would win
+ * the LWW race and roll back a tier change made on another device. UPDATE
+ * touches only score + updated_at; a row deleted server-side in between
+ * simply no-ops.
  */
-export async function upsertServerRatingScores(
+export async function updateServerScores(
   supabase: SupabaseClient,
   userId: string,
   entries: ReadonlyArray<BarRating>,
 ): Promise<void> {
   if (entries.length === 0) return;
   const now = new Date().toISOString();
-  await supabase.from('ratings').upsert(
-    entries.map((r) => ({
-      user_id: userId,
-      bar_id: r.barId,
-      tier: r.rating,
-      rated_at: r.ratedAt,
-      updated_at: now,
-      score: typeof r.score === 'number' ? r.score : null,
-    })),
-    { onConflict: 'user_id,bar_id' },
+  await Promise.all(
+    entries.map((r) =>
+      supabase
+        .from('ratings')
+        .update({
+          score: typeof r.score === 'number' ? r.score : null,
+          updated_at: now,
+        })
+        .eq('user_id', userId)
+        .eq('bar_id', r.barId),
+    ),
   );
 }
 
@@ -129,8 +134,15 @@ export async function deleteServerRating(
 export async function deleteAllServerRatings(
   supabase: SupabaseClient,
   userId: string,
-): Promise<void> {
-  await supabase.from('ratings').delete().eq('user_id', userId);
+): Promise<boolean> {
+  // supabase-js does NOT throw on failure — it resolves with { error }.
+  // Returning success explicitly keeps callers' failure handling alive
+  // (Codex review: a try/catch around this was dead code).
+  const { error } = await supabase
+    .from('ratings')
+    .delete()
+    .eq('user_id', userId);
+  return error === null;
 }
 
 /**
