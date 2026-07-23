@@ -4,16 +4,34 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 
-type Mode = 'password' | 'link';
-type PasswordIntent = 'signin' | 'signup';
+/**
+ * /auth — conventional email + password sign-in (operator call 2026-07-23:
+ * the earlier magic-link tab read as confusing; people expect
+ * username/password + "forgot password").
+ *
+ * Flows:
+ *   - Sign in: signInWithPassword → land on /settings.
+ *   - Create account: signUp → verification email → tap → signed in.
+ *   - Forgot password: resetPasswordForEmail → recovery email → tap → the
+ *     callback signs them in and lands on /settings, where the account
+ *     card's "Set a password" mints the new one. (Reuses the existing
+ *     pieces instead of a dedicated reset page.)
+ *
+ * Phone-number OTP sign-in is escalated — it needs an SMS provider
+ * (Twilio) configured in the Supabase dashboard. Wire it here once the
+ * operator supplies credentials (see nightlog escalation queue).
+ */
+
+type View = 'form' | 'forgot';
+type Intent = 'signin' | 'signup';
 
 type Status =
   | { kind: 'idle' }
   | { kind: 'sending' }
-  /** Magic link sent — check inbox to sign in. */
-  | { kind: 'sent'; email: string }
   /** Account created — check inbox to verify before first sign-in. */
   | { kind: 'confirm'; email: string }
+  /** Reset email sent — tap it, then set a new password in Settings. */
+  | { kind: 'reset-sent'; email: string }
   | { kind: 'error'; message: string };
 
 // Supabase's server-side default minimum; keep the client check in sync so
@@ -32,8 +50,8 @@ function isEmail(value: string): boolean {
 }
 
 export default function AuthPage() {
-  const [mode, setMode] = useState<Mode>('password');
-  const [intent, setIntent] = useState<PasswordIntent>('signin');
+  const [view, setView] = useState<View>('form');
+  const [intent, setIntent] = useState<Intent>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
@@ -41,25 +59,21 @@ export default function AuthPage() {
   const callbackUrl = (): string =>
     `${window.location.origin}/auth/callback?redirect_to=${AFTER_AUTH_PATH}`;
 
-  const handleLinkSubmit = async (): Promise<void> => {
+  const handleForgotSubmit = async (): Promise<void> => {
     const supabase = getBrowserSupabase();
     if (!supabase) {
       setStatus({ kind: 'error', message: UNCONFIGURED_MESSAGE });
       return;
     }
     setStatus({ kind: 'sending' });
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: {
-        emailRedirectTo: callbackUrl(),
-        shouldCreateUser: true,
-      },
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: callbackUrl(),
     });
     if (error) {
       setStatus({ kind: 'error', message: error.message });
       return;
     }
-    setStatus({ kind: 'sent', email: email.trim() });
+    setStatus({ kind: 'reset-sent', email: email.trim() });
   };
 
   const handlePasswordSubmit = async (): Promise<void> => {
@@ -106,13 +120,13 @@ export default function AuthPage() {
       password,
     });
     if (error) {
-      // Account-existence hints here are an accepted UX tradeoff (signup
+      // Account-existence hints are an accepted UX tradeoff (signup
       // already says when an email is taken); what we DON'T do is surface
       // raw Supabase errors for the common cases.
       const friendly = /email not confirmed/i.test(error.message)
         ? 'Almost there — tap the verification link we emailed you, then sign in.'
         : /invalid login credentials/i.test(error.message)
-          ? 'Wrong email or password. (Signed up with an email link before? Use the Email-link tab.)'
+          ? 'Wrong email or password. No password yet? Use "Forgot your password?" below.'
           : error.message;
       setStatus({ kind: 'error', message: friendly });
       return;
@@ -128,13 +142,13 @@ export default function AuthPage() {
       setStatus({ kind: 'error', message: "That email doesn't look right." });
       return;
     }
-    if (mode === 'link') await handleLinkSubmit();
+    if (view === 'forgot') await handleForgotSubmit();
     else await handlePasswordSubmit();
   };
 
   const isBusy = status.kind === 'sending';
   const inboxState =
-    status.kind === 'sent' || status.kind === 'confirm' ? status : null;
+    status.kind === 'confirm' || status.kind === 'reset-sent' ? status : null;
 
   return (
     <main className="min-h-screen flex flex-col">
@@ -159,10 +173,16 @@ export default function AuthPage() {
             Save your nights
           </p>
           <h1 className="font-display text-4xl md:text-5xl text-center leading-tight mb-4">
-            Sign in to Next Bar.
+            {view === 'forgot'
+              ? 'Reset your password.'
+              : intent === 'signup'
+                ? 'Create your account.'
+                : 'Sign in to Next Bar.'}
           </h1>
           <p className="text-muted text-sm text-center mb-8 leading-relaxed">
-            Your ratings, lists, and profile follow you to any device.
+            {view === 'forgot'
+              ? "Enter your email and we'll send a reset link."
+              : 'Your ratings, lists, and profile follow you to any device.'}
           </p>
 
           {inboxState ? (
@@ -171,48 +191,35 @@ export default function AuthPage() {
                 Check your inbox.
               </p>
               <p className="text-muted text-sm mb-4">
-                {inboxState.kind === 'sent' ? (
-                  <>
-                    We sent a sign-in link to{' '}
-                    <strong className="text-text">{inboxState.email}</strong>.
-                    Tap it on this device to come back signed in.
-                  </>
-                ) : (
+                {inboxState.kind === 'confirm' ? (
                   <>
                     We sent a verification link to{' '}
                     <strong className="text-text">{inboxState.email}</strong>.
                     Tap it to activate your account — then your password
                     works everywhere.
                   </>
+                ) : (
+                  <>
+                    We sent a reset link to{' '}
+                    <strong className="text-text">{inboxState.email}</strong>.
+                    Tap it and you&apos;ll be signed in — then set your new
+                    password from Settings.
+                  </>
                 )}
               </p>
               <button
                 type="button"
-                onClick={() => setStatus({ kind: 'idle' })}
+                onClick={() => {
+                  setStatus({ kind: 'idle' });
+                  setView('form');
+                }}
                 className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
               >
-                Use a different email
+                Back to sign in
               </button>
             </div>
           ) : (
             <>
-              <div
-                role="tablist"
-                aria-label="Sign-in method"
-                className="flex gap-2 justify-center mb-6"
-              >
-                <ModeTab
-                  label="Password"
-                  active={mode === 'password'}
-                  onClick={() => setMode('password')}
-                />
-                <ModeTab
-                  label="Email link"
-                  active={mode === 'link'}
-                  onClick={() => setMode('link')}
-                />
-              </div>
-
               <form onSubmit={handleSubmit} className="space-y-4">
                 <label className="block">
                   <span className="sr-only">Email</span>
@@ -229,7 +236,7 @@ export default function AuthPage() {
                   />
                 </label>
 
-                {mode === 'password' ? (
+                {view === 'form' ? (
                   <label className="block">
                     <span className="sr-only">Password</span>
                     <input
@@ -267,33 +274,57 @@ export default function AuthPage() {
                 >
                   {isBusy
                     ? 'One sec…'
-                    : mode === 'link'
-                      ? 'Send sign-in link →'
+                    : view === 'forgot'
+                      ? 'Send reset link →'
                       : intent === 'signup'
                         ? 'Create account →'
                         : 'Sign in →'}
                 </button>
               </form>
 
-              {mode === 'password' ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIntent(intent === 'signup' ? 'signin' : 'signup');
-                    if (status.kind === 'error') setStatus({ kind: 'idle' });
-                  }}
-                  className="block mx-auto text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation mt-4"
-                >
-                  {intent === 'signup'
-                    ? 'Have an account? Sign in'
-                    : 'New here? Create an account'}
-                </button>
-              ) : (
-                <p className="text-muted text-xs text-center mt-4">
-                  No password needed — the link signs you in. It also works
-                  as a reset if you ever forget yours.
-                </p>
-              )}
+              <div className="mt-4 space-y-1 text-center">
+                {view === 'form' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIntent(intent === 'signup' ? 'signin' : 'signup');
+                        if (status.kind === 'error')
+                          setStatus({ kind: 'idle' });
+                      }}
+                      className="block mx-auto text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                    >
+                      {intent === 'signup'
+                        ? 'Have an account? Sign in'
+                        : 'New here? Create an account'}
+                    </button>
+                    {intent === 'signin' ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setView('forgot');
+                          if (status.kind === 'error')
+                            setStatus({ kind: 'idle' });
+                        }}
+                        className="block mx-auto text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                      >
+                        Forgot your password?
+                      </button>
+                    ) : null}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setView('form');
+                      if (status.kind === 'error') setStatus({ kind: 'idle' });
+                    }}
+                    className="block mx-auto text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                  >
+                    ← Back to sign in
+                  </button>
+                )}
+              </div>
             </>
           )}
 
@@ -304,33 +335,5 @@ export default function AuthPage() {
         </div>
       </section>
     </main>
-  );
-}
-
-function ModeTab({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={[
-        'min-h-[44px] touch-manipulation px-5 py-2 rounded-full',
-        'font-display text-sm border transition-colors',
-        active
-          ? 'bg-accent text-bg border-accent'
-          : 'bg-surface border-border text-muted hover:text-text',
-      ].join(' ')}
-    >
-      {label}
-    </button>
   );
 }

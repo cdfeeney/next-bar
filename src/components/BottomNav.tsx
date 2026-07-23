@@ -72,23 +72,21 @@ export default function BottomNav(): JSX.Element | null {
         {TABS.map((tab) => {
           const active = tab.isActive(pathname);
 
-          if (tab.primary) {
+          // The primary tab is only special when it IS the current page:
+          // big raised accent pill on its own page, ordinary tab elsewhere
+          // (operator call 2026-07-23 — the permanent pill dominated the
+          // row and read as always-selected).
+          if (tab.primary && active) {
             return (
               <li key={tab.href} className="flex">
                 <Link
                   href={tab.href}
-                  aria-current={active ? 'page' : undefined}
+                  aria-current="page"
                   className={[
                     'flex flex-col items-center justify-center text-center touch-manipulation',
                     'min-h-[60px] min-w-[84px] -mt-7 px-6 py-3 rounded-full',
-                    'font-display text-[13px] uppercase tracking-wider',
-                    'transition-all active:scale-95',
-                    // Accent fill only when it IS the current page — otherwise
-                    // a quieter raised pill, so it stops reading as
-                    // permanently selected.
-                    active
-                      ? 'bg-accent text-bg shadow-lg shadow-accent/40 ring-2 ring-accent/50 ring-offset-2 ring-offset-bg'
-                      : 'bg-surface text-accent border border-accent/50 shadow-lg shadow-black/40',
+                    'bg-accent text-bg font-display text-[13px] uppercase tracking-wider',
+                    'shadow-lg shadow-accent/40 transition-transform active:scale-95',
                   ].join(' ')}
                 >
                   {tab.label}
