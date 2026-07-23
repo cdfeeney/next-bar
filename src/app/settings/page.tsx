@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deriveTasteProfile } from '@/lib/tasteProfile';
+import { deriveBadges } from '@/lib/badges';
 import { bars } from '@/lib/bars';
 
 export default function SettingsPage(): JSX.Element {
@@ -36,6 +37,7 @@ export default function SettingsPage(): JSX.Element {
   const passCount = ratings.filter((r) => r.rating === 'pass').length;
 
   const taste = deriveTasteProfile(ratings, bars);
+  const badgeReport = deriveBadges(ratings, bars, new Date());
 
   const handleClearProfile = () => {
     if (typeof window === 'undefined') return;
@@ -125,6 +127,44 @@ export default function SettingsPage(): JSX.Element {
             <Stat label="Passed" value={passCount} />
           </div>
         </div>
+
+        {ratings.length > 0 ? (
+          <div>
+            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+              Badges
+            </h2>
+            <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
+              <p className="text-xs text-muted">
+                Explorer score{' '}
+                <span className="text-accent font-display tabular-nums">
+                  {badgeReport.explorerScore}
+                </span>
+                {badgeReport.weekendStreakCount >= 2
+                  ? ` · ${badgeReport.weekendStreakCount}-weekend streak`
+                  : null}
+              </p>
+              <ul className="flex flex-wrap gap-2">
+                {badgeReport.badges.map((b) => (
+                  <li
+                    key={b.id}
+                    title={b.description}
+                    className={[
+                      'text-xs rounded-full px-3 py-1 border',
+                      b.earned
+                        ? 'border-accent text-accent'
+                        : 'border-border text-muted opacity-60',
+                    ].join(' ')}
+                  >
+                    {b.label}
+                    {b.earned
+                      ? ''
+                      : ` ${b.progress.current}/${b.progress.target}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ) : null}
 
         {taste.archetype !== null ? (
           <div>
