@@ -27,6 +27,9 @@ Both research pulls rank the **group decision loop** as the #1 unlock, then live
 
 Legend: 🟢 code-able unattended · 🟡 code-able but real value needs an escalated dependency · 🔴 escalate (needs account/key/decision).
 
+### Phase A0 — Brand refresh (operator-supplied 2026-07-23, run FIRST)
+- **A0 🟢 Poppins font swap.** Brand kit: font = **Poppins** (Google Fonts), weights Bold 700 (wordmark/headlines/accent words), Medium 500 (secondary headlines), Regular 400 (subtitles/captions, slight letter-spacing on small labels). Colors UNCHANGED — tailwind.config.ts already matches the kit (bg #0a0a0a, accent/coral #ff5b3a, text #f5f5f0, muted #8a8a85). Implementation: `next/font/google` Poppins (subsets latin, weights 400/500/700, `display: 'swap'`, CSS variable) in `src/app/layout.tsx`; point BOTH `fontFamily.display` and `fontFamily.sans` in tailwind.config.ts at the variable (display keeps bold weight via existing `font-display` usage — verify headlines render 700, add `font-bold` to `.font-display` contexts only if weight looks wrong in build output; simplest correct: display = ['var(--font-poppins)','sans-serif'] and rely on existing sizing). next/font self-hosts at build time — no runtime network calls, PWA-safe. Verify: build green + e2e smoke (app-shell) still passes; visual = headings no longer serif.
+
 ### Phase A — Identity & retention (safe quick wins, pure client from existing ratings)
 - **A1 🟢 Taste Profile page/section.** Derive from ratings + visited bars: dive vs cocktail vs wine ratio, neighborhood heatmap, archetype, counts. Letterboxd/Beli "taste identity." New `src/lib/tasteProfile.ts` (pure, unit-tested) + a profile surface (extend /settings or new `/you`). Tests: lib unit + e2e render.
 - **A2 🟢 Explorer score + Badges.** Compute from ratings/visits: neighborhood-completion, variety (5 speakeasies, 5 rooftops), streak-of-weekends. `src/lib/badges.ts` (pure, unit-tested) + badge shelf on profile. Untappd/Strava mechanic.
@@ -51,7 +54,7 @@ Legend: 🟢 code-able unattended · 🟡 code-able but real value needs an esca
 ---
 
 ## Overnight loop plan (unattended, while operator sleeps)
-**Order (safest-first, highest-leverage-early):** A1 → A2 → B1 → A3 → B2 → B3 → C1(UI only).
+**Order (safest-first, highest-leverage-early):** A0-brand → A1 → A2 → B1 → A3 → B2 → B3 → C1(UI only). (A1 landed `dff0d32`.)
 **Per tick:** implement ONE step → `npm test && npx tsc --noEmit && npm run build` (+ e2e on interactive steps) → commit locally. **Rules:** keep build green every tick; ESCALATE-don't-fake anything 🔴/🟡-blocked; ONE worktree; **NEVER push**; do NOT run `npm run build` while a dev server holds `.next` (documented footgun); pure-client + localStorage only (no external calls).
 **Escalation queue for the morning:** Supabase auth config (redirect URLs), web-push VAPID keys, Google Places key, Apple Developer enrollment — all needed to turn 🟡/🔴 steps fully live.
 
