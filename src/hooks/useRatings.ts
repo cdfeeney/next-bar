@@ -210,6 +210,12 @@ export function useRatings(): UseRatingsReturn {
         // (including rows written on other devices) so usePairwise and the
         // sign-out fallback read current data.
         writeRatings(merged);
+        // OWNERSHIP marker, not just merge bookkeeping (santa round-3): the
+        // cache now holds THIS account's data, so latch the flag even when
+        // no merge ran (sign-in with no local data). Without it the cache
+        // is indistinguishable from anonymous data and the foreign/residual
+        // guards would let a later account merge it as its own.
+        writeMergedFlag(userId);
       }
     })();
 

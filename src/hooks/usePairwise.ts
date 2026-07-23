@@ -139,7 +139,13 @@ export function usePairwise(): UsePairwiseReturn {
       const server = await fetchServerComparisons(supabase);
       // null = fetch failed — keep the local transcript rather than
       // pretending the user has never compared anything.
-      if (!cancelled && server !== null) setComparisons(server);
+      if (!cancelled && server !== null) {
+        setComparisons(server);
+        // OWNERSHIP marker (santa round-3, mirrors useRatings): the session
+        // now works this account's transcript, so latch the flag even when
+        // no merge ran — the residual/foreign guards key off it.
+        writeMergedFlag(userId);
+      }
     })();
 
     return () => {

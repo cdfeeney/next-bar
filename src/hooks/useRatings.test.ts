@@ -384,6 +384,24 @@ describe('useRatings — server mode', () => {
     expect(result.current.getRating('attaboy')).toBe('loved');
   });
 
+  it('latches the ownership flag on hydrate even when NO merge ran (santa round-3)', async () => {
+    // Sign-in on a device with no local data: the fetch populates the
+    // write-through cache — the flag must mark ownership anyway, or the
+    // cache reads as anonymous and a later account would merge it.
+    fetchServerRatingsMock.mockResolvedValueOnce([
+      { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+    ]);
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+    await waitFor(() => expect(result.current.ratings).toHaveLength(1));
+
+    expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1'),
+    );
+  });
+
   it("never merges another account's cached ratings into this one (cross-account guard)", async () => {
     // User A's write-through cache survived (e.g. session expired without
     // our sign-out button). User B signs in on the same browser.

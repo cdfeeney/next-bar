@@ -64,7 +64,10 @@ export function clearResidualAccountCache(): boolean {
  *
  * A cache with NO merged-for flag is genuine anonymous data (pre-first-sign-in)
  * and is left alone — merging that into the signing-in account is the intended
- * first-sign-in behavior.
+ * first-sign-in behavior. This is sound because the hooks latch the flag as an
+ * OWNERSHIP marker on every server hydrate (not only after a merge) — see the
+ * santa round-3 fix in useRatings/usePairwise; a signed-in account can never
+ * leave flag-less data in the cache.
  */
 export function guardAgainstForeignCache(currentUserId: string): boolean {
   if (typeof window === 'undefined') return false;
