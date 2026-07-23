@@ -32,6 +32,15 @@ async function typeEmail(input: Locator, value: string): Promise<void> {
   await expect(input).toHaveValue(value);
 }
 
+/** /auth now defaults to the Password tab; magic-link tests switch first. */
+async function gotoLinkTab(page: Page): Promise<void> {
+  await page.goto('/auth');
+  await page.getByRole('tab', { name: /Email link/i }).click();
+  await expect(
+    page.getByRole('button', { name: /send sign-in link/i }),
+  ).toBeVisible();
+}
+
 /**
  * Stub Supabase's OTP endpoint. The browser client posts to
  * `<SUPABASE_URL>/auth/v1/otp` regardless of project — we match by path so
@@ -74,7 +83,7 @@ test.describe('/auth — magic-link form', () => {
 
   test('blocks submit until email shape is valid', async ({ page }) => {
     await stubOtpOk(page);
-    await page.goto('/auth');
+    await gotoLinkTab(page);
 
     const input = page.getByRole('textbox', { name: /email/i });
     const submit = page.getByRole('button', { name: /send sign-in link/i });
@@ -94,7 +103,7 @@ test.describe('/auth — magic-link form', () => {
 
   test('successful submit shows the "Check your inbox" confirmation', async ({ page }) => {
     await stubOtpOk(page);
-    await page.goto('/auth');
+    await gotoLinkTab(page);
 
     const input = page.getByRole('textbox', { name: /email/i });
     await typeEmail(input, 'connor@example.com');
@@ -111,7 +120,7 @@ test.describe('/auth — magic-link form', () => {
     page,
   }) => {
     await stubOtpOk(page);
-    await page.goto('/auth');
+    await gotoLinkTab(page);
 
     const input = page.getByRole('textbox', { name: /email/i });
     await typeEmail(input, 'first@example.com');
@@ -129,7 +138,7 @@ test.describe('/auth — magic-link form', () => {
 
   test('Supabase error surfaces inline without entering the sent state', async ({ page }) => {
     await stubOtpError(page, 'Rate limit exceeded — try again in a minute.');
-    await page.goto('/auth');
+    await gotoLinkTab(page);
 
     const input = page.getByRole('textbox', { name: /email/i });
     await typeEmail(input, 'connor@example.com');
@@ -151,13 +160,147 @@ test.describe('/auth — magic-link form', () => {
     // Regression class — the rating-buttons-redirect-home bug. Any form
     // submit that changes route is suspect.
     await stubOtpOk(page);
-    await page.goto('/auth');
+    await gotoLinkTab(page);
 
     const input = page.getByRole('textbox', { name: /email/i });
     await typeEmail(input, 'connor@example.com');
     await page.getByRole('button', { name: /send sign-in link/i }).click();
 
     await expect(page.getByText(/check your inbox/i)).toBeVisible();
+    await expect(page).toHaveURL(/\/auth$/);
+  });
+});
+
+test.describe('/auth — password form', () => {
+  test('password tab is the default with sign-in and create-account modes', async ({
+    page,
+  }) => {
+    await page.goto('/auth');
+
+    await expect(page.getByRole('tab', { name: 'Password' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(page.getByPlaceholder('Password')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
+
+    await page.getByRole('button', { name: /create an account/i }).click();
+    await expect(
+      page.getByRole('button', { name: /^Create account →$/ }),
+    ).toBeVisible();
+    await expect(page.getByPlaceholder(/Choose a password/)).toBeVisible();
+  });
+
+  test('sign-up success shows the verify-your-email state', async ({ page }) => {
+    await page.route('**/auth/v1/signup**', async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'u1', email: 'new@example.com', identities: [{ id: 'i1' }] },
+          session: null,
+        }),
+      });
+    });
+    await page.goto('/auth');
+    await page.getByRole('button', { name: /create an account/i }).click();
+
+    await typeEmail(
+      page.getByRole('textbox', { name: /email/i }),
+      'new@example.com',
+    );
+    const pw = page.getByPlaceholder(/Choose a password/);
+    await pw.click();
+    await pw.pressSequentially('hunter22');
+    await page.getByRole('button', { name: /^Create account →$/ }).click();
+
+    await expect(page.getByText(/check your inbox/i)).toBeVisible();
+    await expect(page.getByText(/verification link/i)).toBeVisible();
+    await expect(page.getByText('new@example.com')).toBeVisible();
+  });
+
+  test('sign-up with an existing email flips to sign-in with guidance', async ({
+    page,
+  }) => {
+    // Confirm-email-on: Supabase signals an existing account via an
+    // obfuscated user with zero identities.
+    await page.route('**/auth/v1/signup**', async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'u1', email: 'taken@example.com', identities: [] },
+          session: null,
+        }),
+      });
+    });
+    await page.goto('/auth');
+    await page.getByRole('button', { name: /create an account/i }).click();
+
+    await typeEmail(
+      page.getByRole('textbox', { name: /email/i }),
+      'taken@example.com',
+    );
+    const pw = page.getByPlaceholder(/Choose a password/);
+    await pw.click();
+    await pw.pressSequentially('hunter22');
+    await page.getByRole('button', { name: /^Create account →$/ }).click();
+
+    const alert = page.locator('p[role="alert"]');
+    await expect(alert).toContainText(/already has an account/i);
+    // Flipped back to sign-in mode for them.
+    await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
+  });
+
+  test('wrong password surfaces a friendly error, no navigation', async ({
+    page,
+  }) => {
+    await page.route('**/auth/v1/token**', async (route: Route) => {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'invalid_grant',
+          error_description: 'Invalid login credentials',
+        }),
+      });
+    });
+    await page.goto('/auth');
+
+    await typeEmail(
+      page.getByRole('textbox', { name: /email/i }),
+      'connor@example.com',
+    );
+    const pw = page.getByPlaceholder('Password');
+    await pw.click();
+    await pw.pressSequentially('wrongpass');
+    await page.getByRole('button', { name: /^Sign in →$/ }).click();
+
+    const alert = page.locator('p[role="alert"]');
+    await expect(alert).toBeVisible();
+    await expect(alert).toContainText(/wrong email or password/i);
+    await expect(page).toHaveURL(/\/auth$/);
+  });
+
+  test('short password is blocked client-side before any request', async ({
+    page,
+  }) => {
+    // No route stub: if a request fired, this test would hang or 4xx —
+    // the client-side length check must reject first. minLength on the
+    // input blocks native submit, and the JS guard is the backstop.
+    await page.goto('/auth');
+
+    await typeEmail(
+      page.getByRole('textbox', { name: /email/i }),
+      'connor@example.com',
+    );
+    const pw = page.getByPlaceholder('Password');
+    await pw.click();
+    await pw.pressSequentially('abc');
+    await page.getByRole('button', { name: /^Sign in →$/ }).click();
+
+    // Never left the form, never reached a confirmation state.
+    await expect(page.getByText(/check your inbox/i)).not.toBeVisible();
     await expect(page).toHaveURL(/\/auth$/);
   });
 });

@@ -103,10 +103,12 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/install');
   });
 
-  test('/auth renders the magic-link sign-in form', async ({ page }) => {
+  test('/auth renders the sign-in form (password default, link tab)', async ({ page }) => {
     await page.goto('/auth');
     await expect(page.getByRole('heading', { name: /Sign in to Next Bar/i })).toBeVisible();
     await expect(page.getByRole('textbox', { name: /email/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
+    await page.getByRole('tab', { name: /Email link/i }).click();
     await expect(page.getByRole('button', { name: /Send sign-in link/i })).toBeVisible();
     await expectNoConsoleErrors(page, '/auth');
   });
