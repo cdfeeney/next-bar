@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useMemo } from 'react';
-import { bars } from '@/lib/bars';
+import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
@@ -10,6 +10,7 @@ import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
 
 export default function MapPage(): JSX.Element {
+  const bars = useBars();
   const { ratings } = useRatings();
   const { state, request, coords } = useGeolocation();
 

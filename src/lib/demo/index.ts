@@ -8,7 +8,7 @@
 
 import type { Bar } from '@/types';
 import type { BarRating } from '@/types/ratings';
-import { bars } from '@/lib/bars';
+import { getBarById } from '@/lib/catalog';
 import type { DemoFriend } from './friends';
 
 export { demoFriends, findDemoFriend } from './friends';
@@ -30,10 +30,10 @@ export {
   clearSampleNight,
 } from './seed';
 
-const barsById = new Map<string, Bar>(bars.map((b) => [b.id, b]));
-
+// Re-exported under the demo layer's historical name; the map-backed
+// lookup now lives in the catalog access layer (blueprint B1).
 export function barById(id: string): Bar | undefined {
-  return barsById.get(id);
+  return getBarById(id);
 }
 
 /** A friend's ratings sorted high→low, resolved to bars (drops unknown ids). */
@@ -45,7 +45,7 @@ export function topRatedBars(
     .slice()
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
     .map((rating) => {
-      const bar = barsById.get(rating.barId);
+      const bar = getBarById(rating.barId);
       return bar ? { rating, bar } : null;
     })
     .filter((x): x is { rating: BarRating; bar: Bar } => x !== null)

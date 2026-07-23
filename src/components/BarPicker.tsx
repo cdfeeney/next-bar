@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import type { Bar, ManhattanNeighborhood } from '@/types';
-import { bars } from '@/lib/bars';
+import { useBars } from '@/lib/useBars';
 import RatingBadge from '@/components/RatingBadge';
 
 type BarPickerProps = {
@@ -27,6 +27,7 @@ const NEIGHBORHOOD_ORDER: ManhattanNeighborhood[] = [
 
 export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {
   const [query, setQuery] = useState('');
+  const bars = useBars();
 
   const grouped = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -49,7 +50,7 @@ export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {
     }
 
     return groups;
-  }, [query]);
+  }, [query, bars]);
 
   return (
     <section className="max-w-2xl mx-auto">

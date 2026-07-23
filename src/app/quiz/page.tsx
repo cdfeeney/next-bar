@@ -13,7 +13,7 @@ import VibeQuiz from '@/components/VibeQuiz';
 import LocationPrompt from '@/components/LocationPrompt';
 import ResultsView from '@/components/ResultsView';
 import InstallNudge from '@/components/InstallNudge';
-import { bars } from '@/lib/bars';
+import { useBars } from '@/lib/useBars';
 import { matches } from '@/lib/matching';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 import { saveProfile } from '@/lib/storedProfile';
@@ -84,6 +84,7 @@ type QuizResultsProps = {
 };
 
 function QuizResults({ profile, location }: QuizResultsProps) {
+  const bars = useBars();
   const userCoords: Coords =
     location.kind === 'coords'
       ? location.coords

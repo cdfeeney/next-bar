@@ -1,5 +1,5 @@
 import { ImageResponse } from 'next/og';
-import { bars } from '@/lib/bars';
+import { getBarById } from '@/lib/catalog';
 
 export const runtime = 'edge';
 export const alt = "Tonight's pick — Next Bar";
@@ -13,7 +13,7 @@ export default function SharePickImage({
 }: {
   params: { barId: string };
 }) {
-  const bar = bars.find((b) => b.id === decodeURIComponent(params.barId));
+  const bar = getBarById(decodeURIComponent(params.barId));
   const name = bar?.name ?? 'Next Bar';
   const sub = bar
     ? `${bar.neighborhood} · ${'$'.repeat(bar.priceTier)}`

@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import type { Rating } from '@/types/ratings';
 import { useRatings } from '@/hooks/useRatings';
 import { usePairwise } from '@/hooks/usePairwise';
-import { bars } from '@/lib/bars';
+import { getBarById } from '@/lib/catalog';
 import PairwiseSheet from '@/components/PairwiseSheet';
 
 type RatingControlProps = {
@@ -53,8 +53,8 @@ export default function RatingControl({ barId }: RatingControlProps) {
       : null;
   const promptPair = useMemo(() => {
     if (!promptForThisBar) return null;
-    const justRated = bars.find((b) => b.id === promptForThisBar.justRatedBarId);
-    const peer = bars.find((b) => b.id === promptForThisBar.peerBarId);
+    const justRated = getBarById(promptForThisBar.justRatedBarId);
+    const peer = getBarById(promptForThisBar.peerBarId);
     if (!justRated || !peer) return null;
     return { justRated, peer, tier: promptForThisBar.tier };
   }, [promptForThisBar]);

@@ -8,13 +8,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { bars } from '@/lib/bars';
+import { getBarById } from '@/lib/catalog';
 import { buildMapsHref } from '@/lib/share';
 
 type ShareParams = { params: { barId: string } };
 
 function barFor(barId: string) {
-  return bars.find((b) => b.id === decodeURIComponent(barId));
+  return getBarById(decodeURIComponent(barId));
 }
 
 export function generateMetadata({ params }: ShareParams): Metadata {

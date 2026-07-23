@@ -8,7 +8,7 @@ import type {
   VibeProfile,
   VibeTag,
 } from '@/types';
-import { bars } from '@/lib/bars';
+import { useBars } from '@/lib/useBars';
 import { matches } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
@@ -45,6 +45,7 @@ export default function ResultsView({
       : profile.preferredNeighborhoods;
 
   const { ratings } = useRatings();
+  const bars = useBars();
 
   const effectiveExcludeIds = useMemo(() => {
     const merged = new Set(excludeIds ?? []);
@@ -68,7 +69,7 @@ export default function ResultsView({
       }
     }
     return Array.from(tags);
-  }, [ratings]);
+  }, [ratings, bars]);
 
   const ranked = useMemo(
     () =>
@@ -82,7 +83,7 @@ export default function ResultsView({
         maxResults,
         lovedTags,
       }),
-    [profile, userCoords, preferredNeighborhoods, maxMiles, effectiveExcludeIds, maxResults, lovedTags],
+    [profile, userCoords, preferredNeighborhoods, maxMiles, bars, effectiveExcludeIds, maxResults, lovedTags],
   );
 
   const locationLabel =

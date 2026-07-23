@@ -6,7 +6,7 @@ import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
 import { sortRatingsByScore } from '@/lib/pairwise';
 import { seedSampleNight } from '@/lib/demo';
-import { bars } from '@/lib/bars';
+import { getBarById } from '@/lib/catalog';
 import type { Bar } from '@/types';
 import type { BarRating, Rating } from '@/types/ratings';
 
@@ -42,10 +42,6 @@ function formatRatedAt(iso: string): string {
   return DATE_FORMATTER.format(date);
 }
 
-function findBarById(id: string): Bar | undefined {
-  return bars.find((b) => b.id === id);
-}
-
 type RatedEntry = {
   rating: BarRating;
   bar: Bar;
@@ -63,7 +59,7 @@ export default function RankingsPage(): JSX.Element {
     const sorted = sortRatingsByScore(ratings);
     const result: RatedEntry[] = [];
     for (const r of sorted) {
-      const bar = findBarById(r.barId);
+      const bar = getBarById(r.barId);
       if (bar) result.push({ rating: r, bar });
     }
     return result;
