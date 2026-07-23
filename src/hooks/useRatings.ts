@@ -6,6 +6,7 @@ import {
   clearRating as clearRatingLib,
   loadRatings,
   setRating as setRatingLib,
+  writeRatings,
 } from '@/lib/ratings';
 import {
   deleteServerRating,
@@ -47,6 +48,15 @@ function broadcastServerUpdate(detail: ServerBroadcastDetail): void {
   } catch {
     // Older Safari etc. — non-fatal; the next server fetch re-syncs.
   }
+}
+
+/**
+ * Publish a server-mode rating entry to every mounted useRatings instance.
+ * Exported for usePairwise (B0.4), which writes transcript-derived scores
+ * outside this hook but must keep in-tab rankings state coherent.
+ */
+export function broadcastServerRatingSet(entry: BarRating): void {
+  broadcastServerUpdate({ kind: 'set', entry });
 }
 
 export type UseRatingsReturn = {
@@ -153,7 +163,15 @@ export function useRatings(): UseRatingsReturn {
         writeMergedFlag(userId);
       }
       const server = await fetchServerRatings(supabase);
-      if (!cancelled) setRatings(server);
+      // null = fetch FAILED (not "no ratings") — keep whatever we have
+      // rather than blanking state / wiping the localStorage cache (B0.3).
+      if (!cancelled && server !== null) {
+        setRatings(server);
+        // Hydrate the localStorage cache with the authoritative server rows
+        // (including rows written on other devices) so usePairwise and the
+        // sign-out fallback read current data.
+        writeRatings(server);
+      }
     })();
 
     return () => {
@@ -180,15 +198,37 @@ export function useRatings(): UseRatingsReturn {
       if (modeRef.current === 'server' && auth.status === 'signed-in') {
         const supabase = getBrowserSupabase();
         if (supabase) {
+          // Tier semantics for the derived score (B0.4): a same-tier re-tap
+          // preserves pairwise refinement; a tier CHANGE invalidates it (the
+          // old score was interpolated inside the old tier's band).
+          const prevEntry = loadRatings().find((r) => r.barId === barId);
+          const tierChanged =
+            prevEntry !== undefined && prevEntry.rating !== rating;
+          const keptScore =
+            !tierChanged && typeof prevEntry?.score === 'number'
+              ? prevEntry.score
+              : undefined;
+          const entry: BarRating =
+            keptScore === undefined ? nextEntry : { ...nextEntry, score: keptScore };
+
           // Optimistic UI update.
           setRatings((prev) => {
             const filtered = prev.filter((r) => r.barId !== barId);
-            return [...filtered, nextEntry];
+            return [...filtered, entry];
           });
-          void upsertServerRating(supabase, auth.user.id, barId, rating);
+          // Write-through localStorage cache so usePairwise + sign-out
+          // fallback stay coherent with server-mode writes (B0.3).
+          setRatingLib(barId, rating);
+          void upsertServerRating(
+            supabase,
+            auth.user.id,
+            barId,
+            rating,
+            tierChanged ? null : undefined,
+          );
           // Notify every OTHER mounted useRatings instance (self-receipt is
           // an idempotent re-apply of the optimistic update above).
-          broadcastServerUpdate({ kind: 'set', entry: nextEntry });
+          broadcastServerUpdate({ kind: 'set', entry });
           return;
         }
       }
@@ -206,6 +246,8 @@ export function useRatings(): UseRatingsReturn {
         const supabase = getBrowserSupabase();
         if (supabase) {
           setRatings((prev) => prev.filter((r) => r.barId !== barId));
+          // Write-through cache (B0.3) — see setRating.
+          clearRatingLib(barId);
           void deleteServerRating(supabase, auth.user.id, barId);
           broadcastServerUpdate({ kind: 'clear', barId });
           return;

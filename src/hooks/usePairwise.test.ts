@@ -15,8 +15,41 @@ vi.mock('@/hooks/useAuth', () => ({
   })),
 }));
 
+vi.mock('@/lib/supabase/client', () => ({
+  getBrowserSupabase: vi.fn(() => null),
+}));
+
+vi.mock('@/lib/pairwise.server', () => ({
+  fetchServerComparisons: vi.fn(async () => []),
+  insertServerComparison: vi.fn(async () => undefined),
+  mergeLocalComparisonsToServer: vi.fn(async () => 0),
+}));
+
+// useRatings (imported for broadcastServerRatingSet) pulls the whole
+// ratings.server surface — mock every export it needs.
+vi.mock('@/lib/ratings.server', () => ({
+  fetchServerRatings: vi.fn(async () => []),
+  upsertServerRating: vi.fn(async () => undefined),
+  upsertServerRatingScores: vi.fn(async () => undefined),
+  deleteServerRating: vi.fn(async () => undefined),
+  deleteAllServerRatings: vi.fn(async () => undefined),
+  mergeLocalRatingsToServer: vi.fn(async () => 0),
+}));
+
 import { useAuth } from '@/hooks/useAuth';
+import { getBrowserSupabase } from '@/lib/supabase/client';
+import {
+  fetchServerComparisons,
+  insertServerComparison,
+  mergeLocalComparisonsToServer,
+} from '@/lib/pairwise.server';
+import { upsertServerRatingScores } from '@/lib/ratings.server';
 const useAuthMock = vi.mocked(useAuth);
+const getBrowserSupabaseMock = vi.mocked(getBrowserSupabase);
+const fetchServerComparisonsMock = vi.mocked(fetchServerComparisons);
+const insertServerComparisonMock = vi.mocked(insertServerComparison);
+const mergeLocalComparisonsToServerMock = vi.mocked(mergeLocalComparisonsToServer);
+const upsertServerRatingScoresMock = vi.mocked(upsertServerRatingScores);
 
 function seedRatings(rs: BarRating[]) {
   window.localStorage.setItem(RATINGS_KEY, JSON.stringify(rs));
@@ -193,63 +226,110 @@ describe('usePairwise — local mode (signed-out)', () => {
   });
 });
 
-describe('usePairwise — signed-in gate', () => {
-  beforeEach(() => {
-    window.localStorage.clear();
+describe('usePairwise — server mode (B0.4)', () => {
+  const fakeSupabase = { __fake: true } as never;
+
+  function signIn(): void {
     useAuthMock.mockReturnValue({
       status: 'signed-in',
       user: { id: 'user-1', email: 'connor@example.com' } as never,
       session: { user: { id: 'user-1' } } as never,
       signOut: vi.fn(),
     });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.clearAllMocks();
+    signIn();
+    getBrowserSupabaseMock.mockReturnValue(fakeSupabase);
+    fetchServerComparisonsMock.mockResolvedValue([]);
   });
 
-  it('requestPrompt is a no-op when signed-in (server-mode pending)', () => {
+  it('falls back to local mode when supabase is unavailable', async () => {
+    getBrowserSupabaseMock.mockReturnValue(null);
     seedRatings([rating('a', 'loved'), rating('b', 'loved')]);
+
     const { result } = renderHook(() => usePairwise());
     act(() => {
       result.current.requestPrompt('a', 'loved');
     });
-    expect(result.current.pendingPrompt).toBeNull();
-  });
+    expect(result.current.pendingPrompt?.peerBarId).toBe('b');
 
-  it('addComparison is a no-op when signed-in', () => {
-    seedRatings([rating('a', 'loved'), rating('b', 'loved')]);
-    const { result } = renderHook(() => usePairwise());
     act(() => {
       result.current.addComparison('a', 'b');
     });
-    expect(readComparisons()).toEqual([]);
-    // Scores on ratings are unchanged.
-    const persisted = readRatings();
-    expect(persisted.every((r) => r.score === undefined)).toBe(true);
+    // Local transcript written, nothing sent to the server.
+    expect(readComparisons()).toHaveLength(1);
+    expect(insertServerComparisonMock).not.toHaveBeenCalled();
   });
 
-  it('flipping to signed-in dismisses any open prompt', () => {
-    // Start signed-out so a prompt can open.
-    useAuthMock.mockReturnValue({
-      status: 'signed-out',
-      user: null,
-      session: null,
-      signOut: vi.fn(),
-    });
-    seedRatings([rating('a', 'loved'), rating('b', 'loved')]);
+  it('merges the local transcript once per user, then serves the server transcript', async () => {
+    const local: PairwiseComparison[] = [
+      { winnerBarId: 'a', loserBarId: 'b', comparedAt: '2026-05-20T00:00:00.000Z' },
+    ];
+    const server: PairwiseComparison[] = [
+      ...local,
+      { winnerBarId: 'c', loserBarId: 'a', comparedAt: '2026-05-21T00:00:00.000Z' },
+    ];
+    seedComparisons(local);
+    fetchServerComparisonsMock.mockResolvedValue(server);
 
-    const { result, rerender } = renderHook(() => usePairwise());
+    const { result, unmount } = renderHook(() => usePairwise());
+    await waitFor(() => expect(result.current.comparisons).toHaveLength(2));
+    expect(mergeLocalComparisonsToServerMock).toHaveBeenCalledTimes(1);
+    expect(mergeLocalComparisonsToServerMock.mock.calls[0][2]).toEqual(local);
+    unmount();
+
+    // Second mount for the same user: merge flag prevents a re-merge.
+    const second = renderHook(() => usePairwise());
+    await waitFor(() => expect(second.result.current.comparisons).toHaveLength(2));
+    expect(mergeLocalComparisonsToServerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('requestPrompt works while signed in (the old gate is gone)', async () => {
+    seedRatings([rating('a', 'loved'), rating('b', 'loved')]);
+    const { result } = renderHook(() => usePairwise());
+    await waitFor(() => expect(fetchServerComparisonsMock).toHaveBeenCalled());
+
     act(() => {
       result.current.requestPrompt('a', 'loved');
     });
-    expect(result.current.pendingPrompt).not.toBeNull();
-
-    // Now flip to signed-in and re-render.
-    useAuthMock.mockReturnValue({
-      status: 'signed-in',
-      user: { id: 'user-1', email: 'connor@example.com' } as never,
-      session: { user: { id: 'user-1' } } as never,
-      signOut: vi.fn(),
+    expect(result.current.pendingPrompt).toEqual({
+      justRatedBarId: 'a',
+      peerBarId: 'b',
+      tier: 'loved',
     });
-    rerender();
+  });
 
+  it('addComparison inserts to the server transcript and bulk-upserts changed scores', async () => {
+    seedRatings([rating('a', 'loved'), rating('b', 'loved')]);
+    const { result } = renderHook(() => usePairwise());
+    await waitFor(() => expect(fetchServerComparisonsMock).toHaveBeenCalled());
+
+    act(() => {
+      result.current.addComparison('a', 'b');
+    });
+
+    // Server insert with the session tag (uuid or null), not the local key.
+    expect(insertServerComparisonMock).toHaveBeenCalledTimes(1);
+    const [, userId, sent, sessionId] = insertServerComparisonMock.mock.calls[0];
+    expect(userId).toBe('user-1');
+    expect(sent.winnerBarId).toBe('a');
+    expect(sent.loserBarId).toBe('b');
+    expect(sessionId === null || typeof sessionId === 'string').toBe(true);
+    expect(readComparisons()).toEqual([]);
+
+    // Transcript-derived scores were bulk-upserted for the changed rows...
+    expect(upsertServerRatingScoresMock).toHaveBeenCalledTimes(1);
+    const entries = upsertServerRatingScoresMock.mock.calls[0][2];
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.every((e) => typeof e.score === 'number')).toBe(true);
+    // ...and the write-through ratings cache carries the same scores.
+    expect(readRatings().some((r) => typeof r.score === 'number')).toBe(true);
+
+    // Optimistic transcript state, prompt dismissed.
+    expect(result.current.comparisons).toHaveLength(1);
     expect(result.current.pendingPrompt).toBeNull();
   });
 });

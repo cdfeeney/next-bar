@@ -356,7 +356,7 @@ describe('useRatings — server mode', () => {
     });
   });
 
-  it('setRating in server mode goes through upsertServerRating (not localStorage)', async () => {
+  it('setRating in server mode upserts AND write-through caches to localStorage (B0.3)', async () => {
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
     const { result } = renderHook(() => useRatings());
     await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
@@ -365,16 +365,43 @@ describe('useRatings — server mode', () => {
       result.current.setRating('attaboy', 'loved');
     });
 
+    // New rating: score arg is undefined (nothing to preserve or reset).
     expect(upsertServerRatingMock).toHaveBeenCalledWith(
       fakeSupabase,
       'user-1',
       'attaboy',
       'loved',
+      undefined,
     );
-    // The KEY localStorage path was NOT touched on writes in server mode.
-    expect(window.localStorage.getItem(KEY)).toBeNull();
+    // Write-through cache: localStorage mirrors the server-mode write so
+    // usePairwise and the sign-out fallback read current data.
+    const cached = JSON.parse(window.localStorage.getItem(KEY) ?? '[]');
+    expect(cached.some((r: { barId: string }) => r.barId === 'attaboy')).toBe(true);
     // Optimistic state update happened.
     expect(result.current.getRating('attaboy')).toBe('loved');
+  });
+
+  it('setRating passes score:null on a tier CHANGE (stale band score must clear)', async () => {
+    // The existing scored rating arrives from the server fetch; hydrate
+    // writes it into the localStorage cache the tier-change check reads.
+    fetchServerRatingsMock.mockResolvedValueOnce([
+      { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z', score: 9.1 },
+    ]);
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+    const { result } = renderHook(() => useRatings());
+    await waitFor(() => expect(result.current.ratings).toHaveLength(1));
+
+    act(() => {
+      result.current.setRating('attaboy', 'liked');
+    });
+
+    expect(upsertServerRatingMock).toHaveBeenCalledWith(
+      fakeSupabase,
+      'user-1',
+      'attaboy',
+      'liked',
+      null,
+    );
   });
 
   it('clearRating in server mode goes through deleteServerRating (not localStorage)', async () => {

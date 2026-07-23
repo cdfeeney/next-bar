@@ -7,37 +7,65 @@ import type { BarRating, Rating } from '@/types/ratings';
  *
  * Shape mapping:
  *   localStorage BarRating  ↔  Supabase `ratings` row
- *   { barId, rating, ratedAt }  ↔  { bar_id, tier, rated_at }
+ *   { barId, rating, ratedAt, score }  ↔  { bar_id, tier, rated_at, score }
  *
  * RLS guarantees the server will only return / accept rows for the
  * authenticated user, so we don't filter by user_id on reads.
+ *
+ * Concurrency (B0.3): every write carries a client-generated `updated_at`;
+ * the `ratings_lww` trigger (migration 0005) silently skips updates that
+ * are not strictly newer, so two devices racing on the same bar converge
+ * on the later write instead of the later-arriving one.
  */
 
 type Row = {
   bar_id: string;
   tier: Rating;
   rated_at: string;
+  score: number | null;
 };
 
 function rowToRating(row: Row): BarRating {
-  return { barId: row.bar_id, rating: row.tier, ratedAt: row.rated_at };
+  return {
+    barId: row.bar_id,
+    rating: row.tier,
+    ratedAt: row.rated_at,
+    ...(typeof row.score === 'number' ? { score: row.score } : {}),
+  };
 }
 
+/**
+ * Fetch the user's ratings. Returns null on transport/RLS error so callers
+ * can distinguish "no ratings" from "fetch failed" — hydrating a cache from
+ * a failed fetch would silently wipe it.
+ */
 export async function fetchServerRatings(
   supabase: SupabaseClient,
-): Promise<BarRating[]> {
+): Promise<BarRating[] | null> {
   const { data, error } = await supabase
     .from('ratings')
-    .select('bar_id, tier, rated_at');
-  if (error || !data) return [];
+    .select('bar_id, tier, rated_at, score');
+  if (error || !data) return null;
   return (data as Row[]).map(rowToRating);
 }
 
+/**
+ * Upsert one rating row.
+ *
+ * `score` semantics:
+ *   - omitted (undefined) → column left out of the payload; PostgREST's
+ *     ON CONFLICT SET only touches supplied columns, so an existing score
+ *     is preserved (same-tier re-tap must not wipe refinement).
+ *   - null → explicitly clears the score (tier CHANGED: the old score was
+ *     interpolated inside the old tier's band and is meaningless now).
+ *   - number → writes that score.
+ */
 export async function upsertServerRating(
   supabase: SupabaseClient,
   userId: string,
   barId: string,
   rating: Rating,
+  score?: number | null,
 ): Promise<void> {
   await supabase.from('ratings').upsert(
     {
@@ -45,7 +73,34 @@ export async function upsertServerRating(
       bar_id: barId,
       tier: rating,
       rated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      ...(score === undefined ? {} : { score }),
     },
+    { onConflict: 'user_id,bar_id' },
+  );
+}
+
+/**
+ * Bulk-write transcript-derived scores after a pairwise answer (B0.4).
+ * Sends full rows (tier + rated_at included) so the upsert can never hit a
+ * NOT NULL violation even if a row vanished server-side between reads.
+ */
+export async function upsertServerRatingScores(
+  supabase: SupabaseClient,
+  userId: string,
+  entries: ReadonlyArray<BarRating>,
+): Promise<void> {
+  if (entries.length === 0) return;
+  const now = new Date().toISOString();
+  await supabase.from('ratings').upsert(
+    entries.map((r) => ({
+      user_id: userId,
+      bar_id: r.barId,
+      tier: r.rating,
+      rated_at: r.ratedAt,
+      updated_at: now,
+      score: typeof r.score === 'number' ? r.score : null,
+    })),
     { onConflict: 'user_id,bar_id' },
   );
 }
@@ -81,6 +136,8 @@ export async function deleteAllServerRatings(
  * One-shot merge of localStorage ratings into the user's server ratings.
  * Server-wins on conflict — we only insert bars that don't already have a
  * server rating for this user. Idempotent: running twice does nothing.
+ * Aborts (returns 0) when the pre-merge fetch fails — merging blind against
+ * unknown server state could duplicate rows.
  *
  * Returns the count of rows actually inserted (useful for telemetry / UI).
  */
@@ -92,6 +149,7 @@ export async function mergeLocalRatingsToServer(
   if (localRatings.length === 0) return 0;
 
   const existing = await fetchServerRatings(supabase);
+  if (existing === null) return 0;
   const existingBarIds = new Set(existing.map((r) => r.barId));
 
   const toInsert = localRatings
@@ -101,6 +159,8 @@ export async function mergeLocalRatingsToServer(
       bar_id: r.barId,
       tier: r.rating,
       rated_at: r.ratedAt,
+      updated_at: r.ratedAt,
+      score: typeof r.score === 'number' ? r.score : null,
     }));
 
   if (toInsert.length === 0) return 0;

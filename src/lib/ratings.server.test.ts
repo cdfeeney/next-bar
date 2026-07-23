@@ -97,26 +97,39 @@ describe('fetchServerRatings', () => {
     ]);
   });
 
-  it('returns [] when the query errors', async () => {
+  it('returns null when the query errors (distinguishable from "no ratings")', async () => {
     const { client } = fakeSupabase({
       selectError: { message: 'RLS denied' },
       selectData: null,
     });
 
-    expect(await fetchServerRatings(client)).toEqual([]);
+    expect(await fetchServerRatings(client)).toBeNull();
   });
 
-  it('returns [] when data is null with no error', async () => {
+  it('returns null when data is null with no error', async () => {
     const { client } = fakeSupabase({ selectData: null });
-    expect(await fetchServerRatings(client)).toEqual([]);
+    expect(await fetchServerRatings(client)).toBeNull();
   });
 
-  it('selects from the `ratings` table with the three needed columns', async () => {
+  it('selects from the `ratings` table including score (B0.4)', async () => {
     const { client, calls } = fakeSupabase({ selectData: [] });
     await fetchServerRatings(client);
 
     expect(calls.from).toEqual(['ratings']);
-    expect(calls.select).toEqual(['bar_id, tier, rated_at']);
+    expect(calls.select).toEqual(['bar_id, tier, rated_at, score']);
+  });
+
+  it('maps a numeric score onto the BarRating and omits null scores', async () => {
+    const { client } = fakeSupabase({
+      selectData: [
+        { bar_id: 'attaboy', tier: 'loved', rated_at: '2026-05-10T00:00:00.000Z', score: 9.3 },
+        { bar_id: 'buvette', tier: 'liked', rated_at: '2026-05-11T00:00:00.000Z', score: null },
+      ],
+    });
+
+    const result = await fetchServerRatings(client);
+    expect(result?.[0].score).toBe(9.3);
+    expect(result?.[1]).not.toHaveProperty('score');
   });
 });
 

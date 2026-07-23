@@ -80,10 +80,20 @@ export function getRating(barId: string): Rating | null {
 export function setRating(barId: string, rating: Rating): void {
   if (typeof window === 'undefined') return;
   const current = loadRatings();
+  // Same-tier re-tap keeps the pairwise-derived score (refinement survives);
+  // a tier CHANGE drops it — the old score was interpolated inside the old
+  // tier's band and is meaningless in the new one (B0.4 semantics, mirrored
+  // by the server path in useRatings/ratings.server).
+  const prev = current.find((r) => r.barId === barId);
+  const keptScore =
+    prev !== undefined && prev.rating === rating && typeof prev.score === 'number'
+      ? prev.score
+      : undefined;
   const next: BarRating = {
     barId,
     rating,
     ratedAt: new Date().toISOString(),
+    ...(keptScore === undefined ? {} : { score: keptScore }),
   };
   const filtered = current.filter((r) => r.barId !== barId);
   const updated = [...filtered, next];
