@@ -322,8 +322,9 @@ describe('usePairwise — server mode (B0.4)', () => {
     // so a later failed fetch has a usable fallback (Codex review).
     expect(readComparisons()).toHaveLength(1);
 
-    // Transcript-derived scores were persisted (score-only) for changed rows...
-    expect(updateServerScoresMock).toHaveBeenCalledTimes(1);
+    // Transcript-derived scores were persisted (score-only) for changed
+    // rows — through the serialized write chain, hence the waitFor.
+    await waitFor(() => expect(updateServerScoresMock).toHaveBeenCalledTimes(1));
     const entries = updateServerScoresMock.mock.calls[0][2];
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.every((e) => typeof e.score === 'number')).toBe(true);

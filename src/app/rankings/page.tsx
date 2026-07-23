@@ -7,6 +7,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { sortRatingsByScore } from '@/lib/pairwise';
 import { seedSampleNight } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
+import QuickAddBar from '@/components/QuickAddBar';
 import type { Bar } from '@/types';
 import type { BarRating, Rating } from '@/types/ratings';
 
@@ -90,6 +91,13 @@ export default function RankingsPage(): JSX.Element {
         >
           Your lists →
         </Link>
+        {!hasNoRatings ? (
+          // Persistent quick-add entry (B4). The empty state below mounts
+          // its own instance — exactly one QuickAddBar renders at a time.
+          <div className="mt-3">
+            <QuickAddBar />
+          </div>
+        ) : null}
       </header>
 
       <div
@@ -127,6 +135,9 @@ export default function RankingsPage(): JSX.Element {
             0–10 by your own taste. Your rankings stay on this device until the
             app ships with sync.
           </p>
+          <div className="mb-4">
+            <QuickAddBar />
+          </div>
           <Link
             href="/"
             className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display text-lg inline-flex items-center justify-center"

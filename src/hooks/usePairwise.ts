@@ -19,6 +19,11 @@ import {
   pickComparisonTarget,
   reconcileScores,
 } from '@/lib/pairwise';
+import {
+  answerComparison,
+  startInsertSession,
+  type InsertSession,
+} from '@/lib/insertFlow';
 import { useAuth } from '@/hooks/useAuth';
 import { broadcastServerRatingSet } from '@/hooks/useRatings';
 import { getBrowserSupabase } from '@/lib/supabase/client';
@@ -36,25 +41,37 @@ export type PendingPrompt = {
   tier: Extract<Rating, 'loved' | 'liked'>;
 };
 
+export type SessionProgress = {
+  /** 1-based number of the comparison currently on screen. */
+  step: number;
+  /** Worst-case comparisons for this insert session. */
+  maxSteps: number;
+};
+
 export type UsePairwiseReturn = {
   comparisons: PairwiseComparison[];
   pendingPrompt: PendingPrompt | null;
   /**
-   * Try to open a comparison prompt for a bar the user just rated. Looks
-   * for a same-tier peer with the fewest existing comparisons. No-op when:
-   *   - tier is 'pass' (matcher returns null per Q2)
+   * Try to open a comparison prompt for a bar the user just rated. When the
+   * tier has ≥2 peers this starts a B4 binary-insert CHAIN (one prompt per
+   * probe, ≤7); with exactly 1 peer it falls back to the original one-shot
+   * prompt. No-op when:
+   *   - tier is 'pass' (Q2 — no Pass-vs-Pass ordering)
    *   - the user has no other same-tier rated bars
    */
   requestPrompt: (justRatedBarId: string, tier: Rating) => void;
   /**
    * Record a comparison the user just answered. Persists the row (local
    * storage signed-out, `pairwise_comparisons` signed-in), recomputes
-   * scores via `applyComparison`, commits the new BarRating[], and
-   * dismisses the prompt.
+   * scores via `applyComparison`, commits the new BarRating[], and then
+   * either advances the active insert chain to its next probe (same tier,
+   * next peer) or dismisses the prompt.
    */
   addComparison: (winnerBarId: string, loserBarId: string) => void;
   /** Dismiss the prompt without recording a pick (Skip / Escape / backdrop). */
   dismissPrompt: () => void;
+  /** "2 of 4" copy for the sheet while an insert chain is active, else null. */
+  sessionProgress: SessionProgress | null;
 };
 
 /**
@@ -75,6 +92,15 @@ export function usePairwise(): UsePairwiseReturn {
   const auth = useAuth();
   const [comparisons, setComparisons] = useState<PairwiseComparison[]>([]);
   const [pendingPrompt, setPendingPrompt] = useState<PendingPrompt | null>(null);
+  // Active B4 binary-insert chain, or null when the (legacy) one-shot
+  // prompt path is in play. Only requestPrompt starts one.
+  const [insertSession, setInsertSession] = useState<InsertSession | null>(
+    null,
+  );
+  // Last (bar|probe|step) an answer was persisted for — double-tap guard.
+  const lastAnsweredProbeRef = useRef<string | null>(null);
+  // Serialization chain for server score writes — see persistComparison.
+  const scoreWriteChainRef = useRef<Promise<unknown>>(Promise.resolve());
   const modeRef = useRef<'local' | 'server' | 'pending'>('pending');
   // One session id per mounted app instance — tags this device's inserts
   // (migration 0005) so a future reconcile flow can detect interleaved
@@ -93,7 +119,10 @@ export function usePairwise(): UsePairwiseReturn {
     setComparisons(loadComparisons());
 
     function handle(): void {
-      if (modeRef.current === 'server') return;
+      // BOTH modes re-read from the write-through cache (Codex B4 review):
+      // server-mode appends mirror into it, so it is the shared source for
+      // every mounted instance — without this, a second RatingControl's
+      // chain started from a transcript missing the first one's answers.
       setComparisons(loadComparisons());
     }
     window.addEventListener(COMPARISONS_BROADCAST, handle);
@@ -188,9 +217,42 @@ export function usePairwise(): UsePairwiseReturn {
 
   const requestPrompt = useCallback(
     (justRatedBarId: string, tier: Rating) => {
+      // EVERY new request invalidates whatever chain/prompt was active
+      // (Codex B4 review): re-rating a bar as Pass mid-chain must not
+      // leave the old sheet appending against stale peers/tiers.
+      setInsertSession(null);
+      setPendingPrompt(null);
+      lastAnsweredProbeRef.current = null;
       if (tier !== 'loved' && tier !== 'liked') return;
 
       const ratings = loadRatings();
+      const peerCount = ratings.filter(
+        (r) => r.rating === tier && r.barId !== justRatedBarId,
+      ).length;
+
+      // ≥2 peers → binary-insert chain (B4). The session probes the
+      // midpoint of the tier's current effective order and halves the
+      // window on each answer, ≤7 comparisons total.
+      if (peerCount >= 2) {
+        const session = startInsertSession(
+          ratings,
+          comparisons,
+          justRatedBarId,
+          tier,
+        );
+        if (!session.done && session.probeBarId !== null) {
+          setInsertSession(session);
+          setPendingPrompt({
+            justRatedBarId,
+            peerBarId: session.probeBarId,
+            tier,
+          });
+          return;
+        }
+      }
+
+      // 0–1 peers (or a session that couldn't start) → original one-shot
+      // prompt behavior.
       const peer = pickComparisonTarget(
         ratings,
         comparisons,
@@ -204,16 +266,13 @@ export function usePairwise(): UsePairwiseReturn {
     [comparisons],
   );
 
-  const addComparison = useCallback(
-    (winnerBarId: string, loserBarId: string) => {
-      if (winnerBarId === loserBarId) return;
-
-      const newComparison: PairwiseComparison = {
-        winnerBarId,
-        loserBarId,
-        comparedAt: new Date().toISOString(),
-      };
-
+  /**
+   * Persist one answered comparison through the mode-appropriate path and
+   * recompute scores from the full transcript. Extracted from the original
+   * addComparison unchanged — the chain reuses it once per answer.
+   */
+  const persistComparison = useCallback(
+    (newComparison: PairwiseComparison) => {
       // Recompute against the CURRENT ratings (write-through cache keeps
       // this fresh in server mode too).
       const currentRatings = loadRatings();
@@ -232,6 +291,10 @@ export function usePairwise(): UsePairwiseReturn {
           // fetch still has a usable fallback (Codex review).
           setComparisons((prev) => [...prev, newComparison]);
           appendComparison(newComparison);
+          // Tell every OTHER mounted usePairwise instance (Codex B4 review —
+          // server mode previously never broadcast, so sibling RatingControls
+          // built chains from incomplete transcripts).
+          broadcast();
           void insertServerComparison(
             supabase,
             userId,
@@ -242,16 +305,20 @@ export function usePairwise(): UsePairwiseReturn {
           // Persist only the rows whose score actually changed (score-ONLY
           // updates — full-row upserts could roll back a newer tier change
           // from another device), then let every mounted useRatings
-          // instance know.
+          // instance know. Writes are SERIALIZED through a promise chain
+          // (Codex B4 review): two chained answers' fire-and-forget score
+          // writes could otherwise land out of order, leaving answer 1's
+          // intermediate scores on the server until the next hydrate's
+          // reconcile pass.
           const changed = updatedRatings.filter((r) => {
             const before = currentRatings.find((c) => c.barId === r.barId);
             return before === undefined || before.score !== r.score;
           });
-          void updateServerScores(supabase, userId, changed);
+          scoreWriteChainRef.current = scoreWriteChainRef.current
+            .then(() => updateServerScores(supabase, userId, changed))
+            .catch(() => undefined);
           writeRatings(updatedRatings); // keep the write-through cache coherent
           for (const entry of changed) broadcastServerRatingSet(entry);
-
-          setPendingPrompt(null);
           return;
         }
       }
@@ -260,15 +327,89 @@ export function usePairwise(): UsePairwiseReturn {
 
       writeRatings(updatedRatings);
       setComparisons(updatedComparisons);
-      setPendingPrompt(null);
       broadcast();
     },
     [auth, broadcast, comparisons],
   );
 
+  const addComparison = useCallback(
+    (winnerBarId: string, loserBarId: string) => {
+      if (winnerBarId === loserBarId) return;
+
+      // Does this answer belong to the active insert chain? (It always
+      // does when the sheet was opened by a session prompt — this guard
+      // just refuses to advance the chain on a mismatched pair.)
+      const chained =
+        insertSession !== null &&
+        !insertSession.done &&
+        insertSession.probeBarId !== null &&
+        ((winnerBarId === insertSession.barId &&
+          loserBarId === insertSession.probeBarId) ||
+          (winnerBarId === insertSession.probeBarId &&
+            loserBarId === insertSession.barId));
+
+      if (chained && insertSession) {
+        // Double-tap idempotence (Opus review): a second tap before the
+        // re-render calls this with the SAME stale session closure — it
+        // would persist a duplicate row for the same probe and skip ahead.
+        // One persist per (bar, probe, step), full stop.
+        const probeKey = `${insertSession.barId}|${insertSession.probeBarId}|${insertSession.step}`;
+        if (lastAnsweredProbeRef.current === probeKey) return;
+        lastAnsweredProbeRef.current = probeKey;
+
+        const { session: next, comparison } = answerComparison(
+          insertSession,
+          winnerBarId,
+        );
+        if (comparison === null) return; // defensive; `chained` should preclude
+        persistComparison(comparison);
+
+        // Chain not finished → immediately show the next probe instead of
+        // closing the sheet. A conflicted session ends gracefully here
+        // (done=true) with the answer already recorded.
+        if (
+          !next.done &&
+          next.probeBarId !== null &&
+          (next.tier === 'loved' || next.tier === 'liked')
+        ) {
+          setInsertSession(next);
+          setPendingPrompt({
+            justRatedBarId: next.barId,
+            peerBarId: next.probeBarId,
+            tier: next.tier,
+          });
+          return;
+        }
+        setInsertSession(null);
+        setPendingPrompt(null);
+        return;
+      }
+
+      // One-shot path (no active chain) — original behavior.
+      persistComparison({
+        winnerBarId,
+        loserBarId,
+        comparedAt: new Date().toISOString(),
+      });
+      setInsertSession(null);
+      setPendingPrompt(null);
+    },
+    [insertSession, persistComparison],
+  );
+
   const dismissPrompt = useCallback(() => {
+    // Skip ends the whole chain (B4: bar falls back to the band midpoint
+    // when nothing was answered — see skipSession semantics in
+    // lib/insertFlow.ts). Answers already given stay persisted; nothing to
+    // roll back, so dropping the session object is the entire skip.
+    setInsertSession(null);
     setPendingPrompt(null);
   }, []);
+
+  const sessionProgress: SessionProgress | null =
+    insertSession !== null && !insertSession.done
+      ? { step: insertSession.step + 1, maxSteps: insertSession.maxSteps }
+      : null;
 
   return {
     comparisons,
@@ -276,6 +417,7 @@ export function usePairwise(): UsePairwiseReturn {
     requestPrompt,
     addComparison,
     dismissPrompt,
+    sessionProgress,
   };
 }
 

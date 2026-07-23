@@ -40,8 +40,13 @@ function selectedClassesFor(rating: Rating): string {
 
 export default function RatingControl({ barId }: RatingControlProps) {
   const { getRating, setRating, clearRating } = useRatings();
-  const { pendingPrompt, requestPrompt, addComparison, dismissPrompt } =
-    usePairwise();
+  const {
+    pendingPrompt,
+    requestPrompt,
+    addComparison,
+    dismissPrompt,
+    sessionProgress,
+  } = usePairwise();
   const current = getRating(barId);
 
   // Resolve the prompt's bar pair into actual Bar objects so PairwiseSheet
@@ -103,6 +108,7 @@ export default function RatingControl({ barId }: RatingControlProps) {
             addComparison(winnerBarId, loserBarId)
           }
           onSkip={dismissPrompt}
+          progress={sessionProgress ?? undefined}
         />
       ) : null}
     </div>

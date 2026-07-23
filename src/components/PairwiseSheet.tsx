@@ -25,6 +25,11 @@ type PairwiseSheetProps = {
   onPick: (winnerBarId: string, loserBarId: string) => void;
   /** Skip this comparison; no comparison is recorded. */
   onSkip: () => void;
+  /**
+   * Optional chain progress ("2 of 4") when this prompt is one step of a
+   * B4 binary-insert session. Omitted for the one-shot prompt.
+   */
+  progress?: { step: number; maxSteps: number };
 };
 
 const PROMPT_BY_TIER: Record<Rating, string> = {
@@ -57,6 +62,7 @@ export default function PairwiseSheet({
   tier,
   onPick,
   onSkip,
+  progress,
 }: PairwiseSheetProps): JSX.Element {
   const firstButtonRef = useRef<HTMLButtonElement | null>(null);
 
@@ -112,6 +118,11 @@ export default function PairwiseSheet({
           <p className="text-muted text-sm mt-2">
             Helps your rankings refine over time. Skip if it&apos;s a toss-up.
           </p>
+          {progress && progress.maxSteps > 1 ? (
+            <p className="text-muted text-xs mt-2 tabular-nums">
+              {progress.step} of {progress.maxSteps}
+            </p>
+          ) : null}
         </header>
 
         <div className="flex-1 flex flex-col gap-4 justify-center">
