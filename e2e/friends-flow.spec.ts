@@ -71,6 +71,27 @@ test.describe('Friends + consensus', () => {
     ).toHaveCount(0);
   });
 
+  test('tonight intent toggles, persists, and shows circle signals', async ({ page }) => {
+    await page.goto('/friends');
+
+    // Default circle (maya + jordan) has seeded demo signals.
+    await expect(page.getByText(/Maya/).first()).toBeVisible();
+    await expect(page.getByText(/is going out tonight/i)).toBeVisible();
+    await expect(page.getByText(/might be out later/i)).toBeVisible();
+
+    // Set your own status; it sticks across reload.
+    const goingBtn = page.getByRole('button', { name: /^Going out$/ });
+    await goingBtn.click();
+    await expect(goingBtn).toHaveAttribute('aria-pressed', 'true');
+    await page.reload();
+    const goingAfter = page.getByRole('button', { name: /^Going out$/ });
+    await expect(goingAfter).toHaveAttribute('aria-pressed', 'true');
+
+    // Tapping the active status clears it.
+    await goingAfter.click();
+    await expect(goingAfter).toHaveAttribute('aria-pressed', 'false');
+  });
+
   test('friends-only vote settles instantly with a winner', async ({ page }) => {
     await page.goto('/friends/consensus');
 

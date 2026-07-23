@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import FriendCard from '@/components/FriendCard';
+import TonightSection from '@/components/TonightSection';
 import { useFollows } from '@/hooks/useFollows';
 import { demoFriends } from '@/lib/demo';
 
@@ -57,6 +58,9 @@ export default function FriendsPage(): JSX.Element {
             rated highly. No more group-chat paralysis.
           </p>
         </Link>
+
+        {/* Tonight — live intent (B2): your toggle + the circle's signals. */}
+        <TonightSection friends={followed} />
 
         {/* Your circle */}
         <div>
