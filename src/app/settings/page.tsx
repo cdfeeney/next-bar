@@ -7,6 +7,8 @@ import { loadProfile, clearProfile } from '@/lib/storedProfile';
 import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
+import { deriveTasteProfile } from '@/lib/tasteProfile';
+import { bars } from '@/lib/bars';
 
 export default function SettingsPage(): JSX.Element {
   const { ratings } = useRatings();
@@ -32,6 +34,8 @@ export default function SettingsPage(): JSX.Element {
   const lovedCount = ratings.filter((r) => r.rating === 'loved').length;
   const likedCount = ratings.filter((r) => r.rating === 'liked').length;
   const passCount = ratings.filter((r) => r.rating === 'pass').length;
+
+  const taste = deriveTasteProfile(ratings, bars);
 
   const handleClearProfile = () => {
     if (typeof window === 'undefined') return;
@@ -121,6 +125,36 @@ export default function SettingsPage(): JSX.Element {
             <Stat label="Passed" value={passCount} />
           </div>
         </div>
+
+        {taste.archetype !== null ? (
+          <div>
+            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+              Your taste
+            </h2>
+            <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
+              <p className="font-display text-xl text-accent">{taste.archetype}</p>
+              <div className="flex flex-wrap gap-2">
+                {taste.topTags.map((t) => (
+                  <span
+                    key={t.tag}
+                    className="text-xs border border-border rounded-full px-3 py-1 text-muted"
+                  >
+                    {t.tag}
+                  </span>
+                ))}
+              </div>
+              {taste.neighborhoods.length > 0 ? (
+                <p className="text-xs text-muted leading-relaxed">
+                  Home turf:{' '}
+                  {taste.neighborhoods
+                    .slice(0, 3)
+                    .map((n) => `${n.neighborhood} (${n.count})`)
+                    .join(' · ')}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
