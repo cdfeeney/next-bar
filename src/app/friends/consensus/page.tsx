@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import Avatar from '@/components/Avatar';
+import GroupVote from '@/components/GroupVote';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
 import {
@@ -61,6 +62,14 @@ export default function ConsensusPage(): JSX.Element {
   );
 
   const enoughPeople = participants.length >= 2;
+
+  // Vote candidates: the group's top picks, best-first (overlap outranks
+  // "also consider"). That order doubles as the tie-break in groupVote.
+  const voteCandidates = useMemo(
+    () =>
+      [...overlap, ...alsoConsider].slice(0, 3).map((entry) => entry.barId),
+    [overlap, alsoConsider],
+  );
 
   return (
     <main className="min-h-screen pb-28">
@@ -150,6 +159,14 @@ export default function ConsensusPage(): JSX.Element {
                   ))}
                 </div>
               </div>
+            ) : null}
+
+            {voteCandidates.length >= 2 ? (
+              <GroupVote
+                key={participants.map((p) => p.id).join('+')}
+                participants={participants}
+                candidates={voteCandidates}
+              />
             ) : null}
           </>
         )}

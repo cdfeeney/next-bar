@@ -71,6 +71,36 @@ test.describe('Friends + consensus', () => {
     ).toHaveCount(0);
   });
 
+  test('friends-only vote settles instantly with a winner', async ({ page }) => {
+    await page.goto('/friends/consensus');
+
+    // Default group is maya + jordan (no "You" without ratings), so their
+    // auto-votes decide it the moment the vote starts.
+    await page.getByRole('button', { name: /Put it to a vote/i }).click();
+    await expect(page.getByText(/Tonight's pick/i)).toBeVisible();
+    await expect(page.getByText(/votes?\b/i).first()).toBeVisible();
+  });
+
+  test('your tap decides the group vote (happy path)', async ({ page }) => {
+    // Seed your own ratings so "You" joins the group.
+    await page.goto('/rankings');
+    await page.getByRole('button', { name: /load a sample night/i }).click();
+
+    await page.goto('/friends/consensus');
+    await page.getByRole('button', { name: /Put it to a vote/i }).click();
+
+    // Three participants → your vote is still outstanding.
+    await expect(page.getByText(/Your call/i)).toBeVisible();
+    await page.getByRole('button', { name: /^Vote for/ }).first().click();
+
+    await expect(page.getByText(/Tonight's pick/i)).toBeVisible();
+    // Restart path returns to the CTA.
+    await page.getByRole('button', { name: /Vote again/i }).click();
+    await expect(
+      page.getByRole('button', { name: /Put it to a vote/i }),
+    ).toBeVisible();
+  });
+
   test('profile follow toggle flips label', async ({ page }) => {
     await page.goto('/u/sasha');
 
