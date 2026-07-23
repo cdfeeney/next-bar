@@ -9,9 +9,12 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { denyGeolocation } from './helpers/geo';
 
 test.describe('Where-next path', () => {
   test('lands on /, picks Attaboy, walks through flow, sees 3 results excluding Attaboy', async ({ page }) => {
+    // Home is location-first; deny geo so it falls back to the manual pick flow.
+    await denyGeolocation(page.context());
     await page.goto('/');
 
     await expect(page.getByRole('heading', { name: /Where are you\?/i })).toBeVisible();

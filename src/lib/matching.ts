@@ -119,12 +119,21 @@ export function matches(args: MatchesArgs): Bar[] {
     pool = pool.filter((b) => haversineMiles(coords, b) <= maxMiles);
   }
 
-  let threshold = JACCARD_START;
-  let candidates: Bar[] = [];
-  while (threshold >= JACCARD_FLOOR - 1e-9 && candidates.length < MIN_CANDIDATES) {
-    candidates = pool.filter((b) => jaccard(profile.tags, b.tags) >= threshold);
-    if (candidates.length >= MIN_CANDIDATES) break;
-    threshold = Math.round((threshold - JACCARD_STEP) * 100) / 100;
+  let candidates: Bar[];
+  if (profile.tags.length === 0) {
+    // No vibe preference (e.g. location-first "suggest near me" before the quiz
+    // is taken). The Jaccard filter would reject every bar — jaccard(vs []) is
+    // always 0, below the floor — so skip it entirely and let the blended score
+    // rank the whole pool by proximity (+ loved affinity).
+    candidates = pool;
+  } else {
+    let threshold = JACCARD_START;
+    candidates = [];
+    while (threshold >= JACCARD_FLOOR - 1e-9 && candidates.length < MIN_CANDIDATES) {
+      candidates = pool.filter((b) => jaccard(profile.tags, b.tags) >= threshold);
+      if (candidates.length >= MIN_CANDIDATES) break;
+      threshold = Math.round((threshold - JACCARD_STEP) * 100) / 100;
+    }
   }
 
   // Rank by the blended score (vibe + proximity + loved affinity). Compute each

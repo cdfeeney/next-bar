@@ -18,6 +18,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { denyGeolocation } from './helpers/geo';
 
 type LocalRating = {
   barId: string;
@@ -27,6 +28,8 @@ type LocalRating = {
 };
 
 async function seed(page: Page, ratings: LocalRating[]): Promise<void> {
+  // Home is location-first; deny geo so `/` settles instantly.
+  await denyGeolocation(page.context());
   await page.goto('/');
   await page.evaluate((data) => {
     window.localStorage.setItem('next-bar:ratings:v1', JSON.stringify(data));

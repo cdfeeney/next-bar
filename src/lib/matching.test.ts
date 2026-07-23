@@ -560,3 +560,28 @@ describe('matches() — sorting and slicing', () => {
     expect(result).toHaveLength(10);
   });
 });
+
+describe('matches — empty vibe profile (location-first suggest)', () => {
+  it('returns proximity-ranked bars instead of filtering everything out', () => {
+    // Regression: an empty profile made jaccard(vs []) === 0 for every bar,
+    // which never cleared the Jaccard floor → zero results. The location-first
+    // "suggest near me" flow (no quiz taken) must still surface bars.
+    const near = makeBar({ id: 'near', lat: 40.7250, lng: -73.9850, tags: ['dive'] });
+    const far = makeBar({ id: 'far', lat: 40.8100, lng: -73.9500, tags: ['cocktail'] });
+    const coords = { lat: 40.7250, lng: -73.9850 };
+
+    const result = matches({
+      profile: baseProfile([]), // no vibe preference
+      coords,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [far, near],
+      maxResults: 5,
+      now: NOW,
+    });
+
+    expect(result.length).toBeGreaterThan(0);
+    // Ranked by proximity when there's no vibe signal: nearest first.
+    expect(result[0].id).toBe('near');
+  });
+});

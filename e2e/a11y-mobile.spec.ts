@@ -8,8 +8,14 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { denyGeolocation } from './helpers/geo';
 
 test.describe('Mobile a11y — home page', () => {
+  // Home is location-first; deny geo so it falls back to the pick-a-bar surface.
+  test.beforeEach(async ({ page }) => {
+    await denyGeolocation(page.context());
+  });
+
   test('no horizontal scroll on home page', async ({ page }) => {
     await page.goto('/');
     await expect(

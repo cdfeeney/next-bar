@@ -19,6 +19,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { denyGeolocation } from './helpers/geo';
 
 async function completeCocktailQuiz(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'A hidden cocktail spot' }).click();
@@ -32,6 +33,9 @@ async function completeCocktailQuiz(page: Page): Promise<void> {
 }
 
 async function clearStorage(page: Page): Promise<void> {
+  // Home is location-first; deny geo so `/` settles instantly to the manual
+  // surface instead of hanging on the async "Finding bars near you…" spinner.
+  await denyGeolocation(page.context());
   await page.goto('/');
   await page.evaluate(() => {
     window.localStorage.clear();
@@ -67,24 +71,32 @@ test.describe('Pairwise prompt — local mode', () => {
     await expect(cards.first()).toBeVisible();
     expect(await cards.count()).toBeGreaterThanOrEqual(2);
 
-    // Capture names so we can assert /rankings order independent of the
-    // matcher's deterministic-but-opaque output.
-    const firstName = (await cards.nth(0).getByRole('heading').textContent())
-      ?.replace(/^\d+\.\s*/, '')
-      .trim();
-    const secondName = (await cards.nth(1).getByRole('heading').textContent())
-      ?.replace(/^\d+\.\s*/, '')
-      .trim();
-    expect(firstName).toBeTruthy();
-    expect(secondName).toBeTruthy();
-    expect(firstName).not.toBe(secondName);
+    const nameOf = async (i: number) =>
+      (await cards.nth(i).getByRole('heading').textContent())
+        ?.replace(/^\d+\.\s*/, '')
+        .trim();
 
     // Rate first card Loved — no peer yet, no prompt.
+    const firstName = await nameOf(0);
+    expect(firstName).toBeTruthy();
     await cards.nth(0).getByRole('button', { name: 'Loved' }).click();
     await expect(page.getByRole('dialog')).not.toBeVisible();
 
-    // Rate second card Loved — peer (first card) exists, prompt opens.
-    await cards.nth(1).getByRole('button', { name: 'Loved' }).click();
+    // Loving the first bar re-ranks the list live (loved-affinity term), so the
+    // "second" bar must be re-read from the CURRENT order — pick the first card
+    // that isn't the one we already Loved.
+    let secondName: string | undefined;
+    const count = await cards.count();
+    for (let i = 0; i < count; i++) {
+      const n = await nameOf(i);
+      if (n && n !== firstName) {
+        secondName = n;
+        await cards.nth(i).getByRole('button', { name: 'Loved' }).click();
+        break;
+      }
+    }
+    expect(secondName).toBeTruthy();
+    expect(secondName).not.toBe(firstName);
 
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();

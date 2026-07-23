@@ -10,6 +10,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { denyGeolocation } from './helpers/geo';
 
 async function expectNoConsoleErrors(page: Page, label: string): Promise<void> {
   const errors: string[] = [];
@@ -22,7 +23,11 @@ async function expectNoConsoleErrors(page: Page, label: string): Promise<void> {
 }
 
 test.describe('App-shell smoke', () => {
-  test('/ (Next Bar?) renders BarPicker', async ({ page }) => {
+  test('/ (Next Bar?) falls back to BarPicker when location is denied', async ({
+    page,
+  }) => {
+    // Location-first home: deny geo so it falls back to the manual pick flow.
+    await denyGeolocation(page.context());
     await page.goto('/');
     await expect(page.getByRole('heading', { name: /Where are you\?/i })).toBeVisible();
     await expectNoConsoleErrors(page, '/');

@@ -13,6 +13,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { denyGeolocation } from './helpers/geo';
 
 async function completeCocktailQuiz(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'A hidden cocktail spot' }).click();
@@ -34,6 +35,9 @@ async function clearRatings(page: Page): Promise<void> {
 
 test.describe('Bottom nav + rating flow', () => {
   test.beforeEach(async ({ page }) => {
+    // Home is location-first; deny geo so `/` deterministically lands on the
+    // manual pick-a-bar flow these tests drive.
+    await denyGeolocation(page.context());
     await clearRatings(page);
   });
 
