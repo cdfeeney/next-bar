@@ -20,12 +20,19 @@ const RATINGS_KEY = 'next-bar:ratings:v1';
 const RATINGS_MERGED_KEY = 'next-bar:ratings:merged-for:v1';
 const PAIRWISE_KEY = 'next-bar:pairwise:v1';
 const PAIRWISE_MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
+// B3: follows became a server-synced surface — its localStorage key joins
+// the guard (blueprint rule; the cross-account guard only protects
+// registered keys). No merged-for flag: local demo follows are never merged
+// into an account (demo handles aren't real profiles), so there's no
+// ownership latch to track — a wipe just re-seeds the demo circle.
+const FOLLOWS_KEY = 'next-bar:follows:v1';
 
 const ALL_KEYS = [
   RATINGS_KEY,
   RATINGS_MERGED_KEY,
   PAIRWISE_KEY,
   PAIRWISE_MERGED_KEY,
+  FOLLOWS_KEY,
 ] as const;
 
 /**

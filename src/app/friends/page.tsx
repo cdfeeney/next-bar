@@ -2,13 +2,23 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import FindFriends from '@/components/FindFriends';
 import FriendCard from '@/components/FriendCard';
 import TonightSection from '@/components/TonightSection';
 import { useFollows } from '@/hooks/useFollows';
 import { demoFriends } from '@/lib/demo';
+import type { PublicProfile } from '@/lib/follows.server';
 
+/**
+ * /friends — dual-mode (B3):
+ *   signed-out → the seeded demo circle (curator profiles, "demo" chips).
+ *   signed-in  → the REAL graph: circle from server follows, find-friends
+ *                search over the search_handles RPC. Consensus + Tonight
+ *                keep demo data behind their explicit demo labels until
+ *                intents/votes tables land (out of beta-critical scope).
+ */
 export default function FriendsPage(): JSX.Element {
-  const { isFollowing, toggleFollow, loading } = useFollows();
+  const { circle, mode, isFollowing, toggleFollow, loading } = useFollows();
   const [query, setQuery] = useState('');
 
   const followed = useMemo(
@@ -31,6 +41,8 @@ export default function FriendsPage(): JSX.Element {
     );
   }, [q, suggested]);
 
+  const isServer = mode === 'server';
+
   return (
     <main className="min-h-screen pb-28">
       <header className="px-6 pt-8 pb-4 text-center">
@@ -45,7 +57,7 @@ export default function FriendsPage(): JSX.Element {
       </header>
 
       <section className="max-w-md mx-auto px-6 space-y-10">
-        {/* Where should we go? — the marquee consensus moment. */}
+        {/* Where should we go? — the marquee consensus moment (demo circle). */}
         <Link
           href="/friends/consensus"
           className="block bg-accent text-bg rounded-3xl p-6 touch-manipulation hover:bg-accentDim transition-colors"
@@ -59,16 +71,37 @@ export default function FriendsPage(): JSX.Element {
           </p>
         </Link>
 
-        {/* Tonight — live intent (B2): your toggle + the circle's signals. */}
+        {/* Tonight — live intent signals (demo circle; B3 keeps this demo). */}
         <TonightSection friends={followed} />
 
         {/* Your circle */}
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
-            Your circle{followed.length > 0 ? ` · ${followed.length}` : ''}
+            Your circle
+            {isServer
+              ? circle.length > 0
+                ? ` · ${circle.length}`
+                : ''
+              : followed.length > 0
+                ? ` · ${followed.length}`
+                : ''}
           </h2>
           {loading ? (
             <p className="text-muted text-sm">Loading…</p>
+          ) : isServer ? (
+            circle.length === 0 ? (
+              <EmptyCircle />
+            ) : (
+              <div className="space-y-3">
+                {circle.map((p) => (
+                  <CircleRow
+                    key={p.handle}
+                    profile={p}
+                    onUnfollow={toggleFollow}
+                  />
+                ))}
+              </div>
+            )
           ) : followed.length === 0 ? (
             <div className="bg-surface border border-border rounded-3xl p-6 text-center">
               <p className="text-sm text-muted leading-relaxed">
@@ -95,55 +128,58 @@ export default function FriendsPage(): JSX.Element {
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
             Find friends
           </h2>
-          <label htmlFor="friend-search" className="sr-only">
-            Search by name or handle
-          </label>
-          <input
-            id="friend-search"
-            type="search"
-            inputMode="text"
-            autoComplete="off"
-            placeholder="Search @handle or name…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
-          />
+          {isServer ? (
+            <FindFriends isFollowing={isFollowing} toggleFollow={toggleFollow} />
+          ) : (
+            <>
+              <label htmlFor="friend-search" className="sr-only">
+                Search by name or handle
+              </label>
+              <input
+                id="friend-search"
+                type="search"
+                inputMode="text"
+                autoComplete="off"
+                placeholder="Search @handle or name…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
+              />
 
-          <div className="mt-4 space-y-3">
-            {searchMatches.length === 0 ? (
-              <p className="text-muted text-sm px-1">
-                {q.length > 0
-                  ? `No one matching "${query}" to add.`
-                  : 'You already follow everyone we’ve curated. More tastemakers coming soon.'}
-              </p>
-            ) : (
-              searchMatches.map((f) => (
-                <div
-                  key={f.handle}
-                  className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3"
-                >
-                  <Link
-                    href={`/u/${f.handle}`}
-                    className="min-w-0 flex-1"
-                  >
-                    <p className="font-display text-sm truncate">
-                      {f.displayName}
-                    </p>
-                    <p className="text-muted text-xs truncate">
-                      @{f.handle} · {f.archetype}
-                    </p>
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => toggleFollow(f.handle)}
-                    className="shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display bg-accent text-bg"
-                  >
-                    Follow
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
+              <div className="mt-4 space-y-3">
+                {searchMatches.length === 0 ? (
+                  <p className="text-muted text-sm px-1">
+                    {q.length > 0
+                      ? `No one matching "${query}" to add.`
+                      : 'You already follow everyone we’ve curated. More tastemakers coming soon.'}
+                  </p>
+                ) : (
+                  searchMatches.map((f) => (
+                    <div
+                      key={f.handle}
+                      className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3"
+                    >
+                      <Link href={`/u/${f.handle}`} className="min-w-0 flex-1">
+                        <p className="font-display text-sm truncate">
+                          {f.displayName}
+                        </p>
+                        <p className="text-muted text-xs truncate">
+                          @{f.handle} · {f.archetype}
+                        </p>
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => toggleFollow(f.handle)}
+                        className="shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display bg-accent text-bg"
+                      >
+                        Follow
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <p className="text-muted text-xs text-center leading-relaxed pt-2">
@@ -152,5 +188,48 @@ export default function FriendsPage(): JSX.Element {
         </p>
       </section>
     </main>
+  );
+}
+
+/**
+ * Empty-state = acceptance criteria (B3): user #1 with zero friends gets an
+ * inviting find-friends prompt, never a broken page.
+ */
+function EmptyCircle(): JSX.Element {
+  return (
+    <div className="bg-surface border border-border rounded-3xl p-6 text-center">
+      <p className="font-display text-base mb-1">No one in your circle yet.</p>
+      <p className="text-sm text-muted leading-relaxed">
+        Search a friend&apos;s @username below to start building your circle —
+        that&apos;s where the good bar lists live.
+      </p>
+    </div>
+  );
+}
+
+function CircleRow({
+  profile,
+  onUnfollow,
+}: {
+  profile: PublicProfile;
+  onUnfollow: (handle: string) => void;
+}): JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
+      <Link href={`/u/${profile.handle}`} className="min-w-0 flex-1">
+        <p className="font-display text-sm truncate">
+          {profile.displayName ?? `@${profile.handle}`}
+        </p>
+        <p className="text-muted text-xs truncate">@{profile.handle}</p>
+      </Link>
+      <button
+        type="button"
+        aria-pressed
+        onClick={() => onUnfollow(profile.handle)}
+        className="shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display border bg-transparent border-border text-muted hover:text-text transition-colors"
+      >
+        Following
+      </button>
+    </div>
   );
 }

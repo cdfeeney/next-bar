@@ -10,12 +10,14 @@ const RATINGS_KEY = 'next-bar:ratings:v1';
 const RATINGS_MERGED_KEY = 'next-bar:ratings:merged-for:v1';
 const PAIRWISE_KEY = 'next-bar:pairwise:v1';
 const PAIRWISE_MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
+const FOLLOWS_KEY = 'next-bar:follows:v1';
 
 function seedFullCache(owner: string): void {
   window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
   window.localStorage.setItem(RATINGS_MERGED_KEY, owner);
   window.localStorage.setItem(PAIRWISE_KEY, '[{"winnerBarId":"a"}]');
   window.localStorage.setItem(PAIRWISE_MERGED_KEY, owner);
+  window.localStorage.setItem(FOLLOWS_KEY, '["maya"]');
 }
 
 describe('clearAccountCache', () => {
@@ -28,6 +30,14 @@ describe('clearAccountCache', () => {
     expect(window.localStorage.getItem(RATINGS_MERGED_KEY)).toBeNull();
     expect(window.localStorage.getItem(PAIRWISE_KEY)).toBeNull();
     expect(window.localStorage.getItem(PAIRWISE_MERGED_KEY)).toBeNull();
+  });
+
+  it('removes the follows key — B3 registered it as a synced surface', () => {
+    // Blueprint rule: when a surface becomes server-synced its localStorage
+    // keys join ALL_KEYS, or the cross-account guard silently skips them.
+    seedFullCache('user-a');
+    clearAccountCache();
+    expect(window.localStorage.getItem(FOLLOWS_KEY)).toBeNull();
   });
 
   it('leaves unrelated keys alone', () => {
