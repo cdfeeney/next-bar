@@ -15,6 +15,13 @@ type BarMapProps = {
   highlightIds?: string[];
   /** When set, the map zooms to fit every bar marker (used by the full catalog view). */
   fitToBars?: boolean;
+  /**
+   * When set, a single finger pans the map (and two fingers still pinch-zoom).
+   * Use only on dedicated full-screen map views where the map owns the whole
+   * touch surface. Leave off for maps embedded inside a scrollable page, where
+   * gesture-handling (two-finger) keeps single-finger swipes scrolling the page.
+   */
+  oneFingerPan?: boolean;
 };
 
 const NYC_FALLBACK_CENTER: Coords = { lat: 40.7250, lng: -73.9850 };
@@ -77,7 +84,7 @@ function FitBounds({ bars }: { bars: Bar[] }) {
   return null;
 }
 
-export default function BarMap({ bars, userCoords, highlightIds, fitToBars }: BarMapProps) {
+export default function BarMap({ bars, userCoords, highlightIds, fitToBars, oneFingerPan }: BarMapProps) {
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -95,7 +102,9 @@ export default function BarMap({ bars, userCoords, highlightIds, fitToBars }: Ba
           className="rounded-2xl border border-border overflow-hidden"
           style={{
             aspectRatio: '4 / 5',
-            touchAction: 'pan-y',
+            // One-finger-pan maps own the touch surface entirely ('none'); embedded
+            // maps keep 'pan-y' so a vertical swipe still scrolls the page.
+            touchAction: oneFingerPan ? 'none' : 'pan-y',
             WebkitTapHighlightColor: 'transparent',
           }}
         >
@@ -107,7 +116,7 @@ export default function BarMap({ bars, userCoords, highlightIds, fitToBars }: Ba
             tap={true}
             style={{ height: '100%', width: '100%' }}
           >
-            <GestureController />
+            {oneFingerPan ? null : <GestureController />}
             {fitToBars ? <FitBounds bars={bars} /> : null}
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
