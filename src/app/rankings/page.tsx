@@ -88,6 +88,12 @@ export default function RankingsPage(): JSX.Element {
           Unscored bars fall back to Loved → Liked → Pass; score firms up
           as you answer comparison prompts.
         </p>
+        <Link
+          href="/lists"
+          className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation mt-1"
+        >
+          Your lists →
+        </Link>
       </header>
 
       <div
