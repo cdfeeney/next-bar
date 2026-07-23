@@ -30,16 +30,10 @@ if (password.length < 6) {
   process.exit(1);
 }
 
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (!serviceRoleKey) {
-  console.error(
-    'Set SUPABASE_SERVICE_ROLE_KEY first (dashboard → Project Settings → API keys → service_role).',
-  );
-  process.exit(1);
-}
-
 // Reuse the project URL from .env.local so the script can't target the
-// wrong project by accident.
+// wrong project by accident. The service-role key may live there too
+// (SUPABASE_SERVICE_ROLE_KEY=...) — .env.local is gitignored, which beats
+// pasting the secret into a shell command or chat.
 const envPath = join(dirname(fileURLToPath(import.meta.url)), '..', '.env.local');
 const envText = readFileSync(envPath, 'utf8');
 const urlMatch = envText.match(/^NEXT_PUBLIC_SUPABASE_URL=(.+)$/m);
@@ -48,6 +42,17 @@ if (!urlMatch) {
   process.exit(1);
 }
 const supabaseUrl = urlMatch[1].trim();
+
+const keyMatch = envText.match(/^SUPABASE_SERVICE_ROLE_KEY=(.+)$/m);
+const serviceRoleKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ?? keyMatch?.[1].trim();
+if (!serviceRoleKey) {
+  console.error(
+    'No service-role key. Add SUPABASE_SERVICE_ROLE_KEY=<key> to .env.local ' +
+      '(dashboard → Project Settings → API keys → service_role) or set the env var.',
+  );
+  process.exit(1);
+}
 
 const admin = createClient(supabaseUrl, serviceRoleKey, {
   auth: { autoRefreshToken: false, persistSession: false },
