@@ -9,6 +9,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { bars } from '@/lib/bars';
+import { buildMapsHref } from '@/lib/share';
 
 type ShareParams = { params: { barId: string } };
 
@@ -52,12 +53,24 @@ export default function SharePickPage({ params }: ShareParams): JSX.Element {
             Your friends settled it on Next Bar — the app that finds the bar
             your whole group agrees on.
           </p>
-          <Link
-            href="/"
+          {/* Primary CTA is bar-actionable: the recipient of tonight's plan
+              needs directions, not a marketing page. */}
+          <a
+            href={buildMapsHref(bar)}
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center justify-center bg-accent text-bg font-display text-lg px-6 py-3 rounded-full min-h-[44px] touch-manipulation"
           >
-            Get Next Bar →
-          </Link>
+            Open in Maps →
+          </a>
+          <p className="mt-4">
+            <Link
+              href="/"
+              className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
+            >
+              Get Next Bar →
+            </Link>
+          </p>
         </div>
       </section>
     </main>

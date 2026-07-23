@@ -43,6 +43,34 @@ export const SAMPLE_NIGHT: BarRating[] = [
   mk('the-frying-pan', 3.9, '2026-04-28T22:50:00.000Z'),
 ];
 
+const sampleNightById = new Map(SAMPLE_NIGHT.map((r) => [r.barId, r]));
+
+/**
+ * True when a rating is sample-night demo data rather than a genuine user
+ * rating. Used to keep seeded ratings OUT of the first-sign-in server merge
+ * (useRatings) — demo data must never pollute a real account.
+ *
+ * Two signals, either is sufficient:
+ *   1. Verbatim copy of a SAMPLE_NIGHT entry (same tier, ratedAt AND score) —
+ *      catches stale seed data even if the seeded-ids flag was lost.
+ *   2. Recorded as seeder-added (SEED_IDS) and unchanged since seeding — the
+ *      same score test `clearSampleNight` uses.
+ *
+ * A bar the user re-rated after seeding (score differs from the sample) is a
+ * genuine rating and returns false — same preservation rule as clearing.
+ */
+export function isSeededDemoRating(rating: BarRating): boolean {
+  const sample = sampleNightById.get(rating.barId);
+  if (!sample) return false;
+  const isVerbatimSampleCopy =
+    rating.rating === sample.rating &&
+    rating.ratedAt === sample.ratedAt &&
+    rating.score === sample.score;
+  if (isVerbatimSampleCopy) return true;
+  if (typeof window === 'undefined') return false;
+  return readSeededIds().has(rating.barId) && rating.score === sample.score;
+}
+
 export function isDemoSeeded(): boolean {
   if (typeof window === 'undefined') return false;
   try {

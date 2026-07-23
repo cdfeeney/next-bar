@@ -17,3 +17,30 @@ export function buildPickPath(barId: string): string {
 export function sharePickText(bar: Bar): string {
   return `Tonight's pick: ${bar.name} (${bar.neighborhood}). Settled on Next Bar.`;
 }
+
+/**
+ * True when a navigator.share rejection means the user dismissed the sheet
+ * (AbortError). Dismiss ≠ consent — callers must NOT fall back to the
+ * clipboard on a dismissal, only on genuine share failures.
+ *
+ * Duck-typed on `name` rather than `instanceof Error`: DOMException doesn't
+ * reliably sit on the realm's Error prototype chain (jsdom, cross-realm).
+ */
+export function isShareAbort(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'name' in err &&
+    (err as { name: unknown }).name === 'AbortError'
+  );
+}
+
+/**
+ * Google Maps search link for a bar — same query shape as ResultCard's
+ * mapsHref, so shared-pick recipients land on the exact place card.
+ */
+export function buildMapsHref(bar: Pick<Bar, 'name' | 'address'>): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    `${bar.name} ${bar.address}`,
+  )}`;
+}

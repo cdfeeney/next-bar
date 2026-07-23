@@ -256,6 +256,7 @@ export default function WhereNextFlow() {
         seedBar={step.seedBar}
         userCoords={geo.coords}
         accuracyBand={geo.accuracyBand}
+        geoStatus={geo.state.status}
         onProceed={handleGpsProceed}
         onPickDifferent={handlePickDifferent}
       />

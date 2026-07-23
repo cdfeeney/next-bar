@@ -4,12 +4,14 @@
  * TonightSection — blueprint B2 live-intent signals on /friends.
  * Your own "going / maybe / here now" toggle (localStorage, expires with
  * the night — see src/lib/intent.ts) plus your circle's signals (seeded
- * demo intents until D1 syncs real ones). Friends-only, never public.
+ * demo intents until D1 syncs real ones — each row is labeled "demo" so
+ * it can't be mistaken for a real person, audit F3). Friends-only, never
+ * public.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Avatar from '@/components/Avatar';
-import { useIntent } from '@/hooks/useIntent';
+import { useIntent, useNightRefresh } from '@/hooks/useIntent';
 import { tonightPrompt } from '@/lib/cadence';
 import type { IntentStatus } from '@/lib/intent';
 import {
@@ -42,19 +44,24 @@ export default function TonightSection({
 }): JSX.Element {
   const { intent, toggleIntent } = useIntent();
 
-  // Cadence banner (C1): computed after mount so SSR and client can't
-  // disagree about what night it is (hydration-safe), Thu–Sat only.
-  const [prompt, setPrompt] = useState<string | null>(null);
-  useEffect(() => {
-    setPrompt(tonightPrompt(new Date()));
-  }, []);
+  // One post-mount clock drives the cadence banner (C1) and the demo
+  // signals: computed after mount so SSR and client can't disagree about
+  // what night it is (hydration-safe), then re-read every minute and on
+  // tab-visible so both stay correct across the midnight/5am rollover (F5).
+  const [now, setNow] = useState<Date | null>(null);
+  useNightRefresh(() => setNow(new Date()));
 
-  const signals = friends
-    .map((f) => ({ friend: f, status: demoIntentFor(f.handle) }))
-    .filter(
-      (s): s is { friend: DemoFriend; status: IntentStatus } =>
-        s.status !== null,
-    );
+  const prompt = now ? tonightPrompt(now) : null;
+
+  const signals =
+    now === null
+      ? []
+      : friends
+          .map((f) => ({ friend: f, status: demoIntentFor(f.handle, now) }))
+          .filter(
+            (s): s is { friend: DemoFriend; status: IntentStatus } =>
+              s.status !== null,
+          );
 
   return (
     <section aria-label="Tonight">
@@ -93,7 +100,8 @@ export default function TonightSection({
           })}
         </div>
         <p className="text-muted text-xs mt-3">
-          Only your circle sees this — it resets every night.
+          Stays on this device — demo circle, friends sync coming soon. Resets
+          every night at 5am.
         </p>
 
         {signals.length > 0 ? (
@@ -126,6 +134,10 @@ export default function TonightSection({
                         className="ml-1.5 inline-block w-2 h-2 rounded-full bg-accent align-middle"
                       />
                     ) : null}
+                    {/* F3: demo-sourced signal — say so, every row. */}
+                    <span className="ml-1.5 inline-block rounded-full border border-border px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-muted align-middle">
+                      demo
+                    </span>
                   </span>
                 </li>
               );

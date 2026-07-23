@@ -10,6 +10,7 @@ import {
   clearSampleNight,
   isDemoSeeded,
 } from './index';
+import { isSeededDemoRating } from './seed';
 import { loadRatings, writeRatings } from '@/lib/ratings';
 
 describe('demo friends data integrity', () => {
@@ -103,6 +104,55 @@ describe('sample-night seeder', () => {
     for (const r of SAMPLE_NIGHT) {
       expect(ratings.find((x) => x.barId === r.barId)).toBeUndefined();
     }
+  });
+});
+
+describe('isSeededDemoRating (demo pollution guard for the sign-in merge)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('flags every seeder-added rating after seeding', () => {
+    seedSampleNight();
+    for (const r of loadRatings()) {
+      expect(isSeededDemoRating(r), `${r.barId} should read as seeded`).toBe(true);
+    }
+  });
+
+  it('flags a verbatim sample-night copy even when the seeded flags are missing', () => {
+    // Stale device: seeded ratings persisted but the demo:seeded keys got lost.
+    expect(isSeededDemoRating(SAMPLE_NIGHT[0])).toBe(true);
+  });
+
+  it('does not flag a genuine rating of a bar that also appears in the sample night', () => {
+    expect(
+      isSeededDemoRating({
+        barId: 'attaboy',
+        rating: 'loved',
+        ratedAt: '2026-06-01T00:00:00.000Z',
+        score: 7.7,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not flag a rating for a bar outside the sample night', () => {
+    expect(
+      isSeededDemoRating({
+        barId: 'pier-a',
+        rating: 'liked',
+        ratedAt: '2026-05-01T00:00:00.000Z',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not flag a seeded bar the user re-rated since seeding (score changed)', () => {
+    seedSampleNight();
+    const updated = loadRatings().map((r) =>
+      r.barId === 'death-and-co'
+        ? { ...r, rating: 'liked' as const, score: 6.0, ratedAt: '2026-06-02T00:00:00.000Z' }
+        : r,
+    );
+    writeRatings(updated);
+    const rerated = loadRatings().find((r) => r.barId === 'death-and-co')!;
+    expect(isSeededDemoRating(rerated)).toBe(false);
   });
 });
 

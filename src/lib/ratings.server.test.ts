@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { BarRating } from '@/types/ratings';
 import {
+  deleteAllServerRatings,
   deleteServerRating,
   fetchServerRatings,
   mergeLocalRatingsToServer,
@@ -171,6 +172,25 @@ describe('deleteServerRating', () => {
     const { client } = fakeSupabase({ deleteError: { message: 'RLS denied' } });
     await expect(
       deleteServerRating(client, 'user-1', 'attaboy'),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('deleteAllServerRatings', () => {
+  it('issues one delete on `ratings` filtered by user_id only (no bar_id filter)', async () => {
+    const { client, calls } = fakeSupabase({});
+
+    await deleteAllServerRatings(client, 'user-1');
+
+    expect(calls.from).toEqual(['ratings']);
+    expect(calls.delete).toBe(1);
+    expect(calls.eq).toEqual([{ column: 'user_id', value: 'user-1' }]);
+  });
+
+  it('does not throw on Supabase error', async () => {
+    const { client } = fakeSupabase({ deleteError: { message: 'RLS denied' } });
+    await expect(
+      deleteAllServerRatings(client, 'user-1'),
     ).resolves.toBeUndefined();
   });
 });

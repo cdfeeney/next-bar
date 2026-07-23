@@ -12,6 +12,8 @@
  *   - Sign-up verification + forgot-password confirmation states breaking
  *   - Error responses from Supabase not surfacing (or surfacing raw)
  *   - The Skip-for-now and brand links pointing somewhere other than `/`
+ *   - Callback failures (`/auth?error=...` from /auth/callback) landing on
+ *     a blank form with no explanation
  *
  * WebKit (iPhone 13) note: `.fill()` writes the DOM value but on WebKit the
  * React onChange handler for a controlled input doesn't always fire before
@@ -190,5 +192,54 @@ test.describe('/auth — forgot password', () => {
     await expect(alert).toBeVisible();
     await expect(alert).toContainText(/rate limit/i);
     await expect(page.getByText(/check your inbox/i)).not.toBeVisible();
+  });
+});
+
+test.describe('/auth — callback errors (?error=... from /auth/callback)', () => {
+  // No route stubs needed: the banner is driven purely by the query param
+  // the callback route redirects with — no network requests fire.
+
+  test('expired/used link shows the banner, offers resend, and clears the URL', async ({ page }) => {
+    // The callback URL-encodes the raw Supabase exchange error.
+    await page.goto(
+      '/auth?error=Email%20link%20is%20invalid%20or%20has%20expired',
+    );
+
+    const banner = page.locator('div[role="alert"]');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText(/expired or was already used/i);
+
+    // The param is stripped (router.replace) so a refresh can't re-show
+    // a stale error.
+    await expect(page).toHaveURL(/\/auth$/);
+    await page.reload();
+    await expect(page.locator('div[role="alert"]')).not.toBeVisible();
+  });
+
+  test('resend path drops into the existing forgot-password flow', async ({ page }) => {
+    // `missing_code` is the callback's own sentinel for a link that came
+    // back without a code — treated as expired/invalid too.
+    await page.goto('/auth?error=missing_code');
+
+    const banner = page.locator('div[role="alert"]');
+    await expect(banner).toContainText(/expired or was already used/i);
+    await banner.getByRole('button', { name: /send a new link/i }).click();
+
+    await expect(banner).not.toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /reset your password/i }),
+    ).toBeVisible();
+  });
+
+  test('generic callback failure shows a retry banner without the resend path', async ({ page }) => {
+    await page.goto('/auth?error=server_error');
+
+    const banner = page.locator('div[role="alert"]');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText(/didn't complete/i);
+    await expect(
+      banner.getByRole('button', { name: /send a new link/i }),
+    ).not.toBeVisible();
+    await expect(page).toHaveURL(/\/auth$/);
   });
 });

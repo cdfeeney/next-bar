@@ -59,6 +59,29 @@ test.describe('Lists', () => {
     await expect(page.getByText(/0 bars/)).toBeVisible();
   });
 
+  test('delete asks for confirmation — dismiss keeps the list, accept deletes', async ({
+    page,
+  }) => {
+    await page.goto('/lists');
+    await typeInto(page.getByLabel('New list name'), 'Rooftops');
+    await page.getByRole('button', { name: /^Create$/ }).click();
+    await expect(
+      page.getByRole('button', { name: /^Rooftops 0 bars$/ }),
+    ).toBeVisible();
+
+    // Dismissing the confirm must NOT delete the list (negative state).
+    page.once('dialog', (dialog) => void dialog.dismiss());
+    await page.getByRole('button', { name: /Delete list Rooftops/i }).click();
+    await expect(
+      page.getByRole('button', { name: /^Rooftops 0 bars$/ }),
+    ).toBeVisible();
+
+    // Accepting the confirm deletes it.
+    page.once('dialog', (dialog) => void dialog.accept());
+    await page.getByRole('button', { name: /Delete list Rooftops/i }).click();
+    await expect(page.getByText(/No lists yet/i)).toBeVisible();
+  });
+
   test('rankings header links to lists', async ({ page }) => {
     await page.goto('/rankings');
     await page.getByRole('link', { name: /Your lists/i }).click();

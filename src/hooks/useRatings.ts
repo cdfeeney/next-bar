@@ -15,6 +15,7 @@ import {
 } from '@/lib/ratings.server';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { isSeededDemoRating } from '@/lib/demo/seed';
 
 const KEY = 'next-bar:ratings:v1';
 const MERGED_KEY = 'next-bar:ratings:merged-for:v1';
@@ -26,6 +27,27 @@ const MERGED_KEY = 'next-bar:ratings:merged-for:v1';
  * localStorage on writes — so we synthesize an in-tab broadcast instead.
  */
 const SERVER_BROADCAST = 'next-bar:ratings:server-update';
+
+/**
+ * Payload carried on the SERVER_BROADCAST CustomEvent. The mutation itself
+ * rides along so listeners can apply it to their state directly — re-fetching
+ * from Supabase here would race the fire-and-forget write and read back the
+ * pre-mutation rows.
+ */
+type ServerBroadcastDetail =
+  | { kind: 'set'; entry: BarRating }
+  | { kind: 'clear'; barId: string };
+
+function broadcastServerUpdate(detail: ServerBroadcastDetail): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent<ServerBroadcastDetail>(SERVER_BROADCAST, { detail }),
+    );
+  } catch {
+    // Older Safari etc. — non-fatal; the next server fetch re-syncs.
+  }
+}
 
 export type UseRatingsReturn = {
   ratings: BarRating[];
@@ -71,9 +93,25 @@ export function useRatings(): UseRatingsReturn {
         setRatings(loadRatings());
       }
     }
+    // Server-mode counterpart of the storage listener: writes never touch
+    // localStorage, so mutations broadcast a CustomEvent instead and every
+    // mounted instance applies the payload to its own state.
+    function handleServerBroadcast(event: Event): void {
+      if (modeRef.current !== 'server') return;
+      const detail = (event as CustomEvent<ServerBroadcastDetail>).detail;
+      if (!detail) return;
+      setRatings((prev) =>
+        detail.kind === 'set'
+          ? [...prev.filter((r) => r.barId !== detail.entry.barId), detail.entry]
+          : prev.filter((r) => r.barId !== detail.barId),
+      );
+    }
+
     window.addEventListener('storage', handleStorage);
+    window.addEventListener(SERVER_BROADCAST, handleServerBroadcast);
     return () => {
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener(SERVER_BROADCAST, handleServerBroadcast);
     };
   }, []);
 
@@ -98,15 +136,20 @@ export function useRatings(): UseRatingsReturn {
     modeRef.current = 'server';
 
     const userId = auth.user.id;
-    const localRatings = loadRatings();
+    // Demo pollution guard: the sample-night seeder writes through the same
+    // localStorage lib as genuine ratings, so filter seeded entries out here —
+    // demo data must never merge into a real account.
+    const mergeableRatings = loadRatings().filter(
+      (r) => !isSeededDemoRating(r),
+    );
     const alreadyMergedFor = readMergedFlag();
 
     let cancelled = false;
     void (async () => {
       // First-sign-in merge: only re-runs if this browser hasn't merged
       // for this user yet. Idempotent on the server side via insert-only.
-      if (localRatings.length > 0 && alreadyMergedFor !== userId) {
-        await mergeLocalRatingsToServer(supabase, userId, localRatings);
+      if (mergeableRatings.length > 0 && alreadyMergedFor !== userId) {
+        await mergeLocalRatingsToServer(supabase, userId, mergeableRatings);
         writeMergedFlag(userId);
       }
       const server = await fetchServerRatings(supabase);
@@ -143,6 +186,9 @@ export function useRatings(): UseRatingsReturn {
             return [...filtered, nextEntry];
           });
           void upsertServerRating(supabase, auth.user.id, barId, rating);
+          // Notify every OTHER mounted useRatings instance (self-receipt is
+          // an idempotent re-apply of the optimistic update above).
+          broadcastServerUpdate({ kind: 'set', entry: nextEntry });
           return;
         }
       }
@@ -161,6 +207,7 @@ export function useRatings(): UseRatingsReturn {
         if (supabase) {
           setRatings((prev) => prev.filter((r) => r.barId !== barId));
           void deleteServerRating(supabase, auth.user.id, barId);
+          broadcastServerUpdate({ kind: 'clear', barId });
           return;
         }
       }

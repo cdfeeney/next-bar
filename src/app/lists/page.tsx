@@ -90,7 +90,19 @@ export default function ListsPage(): JSX.Element {
                 onToggle={() =>
                   setOpenId(openId === list.id ? null : list.id)
                 }
-                onDelete={() => deleteList(list.id)}
+                onDelete={() => {
+                  // Mirror the settings confirm pattern (clear-ratings /
+                  // clear-profile) — one tap must not destroy a list.
+                  if (typeof window === 'undefined') return;
+                  if (
+                    !window.confirm(
+                      `Delete the list "${list.name}"? This cannot be undone.`,
+                    )
+                  ) {
+                    return;
+                  }
+                  deleteList(list.id);
+                }}
                 onAddBar={(barId) => addBarToList(list.id, barId)}
                 onRemoveBar={(barId) => removeBarFromList(list.id, barId)}
               />

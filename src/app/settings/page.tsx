@@ -8,6 +8,8 @@ import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import SetPassword from '@/components/SetPassword';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
+import { deleteAllServerRatings } from '@/lib/ratings.server';
+import { getBrowserSupabase } from '@/lib/supabase/client';
 import { deriveTasteProfile } from '@/lib/tasteProfile';
 import { deriveBadges } from '@/lib/badges';
 import { bars } from '@/lib/bars';
@@ -47,10 +49,21 @@ export default function SettingsPage(): JSX.Element {
     setHasProfile(false);
   };
 
-  const handleClearRatings = () => {
+  const handleClearRatings = async () => {
     if (typeof window === 'undefined') return;
     if (!window.confirm('Clear ALL bar ratings? This cannot be undone.')) return;
+    // Signed-in: server rows are the source of truth — delete them BEFORE the
+    // reload, or useRatings re-fetches them and everything reappears.
+    if (auth.status === 'signed-in') {
+      const supabase = getBrowserSupabase();
+      if (supabase) {
+        await deleteAllServerRatings(supabase, auth.user.id);
+      }
+    }
     window.localStorage.removeItem('next-bar:ratings:v1');
+    // Stale pairwise comparisons would silently re-derive scores onto freshly
+    // re-rated bars — clear them together with the ratings they came from.
+    window.localStorage.removeItem('next-bar:pairwise:v1');
     // Clearing all ratings also clears the sample night, so reset the demo-seeded flags — otherwise the
     // Settings "Demo" section still shows "Remove sample night" while Rankings is empty (Codex review).
     window.localStorage.removeItem('next-bar:demo:seeded:v1');

@@ -41,4 +41,11 @@ describe('tonightPrompt', () => {
     expect(tonightPrompt(MON_9PM)).toBeNull();
     expect(tonightPrompt(WED_9PM)).toBeNull();
   });
+
+  it('flips the named night exactly at the 5am boundary (F5 rollover)', () => {
+    // 2026-07-24 is a Friday: 4:59am is still Thursday night…
+    expect(tonightPrompt(new Date('2026-07-24T04:59:00'))).toMatch(/Thursday/);
+    // …and 5:00am starts Friday.
+    expect(tonightPrompt(new Date('2026-07-24T05:00:00'))).toMatch(/Friday/);
+  });
 });

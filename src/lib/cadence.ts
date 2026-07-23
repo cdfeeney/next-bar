@@ -26,8 +26,12 @@ const NIGHT_NAMES = [
   'Saturday',
 ] as const;
 
-/** The Date shifted back so small hours count as the previous night. */
-function effectiveNight(date: Date): Date {
+/**
+ * The Date shifted back so small hours count as the previous night.
+ * Returns a copy — never mutates the input. Exported so other
+ * night-keyed logic (e.g. src/lib/demo/intents.ts) shares one rollover.
+ */
+export function effectiveNight(date: Date): Date {
   const copy = new Date(date.getTime());
   if (copy.getHours() < NIGHT_ROLLOVER_HOUR) {
     copy.setDate(copy.getDate() - 1);

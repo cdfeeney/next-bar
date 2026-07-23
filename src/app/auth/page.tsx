@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 
 /**
@@ -49,12 +50,49 @@ function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+/**
+ * /auth/callback redirects failures here as `?error=...` — either one of
+ * its own sentinels (`missing_code`, `supabase_unconfigured`) or the
+ * URL-encoded Supabase exchange error. Classify the raw value so the
+ * banner can offer the right recovery path.
+ */
+type CallbackErrorKind = 'expired-link' | 'unconfigured' | 'generic';
+
+function classifyCallbackError(raw: string): CallbackErrorKind {
+  if (raw === 'supabase_unconfigured') return 'unconfigured';
+  // One-shot confirm/recovery links fail the code exchange with messages
+  // like "Email link is invalid or has expired" / "flow state not found".
+  // `missing_code` lands here too: when a link is expired or already used,
+  // Supabase redirects without a `code` param at all.
+  if (
+    raw === 'missing_code' ||
+    /expired|invalid|otp|flow.?state|not.?found|already|used/i.test(raw)
+  ) {
+    return 'expired-link';
+  }
+  return 'generic';
+}
+
 export default function AuthPage() {
+  const router = useRouter();
   const [view, setView] = useState<View>('form');
   const [intent, setIntent] = useState<Intent>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [callbackError, setCallbackError] = useState<CallbackErrorKind | null>(
+    null,
+  );
+
+  useEffect(() => {
+    // Read via window.location (not useSearchParams) so the page keeps its
+    // current no-Suspense structure; this only runs client-side anyway.
+    const raw = new URLSearchParams(window.location.search).get('error');
+    if (!raw) return;
+    setCallbackError(classifyCallbackError(raw));
+    // Strip the param so a refresh doesn't re-show a stale error.
+    router.replace('/auth', { scroll: false });
+  }, [router]);
 
   const callbackUrl = (): string =>
     `${window.location.origin}/auth/callback?redirect_to=${AFTER_AUTH_PATH}`;
@@ -184,6 +222,42 @@ export default function AuthPage() {
               ? "Enter your email and we'll send a reset link."
               : 'Your ratings, lists, and profile follow you to any device.'}
           </p>
+
+          {callbackError ? (
+            <div
+              role="alert"
+              className="bg-surface border border-border rounded-2xl p-4 mb-6 text-center"
+            >
+              {callbackError === 'expired-link' ? (
+                <>
+                  <p className="text-sm mb-1">
+                    That link has expired or was already used.
+                  </p>
+                  <p className="text-muted text-xs mb-1 leading-relaxed">
+                    Email links only work once. Enter your email and
+                    we&apos;ll send you a fresh one.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCallbackError(null);
+                      setStatus({ kind: 'idle' });
+                      setView('forgot');
+                    }}
+                    className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                  >
+                    Send a new link
+                  </button>
+                </>
+              ) : (
+                <p className="text-sm">
+                  {callbackError === 'unconfigured'
+                    ? UNCONFIGURED_MESSAGE
+                    : "Sign-in didn't complete. Please try again."}
+                </p>
+              )}
+            </div>
+          ) : null}
 
           {inboxState ? (
             <div className="bg-surface border border-border rounded-3xl p-6 text-center">

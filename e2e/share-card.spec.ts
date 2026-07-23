@@ -10,7 +10,9 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Shareable pick cards', () => {
-  test('share page renders the pick card and app CTA', async ({ page }) => {
+  test('share page renders the pick card, Maps CTA, and app link', async ({
+    page,
+  }) => {
     await page.goto('/share/death-and-co');
 
     await expect(page.getByText(/Tonight's pick/i)).toBeVisible();
@@ -18,9 +20,19 @@ test.describe('Shareable pick cards', () => {
       page.getByRole('heading', { name: /Death & Co/i }),
     ).toBeVisible();
     await expect(page.getByText(/East Village/i)).toBeVisible();
-    await expect(
-      page.getByRole('link', { name: /Get Next Bar/i }),
-    ).toBeVisible();
+
+    // Primary CTA is bar-actionable: Google Maps for the picked bar.
+    const mapsCta = page.getByRole('link', { name: /Open in Maps/i });
+    await expect(mapsCta).toBeVisible();
+    await expect(mapsCta).toHaveAttribute(
+      'href',
+      /google\.com\/maps\/search/,
+    );
+
+    // Secondary link still routes into the app.
+    const appLink = page.getByRole('link', { name: /Get Next Bar/i });
+    await expect(appLink).toBeVisible();
+    await expect(appLink).toHaveAttribute('href', '/');
   });
 
   test('unknown bar id 404s', async ({ page }) => {

@@ -14,7 +14,7 @@
 
 import { useState } from 'react';
 import { barById, type ConsensusParticipant } from '@/lib/demo';
-import { buildPickPath, sharePickText } from '@/lib/share';
+import { buildPickPath, isShareAbort, sharePickText } from '@/lib/share';
 import {
   createSession,
   castVote,
@@ -215,8 +215,10 @@ function SharePickButton({ barId }: { barId: string }): JSX.Element {
       try {
         await navigator.share({ title: text, text, url });
         return;
-      } catch {
-        // Dismissed or unsupported payload — fall through to clipboard.
+      } catch (err) {
+        // User dismissed the sheet — dismiss ≠ consent. Do nothing.
+        if (isShareAbort(err)) return;
+        // Unsupported payload / share failure — fall through to clipboard.
       }
     }
     try {

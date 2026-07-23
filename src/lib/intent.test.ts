@@ -65,6 +65,20 @@ describe('intent storage', () => {
     expect(loadIntent(new Date(SAT_9PM))).toBeNull();
   });
 
+  it('expires exactly at the 5am boundary mid-session (F5 rollover)', () => {
+    // Set in the small hours (still Friday night)…
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'going', setAt: '2026-07-25T04:30:00' }),
+    );
+    // …still visible one second before the rollover…
+    expect(
+      loadIntent(new Date('2026-07-25T04:59:59'))?.status,
+    ).toBe('going');
+    // …and gone the moment the clock hits 5am, without any write.
+    expect(loadIntent(new Date('2026-07-25T05:00:00'))).toBeNull();
+  });
+
   it('returns null on corrupted or unknown-status storage', () => {
     window.localStorage.setItem(KEY, '{not json');
     expect(loadIntent()).toBeNull();

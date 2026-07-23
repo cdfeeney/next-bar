@@ -29,9 +29,15 @@ export default function FriendCard({
         </Link>
         <div className="min-w-0 flex-1">
           <Link href={`/u/${friend.handle}`} className="block">
-            <h3 className="font-display text-lg leading-tight truncate">
-              {friend.displayName}
-            </h3>
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="font-display text-lg leading-tight truncate">
+                {friend.displayName}
+              </h3>
+              {/* F3: seeded curator profile, not a real person — label it. */}
+              <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-muted">
+                demo
+              </span>
+            </div>
             <p className="text-muted text-xs truncate">
               @{friend.handle} · {friend.archetype}
             </p>

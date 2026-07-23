@@ -63,6 +63,21 @@ export async function deleteServerRating(
 }
 
 /**
+ * Delete EVERY rating row belonging to the user — the server half of the
+ * Settings "Clear all ratings" action. Without it, clearing localStorage
+ * alone just re-fetches the server rows on next mount and everything
+ * reappears. RLS already scopes deletes to the authenticated user; the
+ * explicit user_id filter keeps intent obvious and stays safe if policies
+ * loosen later.
+ */
+export async function deleteAllServerRatings(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<void> {
+  await supabase.from('ratings').delete().eq('user_id', userId);
+}
+
+/**
  * One-shot merge of localStorage ratings into the user's server ratings.
  * Server-wins on conflict — we only insert bars that don't already have a
  * server rating for this user. Idempotent: running twice does nothing.

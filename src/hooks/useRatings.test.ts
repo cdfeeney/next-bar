@@ -221,6 +221,7 @@ vi.mock('@/lib/ratings.server', () => ({
 
 // Pull the mocked symbols after vi.mock so they're typed as the mock fns.
 import { useAuth } from '@/hooks/useAuth';
+import { seedSampleNight } from '@/lib/demo/seed';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
   deleteServerRating,
@@ -423,6 +424,75 @@ describe('useRatings — server mode', () => {
       'attaboy',
       'death-and-co',
     ]);
+  });
+
+  it('setRating in one server-mode instance propagates to a second instance without reload', async () => {
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+    const first = renderHook(() => useRatings());
+    const second = renderHook(() => useRatings());
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+
+    act(() => {
+      first.result.current.setRating('attaboy', 'loved');
+    });
+
+    // The tapping instance updates optimistically; the OTHER instance must
+    // hear a broadcast — server mode never touches localStorage on writes,
+    // so without it ResultsView/map/badges consumers stay stale until reload.
+    expect(first.result.current.getRating('attaboy')).toBe('loved');
+    expect(second.result.current.getRating('attaboy')).toBe('loved');
+  });
+
+  it('clearRating in one server-mode instance propagates to a second instance without reload', async () => {
+    fetchServerRatingsMock.mockResolvedValue([
+      { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+    ]);
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+    const first = renderHook(() => useRatings());
+    const second = renderHook(() => useRatings());
+    await waitFor(() => {
+      expect(first.result.current.ratings).toHaveLength(1);
+      expect(second.result.current.ratings).toHaveLength(1);
+    });
+
+    act(() => {
+      first.result.current.clearRating('attaboy');
+    });
+
+    expect(first.result.current.getRating('attaboy')).toBeNull();
+    expect(second.result.current.getRating('attaboy')).toBeNull();
+  });
+
+  it('excludes seeded sample-night demo ratings from the first sign-in merge', async () => {
+    // One genuine rating, then the demo seeder layers the sample night on top.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'pier-a', rating: 'liked', ratedAt: '2026-05-01T00:00:00.000Z' },
+      ]),
+    );
+    seedSampleNight();
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(mergeLocalRatingsToServerMock).toHaveBeenCalledTimes(1);
+    });
+    const [, , passedLocals] = mergeLocalRatingsToServerMock.mock.calls[0];
+    expect(passedLocals.map((r) => r.barId)).toEqual(['pier-a']);
+  });
+
+  it('skips the merge call entirely when every local rating is seeded demo data', async () => {
+    seedSampleNight();
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(fetchServerRatingsMock).toHaveBeenCalled();
+    });
+    expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
   });
 
   it('when getBrowserSupabase returns null, server-mode falls back to localStorage', async () => {
