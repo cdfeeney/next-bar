@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { clearAccountCache } from '@/lib/accountCache';
 
 export type AuthState =
   | { status: 'loading'; user: null; session: null }
@@ -55,6 +56,10 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     await supabase.auth.signOut();
+    // The write-through cache holds THIS account's server data — it must not
+    // survive into the next session on a shared browser (cross-account
+    // contamination; see lib/accountCache.ts).
+    clearAccountCache();
   };
 
   return { ...state, signOut };

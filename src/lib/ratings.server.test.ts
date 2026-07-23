@@ -272,7 +272,7 @@ describe('mergeLocalRatingsToServer', () => {
     expect(byBar['employees-only']).toBe('2026-05-15T00:00:00.000Z');
   });
 
-  it('returns 0 (no count) when the insert errors, even with rows to send', async () => {
+  it('returns null (merge incomplete) when the insert errors — callers must not latch the merged flag', async () => {
     const { client } = fakeSupabase({
       selectData: [],
       insertError: { message: 'RLS denied' },
@@ -280,7 +280,7 @@ describe('mergeLocalRatingsToServer', () => {
 
     const inserted = await mergeLocalRatingsToServer(client, 'user-1', local);
 
-    expect(inserted).toBe(0);
+    expect(inserted).toBeNull();
   });
 
   it('maps local tier values into the `tier` column (not `rating`)', async () => {

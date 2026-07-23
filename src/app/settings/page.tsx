@@ -9,6 +9,7 @@ import InstallPrompt from '@/components/InstallPrompt';
 import SetPassword from '@/components/SetPassword';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
+import { deleteAllServerComparisons } from '@/lib/pairwise.server';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { deriveTasteProfile } from '@/lib/tasteProfile';
 import { deriveBadges } from '@/lib/badges';
@@ -58,6 +59,10 @@ export default function SettingsPage(): JSX.Element {
       const supabase = getBrowserSupabase();
       if (supabase) {
         await deleteAllServerRatings(supabase, auth.user.id);
+        // The server comparison transcript must die with the ratings it
+        // ranked — orphaned judgments would re-derive stale scores onto
+        // re-rated bars on the next mount (santa-loop round-1 finding).
+        await deleteAllServerComparisons(supabase, auth.user.id);
       }
     }
     window.localStorage.removeItem('next-bar:ratings:v1');

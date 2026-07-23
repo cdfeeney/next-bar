@@ -65,9 +65,9 @@ export default function RatingControl({ barId }: RatingControlProps) {
       return;
     }
     setRating(barId, rating);
-    // requestPrompt is a no-op for 'pass', for signed-in users (server-mode
-    // pairwise lands later), and when no same-tier peer exists. The hook
-    // gates internally — RatingControl just always asks.
+    // requestPrompt is a no-op for 'pass' and when no same-tier peer exists.
+    // It works in BOTH modes since B0.4 (signed-in pairwise syncs to the
+    // server). The hook gates internally — RatingControl just always asks.
     requestPrompt(barId, rating);
   };
 

@@ -66,18 +66,21 @@ export async function insertServerComparison(
  * transcript. Insert-only, deduped on the (winner, loser, comparedAt)
  * tuple — the local list IS an append-only transcript, so identical
  * tuples are true duplicates, not intentional re-answers (those carry
- * fresh timestamps). Aborts (returns 0) when the pre-merge fetch fails.
+ * fresh timestamps).
+ *
+ * Returns rows inserted, or null when the merge did NOT complete (fetch or
+ * insert failure) — callers must not latch their merged-for flag on null.
  */
 export async function mergeLocalComparisonsToServer(
   supabase: SupabaseClient,
   userId: string,
   localComparisons: ReadonlyArray<PairwiseComparison>,
   sessionId: string | null,
-): Promise<number> {
+): Promise<number | null> {
   if (localComparisons.length === 0) return 0;
 
   const existing = await fetchServerComparisons(supabase);
-  if (existing === null) return 0;
+  if (existing === null) return null;
   const seen = new Set(
     existing.map((c) => `${c.winnerBarId}|${c.loserBarId}|${c.comparedAt}`),
   );
@@ -95,6 +98,22 @@ export async function mergeLocalComparisonsToServer(
   if (toInsert.length === 0) return 0;
 
   const { error } = await supabase.from('pairwise_comparisons').insert(toInsert);
-  if (error) return 0;
+  if (error) return null;
   return toInsert.length;
+}
+
+/**
+ * Delete the user's ENTIRE comparison transcript — the server half of the
+ * Settings "Clear all ratings" action (santa-loop round-1 finding: without
+ * this, the orphaned server transcript re-derives stale scores onto
+ * re-rated bars on the next mount).
+ */
+export async function deleteAllServerComparisons(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<void> {
+  await supabase
+    .from('pairwise_comparisons')
+    .delete()
+    .eq('user_id', userId);
 }

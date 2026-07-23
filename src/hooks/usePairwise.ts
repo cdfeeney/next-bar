@@ -20,6 +20,7 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { broadcastServerRatingSet } from '@/hooks/useRatings';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { guardAgainstForeignCache } from '@/lib/accountCache';
 
 const COMPARISONS_BROADCAST = 'next-bar:pairwise:local-update';
 const MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
@@ -117,19 +118,23 @@ export function usePairwise(): UsePairwiseReturn {
 
     modeRef.current = 'server';
     const userId = auth.user.id;
+    // Cross-account guard (see lib/accountCache.ts): another account's
+    // cached transcript must be wiped, never merged into this one.
+    guardAgainstForeignCache(userId);
     const local = loadComparisons();
     const alreadyMergedFor = readMergedFlag();
 
     let cancelled = false;
     void (async () => {
       if (local.length > 0 && alreadyMergedFor !== userId) {
-        await mergeLocalComparisonsToServer(
+        const merged = await mergeLocalComparisonsToServer(
           supabase,
           userId,
           local,
           sessionIdRef.current,
         );
-        writeMergedFlag(userId);
+        // Latch only on a completed run — a failed merge must retry.
+        if (merged !== null) writeMergedFlag(userId);
       }
       const server = await fetchServerComparisons(supabase);
       // null = fetch failed — keep the local transcript rather than

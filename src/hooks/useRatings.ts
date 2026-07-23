@@ -17,6 +17,27 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { isSeededDemoRating } from '@/lib/demo/seed';
+import { guardAgainstForeignCache } from '@/lib/accountCache';
+
+/**
+ * Hydrate-race repair: prefer whichever entry is fresher per bar. A rating
+ * tapped while the sign-in fetch was in flight lives in the write-through
+ * cache with a newer ratedAt than the (pre-tap) server snapshot — a blind
+ * setRatings(server) would revert it in state AND cache until next fetch.
+ */
+function mergeFreshest(
+  server: BarRating[],
+  local: BarRating[],
+): BarRating[] {
+  const byId = new Map(server.map((r) => [r.barId, r]));
+  for (const l of local) {
+    const s = byId.get(l.barId);
+    if (!s || Date.parse(l.ratedAt) > Date.parse(s.ratedAt)) {
+      byId.set(l.barId, l);
+    }
+  }
+  return [...byId.values()];
+}
 
 const KEY = 'next-bar:ratings:v1';
 const MERGED_KEY = 'next-bar:ratings:merged-for:v1';
@@ -85,6 +106,11 @@ export function useRatings(): UseRatingsReturn {
   const auth = useAuth();
   const [ratings, setRatings] = useState<BarRating[]>([]);
   const modeRef = useRef<'local' | 'server' | 'pending'>('pending');
+  // Mirror of `ratings` for event-handler reads: cross-instance broadcasts
+  // update React state but not localStorage, so state (not the cache) is the
+  // authoritative prev-value source inside callbacks.
+  const ratingsRef = useRef<BarRating[]>([]);
+  ratingsRef.current = ratings;
 
   // Storage listener — always on, regardless of auth state. When in local
   // mode, this is how cross-instance updates propagate (one ResultCard's
@@ -146,6 +172,10 @@ export function useRatings(): UseRatingsReturn {
     modeRef.current = 'server';
 
     const userId = auth.user.id;
+    // Cross-account guard: if the cache's merged-for flags name a DIFFERENT
+    // user, this is another account's residue (e.g. session expired without
+    // our sign-out) — wipe it BEFORE any merge can read it.
+    guardAgainstForeignCache(userId);
     // Demo pollution guard: the sample-night seeder writes through the same
     // localStorage lib as genuine ratings, so filter seeded entries out here —
     // demo data must never merge into a real account.
@@ -159,18 +189,27 @@ export function useRatings(): UseRatingsReturn {
       // First-sign-in merge: only re-runs if this browser hasn't merged
       // for this user yet. Idempotent on the server side via insert-only.
       if (mergeableRatings.length > 0 && alreadyMergedFor !== userId) {
-        await mergeLocalRatingsToServer(supabase, userId, mergeableRatings);
-        writeMergedFlag(userId);
+        const merged = await mergeLocalRatingsToServer(
+          supabase,
+          userId,
+          mergeableRatings,
+        );
+        // Only latch the flag on a run that actually completed — a failed
+        // merge (null) must retry next sign-in, not be marked done.
+        if (merged !== null) writeMergedFlag(userId);
       }
       const server = await fetchServerRatings(supabase);
       // null = fetch FAILED (not "no ratings") — keep whatever we have
       // rather than blanking state / wiping the localStorage cache (B0.3).
       if (!cancelled && server !== null) {
-        setRatings(server);
-        // Hydrate the localStorage cache with the authoritative server rows
+        // Keep any rating tapped while this fetch was in flight (it sits in
+        // the write-through cache with a newer ratedAt than the snapshot).
+        const merged = mergeFreshest(server, loadRatings());
+        setRatings(merged);
+        // Hydrate the localStorage cache with the authoritative rows
         // (including rows written on other devices) so usePairwise and the
         // sign-out fallback read current data.
-        writeRatings(server);
+        writeRatings(merged);
       }
     })();
 
@@ -200,8 +239,10 @@ export function useRatings(): UseRatingsReturn {
         if (supabase) {
           // Tier semantics for the derived score (B0.4): a same-tier re-tap
           // preserves pairwise refinement; a tier CHANGE invalidates it (the
-          // old score was interpolated inside the old tier's band).
-          const prevEntry = loadRatings().find((r) => r.barId === barId);
+          // old score was interpolated inside the old tier's band). Read prev
+          // from state (via ref) — broadcasts from other instances land in
+          // state but not in the localStorage cache.
+          const prevEntry = ratingsRef.current.find((r) => r.barId === barId);
           const tierChanged =
             prevEntry !== undefined && prevEntry.rating !== rating;
           const keptScore =

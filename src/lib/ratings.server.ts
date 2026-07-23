@@ -136,20 +136,21 @@ export async function deleteAllServerRatings(
  * One-shot merge of localStorage ratings into the user's server ratings.
  * Server-wins on conflict — we only insert bars that don't already have a
  * server rating for this user. Idempotent: running twice does nothing.
- * Aborts (returns 0) when the pre-merge fetch fails — merging blind against
- * unknown server state could duplicate rows.
  *
- * Returns the count of rows actually inserted (useful for telemetry / UI).
+ * Returns the count of rows actually inserted, or null when the merge did
+ * NOT complete (pre-merge fetch failed, or the insert errored) — callers
+ * must not latch their merged-for flag on null, so a failed merge retries
+ * on the next sign-in instead of being silently marked done.
  */
 export async function mergeLocalRatingsToServer(
   supabase: SupabaseClient,
   userId: string,
   localRatings: BarRating[],
-): Promise<number> {
+): Promise<number | null> {
   if (localRatings.length === 0) return 0;
 
   const existing = await fetchServerRatings(supabase);
-  if (existing === null) return 0;
+  if (existing === null) return null;
   const existingBarIds = new Set(existing.map((r) => r.barId));
 
   const toInsert = localRatings
@@ -166,6 +167,6 @@ export async function mergeLocalRatingsToServer(
   if (toInsert.length === 0) return 0;
 
   const { error } = await supabase.from('ratings').insert(toInsert);
-  if (error) return 0;
+  if (error) return null;
   return toInsert.length;
 }

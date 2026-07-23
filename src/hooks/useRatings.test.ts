@@ -313,14 +313,17 @@ describe('useRatings — server mode', () => {
     expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
   });
 
-  it('re-merges when a DIFFERENT user signs in on the same browser', async () => {
+  it('a genuinely anonymous cache (no merged-for flag) DOES merge on first sign-in', async () => {
+    // This was previously "re-merges when a DIFFERENT user signs in" — that
+    // asserted the cross-account contamination bug as intended behavior.
+    // The foreign-cache case is covered by the guard test below; the case
+    // that still merges is an anonymous cache with NO owner flag.
     window.localStorage.setItem(
       KEY,
       JSON.stringify([
         { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
       ]),
     );
-    window.localStorage.setItem(MERGED_KEY, 'previous-user');
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
     renderHook(() => useRatings());
@@ -379,6 +382,29 @@ describe('useRatings — server mode', () => {
     expect(cached.some((r: { barId: string }) => r.barId === 'attaboy')).toBe(true);
     // Optimistic state update happened.
     expect(result.current.getRating('attaboy')).toBe('loved');
+  });
+
+  it("never merges another account's cached ratings into this one (cross-account guard)", async () => {
+    // User A's write-through cache survived (e.g. session expired without
+    // our sign-out button). User B signs in on the same browser.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem('next-bar:ratings:merged-for:v1', 'user-A');
+    useAuthMock.mockReturnValue(signedInAuthState('user-B'));
+
+    renderHook(() => useRatings());
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+
+    // The foreign cache must be wiped, NEVER uploaded to user B.
+    expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
+    const cached = JSON.parse(window.localStorage.getItem(KEY) ?? '[]');
+    expect(
+      cached.some((r: { barId: string }) => r.barId === 'attaboy'),
+    ).toBe(false);
   });
 
   it('setRating passes score:null on a tier CHANGE (stale band score must clear)', async () => {
