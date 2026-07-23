@@ -242,8 +242,11 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
     await typeInto(usernameInput(page), 'ConnorF');
     await claimButton(page).click();
 
+    // On success, Settings' onClaimed updates the account card and UNMOUNTS
+    // the ClaimHandle card entirely — the @handle line in the account card
+    // is the persistent success feedback (the card's internal claimed-state
+    // copy is unreachable in this integration; documented seam).
     await expect(page.getByText('@ConnorF').first()).toBeVisible();
-    await expect(page.getByText(/friends can find you now/i)).toBeVisible();
     await expect(usernameInput(page)).not.toBeVisible();
     // Still on /settings — claiming must not navigate.
     await expect(page).toHaveURL(/\/settings$/);
