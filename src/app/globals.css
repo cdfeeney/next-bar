@@ -3,6 +3,13 @@
 @tailwind utilities;
 
 html, body { height: 100%; }
+
+/* Brand kit 2026-07-23: Poppins headlines are Bold. font-display only sets the
+   family, so give it the brand weight here (base layer — explicit font-*
+   utilities still override). */
+@layer base {
+  .font-display { font-weight: 700; }
+}
 html { scroll-behavior: smooth; }
 
 body {

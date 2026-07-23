@@ -1,9 +1,20 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
+import { Poppins } from 'next/font/google';
 import './globals.css';
 import 'leaflet/dist/leaflet.css';
 import BottomNav from '@/components/BottomNav';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
+
+// Brand font (2026-07-23 kit): Poppins — Bold 700 wordmark/headlines,
+// Medium 500 secondary headlines, Regular 400 body/captions. Self-hosted by
+// next/font at build time (no runtime requests; PWA-safe).
+const poppins = Poppins({
+  subsets: ['latin'],
+  weight: ['400', '500', '700'],
+  display: 'swap',
+  variable: '--font-poppins',
+});
 
 const siteUrl =
   process.env.NEXT_PUBLIC_SITE_URL ??
@@ -54,7 +65,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={poppins.variable}>
       <body className="bg-bg text-text font-sans antialiased pb-[calc(64px+env(safe-area-inset-bottom))]">
         {children}
         <BottomNav />
