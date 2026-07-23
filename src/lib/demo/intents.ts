@@ -18,3 +18,18 @@ const DEMO_INTENTS: Readonly<Record<string, IntentStatus>> = {
 export function demoIntentFor(handle: string): IntentStatus | null {
   return DEMO_INTENTS[handle] ?? null;
 }
+
+/**
+ * Where each signaling friend is headed tonight — their own top-loved bar
+ * (see friends.ts data), fixed so the reciprocity reveal (C1) is
+ * deterministic. Only friends with an intent have a pick.
+ */
+const DEMO_TONIGHT_PICKS: Readonly<Record<string, string>> = {
+  maya: 'death-and-co',
+  jordan: 'smalls-jazz-club',
+  sasha: 'mr-purple',
+};
+
+export function demoTonightPickFor(handle: string): string | null {
+  return DEMO_TONIGHT_PICKS[handle] ?? null;
+}

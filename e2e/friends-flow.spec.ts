@@ -79,10 +79,21 @@ test.describe('Friends + consensus', () => {
     await expect(page.getByText(/is going out tonight/i)).toBeVisible();
     await expect(page.getByText(/might be out later/i)).toBeVisible();
 
+    // Reciprocity gate (C1): friends' picks are hidden until you commit.
+    // Scoped to the Tonight region — Maya's friend card elsewhere on the
+    // page also names her top bars.
+    const tonight = page.getByRole('region', { name: 'Tonight' });
+    await expect(tonight.getByText(/Set your status to see/i)).toBeVisible();
+    await expect(tonight.getByText(/Death & Co/)).toHaveCount(0);
+
     // Set your own status; it sticks across reload.
     const goingBtn = page.getByRole('button', { name: /^Going out$/ });
     await goingBtn.click();
     await expect(goingBtn).toHaveAttribute('aria-pressed', 'true');
+
+    // Picks unlock: Maya's tonight pick appears.
+    await expect(tonight.getByText(/Death & Co/)).toBeVisible();
+    await expect(tonight.getByText(/Set your status to see/i)).toHaveCount(0);
     await page.reload();
     const goingAfter = page.getByRole('button', { name: /^Going out$/ });
     await expect(goingAfter).toHaveAttribute('aria-pressed', 'true');

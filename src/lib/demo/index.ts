@@ -12,7 +12,7 @@ import { bars } from '@/lib/bars';
 import type { DemoFriend } from './friends';
 
 export { demoFriends, findDemoFriend } from './friends';
-export { demoIntentFor } from './intents';
+export { demoIntentFor, demoTonightPickFor } from './intents';
 export type { DemoFriend } from './friends';
 export {
   computeConsensus,
