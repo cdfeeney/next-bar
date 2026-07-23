@@ -1,25 +1,19 @@
 /**
- * Pairwise comparison scoring — v0.5.1 Beli-aggregate model.
+ * Pairwise comparison scoring — B0.2 rank-order model.
  *
  * Each rated bar belongs to a tier (loved / liked / pass) which maps to a
  * fixed band on the 0.0–10.0 scale. Within a tier, the user's pairwise
  * comparisons (A > B answers) produce a per-bar score in that band.
  *
- * The math (PRD-v0.5 §D2 option (c) "Beli aggregate"):
- *   - For each bar in tier T, compute its winrate among comparisons where
- *     both bars are in T.
- *   - score = band.lo + winrate × (band.hi − band.lo).
+ * Rank-order replay rules:
+ *   - Replay same-tier comparisons into a deterministic ordered list.
+ *   - Interpolate each compared bar's list index across the tier band.
  *   - A bar with no comparisons defaults to the band midpoint.
  *
- * This is mathematically equivalent to PRD's "average position rescaled to
- * tier band": average position in a 2-bar comparison is `1 + lossrate`, so
- * `1 − lossrate = winrate` and the rescale collapses to the same formula.
+ * Replaying the same transcript always reconstructs the same order and score.
  *
- * R8 smoothing — "don't apply >1.0 score change per pairwise event" — is
- * enforced by `applyComparison`, which clamps the per-event delta. Use
- * `computeScoresForTier` when you want the ideal final score; use
- * `applyComparison` when you want the smoothed step shown to the user
- * immediately after answering a comparison.
+ * `applyComparison` replays the complete transcript so incremental updates
+ * and a cold replay produce exactly the same result.
  *
  * Q2 decision: pairwise prompts are NOT fired for tier='pass' (Pass-vs-Pass
  * ordering is pointless). `pickComparisonTarget` returns null for Pass.
@@ -31,18 +25,14 @@ export type Tier = Rating;
 
 type Band = { readonly lo: number; readonly hi: number };
 
-/**
- * Score bands per tier. Loved sits above Liked sits above Pass, with a small
- * gap between Liked.hi (7.9) and Loved.lo (8.0) so the tiers stay visually
- * separable on /rankings. Pass tops out at 4.9 for the same reason.
- */
+/** Fixed score bands agreed for the rank-order model. */
 export const TIER_BANDS: Readonly<Record<Tier, Band>> = {
   loved: { lo: 8.0, hi: 10.0 },
-  liked: { lo: 5.0, hi: 7.9 },
-  pass: { lo: 0.0, hi: 4.9 },
+  liked: { lo: 5.0, hi: 8.0 },
+  pass: { lo: 0.0, hi: 5.0 },
 };
 
-/** Maximum |delta| applied to a single bar's score per pairwise event. */
+/** @deprecated Rank-order replay no longer smooths transcript-derived scores. */
 export const MAX_DELTA_PER_EVENT = 1.0;
 
 /** Quantize a 0–10 score to one decimal place, matching what /rankings shows. */
@@ -57,15 +47,6 @@ export function roundScore(value: number): number {
 export function tierMidpoint(tier: Tier): number {
   const b = TIER_BANDS[tier];
   return roundScore((b.lo + b.hi) / 2);
-}
-
-/**
- * Clamp a value into [lo, hi]. Inclusive on both ends.
- */
-function clamp(value: number, lo: number, hi: number): number {
-  if (value < lo) return lo;
-  if (value > hi) return hi;
-  return value;
 }
 
 /**
@@ -117,9 +98,99 @@ export function pickComparisonTarget(
   return eligible[idx]?.barId ?? null;
 }
 
+export type TierRankOrder = {
+  /** Compared bars from highest to lowest within the tier. */
+  orderedBarIds: string[];
+  /** Score for every bar in the tier; unscored bars are at the midpoint. */
+  scores: Map<string, number>;
+  /** Number of valid same-tier transcript rows involving each bar. */
+  comparisonCounts: Map<string, number>;
+};
+
 /**
- * Compute the "ideal" 0–10 score for every bar in `tier`, ignoring any
- * R8 smoothing. Bars with no comparisons get the tier midpoint.
+ * Replay a tier's append-only transcript into a deterministic ordered list.
+ *
+ * A bar first seen against an existing peer is inserted immediately above or
+ * below that peer. When both endpoints are already present, the endpoint that
+ * entered the transcript later remains the insertion candidate and moves to
+ * satisfy the latest answer. If they first appeared together, the winner is
+ * the deterministic tiebreak candidate. Removing and reinserting one endpoint
+ * keeps every uninvolved bar's relative order intact.
+ */
+export function buildRankOrderForTier(
+  ratings: ReadonlyArray<BarRating>,
+  comparisons: ReadonlyArray<PairwiseComparison>,
+  tier: Tier,
+): TierRankOrder {
+  const inTier = new Set(
+    ratings.filter((rating) => rating.rating === tier).map((rating) => rating.barId),
+  );
+  const orderedBarIds: string[] = [];
+  const firstSeenAt = new Map<string, number>();
+  const comparisonCounts = new Map<string, number>();
+  for (const barId of inTier) comparisonCounts.set(barId, 0);
+
+  for (const [transcriptIndex, comparison] of comparisons.entries()) {
+    const winnerId = comparison.winnerBarId;
+    const loserId = comparison.loserBarId;
+    if (
+      winnerId === loserId ||
+      !inTier.has(winnerId) ||
+      !inTier.has(loserId)
+    ) {
+      continue;
+    }
+
+    comparisonCounts.set(winnerId, (comparisonCounts.get(winnerId) ?? 0) + 1);
+    comparisonCounts.set(loserId, (comparisonCounts.get(loserId) ?? 0) + 1);
+
+    const winnerIndex = orderedBarIds.indexOf(winnerId);
+    const loserIndex = orderedBarIds.indexOf(loserId);
+    if (winnerIndex === -1 && loserIndex === -1) {
+      firstSeenAt.set(winnerId, transcriptIndex);
+      firstSeenAt.set(loserId, transcriptIndex);
+      orderedBarIds.push(winnerId, loserId);
+      continue;
+    }
+    if (winnerIndex === -1) {
+      firstSeenAt.set(winnerId, transcriptIndex);
+      orderedBarIds.splice(loserIndex, 0, winnerId);
+      continue;
+    }
+    if (loserIndex === -1) {
+      firstSeenAt.set(loserId, transcriptIndex);
+      orderedBarIds.splice(winnerIndex + 1, 0, loserId);
+      continue;
+    }
+
+    const winnerFirstSeen = firstSeenAt.get(winnerId) ?? -1;
+    const loserFirstSeen = firstSeenAt.get(loserId) ?? -1;
+    const movingId =
+      winnerFirstSeen >= loserFirstSeen ? winnerId : loserId;
+    const anchorId = movingId === winnerId ? loserId : winnerId;
+    const movingWins = movingId === winnerId;
+
+    orderedBarIds.splice(orderedBarIds.indexOf(movingId), 1);
+    const anchorIndex = orderedBarIds.indexOf(anchorId);
+    orderedBarIds.splice(anchorIndex + (movingWins ? 0 : 1), 0, movingId);
+  }
+
+  const band = TIER_BANDS[tier];
+  const scores = new Map<string, number>();
+  for (const barId of inTier) scores.set(barId, tierMidpoint(tier));
+  if (orderedBarIds.length > 1) {
+    const step = (band.hi - band.lo) / (orderedBarIds.length - 1);
+    orderedBarIds.forEach((barId, index) => {
+      scores.set(barId, roundScore(band.hi - index * step));
+    });
+  }
+
+  return { orderedBarIds, scores, comparisonCounts };
+}
+
+/**
+ * Compute the transcript-derived 0–10 score for every bar in `tier`.
+ * Bars with no comparisons get the tier midpoint.
  *
  * Only comparisons where BOTH endpoints are in the requested tier count
  * — a Loved-vs-Liked comparison (if one ever happened) is irrelevant to
@@ -130,44 +201,13 @@ export function computeScoresForTier(
   comparisons: ReadonlyArray<PairwiseComparison>,
   tier: Tier,
 ): Map<string, number> {
-  const band = TIER_BANDS[tier];
-  const span = band.hi - band.lo;
-  const inTier = new Set(
-    ratings.filter((r) => r.rating === tier).map((r) => r.barId),
-  );
-
-  const wins = new Map<string, number>();
-  const losses = new Map<string, number>();
-  for (const c of comparisons) {
-    if (!inTier.has(c.winnerBarId) || !inTier.has(c.loserBarId)) continue;
-    wins.set(c.winnerBarId, (wins.get(c.winnerBarId) ?? 0) + 1);
-    losses.set(c.loserBarId, (losses.get(c.loserBarId) ?? 0) + 1);
-  }
-
-  const midpoint = (band.lo + band.hi) / 2;
-  const result = new Map<string, number>();
-  for (const barId of inTier) {
-    const w = wins.get(barId) ?? 0;
-    const l = losses.get(barId) ?? 0;
-    const total = w + l;
-    if (total === 0) {
-      result.set(barId, roundScore(midpoint));
-      continue;
-    }
-    const winrate = w / total;
-    result.set(barId, roundScore(band.lo + winrate * span));
-  }
-  return result;
+  return buildRankOrderForTier(ratings, comparisons, tier).scores;
 }
 
 /**
  * Apply a single new comparison to the current rating set and return the
- * updated BarRating[] with smoothed scores.
- *
- * "Smoothed" per R8: the score for each affected bar moves toward its new
- * ideal but by at most MAX_DELTA_PER_EVENT in this step. Unaffected bars
- * (different tier, or not involved in the comparison's tier graph) are
- * returned untouched — preserves referential equality where possible.
+ * updated BarRating[] with scores from the complete transcript replay.
+ * Other tiers remain untouched to preserve referential equality.
  *
  * Invariant: never mutates input. Returns a fresh BarRating[].
  */
@@ -187,34 +227,20 @@ export function applyComparison(
 
   const tier = winner.rating;
   const combined: PairwiseComparison[] = [...priorComparisons, newComparison];
-  const idealScores = computeScoresForTier(ratings, combined, tier);
+  const scores = computeScoresForTier(ratings, combined, tier);
 
   return ratings.map((r) => {
     if (r.rating !== tier) return r;
-    const ideal = idealScores.get(r.barId);
-    if (ideal === undefined) return r;
-
-    // Bars in this tier that weren't part of this comparison still have
-    // their ideal score updated by the new graph state — but smoothing only
-    // applies to the two bars actually involved in the comparison. The
-    // others move freely so passive recompute doesn't lag behind.
-    const involved =
-      r.barId === newComparison.winnerBarId ||
-      r.barId === newComparison.loserBarId;
-
-    if (!involved) return { ...r, score: ideal };
-
-    const prev = typeof r.score === 'number' ? r.score : tierMidpoint(tier);
-    const delta = clamp(ideal - prev, -MAX_DELTA_PER_EVENT, MAX_DELTA_PER_EVENT);
-    return { ...r, score: roundScore(prev + delta) };
+    const score = scores.get(r.barId);
+    return score === undefined ? r : { ...r, score };
   });
 }
 
 /**
  * Sort ratings for /rankings:
- *   - Bars with a score sort by score desc.
- *   - Bars without a score fall through to tier-then-recency (current v0.4
- *     behavior) and rank below all scored bars in the same tier.
+ *   - Tier precedence is absolute: Loved, then Liked, then Pass.
+ *   - Within a tier, bars sort by score desc; unscored bars use the midpoint.
+ *   - Equal effective scores fall through to recency.
  *
  * Returns a new array; does not mutate input.
  */
@@ -225,15 +251,14 @@ export function sortRatingsByScore(
   return ratings
     .slice()
     .sort((a, b) => {
-      const aHasScore = typeof a.score === 'number';
-      const bHasScore = typeof b.score === 'number';
-
-      if (aHasScore && bHasScore) return (b.score as number) - (a.score as number);
-      if (aHasScore) return -1;
-      if (bHasScore) return 1;
-
       const tierDelta = tierRank[a.rating] - tierRank[b.rating];
       if (tierDelta !== 0) return tierDelta;
+
+      const aScore = typeof a.score === 'number' ? a.score : tierMidpoint(a.rating);
+      const bScore = typeof b.score === 'number' ? b.score : tierMidpoint(b.rating);
+      const scoreDelta = bScore - aScore;
+      if (scoreDelta !== 0) return scoreDelta;
+
       // Recency tiebreak within tier — newer first.
       return Date.parse(b.ratedAt) - Date.parse(a.ratedAt);
     });

@@ -64,8 +64,8 @@ export function writeComparisons(items: PairwiseComparison[]): void {
  * list so callers can recompute scores without a follow-up read.
  *
  * No dedup: a user who flip-flops "A > B" then "B > A" intentionally
- * leaves both rows so the recent answer dominates the winrate math
- * (and the historical record is preserved).
+ * leaves both rows so deterministic transcript replay can apply the later
+ * insertion decision while preserving the historical record.
  */
 export function appendComparison(
   comparison: PairwiseComparison,

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { BarRating, PairwiseComparison } from '@/types/ratings';
 import {
-  MAX_DELTA_PER_EVENT,
   TIER_BANDS,
   applyComparison,
+  buildRankOrderForTier,
   computeScoresForTier,
   pickComparisonTarget,
   roundScore,
@@ -29,9 +29,12 @@ function comp(winnerBarId: string, loserBarId: string): PairwiseComparison {
 }
 
 describe('tier bands', () => {
-  it('are ordered Loved > Liked > Pass without overlap', () => {
-    expect(TIER_BANDS.loved.lo).toBeGreaterThan(TIER_BANDS.liked.hi);
-    expect(TIER_BANDS.liked.lo).toBeGreaterThan(TIER_BANDS.pass.hi);
+  it('use the agreed loved 8-10, liked 5-8, and pass 0-5 bands', () => {
+    expect(TIER_BANDS).toEqual({
+      loved: { lo: 8, hi: 10 },
+      liked: { lo: 5, hi: 8 },
+      pass: { lo: 0, hi: 5 },
+    });
   });
 
   it('tierMidpoint returns the band center rounded to one decimal', () => {
@@ -112,7 +115,7 @@ describe('computeScoresForTier', () => {
     expect(scores.get('b')).toBe(8.0);
   });
 
-  it('uses winrate proportionally — 2 wins + 1 loss = band.lo + 2/3 * span', () => {
+  it('interpolates ordered-list indices across the tier band', () => {
     const ratings: BarRating[] = [
       rating('a', 'liked'),
       rating('b', 'liked'),
@@ -120,15 +123,11 @@ describe('computeScoresForTier', () => {
     ];
     const comparisons: PairwiseComparison[] = [
       comp('a', 'b'),
-      comp('a', 'c'),
-      comp('b', 'a'),
+      comp('b', 'c'),
     ];
     const scores = computeScoresForTier(ratings, comparisons, 'liked');
-    // 'a': 2 wins, 1 loss → 2/3 winrate → 5.0 + (2/3) * 2.9 = ~6.93 → 6.9
-    expect(scores.get('a')).toBe(6.9);
-    // 'b': 1 win, 1 loss → 50% → 5.0 + 0.5 * 2.9 = 6.45 → 6.5
+    expect(scores.get('a')).toBe(8.0);
     expect(scores.get('b')).toBe(6.5);
-    // 'c': 0 wins, 1 loss → 0% → 5.0
     expect(scores.get('c')).toBe(5.0);
   });
 
@@ -151,6 +150,152 @@ describe('computeScoresForTier', () => {
     ];
     const scores = computeScoresForTier(ratings, [], 'loved');
     expect([...scores.keys()]).toEqual(['a']);
+  });
+});
+
+describe('rank-order properties', () => {
+  it('preserves every uninvolved bar relative order when a bar is inserted', () => {
+    const ratings: BarRating[] = ['a', 'b', 'c', 'd', 'x'].map((barId) =>
+      rating(barId, 'loved'),
+    );
+    const seed = [comp('a', 'b'), comp('b', 'c'), comp('c', 'd')];
+    const before = buildRankOrderForTier(ratings, seed, 'loved');
+    const after = buildRankOrderForTier(
+      ratings,
+      [...seed, comp('x', 'b')],
+      'loved',
+    );
+
+    expect(before.orderedBarIds).toEqual(['a', 'b', 'c', 'd']);
+    expect(after.orderedBarIds).toEqual(['a', 'x', 'b', 'c', 'd']);
+    expect(after.orderedBarIds.filter((barId) => barId !== 'x')).toEqual(
+      before.orderedBarIds,
+    );
+  });
+
+  it('keeps every score inside its tier band, including unscored bars', () => {
+    const ratings: BarRating[] = [
+      rating('l1', 'loved'),
+      rating('l2', 'loved'),
+      rating('l0', 'loved'),
+      rating('k1', 'liked'),
+      rating('k2', 'liked'),
+      rating('k0', 'liked'),
+      rating('p1', 'pass'),
+      rating('p2', 'pass'),
+      rating('p0', 'pass'),
+    ];
+    const transcript = [
+      comp('l1', 'l2'),
+      comp('k1', 'k2'),
+      comp('p1', 'p2'),
+    ];
+
+    for (const tier of ['loved', 'liked', 'pass'] as const) {
+      const rankOrder = buildRankOrderForTier(ratings, transcript, tier);
+      const band = TIER_BANDS[tier];
+      for (const score of rankOrder.scores.values()) {
+        expect(score).toBeGreaterThanOrEqual(band.lo);
+        expect(score).toBeLessThanOrEqual(band.hi);
+      }
+      const unscoredId = { loved: 'l0', liked: 'k0', pass: 'p0' }[tier];
+      expect(rankOrder.scores.get(unscoredId)).toBe(tierMidpoint(tier));
+    }
+  });
+
+  it('prevents cross-tier inversion with compared and unscored bars', () => {
+    const ratings: BarRating[] = [
+      rating('loved-winner', 'loved'),
+      rating('loved-loser', 'loved'),
+      rating('loved-unscored', 'loved'),
+      rating('liked-winner', 'liked'),
+      rating('liked-loser', 'liked'),
+      rating('liked-unscored', 'liked'),
+      rating('pass-winner', 'pass'),
+      rating('pass-loser', 'pass'),
+      rating('pass-unscored', 'pass'),
+    ];
+    const transcript = [
+      comp('loved-winner', 'loved-loser'),
+      comp('liked-winner', 'liked-loser'),
+      comp('pass-winner', 'pass-loser'),
+    ];
+    const loved = [...buildRankOrderForTier(ratings, transcript, 'loved').scores.values()];
+    const liked = [...buildRankOrderForTier(ratings, transcript, 'liked').scores.values()];
+    const pass = [...buildRankOrderForTier(ratings, transcript, 'pass').scores.values()];
+
+    expect(Math.min(...loved)).toBeGreaterThanOrEqual(Math.max(...liked));
+    expect(Math.min(...liked)).toBeGreaterThanOrEqual(Math.max(...pass));
+  });
+
+  it('replays the same append-only transcript idempotently', () => {
+    const ratings: BarRating[] = ['a', 'b', 'c', 'd'].map((barId) =>
+      rating(barId, 'loved'),
+    );
+    const transcript = [
+      comp('a', 'b'),
+      comp('b', 'c'),
+      comp('c', 'a'),
+      comp('d', 'a'),
+    ];
+    let incrementallyApplied = ratings;
+    const prior: PairwiseComparison[] = [];
+    for (const comparison of transcript) {
+      incrementallyApplied = applyComparison(
+        incrementallyApplied,
+        prior,
+        comparison,
+      );
+      prior.push(comparison);
+    }
+
+    const firstReplay = buildRankOrderForTier(ratings, transcript, 'loved');
+    const secondReplay = buildRankOrderForTier(ratings, transcript, 'loved');
+    expect(secondReplay.orderedBarIds).toEqual(firstReplay.orderedBarIds);
+    expect(secondReplay.scores).toEqual(firstReplay.scores);
+    expect(secondReplay.comparisonCounts).toEqual(
+      firstReplay.comparisonCounts,
+    );
+    expect(
+      new Map(incrementallyApplied.map((item) => [item.barId, item.score])),
+    ).toEqual(firstReplay.scores);
+  });
+
+  it('derives one deterministic binary-insert order and comparison counts from a transcript', () => {
+    const transcript = [
+      comp('a', 'b'),
+      comp('c', 'b'),
+      comp('a', 'c'),
+      comp('d', 'c'),
+      comp('a', 'd'),
+    ];
+    const forwardRatings: BarRating[] = ['a', 'b', 'c', 'd', 'e'].map(
+      (barId) => rating(barId, 'liked'),
+    );
+    const reverseRatings = forwardRatings.slice().reverse();
+    const forward = buildRankOrderForTier(
+      forwardRatings,
+      transcript,
+      'liked',
+    );
+    const reverse = buildRankOrderForTier(
+      reverseRatings,
+      transcript,
+      'liked',
+    );
+
+    expect(forward.orderedBarIds).toEqual(['a', 'd', 'c', 'b']);
+    expect(reverse.orderedBarIds).toEqual(forward.orderedBarIds);
+    expect(forward.comparisonCounts).toEqual(
+      new Map([
+        ['a', 3],
+        ['b', 2],
+        ['c', 3],
+        ['d', 2],
+        ['e', 0],
+      ]),
+    );
+    expect(forward.scores.get('e')).toBe(tierMidpoint('liked'));
   });
 });
 
@@ -178,20 +323,17 @@ describe('applyComparison', () => {
     expect(b?.score).toBeLessThan(9.0);
   });
 
-  it('clamps |delta| ≤ MAX_DELTA_PER_EVENT for the two involved bars (R8)', () => {
-    // Start with extreme prior scores so the "ideal" is far away.
+  it('recomputes involved bars from their transcript-derived positions', () => {
+    // Existing scores are not another source of truth: transcript order wins.
     const ratings: BarRating[] = [
       rating('a', 'loved', 8.0), // prior was the band floor
       rating('b', 'loved', 10.0), // prior was the band ceiling
     ];
-    // Single comparison a > b → ideal would flip them: a=10, b=8.
-    // Delta for 'a' is +2.0 → clamped to +1.0 → a=9.0.
-    // Delta for 'b' is -2.0 → clamped to -1.0 → b=9.0.
     const next = applyComparison(ratings, [], comp('a', 'b'));
     const a = next.find((r) => r.barId === 'a');
     const b = next.find((r) => r.barId === 'b');
-    expect(a?.score).toBe(roundScore(8.0 + MAX_DELTA_PER_EVENT));
-    expect(b?.score).toBe(roundScore(10.0 - MAX_DELTA_PER_EVENT));
+    expect(a?.score).toBe(10.0);
+    expect(b?.score).toBe(8.0);
   });
 
   it('starts from the tier midpoint when an involved bar has no prior score', () => {
@@ -208,19 +350,19 @@ describe('applyComparison', () => {
     expect(b?.score).toBe(8.0);
   });
 
-  it('updates uninvolved same-tier bars to the new ideal without clamping', () => {
-    // 'c' is in the same tier but wasn't part of this comparison. Its ideal
-    // score may shift if the comparison graph changes its winrate — passive
-    // recompute shouldn't lag behind.
+  it('preserves prior refinement for uninvolved same-tier bars', () => {
     const ratings: BarRating[] = [
       rating('a', 'loved', 9.0),
       rating('b', 'loved', 9.0),
-      rating('c', 'loved', 9.0),
+      rating('c', 'loved', 10.0),
+      rating('d', 'loved', 8.0),
     ];
-    const next = applyComparison(ratings, [], comp('a', 'b'));
+    const next = applyComparison(ratings, [comp('c', 'd')], comp('a', 'b'));
     const c = next.find((r) => r.barId === 'c');
-    // 'c' has 0 wins, 0 losses → still midpoint (9.0). No shift.
-    expect(c?.score).toBe(9.0);
+    const d = next.find((r) => r.barId === 'd');
+    expect(c?.score).toBeGreaterThan(d?.score as number);
+    expect(c?.score).not.toBe(tierMidpoint('loved'));
+    expect(d?.score).not.toBe(tierMidpoint('loved'));
   });
 
   it('leaves bars in other tiers untouched (referential equality preserved)', () => {
@@ -254,16 +396,20 @@ describe('applyComparison', () => {
 });
 
 describe('sortRatingsByScore', () => {
-  it('puts scored bars above unscored bars regardless of tier', () => {
-    // A scored Liked bar should rank above an unscored Loved bar — scoring
-    // is the user's authoritative ordering once it exists.
+  it('keeps tier precedence when compared and unscored bars are mixed', () => {
     const ratings: BarRating[] = [
       rating('unscored-loved', 'loved'),
       rating('scored-liked', 'liked', 7.5),
+      rating('unscored-liked', 'liked'),
+      rating('scored-pass', 'pass', 5.0),
     ];
     const sorted = sortRatingsByScore(ratings);
-    expect(sorted[0].barId).toBe('scored-liked');
-    expect(sorted[1].barId).toBe('unscored-loved');
+    expect(sorted.map((item) => item.barId)).toEqual([
+      'unscored-loved',
+      'scored-liked',
+      'unscored-liked',
+      'scored-pass',
+    ]);
   });
 
   it('sorts scored bars by score descending', () => {
