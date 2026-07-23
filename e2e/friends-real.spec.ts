@@ -96,7 +96,7 @@ type StubOptions = {
   /** follow_user / unfollow_user results. */
   followResult?: boolean;
   unfollowResult?: boolean;
-  /** Rows the friend_ratings view select returns. */
+  /** Rows the get_friend_ratings RPC returns (view→RPC per DeepSeek review). */
   friendRatings?: Array<{
     user_id: string;
     bar_id: string;
@@ -135,7 +135,7 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     fulfillJson(200, opts.unfollowResult ?? true),
   );
   await page.route(
-    '**/rest/v1/friend_ratings**',
+    '**/rest/v1/rpc/get_friend_ratings**',
     fulfillJson(200, opts.friendRatings ?? []),
   );
 }
