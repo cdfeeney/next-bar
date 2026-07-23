@@ -7,24 +7,60 @@ import { loadProfile, clearProfile } from '@/lib/storedProfile';
 import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import SetPassword from '@/components/SetPassword';
+import ClaimHandle from '@/components/ClaimHandle';
+import { fetchOwnProfile } from '@/lib/profile.server';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
 import { deleteAllServerComparisons } from '@/lib/pairwise.server';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { deriveTasteProfile } from '@/lib/tasteProfile';
 import { deriveBadges } from '@/lib/badges';
-import { bars } from '@/lib/bars';
+import { useBars } from '@/lib/useBars';
+
+// Dismissal flag for the claim-your-username nudge. UI preference only —
+// deliberately NOT in accountCache ALL_KEYS (it holds no account data; a
+// shared browser leaking "nudge was dismissed" is harmless).
+const HANDLE_NUDGE_DISMISSED_KEY = 'next-bar:handle-nudge-dismissed:v1';
 
 export default function SettingsPage(): JSX.Element {
   const { ratings } = useRatings();
+  const bars = useBars();
   const auth = useAuth();
   const [hasProfile, setHasProfile] = useState(false);
   const [seeded, setSeeded] = useState(false);
+  // null = unknown/unclaimed until the profile fetch lands; the claim UI
+  // only renders once the fetch confirms handle IS NULL (handleKnown).
+  const [handle, setHandle] = useState<string | null>(null);
+  const [handleKnown, setHandleKnown] = useState(false);
+  const [nudgeDismissed, setNudgeDismissed] = useState(true);
 
   useEffect(() => {
     setHasProfile(loadProfile() !== null);
     setSeeded(isDemoSeeded());
   }, [ratings.length]);
+
+  useEffect(() => {
+    if (auth.status !== 'signed-in') return;
+    setNudgeDismissed(
+      window.localStorage.getItem(HANDLE_NUDGE_DISMISSED_KEY) === '1',
+    );
+    const supabase = getBrowserSupabase();
+    if (!supabase) return;
+    let cancelled = false;
+    fetchOwnProfile(supabase).then((profile) => {
+      if (cancelled || profile === null) return;
+      setHandle(profile.handle);
+      setHandleKnown(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.status]);
+
+  const handleDismissNudge = () => {
+    window.localStorage.setItem(HANDLE_NUDGE_DISMISSED_KEY, '1');
+    setNudgeDismissed(true);
+  };
 
   const handleSeed = () => {
     seedSampleNight();
@@ -124,6 +160,9 @@ export default function SettingsPage(): JSX.Element {
                     <p className="font-display text-base truncate">
                       {auth.user.email}
                     </p>
+                    {handle !== null ? (
+                      <p className="text-accent text-sm mt-1 truncate">@{handle}</p>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -133,6 +172,27 @@ export default function SettingsPage(): JSX.Element {
                     Sign out
                   </button>
                 </div>
+                {handleKnown && handle === null ? (
+                  <div className="pt-3 border-t border-border space-y-3">
+                    {!nudgeDismissed ? (
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-xs text-muted leading-relaxed">
+                          Usernames are here — claim yours so friends can find
+                          you.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleDismissNudge}
+                          aria-label="Dismiss username nudge"
+                          className="text-muted text-xs underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    ) : null}
+                    <ClaimHandle onClaimed={setHandle} />
+                  </div>
+                ) : null}
                 <div className="pt-3 border-t border-border">
                   <SetPassword />
                 </div>
