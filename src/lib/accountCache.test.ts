@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clearAccountCache,
   clearResidualAccountCache,
+  getCacheEpoch,
   guardAgainstForeignCache,
 } from './accountCache';
 
@@ -33,6 +34,14 @@ describe('clearAccountCache', () => {
     window.localStorage.setItem('next-bar:profile:v1', '{"tags":[]}');
     clearAccountCache();
     expect(window.localStorage.getItem('next-bar:profile:v1')).not.toBeNull();
+  });
+
+  it('bumps the cache epoch so in-flight hydrates abandon their writes', () => {
+    // The sign-out race: an async hydrate captures the epoch before its
+    // fetch; a wipe during the fetch must invalidate the pending write.
+    const before = getCacheEpoch();
+    clearAccountCache();
+    expect(getCacheEpoch()).toBe(before + 1);
   });
 });
 

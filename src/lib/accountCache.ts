@@ -28,8 +28,22 @@ const ALL_KEYS = [
   PAIRWISE_MERGED_KEY,
 ] as const;
 
+/**
+ * Monotonic wipe counter. An async hydrate captures the epoch when it
+ * starts and re-checks before writing: if a wipe happened in between, the
+ * write is abandoned. Closes the sign-out-races-in-flight-fetch window —
+ * React's `cancelled` cleanup only flips at commit, which can be AFTER the
+ * fetch resolves but after the wipe already ran (routed review finding).
+ */
+let cacheEpoch = 0;
+
+export function getCacheEpoch(): number {
+  return cacheEpoch;
+}
+
 export function clearAccountCache(): void {
   if (typeof window === 'undefined') return;
+  cacheEpoch += 1;
   try {
     for (const key of ALL_KEYS) window.localStorage.removeItem(key);
   } catch {

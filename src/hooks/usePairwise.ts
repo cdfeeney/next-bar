@@ -20,7 +20,7 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { broadcastServerRatingSet } from '@/hooks/useRatings';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { guardAgainstForeignCache } from '@/lib/accountCache';
+import { getCacheEpoch, guardAgainstForeignCache } from '@/lib/accountCache';
 
 const COMPARISONS_BROADCAST = 'next-bar:pairwise:local-update';
 const MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
@@ -125,6 +125,9 @@ export function usePairwise(): UsePairwiseReturn {
     const alreadyMergedFor = readMergedFlag();
 
     let cancelled = false;
+    // Epoch guard — see useRatings: abandon writes if a wipe landed while
+    // this block was in flight (sign-out race).
+    const epoch = getCacheEpoch();
     void (async () => {
       if (local.length > 0 && alreadyMergedFor !== userId) {
         const merged = await mergeLocalComparisonsToServer(
@@ -134,7 +137,7 @@ export function usePairwise(): UsePairwiseReturn {
           sessionIdRef.current,
         );
         // Latch only on a completed run — a failed merge must retry.
-        if (merged !== null) writeMergedFlag(userId);
+        if (merged !== null && getCacheEpoch() === epoch) writeMergedFlag(userId);
       }
       const server = await fetchServerComparisons(supabase);
       // null = fetch failed — keep the local transcript rather than
@@ -144,7 +147,7 @@ export function usePairwise(): UsePairwiseReturn {
         // OWNERSHIP marker (santa round-3, mirrors useRatings): the session
         // now works this account's transcript, so latch the flag even when
         // no merge ran — the residual/foreign guards key off it.
-        writeMergedFlag(userId);
+        if (getCacheEpoch() === epoch) writeMergedFlag(userId);
       }
     })();
 

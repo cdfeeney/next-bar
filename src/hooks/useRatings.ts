@@ -17,7 +17,7 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { isSeededDemoRating } from '@/lib/demo/seed';
-import { guardAgainstForeignCache } from '@/lib/accountCache';
+import { getCacheEpoch, guardAgainstForeignCache } from '@/lib/accountCache';
 
 /**
  * Hydrate-race repair: prefer whichever entry is fresher per bar. A rating
@@ -185,6 +185,11 @@ export function useRatings(): UseRatingsReturn {
     const alreadyMergedFor = readMergedFlag();
 
     let cancelled = false;
+    // Epoch guard: if a cache wipe (sign-out) lands while this async block
+    // is in flight, every later write here must be abandoned — `cancelled`
+    // alone flips too late (at React commit) to prevent re-polluting a
+    // just-wiped cache (routed review finding).
+    const epoch = getCacheEpoch();
     void (async () => {
       // First-sign-in merge: only re-runs if this browser hasn't merged
       // for this user yet. Idempotent on the server side via insert-only.
@@ -196,12 +201,12 @@ export function useRatings(): UseRatingsReturn {
         );
         // Only latch the flag on a run that actually completed — a failed
         // merge (null) must retry next sign-in, not be marked done.
-        if (merged !== null) writeMergedFlag(userId);
+        if (merged !== null && getCacheEpoch() === epoch) writeMergedFlag(userId);
       }
       const server = await fetchServerRatings(supabase);
       // null = fetch FAILED (not "no ratings") — keep whatever we have
       // rather than blanking state / wiping the localStorage cache (B0.3).
-      if (!cancelled && server !== null) {
+      if (!cancelled && server !== null && getCacheEpoch() === epoch) {
         // Keep any rating tapped while this fetch was in flight (it sits in
         // the write-through cache with a newer ratedAt than the snapshot).
         const merged = mergeFreshest(server, loadRatings());
