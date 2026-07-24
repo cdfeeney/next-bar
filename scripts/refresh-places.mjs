@@ -2,10 +2,14 @@
 //
 // WHY THIS IS ~$0 (cost notes, B5 update):
 //   - WEEKLY pass: at most (269 bars × 2) API calls per run — Text Search only
-//     on first resolve (cached after), then Place Details. ~1,160 Details/mo,
-//     comfortably inside the free tier. The Details field mask now also pulls
-//     `photos` (first photo resource name + author attribution) — metadata
-//     only; it does not change the call count.
+//     on first resolve (cached after), then Place Details. The mask pulls
+//     `regularOpeningHours` + `photos`; opening-hours puts each Details call
+//     in Google's ENTERPRISE tier (Codex cost review 2026-07-24), so a truly
+//     weekly cadence (~1,160/mo) can exceed the ~1,000/mo Enterprise free cap
+//     and cost a few $/mo — NOT $0 as an earlier note claimed. Mitigation:
+//     nothing schedules this script (no cron/CI — verified), so cost is only
+//     incurred on manual runs; run hours-refresh ~monthly, not weekly, and
+//     the per-day quota bounds worst case. Photos field is metadata (no call).
 //   - PHOTOS (--photos, weekly): one GetPhotoMedia call per bar WITH a photo
 //     AND no local file yet (≤269 first run, ~0 after — existing files are
 //     skipped unless --force-photos). Inside the Photos SKU free tier.
