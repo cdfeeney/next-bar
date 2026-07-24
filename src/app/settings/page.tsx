@@ -11,6 +11,7 @@ import ClaimHandle from '@/components/ClaimHandle';
 import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
 import { fetchOutgoingRequests } from '@/lib/follows.server';
 import { getCacheEpoch } from '@/lib/accountCache';
+import { requestAccountDeletion } from '@/lib/accountDeletion';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
 import { deleteAllServerComparisons } from '@/lib/pairwise.server';
@@ -46,6 +47,12 @@ export default function SettingsPage(): JSX.Element {
   // read RPC: null (missing RPC or transport failure) hides the toggle —
   // fail-closed is correct for a consent promise.
   const [consentLive, setConsentLive] = useState(false);
+  // Account deletion (H2): idle → armed (type-to-confirm visible) →
+  // deleting. 'failed' shows an inline error and returns to armed.
+  const [deleteState, setDeleteState] = useState<
+    'idle' | 'armed' | 'deleting' | 'failed'
+  >('idle');
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   useEffect(() => {
     setHasProfile(loadProfile() !== null);
@@ -122,6 +129,29 @@ export default function SettingsPage(): JSX.Element {
     if (!window.confirm('Clear your saved vibe profile? You can retake the quiz anytime.')) return;
     clearProfile();
     setHasProfile(false);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (auth.status !== 'signed-in' || deleteState === 'deleting') return;
+    if (deleteConfirmText.trim().toLowerCase() !== 'delete') return;
+    setDeleteState('deleting');
+    const ok = await requestAccountDeletion(auth.session.access_token);
+    if (!ok) {
+      // Nothing was deleted (the route is all-or-nothing) — say so and let
+      // the user retry or bail.
+      setDeleteState('failed');
+      return;
+    }
+    // The auth user is gone server-side. signOut() clears the local
+    // session AND the account cache (useAuth owns that coupling), then a
+    // hard redirect lands on a clean signed-out home. try/finally (Opus
+    // review): the redirect must happen even if signOut throws — the
+    // account no longer exists, staying on a signed-in-looking page lies.
+    try {
+      await auth.signOut();
+    } finally {
+      window.location.assign('/');
+    }
   };
 
   const handleClearRatings = async () => {
@@ -473,6 +503,87 @@ export default function SettingsPage(): JSX.Element {
             </button>
           </div>
         </div>
+
+        {auth.status === 'signed-in' ? (
+          <div>
+            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+              Danger zone
+            </h2>
+            <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
+              <p className="text-xs text-muted leading-relaxed">
+                Deleting your account removes your login, profile, username,
+                ratings, rankings, and follows — permanently. There is no
+                undo.
+              </p>
+              {deleteState === 'idle' ? (
+                <button
+                  type="button"
+                  onClick={() => setDeleteState('armed')}
+                  className="text-sm text-red-400 underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                >
+                  Delete account
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <label
+                    htmlFor="delete-confirm"
+                    className="block text-xs text-muted"
+                  >
+                    Type <span className="text-text font-display">delete</span>{' '}
+                    to confirm:
+                  </label>
+                  <input
+                    id="delete-confirm"
+                    type="text"
+                    inputMode="text"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    // Arming unmounts the trigger button — move focus here
+                    // so keyboard/screen-reader users aren't dropped to
+                    // <body> (Opus a11y review).
+                    autoFocus
+                    value={deleteConfirmText}
+                    onChange={(e) => setDeleteConfirmText(e.target.value)}
+                    className="w-full bg-bg border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-red-400 min-h-[44px]"
+                  />
+                  {deleteState === 'failed' ? (
+                    <p className="text-red-400 text-xs" role="status">
+                      Couldn&apos;t delete your account — nothing was removed.
+                      Try again in a moment, or email hi@next-bar.app.
+                    </p>
+                  ) : null}
+                  <div className="flex items-center gap-4">
+                    <button
+                      type="button"
+                      onClick={handleDeleteAccount}
+                      disabled={
+                        deleteConfirmText.trim().toLowerCase() !== 'delete' ||
+                        deleteState === 'deleting'
+                      }
+                      className="bg-red-500/90 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-white font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
+                    >
+                      {deleteState === 'deleting'
+                        ? 'Deleting…'
+                        : 'Permanently delete'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteState('idle');
+                        setDeleteConfirmText('');
+                      }}
+                      disabled={deleteState === 'deleting'}
+                      className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation disabled:opacity-40"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
 
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
