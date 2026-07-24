@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import Avatar from '@/components/Avatar';
 import GroupVote from '@/components/GroupVote';
+import TonightSuggestions from '@/components/TonightSuggestions';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
@@ -214,6 +215,10 @@ export default function ConsensusPage(): JSX.Element {
             yet — they&apos;ll appear here once they do.
           </p>
         ) : null}
+
+        {/* Nominations (0011): real circles only — the demo curators can't
+            suggest, and rendering an inert section would read as broken. */}
+        {isServer ? <TonightSuggestions /> : null}
 
         {!enoughPeople ? (
           <EmptyState
