@@ -48,15 +48,34 @@ export type WeeklyHours = Partial<Record<number, TimeRange[]>>;
 
 export type BusinessStatus = 'OPERATIONAL' | 'CLOSED_TEMPORARILY' | 'CLOSED_PERMANENTLY';
 
+/** One Google review snippet stored by the monthly `--reviews` ingest pass
+ * (scripts/refresh-places.mjs). Text is an excerpt (≤200 chars); author is the
+ * required Google attribution; rating is the reviewer's 1–5 stars. */
+export type BarReview = {
+  text: string;
+  author: string;
+  rating: number;
+};
+
 /** A per-bar patch produced by the Google Places refresh job (keyed by bar id).
  * Overlaid onto the curated catalog at load time so the hand-authored bar files
- * stay clean and the machine-generated data can be regenerated wholesale. */
+ * stay clean and the machine-generated data can be regenerated wholesale.
+ * NOTE: photo/review fields ride the SAME patch object as coords/hours on
+ * purpose — bars.ts's wrong-venue bbox guard rejects the patch wholesale, so a
+ * mis-resolved venue's photo and reviews are dropped along with its coords. */
 export type PlacePatch = {
   lat?: number;
   lng?: number;
   googlePlaceId?: string;
   businessStatus?: BusinessStatus;
   hours?: WeeklyHours;
+  /** Places photo resource name (places/{id}/photos/{ref}); presence means a
+   * local photo was ingested to public/bar-photos/<barId>.jpg. */
+  photoRef?: string;
+  /** Photo author attribution (Google policy: must render when photo shown). */
+  photoAttribution?: string;
+  /** Up to 3 review snippets from the monthly `--reviews` pass. */
+  reviews?: BarReview[];
 };
 
 export type Bar = {
@@ -75,6 +94,9 @@ export type Bar = {
   googlePlaceId?: string;
   businessStatus?: BusinessStatus;
   hours?: WeeklyHours;
+  photoRef?: string;
+  photoAttribution?: string;
+  reviews?: BarReview[];
 };
 
 export type Radius =

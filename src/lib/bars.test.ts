@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { bars } from '@/lib/bars';
+import type { Bar, PlacePatch } from '@/types';
+import { applyPlaces, bars } from '@/lib/bars';
 
 // Normalize a bar name for duplicate detection: fold case, punctuation, and the
 // filler words that let the same venue slip in twice under slightly different
@@ -38,5 +39,47 @@ describe('bars catalog integrity', () => {
       (b) => b.lat < BBOX.minLat || b.lat > BBOX.maxLat || b.lng < BBOX.minLng || b.lng > BBOX.maxLng,
     );
     expect(outOfBox.map((b) => `${b.name} (${b.lat},${b.lng})`)).toEqual([]);
+  });
+});
+
+describe('applyPlaces wrong-venue guard', () => {
+  const curated: Bar = {
+    id: 'test-bar',
+    name: 'Test Bar',
+    neighborhood: 'LES',
+    address: '1 Test St',
+    lat: 40.7188,
+    lng: -73.9913,
+    priceTier: 2,
+    tags: ['dive'],
+    blurb: 'test',
+    lastVerified: '2026-04-01',
+  };
+
+  const photoFields: PlacePatch = {
+    photoRef: 'places/abc/photos/def',
+    photoAttribution: 'A Google User',
+    reviews: [{ text: 'Great spot', author: 'Reviewer', rating: 5 }],
+  };
+
+  it('passes photo + review fields through for an in-area patch', () => {
+    const [out] = applyPlaces([curated], {
+      'test-bar': { lat: 40.72, lng: -73.99, ...photoFields },
+    });
+    expect(out.lat).toBe(40.72);
+    expect(out.photoRef).toBe(photoFields.photoRef);
+    expect(out.photoAttribution).toBe(photoFields.photoAttribution);
+    expect(out.reviews).toEqual(photoFields.reviews);
+  });
+
+  it('drops photo + review fields together with rejected out-of-area coords', () => {
+    // Nassau County coords → wrong venue → NOTHING in the patch is trusted:
+    // the photo and reviews belong to that other place too.
+    const [out] = applyPlaces([curated], {
+      'test-bar': { lat: 40.7, lng: -73.6, ...photoFields },
+    });
+    expect(out).toEqual(curated);
+    expect(out.photoRef).toBeUndefined();
+    expect(out.reviews).toBeUndefined();
   });
 });

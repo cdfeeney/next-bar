@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import type { Bar, ManhattanNeighborhood } from '@/types';
 import { useBars } from '@/lib/useBars';
 import RatingBadge from '@/components/RatingBadge';
+import BarVisualTile from '@/components/BarVisualTile';
 
 type BarPickerProps = {
   onPick: (bar: Bar) => void;
@@ -80,9 +81,10 @@ export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {
                     <button
                       type="button"
                       onClick={() => onPick(bar)}
-                      className="w-full min-h-[56px] flex items-baseline justify-between gap-3 px-4 py-3 border-b border-border hover:bg-surface active:bg-surface touch-manipulation text-left"
+                      className="w-full min-h-[56px] flex items-center justify-between gap-3 px-4 py-3 border-b border-border hover:bg-surface active:bg-surface touch-manipulation text-left"
                     >
                       <span className="font-display flex items-center gap-2 min-w-0">
+                        <BarVisualTile bar={bar} size={32} />
                         <span className="truncate">{bar.name}</span>
                         <RatingBadge barId={bar.id} />
                       </span>

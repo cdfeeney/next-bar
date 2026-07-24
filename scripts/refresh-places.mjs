@@ -1,19 +1,46 @@
 // Weekly Google Places refresh for the Next Bar catalog.
 //
-// WHY THIS IS ~$0: it makes at most (269 bars × 2) API calls per run. Google's
-// free tier resets monthly at 10,000 Place Details + 5,000 Text Search calls.
-// A weekly run uses ~1,160 Place Details/month — comfortably free. Users never
-// call Google; they read the overlaid catalog. "Open now" is computed client-
-// side (src/lib/openNow.ts) from the hours this job stores — never a live call.
+// WHY THIS IS ~$0 (cost notes, B5 update):
+//   - WEEKLY pass: at most (269 bars × 2) API calls per run — Text Search only
+//     on first resolve (cached after), then Place Details. ~1,160 Details/mo,
+//     comfortably inside the free tier. The Details field mask now also pulls
+//     `photos` (first photo resource name + author attribution) — metadata
+//     only; it does not change the call count.
+//   - PHOTOS (--photos, weekly): one GetPhotoMedia call per bar WITH a photo
+//     AND no local file yet (≤269 first run, ~0 after — existing files are
+//     skipped unless --force-photos). Inside the Photos SKU free tier.
+//   - REVIEWS (--reviews, MONTHLY — do NOT run weekly): adds the `reviews`
+//     field to the same Place Details request. Reviews bill at the
+//     Enterprise(+Atmosphere) tier whose free allowance is ~1,000 calls/mo;
+//     269 calls monthly ≈ ¼ of it → $0, weekly (~1,160/mo) would COST.
+//     Between --reviews runs the sidecar's stored reviews are carried forward
+//     untouched.
+//   Users never call Google; they read the overlaid catalog. "Open now" is
+//   computed client-side (src/lib/openNow.ts) from the hours this job stores.
 //
 // FLOW: for each bar, resolve a googlePlaceId (cached after first run via Text
-// Search), then Place Details for coords + business status + opening hours.
-// Writes the result to src/lib/bars.places.ts (a generated sidecar overlaid in
-// bars.ts). Dry-run by default; pass --apply to write the sidecar.
+// Search), then Place Details for coords + business status + opening hours +
+// primary photo name. Writes the result to src/lib/bars.places.ts (a generated
+// sidecar overlaid in bars.ts — its wrong-venue bbox guard drops a whole patch,
+// photos/reviews included, when coords resolve outside the service area).
+// Dry-run by default; pass --apply to write the sidecar.
 //
-// USAGE:  GOOGLE_MAPS_API_KEY=... node scripts/refresh-places.mjs [--apply]
+// PHOTO FORMAT (dependency-free choice): GetPhotoMedia's media redirect serves
+// JPEG bytes; we save them AS-IS to public/bar-photos/<barId>.jpg. Converting
+// to WebP would require adding `sharp` (not a dep) — so .jpg it is, and
+// src/lib/barVisual.ts's barImageUrl() returns the matching .jpg path. If a
+// dep is ever added, change BOTH places together.
 //
-// Uses the Places API (New): places:searchText and places/{id} with FieldMasks.
+// USAGE:
+//   GOOGLE_MAPS_API_KEY=... node scripts/refresh-places.mjs [--apply]
+//     [--photos]        download missing bar photos to public/bar-photos/
+//                       (writes image files even in dry-run — additive + skip-
+//                       if-present; the sidecar itself still needs --apply)
+//     [--force-photos]  re-download photos that already exist locally
+//     [--reviews]       MONTHLY pass: also fetch up to 3 review snippets/bar
+//
+// Uses the Places API (New): places:searchText, places/{id} with FieldMasks,
+// and {photoName}/media for photo bytes.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,8 +49,15 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
 const APPLY = process.argv.includes('--apply');
+const PHOTOS = process.argv.includes('--photos');
+const FORCE_PHOTOS = process.argv.includes('--force-photos');
+const REVIEWS = process.argv.includes('--reviews');
 const KEY = process.env.GOOGLE_MAPS_API_KEY;
 const SIDECAR = path.join(REPO, 'src/lib/bars.places.ts');
+const PHOTO_DIR = path.join(REPO, 'public/bar-photos');
+const PHOTO_MAX_WIDTH = 640;
+const REVIEW_MAX = 3;
+const REVIEW_EXCERPT_CHARS = 200;
 const BAR_FILES = ['bars.ts', 'bars.extra.ts', 'bars.expansion.ts', 'bars.expansion2.ts', 'bars.expansion3.ts'];
 
 if (!KEY) {
@@ -55,16 +89,23 @@ function parseBars() {
   return bars;
 }
 
-// Reuse already-resolved place ids from the existing sidecar so we skip Text Search.
-function loadExistingPlaceIds() {
-  const ids = {};
+// Parse the existing generated sidecar back into patch objects. Entry values
+// are JSON.stringify output (see the writer below), so JSON.parse round-trips.
+// Used to (a) reuse resolved place ids and skip Text Search, and (b) carry
+// stored reviews forward on runs that don't pass --reviews — the sidecar is
+// regenerated wholesale, so without this a weekly run would wipe the monthly
+// review data.
+function loadExistingPatches() {
+  const patches = {};
   try {
     const t = fs.readFileSync(SIDECAR, 'utf8');
-    const re = /'([^']+)':\s*\{[^}]*googlePlaceId:\s*'([^']+)'/g;
+    const re = /^\s*'([^']+)':\s*(\{.*\}),$/gm;
     let m;
-    while ((m = re.exec(t))) ids[m[1]] = m[2];
+    while ((m = re.exec(t))) {
+      try { patches[m[1]] = JSON.parse(m[2]); } catch { /* hand-edited line; skip */ }
+    }
   } catch { /* first run, no sidecar data yet */ }
-  return ids;
+  return patches;
 }
 
 async function resolvePlaceId(bar) {
@@ -82,13 +123,53 @@ async function resolvePlaceId(bar) {
 }
 
 async function placeDetails(placeId) {
+  // `photos` = first photo resource name + authorAttributions (metadata only).
+  // `reviews` is added ONLY on the monthly --reviews pass (Enterprise tier —
+  // see cost notes in the header).
+  const fields = 'id,location,businessStatus,regularOpeningHours,photos' + (REVIEWS ? ',reviews' : '');
   const res = await fetch(`https://places.googleapis.com/v1/places/${placeId}`, {
     headers: {
       'X-Goog-Api-Key': KEY,
-      'X-Goog-FieldMask': 'id,location,businessStatus,regularOpeningHours',
+      'X-Goog-FieldMask': fields,
     },
   });
   return res.json();
+}
+
+// Trim a review to a ≤N-char excerpt on a word boundary with an ellipsis.
+function excerpt(text, max) {
+  const t = String(text).replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max - 1);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut) + '…';
+}
+
+// Google review objects -> up to REVIEW_MAX stored snippets.
+function toReviews(reviews) {
+  if (!Array.isArray(reviews)) return undefined;
+  const out = reviews
+    .map((r) => ({
+      text: excerpt(r.text?.text ?? r.originalText?.text ?? '', REVIEW_EXCERPT_CHARS),
+      author: r.authorAttribution?.displayName ?? 'Google user',
+      rating: typeof r.rating === 'number' ? r.rating : 0,
+    }))
+    .filter((r) => r.text)
+    .slice(0, REVIEW_MAX);
+  return out.length ? out : undefined;
+}
+
+// Download one bar's photo via GetPhotoMedia. The endpoint 302-redirects to
+// the image bytes; fetch follows the redirect, and we save the (JPEG) bytes
+// as-is — no re-encode, no image dep (see PHOTO FORMAT header note).
+async function downloadPhoto(photoRef, file) {
+  const url = `https://places.googleapis.com/v1/${photoRef}/media?maxWidthPx=${PHOTO_MAX_WIDTH}&key=${KEY}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`photo media HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length === 0) throw new Error('photo media returned 0 bytes');
+  fs.writeFileSync(file, buf);
+  return buf.length;
 }
 
 // Google periods -> our WeeklyHours (0=Sun..6=Sat, "HH:MM"; overnight = close<open).
@@ -109,16 +190,17 @@ function toWeeklyHours(regularOpeningHours) {
 
 (async () => {
   const bars = parseBars();
-  const cachedIds = loadExistingPlaceIds();
-  console.log(`Refreshing ${bars.length} bars via Google Places (New)${APPLY ? ' [--apply]' : ' [dry-run]'}`);
+  const existing = loadExistingPatches();
+  const modes = [APPLY ? '--apply' : 'dry-run', PHOTOS && '--photos', FORCE_PHOTOS && '--force-photos', REVIEWS && '--reviews'].filter(Boolean).join(' ');
+  console.log(`Refreshing ${bars.length} bars via Google Places (New) [${modes}]`);
 
   const patches = {};
   const flags = [];
-  let done = 0, withHours = 0, closed = 0;
+  let done = 0, withHours = 0, closed = 0, withPhoto = 0, withReviews = 0;
 
   for (const bar of bars) {
     try {
-      let placeId = cachedIds[bar.id];
+      let placeId = existing[bar.id]?.googlePlaceId;
       if (!placeId) { placeId = await resolvePlaceId(bar); await sleep(120); }
       if (!placeId) { flags.push({ id: bar.id, reason: 'no-place-id', q: bar.name }); continue; }
 
@@ -129,6 +211,21 @@ function toWeeklyHours(regularOpeningHours) {
       if (d.businessStatus) patch.businessStatus = d.businessStatus;
       const hours = toWeeklyHours(d.regularOpeningHours);
       if (hours) { patch.hours = hours; withHours++; }
+
+      // First photo: resource name + author attribution (required on render).
+      const photo = d.photos?.[0];
+      if (photo?.name) {
+        patch.photoRef = photo.name;
+        const attr = photo.authorAttributions?.[0]?.displayName;
+        if (attr) patch.photoAttribution = attr;
+        withPhoto++;
+      }
+
+      // Reviews: fresh on a --reviews run; otherwise carry the sidecar's
+      // stored snippets forward so the weekly wholesale regen can't wipe them.
+      const reviews = REVIEWS ? toReviews(d.reviews) : existing[bar.id]?.reviews;
+      if (reviews) { patch.reviews = reviews; withReviews++; }
+
       if (d.businessStatus && d.businessStatus !== 'OPERATIONAL') { closed++; flags.push({ id: bar.id, reason: d.businessStatus, name: bar.name }); }
       patches[bar.id] = patch;
     } catch (e) {
@@ -137,8 +234,29 @@ function toWeeklyHours(regularOpeningHours) {
     if (++done % 25 === 0) console.log(`  ${done}/${bars.length}`);
   }
 
+  // --photos: fetch missing photo files. Additive + idempotent (skip when the
+  // file exists unless --force-photos), so it runs even in dry-run; only the
+  // sidecar write is gated on --apply.
+  if (PHOTOS) {
+    fs.mkdirSync(PHOTO_DIR, { recursive: true });
+    let downloaded = 0, skipped = 0;
+    for (const [id, patch] of Object.entries(patches)) {
+      if (!patch.photoRef) continue;
+      const file = path.join(PHOTO_DIR, `${id}.jpg`);
+      if (fs.existsSync(file) && !FORCE_PHOTOS) { skipped++; continue; }
+      try {
+        await downloadPhoto(patch.photoRef, file);
+        downloaded++;
+        await sleep(120);
+      } catch (e) {
+        flags.push({ id, reason: 'photo-error', detail: String(e.message || e) });
+      }
+    }
+    console.log(`Photos: downloaded ${downloaded}, skipped ${skipped} existing (public/bar-photos/)`);
+  }
+
   console.log(`\n=== REFRESH REPORT ===`);
-  console.log(`Patched: ${Object.keys(patches).length} | with hours: ${withHours} | non-operational: ${closed} | flags: ${flags.length}`);
+  console.log(`Patched: ${Object.keys(patches).length} | with hours: ${withHours} | with photo: ${withPhoto} | with reviews: ${withReviews} | non-operational: ${closed} | flags: ${flags.length}`);
   for (const f of flags.slice(0, 20)) console.log(`  - ${f.id} [${f.reason}]${f.name ? ' ' + f.name : ''}${f.detail ? ' ' + f.detail : ''}`);
   fs.writeFileSync(path.join(REPO, 'scripts/refresh-report.json'), JSON.stringify({ patches, flags }, null, 2));
 

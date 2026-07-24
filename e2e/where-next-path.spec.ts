@@ -35,6 +35,11 @@ test.describe('Where-next path', () => {
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
     await expect(cards).toHaveCount(3);
 
+    // B5 visual identity: every card renders the leading visual tile. Covers
+    // the glyph path (photos may not be ingested yet); the tile testid is the
+    // same wrapper for both photo and glyph, so this holds either way.
+    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(3);
+
     await expect(
       page.locator('article').filter({ hasText: /Vibe match/i }).getByRole('heading', { name: /Attaboy/i })
     ).toHaveCount(0);

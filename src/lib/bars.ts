@@ -1,4 +1,4 @@
-import type { Bar } from '@/types';
+import type { Bar, PlacePatch } from '@/types';
 import { SERVICE_AREA_BBOX } from './constants';
 import { extraBars } from './bars.extra';
 import { expansionBars } from './bars.expansion';
@@ -531,9 +531,15 @@ function isInsideServiceArea(lat: number, lng: number): boolean {
   );
 }
 
-function applyPlaces(list: Bar[]): Bar[] {
+// Exported for bars.test.ts — the guard's all-or-nothing contract (photo +
+// review fields must be dropped together with rejected coords) is unit-tested
+// with injected patches; production always uses the placesData default.
+export function applyPlaces(
+  list: Bar[],
+  patches: Record<string, PlacePatch> = placesData,
+): Bar[] {
   return list.map((b) => {
-    const p = placesData[b.id];
+    const p = patches[b.id];
     if (!p) return b;
     if (p.lat != null && p.lng != null && !isInsideServiceArea(p.lat, p.lng)) {
       return b; // wrong-venue match — reject the entire patch
@@ -544,6 +550,11 @@ function applyPlaces(list: Bar[]): Bar[] {
       googlePlaceId: p.googlePlaceId ?? b.googlePlaceId,
       businessStatus: p.businessStatus ?? b.businessStatus,
       hours: p.hours ?? b.hours,
+      // Photo + review data rides the same patch so the wrong-venue guard
+      // above drops it together with the untrusted coords/hours.
+      photoRef: p.photoRef ?? b.photoRef,
+      photoAttribution: p.photoAttribution ?? b.photoAttribution,
+      reviews: p.reviews ?? b.reviews,
     };
   });
 }
