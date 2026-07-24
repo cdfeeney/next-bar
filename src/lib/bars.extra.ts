@@ -51,18 +51,6 @@ export const extraBars: Bar[] = [
     lastVerified: INGESTED,
   },
   {
-    id: 'max-fish',
-    name: 'Max Fish',
-    neighborhood: 'LES',
-    address: '120 Orchard St',
-    lat: 40.719365,
-    lng: -73.9893214,
-    priceTier: 1,
-    tags: ['dive', 'indie', 'cheap', 'locals', 'rough'],
-    blurb: 'Lower East Side art-dive institution. Pinball, cheap beer, no attitude.',
-    lastVerified: INGESTED,
-  },
-  {
     id: 'mehanata',
     name: 'Mehanata Bulgarian Bar',
     neighborhood: 'LES',

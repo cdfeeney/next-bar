@@ -313,18 +313,6 @@ const coreBars: Bar[] = [
     blurb: 'Drinks inside a 1904 bank vault. Order something stiff.',
     lastVerified: PLACEHOLDER_VERIFIED,
   },
-  {
-    id: 'pier-a',
-    name: 'Pier A Harbor House',
-    neighborhood: 'FiDi',
-    address: '22 Battery Pl',
-    lat: 40.7044108,
-    lng: -74.0179022,
-    priceTier: 2,
-    tags: ['beer', 'tourist', 'buzzy', 'mid', 'rooftop'],
-    blurb: 'Outdoor deck on the harbor. Long beer list, longer sunsets.',
-    lastVerified: PLACEHOLDER_VERIFIED,
-  },
 
   // ---- Midtown (5) ----
   {
