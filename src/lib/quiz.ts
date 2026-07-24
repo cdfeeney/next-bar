@@ -25,6 +25,10 @@ export const quiz: QuizQuestion[] = [
     options: [
       { label: 'A dive with a jukebox', tags: ['dive', 'rough', 'old-nyc'] },
       { label: 'A hidden cocktail spot', tags: ['speakeasy', 'cocktail', 'polished'] },
+      // Tag-audit F2 (2026-07-25): beer(76 bars)/pub(44)/wine(20) were
+      // quiz-inexpressible — the two biggest gaps in the catalog.
+      { label: 'Cold pints at a proper pub', tags: ['pub', 'beer'] },
+      { label: 'A good glass of wine', tags: ['wine', 'chill'] },
     ],
   },
   {
@@ -40,8 +44,13 @@ export const quiz: QuizQuestion[] = [
     prompt: 'Soundtrack of the night?',
     options: [
       { label: 'Indie / rock', tags: ['indie', 'rough'] },
-      { label: 'Hip-hop', tags: ['hiphop', 'buzzy'] },
-      { label: 'House / EDM', tags: ['house', 'dance'] },
+      // Tag-audit F1 (2026-07-25): 'hiphop' tags ZERO bars — an emittable
+      // dead tag only diluted Jaccard. Danceable intent now maps to the
+      // coverage that exists (dance 13, house 5, loud); re-add a hip-hop
+      // answer when B5c review-mining actually tags hip-hop rooms.
+      { label: 'DJs & dancing', tags: ['dance', 'house', 'loud'] },
+      // 'live' (29 bars) was inexpressible — audit F6.
+      { label: 'Live music', tags: ['live', 'jazz'] },
       { label: 'Jazz / lounge', tags: ['jazz', 'lounge'] },
     ],
   },
@@ -52,6 +61,19 @@ export const quiz: QuizQuestion[] = [
       { label: 'Locals & regulars', tags: ['locals', 'old-nyc', 'dive'] },
       { label: 'Trendy and lively', tags: ['trendy', 'instagrammable'] },
       { label: 'Industry / creative', tags: ['industry', 'cocktail'] },
+    ],
+  },
+  {
+    kind: 'single',
+    // Tag-audit F2 (2026-07-25): 'date'(84 bars!)/'romantic'(24)/
+    // 'post-work'(38) were the biggest quiz-inexpressible tags — a core
+    // bar-choice mode the matcher could never hear about.
+    prompt: 'Who are you out with?',
+    options: [
+      { label: 'On a date', tags: ['date', 'romantic', 'cocktail'] },
+      { label: 'Post-work crew', tags: ['post-work', 'beer'] },
+      { label: 'The whole group, going late', tags: ['buzzy', 'loud', 'dance'] },
+      { label: 'Solo or one good friend', tags: ['chill', 'locals'] },
     ],
   },
   {
