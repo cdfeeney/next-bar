@@ -26,11 +26,19 @@ import {
   unsuggestBar,
   type CircleSuggestion,
 } from '@/lib/suggestions.server';
+import {
+  fetchCircleRsvps,
+  rsvpBar,
+  unrsvpBar,
+  type CircleRsvp,
+} from '@/lib/rsvps.server';
 import type { Bar } from '@/types';
 
 type Grouped = {
   bar: Bar;
   suggesters: Array<{ userId: string; label: string; isYou: boolean }>;
+  /** Who's IN at this bar tonight ("You" first). */
+  going: Array<{ userId: string; label: string; isYou: boolean }>;
 };
 
 export default function TonightSuggestions(): JSX.Element | null {
@@ -38,6 +46,7 @@ export default function TonightSuggestions(): JSX.Element | null {
   const [suggestions, setSuggestions] = useState<CircleSuggestion[] | null>(
     null,
   );
+  const [rsvps, setRsvps] = useState<CircleRsvp[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -49,7 +58,10 @@ export default function TonightSuggestions(): JSX.Element | null {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     const epoch = getCacheEpoch();
-    const rows = await fetchCircleSuggestions(supabase, night);
+    const [rows, rsvpRows] = await Promise.all([
+      fetchCircleSuggestions(supabase, night),
+      fetchCircleRsvps(supabase, night),
+    ]);
     if (getCacheEpoch() !== epoch) return;
     if (rows === null) {
       setLoadFailed(true);
@@ -57,6 +69,9 @@ export default function TonightSuggestions(): JSX.Element | null {
     }
     setLoadFailed(false);
     setSuggestions(rows);
+    // RSVP load failure degrades quietly (going-lists empty) rather than
+    // blocking the whole section — suggestions are the primary content.
+    setRsvps(rsvpRows ?? []);
   }, [auth.status, night]);
 
   useEffect(() => {
@@ -66,20 +81,34 @@ export default function TonightSuggestions(): JSX.Element | null {
   if (auth.status !== 'signed-in') return null;
 
   const you = auth.user.id;
+  const personLabel = (p: { userId: string; displayName: string | null; handle: string | null }) =>
+    p.userId === you ? 'You' : (p.displayName ?? (p.handle ? `@${p.handle}` : 'A friend'));
+
   const grouped: Grouped[] = [];
   for (const s of suggestions ?? []) {
     const bar = getBarById(s.barId);
     if (!bar) continue; // unknown/retired catalog id — never render
-    const label =
-      s.userId === you ? 'You' : (s.displayName ?? (s.handle ? `@${s.handle}` : 'A friend'));
     const existing = grouped.find((g) => g.bar.id === s.barId);
-    const suggester = { userId: s.userId, label, isYou: s.userId === you };
+    const suggester = { userId: s.userId, label: personLabel(s), isYou: s.userId === you };
     if (existing) existing.suggesters.push(suggester);
-    else grouped.push({ bar, suggesters: [suggester] });
+    else grouped.push({ bar, suggesters: [suggester], going: [] });
   }
-  // Most-backed suggestions first.
-  grouped.sort((a, b) => b.suggesters.length - a.suggesters.length);
+  for (const r of rsvps) {
+    const entry = grouped.find((g) => g.bar.id === r.barId);
+    // RSVPs only render on suggested bars (the RSVP button lives there);
+    // an RSVP for a bar nobody suggests anymore just doesn't display.
+    if (!entry) continue;
+    entry.going.push({ userId: r.userId, label: personLabel(r), isYou: r.userId === you });
+  }
+  for (const g of grouped) {
+    g.going.sort((a, b) => Number(b.isYou) - Number(a.isYou)); // "You" first
+  }
+  // Most-IN first, then most-backed.
+  grouped.sort(
+    (a, b) => b.going.length - a.going.length || b.suggesters.length - a.suggesters.length,
+  );
   const ownCount = (suggestions ?? []).filter((s) => s.userId === you).length;
+  const yourRsvpBarId = rsvps.find((r) => r.userId === you)?.barId ?? null;
 
   const handlePick = async (bar: Bar): Promise<void> => {
     setPickerOpen(false);
@@ -111,6 +140,26 @@ export default function TonightSuggestions(): JSX.Element | null {
     setBusy(false);
     if (!ok) {
       setNotice("Couldn't remove that — try again in a moment.");
+      return;
+    }
+    await refresh();
+  };
+
+  const handleToggleRsvp = async (barId: string): Promise<void> => {
+    if (busy) return;
+    const supabase = getBrowserSupabase();
+    if (!supabase) return;
+    setBusy(true);
+    setNotice(null);
+    // Tapping your current bar = "I'm out"; anywhere else = move there
+    // (rsvp_bar's server-side single-RSVP semantics).
+    const ok =
+      yourRsvpBarId === barId
+        ? await unrsvpBar(supabase, you, barId, night)
+        : await rsvpBar(supabase, barId, night);
+    setBusy(false);
+    if (!ok) {
+      setNotice("Couldn't update your RSVP — try again in a moment.");
       return;
     }
     await refresh();
@@ -149,31 +198,59 @@ export default function TonightSuggestions(): JSX.Element | null {
         </p>
       ) : (
         <ul className="space-y-3">
-          {grouped.map(({ bar, suggesters }) => (
-            <li
-              key={bar.id}
-              className="bg-surface border border-border rounded-3xl p-4 flex items-center justify-between gap-3"
-            >
-              <div className="min-w-0">
-                <p className="font-display text-base truncate">{bar.name}</p>
-                <p className="text-muted text-xs mt-0.5 truncate">
-                  {bar.neighborhood} · suggested by{' '}
-                  {suggesters.map((s) => s.label).join(', ')}
-                </p>
-              </div>
-              {suggesters.some((s) => s.isYou) ? (
-                <button
-                  type="button"
-                  onClick={() => void handleRemove(bar.id)}
-                  disabled={busy}
-                  aria-label={`Remove your suggestion of ${bar.name}`}
-                  className="text-muted text-xs underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0 disabled:opacity-50"
-                >
-                  Remove
-                </button>
-              ) : null}
-            </li>
-          ))}
+          {grouped.map(({ bar, suggesters, going }) => {
+            const youAreIn = yourRsvpBarId === bar.id;
+            return (
+              <li
+                key={bar.id}
+                className="bg-surface border border-border rounded-3xl p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-display text-base truncate">{bar.name}</p>
+                    <p className="text-muted text-xs mt-0.5 truncate">
+                      {bar.neighborhood} · suggested by{' '}
+                      {suggesters.map((s) => s.label).join(', ')}
+                    </p>
+                    {going.length > 0 ? (
+                      <p className="text-xs mt-1 truncate">
+                        <span className="text-accent" aria-hidden="true">● </span>
+                        {going.map((g) => g.label).join(', ')}{' '}
+                        {going.length === 1 && !going[0].isYou ? 'is' : 'are'} in
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleRsvp(bar.id)}
+                      disabled={busy}
+                      aria-pressed={youAreIn}
+                      className={[
+                        'font-display text-xs px-4 py-2 rounded-full min-h-[38px] touch-manipulation disabled:opacity-50 border transition-colors',
+                        youAreIn
+                          ? 'bg-accent text-bg border-accent'
+                          : 'bg-transparent text-accent border-accent/40 hover:border-accent',
+                      ].join(' ')}
+                    >
+                      {youAreIn ? "I'm in ✓" : "I'm in"}
+                    </button>
+                    {suggesters.some((s) => s.isYou) ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleRemove(bar.id)}
+                        disabled={busy}
+                        aria-label={`Remove your suggestion of ${bar.name}`}
+                        className="text-muted text-xs underline-offset-4 hover:underline min-h-[32px] touch-manipulation disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 
