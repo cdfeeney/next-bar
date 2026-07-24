@@ -7,9 +7,11 @@ import type {
 } from '@/types';
 import { haversineMiles } from '@/lib/distance';
 import { daysAgo } from '@/lib/freshness';
+import { effectiveNight } from '@/lib/cadence';
 import {
   DIST_DECAY_MILES,
   DIST_WEIGHT,
+  EXPLORATION_MIN_RESULTS,
   JACCARD_FLOOR,
   JACCARD_START,
   JACCARD_STEP,
@@ -147,5 +149,47 @@ export function matches(args: MatchesArgs): Bar[] {
     .sort((a, b) => b.score - a.score);
 
   const cap = maxResults ?? MAX_RESULTS;
-  return ranked.slice(0, cap).map((r) => r.bar);
+  const top = ranked.slice(0, cap).map((r) => r.bar);
+
+  // Exploration slot (B7b — ε-greedy, simplified): on surfaces showing 10+
+  // results, the last slot goes to a QUALIFIED long-tail pick (still vibe-
+  // matched at or above the Jaccard floor) instead of the Nth-best score —
+  // pure exploit never re-surfaces the catalog's depth. Deterministically
+  // seeded from (profile tags, day): stable within a day, rotates daily.
+  // Small surfaces (default MAX_RESULTS = 3) are never taxed a slot.
+  if (cap >= EXPLORATION_MIN_RESULTS && ranked.length > cap) {
+    // Every tail bar already cleared the adaptive Jaccard gate (which
+    // bottoms out at JACCARD_FLOOR) or the empty-profile bypass — that IS
+    // the "qualified" bar (DeepSeek review: a second floor filter here was
+    // dead code inviting divergence).
+    const tail = ranked.slice(cap);
+    const seed = explorationSeed(profile.tags, now ?? new Date());
+    top[cap - 1] = tail[seed % tail.length].bar;
+  }
+
+  return top;
+}
+
+/**
+ * FNV-1a hash of (sorted profile tags + effective NIGHT) — deterministic
+ * for a given profile/night so the pick doesn't jitter between renders,
+ * rotating at the 5am LOCAL night rollover (cadence.ts), never mid-evening
+ * (DeepSeek review: a UTC-midnight key rotated at 8pm ET — prime time for
+ * a NYC product).
+ *
+ * KNOWN + ACCEPTED FOR BETA: no per-user salt — users with identical tag
+ * profiles share a night's pick. Decorrelating needs an identity/device
+ * input this pure module doesn't have; revisit with the analytics
+ * decision (escalation queue).
+ */
+function explorationSeed(tags: VibeTag[], now: Date): number {
+  const night = effectiveNight(now);
+  const day = `${night.getFullYear()}-${night.getMonth() + 1}-${night.getDate()}`;
+  const input = `${[...tags].sort().join(',')}|${day}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash;
 }

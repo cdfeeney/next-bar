@@ -5,6 +5,13 @@ export const JACCARD_FLOOR = 0.10;
 export const JACCARD_STEP = 0.05;
 export const MIN_CANDIDATES = 3;
 export const MAX_RESULTS = 3;
+/**
+ * Exploration slot (B7b, "DeepSeek ε-greedy, simplified"): when a surface
+ * requests at least this many results, the LAST slot is reserved for a
+ * qualified long-tail pick instead of the Nth-best score. Small default
+ * surfaces (MAX_RESULTS = 3) never sacrifice a slot.
+ */
+export const EXPLORATION_MIN_RESULTS = 10;
 
 // Blended-ranking weights (must sum to 1 so the final score stays in [0, 1] and
 // no single axis can dominate by scale). Vibe leads; proximity is a strong
