@@ -9,9 +9,31 @@
 
 import type { BrowserContext } from '@playwright/test';
 
-/** Force navigator.geolocation to immediately report PERMISSION_DENIED. */
+/**
+ * Force navigator.geolocation to immediately report PERMISSION_DENIED and
+ * the Permissions API to report 'denied' — matching real Safari AFTER a
+ * user has tapped "Don't Allow" (the permission-primed home flow routes
+ * denied straight to the manual picker, no primer).
+ */
 export async function denyGeolocation(context: BrowserContext): Promise<void> {
   await context.addInitScript(() => {
+    const permissions = navigator.permissions;
+    if (permissions && typeof permissions.query === 'function') {
+      const originalQuery = permissions.query.bind(permissions);
+      Object.defineProperty(navigator, 'permissions', {
+        configurable: true,
+        value: {
+          query: (descriptor: PermissionDescriptor) =>
+            descriptor?.name === 'geolocation'
+              ? Promise.resolve({
+                  state: 'denied',
+                  addEventListener: () => {},
+                  removeEventListener: () => {},
+                } as unknown as PermissionStatus)
+              : originalQuery(descriptor),
+        },
+      });
+    }
     const fail = (_ok: PositionCallback, err?: PositionErrorCallback) => {
       err?.({
         code: 1,

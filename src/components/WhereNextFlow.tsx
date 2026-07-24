@@ -18,9 +18,15 @@ import ResultsView from '@/components/ResultsView';
 const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
 
 type Step =
-  // Location-first entry: on open we try to locate the user and jump straight
-  // to suggestions. Only if we can't locate them do we fall back to pickBar.
+  // Location-first entry (permission-primed, operator decision 2026-07-25 +
+  // web research): with permission already GRANTED we locate silently; with
+  // permission undecided we show the PRIMER — our own "share location"
+  // button whose tap fires the real browser prompt (gesture-bound asks get
+  // shown and approved; load-time auto-prompts get reflex-dismissed and
+  // iOS remembers that as a permanent deny). Denied goes straight to
+  // pickBar, where the recovery card lives.
   | { kind: 'locating' }
+  | { kind: 'askLocation' }
   | { kind: 'autoResults'; coords: Coords }
   | { kind: 'pickBar' }
   | { kind: 'freeTextSeed' }
@@ -56,16 +62,14 @@ export default function WhereNextFlow() {
     }
   }, []);
 
-  // Location-first: request GPS on open, then route to suggestions (precise or
-  // snapped fix) or fall back to the manual pickBar flow (denied / unavailable /
-  // too-coarse-to-place).
+  // Location-first routing. In 'locating' we NEVER fire the browser
+  // request ourselves anymore — the hook auto-fetches when permission is
+  // already granted (U2-4); an undecided permission routes to the primer,
+  // whose TAP calls request() (gesture-bound = the prompt actually shows
+  // and gets approved); a denial lands on pickBar with the recovery card.
   useEffect(() => {
-    if (step.kind !== 'locating') return;
+    if (step.kind !== 'locating' && step.kind !== 'askLocation') return;
     const status = geo.state.status;
-    if (status === 'idle') {
-      geo.request();
-      return;
-    }
     if (geo.coords) {
       setStep({ kind: 'autoResults', coords: geo.coords });
       return;
@@ -76,8 +80,35 @@ export default function WhereNextFlow() {
       status === 'granted_coarse'
     ) {
       setStep({ kind: 'pickBar' });
+      return;
     }
-  }, [step.kind, geo.state.status, geo.coords, geo]);
+    if (step.kind !== 'locating') return;
+    if (status === 'requesting') return; // auto-resume in flight
+    if (geo.permissionState === 'granted') return; // hook will fetch
+    if (geo.permissionState === 'denied') {
+      setStep({ kind: 'pickBar' });
+      return;
+    }
+    // 'prompt' → primer immediately. (Safari can report 'prompt' even when
+    // previously granted; the primer tap then succeeds without any dialog,
+    // which is fine.)
+    if (geo.permissionState === 'prompt') {
+      setStep({ kind: 'askLocation' });
+    }
+    // 'unknown' → grace-handled by the timer effect below (the Permissions
+    // API resolves in ms when present; without it — older Safari — the
+    // primer is the correct destination anyway).
+  }, [step.kind, geo.state.status, geo.coords, geo.permissionState, geo]);
+
+  // Grace timer for 'unknown' permission at startup: don't flash the
+  // primer at a granted user whose Permissions API answer is milliseconds
+  // away; don't strand a no-Permissions-API Safari on the spinner either.
+  useEffect(() => {
+    if (step.kind !== 'locating') return;
+    if (geo.permissionState !== 'unknown') return;
+    const timer = setTimeout(() => setStep({ kind: 'askLocation' }), 400);
+    return () => clearTimeout(timer);
+  }, [step.kind, geo.permissionState]);
 
   // Request geolocation when we move into confirmGps via the manual path.
   useEffect(() => {
@@ -164,12 +195,49 @@ export default function WhereNextFlow() {
   const effectiveCoords = useMemo<Coords | null>(() => {
     if (geo.coords) return geo.coords;
     if (step.kind === 'locating') return null;
+    if (step.kind === 'askLocation') return null;
     if (step.kind === 'autoResults') return step.coords;
     if (step.kind === 'pickBar') return null;
     if (step.kind === 'freeTextSeed') return null;
     if (step.kind === 'confirmGps') return null;
     return { lat: step.seedBar.lat, lng: step.seedBar.lng };
   }, [geo.coords, step]);
+
+  if (step.kind === 'askLocation') {
+    return (
+      <section className="min-h-screen px-6 py-16 flex flex-col items-center justify-center text-center">
+        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-4">
+          Next Bar?
+        </p>
+        <h1 className="font-display text-3xl md:text-4xl mb-3 max-w-sm">
+          Find bars near you
+        </h1>
+        <p className="text-muted text-sm mb-8 max-w-xs leading-relaxed">
+          See what&apos;s good within a short walk. Your location stays in
+          your browser — we never store it.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            // The REAL browser prompt fires from inside this tap —
+            // gesture-bound asks are the ones users see and approve.
+            geo.request();
+            setStep({ kind: 'locating' });
+          }}
+          className="bg-accent hover:bg-accentDim transition-colors text-bg font-display text-lg px-8 py-3 rounded-full min-h-[44px] touch-manipulation mb-4"
+        >
+          Share my location
+        </button>
+        <button
+          type="button"
+          onClick={() => setStep({ kind: 'pickBar' })}
+          className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
+        >
+          Pick a bar instead
+        </button>
+      </section>
+    );
+  }
 
   if (step.kind === 'locating') {
     return (

@@ -83,3 +83,25 @@ test('a DENIED location explains itself with recovery steps instead of failing s
   await expect(page.getByText(/location is blocked for this site/i)).toBeVisible();
   await expect(page.getByRole('button', { name: /try again/i })).toBeVisible();
 });
+
+test('an UNDECIDED permission shows the primer — the real prompt fires from the tap, not on load', async ({
+  page,
+}) => {
+  // Default context: permission state 'prompt' (never asked). The app must
+  // NOT auto-fire the browser prompt on load — it primes with its own
+  // value proposition and a gesture-bound button (web research: load-time
+  // prompts get reflex-dismissed and iOS remembers that as a permanent
+  // deny; gesture-bound asks get approved).
+  await page.goto('/');
+
+  await expect(
+    page.getByRole('heading', { name: /find bars near you/i }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: /share my location/i }),
+  ).toBeVisible();
+
+  // The manual path stays one tap away.
+  await page.getByRole('button', { name: /pick a bar instead/i }).click();
+  await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
+});
