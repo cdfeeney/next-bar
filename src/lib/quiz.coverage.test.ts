@@ -31,14 +31,30 @@ describe('quiz tag coverage', () => {
     expect(deadEmittable).toEqual([]);
   });
 
-  it('the audit gap tags are now expressible: date, beer, pub, wine, live, post-work, romantic', () => {
+  it('the audit gap tags are now expressible: date, beer, pub, wine, live, post-work, romantic, garden, rooftop, splurge', () => {
     const emittable = new Set(
       quiz.flatMap((q) => (q.kind === 'single' ? q.options.flatMap((o) => o.tags) : [])),
     );
-    for (const tag of ['date', 'beer', 'pub', 'wine', 'live', 'post-work', 'romantic']) {
+    for (const tag of [
+      'date',
+      'beer',
+      'pub',
+      'wine',
+      'live',
+      'post-work',
+      'romantic',
+      // Setting axis (2026-07-24): 45 outdoor-space bars were invisible to
+      // new users; splurge joins the spending question the same pass.
+      'garden',
+      'rooftop',
+      'splurge',
+    ]) {
       expect(emittable.has(tag as never), `${tag} should be quiz-expressible`).toBe(true);
     }
-    // The dead tag stays un-emittable until bars actually carry it.
+    // The dead tag stays un-emittable until bars actually carry it, and
+    // 'tourist' is deliberately never offered (audit F4: it's an
+    // avoid-signal wearing a positive suit).
     expect(emittable.has('hiphop' as never)).toBe(false);
+    expect(emittable.has('tourist' as never)).toBe(false);
   });
 });
