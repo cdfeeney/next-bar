@@ -5,9 +5,10 @@ import { DEFAULT_FOLLOWS } from '@/lib/demo/friends';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
+  cancelFollowRequest,
   fetchFollows,
+  fetchOutgoingRequests,
   followByHandle,
-  unfollowByHandle,
   unfollowById,
   type PublicProfile,
 } from '@/lib/follows.server';
@@ -71,8 +72,15 @@ export type UseFollowsReturn = {
   follows: string[];
   /** Server mode only: the handle-resolved circle. [] in local mode. */
   circle: PublicProfile[];
+  /**
+   * Server mode only: outgoing follow requests still awaiting the private
+   * target's consent (B3b). [] in local mode — demo profiles are public.
+   */
+  requested: PublicProfile[];
   mode: FollowsMode;
   isFollowing: (handle: string) => boolean;
+  /** True when a request to this handle is pending ("Requested" button). */
+  isRequested: (handle: string) => boolean;
   toggleFollow: (handle: string) => void;
   /** True until the first read (local or server fetch) resolves. */
   loading: boolean;
@@ -82,13 +90,16 @@ export function useFollows(): UseFollowsReturn {
   const auth = useAuth();
   const [localFollows, setLocalFollows] = useState<string[]>([]);
   const [circle, setCircle] = useState<PublicProfile[]>([]);
+  const [requested, setRequested] = useState<PublicProfile[]>([]);
   const [mode, setMode] = useState<FollowsMode>('pending');
   const [loading, setLoading] = useState(true);
   const modeRef = useRef<FollowsMode>('pending');
-  // Mirror for event-handler reads (the toggle callback must see the
-  // current circle without re-binding on every change).
+  // Mirrors for event-handler reads (the toggle callback must see the
+  // current circle/requested without re-binding on every change).
   const circleRef = useRef<PublicProfile[]>([]);
   circleRef.current = circle;
+  const requestedRef = useRef<PublicProfile[]>([]);
+  requestedRef.current = requested;
 
   // Storage listener — cross-tab propagation for local mode only (server
   // mode never writes the key, so there is nothing to hear).
@@ -114,10 +125,12 @@ export function useFollows(): UseFollowsReturn {
     if (auth.status !== 'signed-in' || !supabase) {
       modeRef.current = 'local';
       setMode('local');
-      // Clear the server circle so it can't linger across a sign-out and
-      // feed a stale optimistic toggle for the NEXT identity (DeepSeek
-      // review — transient UI only, but the ref must never cross users).
+      // Clear the server circle + pending requests so they can't linger
+      // across a sign-out and feed a stale optimistic toggle for the NEXT
+      // identity (DeepSeek review — transient UI only, but the refs must
+      // never cross users).
       setCircle([]);
+      setRequested([]);
       setLocalFollows(loadFollows());
       setLoading(false);
       return;
@@ -133,12 +146,18 @@ export function useFollows(): UseFollowsReturn {
     // (at React commit) to prevent repopulating post-wipe state.
     const epoch = getCacheEpoch();
     void (async () => {
-      const server = await fetchFollows(supabase);
+      const [server, outgoing] = await Promise.all([
+        fetchFollows(supabase),
+        fetchOutgoingRequests(supabase),
+      ]);
       if (cancelled || getCacheEpoch() !== epoch) return;
       // null = fetch FAILED (not "zero friends") — keep prior state rather
       // than blanking a circle on a transient failure. Never fall back to
       // the demo seed here: demo handles aren't real accounts.
       if (server !== null) setCircle(server);
+      // Pre-0008 the outgoing RPC doesn't exist yet → null → keep [] (no
+      // requests can exist before the migration lands either).
+      if (outgoing !== null) setRequested(outgoing);
       setLoading(false);
     })();
 
@@ -157,6 +176,15 @@ export function useFollows(): UseFollowsReturn {
     [mode, circle, localFollows],
   );
 
+  const isRequested = useCallback(
+    (handle: string) => {
+      if (mode !== 'server') return false;
+      const target = normalize(handle);
+      return requested.some((p) => p.handle.toLowerCase() === target);
+    },
+    [mode, requested],
+  );
+
   const toggleFollow = useCallback((handle: string) => {
     if (modeRef.current === 'server') {
       const supabase = getBrowserSupabase();
@@ -168,17 +196,22 @@ export function useFollows(): UseFollowsReturn {
       );
 
       if (existing) {
+        // A placeholder (id still resolving) means a follow is IN FLIGHT —
+        // ignore the tap. Treating it as an unfollowable edge let a quick
+        // double-tap on a private target race the resolve: unfollowByHandle
+        // found no edge (only a request row), returned false, and restored
+        // a phantom "Following" alongside the settled "Requested" entry
+        // (Opus B3b review). The resolve callback below owns the entry's
+        // final home; the user can act again once it settles.
+        if (!existing.id) return;
+
         // Optimistic remove; restore on server refusal. Unfollow by the id
         // the circle entry already carries — the by-handle variant burned a
         // unit of the shared 500/day search cap per unfollow (Opus review).
-        // Placeholder entries (id still resolving) fall back to by-handle.
         setCircle((prev) =>
           prev.filter((p) => p.handle.toLowerCase() !== target),
         );
-        const unfollow = existing.id
-          ? unfollowById(supabase, existing.id)
-          : unfollowByHandle(supabase, existing.handle);
-        void unfollow.then((removed) => {
+        void unfollowById(supabase, existing.id).then((removed) => {
           if (removed || getCacheEpoch() !== epoch) return;
           setCircle((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
@@ -189,23 +222,55 @@ export function useFollows(): UseFollowsReturn {
         return;
       }
 
+      // Pending request → the toggle withdraws it (B3b). Optimistic remove;
+      // restore on server refusal. A placeholder entry (id still resolving)
+      // has no request row yet — nothing to cancel, just drop it.
+      const pending = requestedRef.current.find(
+        (p) => p.handle.toLowerCase() === target,
+      );
+      if (pending) {
+        setRequested((prev) =>
+          prev.filter((p) => p.handle.toLowerCase() !== target),
+        );
+        if (!pending.id) return;
+        void cancelFollowRequest(supabase, pending.id).then((removed) => {
+          if (removed || getCacheEpoch() !== epoch) return;
+          setRequested((prev) =>
+            prev.some((p) => p.handle.toLowerCase() === target)
+              ? prev
+              : [...prev, pending],
+          );
+        });
+        return;
+      }
+
       // Optimistic add with a placeholder entry (id unknown until the
-      // handle resolves); the resolved profile replaces it, a null result
-      // rolls it back.
+      // handle resolves); the resolved profile replaces it — in the circle
+      // when the server followed, in `requested` when the target is private
+      // and the server filed a request instead (B3b). A null rolls it back.
       const placeholder: PublicProfile = {
         id: '',
         handle: handle.trim().replace(/^@/, ''),
         displayName: null,
       };
       setCircle((prev) => [...prev, placeholder]);
-      void followByHandle(supabase, handle).then((profile) => {
+      void followByHandle(supabase, handle).then((outcome) => {
         if (getCacheEpoch() !== epoch) return;
         setCircle((prev) => {
           const without = prev.filter(
             (p) => p.handle.toLowerCase() !== target,
           );
-          return profile ? [...without, profile] : without;
+          return outcome?.status === 'followed'
+            ? [...without, outcome.profile]
+            : without;
         });
+        if (outcome?.status === 'requested') {
+          setRequested((prev) =>
+            prev.some((p) => p.handle.toLowerCase() === target)
+              ? prev
+              : [...prev, outcome.profile],
+          );
+        }
       });
       return;
     }
@@ -223,8 +288,10 @@ export function useFollows(): UseFollowsReturn {
   return {
     follows: mode === 'server' ? circle.map((p) => p.handle) : localFollows,
     circle: mode === 'server' ? circle : [],
+    requested: mode === 'server' ? requested : [],
     mode,
     isFollowing,
+    isRequested,
     toggleFollow,
     loading,
   };

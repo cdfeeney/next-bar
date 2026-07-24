@@ -6,8 +6,9 @@ import FindFriends from '@/components/FindFriends';
 import FriendCard from '@/components/FriendCard';
 import TonightSection from '@/components/TonightSection';
 import { useFollows } from '@/hooks/useFollows';
+import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { demoFriends } from '@/lib/demo';
-import type { PublicProfile } from '@/lib/follows.server';
+import type { FollowRequest, PublicProfile } from '@/lib/follows.server';
 
 /**
  * /friends — dual-mode (B3):
@@ -18,7 +19,9 @@ import type { PublicProfile } from '@/lib/follows.server';
  *                intents/votes tables land (out of beta-critical scope).
  */
 export default function FriendsPage(): JSX.Element {
-  const { circle, mode, isFollowing, toggleFollow, loading } = useFollows();
+  const { circle, requested, mode, isFollowing, isRequested, toggleFollow, loading } =
+    useFollows();
+  const { requests, accept, decline } = useFollowRequests();
   const [query, setQuery] = useState('');
 
   const followed = useMemo(
@@ -74,6 +77,27 @@ export default function FriendsPage(): JSX.Element {
         {/* Tonight — live intent signals (demo circle; B3 keeps this demo). */}
         <TonightSection friends={followed} />
 
+        {/* Follow requests — consent inbox for private accounts (B3b).
+            Rendered only when non-empty: public users and empty inboxes see
+            nothing. */}
+        {isServer && requests.length > 0 ? (
+          <div>
+            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
+              Requests · {requests.length}
+            </h2>
+            <div className="space-y-3">
+              {requests.map((r) => (
+                <RequestRow
+                  key={r.id}
+                  request={r}
+                  onAccept={accept}
+                  onDecline={decline}
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {/* Your circle */}
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
@@ -89,7 +113,7 @@ export default function FriendsPage(): JSX.Element {
           {loading ? (
             <p className="text-muted text-sm">Loading…</p>
           ) : isServer ? (
-            circle.length === 0 ? (
+            circle.length === 0 && requested.length === 0 ? (
               <EmptyCircle />
             ) : (
               <div className="space-y-3">
@@ -97,6 +121,15 @@ export default function FriendsPage(): JSX.Element {
                   <CircleRow
                     key={p.handle}
                     profile={p}
+                    onUnfollow={toggleFollow}
+                  />
+                ))}
+                {/* Outgoing requests awaiting consent — tap withdraws (B3b). */}
+                {requested.map((p) => (
+                  <CircleRow
+                    key={`req-${p.handle}`}
+                    profile={p}
+                    pending
                     onUnfollow={toggleFollow}
                   />
                 ))}
@@ -129,7 +162,11 @@ export default function FriendsPage(): JSX.Element {
             Find friends
           </h2>
           {isServer ? (
-            <FindFriends isFollowing={isFollowing} toggleFollow={toggleFollow} />
+            <FindFriends
+              isFollowing={isFollowing}
+              isRequested={isRequested}
+              toggleFollow={toggleFollow}
+            />
           ) : (
             <>
               <label htmlFor="friend-search" className="sr-only">
@@ -209,9 +246,12 @@ function EmptyCircle(): JSX.Element {
 
 function CircleRow({
   profile,
+  pending = false,
   onUnfollow,
 }: {
   profile: PublicProfile;
+  /** True for an outgoing request awaiting consent — tap withdraws (B3b). */
+  pending?: boolean;
   onUnfollow: (handle: string) => void;
 }): JSX.Element {
   return (
@@ -228,8 +268,53 @@ function CircleRow({
         onClick={() => onUnfollow(profile.handle)}
         className="shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display border bg-transparent border-border text-muted hover:text-text transition-colors"
       >
-        Following
+        {pending ? 'Requested' : 'Following'}
       </button>
+    </div>
+  );
+}
+
+/**
+ * One incoming follow request (B3b consent inbox): accept creates the edge
+ * on the requester's side, decline discards. Both are optimistic in the
+ * hook — a server refusal puts the row back.
+ */
+function RequestRow({
+  request,
+  onAccept,
+  onDecline,
+}: {
+  request: FollowRequest;
+  onAccept: (requesterId: string) => void;
+  onDecline: (requesterId: string) => void;
+}): JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
+      <Link href={`/u/${request.handle}`} className="min-w-0 flex-1">
+        <p className="font-display text-sm truncate">
+          {request.displayName ?? `@${request.handle}`}
+        </p>
+        <p className="text-muted text-xs truncate">
+          @{request.handle} · wants to follow you
+        </p>
+      </Link>
+      <div className="flex items-center gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => onAccept(request.id)}
+          className="min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display bg-accent text-bg"
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          onClick={() => onDecline(request.id)}
+          aria-label={`Decline follow request from @${request.handle}`}
+          className="min-h-[36px] touch-manipulation px-3 rounded-full text-sm font-display border border-border text-muted hover:text-text transition-colors"
+        >
+          ✕
+        </button>
+      </div>
     </div>
   );
 }

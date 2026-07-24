@@ -8,7 +8,9 @@ import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import SetPassword from '@/components/SetPassword';
 import ClaimHandle from '@/components/ClaimHandle';
-import { fetchOwnProfile } from '@/lib/profile.server';
+import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
+import { fetchOutgoingRequests } from '@/lib/follows.server';
+import { getCacheEpoch } from '@/lib/accountCache';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
 import { deleteAllServerComparisons } from '@/lib/pairwise.server';
@@ -33,6 +35,17 @@ export default function SettingsPage(): JSX.Element {
   const [handle, setHandle] = useState<string | null>(null);
   const [handleKnown, setHandleKnown] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(true);
+  // null = unknown until the profile fetch lands; the privacy toggle only
+  // renders once the real value is known (no flash of a wrong default).
+  const [isPrivate, setIsPrivate] = useState<boolean | null>(null);
+  const [privacyBusy, setPrivacyBusy] = useState(false);
+  // Consent enforcement lives in migration 0008's follow_user. Until that
+  // is live, flipping "private" would DISPLAY a promise ("you approve new
+  // followers") the backend cannot honor — pre-0008 follow_user creates
+  // edges directly (Opus review HIGH). Feature-detect by probing the 0008
+  // read RPC: null (missing RPC or transport failure) hides the toggle —
+  // fail-closed is correct for a consent promise.
+  const [consentLive, setConsentLive] = useState(false);
 
   useEffect(() => {
     setHasProfile(loadProfile() !== null);
@@ -47,10 +60,18 @@ export default function SettingsPage(): JSX.Element {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     let cancelled = false;
+    // Epoch guard (accountCache convention — Opus review): a sign-out wipe
+    // mid-fetch must abandon the hydrate, not repopulate the next identity.
+    const epoch = getCacheEpoch();
     fetchOwnProfile(supabase).then((profile) => {
-      if (cancelled || profile === null) return;
+      if (cancelled || getCacheEpoch() !== epoch || profile === null) return;
       setHandle(profile.handle);
       setHandleKnown(true);
+      setIsPrivate(profile.isPrivate);
+    });
+    void fetchOutgoingRequests(supabase).then((outgoing) => {
+      if (cancelled || getCacheEpoch() !== epoch) return;
+      setConsentLive(outgoing !== null);
     });
     return () => {
       cancelled = true;
@@ -60,6 +81,23 @@ export default function SettingsPage(): JSX.Element {
   const handleDismissNudge = () => {
     window.localStorage.setItem(HANDLE_NUDGE_DISMISSED_KEY, '1');
     setNudgeDismissed(true);
+  };
+
+  const handleTogglePrivacy = async () => {
+    if (auth.status !== 'signed-in' || isPrivate === null || privacyBusy) return;
+    const supabase = getBrowserSupabase();
+    if (!supabase) return;
+    const next = !isPrivate;
+    // Optimistic flip with revert — the server response is authoritative.
+    // Epoch guard (Opus review): an identity change while the write is in
+    // flight must not revert-write user A's value into user B's view.
+    const epoch = getCacheEpoch();
+    setIsPrivate(next);
+    setPrivacyBusy(true);
+    const ok = await setOwnPrivacy(supabase, auth.user.id, next);
+    if (getCacheEpoch() !== epoch) return;
+    setPrivacyBusy(false);
+    if (!ok) setIsPrivate(!next);
   };
 
   const handleSeed = () => {
@@ -218,6 +256,44 @@ export default function SettingsPage(): JSX.Element {
             )}
           </div>
         </div>
+
+        {auth.status === 'signed-in' && isPrivate !== null && consentLive ? (
+          <div>
+            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+              Privacy
+            </h2>
+            <div className="bg-surface border border-border rounded-3xl p-5 flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-sm mb-1">Private account</p>
+                <p className="text-xs text-muted leading-relaxed">
+                  {isPrivate
+                    ? 'New followers must send a request you approve. People who already follow you keep access.'
+                    : 'Anyone can follow you and your username appears in search.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isPrivate}
+                aria-label="Private account"
+                disabled={privacyBusy}
+                onClick={handleTogglePrivacy}
+                className={[
+                  'shrink-0 relative w-12 h-7 rounded-full border transition-colors touch-manipulation disabled:opacity-50',
+                  isPrivate ? 'bg-accent border-accent' : 'bg-surface border-border',
+                ].join(' ')}
+              >
+                <span
+                  aria-hidden
+                  className={[
+                    'absolute top-0.5 w-5 h-5 rounded-full transition-all',
+                    isPrivate ? 'right-0.5 bg-bg' : 'left-0.5 bg-muted',
+                  ].join(' ')}
+                />
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">

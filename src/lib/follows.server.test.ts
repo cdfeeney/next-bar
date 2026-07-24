@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+  acceptFollowRequest,
+  cancelFollowRequest,
+  declineFollowRequest,
+  fetchFollowRequests,
   fetchFollows,
+  fetchOutgoingRequests,
   fetchFriendRatings,
   followByHandle,
   getProfileByHandle,
@@ -167,15 +172,57 @@ describe('followByHandle', () => {
 
     const followed = await followByHandle(client, 'claire_r');
 
+    // Pre-0008 boolean `true` maps to status 'followed' (the client must be
+    // deployable either side of the migration apply).
     expect(followed).toEqual({
-      id: 'uuid-claire',
-      handle: 'Claire_R',
-      displayName: 'Claire R.',
+      profile: {
+        id: 'uuid-claire',
+        handle: 'Claire_R',
+        displayName: 'Claire R.',
+      },
+      status: 'followed',
     });
     expect(calls.rpc).toEqual([
       { fn: 'get_profile_by_handle', args: { h: 'claire_r' } },
       { fn: 'follow_user', args: { target: 'uuid-claire' } },
     ]);
+  });
+
+  it("maps the post-0008 text returns: 'followed' and 'requested' (B3b)", async () => {
+    const followedCase = fakeSupabase({
+      rpcResults: {
+        get_profile_by_handle: { data: [MAYA_ROW] },
+        follow_user: { data: 'followed' },
+      },
+    });
+    expect(await followByHandle(followedCase.client, 'claire_r')).toMatchObject({
+      status: 'followed',
+    });
+
+    const requestedCase = fakeSupabase({
+      rpcResults: {
+        get_profile_by_handle: { data: [MAYA_ROW] },
+        follow_user: { data: 'requested' },
+      },
+    });
+    expect(await followByHandle(requestedCase.client, 'claire_r')).toEqual({
+      profile: {
+        id: 'uuid-claire',
+        handle: 'Claire_R',
+        displayName: 'Claire R.',
+      },
+      status: 'requested',
+    });
+  });
+
+  it("returns null on the post-0008 'rejected' return", async () => {
+    const { client } = fakeSupabase({
+      rpcResults: {
+        get_profile_by_handle: { data: [MAYA_ROW] },
+        follow_user: { data: 'rejected' },
+      },
+    });
+    expect(await followByHandle(client, 'claire_r')).toBeNull();
   });
 
   it('returns null when the handle does not resolve — follow_user never fires', async () => {
@@ -325,5 +372,108 @@ describe('fetchFriendRatings', () => {
       rpcResults: { get_friend_ratings: { data: [] } },
     });
     expect(await fetchFriendRatings(client, 'uuid-claire')).toEqual([]);
+  });
+});
+
+describe('follow requests (B3b, migration 0008)', () => {
+  const REQUEST_ROW = {
+    id: 'uuid-john',
+    handle: 'John_D',
+    display_name: 'John D.',
+    requested_at: '2026-07-25T01:00:00.000Z',
+  };
+
+  it('fetchFollowRequests maps the inbox and drops handle-less rows', async () => {
+    const { client, calls } = fakeSupabase({
+      rpcResults: {
+        get_follow_requests: {
+          data: [REQUEST_ROW, { ...REQUEST_ROW, id: 'uuid-x', handle: null }],
+        },
+      },
+    });
+
+    expect(await fetchFollowRequests(client)).toEqual([
+      {
+        id: 'uuid-john',
+        handle: 'John_D',
+        displayName: 'John D.',
+        requestedAt: '2026-07-25T01:00:00.000Z',
+      },
+    ]);
+    expect(calls.rpc).toEqual([{ fn: 'get_follow_requests', args: undefined }]);
+  });
+
+  it('fetchFollowRequests returns null on RPC error (pre-0008 missing RPC included)', async () => {
+    const { client } = fakeSupabase({
+      rpcResults: {
+        get_follow_requests: { error: { message: 'function does not exist' } },
+      },
+    });
+    expect(await fetchFollowRequests(client)).toBeNull();
+  });
+
+  it('fetchOutgoingRequests maps pending targets as profiles', async () => {
+    const { client, calls } = fakeSupabase({
+      rpcResults: { get_outgoing_requests: { data: [REQUEST_ROW] } },
+    });
+
+    expect(await fetchOutgoingRequests(client)).toEqual([
+      { id: 'uuid-john', handle: 'John_D', displayName: 'John D.' },
+    ]);
+    expect(calls.rpc).toEqual([{ fn: 'get_outgoing_requests', args: undefined }]);
+  });
+
+  it('fetchOutgoingRequests returns null on RPC error', async () => {
+    const { client } = fakeSupabase({
+      rpcResults: { get_outgoing_requests: { error: { message: 'boom' } } },
+    });
+    expect(await fetchOutgoingRequests(client)).toBeNull();
+  });
+
+  it('acceptFollowRequest calls the RPC with the requester id and maps true', async () => {
+    const { client, calls } = fakeSupabase({
+      rpcResults: { accept_follow_request: { data: true } },
+    });
+    expect(await acceptFollowRequest(client, 'uuid-john')).toBe(true);
+    expect(calls.rpc).toEqual([
+      { fn: 'accept_follow_request', args: { requester: 'uuid-john' } },
+    ]);
+  });
+
+  it('accept/decline/cancel return false on server refusal or RPC error', async () => {
+    const refused = fakeSupabase({
+      rpcResults: {
+        accept_follow_request: { data: false },
+        decline_follow_request: { data: false },
+        cancel_follow_request: { data: false },
+      },
+    });
+    expect(await acceptFollowRequest(refused.client, 'uuid-john')).toBe(false);
+    expect(await declineFollowRequest(refused.client, 'uuid-john')).toBe(false);
+    expect(await cancelFollowRequest(refused.client, 'uuid-john')).toBe(false);
+
+    const errored = fakeSupabase({
+      rpcResults: {
+        decline_follow_request: { error: { message: 'boom' } },
+        cancel_follow_request: { error: { message: 'boom' } },
+      },
+    });
+    expect(await declineFollowRequest(errored.client, 'uuid-john')).toBe(false);
+    expect(await cancelFollowRequest(errored.client, 'uuid-john')).toBe(false);
+  });
+
+  it('declineFollowRequest and cancelFollowRequest send the right RPC args', async () => {
+    const { client, calls } = fakeSupabase({
+      rpcResults: {
+        decline_follow_request: { data: true },
+        cancel_follow_request: { data: true },
+      },
+    });
+    expect(await declineFollowRequest(client, 'uuid-john')).toBe(true);
+    expect(await cancelFollowRequest(client, 'uuid-target')).toBe(true);
+    expect(calls.rpc).toEqual([
+      { fn: 'decline_follow_request', args: { requester: 'uuid-john' } },
+      { fn: 'cancel_follow_request', args: { target: 'uuid-target' } },
+    ]);
   });
 });

@@ -6,6 +6,7 @@ import {
   fetchOwnProfile,
   isValidHandle,
   searchHandles,
+  setOwnPrivacy,
 } from '@/lib/profile.server';
 
 /**
@@ -18,12 +19,15 @@ function fakeSupabase(opts: {
   rpcError?: unknown;
   selectData?: unknown;
   selectError?: unknown;
+  updateError?: unknown;
 }) {
   const calls = {
     rpc: [] as Array<{ fn: string; args: unknown }>,
     from: [] as string[],
     select: [] as string[],
     limit: [] as number[],
+    update: [] as unknown[],
+    eq: [] as Array<{ column: string; value: unknown }>,
   };
 
   const client = {
@@ -45,6 +49,18 @@ function fakeSupabase(opts: {
               return Promise.resolve({
                 data: opts.selectData ?? null,
                 error: opts.selectError ?? null,
+              });
+            },
+          };
+        },
+        update(values: unknown) {
+          calls.update.push(values);
+          return {
+            eq(column: string, value: unknown) {
+              calls.eq.push({ column, value });
+              return Promise.resolve({
+                data: null,
+                error: opts.updateError ?? null,
               });
             },
           };
@@ -218,5 +234,26 @@ describe('fetchOwnProfile', () => {
   it('returns null when no profile row exists', async () => {
     const { client } = fakeSupabase({ selectData: [] });
     expect(await fetchOwnProfile(client)).toBeNull();
+  });
+});
+
+describe('setOwnPrivacy (B3b privacy toggle)', () => {
+  it('updates only is_private, scoped to the caller row', async () => {
+    const { client, calls } = fakeSupabase({});
+
+    expect(await setOwnPrivacy(client, 'uuid-me', true)).toBe(true);
+
+    expect(calls.from).toEqual(['profiles']);
+    // ONLY is_private — a wider payload would be refused by the 0006 column
+    // grant, but the client must not even try.
+    expect(calls.update).toEqual([{ is_private: true }]);
+    expect(calls.eq).toEqual([{ column: 'id', value: 'uuid-me' }]);
+  });
+
+  it('returns false on update error — the toggle UI reverts', async () => {
+    const { client } = fakeSupabase({
+      updateError: { message: 'RLS denied' },
+    });
+    expect(await setOwnPrivacy(client, 'uuid-me', false)).toBe(false);
   });
 });

@@ -17,6 +17,15 @@ import type { Rating } from '@/types/ratings';
  *   - friend_ratings view      — tier-only friend read on ratings. The
  *     `score` column is NEVER selected or exposed (blueprint hard rule:
  *     score stays owner-only; tier is the friend-visible signal).
+ *
+ * B3b (migration 0008) adds the consent layer for private accounts:
+ *   - follow_user now returns text — 'followed' | 'requested' | 'rejected'.
+ *     Until 0008 is applied the live RPC still returns boolean; the mapping
+ *     in followByHandle accepts BOTH shapes so this client is deployable
+ *     either side of the apply.
+ *   - accept/decline (target side), cancel (requester side).
+ *   - get_follow_requests() (inbox) / get_outgoing_requests() ("Requested"
+ *     button states surviving reload).
  */
 
 const HANDLE_RE = /^[a-z0-9_]{3,20}$/;
@@ -32,6 +41,29 @@ export type FriendRating = {
   barId: string;
   rating: Rating;
   ratedAt: string;
+};
+
+/** Outcome of a follow attempt once requests exist (B3b). */
+export type FollowStatus = 'followed' | 'requested';
+
+export type FollowOutcome = {
+  profile: PublicProfile;
+  status: FollowStatus;
+};
+
+/** An incoming follow request (the target's inbox). */
+export type FollowRequest = {
+  id: string;
+  handle: string;
+  displayName: string | null;
+  requestedAt: string;
+};
+
+type RequestRow = {
+  id: string;
+  handle: string | null;
+  display_name: string | null;
+  requested_at: string;
 };
 
 type ProfileRow = { id: string; handle: string | null; display_name: string | null };
@@ -97,24 +129,31 @@ export async function fetchFollows(
 /**
  * Follow by handle: resolve → `follow_user(target)`.
  *
- * Returns the followed profile so the caller can render the circle entry
- * without a refetch, or null when resolution fails, the RPC errors, or the
- * server declines (rate cap, self-follow, missing target). The server
- * response is authoritative — a null here means the optimistic UI entry
- * must be rolled back.
+ * Returns the resolved profile plus what the server did with the attempt:
+ * 'followed' (edge exists) or 'requested' (target is private — a consent
+ * request now sits in their inbox, B3b). Null when resolution fails, the
+ * RPC errors, or the server declines (rate cap, self-follow, missing
+ * target). The server response is authoritative — a null here means the
+ * optimistic UI entry must be rolled back.
+ *
+ * Return-shape mapping accepts BOTH RPC generations: pre-0008 `follow_user`
+ * returns boolean (true = followed), post-0008 returns text. Anything else
+ * — including the old `false` and the new 'rejected' — is null.
  */
 export async function followByHandle(
   supabase: SupabaseClient,
   handle: string,
-): Promise<PublicProfile | null> {
+): Promise<FollowOutcome | null> {
   const profile = await getProfileByHandle(supabase, handle);
   if (profile === null) return null;
 
   const { data, error } = await supabase.rpc('follow_user', {
     target: profile.id,
   });
-  if (error || data !== true) return null;
-  return profile;
+  if (error) return null;
+  if (data === true || data === 'followed') return { profile, status: 'followed' };
+  if (data === 'requested') return { profile, status: 'requested' };
+  return null;
 }
 
 /**
@@ -169,4 +208,89 @@ export async function fetchFriendRatings(
       rating: row.tier,
       ratedAt: row.rated_at,
     }));
+}
+
+/**
+ * The caller's inbox of incoming follow requests via `get_follow_requests`
+ * (B3b definer read — requester profiles handle-resolved because profiles
+ * has no client SELECT). Null on RPC error (callers keep prior state);
+ * requester rows without a handle are dropped — an unclaimed profile has no
+ * /u/ route and no way to be rendered.
+ */
+export async function fetchFollowRequests(
+  supabase: SupabaseClient,
+): Promise<FollowRequest[] | null> {
+  const { data, error } = await supabase.rpc('get_follow_requests');
+  if (error || !Array.isArray(data)) return null;
+  return (data as RequestRow[])
+    .filter((row): row is RequestRow & { handle: string } =>
+      typeof row.handle === 'string',
+    )
+    .map((row) => ({
+      id: row.id,
+      handle: row.handle,
+      displayName: row.display_name,
+      requestedAt: row.requested_at,
+    }));
+}
+
+/**
+ * The caller's own outgoing pending requests via `get_outgoing_requests` —
+ * this is what lets a "Requested" button state survive a reload. Null on
+ * RPC error; handle-less rows dropped (same rule as fetchFollows).
+ */
+export async function fetchOutgoingRequests(
+  supabase: SupabaseClient,
+): Promise<PublicProfile[] | null> {
+  const { data, error } = await supabase.rpc('get_outgoing_requests');
+  if (error || !Array.isArray(data)) return null;
+  return (data as RequestRow[])
+    .filter((row): row is RequestRow & { handle: string } =>
+      typeof row.handle === 'string',
+    )
+    .map((row) => ({
+      id: row.id,
+      handle: row.handle,
+      displayName: row.display_name,
+    }));
+}
+
+/**
+ * Accept an incoming request (target side): atomically creates the follows
+ * edge and deletes the request. True only when the server confirms — a
+ * false must roll back any optimistic inbox removal.
+ */
+export async function acceptFollowRequest(
+  supabase: SupabaseClient,
+  requesterId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc('accept_follow_request', {
+    requester: requesterId,
+  });
+  return !error && data === true;
+}
+
+/** Decline an incoming request (target side). True when a row was removed. */
+export async function declineFollowRequest(
+  supabase: SupabaseClient,
+  requesterId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc('decline_follow_request', {
+    requester: requesterId,
+  });
+  return !error && data === true;
+}
+
+/**
+ * Withdraw the caller's own pending request (requester side) — the toggle
+ * path for a "Requested" button. True when a row was removed.
+ */
+export async function cancelFollowRequest(
+  supabase: SupabaseClient,
+  targetId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc('cancel_follow_request', {
+    target: targetId,
+  });
+  return !error && data === true;
 }

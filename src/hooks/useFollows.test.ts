@@ -26,15 +26,19 @@ vi.mock('@/lib/supabase/client', () => ({
 
 vi.mock('@/lib/follows.server', () => ({
   fetchFollows: vi.fn(() => Promise.resolve([])),
+  fetchOutgoingRequests: vi.fn(() => Promise.resolve([])),
   followByHandle: vi.fn(() => Promise.resolve(null)),
   unfollowByHandle: vi.fn(() => Promise.resolve(false)),
   unfollowById: vi.fn(() => Promise.resolve(false)),
+  cancelFollowRequest: vi.fn(() => Promise.resolve(false)),
 }));
 
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
+  cancelFollowRequest,
   fetchFollows,
+  fetchOutgoingRequests,
   followByHandle,
   unfollowByHandle,
   unfollowById,
@@ -43,9 +47,11 @@ import {
 const useAuthMock = vi.mocked(useAuth);
 const getBrowserSupabaseMock = vi.mocked(getBrowserSupabase);
 const fetchFollowsMock = vi.mocked(fetchFollows);
+const fetchOutgoingRequestsMock = vi.mocked(fetchOutgoingRequests);
 const followByHandleMock = vi.mocked(followByHandle);
 const unfollowByHandleMock = vi.mocked(unfollowByHandle);
 const unfollowByIdMock = vi.mocked(unfollowById);
+const cancelFollowRequestMock = vi.mocked(cancelFollowRequest);
 
 const fakeSupabase = {} as unknown as ReturnType<typeof getBrowserSupabase>;
 
@@ -116,6 +122,7 @@ describe('useFollows — server (signed-in) mode', () => {
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
     getBrowserSupabaseMock.mockReturnValue(fakeSupabase);
     fetchFollowsMock.mockResolvedValue([]);
+    fetchOutgoingRequestsMock.mockResolvedValue([]);
     followByHandleMock.mockResolvedValue(null);
     unfollowByHandleMock.mockResolvedValue(false);
   });
@@ -154,7 +161,7 @@ describe('useFollows — server (signed-in) mode', () => {
   });
 
   it('toggleFollow on a new handle calls followByHandle and lands the resolved profile', async () => {
-    followByHandleMock.mockResolvedValue(MAYA);
+    followByHandleMock.mockResolvedValue({ profile: MAYA, status: 'followed' });
     const { result } = renderHook(() => useFollows());
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -210,5 +217,139 @@ describe('useFollows — server (signed-in) mode', () => {
     expect(result.current.isFollowing('Claire_R')).toBe(false);
 
     await waitFor(() => expect(result.current.isFollowing('Claire_R')).toBe(true));
+  });
+});
+
+describe('useFollows — follow requests (B3b)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.clearAllMocks();
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+    getBrowserSupabaseMock.mockReturnValue(fakeSupabase);
+    fetchFollowsMock.mockResolvedValue([]);
+    fetchOutgoingRequestsMock.mockResolvedValue([]);
+    followByHandleMock.mockResolvedValue(null);
+    unfollowByHandleMock.mockResolvedValue(false);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('hydrates outgoing requests so "Requested" survives a reload', async () => {
+    fetchOutgoingRequestsMock.mockResolvedValue([MAYA]);
+
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.requested).toEqual([MAYA]);
+    expect(result.current.isRequested('claire_r')).toBe(true);
+    expect(result.current.isFollowing('claire_r')).toBe(false);
+  });
+
+  it("a 'requested' outcome moves the optimistic entry to requested, not the circle", async () => {
+    followByHandleMock.mockResolvedValue({ profile: MAYA, status: 'requested' });
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => result.current.toggleFollow('claire_r'));
+    // Optimistic phase: appears as following until the server answers.
+    expect(result.current.isFollowing('Claire_R')).toBe(true);
+
+    await waitFor(() => expect(result.current.isRequested('Claire_R')).toBe(true));
+    expect(result.current.isFollowing('Claire_R')).toBe(false);
+    expect(result.current.circle).toEqual([]);
+    expect(result.current.requested).toEqual([MAYA]);
+  });
+
+  it('toggling a requested handle withdraws the request via cancelFollowRequest', async () => {
+    fetchOutgoingRequestsMock.mockResolvedValue([MAYA]);
+    cancelFollowRequestMock.mockResolvedValue(true);
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.requested).toHaveLength(1));
+
+    act(() => result.current.toggleFollow('Claire_R'));
+
+    expect(result.current.isRequested('Claire_R')).toBe(false);
+    await waitFor(() =>
+      expect(cancelFollowRequestMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'uuid-claire',
+      ),
+    );
+    // A withdraw must not fire a follow or unfollow.
+    expect(followByHandleMock).not.toHaveBeenCalled();
+    expect(unfollowByIdMock).not.toHaveBeenCalled();
+  });
+
+  it('restores the requested entry when the cancel reports failure', async () => {
+    fetchOutgoingRequestsMock.mockResolvedValue([MAYA]);
+    cancelFollowRequestMock.mockResolvedValue(false);
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.requested).toHaveLength(1));
+
+    act(() => result.current.toggleFollow('Claire_R'));
+    expect(result.current.isRequested('Claire_R')).toBe(false);
+
+    await waitFor(() =>
+      expect(result.current.isRequested('Claire_R')).toBe(true),
+    );
+  });
+
+  it('requested is [] and isRequested false in local mode', async () => {
+    useAuthMock.mockReturnValue(signedOutAuthState());
+    getBrowserSupabaseMock.mockReturnValue(null);
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.mode).toBe('local');
+    expect(result.current.requested).toEqual([]);
+    expect(result.current.isRequested(DEFAULT_FOLLOWS[0] ?? 'claire')).toBe(false);
+  });
+});
+
+describe('useFollows — double-tap race on an in-flight follow (Opus B3b review)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.clearAllMocks();
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+    getBrowserSupabaseMock.mockReturnValue(fakeSupabase);
+    fetchFollowsMock.mockResolvedValue([]);
+    fetchOutgoingRequestsMock.mockResolvedValue([]);
+    unfollowByHandleMock.mockResolvedValue(false);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('a second tap while the placeholder resolves is ignored — no phantom Following beside Requested', async () => {
+    let resolveFollow: (v: unknown) => void = () => {};
+    followByHandleMock.mockReturnValue(
+      new Promise((res) => {
+        resolveFollow = res as (v: unknown) => void;
+      }) as never,
+    );
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // First tap: optimistic placeholder appears in the circle.
+    act(() => result.current.toggleFollow('ava_p'));
+    expect(result.current.isFollowing('ava_p')).toBe(true);
+
+    // Second tap lands while the follow is still in flight — must be a
+    // no-op (no unfollow fires, placeholder untouched).
+    act(() => result.current.toggleFollow('ava_p'));
+    expect(unfollowByIdMock).not.toHaveBeenCalled();
+    expect(unfollowByHandleMock).not.toHaveBeenCalled();
+    expect(result.current.isFollowing('ava_p')).toBe(true);
+
+    // The server settles: private target → 'requested'. The entry must end
+    // in requested ONLY — no phantom left in the circle.
+    const AVA = { id: 'uuid-ava', handle: 'ava_p', displayName: 'Ava P.' };
+    await act(async () => {
+      resolveFollow({ profile: AVA, status: 'requested' });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isRequested('ava_p')).toBe(true));
+    expect(result.current.isFollowing('ava_p')).toBe(false);
+    expect(result.current.circle).toEqual([]);
+    expect(result.current.requested).toEqual([AVA]);
   });
 });

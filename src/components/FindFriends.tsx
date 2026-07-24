@@ -23,11 +23,14 @@ type SearchState =
 
 type Props = {
   isFollowing: (handle: string) => boolean;
+  /** True when a follow request to this handle awaits consent (B3b). */
+  isRequested: (handle: string) => boolean;
   toggleFollow: (handle: string) => void;
 };
 
 export default function FindFriends({
   isFollowing,
+  isRequested,
   toggleFollow,
 }: Props): JSX.Element {
   const [query, setQuery] = useState('');
@@ -101,6 +104,8 @@ export default function FindFriends({
         ) : (
           state.results.map((r) => {
             const following = isFollowing(r.handle);
+            // Pending request to a private account — tap withdraws (B3b).
+            const pending = !following && isRequested(r.handle);
             return (
               <div
                 key={r.handle}
@@ -114,16 +119,16 @@ export default function FindFriends({
                 </Link>
                 <button
                   type="button"
-                  aria-pressed={following}
+                  aria-pressed={following || pending}
                   onClick={() => toggleFollow(r.handle)}
                   className={[
                     'shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display border transition-colors',
-                    following
+                    following || pending
                       ? 'bg-transparent border-border text-muted hover:text-text'
                       : 'bg-accent border-accent text-bg',
                   ].join(' ')}
                 >
-                  {following ? 'Following' : 'Follow'}
+                  {following ? 'Following' : pending ? 'Requested' : 'Follow'}
                 </button>
               </div>
             );

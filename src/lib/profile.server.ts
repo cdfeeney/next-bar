@@ -132,3 +132,24 @@ export async function fetchOwnProfile(
     isPrivate: row.is_private,
   };
 }
+
+/**
+ * Flip the caller's own is_private flag (B3b privacy toggle). Direct table
+ * UPDATE is legal here: the 0006 column grant limits authenticated UPDATE
+ * to display_name/is_private and RLS scopes it to the caller's own row.
+ * True only when the server confirms — the toggle UI reverts on false.
+ *
+ * Going private does NOT demote existing followers (edges persist; the B3b
+ * decision gates only NEW follows through requests).
+ */
+export async function setOwnPrivacy(
+  supabase: SupabaseClient,
+  userId: string,
+  isPrivate: boolean,
+): Promise<boolean> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ is_private: isPrivate })
+    .eq('id', userId);
+  return !error;
+}
