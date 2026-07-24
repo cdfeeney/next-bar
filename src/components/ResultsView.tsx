@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AccuracyBand,
   Coords,
@@ -25,6 +25,12 @@ type ResultsViewProps = {
   maxMiles: number | null;
   excludeIds?: string[];
   maxResults?: number;
+  /**
+   * Fires with the ranked bar ids whenever the list changes — the single
+   * source of truth for any companion surface (quiz map highlights,
+   * MED-11: the parent must NOT recompute matches with different inputs).
+   */
+  onRanked?: (ids: string[]) => void;
 };
 
 export default function ResultsView({
@@ -33,18 +39,26 @@ export default function ResultsView({
   maxMiles,
   excludeIds,
   maxResults,
+  onRanked,
 }: ResultsViewProps) {
   const userCoords: Coords =
     location.kind === 'coords'
       ? location.coords
       : NEIGHBORHOOD_CENTROIDS[location.neighborhood];
 
-  const preferredNeighborhoods =
-    location.kind === 'neighborhood'
-      ? [location.neighborhood]
-      : profile.preferredNeighborhoods;
+  // Memoized: a fresh array identity here cascades into `ranked` (useMemo
+  // dep) and from there into the onRanked effect — an unstable identity
+  // turned that into an infinite render loop (caught by rating-and-nav
+  // e2e when MED-11 landed).
+  const preferredNeighborhoods = useMemo(
+    () =>
+      location.kind === 'neighborhood'
+        ? [location.neighborhood]
+        : profile.preferredNeighborhoods,
+    [location, profile.preferredNeighborhoods],
+  );
 
-  const { ratings } = useRatings();
+  const { ratings, setRating, clearRating } = useRatings();
   const bars = useBars();
 
   const effectiveExcludeIds = useMemo(() => {
@@ -86,12 +100,117 @@ export default function ResultsView({
     [profile, userCoords, preferredNeighborhoods, maxMiles, bars, effectiveExcludeIds, maxResults, lovedTags],
   );
 
+  // MED-11: companion surfaces (quiz map) mirror THIS list, not their own
+  // recompute. Signature guard: fire only when the id SEQUENCE changes —
+  // never on mere array-identity churn (belt-and-braces against the
+  // render-loop class above).
+  const lastRankedSigRef = useRef('');
+  // Ref-carried callback (DeepSeek review): an inline-lambda parent must
+  // not re-trigger the effect on every render — only a ranked change does.
+  const onRankedRef = useRef(onRanked);
+  onRankedRef.current = onRanked;
+  useEffect(() => {
+    const ids = ranked.map((b) => b.id);
+    const sig = ids.join(',');
+    if (sig === lastRankedSigRef.current) return;
+    lastRankedSigRef.current = sig;
+    onRankedRef.current?.(ids);
+  }, [ranked]);
+
+  // MED-14: a Pass tap yanks the card out from under the finger — give it
+  // an 8s undo window. Detect "newly passed AND was on screen" by diffing
+  // the pass-set against the previous render's ranked list.
+  const [undoTarget, setUndoTarget] = useState<{
+    barId: string;
+    name: string;
+    /** The tier the bar held BEFORE the pass — Undo restores it, not
+     *  "unrated" (DeepSeek review: liked→pass→Undo must give liked back,
+     *  or the snackbar is a Clear button wearing an Undo label). */
+    prior: 'loved' | 'liked' | null;
+  } | null>(null);
+  const prevRankedRef = useRef<string[]>([]);
+  const prevPassRef = useRef<Set<string>>(new Set());
+  const prevTierRef = useRef<Map<string, 'loved' | 'liked'>>(new Map());
+  const prevRatingIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const passNow = new Set(
+      ratings.filter((r) => r.rating === 'pass').map((r) => r.barId),
+    );
+    const ratingIdsNow = new Set(ratings.map((r) => r.barId));
+    const newlyPassedAll = [...passNow].filter(
+      (id) => !prevPassRef.current.has(id) && prevRankedRef.current.includes(id),
+    );
+    // Live-tap fingerprint (Opus review): a real Pass tap changes exactly
+    // one bar and never REMOVES ratings. A wholesale ratings swap
+    // (sign-in/out, account switch hydrate) can also diff as "new pass on
+    // an on-screen bar" — firing there offers an Undo that would mutate
+    // the OTHER account's data. Guard on the delta shape.
+    const removedCount = [...prevRatingIdsRef.current].filter(
+      (id) => !ratingIdsNow.has(id),
+    ).length;
+    const addedCount = [...ratingIdsNow].filter(
+      (id) => !prevRatingIdsRef.current.has(id),
+    ).length;
+    const isSingleLiveTap =
+      newlyPassedAll.length === 1 && removedCount === 0 && addedCount <= 1;
+    if (isSingleLiveTap) {
+      const bar = bars.find((b) => b.id === newlyPassedAll[0]);
+      if (bar) {
+        setUndoTarget({
+          barId: bar.id,
+          name: bar.name,
+          prior: prevTierRef.current.get(bar.id) ?? null,
+        });
+      }
+    }
+    prevPassRef.current = passNow;
+    prevRatingIdsRef.current = ratingIdsNow;
+    prevRankedRef.current = ranked.map((b) => b.id);
+    // Snapshot the non-pass tiers as of THIS render — next render's diff
+    // reads them as "what the bar was before".
+    prevTierRef.current = new Map(
+      ratings
+        .filter((r): r is typeof r & { rating: 'loved' | 'liked' } =>
+          r.rating === 'loved' || r.rating === 'liked',
+        )
+        .map((r) => [r.barId, r.rating]),
+    );
+  }, [ratings, ranked, bars]);
+  const snackbarRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!undoTarget) return;
+    // 8s window; while keyboard/SR focus is INSIDE the snackbar the
+    // dismissal re-arms instead of yanking the control away (Opus a11y
+    // review, WCAG 2.2.1 — the recovery affordance must not race focus).
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = (): void => {
+      timer = setTimeout(() => {
+        if (
+          snackbarRef.current &&
+          snackbarRef.current.contains(document.activeElement)
+        ) {
+          arm();
+          return;
+        }
+        setUndoTarget(null);
+      }, 8000);
+    };
+    arm();
+    return () => clearTimeout(timer);
+  }, [undoTarget]);
+
+  // MED-12 honesty: "Using your location" was a half-truth whenever the
+  // quiz's neighborhood filter was ALSO narrowing the pool — say so.
+  const neighborhoodFiltered =
+    location.kind === 'coords' && preferredNeighborhoods.length > 0;
   const locationLabel =
     location.kind === 'neighborhood'
       ? `In ${location.neighborhood}`
       : location.snappedTo
       ? `Approximate — based on ${location.snappedTo}`
-      : 'Using your location';
+      : neighborhoodFiltered
+        ? 'Near you · limited to your picked neighborhoods'
+        : 'Using your location';
 
   return (
     <section className="px-6 py-8">
@@ -128,6 +247,35 @@ export default function ResultsView({
             })}
           </div>
         )}
+
+        {/* MED-14 undo snackbar: floats above BottomNav; disappears after
+            8s (focus-aware) or on undo. */}
+        {undoTarget ? (
+          <div
+            ref={snackbarRef}
+            role="status"
+            className="fixed left-1/2 -translate-x-1/2 bottom-[calc(76px+env(safe-area-inset-bottom))] z-[500] flex items-center gap-3 bg-surface border border-border rounded-full pl-4 pr-2 py-2 shadow-lg"
+          >
+            <p className="text-sm text-muted">
+              Passed on{' '}
+              <span className="text-text font-display">{undoTarget.name}</span>
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                if (undoTarget.prior) {
+                  setRating(undoTarget.barId, undoTarget.prior);
+                } else {
+                  clearRating(undoTarget.barId);
+                }
+                setUndoTarget(null);
+              }}
+              className="min-h-[36px] touch-manipulation px-3 rounded-full text-sm font-display text-accent hover:bg-bg transition-colors"
+            >
+              Undo
+            </button>
+          </div>
+        ) : null}
       </div>
     </section>
   );

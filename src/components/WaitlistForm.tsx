@@ -32,13 +32,29 @@ export default function WaitlistForm({ profile }: WaitlistFormProps) {
   };
 
   if (status === 'success') {
+    // LOW/join fix (U1): success used to be a dead end — hand the person
+    // straight into the product they just signed up for.
     return (
       <section className="px-6 py-16">
         <div className="max-w-md mx-auto text-center">
           <h2 className="font-display text-3xl mb-3">You&apos;re on the list.</h2>
-          <p className="text-muted">
+          <p className="text-muted mb-8">
             We launch the iOS app this summer. We&apos;ll DM you first.
           </p>
+          <div className="space-y-3">
+            <a
+              href="/quiz"
+              className="block bg-accent hover:bg-accentDim transition-colors text-bg font-display text-lg py-3 rounded-xl touch-manipulation"
+            >
+              Meanwhile — find tonight&apos;s bar →
+            </a>
+            <a
+              href="/map"
+              className="block text-muted hover:text-text underline-offset-4 hover:underline text-sm min-h-[44px] leading-[44px] touch-manipulation"
+            >
+              or browse the whole map
+            </a>
+          </div>
         </div>
       </section>
     );

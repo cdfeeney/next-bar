@@ -146,6 +146,7 @@ export default function MapPage(): JSX.Element {
         <BarMap
           bars={bars}
           userCoords={coords}
+          panToUser
           highlightIds={highlightIds}
           // Always defined on /map → tiered rendering. Empty (no quiz
           // profile) means no suggested tier: grey dots + rated rings only.

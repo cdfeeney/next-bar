@@ -14,7 +14,6 @@ import LocationPrompt from '@/components/LocationPrompt';
 import ResultsView from '@/components/ResultsView';
 import InstallNudge from '@/components/InstallNudge';
 import { useBars } from '@/lib/useBars';
-import { matches } from '@/lib/matching';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 import { saveProfile } from '@/lib/storedProfile';
 
@@ -90,21 +89,11 @@ function QuizResults({ profile, location }: QuizResultsProps) {
       ? location.coords
       : NEIGHBORHOOD_CENTROIDS[location.neighborhood];
 
-  const preferredNeighborhoods =
-    location.kind === 'neighborhood'
-      ? [location.neighborhood]
-      : profile.preferredNeighborhoods;
-
-  const ranked = matches({
-    profile,
-    coords: userCoords,
-    preferredNeighborhoods,
-    maxMiles: null,
-    bars,
-    maxResults: QUIZ_TOP_N,
-  });
-
-  const highlightIds = ranked.map((b) => b.id);
+  // MED-11 (quiz highlight parity): the map mirrors the EXACT list
+  // ResultsView renders — previously this page recomputed matches()
+  // without pass-exclusions/lovedTags, so map pins and listed cards could
+  // disagree. ResultsView is the single source of truth via onRanked.
+  const [highlightIds, setHighlightIds] = useState<string[]>([]);
 
   return (
     <>
@@ -113,6 +102,7 @@ function QuizResults({ profile, location }: QuizResultsProps) {
         location={location}
         maxMiles={null}
         maxResults={QUIZ_TOP_N}
+        onRanked={setHighlightIds}
       />
       <BarMap bars={bars} userCoords={userCoords} highlightIds={highlightIds} />
       <InstallNudge />

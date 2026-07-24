@@ -12,6 +12,8 @@ import type { Bar, Coords } from '@/types';
 type BarMapProps = {
   bars: Bar[];
   userCoords?: Coords | null;
+  /** MED-15: fly to the user's coords when they land (the /map surface). */
+  panToUser?: boolean;
   /**
    * Bars the user has rated (Loved/Liked). Legacy mode (suggestedIds
    * undefined): these get the loud accent glow and every other bar renders
@@ -129,7 +131,32 @@ function FitBounds({ bars }: { bars: Bar[] }) {
   return null;
 }
 
-export default function BarMap({ bars, userCoords, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
+/**
+ * MED-15: when the user's location lands (or changes), PAN there — the
+ * MapContainer center prop only applies on mount, so "Use my location"
+ * used to plot a marker somewhere off-viewport and go nowhere. Never
+ * zooms OUT (keeps a user-chosen zoom), floors at 14 for a usable
+ * street-level view.
+ */
+function PanToUser({ coords }: { coords: Coords | null | undefined }) {
+  const map = useMap();
+  // String-keyed dep (DeepSeek review): a geolocation hook that re-emits a
+  // fresh coords OBJECT each fix must not re-fly the map unless the actual
+  // position moved — identity churn here would fight the user's panning.
+  const coordsKey = coords
+    ? `${coords.lat.toFixed(5)},${coords.lng.toFixed(5)}`
+    : null;
+  useEffect(() => {
+    if (!coordsKey || !coords) return;
+    map.flyTo([coords.lat, coords.lng], Math.max(map.getZoom(), 14), {
+      duration: 0.8,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- coordsKey stands in for coords
+  }, [map, coordsKey]);
+  return null;
+}
+
+export default function BarMap({ bars, userCoords, panToUser, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -180,6 +207,7 @@ export default function BarMap({ bars, userCoords, highlightIds, suggestedIds, f
           >
             {oneFingerPan ? null : <GestureController />}
             {fitToBars ? <FitBounds bars={bars} /> : null}
+            {panToUser ? <PanToUser coords={userCoords} /> : null}
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
               attribution="&copy; OpenStreetMap &copy; CARTO"

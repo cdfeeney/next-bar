@@ -1,9 +1,20 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import WhereNextFlow from '@/components/WhereNextFlow';
+import { loadProfile } from '@/lib/storedProfile';
 
 export default function HomePage() {
+  // MED-26: `/` never prompted the quiz — profile-less visitors got the
+  // location flow with generic (vibe-less) suggestions and no hint that a
+  // 60-second quiz personalizes everything. localStorage read must wait
+  // for mount (SSR has no storage); until then render nothing extra.
+  const [hasProfile, setHasProfile] = useState<boolean | null>(null);
+  useEffect(() => {
+    setHasProfile(loadProfile() !== null);
+  }, []);
+
   return (
     <main>
       <header className="px-6 py-4 flex items-center justify-between border-b border-border">
@@ -17,6 +28,22 @@ export default function HomePage() {
           Get the app →
         </Link>
       </header>
+      {hasProfile === false ? (
+        <div className="px-6 pt-4">
+          <Link
+            href="/quiz"
+            className="block max-w-md mx-auto bg-surface border border-accent/40 rounded-2xl px-5 py-4 touch-manipulation hover:border-accent transition-colors"
+          >
+            <p className="font-display text-sm mb-1">
+              New here? Take the vibe quiz →
+            </p>
+            <p className="text-muted text-xs leading-relaxed">
+              60 seconds, and every suggestion gets picked for your taste —
+              not just what&apos;s nearby.
+            </p>
+          </Link>
+        </div>
+      ) : null}
       <WhereNextFlow />
     </main>
   );
