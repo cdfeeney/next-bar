@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isOpenNow } from '@/lib/openNow';
+import { isOpenNow, todayHoursLine, weekHoursRows } from '@/lib/openNow';
 import type { WeeklyHours } from '@/types';
 
 // All fixtures use January 2026 dates so NYC is on EST (UTC-5), keeping the
@@ -55,5 +55,94 @@ describe('isOpenNow', () => {
   it('treats a day with no entry as closed', () => {
     // Sunday (day 0) has no hours in dinnerOnly.
     expect(isOpenNow(dinnerOnly, new Date('2026-01-18T20:00:00Z'))).toBe(false); // NYC Sun 15:00
+  });
+});
+
+describe('todayHoursLine (U2-1)', () => {
+  // Bar open 17:00–02:00 Fri (overnight) and 17:00–00:00 Thu.
+  const HOURS = {
+    4: [{ open: '17:00', close: '00:00' }],
+    5: [{ open: '17:00', close: '02:00' }],
+  } as unknown as import('@/types').WeeklyHours;
+
+  // Helpers construct NY-local times via explicit offsets (EDT = UTC-4).
+  const nyc = (iso: string) => new Date(iso);
+
+  it('before opening: "Opens 5 PM"', () => {
+    expect(todayHoursLine(HOURS, nyc('2026-07-24T14:00:00-04:00'))).toBe('Opens 5 PM');
+  });
+
+  it('while open: "Open · until 2 AM"', () => {
+    expect(todayHoursLine(HOURS, nyc('2026-07-24T22:00:00-04:00'))).toBe('Open · until 2 AM');
+  });
+
+  it("in the overnight tail (1 AM Sat) still shows Friday's close", () => {
+    expect(todayHoursLine(HOURS, nyc('2026-07-25T01:00:00-04:00'))).toBe('Open · until 2 AM');
+  });
+
+  it('day with no windows: "Closed today"', () => {
+    expect(todayHoursLine(HOURS, nyc('2026-07-20T20:00:00-04:00'))).toBe('Closed today');
+  });
+
+  it('before/after the overnight boundary resolves to the correct window', () => {
+    expect(todayHoursLine(HOURS, nyc('2026-07-23T23:30:00-04:00'))).toBe('Open · until midnight');
+    expect(todayHoursLine(HOURS, nyc('2026-07-24T03:00:00-04:00'))).toBe('Opens 5 PM');
+  });
+
+  it('unknown hours → null (never guess)', () => {
+    expect(todayHoursLine(undefined, new Date())).toBeNull();
+  });
+});
+
+describe('weekHoursRows (U2-1)', () => {
+  const HOURS = {
+    4: [{ open: '17:00', close: '00:00' }],
+    5: [{ open: '17:00', close: '02:00' }],
+  } as unknown as import('@/types').WeeklyHours;
+
+  it('renders Monday-first with Closed gaps and marks today', () => {
+    const rows = weekHoursRows(HOURS, new Date('2026-07-24T22:00:00-04:00'));
+    expect(rows).not.toBeNull();
+    expect(rows!.map((r) => r.day)).toEqual(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+    expect(rows![3]).toEqual({ day: 'Thu', hours: '5 PM – midnight', isToday: false });
+    expect(rows![4]).toEqual({ day: 'Fri', hours: '5 PM – 2 AM', isToday: true });
+    expect(rows![0].hours).toBe('Closed');
+  });
+
+  it('null for unknown hours', () => {
+    expect(weekHoursRows(undefined, new Date())).toBeNull();
+  });
+});
+
+describe('todayHoursLine — DeepSeek review fixes', () => {
+  it('24-hour encoding (open === close) reads "Open 24 hours", never "until midnight"', () => {
+    const ALL_DAY = {
+      5: [{ open: '00:00', close: '00:00' }],
+    } as unknown as import('@/types').WeeklyHours;
+    expect(todayHoursLine(ALL_DAY, new Date('2026-07-24T22:00:00-04:00'))).toBe(
+      'Open 24 hours',
+    );
+    const rows = weekHoursRows(ALL_DAY, new Date('2026-07-24T22:00:00-04:00'));
+    expect(rows!.find((r) => r.day === 'Fri')!.hours).toBe('Open 24 hours');
+  });
+
+  it('"opens tomorrow" only when tomorrow actually has windows', () => {
+    // Saturday windows only: after close on Saturday night... use a bar
+    // open Thu only — checked on Thu after close, Fri has no windows.
+    const THU_ONLY = {
+      4: [{ open: '12:00', close: '14:00' }],
+    } as unknown as import('@/types').WeeklyHours;
+    // Thursday 20:00 — after close, Friday empty → plain "Closed".
+    expect(todayHoursLine(THU_ONLY, new Date('2026-07-23T20:00:00-04:00'))).toBe(
+      'Closed',
+    );
+    // Wednesday 20:00 — no windows today, tomorrow (Thu) has some.
+    const WED_THU = {
+      3: [{ open: '12:00', close: '14:00' }],
+      4: [{ open: '12:00', close: '14:00' }],
+    } as unknown as import('@/types').WeeklyHours;
+    expect(todayHoursLine(WED_THU, new Date('2026-07-22T20:00:00-04:00'))).toBe(
+      'Closed · opens tomorrow',
+    );
   });
 });

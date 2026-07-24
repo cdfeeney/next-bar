@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { Bar } from '@/types';
-import { isOpenNow } from '@/lib/openNow';
+import { isOpenNow, todayHoursLine } from '@/lib/openNow';
 
 export type OpenStatus = 'unknown' | 'open' | 'closed' | 'permanently-closed';
 
@@ -21,11 +21,19 @@ export function barStatus(bar: Bar, now: Date): OpenStatus {
  */
 export default function OpenNowBadge({ bar }: { bar: Bar }) {
   const [status, setStatus] = useState<OpenStatus>('unknown');
+  const [line, setLine] = useState<string | null>(null);
 
   useEffect(() => {
-    setStatus(barStatus(bar, new Date()));
+    const tick = () => {
+      const now = new Date();
+      setStatus(barStatus(bar, now));
+      // U2-1: the REAL hours line ("Open · until 2 AM" / "Opens 5 PM")
+      // replaces the bare open/closed label whenever hours are known.
+      setLine(todayHoursLine(bar.hours, now));
+    };
+    tick();
     if (bar.businessStatus === 'CLOSED_PERMANENTLY') return;
-    const t = setInterval(() => setStatus(barStatus(bar, new Date())), 60_000);
+    const t = setInterval(tick, 60_000);
     return () => clearInterval(t);
   }, [bar]);
 
@@ -37,10 +45,13 @@ export default function OpenNowBadge({ bar }: { bar: Bar }) {
     'permanently-closed': { label: 'Permanently closed', text: 'text-red-400', dot: 'bg-red-400' },
   }[status];
 
+  const label =
+    status === 'permanently-closed' ? config.label : line ?? config.label;
+
   return (
     <span className={`inline-flex items-center gap-1.5 text-xs ${config.text}`}>
       <span className={`inline-block h-1.5 w-1.5 rounded-full ${config.dot}`} aria-hidden="true" />
-      {config.label}
+      {label}
     </span>
   );
 }

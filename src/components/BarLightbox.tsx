@@ -1,0 +1,200 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import type { Bar } from '@/types';
+import { barImageUrl } from '@/lib/barVisual';
+import { weekHoursRows } from '@/lib/openNow';
+import OpenNowBadge from '@/components/OpenNowBadge';
+
+/**
+ * U2-2: photo headliner. Tapping a card's photo opens this full-screen
+ * overlay — big image, the bar's identity, FULL weekly hours (U2-1), the
+ * review quote, and the two actions (Maps, Rank it). Single cached photo
+ * today; when the ingest starts storing multiple photoRefs this becomes a
+ * swipeable carousel without changing the entry point.
+ *
+ * Scroll-lock note: plain save/restore is safe here because no overlay
+ * ever NESTS inside the lightbox — "Rank it" navigates to /rankings,
+ * unmounting this first (reviewed; revisit with a lock-counter if an
+ * in-place sheet is ever added).
+ *
+ * A11y (Opus review): dialog semantics; Escape + backdrop close; focus
+ * moves to ✕ on open, Tab CYCLES inside the dialog (minimal trap), and
+ * on unmount focus RETURNS to whatever opened the lightbox (captured
+ * activeElement) — unmounting a focused node otherwise drops focus to
+ * <body> and strands keyboard users at the top of the page.
+ */
+export default function BarLightbox({
+  bar,
+  onClose,
+}: {
+  bar: Bar;
+  onClose: () => void;
+}): JSX.Element {
+  const photoUrl = barImageUrl(bar);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  // Ref-carried close handler (Opus review): ResultCard passes an inline
+  // lambda, and having it in the effect deps re-ran the whole effect on
+  // every parent re-render — stealing focus back to ✕ mid-interaction.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  // Hours are time-dependent → client-only state, set after mount (same
+  // hydration rule as OpenNowBadge).
+  const [rows, setRows] = useState<ReturnType<typeof weekHoursRows>>(null);
+
+  useEffect(() => {
+    const opener =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    closeRef.current?.focus();
+    setRows(weekHoursRows(bar.hours, new Date()));
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        onCloseRef.current();
+        return;
+      }
+      // Minimal focus trap (Opus review): Tab cycles within the dialog.
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled])',
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+        if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        } else if (e.shiftKey && active === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!dialogRef.current.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    // Lock background scroll while open.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+      opener?.focus();
+    };
+  }, [bar]);
+
+  const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    `${bar.name} ${bar.address}`,
+  )}`;
+
+  return (
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${bar.name} details`}
+      className="fixed inset-0 z-[1500] bg-bg/95 backdrop-blur-sm overflow-y-auto overscroll-contain"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="max-w-lg mx-auto min-h-full px-4 py-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <p className="text-accent uppercase tracking-[0.25em] text-xs">
+            {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+          </p>
+          <button
+            ref={closeRef}
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="min-h-[44px] min-w-[44px] touch-manipulation rounded-full border border-border text-muted hover:text-text text-lg"
+          >
+            ✕
+          </button>
+        </div>
+
+        {photoUrl ? (
+          <figure className="rounded-3xl overflow-hidden border border-border">
+            {/* eslint-disable-next-line @next/next/no-img-element -- local cached WebP, no next/image sizing needed */}
+            <img
+              src={photoUrl}
+              alt={`${bar.name} — photo`}
+              className="w-full h-auto max-h-[55vh] object-cover"
+            />
+            {bar.photoAttribution ? (
+              <figcaption className="text-[10px] text-muted px-3 py-1.5">
+                Photo: {bar.photoAttribution} · Google
+              </figcaption>
+            ) : null}
+          </figure>
+        ) : null}
+
+        <div>
+          <h2 className="font-display text-3xl leading-tight mb-1">
+            {bar.name}
+          </h2>
+          <div className="flex items-center gap-3">
+            <p className="text-muted text-xs">{bar.address}</p>
+            <OpenNowBadge bar={bar} />
+          </div>
+        </div>
+
+        <p className="text-sm italic">{bar.blurb}</p>
+
+        {bar.reviews?.[0] ? (
+          <p className="text-xs text-muted">
+            &ldquo;{bar.reviews[0].text}&rdquo; &mdash; {bar.reviews[0].author},
+            Google review
+          </p>
+        ) : null}
+
+        {rows ? (
+          <div className="bg-surface border border-border rounded-2xl p-4">
+            <h3 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+              Hours
+            </h3>
+            <table className="w-full text-sm">
+              <tbody>
+                {rows.map((r) => (
+                  <tr
+                    key={r.day}
+                    className={r.isToday ? 'text-accent' : 'text-muted'}
+                  >
+                    <td className="py-0.5 pr-4 font-display w-14">{r.day}</td>
+                    <td className="py-0.5">{r.hours}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-[10px] text-muted mt-2">
+              Hours are best-effort — confirm before a special trip.
+            </p>
+          </div>
+        ) : null}
+
+        <div className="flex items-center gap-3 pb-4">
+          <Link
+            href={`/rankings?add=${bar.id}`}
+            className="flex-1 text-center bg-accent hover:bg-accentDim transition-colors text-bg font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation"
+          >
+            Rank it →
+          </Link>
+          <a
+            href={mapsHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 text-center border border-border text-text font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation hover:border-accent transition-colors"
+          >
+            View on Maps
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}

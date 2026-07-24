@@ -42,6 +42,101 @@ function toMinutes(hhmm: string): number {
   return h * 60 + m;
 }
 
+/** "17:00" → "5 PM", "17:30" → "5:30 PM", "00:00" → "midnight". */
+export function formatClockTime(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map((n) => parseInt(n, 10));
+  if (h === 0 && m === 0) return 'midnight';
+  if (h === 12 && m === 0) return 'noon';
+  const suffix = h < 12 ? 'AM' : 'PM';
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return m === 0 ? `${hour12} ${suffix}` : `${hour12}:${String(m).padStart(2, '0')} ${suffix}`;
+}
+
+/**
+ * U2-1: the human line for a card — "Open · until 2 AM", "Opens 5 PM",
+ * "Closed today". Null when hours are unknown (show nothing, never guess).
+ * Same overnight-window semantics as isOpenNow.
+ *
+ * KNOWN LIMITATION (accepted, DeepSeek review): windows touching the DST
+ * spring-forward gap (2-3 AM, one night/year) can mislabel for that hour —
+ * minutes-from-midnight math has no gap awareness. Not worth the
+ * complexity for bar hours.
+ */
+export function todayHoursLine(
+  hours: WeeklyHours | undefined,
+  now: Date,
+): string | null {
+  if (!hours) return null;
+  const { day, minutes } = nycNow(now);
+  const yesterday = (day + 6) % 7;
+
+  // Currently inside yesterday's overnight tail?
+  for (const r of hours[yesterday] ?? []) {
+    const open = toMinutes(r.open);
+    const close = toMinutes(r.close);
+    if (close <= open && minutes < close) {
+      return `Open · until ${formatClockTime(r.close)}`;
+    }
+  }
+
+  const todays = [...(hours[day] ?? [])].sort(
+    (a, b) => toMinutes(a.open) - toMinutes(b.open),
+  );
+  for (const r of todays) {
+    const open = toMinutes(r.open);
+    const close = toMinutes(r.close);
+    // open === close is the 24-hour encoding — "until midnight" would tell
+    // users a never-closing bar is about to close (DeepSeek review).
+    if (open === close) return 'Open 24 hours';
+    const openNow = close > open ? minutes >= open && minutes < close : minutes >= open;
+    if (openNow) return `Open · until ${formatClockTime(r.close)}`;
+    if (minutes < open) return `Opens ${formatClockTime(r.open)}`;
+  }
+  if (todays.length === 0) return 'Closed today';
+  // Only claim "opens tomorrow" after CHECKING tomorrow (DeepSeek review:
+  // a Sunday-closed venue must not promise a Sunday opening on Saturday
+  // night).
+  const tomorrow = (day + 1) % 7;
+  return (hours[tomorrow] ?? []).length > 0 ? 'Closed · opens tomorrow' : 'Closed';
+}
+
+const WEEK_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+export type WeekHoursRow = { day: string; hours: string; isToday: boolean };
+
+/**
+ * U2-1: full weekly schedule, Monday-first, for the detail/lightbox view.
+ * Null when unknown. Days with no windows read "Closed".
+ */
+export function weekHoursRows(
+  hours: WeeklyHours | undefined,
+  now: Date,
+): WeekHoursRow[] | null {
+  if (!hours) return null;
+  const { day: today } = nycNow(now);
+  // Monday-first ordering feels like a printed schedule.
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  return order.map((d) => {
+    const windows = [...(hours[d] ?? [])].sort(
+      (a, b) => toMinutes(a.open) - toMinutes(b.open),
+    );
+    return {
+      day: WEEK_LABELS[d],
+      hours:
+        windows.length === 0
+          ? 'Closed'
+          : windows
+              .map((r) =>
+                r.open === r.close
+                  ? 'Open 24 hours'
+                  : `${formatClockTime(r.open)} – ${formatClockTime(r.close)}`,
+              )
+              .join(', '),
+      isToday: d === today,
+    };
+  });
+}
+
 /** Day-of-week (0=Sun) and minutes-since-midnight in America/New_York for `now`. */
 function nycNow(now: Date): { day: number; minutes: number } {
   const parts = new Intl.DateTimeFormat('en-US', {

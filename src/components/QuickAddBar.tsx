@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Bar } from '@/types';
 import type { Rating } from '@/types/ratings';
 import { useRatings } from '@/hooks/useRatings';
@@ -38,9 +38,37 @@ const TIER_BUTTON_CLASSES: Record<Rating, string> = {
  * Mount exactly ONE instance per page (the /rankings header xor its empty
  * state) — each instance owns its own usePairwise prompt state.
  */
-export default function QuickAddBar(): JSX.Element {
+export default function QuickAddBar({
+  initialBarId,
+  onInitialConsumed,
+}: {
+  /**
+   * U2-3 deep link: arrive with a bar preselected (from "Rank it →" on a
+   * suggestion card or the lightbox) and open straight at the tier pick.
+   */
+  initialBarId?: string;
+  /**
+   * MUST clear the parent's initialBarId. The rankings page mounts one
+   * QuickAddBar in the empty state and a different one once ratings
+   * exist — rating the deep-linked bar swaps instances, and a still-set
+   * initialBarId would re-arm the sheet on the fresh instance (caught by
+   * pairwise-flow e2e).
+   */
+  onInitialConsumed?: () => void;
+} = {}): JSX.Element {
   const [stage, setStage] = useState<Stage>('idle');
   const [selectedBar, setSelectedBar] = useState<Bar | null>(null);
+  const consumedInitialRef = useRef(false);
+
+  useEffect(() => {
+    if (!initialBarId || consumedInitialRef.current) return;
+    consumedInitialRef.current = true;
+    onInitialConsumed?.();
+    const bar = getBarById(initialBarId);
+    if (!bar) return; // unknown id in the URL — fall through to idle
+    setSelectedBar(bar);
+    setStage('pick-tier');
+  }, [initialBarId, onInitialConsumed]);
   const { setRating } = useRatings();
   const {
     pendingPrompt,

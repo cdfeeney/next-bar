@@ -82,7 +82,7 @@ test.describe('/map interaction', () => {
     expect(after).not.toBe(before);
   });
 
-  test('"Use my location" plots the user location', async ({
+  test('an already-granted permission locates AUTOMATICALLY on open (U2-4), no tap needed', async ({
     page,
     context,
   }) => {
@@ -90,12 +90,11 @@ test.describe('/map interaction', () => {
     await context.setGeolocation(NYC);
     await page.goto('/map');
 
-    await page.getByRole('button', { name: /Use my location/i }).click();
-
+    // U2-4 auto-resume: granted permission → the map locates on mount.
     await expect(page.getByText(/Showing your location on the map/i)).toBeVisible(
       { timeout: 15_000 },
     );
-    // The button flips to the update affordance once located.
+    // The button reads as the update affordance without ever being tapped.
     await expect(
       page.getByRole('button', { name: /Update my location/i }),
     ).toBeVisible();
@@ -109,10 +108,8 @@ test.describe('/map interaction', () => {
     await context.setGeolocation(COARSE_FAR);
     await page.goto('/map');
 
-    await page.getByRole('button', { name: /Use my location/i }).click();
-
-    // The coarse outcome must surface a message, not leave the button in a
-    // silent gap between "locating" and "failed".
+    // U2-4: the auto-resume attempt runs on mount; a coarse fix must still
+    // surface its explanation, not leave a silent gap.
     await expect(page.getByText(/too rough to pin exactly/i)).toBeVisible({
       timeout: 15_000,
     });

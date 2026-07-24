@@ -1,13 +1,14 @@
 /**
  * rating-and-nav.spec.ts
  *
- * v0.3.1 coverage:
- *   1. Bottom nav switches between Where next / Quiz / Tried without losing
- *      route state.
- *   2. User rates a bar on the quiz results screen → navigates to /tried via
- *      bottom nav → sees the rated bar listed there.
- *   3. Pass-rated bars are excluded from subsequent quiz results (matcher
- *      consumes ratings as an exclusion list).
+ * Coverage after the U2-3 restructure (operator decision 2026-07-25:
+ * suggestion cards are for deciding, ranking lives on /rankings):
+ *   1. Bottom nav switches between the 5 app tabs.
+ *   2. "Rank it →" on a quiz result deep-links to /rankings with the tier
+ *      sheet armed for THAT bar; picking a tier lands it in the list.
+ *   3. Same deep link works from the Where-next results on /.
+ *   4. Pass-rating via the deep-link flow excludes the bar from subsequent
+ *      quiz results (matcher consumes ratings as an exclusion list).
  *
  * Each test resets localStorage so they don't bleed into each other.
  */
@@ -34,6 +35,17 @@ async function clearRatings(page: Page): Promise<void> {
     // and clearing storage must not resurface the overlay mid-test.
     window.localStorage.setItem('next-bar:age-ack:v1', '1');
   });
+}
+
+/** First result card's bar name, with the "1. " rank prefix stripped. */
+async function firstCardBarName(page: Page): Promise<string> {
+  const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+  await expect(cards.first()).toBeVisible();
+  const headingText =
+    (await cards.first().getByRole('heading').textContent()) ?? '';
+  const name = headingText.replace(/^\d+\.\s*/, '').trim();
+  expect(name.length).toBeGreaterThan(0);
+  return name;
 }
 
 test.describe('Bottom nav + rating flow', () => {
@@ -66,59 +78,41 @@ test.describe('Bottom nav + rating flow', () => {
     await expect(page).toHaveURL(/\/$/);
   });
 
-  test('rate a bar on quiz results, see it in /tried', async ({ page }) => {
+  test('"Rank it" on a quiz result opens the tier sheet on /rankings for that bar; Loved lands it in the list', async ({
+    page,
+  }) => {
     await page.goto('/quiz');
-
     await completeCocktailQuiz(page);
 
+    const barName = await firstCardBarName(page);
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-    // Quiz path renders top 10; East Village + cocktail yields ≥ 3 so allow a
-    // range. Picking the first card is what we actually care about.
-    await expect(cards.first()).toBeVisible();
     expect(await cards.count()).toBeGreaterThanOrEqual(3);
 
-    // Rate the first card "Loved"
-    const firstCard = cards.first();
-    await firstCard.getByRole('button', { name: 'Loved' }).click();
-    await expect(firstCard.getByRole('button', { name: 'Loved' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    // U2-3: cards no longer carry rating buttons — ranking is a deep link.
+    await expect(
+      cards.first().getByRole('button', { name: 'Loved' }),
+    ).toHaveCount(0);
+    await cards.first().getByRole('link', { name: /Rank it/i }).click();
 
-    // Navigate to /rankings via bottom nav
-    const nav = page.getByRole('navigation', { name: 'Primary' });
-    await nav.getByRole('link', { name: 'Rankings' }).click();
+    // Lands on /rankings with the tier sheet already open for THAT bar.
+    await expect(page).toHaveURL(/\/rankings/);
+    // Scope to the tier SHEET — the rankings filter pills also say "Loved".
+    const sheet = page.getByRole('dialog');
+    await expect(sheet).toContainText(`How was ${barName}?`);
+    await sheet.getByRole('button', { name: /^Loved/ }).click();
+
+    // Tier pick must not navigate anywhere (URL-hygiene class from the
+    // pre-U2-3 specs, ported).
     await expect(page).toHaveURL(/\/rankings$/);
 
-    // Expect at least one rated bar to appear in the list
+    // First-ever rating → no comparison peers → straight into the list.
     const rankedCards = page.locator('article');
     await expect(rankedCards).toHaveCount(1);
+    await expect(rankedCards.first()).toContainText(barName);
     await expect(rankedCards.first()).toContainText(/Loved/i);
   });
 
-  test('rating a bar on /quiz results does NOT change the URL', async ({ page }) => {
-    // Regression: Connor reported rating a bar pushed him back to the home
-    // tab. We assert URL stays on /quiz across all three rating taps.
-    await page.goto('/quiz');
-    await completeCocktailQuiz(page);
-
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-    await expect(cards.first()).toBeVisible();
-
-    const ratings = ['Loved', 'Liked', 'Pass'] as const;
-    for (const rating of ratings) {
-      const card = cards.first();
-      const button = card.getByRole('button', { name: rating });
-      if (!(await button.isVisible())) continue;
-      await button.click();
-      // Settle: give the optimistic update + any re-rank a beat.
-      await page.waitForTimeout(200);
-      await expect(page).toHaveURL(/\/quiz$/);
-    }
-  });
-
-  test('rating a bar on / (Where-next) results does NOT change the URL', async ({ page }) => {
-    // Regression: same bug class on the Where-next results page.
+  test('"Rank it" works from the Where-next results on /', async ({ page }) => {
     await page.goto('/');
 
     // Pick Attaboy → bypass GPS (denied in headless) → Walking radius → results
@@ -130,61 +124,43 @@ test.describe('Bottom nav + rating flow', () => {
 
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
     await expect(cards.first()).toBeVisible();
+    const barName = await firstCardBarName(page);
 
-    const ratings = ['Loved', 'Liked', 'Pass'] as const;
-    for (const rating of ratings) {
-      const card = cards.first();
-      const button = card.getByRole('button', { name: rating });
-      if (!(await button.isVisible())) continue;
-      await button.click();
-      await page.waitForTimeout(200);
-      await expect(page).toHaveURL(/\/$/);
-    }
+    await cards.first().getByRole('link', { name: /Rank it/i }).click();
+    await expect(page).toHaveURL(/\/rankings/);
+    // Tier sheet is armed for the same bar (scoped: filter pills also say Liked).
+    const sheet = page.getByRole('dialog');
+    await expect(sheet).toContainText(`How was ${barName}?`);
+    await expect(sheet.getByRole('button', { name: /^Liked/ })).toBeVisible();
   });
 
-  test('Pass-rated bars are excluded from subsequent quiz results', async ({ page }) => {
-    // Run 1 — complete quiz, capture the first result's bar name, rate it Pass.
+  test('Pass via the deep-link flow excludes the bar from subsequent quiz results', async ({
+    page,
+  }) => {
+    // Run 1 — complete quiz, capture the first result's bar name.
     await page.goto('/quiz');
     await completeCocktailQuiz(page);
+    const passedBarName = await firstCardBarName(page);
 
+    // Rank it → /rankings tier sheet → Pass.
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-    // Quiz path renders top 10; East Village + cocktail yields ≥ 3 so allow a
-    // range. Picking the first card is what we actually care about.
-    await expect(cards.first()).toBeVisible();
-    expect(await cards.count()).toBeGreaterThanOrEqual(3);
+    await cards.first().getByRole('link', { name: /Rank it/i }).click();
+    await expect(page).toHaveURL(/\/rankings/);
+    const sheet = page.getByRole('dialog');
+    await expect(sheet).toContainText(`How was ${passedBarName}?`);
+    await sheet.getByRole('button', { name: /^Pass/ }).click();
+    // The pass landed: rankings shows it under the Pass filter state.
+    await expect(page.locator('article').first()).toContainText(passedBarName);
 
-    const firstHeading = cards.first().getByRole('heading');
-    const headingText = (await firstHeading.textContent()) ?? '';
-    // ResultCard heading is "1. Bar Name" — strip the rank prefix.
-    const passedBarName = headingText.replace(/^\d+\.\s*/, '').trim();
-    expect(passedBarName.length).toBeGreaterThan(0);
-
-    // Pass-rating the first card causes ResultsView to re-rank live and drop
-    // it from the list. Verify the rated bar is gone, then confirm the same
-    // exclusion persists across a fresh quiz run.
-    await cards.first().getByRole('button', { name: 'Pass' }).click();
-
-    await expect(async () => {
-      const headings = await cards.getByRole('heading').allTextContents();
-      const names = headings.map((h) => h.replace(/^\d+\.\s*/, '').trim());
-      expect(names).not.toContain(passedBarName);
-    }).toPass({ timeout: 5_000 });
-
-    // Run 2 — navigate away, retake the quiz with the same answers, confirm
-    // the Pass-rated bar still doesn't appear.
-    await page.getByRole('navigation', { name: 'Primary' })
-      .getByRole('link', { name: 'Next Bar?' })
-      .click();
-    await expect(page).toHaveURL(/\/$/);
-
+    // Run 2 — retake the quiz with the same answers; the passed bar must
+    // not appear (matcher exclusion).
     await page.goto('/quiz');
     await completeCocktailQuiz(page);
 
     const newCards = page.locator('article').filter({ hasText: /Vibe match/i });
     await expect(newCards.first()).toBeVisible();
-
-    const headings2 = await newCards.getByRole('heading').allTextContents();
-    const newNames = headings2.map((h) => h.replace(/^\d+\.\s*/, '').trim());
-    expect(newNames).not.toContain(passedBarName);
+    const headings = await newCards.getByRole('heading').allTextContents();
+    const names = headings.map((h) => h.replace(/^\d+\.\s*/, '').trim());
+    expect(names).not.toContain(passedBarName);
   });
 });

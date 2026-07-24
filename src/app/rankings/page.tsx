@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
@@ -52,6 +52,25 @@ export default function RankingsPage(): JSX.Element {
   const { ratings } = useRatings();
   const auth = useAuth();
   const [filter, setFilter] = useState<FilterValue>('all');
+  // U2-3 deep link (?add=<barId> from "Rank it →" on suggestion cards):
+  // read once from location.search on mount — window-only, so no
+  // useSearchParams/Suspense prerender dance — then strip the param so a
+  // refresh doesn't re-open the tier sheet.
+  const [deepLinkBarId, setDeepLinkBarId] = useState<string | undefined>();
+  const clearDeepLink = useCallback(() => setDeepLinkBarId(undefined), []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const add = params.get('add');
+    if (!add) return;
+    setDeepLinkBarId(add);
+    params.delete('add');
+    const query = params.toString();
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${query ? `?${query}` : ''}`,
+    );
+  }, []);
 
   const sortedEntries: RatedEntry[] = useMemo(() => {
     // sortRatingsByScore puts pairwise-scored bars first (score desc), then
@@ -95,7 +114,7 @@ export default function RankingsPage(): JSX.Element {
           // Persistent quick-add entry (B4). The empty state below mounts
           // its own instance — exactly one QuickAddBar renders at a time.
           <div className="mt-3">
-            <QuickAddBar />
+            <QuickAddBar initialBarId={deepLinkBarId} onInitialConsumed={clearDeepLink} />
           </div>
         ) : null}
       </header>
@@ -136,7 +155,7 @@ export default function RankingsPage(): JSX.Element {
             app ships with sync.
           </p>
           <div className="mb-4">
-            <QuickAddBar />
+            <QuickAddBar initialBarId={deepLinkBarId} onInitialConsumed={clearDeepLink} />
           </div>
           <Link
             href="/"

@@ -122,6 +122,59 @@ export function useGeolocation(): UseGeolocationReturn {
     }
   }, []);
 
+  // AUTO-RESUME (U2-4): once the user has granted location to this site,
+  // later visits should not demand another "Use my location" tap — the
+  // browser fires no prompt for an already-granted permission, so a silent
+  // fetch on mount is free UX. Strictly feature-detected: no Permissions
+  // API (or a query that throws, e.g. older Safari) → exactly the old
+  // tap-to-request behavior. 'prompt'/'denied' states never auto-request —
+  // surprising permission dialogs on load are hostile.
+  useEffect(() => {
+    if (!hasGeolocation()) return;
+    if (typeof navigator.permissions?.query !== 'function') return;
+    let cancelled = false;
+    navigator.permissions
+      .query({ name: 'geolocation' })
+      .then((status) => {
+        if (cancelled || status.state !== 'granted') return;
+        // Same guard shape as request(): read the ref, set plainly, fetch
+        // OUTSIDE any updater (DeepSeek review: updaters must stay pure —
+        // React double-invokes them under StrictMode).
+        if (stateRef.current.status !== 'idle') return;
+        setState({ status: 'requesting' });
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            if (!cancelled) setState(classifySuccess(position));
+          },
+          (error) => {
+            // A SILENT attempt must not paint failure UI the user never
+            // asked for (DeepSeek review): OS-off / timeout returns to
+            // idle so the manual button still works untainted. A genuine
+            // permission revocation (code 1) is a real signal — keep it.
+            if (cancelled) return;
+            setState(
+              error.code === 1 ? classifyError(error) : { status: 'idle' },
+            );
+          },
+          GEO_OPTIONS,
+        );
+      })
+      .catch(() => {
+        // Permissions API present but geolocation unqueryable — keep the
+        // manual flow.
+      });
+    return () => {
+      cancelled = true;
+      // StrictMode runs mount→cleanup→mount: the first pass may have
+      // parked state at 'requesting' before its callbacks were discarded —
+      // give the slot back so the second pass (or a manual tap) can run
+      // (a permanent 'requesting' deadlock was caught by the map e2e).
+      setState((current) =>
+        current.status === 'requesting' ? { status: 'idle' } : current,
+      );
+    };
+  }, []);
+
   const request = useCallback(() => {
     if (stateRef.current.status === 'requesting') return;
     if (!hasGeolocation()) {
