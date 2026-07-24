@@ -1,5 +1,7 @@
 import { ImageResponse } from 'next/og';
-import { getBarById } from '@/lib/catalog';
+// SLIM import only (edge 1MB limit): the full catalog drags the Places
+// sidecar into this bundle — see catalog.slim.ts.
+import { getBarCard } from '@/lib/catalog.slim';
 
 export const runtime = 'edge';
 export const alt = "Tonight's pick — Next Bar";
@@ -13,7 +15,7 @@ export default function SharePickImage({
 }: {
   params: { barId: string };
 }) {
-  const bar = getBarById(decodeURIComponent(params.barId));
+  const bar = getBarCard(decodeURIComponent(params.barId));
   const name = bar?.name ?? 'Next Bar';
   const sub = bar
     ? `${bar.neighborhood} · ${'$'.repeat(bar.priceTier)}`

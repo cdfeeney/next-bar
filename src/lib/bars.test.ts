@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Bar, PlacePatch } from '@/types';
 import { applyPlaces, bars } from '@/lib/bars';
+import { rawBarCount } from '@/lib/catalog.slim';
 
 // Normalize a bar name for duplicate detection: fold case, punctuation, and the
 // filler words that let the same venue slip in twice under slightly different
@@ -39,6 +40,13 @@ describe('bars catalog integrity', () => {
       (b) => b.lat < BBOX.minLat || b.lat > BBOX.maxLat || b.lng < BBOX.minLng || b.lng > BBOX.maxLng,
     );
     expect(outOfBox.map((b) => `${b.name} (${b.lat},${b.lng})`)).toEqual([]);
+  });
+
+  it('the slim edge-catalog view merges the SAME expansion files as bars.ts', () => {
+    // catalog.slim.ts exists so the share OG edge function skips the
+    // Places sidecar (1MB edge limit). tsc cannot catch a forgotten
+    // spread there — this count cross-check can.
+    expect(rawBarCount).toBe(bars.length);
   });
 });
 
