@@ -27,7 +27,7 @@ import {
   setOwnDisplayName,
 } from '@/lib/profile.server';
 import { useHandleAvailability } from '@/hooks/useHandleAvailability';
-import { ONBOARDING_PROMPTED_KEY } from '@/components/OnboardingGate';
+import { setPromptedFlag } from '@/components/OnboardingGate';
 
 const CHARSET_HINT = '3–20 characters: letters, numbers, underscores.';
 
@@ -74,7 +74,7 @@ export default function OnboardingPage(): JSX.Element {
   }, [auth.status, router]);
 
   const skip = (): void => {
-    window.sessionStorage.setItem(ONBOARDING_PROMPTED_KEY, '1');
+    setPromptedFlag();
     router.replace('/');
   };
 
@@ -103,15 +103,16 @@ export default function OnboardingPage(): JSX.Element {
     }
 
     setStatus({ kind: 'submitting' });
-    if (name.trim() !== '') {
-      const nameOk = await setOwnDisplayName(supabase, auth.user.id, name);
-      if (!nameOk) {
-        setStatus({
-          kind: 'error',
-          message: "Couldn't save your name — try again in a moment.",
-        });
-        return;
-      }
+    // Always write (empty clears to NULL): a retry after a failed claim
+    // must persist whatever is in the field NOW — including a cleared name
+    // undoing an earlier partial save (DeepSeek review).
+    const nameOk = await setOwnDisplayName(supabase, auth.user.id, name);
+    if (!nameOk) {
+      setStatus({
+        kind: 'error',
+        message: "Couldn't save your name — try again in a moment.",
+      });
+      return;
     }
     const claimed = await claimHandle(supabase, trimmedHandle);
     if (claimed === null) {
@@ -123,7 +124,7 @@ export default function OnboardingPage(): JSX.Element {
     }
     // Belt-and-braces: the gate keys off the now-set handle, but the flag
     // spares one profile fetch per session.
-    window.sessionStorage.setItem(ONBOARDING_PROMPTED_KEY, '1');
+    setPromptedFlag();
     // Full navigation (auth-page pattern) so every consumer boots with the
     // fresh identity.
     window.location.assign('/');
@@ -227,7 +228,9 @@ export default function OnboardingPage(): JSX.Element {
                 <button
                   type="submit"
                   disabled={
-                    status.kind === 'submitting' || !isValidHandle(desired)
+                    status.kind === 'submitting' ||
+                    !isValidHandle(desired) ||
+                    !isValidDisplayName(name)
                   }
                   className="bg-accent text-bg font-display text-sm px-6 py-2.5 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50"
                 >

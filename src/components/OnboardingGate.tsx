@@ -32,6 +32,28 @@ export const ONBOARDING_PROMPTED_KEY = 'next-bar:onboarding-prompted:v1';
 /** Never yank the user out of these flows into onboarding. */
 const EXCLUDED_PREFIXES = ['/onboarding', '/auth', '/privacy', '/terms'];
 
+/**
+ * Best-effort flag write: sessionStorage.setItem can throw (Safari private
+ * mode at quota, some webviews). A missing flag just means the gate probes
+ * again next session/navigation — never let the throw block navigation
+ * (DeepSeek review).
+ */
+export function setPromptedFlag(): void {
+  try {
+    window.sessionStorage.setItem(ONBOARDING_PROMPTED_KEY, '1');
+  } catch {
+    // Fine — the flag is an optimization, not state.
+  }
+}
+
+function isPromptedFlagSet(): boolean {
+  try {
+    return window.sessionStorage.getItem(ONBOARDING_PROMPTED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export default function OnboardingGate(): null {
   const auth = useAuth();
   const pathname = usePathname();
@@ -40,7 +62,7 @@ export default function OnboardingGate(): null {
   useEffect(() => {
     if (auth.status !== 'signed-in') return;
     if (EXCLUDED_PREFIXES.some((p) => pathname.startsWith(p))) return;
-    if (window.sessionStorage.getItem(ONBOARDING_PROMPTED_KEY) === '1') return;
+    if (isPromptedFlagSet()) return;
     const supabase = getBrowserSupabase();
     if (!supabase) return;
 
@@ -50,9 +72,16 @@ export default function OnboardingGate(): null {
     const epoch = getCacheEpoch();
     fetchOwnProfile(supabase).then((profile) => {
       if (cancelled || getCacheEpoch() !== epoch) return;
-      // null = unknown (fetch failed / no row yet) — fail open, no prompt.
-      if (profile === null || profile.handle !== null) return;
-      window.sessionStorage.setItem(ONBOARDING_PROMPTED_KEY, '1');
+      // null = unknown (fetch failed / no row yet) — fail open, no prompt,
+      // and no flag either so a later navigation retries.
+      if (profile === null) return;
+      if (profile.handle !== null) {
+        // Already onboarded — cache that for the session (Opus review:
+        // without this, every navigation re-pays a profile fetch).
+        setPromptedFlag();
+        return;
+      }
+      setPromptedFlag();
       router.replace('/onboarding');
     });
     return () => {

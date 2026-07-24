@@ -54,7 +54,13 @@ export default function DisplayNameEditor({
     const epoch = getCacheEpoch();
     setStatus('saving');
     const ok = await setOwnDisplayName(supabase, userId, value);
-    if (getCacheEpoch() !== epoch) return;
+    if (getCacheEpoch() !== epoch) {
+      // Identity changed mid-flight: drop the result, but recover the
+      // button from "Saving…" — status is UI state, not account data
+      // (DeepSeek review).
+      setStatus('idle');
+      return;
+    }
     if (!ok) {
       setStatus('error');
       return;
