@@ -62,7 +62,7 @@ function fakeSupabase(opts: {
   return { client, calls };
 }
 
-const MAYA_ROW = { id: 'uuid-maya', handle: 'Maya_R', display_name: 'Maya R.' };
+const MAYA_ROW = { id: 'uuid-claire', handle: 'Claire_R', display_name: 'Claire R.' };
 
 describe('getProfileByHandle', () => {
   it('calls get_profile_by_handle with the trimmed handle (leading @ stripped)', async () => {
@@ -70,15 +70,15 @@ describe('getProfileByHandle', () => {
       rpcResults: { get_profile_by_handle: { data: [MAYA_ROW] } },
     });
 
-    const profile = await getProfileByHandle(client, ' @Maya_R ');
+    const profile = await getProfileByHandle(client, ' @Claire_R ');
 
     expect(profile).toEqual({
-      id: 'uuid-maya',
-      handle: 'Maya_R',
-      displayName: 'Maya R.',
+      id: 'uuid-claire',
+      handle: 'Claire_R',
+      displayName: 'Claire R.',
     });
     expect(calls.rpc).toEqual([
-      { fn: 'get_profile_by_handle', args: { h: 'Maya_R' } },
+      { fn: 'get_profile_by_handle', args: { h: 'Claire_R' } },
     ]);
   });
 
@@ -102,7 +102,7 @@ describe('getProfileByHandle', () => {
     const { client } = fakeSupabase({
       rpcResults: { get_profile_by_handle: { error: { message: 'boom' } } },
     });
-    expect(await getProfileByHandle(client, 'maya')).toBeNull();
+    expect(await getProfileByHandle(client, 'claire')).toBeNull();
   });
 });
 
@@ -122,7 +122,7 @@ describe('fetchFollows', () => {
     const follows = await fetchFollows(client);
 
     expect(follows).toEqual([
-      { id: 'uuid-maya', handle: 'Maya_R', displayName: 'Maya R.' },
+      { id: 'uuid-claire', handle: 'Claire_R', displayName: 'Claire R.' },
       { id: 'uuid-dev', handle: 'dev', displayName: null },
     ]);
     expect(calls.rpc).toEqual([{ fn: 'get_following', args: undefined }]);
@@ -152,7 +152,7 @@ describe('fetchFollows', () => {
     });
     const follows = await fetchFollows(client);
     expect(follows).toHaveLength(1);
-    expect(follows?.[0].handle).toBe('Maya_R');
+    expect(follows?.[0].handle).toBe('Claire_R');
   });
 });
 
@@ -165,16 +165,16 @@ describe('followByHandle', () => {
       },
     });
 
-    const followed = await followByHandle(client, 'maya_r');
+    const followed = await followByHandle(client, 'claire_r');
 
     expect(followed).toEqual({
-      id: 'uuid-maya',
-      handle: 'Maya_R',
-      displayName: 'Maya R.',
+      id: 'uuid-claire',
+      handle: 'Claire_R',
+      displayName: 'Claire R.',
     });
     expect(calls.rpc).toEqual([
-      { fn: 'get_profile_by_handle', args: { h: 'maya_r' } },
-      { fn: 'follow_user', args: { target: 'uuid-maya' } },
+      { fn: 'get_profile_by_handle', args: { h: 'claire_r' } },
+      { fn: 'follow_user', args: { target: 'uuid-claire' } },
     ]);
   });
 
@@ -197,7 +197,7 @@ describe('followByHandle', () => {
         follow_user: { data: false },
       },
     });
-    expect(await followByHandle(client, 'maya_r')).toBeNull();
+    expect(await followByHandle(client, 'claire_r')).toBeNull();
   });
 
   it('returns null when the follow_user RPC errors', async () => {
@@ -207,7 +207,7 @@ describe('followByHandle', () => {
         follow_user: { error: { message: 'boom' } },
       },
     });
-    expect(await followByHandle(client, 'maya_r')).toBeNull();
+    expect(await followByHandle(client, 'claire_r')).toBeNull();
   });
 });
 
@@ -220,10 +220,10 @@ describe('unfollowByHandle', () => {
       },
     });
 
-    expect(await unfollowByHandle(client, 'Maya_R')).toBe(true);
+    expect(await unfollowByHandle(client, 'Claire_R')).toBe(true);
     expect(calls.rpc).toEqual([
-      { fn: 'get_profile_by_handle', args: { h: 'Maya_R' } },
-      { fn: 'unfollow_user', args: { target: 'uuid-maya' } },
+      { fn: 'get_profile_by_handle', args: { h: 'Claire_R' } },
+      { fn: 'unfollow_user', args: { target: 'uuid-claire' } },
     ]);
   });
 
@@ -242,7 +242,7 @@ describe('unfollowByHandle', () => {
         unfollow_user: { data: false },
       },
     });
-    expect(await unfollowByHandle(notFollowing.client, 'maya_r')).toBe(false);
+    expect(await unfollowByHandle(notFollowing.client, 'claire_r')).toBe(false);
 
     const errored = fakeSupabase({
       rpcResults: {
@@ -250,7 +250,7 @@ describe('unfollowByHandle', () => {
         unfollow_user: { error: { message: 'boom' } },
       },
     });
-    expect(await unfollowByHandle(errored.client, 'maya_r')).toBe(false);
+    expect(await unfollowByHandle(errored.client, 'claire_r')).toBe(false);
   });
 });
 
@@ -260,7 +260,7 @@ describe('fetchFriendRatings', () => {
       rpcResults: { get_friend_ratings: { data: [] } },
     });
 
-    await fetchFriendRatings(client, 'uuid-maya');
+    await fetchFriendRatings(client, 'uuid-claire');
 
     expect(calls.rpc).toEqual([{ fn: 'get_friend_ratings', args: undefined }]);
     expect(calls.from).toEqual([]); // no table/view read — RPC only
@@ -272,19 +272,19 @@ describe('fetchFriendRatings', () => {
         get_friend_ratings: {
           data: [
             {
-              user_id: 'uuid-maya',
+              user_id: 'uuid-claire',
               bar_id: 'attaboy',
               tier: 'loved',
               rated_at: '2026-05-10T00:00:00.000Z',
             },
             {
-              user_id: 'uuid-maya',
+              user_id: 'uuid-claire',
               bar_id: 'buvette',
               tier: 'liked',
               rated_at: '2026-05-11T00:00:00.000Z',
             },
             {
-              user_id: 'uuid-jordan',
+              user_id: 'uuid-john',
               bar_id: 'attaboy',
               tier: 'liked',
               rated_at: '2026-05-12T00:00:00.000Z',
@@ -294,18 +294,18 @@ describe('fetchFriendRatings', () => {
       },
     });
 
-    const ratings = await fetchFriendRatings(client, 'uuid-maya');
+    const ratings = await fetchFriendRatings(client, 'uuid-claire');
     expect(ratings?.every((r) => !('score' in r))).toBe(true);
 
     expect(ratings).toEqual([
       {
-        userId: 'uuid-maya',
+        userId: 'uuid-claire',
         barId: 'attaboy',
         rating: 'loved',
         ratedAt: '2026-05-10T00:00:00.000Z',
       },
       {
-        userId: 'uuid-maya',
+        userId: 'uuid-claire',
         barId: 'buvette',
         rating: 'liked',
         ratedAt: '2026-05-11T00:00:00.000Z',
@@ -317,13 +317,13 @@ describe('fetchFriendRatings', () => {
     const { client } = fakeSupabase({
       rpcResults: { get_friend_ratings: { error: { message: 'RLS denied' } } },
     });
-    expect(await fetchFriendRatings(client, 'uuid-maya')).toBeNull();
+    expect(await fetchFriendRatings(client, 'uuid-claire')).toBeNull();
   });
 
   it('returns [] when the RPC yields nothing (not following / friend unrated)', async () => {
     const { client } = fakeSupabase({
       rpcResults: { get_friend_ratings: { data: [] } },
     });
-    expect(await fetchFriendRatings(client, 'uuid-maya')).toEqual([]);
+    expect(await fetchFriendRatings(client, 'uuid-claire')).toEqual([]);
   });
 });

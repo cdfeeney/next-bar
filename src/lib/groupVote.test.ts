@@ -11,8 +11,8 @@ import type { BarRating } from '@/types/ratings';
 const CANDIDATES = ['death-and-co', 'attaboy', 'donna'];
 const PEOPLE = [
   { id: 'you', label: 'You' },
-  { id: 'maya', label: 'Maya' },
-  { id: 'jordan', label: 'Jordan' },
+  { id: 'claire', label: 'Claire' },
+  { id: 'john', label: 'John' },
 ];
 
 const rating = (
@@ -36,7 +36,7 @@ describe('createSession', () => {
       [PEOPLE[0], PEOPLE[1], { id: 'you', label: 'Duplicate You' }],
     );
     expect(s.candidates).toEqual(['a', 'b']);
-    expect(s.participants.map((p) => p.id)).toEqual(['you', 'maya']);
+    expect(s.participants.map((p) => p.id)).toEqual(['you', 'claire']);
   });
 
   it('throws when there are fewer than 2 candidates or 2 participants', () => {
@@ -48,8 +48,8 @@ describe('createSession', () => {
 describe('castVote', () => {
   it('records a vote without mutating the previous session', () => {
     const s0 = createSession(CANDIDATES, PEOPLE);
-    const s1 = castVote(s0, 'maya', 'attaboy');
-    expect(s1.votes).toEqual({ maya: 'attaboy' });
+    const s1 = castVote(s0, 'claire', 'attaboy');
+    expect(s1.votes).toEqual({ claire: 'attaboy' });
     expect(s0.votes).toEqual({});
     expect(s1.status).toBe('voting');
   });
@@ -57,32 +57,32 @@ describe('castVote', () => {
   it('ignores unknown participants and unknown candidates', () => {
     const s0 = createSession(CANDIDATES, PEOPLE);
     expect(castVote(s0, 'stranger', 'attaboy')).toBe(s0);
-    expect(castVote(s0, 'maya', 'not-a-candidate')).toBe(s0);
+    expect(castVote(s0, 'claire', 'not-a-candidate')).toBe(s0);
   });
 
   it('lets a participant change their vote while voting is open', () => {
     const s0 = createSession(CANDIDATES, PEOPLE);
-    const s1 = castVote(s0, 'maya', 'attaboy');
-    const s2 = castVote(s1, 'maya', 'donna');
-    expect(s2.votes).toEqual({ maya: 'donna' });
+    const s1 = castVote(s0, 'claire', 'attaboy');
+    const s2 = castVote(s1, 'claire', 'donna');
+    expect(s2.votes).toEqual({ claire: 'donna' });
     expect(s2.status).toBe('voting');
   });
 
   it('flips to decided when the final participant votes', () => {
     let s = createSession(CANDIDATES, PEOPLE);
     s = castVote(s, 'you', 'death-and-co');
-    s = castVote(s, 'maya', 'death-and-co');
+    s = castVote(s, 'claire', 'death-and-co');
     expect(s.status).toBe('voting');
-    s = castVote(s, 'jordan', 'attaboy');
+    s = castVote(s, 'john', 'attaboy');
     expect(s.status).toBe('decided');
   });
 
   it('ignores votes after the session is decided', () => {
     let s = createSession(CANDIDATES, PEOPLE);
     s = castVote(s, 'you', 'death-and-co');
-    s = castVote(s, 'maya', 'death-and-co');
-    s = castVote(s, 'jordan', 'attaboy');
-    const after = castVote(s, 'jordan', 'donna');
+    s = castVote(s, 'claire', 'death-and-co');
+    s = castVote(s, 'john', 'attaboy');
+    const after = castVote(s, 'john', 'donna');
     expect(after).toBe(s);
   });
 });
@@ -91,8 +91,8 @@ describe('tally + winner', () => {
   it('ranks candidates by vote count, keeping every candidate visible', () => {
     let s = createSession(CANDIDATES, PEOPLE);
     s = castVote(s, 'you', 'attaboy');
-    s = castVote(s, 'maya', 'attaboy');
-    s = castVote(s, 'jordan', 'donna');
+    s = castVote(s, 'claire', 'attaboy');
+    s = castVote(s, 'john', 'donna');
     const rows = tally(s);
     expect(rows).toEqual([
       { barId: 'attaboy', count: 2 },
@@ -104,7 +104,7 @@ describe('tally + winner', () => {
   it('breaks ties by candidate order (group ranking wins)', () => {
     let s = createSession(CANDIDATES, [PEOPLE[0], PEOPLE[1]]);
     s = castVote(s, 'you', 'donna');
-    s = castVote(s, 'maya', 'death-and-co');
+    s = castVote(s, 'claire', 'death-and-co');
     // 1–1 tie: death-and-co is ranked earlier in candidates, so it leads.
     expect(tally(s)[0]).toEqual({ barId: 'death-and-co', count: 1 });
     expect(winner(s)).toBe('death-and-co');
@@ -115,8 +115,8 @@ describe('tally + winner', () => {
     expect(winner(s)).toBeNull();
     s = castVote(s, 'you', 'attaboy');
     expect(winner(s)).toBeNull();
-    s = castVote(s, 'maya', 'attaboy');
-    s = castVote(s, 'jordan', 'attaboy');
+    s = castVote(s, 'claire', 'attaboy');
+    s = castVote(s, 'john', 'attaboy');
     expect(winner(s)).toBe('attaboy');
   });
 });

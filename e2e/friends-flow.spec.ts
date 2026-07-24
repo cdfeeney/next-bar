@@ -10,7 +10,7 @@
  *   4. The profile follow toggle persists.
  *
  * Fresh Playwright contexts start with empty localStorage, so follows fall
- * back to the default set (maya, jordan) — see useFollows.
+ * back to the default set (claire, john) — see useFollows.
  */
 
 import { test, expect } from '@playwright/test';
@@ -19,7 +19,7 @@ test.describe('Friends + consensus', () => {
   test('following a suggested curator adds them to your circle', async ({ page }) => {
     await page.goto('/friends');
 
-    // Default circle is 2 (maya, jordan); Sasha is in the suggested list.
+    // Default circle is 2 (claire, john); Sasha is in the suggested list.
     await expect(page.getByText(/Your circle · 2/)).toBeVisible();
 
     // The suggested row (only Sasha, who isn't followed by default, shows
@@ -36,7 +36,7 @@ test.describe('Friends + consensus', () => {
   test('consensus shows bars the group all rated', async ({ page }) => {
     await page.goto('/friends/consensus');
 
-    // With the default group (maya + jordan), there is overlap.
+    // With the default group (claire + john), there is overlap.
     await expect(page.getByText(/You all agree on/i)).toBeVisible();
     // Death & Co is loved by both curators → appears as a group pick.
     await expect(
@@ -47,8 +47,8 @@ test.describe('Friends + consensus', () => {
   test('consensus needs at least two people selected', async ({ page }) => {
     await page.goto('/friends/consensus');
 
-    // Deselect jordan, leaving only maya → not enough for consensus.
-    await page.getByRole('button', { name: /Jordan/ }).click();
+    // Deselect john, leaving only claire → not enough for consensus.
+    await page.getByRole('button', { name: /John/ }).click();
     await expect(page.getByText(/Pick at least two people/i)).toBeVisible();
   });
 
@@ -72,19 +72,19 @@ test.describe('Friends + consensus', () => {
   });
 
   test('tonight intent toggles, persists, and shows circle signals', async ({ page }) => {
-    // Demo intents are day-varying since F3/F5 (no more "Maya goes out every
+    // Demo intents are day-varying since F3/F5 (no more "Claire goes out every
     // night") — pin the clock to a Friday night, where the classic trio
-    // (maya going / jordan maybe) is guaranteed by the rhythm table.
+    // (claire going / john maybe) is guaranteed by the rhythm table.
     await page.clock.install({ time: new Date('2026-07-24T22:00:00') });
     await page.goto('/friends');
 
-    // Default circle (maya + jordan) has seeded demo signals.
-    await expect(page.getByText(/Maya/).first()).toBeVisible();
+    // Default circle (claire + john) has seeded demo signals.
+    await expect(page.getByText(/Claire/).first()).toBeVisible();
     await expect(page.getByText(/is going out tonight/i)).toBeVisible();
     await expect(page.getByText(/might be out later/i)).toBeVisible();
 
     // Reciprocity gate (C1): friends' picks are hidden until you commit.
-    // Scoped to the Tonight region — Maya's friend card elsewhere on the
+    // Scoped to the Tonight region — Claire's friend card elsewhere on the
     // page also names her top bars.
     const tonight = page.getByRole('region', { name: 'Tonight' });
     await expect(tonight.getByText(/Set your status to see/i)).toBeVisible();
@@ -95,7 +95,7 @@ test.describe('Friends + consensus', () => {
     await goingBtn.click();
     await expect(goingBtn).toHaveAttribute('aria-pressed', 'true');
 
-    // Picks unlock: Maya's tonight pick appears.
+    // Picks unlock: Claire's tonight pick appears.
     await expect(tonight.getByText(/Death & Co/)).toBeVisible();
     await expect(tonight.getByText(/Set your status to see/i)).toHaveCount(0);
     await page.reload();
@@ -110,7 +110,7 @@ test.describe('Friends + consensus', () => {
   test('friends-only vote settles instantly with a winner', async ({ page }) => {
     await page.goto('/friends/consensus');
 
-    // Default group is maya + jordan (no "You" without ratings), so their
+    // Default group is claire + john (no "You" without ratings), so their
     // auto-votes decide it the moment the vote starts.
     await page.getByRole('button', { name: /Put it to a vote/i }).click();
     await expect(page.getByText(/Tonight's pick/i)).toBeVisible();

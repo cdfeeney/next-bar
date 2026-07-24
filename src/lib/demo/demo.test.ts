@@ -37,28 +37,28 @@ describe('demo friends data integrity', () => {
   });
 
   it('findDemoFriend is case-insensitive and returns undefined for unknown', () => {
-    expect(findDemoFriend('MAYA')?.handle).toBe('maya');
+    expect(findDemoFriend('CLAIRE')?.handle).toBe('claire');
     expect(findDemoFriend('nobody')).toBeUndefined();
   });
 });
 
 describe('topRatedBars / lovedCount', () => {
-  const maya = findDemoFriend('maya')!;
+  const claire = findDemoFriend('claire')!;
 
   it('sorts a friend list high→low by score', () => {
-    const top = topRatedBars(maya);
+    const top = topRatedBars(claire);
     const scores = top.map((t) => t.rating.score ?? 0);
     const sorted = [...scores].sort((a, b) => b - a);
     expect(scores).toEqual(sorted);
   });
 
   it('respects the limit', () => {
-    expect(topRatedBars(maya, 3)).toHaveLength(3);
+    expect(topRatedBars(claire, 3)).toHaveLength(3);
   });
 
   it('counts only loved entries', () => {
-    const expected = maya.ratings.filter((r) => r.rating === 'loved').length;
-    expect(lovedCount(maya)).toBe(expected);
+    const expected = claire.ratings.filter((r) => r.rating === 'loved').length;
+    expect(lovedCount(claire)).toBe(expected);
   });
 });
 

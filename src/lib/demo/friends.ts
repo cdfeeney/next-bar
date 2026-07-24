@@ -43,8 +43,8 @@ const r = (barId: string, score: number, ratedAt: string): BarRating => ({
 
 export const demoFriends: DemoFriend[] = [
   {
-    handle: 'maya',
-    displayName: 'Maya R.',
+    handle: 'claire',
+    displayName: 'Claire R.',
     initials: 'MR',
     archetype: 'Cocktail Romantic',
     blurb: 'Will cross town for a perfect Negroni and a quiet corner.',
@@ -98,8 +98,8 @@ export const demoFriends: DemoFriend[] = [
     ],
   },
   {
-    handle: 'jordan',
-    displayName: 'Jordan K.',
+    handle: 'john',
+    displayName: 'John K.',
     initials: 'JK',
     archetype: 'Jazz & Late Nights',
     blurb: 'Last call is a suggestion. Live music is non-negotiable.',
@@ -120,7 +120,7 @@ export const demoFriends: DemoFriend[] = [
  * Handles followed by default on a fresh device. A populated subset (not all)
  * so the demo feed is alive immediately while a live Follow button remains.
  */
-export const DEFAULT_FOLLOWS: readonly string[] = ['maya', 'jordan'];
+export const DEFAULT_FOLLOWS: readonly string[] = ['claire', 'john'];
 
 export function findDemoFriend(handle: string): DemoFriend | undefined {
   return demoFriends.find((f) => f.handle === handle.toLowerCase());

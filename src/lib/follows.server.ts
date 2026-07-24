@@ -42,7 +42,7 @@ type FriendRatingRow = {
   rated_at: string;
 };
 
-/** Trim + strip a leading @ — what users paste is "@maya", what the DB knows is "maya". */
+/** Trim + strip a leading @ — what users paste is "@claire", what the DB knows is "claire". */
 function cleanHandle(handle: string): string {
   return handle.trim().replace(/^@/, '');
 }

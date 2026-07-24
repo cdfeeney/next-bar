@@ -17,7 +17,7 @@ function seedFullCache(owner: string): void {
   window.localStorage.setItem(RATINGS_MERGED_KEY, owner);
   window.localStorage.setItem(PAIRWISE_KEY, '[{"winnerBarId":"a"}]');
   window.localStorage.setItem(PAIRWISE_MERGED_KEY, owner);
-  window.localStorage.setItem(FOLLOWS_KEY, '["maya"]');
+  window.localStorage.setItem(FOLLOWS_KEY, '["claire"]');
 }
 
 describe('clearAccountCache', () => {

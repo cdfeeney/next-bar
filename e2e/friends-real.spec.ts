@@ -171,8 +171,8 @@ test.describe('/friends — signed in (real graph)', () => {
       page.getByText(/search a friend.s @username below/i),
     ).toBeVisible();
     // Demo curators must NOT bleed into the signed-in circle.
-    await expect(page.getByText('@maya')).not.toBeVisible();
-    await expect(page.getByText('@jordan')).not.toBeVisible();
+    await expect(page.getByText('@claire')).not.toBeVisible();
+    await expect(page.getByText('@john')).not.toBeVisible();
     // The find-friends search is the way forward.
     await expect(page.getByPlaceholder(/search @username/i)).toBeVisible();
   });

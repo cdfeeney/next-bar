@@ -67,7 +67,7 @@ function signedOutAuthState() {
   };
 }
 
-const MAYA = { id: 'uuid-maya', handle: 'Maya_R', displayName: 'Maya R.' };
+const MAYA = { id: 'uuid-claire', handle: 'Claire_R', displayName: 'Claire R.' };
 const DEV = { id: 'uuid-dev', handle: 'dev_p', displayName: null };
 
 describe('useFollows — local (signed-out) mode', () => {
@@ -125,25 +125,25 @@ describe('useFollows — server (signed-in) mode', () => {
   it('hydrates the circle from the server and IGNORES the demo seed entirely', async () => {
     // Demo follows in localStorage must NOT merge — demo handles aren't
     // real accounts. Server truth is the whole circle.
-    window.localStorage.setItem(KEY, JSON.stringify(['maya', 'jordan']));
+    window.localStorage.setItem(KEY, JSON.stringify(['claire', 'john']));
     fetchFollowsMock.mockResolvedValue([MAYA]);
 
     const { result } = renderHook(() => useFollows());
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.mode).toBe('server');
-    expect(result.current.follows).toEqual(['Maya_R']);
+    expect(result.current.follows).toEqual(['Claire_R']);
     expect(result.current.circle).toEqual([MAYA]);
     // The demo entries never travel to the server.
     expect(followByHandleMock).not.toHaveBeenCalled();
     // …and the local demo cache is left as-is (sign-out fallback), unmerged.
     expect(window.localStorage.getItem(KEY)).toBe(
-      JSON.stringify(['maya', 'jordan']),
+      JSON.stringify(['claire', 'john']),
     );
   });
 
   it('a failed fetch (null) leaves an empty circle — no demo fallback bleed', async () => {
-    window.localStorage.setItem(KEY, JSON.stringify(['maya']));
+    window.localStorage.setItem(KEY, JSON.stringify(['claire']));
     fetchFollowsMock.mockResolvedValue(null);
 
     const { result } = renderHook(() => useFollows());
@@ -158,15 +158,15 @@ describe('useFollows — server (signed-in) mode', () => {
     const { result } = renderHook(() => useFollows());
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    act(() => result.current.toggleFollow('maya_r'));
+    act(() => result.current.toggleFollow('claire_r'));
 
     // Optimistic: following reads true immediately (case-insensitive).
-    expect(result.current.isFollowing('Maya_R')).toBe(true);
+    expect(result.current.isFollowing('Claire_R')).toBe(true);
 
     await waitFor(() =>
       expect(result.current.circle).toContainEqual(MAYA),
     );
-    expect(followByHandleMock).toHaveBeenCalledWith(fakeSupabase, 'maya_r');
+    expect(followByHandleMock).toHaveBeenCalledWith(fakeSupabase, 'claire_r');
     // Server mode never writes the local follows key.
     expect(window.localStorage.getItem(KEY)).toBeNull();
   });
@@ -190,11 +190,11 @@ describe('useFollows — server (signed-in) mode', () => {
     const { result } = renderHook(() => useFollows());
     await waitFor(() => expect(result.current.circle).toHaveLength(2));
 
-    act(() => result.current.toggleFollow('maya_r'));
+    act(() => result.current.toggleFollow('claire_r'));
 
-    expect(result.current.isFollowing('Maya_R')).toBe(false);
+    expect(result.current.isFollowing('Claire_R')).toBe(false);
     await waitFor(() =>
-      expect(unfollowByIdMock).toHaveBeenCalledWith(fakeSupabase, 'uuid-maya'),
+      expect(unfollowByIdMock).toHaveBeenCalledWith(fakeSupabase, 'uuid-claire'),
     );
     expect(unfollowByHandleMock).not.toHaveBeenCalled();
     expect(result.current.circle).toEqual([DEV]);
@@ -206,9 +206,9 @@ describe('useFollows — server (signed-in) mode', () => {
     const { result } = renderHook(() => useFollows());
     await waitFor(() => expect(result.current.circle).toHaveLength(1));
 
-    act(() => result.current.toggleFollow('Maya_R'));
-    expect(result.current.isFollowing('Maya_R')).toBe(false);
+    act(() => result.current.toggleFollow('Claire_R'));
+    expect(result.current.isFollowing('Claire_R')).toBe(false);
 
-    await waitFor(() => expect(result.current.isFollowing('Maya_R')).toBe(true));
+    await waitFor(() => expect(result.current.isFollowing('Claire_R')).toBe(true));
   });
 });
