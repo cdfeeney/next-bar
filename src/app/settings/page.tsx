@@ -239,7 +239,9 @@ export default function SettingsPage(): JSX.Element {
                             : '…')}
                     </p>
                     {handle !== null && displayName !== null ? (
-                      <p className="text-accent text-sm mt-1 truncate">@{handle}</p>
+                      // Identity convention (operator 2026-07-24): big white
+                      // name on top, grey @handle underneath — everywhere.
+                      <p className="text-muted text-sm mt-1 truncate">@{handle}</p>
                     ) : null}
                   </div>
                   <button
