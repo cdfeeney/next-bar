@@ -542,6 +542,8 @@ export function applyPlaces(
       // above drops it together with the untrusted coords/hours.
       photoRef: p.photoRef ?? b.photoRef,
       photoAttribution: p.photoAttribution ?? b.photoAttribution,
+      photoRefs: p.photoRefs ?? b.photoRefs,
+      photoAttributions: p.photoAttributions ?? b.photoAttributions,
       reviews: p.reviews ?? b.reviews,
     };
   });

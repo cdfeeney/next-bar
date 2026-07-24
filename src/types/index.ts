@@ -72,6 +72,8 @@ export type PlacePatch = {
   /** Places photo resource name (places/{id}/photos/{ref}); presence means a
    * local photo was ingested to public/bar-photos/<barId>.jpg. */
   photoRef?: string;
+  photoRefs?: string[];
+  photoAttributions?: string[];
   /** Photo author attribution (Google policy: must render when photo shown). */
   photoAttribution?: string;
   /** Up to 3 review snippets from the monthly `--reviews` pass. */
@@ -96,6 +98,10 @@ export type Bar = {
   hours?: WeeklyHours;
   photoRef?: string;
   photoAttribution?: string;
+  /** Carousel photos (photos-multi ingest): resource names, order = display order. */
+  photoRefs?: string[];
+  /** Per-photo author attributions, index-aligned with photoRefs ('' = unknown). */
+  photoAttributions?: string[];
   reviews?: BarReview[];
 };
 

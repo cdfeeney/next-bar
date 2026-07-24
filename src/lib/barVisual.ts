@@ -150,3 +150,23 @@ const PHOTO_EXT = 'jpg';
 export function barImageUrl(bar: Pick<Bar, 'id' | 'photoRef'>): string | null {
   return bar.photoRef ? `/bar-photos/${bar.id}.${PHOTO_EXT}` : null;
 }
+
+/**
+ * Carousel URLs (photos-multi ingest): photo 1 keeps the legacy
+ * `<id>.jpg` name, extras are `<id>-2.jpg`, `<id>-3.jpg`… — index-aligned
+ * with photoAttributions. Falls back to the single legacy photo (or
+ * nothing) for bars the multi ingest hasn't covered.
+ */
+export function barImageUrls(
+  bar: Pick<Bar, 'id' | 'photoRef' | 'photoRefs'>,
+): string[] {
+  if (bar.photoRefs && bar.photoRefs.length > 0) {
+    return bar.photoRefs.map((_, i) =>
+      i === 0
+        ? `/bar-photos/${bar.id}.${PHOTO_EXT}`
+        : `/bar-photos/${bar.id}-${i + 1}.${PHOTO_EXT}`,
+    );
+  }
+  const single = barImageUrl(bar);
+  return single ? [single] : [];
+}

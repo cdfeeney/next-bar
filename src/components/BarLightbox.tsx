@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
-import { barImageUrl } from '@/lib/barVisual';
+import { barImageUrls } from '@/lib/barVisual';
 import { weekHoursRows } from '@/lib/openNow';
 import OpenNowBadge from '@/components/OpenNowBadge';
 
@@ -32,7 +32,21 @@ export default function BarLightbox({
   bar: Bar;
   onClose: () => void;
 }): JSX.Element {
-  const photoUrl = barImageUrl(bar);
+  const photoUrls = barImageUrls(bar);
+  const [activePhoto, setActivePhoto] = useState(0);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  // Scroll-snap position → active dot (passive listener; index from the
+  // nearest slide edge).
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    const onScroll = (): void => {
+      const idx = Math.round(track.scrollLeft / track.clientWidth);
+      setActivePhoto((prev) => (prev === idx ? prev : idx));
+    };
+    track.addEventListener('scroll', onScroll, { passive: true });
+    return () => track.removeEventListener('scroll', onScroll);
+  }, []);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   // Ref-carried close handler (Opus review): ResultCard passes an inline
@@ -119,19 +133,47 @@ export default function BarLightbox({
           </button>
         </div>
 
-        {photoUrl ? (
+        {photoUrls.length > 0 ? (
           <figure className="rounded-3xl overflow-hidden border border-border">
-            {/* eslint-disable-next-line @next/next/no-img-element -- local cached WebP, no next/image sizing needed */}
-            <img
-              src={photoUrl}
-              alt={`${bar.name} — photo`}
-              className="w-full h-auto max-h-[55vh] object-cover"
-            />
-            {bar.photoAttribution ? (
-              <figcaption className="text-[10px] text-muted px-3 py-1.5">
-                Photo: {bar.photoAttribution} · Google
-              </figcaption>
-            ) : null}
+            {/* U2-2 carousel (photos-multi ingest): CSS scroll-snap — swipe
+                on touch, scroll on desktop, no library. */}
+            <div
+              ref={trackRef}
+              className="flex overflow-x-auto snap-x snap-mandatory scrollbar-none"
+              style={{ scrollbarWidth: 'none' }}
+              aria-label={`${bar.name} photos, ${photoUrls.length} total`}
+            >
+              {photoUrls.map((url, i) => (
+                // eslint-disable-next-line @next/next/no-img-element -- local cached JPEGs
+                <img
+                  key={url}
+                  src={url}
+                  alt={`${bar.name} — photo ${i + 1} of ${photoUrls.length}`}
+                  loading={i === 0 ? 'eager' : 'lazy'}
+                  className="w-full shrink-0 snap-center h-auto max-h-[55vh] object-cover"
+                />
+              ))}
+            </div>
+            <figcaption className="flex items-center justify-between text-[10px] text-muted px-3 py-1.5">
+              <span>
+                {(bar.photoAttributions?.[activePhoto] || bar.photoAttribution)
+                  ? `Photo: ${bar.photoAttributions?.[activePhoto] || bar.photoAttribution} · Google`
+                  : 'Photo · Google'}
+              </span>
+              {photoUrls.length > 1 ? (
+                <span className="flex items-center gap-1.5" aria-hidden>
+                  {photoUrls.map((url, i) => (
+                    <span
+                      key={url}
+                      className={[
+                        'inline-block h-1.5 w-1.5 rounded-full transition-colors',
+                        i === activePhoto ? 'bg-accent' : 'bg-border',
+                      ].join(' ')}
+                    />
+                  ))}
+                </span>
+              ) : null}
+            </figcaption>
           </figure>
         ) : null}
 

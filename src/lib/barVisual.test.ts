@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { VibeTag } from '@/types';
 import { TAG_VOCABULARY } from '@/lib/catalog';
-import { barVisual, barImageUrl, TAG_GLYPH } from '@/lib/barVisual';
+import { barVisual, barImageUrl,
+  barImageUrls, TAG_GLYPH } from '@/lib/barVisual';
 
 // Minimal bar factory — barVisual only reads name/tags/priceTier and
 // barImageUrl only reads id/photoRef, so tests pass exactly those.
@@ -81,5 +82,24 @@ describe('barImageUrl', () => {
   it('returns null when photoRef is absent', () => {
     expect(barImageUrl({ id: 'attaboy' })).toBeNull();
     expect(barImageUrl({ id: 'attaboy', photoRef: undefined })).toBeNull();
+  });
+});
+
+describe('barImageUrls (carousel)', () => {
+  it('maps photoRefs to legacy-first file names', () => {
+    expect(
+      barImageUrls({ id: 'attaboy', photoRef: 'places/x/photos/a', photoRefs: ['places/x/photos/a', 'places/x/photos/b', 'places/x/photos/c'] }),
+    ).toEqual([
+      '/bar-photos/attaboy.jpg',
+      '/bar-photos/attaboy-2.jpg',
+      '/bar-photos/attaboy-3.jpg',
+    ]);
+  });
+
+  it('falls back to the single legacy photo pre-ingest, and [] with none', () => {
+    expect(
+      barImageUrls({ id: 'attaboy', photoRef: 'places/x/photos/a' }),
+    ).toEqual(['/bar-photos/attaboy.jpg']);
+    expect(barImageUrls({ id: 'attaboy', photoRef: undefined })).toEqual([]);
   });
 });
