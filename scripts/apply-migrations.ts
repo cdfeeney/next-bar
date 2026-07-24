@@ -22,6 +22,17 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 
+// Hard gate: never write the live DB with the service-role/pooler creds
+// during the unattended overnight loop (DeepSeek security review). This
+// runs BEFORE any env load so nothing DB-touching happens first.
+if (process.env.LOOP_UNATTENDED === '1') {
+  console.error(
+    '[loop-guard] applying migrations is forbidden during the unattended ' +
+      'loop (LOOP_UNATTENDED=1). Migrations are an attended step. Aborting.',
+  );
+  process.exit(1);
+}
+
 loadEnv({ path: '.env.local' });
 loadEnv({ path: '.env' });
 

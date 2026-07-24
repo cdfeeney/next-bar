@@ -25,6 +25,13 @@ import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Never spend Google quota during the unattended overnight loop
+// (DeepSeek security review). Inline gate — this is a .ts run via tsx.
+if (process.env.LOOP_UNATTENDED === '1') {
+  console.error('[loop-guard] bar ingestion (Google Places) forbidden during unattended loop. Aborting.');
+  process.exit(1);
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const OUT_PATH = join(__dirname, 'data', 'candidates.json');

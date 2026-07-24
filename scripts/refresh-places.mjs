@@ -45,6 +45,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { refuseIfUnattended } from './loop-guard.mjs';
+
+// Never spend Google quota during the unattended overnight loop.
+refuseIfUnattended('Google Places refresh');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
