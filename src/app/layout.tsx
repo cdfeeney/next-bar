@@ -5,6 +5,7 @@ import './globals.css';
 import 'leaflet/dist/leaflet.css';
 import AgeGate from '@/components/AgeGate';
 import BottomNav from '@/components/BottomNav';
+import OnboardingGate from '@/components/OnboardingGate';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 
 // Brand font (2026-07-23 kit): Poppins — Bold 700 wordmark/headlines,
@@ -71,6 +72,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {children}
         <BottomNav />
         <AgeGate />
+        <OnboardingGate />
         <ServiceWorkerRegister />
       </body>
     </html>

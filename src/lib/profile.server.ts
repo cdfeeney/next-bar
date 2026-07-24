@@ -153,3 +153,41 @@ export async function setOwnPrivacy(
     .eq('id', userId);
   return !error;
 }
+
+/**
+ * Display-name length cap. UX-chosen (the column is unconstrained text):
+ * long enough for any real name, short enough that identity rows and
+ * search results never wrap weirdly.
+ */
+export const DISPLAY_NAME_MAX = 50;
+
+/**
+ * True when `input` trims to an acceptable display name. Empty IS valid —
+ * it means "clear the name" (display name is optional; @handle is the
+ * required identity). Only over-cap input is rejected.
+ */
+export function isValidDisplayName(input: string): boolean {
+  return input.trim().length <= DISPLAY_NAME_MAX;
+}
+
+/**
+ * Set (or clear) the caller's own display name. Same legality argument as
+ * setOwnPrivacy: the 0006 column grant limits authenticated UPDATE to
+ * display_name/is_private and RLS scopes it to the caller's own row.
+ * Empty/whitespace input writes NULL (clears); over-cap input is rejected
+ * client-side without a roundtrip. True only when the server confirms.
+ */
+export async function setOwnDisplayName(
+  supabase: SupabaseClient,
+  userId: string,
+  displayName: string,
+): Promise<boolean> {
+  const trimmed = displayName.trim();
+  if (trimmed.length > DISPLAY_NAME_MAX) return false;
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ display_name: trimmed === '' ? null : trimmed })
+    .eq('id', userId);
+  return !error;
+}

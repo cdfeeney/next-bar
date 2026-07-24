@@ -14,18 +14,12 @@
  * terminal claimed state.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import {
-  checkHandleAvailability,
-  claimHandle,
-  isValidHandle,
-} from '@/lib/profile.server';
+import { claimHandle, isValidHandle } from '@/lib/profile.server';
+import { useHandleAvailability } from '@/hooks/useHandleAvailability';
 
-const AVAILABILITY_DEBOUNCE_MS = 400;
 const CHARSET_HINT = '3–20 characters: letters, numbers, underscores.';
-
-type Availability = 'idle' | 'invalid' | 'checking' | 'available' | 'taken';
 
 type ClaimStatus =
   | { kind: 'idle' }
@@ -40,37 +34,8 @@ type Props = {
 
 export default function ClaimHandle({ onClaimed }: Props): JSX.Element {
   const [desired, setDesired] = useState('');
-  const [availability, setAvailability] = useState<Availability>('idle');
   const [status, setStatus] = useState<ClaimStatus>({ kind: 'idle' });
-
-  // Debounced availability probe. Cancelled-flag guard keeps a slow older
-  // response from overwriting the state for newer input.
-  useEffect(() => {
-    const trimmed = desired.trim();
-    if (trimmed === '') {
-      setAvailability('idle');
-      return;
-    }
-    if (!isValidHandle(trimmed)) {
-      setAvailability('invalid');
-      return;
-    }
-
-    let cancelled = false;
-    setAvailability('checking');
-    const timer = setTimeout(async () => {
-      const supabase = getBrowserSupabase();
-      if (!supabase) return;
-      const available = await checkHandleAvailability(supabase, trimmed);
-      if (cancelled) return;
-      setAvailability(available ? 'available' : 'taken');
-    }, AVAILABILITY_DEBOUNCE_MS);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [desired]);
+  const availability = useHandleAvailability(desired);
 
   const claim = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();

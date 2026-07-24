@@ -3,9 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   checkHandleAvailability,
   claimHandle,
+  DISPLAY_NAME_MAX,
   fetchOwnProfile,
+  isValidDisplayName,
   isValidHandle,
   searchHandles,
+  setOwnDisplayName,
   setOwnPrivacy,
 } from '@/lib/profile.server';
 
@@ -255,5 +258,62 @@ describe('setOwnPrivacy (B3b privacy toggle)', () => {
       updateError: { message: 'RLS denied' },
     });
     expect(await setOwnPrivacy(client, 'uuid-me', false)).toBe(false);
+  });
+});
+
+describe('isValidDisplayName', () => {
+  it('accepts ordinary names up to the cap (validation runs on the trimmed form)', () => {
+    expect(isValidDisplayName('Conor')).toBe(true);
+    expect(isValidDisplayName('  Conor F  ')).toBe(true);
+    expect(isValidDisplayName('a'.repeat(DISPLAY_NAME_MAX))).toBe(true);
+  });
+
+  it('accepts empty input (empty means "clear the name")', () => {
+    expect(isValidDisplayName('')).toBe(true);
+    expect(isValidDisplayName('   ')).toBe(true);
+  });
+
+  it('rejects names over the cap', () => {
+    expect(isValidDisplayName('a'.repeat(DISPLAY_NAME_MAX + 1))).toBe(false);
+  });
+});
+
+describe('setOwnDisplayName (identity: account name)', () => {
+  it('writes the trimmed display_name, scoped to the caller row', async () => {
+    const { client, calls } = fakeSupabase({});
+
+    expect(await setOwnDisplayName(client, 'uuid-me', '  Conor F ')).toBe(true);
+
+    expect(calls.from).toEqual(['profiles']);
+    // ONLY display_name — a wider payload would be refused by the 0006
+    // column grant, but the client must not even try.
+    expect(calls.update).toEqual([{ display_name: 'Conor F' }]);
+    expect(calls.eq).toEqual([{ column: 'id', value: 'uuid-me' }]);
+  });
+
+  it('writes null when the input is empty/whitespace (clears the name)', async () => {
+    const { client, calls } = fakeSupabase({});
+
+    expect(await setOwnDisplayName(client, 'uuid-me', '   ')).toBe(true);
+
+    expect(calls.update).toEqual([{ display_name: null }]);
+  });
+
+  it('rejects over-cap input client-side — the server is never hit', async () => {
+    const { client, calls } = fakeSupabase({});
+
+    expect(
+      await setOwnDisplayName(client, 'uuid-me', 'x'.repeat(DISPLAY_NAME_MAX + 1)),
+    ).toBe(false);
+
+    expect(calls.from).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
+  it('returns false on update error — the editor UI keeps the old value', async () => {
+    const { client } = fakeSupabase({
+      updateError: { message: 'RLS denied' },
+    });
+    expect(await setOwnDisplayName(client, 'uuid-me', 'Conor')).toBe(false);
   });
 });
