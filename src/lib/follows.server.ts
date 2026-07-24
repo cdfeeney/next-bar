@@ -294,3 +294,53 @@ export async function cancelFollowRequest(
   });
   return !error && data === true;
 }
+
+/**
+ * The caller's FOLLOWERS via the 0010 `get_followers` definer read (B3c).
+ * Null on RPC error (incl. pre-0010 missing function) so callers keep
+ * prior state; handle-less rows dropped (unroutable), same as
+ * fetchFollows.
+ */
+export async function fetchFollowers(
+  supabase: SupabaseClient,
+): Promise<PublicProfile[] | null> {
+  const { data, error } = await supabase.rpc('get_followers');
+  if (error || !Array.isArray(data)) return null;
+  return (data as RequestRow[])
+    .filter((row): row is RequestRow & { handle: string } =>
+      typeof row.handle === 'string',
+    )
+    .map((row) => ({
+      id: row.id,
+      handle: row.handle,
+      displayName: row.display_name,
+    }));
+}
+
+/**
+ * Follower count for any profile (B3c): integer for public profiles and
+ * private profiles the caller follows; null for hidden/unknown profiles
+ * AND on any error — the UI shows nothing rather than a wrong number.
+ */
+export async function fetchFollowerCount(
+  supabase: SupabaseClient,
+  profileId: string,
+): Promise<number | null> {
+  const { data, error } = await supabase.rpc('get_follower_count', {
+    profile_id: profileId,
+  });
+  if (error || typeof data !== 'number') return null;
+  return data;
+}
+
+/**
+ * Friends = MUTUAL follows (B3c): the intersection of who you follow and
+ * who follows you, keyed by profile id. Pure derivation — no RPC.
+ */
+export function deriveMutuals(
+  following: readonly PublicProfile[],
+  followers: readonly PublicProfile[],
+): PublicProfile[] {
+  const followerIds = new Set(followers.map((p) => p.id));
+  return following.filter((p) => p.id !== '' && followerIds.has(p.id));
+}

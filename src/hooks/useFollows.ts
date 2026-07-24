@@ -1,11 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_FOLLOWS } from '@/lib/demo/friends';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
   cancelFollowRequest,
+  deriveMutuals,
+  fetchFollowers,
   fetchFollows,
   fetchOutgoingRequests,
   followByHandle,
@@ -77,6 +79,10 @@ export type UseFollowsReturn = {
    * target's consent (B3b). [] in local mode — demo profiles are public.
    */
   requested: PublicProfile[];
+  /** Server mode only: who follows YOU (0010). [] in local mode. */
+  followers: PublicProfile[];
+  /** Server mode only: mutual follows — the FRIENDS list (B3c). */
+  mutuals: PublicProfile[];
   mode: FollowsMode;
   isFollowing: (handle: string) => boolean;
   /** True when a request to this handle is pending ("Requested" button). */
@@ -91,6 +97,7 @@ export function useFollows(): UseFollowsReturn {
   const [localFollows, setLocalFollows] = useState<string[]>([]);
   const [circle, setCircle] = useState<PublicProfile[]>([]);
   const [requested, setRequested] = useState<PublicProfile[]>([]);
+  const [followers, setFollowers] = useState<PublicProfile[]>([]);
   const [mode, setMode] = useState<FollowsMode>('pending');
   const [loading, setLoading] = useState(true);
   const modeRef = useRef<FollowsMode>('pending');
@@ -131,6 +138,7 @@ export function useFollows(): UseFollowsReturn {
       // never cross users).
       setCircle([]);
       setRequested([]);
+      setFollowers([]);
       setLocalFollows(loadFollows());
       setLoading(false);
       return;
@@ -146,9 +154,10 @@ export function useFollows(): UseFollowsReturn {
     // (at React commit) to prevent repopulating post-wipe state.
     const epoch = getCacheEpoch();
     void (async () => {
-      const [server, outgoing] = await Promise.all([
+      const [server, outgoing, followerList] = await Promise.all([
         fetchFollows(supabase),
         fetchOutgoingRequests(supabase),
+        fetchFollowers(supabase),
       ]);
       if (cancelled || getCacheEpoch() !== epoch) return;
       // null = fetch FAILED (not "zero friends") — keep prior state rather
@@ -158,6 +167,8 @@ export function useFollows(): UseFollowsReturn {
       // Pre-0008 the outgoing RPC doesn't exist yet → null → keep [] (no
       // requests can exist before the migration lands either).
       if (outgoing !== null) setRequested(outgoing);
+      // Same rule pre-0010 for followers.
+      if (followerList !== null) setFollowers(followerList);
       setLoading(false);
     })();
 
@@ -285,10 +296,19 @@ export function useFollows(): UseFollowsReturn {
     });
   }, []);
 
+  // Friends = mutuals (B3c). Cheap derivation; only meaningful in server
+  // mode.
+  const mutuals = useMemo(
+    () => (mode === 'server' ? deriveMutuals(circle, followers) : []),
+    [mode, circle, followers],
+  );
+
   return {
     follows: mode === 'server' ? circle.map((p) => p.handle) : localFollows,
     circle: mode === 'server' ? circle : [],
     requested: mode === 'server' ? requested : [],
+    followers: mode === 'server' ? followers : [],
+    mutuals,
     mode,
     isFollowing,
     isRequested,

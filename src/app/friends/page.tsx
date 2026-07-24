@@ -19,8 +19,17 @@ import type { FollowRequest, PublicProfile } from '@/lib/follows.server';
  *                intents/votes tables land (out of beta-critical scope).
  */
 export default function FriendsPage(): JSX.Element {
-  const { circle, requested, mode, isFollowing, isRequested, toggleFollow, loading } =
-    useFollows();
+  const {
+    circle,
+    requested,
+    followers,
+    mutuals,
+    mode,
+    isFollowing,
+    isRequested,
+    toggleFollow,
+    loading,
+  } = useFollows();
   const { requests, accept, decline } = useFollowRequests();
   const [query, setQuery] = useState('');
 
@@ -98,10 +107,70 @@ export default function FriendsPage(): JSX.Element {
           </div>
         ) : null}
 
-        {/* Your circle */}
+        {/* B3c: Friends (mutuals) + Followers, above the Following list. */}
+        {isServer && !loading ? (
+          <>
+            {/* Friends explainer only once there's a graph to explain — a
+                zero-everything account keeps ONE empty state (the Following
+                section's), not a stack (Opus review). */}
+            {mutuals.length > 0 || followers.length > 0 || circle.length > 0 ? (
+            <div>
+              <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
+                Friends{mutuals.length > 0 ? ` · ${mutuals.length}` : ''}
+              </h2>
+              {mutuals.length === 0 ? (
+                <div className="bg-surface border border-border rounded-3xl p-6 text-center">
+                  <p className="text-sm text-muted leading-relaxed">
+                    Friends are people you both follow. Follow back a
+                    follower — or get followed back — and they&apos;ll show
+                    up here.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {mutuals.map((p) => (
+                    <CircleRow
+                      key={p.handle}
+                      profile={p}
+                      onUnfollow={toggleFollow}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+            ) : null}
+
+            {followers.length > 0 ? (
+              <div>
+                <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
+                  Followers · {followers.length}
+                </h2>
+                <div className="space-y-3">
+                  {followers.map((p) =>
+                    isFollowing(p.handle) ? null : (
+                      <FollowerRow
+                        key={p.handle}
+                        profile={p}
+                        requested={isRequested(p.handle)}
+                        onFollowBack={toggleFollow}
+                      />
+                    ),
+                  )}
+                  {followers.every((p) => isFollowing(p.handle)) ? (
+                    <p className="text-muted text-xs px-1">
+                      You follow back everyone who follows you.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : null}
+
+        {/* Following (was "Your circle") */}
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
-            Your circle
+            {isServer ? 'Following' : 'Your circle'}
             {isServer
               ? circle.length > 0
                 ? ` · ${circle.length}`
@@ -269,6 +338,47 @@ function CircleRow({
         className="shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display border bg-transparent border-border text-muted hover:text-text transition-colors"
       >
         {pending ? 'Requested' : 'Following'}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * A follower you don't follow back (B3c): the follow-back button reuses
+ * toggleFollow, which honors B3b request semantics for private accounts
+ * ("Requested" state via the `requested` prop).
+ */
+function FollowerRow({
+  profile,
+  requested,
+  onFollowBack,
+}: {
+  profile: PublicProfile;
+  requested: boolean;
+  onFollowBack: (handle: string) => void;
+}): JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
+      <Link href={`/u/${profile.handle}`} className="min-w-0 flex-1">
+        <p className="font-display text-sm truncate">
+          {profile.displayName ?? `@${profile.handle}`}
+        </p>
+        <p className="text-muted text-xs truncate">
+          @{profile.handle} · follows you
+        </p>
+      </Link>
+      <button
+        type="button"
+        aria-pressed={requested}
+        onClick={() => onFollowBack(profile.handle)}
+        className={[
+          'shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display border transition-colors',
+          requested
+            ? 'bg-transparent border-border text-muted hover:text-text'
+            : 'bg-accent border-accent text-bg',
+        ].join(' ')}
+      >
+        {requested ? 'Requested' : 'Follow back'}
       </button>
     </div>
   );

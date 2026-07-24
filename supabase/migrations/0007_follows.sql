@@ -93,7 +93,13 @@ revoke all on table public.follow_attempts from public, anon, authenticated;
 -- 3a. follow_user(target) — the only way to create a follow edge
 ------------------------------------------------------------------------------
 
-create or replace function public.follow_user(target uuid)
+-- DROP first (added 2026-07-25): 0008 replaces this function with a TEXT
+-- return type, and CREATE OR REPLACE cannot change a return type — without
+-- the drop, RE-RUNNING the sequence on a post-0008 database fails here.
+-- Within a full run this window is safe: 0008 recreates the text version
+-- (and its grants) moments later in the same session.
+drop function if exists public.follow_user(uuid);
+create function public.follow_user(target uuid)
 returns boolean
 language plpgsql
 security definer

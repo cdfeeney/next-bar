@@ -10,6 +10,7 @@ import { findDemoFriend, topRatedBars, lovedCount } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
+  fetchFollowerCount,
   fetchFriendRatings,
   getProfileByHandle,
   type FriendRating,
@@ -70,6 +71,7 @@ export default function ProfilePage({
   const auth = useAuth();
   const { isFollowing, toggleFollow } = useFollows();
   const [state, setState] = useState<ProfileState>({ kind: 'loading' });
+  const [followerCount, setFollowerCount] = useState<number | null>(null);
   const [friendRatings, setFriendRatings] = useState<FriendRating[] | null>(
     null,
   );
@@ -84,10 +86,19 @@ export default function ProfilePage({
 
     let cancelled = false;
     setState({ kind: 'loading' });
+    // Reset with the profile — profile B must never wear profile A's
+    // count for a roundtrip (Opus B3c review).
+    setFollowerCount(null);
     void (async () => {
       const profile = await getProfileByHandle(supabase, params.handle);
       if (cancelled) return;
       setState(profile ? { kind: 'ready', profile } : { kind: 'not-found' });
+      // B3c: follower COUNT (public profiles + private ones you follow;
+      // hidden profiles return null and we show nothing).
+      if (profile) {
+        const count = await fetchFollowerCount(supabase, profile.id);
+        if (!cancelled) setFollowerCount(count);
+      }
     })();
     return () => {
       cancelled = true;
@@ -158,6 +169,11 @@ export default function ProfilePage({
             {p.displayName ?? `@${p.handle}`}
           </h1>
           <p className="text-muted text-sm mt-1">@{p.handle}</p>
+          {followerCount !== null ? (
+            <p className="text-muted text-xs mt-1">
+              {followerCount} follower{followerCount === 1 ? '' : 's'}
+            </p>
+          ) : null}
 
           <div className="flex items-center gap-3 mt-6">
             <button

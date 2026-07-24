@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { usePathname } from 'next/navigation';
 
 type Tab = {
@@ -47,6 +48,9 @@ const TABS: Tab[] = [
 
 export default function BottomNav(): JSX.Element | null {
   const pathname = usePathname();
+  // B3c: incoming-request count badges the Friends tab (server mode
+  // only; [] when signed out, so no badge in demo mode).
+  const { requests } = useFollowRequests();
 
   // Waitlist + install pitch + api routes get no bottom nav — they're either
   // pre-funnel marketing surfaces or system endpoints. Auth + share are
@@ -105,7 +109,17 @@ export default function BottomNav(): JSX.Element | null {
                   active ? 'text-accent' : 'text-muted',
                 ].join(' ')}
               >
-                {tab.label}
+                <span className="relative">
+                  {tab.label}
+                  {tab.href === '/friends' && requests.length > 0 ? (
+                    <span
+                      aria-label={`${requests.length} pending follow request${requests.length === 1 ? '' : 's'}`}
+                      className="absolute -top-2 -right-4 min-w-[16px] h-4 px-1 rounded-full bg-accent text-bg text-[10px] leading-4 font-display text-center"
+                    >
+                      {requests.length > 9 ? '9+' : requests.length}
+                    </span>
+                  ) : null}
+                </span>
               </Link>
             </li>
           );

@@ -24,8 +24,12 @@ vi.mock('@/lib/supabase/client', () => ({
   getBrowserSupabase: vi.fn(() => null),
 }));
 
-vi.mock('@/lib/follows.server', () => ({
+vi.mock('@/lib/follows.server', async (importOriginal) => ({
+  // deriveMutuals is a pure function — keep the REAL one so mutuals
+  // behavior is tested, not mocked.
+  deriveMutuals: (await importOriginal<typeof import('@/lib/follows.server')>()).deriveMutuals,
   fetchFollows: vi.fn(() => Promise.resolve([])),
+  fetchFollowers: vi.fn(() => Promise.resolve([])),
   fetchOutgoingRequests: vi.fn(() => Promise.resolve([])),
   followByHandle: vi.fn(() => Promise.resolve(null)),
   unfollowByHandle: vi.fn(() => Promise.resolve(false)),
@@ -37,6 +41,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
   cancelFollowRequest,
+  fetchFollowers,
   fetchFollows,
   fetchOutgoingRequests,
   followByHandle,
@@ -47,6 +52,7 @@ import {
 const useAuthMock = vi.mocked(useAuth);
 const getBrowserSupabaseMock = vi.mocked(getBrowserSupabase);
 const fetchFollowsMock = vi.mocked(fetchFollows);
+const fetchFollowersMock = vi.mocked(fetchFollowers);
 const fetchOutgoingRequestsMock = vi.mocked(fetchOutgoingRequests);
 const followByHandleMock = vi.mocked(followByHandle);
 const unfollowByHandleMock = vi.mocked(unfollowByHandle);
@@ -351,5 +357,52 @@ describe('useFollows — double-tap race on an in-flight follow (Opus B3b review
     expect(result.current.isFollowing('ava_p')).toBe(false);
     expect(result.current.circle).toEqual([]);
     expect(result.current.requested).toEqual([AVA]);
+  });
+});
+
+describe('useFollows — followers + mutuals (B3c)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.clearAllMocks();
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+    getBrowserSupabaseMock.mockReturnValue(fakeSupabase);
+    fetchFollowsMock.mockResolvedValue([]);
+    fetchOutgoingRequestsMock.mockResolvedValue([]);
+    fetchFollowersMock.mockResolvedValue([]);
+    followByHandleMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('hydrates followers and derives mutuals as the intersection', async () => {
+    fetchFollowsMock.mockResolvedValue([MAYA, DEV]);
+    fetchFollowersMock.mockResolvedValue([MAYA]);
+
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.followers).toEqual([MAYA]);
+    expect(result.current.mutuals).toEqual([MAYA]); // follows both ways
+    expect(result.current.circle).toEqual([MAYA, DEV]);
+  });
+
+  it('pre-0010 (followers RPC missing → null) keeps followers empty, mutuals empty', async () => {
+    fetchFollowsMock.mockResolvedValue([MAYA]);
+    fetchFollowersMock.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.followers).toEqual([]);
+    expect(result.current.mutuals).toEqual([]);
+  });
+
+  it('followers and mutuals are [] in local mode', async () => {
+    useAuthMock.mockReturnValue(signedOutAuthState());
+    getBrowserSupabaseMock.mockReturnValue(null);
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.followers).toEqual([]);
+    expect(result.current.mutuals).toEqual([]);
   });
 });

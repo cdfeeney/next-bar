@@ -111,6 +111,10 @@ type StubOptions = {
     display_name: string | null;
     is_private: boolean;
   };
+  /** B3c: get_followers rows. */
+  followers?: ProfileRow[];
+  /** B3c: get_follower_count result (null = hidden). */
+  followerCount?: number | null;
 };
 
 /**
@@ -138,25 +142,51 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     '**/rest/v1/rpc/follow_user**',
     fulfillJson(200, opts.followResult ?? 'followed'),
   );
-  await page.route(
-    '**/rest/v1/rpc/get_follow_requests**',
-    fulfillJson(200, opts.incomingRequests ?? []),
-  );
+  // STATEFUL inbox: resolving a request removes it from later fetches —
+  // the hook refetches after accept/decline (shared-badge refresh bus),
+  // and a static stub would resurrect resolved rows.
+  let inbox: RequestRow[] = [...(opts.incomingRequests ?? [])];
+  await page.route('**/rest/v1/rpc/get_follow_requests**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(inbox),
+    });
+  });
   await page.route(
     '**/rest/v1/rpc/get_outgoing_requests**',
     fulfillJson(200, opts.outgoingRequests ?? []),
   );
+  const resolveRoute = (result: boolean) => async (route: Route) => {
+    if (result) {
+      const body = route.request().postDataJSON() as { requester?: string };
+      inbox = inbox.filter((r) => r.id !== body?.requester);
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result),
+    });
+  };
   await page.route(
     '**/rest/v1/rpc/accept_follow_request**',
-    fulfillJson(200, opts.acceptResult ?? true),
+    resolveRoute(opts.acceptResult ?? true),
   );
   await page.route(
     '**/rest/v1/rpc/decline_follow_request**',
-    fulfillJson(200, opts.declineResult ?? true),
+    resolveRoute(opts.declineResult ?? true),
   );
   await page.route(
     '**/rest/v1/rpc/cancel_follow_request**',
     fulfillJson(200, opts.cancelResult ?? true),
+  );
+  await page.route(
+    '**/rest/v1/rpc/get_followers**',
+    fulfillJson(200, opts.followers ?? []),
+  );
+  await page.route(
+    '**/rest/v1/rpc/get_follower_count**',
+    fulfillJson(200, opts.followerCount ?? null),
   );
   if (opts.ownProfile) {
     // GET (select) returns the row; PATCH (privacy update) returns 204-ish
@@ -347,5 +377,94 @@ test.describe('/settings — privacy toggle (B3b)', () => {
     await expect(
       page.getByText(/new followers must send a request/i),
     ).toBeVisible();
+  });
+});
+
+
+test.describe('/friends — friends list (B3c)', () => {
+  test.beforeEach(async ({ page }) => {
+    test.skip(
+      SUPABASE_URL === null,
+      'NEXT_PUBLIC_SUPABASE_URL not found in .env.local',
+    );
+    await signIn(page);
+  });
+
+  const SAM = { id: REQUESTER_ID, handle: 'sam_j', display_name: 'Sam J.' };
+
+  test('mutuals show as Friends; a follower you do not follow gets a Follow back button', async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [AVA],
+      followers: [AVA, SAM],
+    });
+    await page.goto('/friends');
+
+    // Ava is mutual → Friends section.
+    await expect(page.getByText(/Friends · 1/)).toBeVisible();
+    // Sam follows you but you don't follow back → Followers section with CTA.
+    await expect(page.getByText(/Followers · 2/)).toBeVisible();
+    const samRow = page
+      .locator('.bg-surface')
+      .filter({ hasText: 'follows you' })
+      .filter({ hasText: '@sam_j' })
+      .first();
+    await expect(samRow).toBeVisible();
+    await expect(
+      samRow.getByRole('button', { name: /follow back/i }),
+    ).toBeVisible();
+  });
+
+  test('follow back creates the edge and the follower becomes a Friend', async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [],
+      followers: [SAM],
+      profileByHandle: [SAM],
+      followResult: 'followed',
+    });
+    await page.goto('/friends');
+
+    const samRow = page
+      .locator('.bg-surface')
+      .filter({ hasText: 'follows you' })
+      .first();
+    await samRow.getByRole('button', { name: /follow back/i }).click();
+
+    // Mutual now → Friends section counts them.
+    await expect(page.getByText(/Friends · 1/)).toBeVisible();
+  });
+
+  test('pending incoming requests badge the Friends tab in the nav', async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [],
+      incomingRequests: [
+        {
+          id: REQUESTER_ID,
+          handle: 'sam_j',
+          display_name: 'Sam J.',
+          requested_at: '2026-07-25T01:00:00.000Z',
+        },
+      ],
+    });
+    await page.goto('/rankings');
+
+    const nav = page.getByRole('navigation', { name: 'Primary' });
+    await expect(nav.getByLabel(/1 pending follow request/)).toBeVisible();
+  });
+
+  test('public profile shows the follower count; hidden profiles show nothing', async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      profileByHandle: [SAM],
+      followerCount: 12,
+    });
+    await page.goto('/u/sam_j');
+    await expect(page.getByText(/12 followers/)).toBeVisible();
   });
 });

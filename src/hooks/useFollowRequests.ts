@@ -31,12 +31,30 @@ export type UseFollowRequestsReturn = {
   loading: boolean;
 };
 
+// Module-level refresh bus (Opus B3c review): BottomNav's badge and the
+// /friends inbox are two INSTANCES of this hook with no shared state — an
+// accept/decline in one must not leave the other showing a stale count.
+// Resolution notifies every mounted instance to refetch.
+const listeners = new Set<() => void>();
+function notifyAllInstances(): void {
+  for (const l of [...listeners]) l();
+}
+
 export function useFollowRequests(): UseFollowRequestsReturn {
   const auth = useAuth();
   const [requests, setRequests] = useState<FollowRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const requestsRef = useRef<FollowRequest[]>([]);
   requestsRef.current = requests;
+
+  const [refreshTick, setRefreshTick] = useState(0);
+  useEffect(() => {
+    const bump = (): void => setRefreshTick((t) => t + 1);
+    listeners.add(bump);
+    return () => {
+      listeners.delete(bump);
+    };
+  }, []);
 
   useEffect(() => {
     if (auth.status === 'loading') return;
@@ -65,7 +83,11 @@ export function useFollowRequests(): UseFollowRequestsReturn {
     return () => {
       cancelled = true;
     };
-  }, [auth.status, auth.status === 'signed-in' ? auth.user.id : null]);
+  }, [
+    auth.status,
+    auth.status === 'signed-in' ? auth.user.id : null,
+    refreshTick,
+  ]);
 
   const resolve = useCallback(
     (requesterId: string, action: 'accept' | 'decline') => {
@@ -82,7 +104,13 @@ export function useFollowRequests(): UseFollowRequestsReturn {
           ? acceptFollowRequest(supabase, requesterId)
           : declineFollowRequest(supabase, requesterId);
       void call.then((ok) => {
-        if (ok || getCacheEpoch() !== epoch) return;
+        if (getCacheEpoch() !== epoch) return;
+        if (ok) {
+          // Every mounted instance (nav badge included) refetches so a
+          // resolved request clears everywhere (Opus B3c review).
+          notifyAllInstances();
+          return;
+        }
         // Rollback re-sorts by requestedAt so a restored row lands where it
         // was, preserving the inbox's newest-first invariant (Opus review).
         setRequests((prev) =>

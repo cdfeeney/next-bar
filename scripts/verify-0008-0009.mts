@@ -18,7 +18,8 @@ const fns = await client.query(
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname='public' and p.proname in
       ('follow_user','accept_follow_request','decline_follow_request','cancel_follow_request',
-       'get_follow_requests','get_outgoing_requests','save_push_subscription','delete_push_subscription')
+       'get_follow_requests','get_outgoing_requests','save_push_subscription','delete_push_subscription',
+       'get_followers','get_follower_count')
     order by 1`,
 );
 for (const r of fns.rows) console.log(`fn ${r.proname} -> ${r.returns}`);

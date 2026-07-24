@@ -4,6 +4,9 @@ import {
   acceptFollowRequest,
   cancelFollowRequest,
   declineFollowRequest,
+  deriveMutuals,
+  fetchFollowerCount,
+  fetchFollowers,
   fetchFollowRequests,
   fetchFollows,
   fetchOutgoingRequests,
@@ -475,5 +478,66 @@ describe('follow requests (B3b, migration 0008)', () => {
       { fn: 'decline_follow_request', args: { requester: 'uuid-john' } },
       { fn: 'cancel_follow_request', args: { target: 'uuid-target' } },
     ]);
+  });
+});
+
+describe('B3c followers + count + mutuals', () => {
+  const ROW_A = { id: 'uuid-a', handle: 'ana', display_name: 'Ana' };
+  const ROW_B = { id: 'uuid-b', handle: 'ben', display_name: null };
+
+  it('fetchFollowers maps rows and drops handle-less profiles', async () => {
+    const { client, calls } = fakeSupabase({
+      rpcResults: {
+        get_followers: {
+          data: [ROW_A, { id: 'uuid-x', handle: null, display_name: 'X' }],
+        },
+      },
+    });
+    expect(await fetchFollowers(client)).toEqual([
+      { id: 'uuid-a', handle: 'ana', displayName: 'Ana' },
+    ]);
+    expect(calls.rpc).toEqual([{ fn: 'get_followers', args: undefined }]);
+  });
+
+  it('fetchFollowers returns null on RPC error (pre-0010 missing fn included)', async () => {
+    const { client } = fakeSupabase({
+      rpcResults: { get_followers: { error: { message: 'nope' } } },
+    });
+    expect(await fetchFollowers(client)).toBeNull();
+  });
+
+  it('fetchFollowerCount returns the integer and passes the profile id', async () => {
+    const { client, calls } = fakeSupabase({
+      rpcResults: { get_follower_count: { data: 7 } },
+    });
+    expect(await fetchFollowerCount(client, 'uuid-a')).toBe(7);
+    expect(calls.rpc).toEqual([
+      { fn: 'get_follower_count', args: { profile_id: 'uuid-a' } },
+    ]);
+  });
+
+  it('fetchFollowerCount is null for hidden profiles, errors, and non-numbers', async () => {
+    const hidden = fakeSupabase({
+      rpcResults: { get_follower_count: { data: null } },
+    });
+    expect(await fetchFollowerCount(hidden.client, 'uuid-p')).toBeNull();
+    const errored = fakeSupabase({
+      rpcResults: { get_follower_count: { error: { message: 'boom' } } },
+    });
+    expect(await fetchFollowerCount(errored.client, 'uuid-p')).toBeNull();
+  });
+
+  it('deriveMutuals intersects by id and never counts optimistic placeholders', () => {
+    const me = { id: 'uuid-a', handle: 'ana', displayName: 'Ana' };
+    const ben = { id: 'uuid-b', handle: 'ben', displayName: null };
+    const placeholder = { id: '', handle: 'ghost', displayName: null };
+    const following = [me, ben, placeholder];
+    const followers = [
+      { id: 'uuid-a', handle: 'ana', displayName: 'Ana' },
+      { id: '', handle: 'other-ghost', displayName: null },
+    ];
+    expect(deriveMutuals(following, followers)).toEqual([me]);
+    expect(deriveMutuals([], followers)).toEqual([]);
+    expect(deriveMutuals(following, [])).toEqual([]);
   });
 });

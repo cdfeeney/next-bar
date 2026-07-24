@@ -201,7 +201,7 @@ test.describe('/friends — signed in (real graph)', () => {
     await resultRow.getByRole('button', { name: /^Follow$/ }).click();
 
     // Circle grows to 1 and shows the followed @handle.
-    await expect(page.getByText(/Your circle · 1/)).toBeVisible();
+    await expect(page.getByText(/Following · 1/)).toBeVisible();
     await expect(page.getByText('Sam J.').first()).toBeVisible();
     // Empty state is gone; still on /friends (following must not navigate).
     await expect(page.getByText(/no one in your circle yet/i)).not.toBeVisible();
@@ -218,7 +218,7 @@ test.describe('/friends — signed in (real graph)', () => {
     });
     await page.goto('/friends');
 
-    await expect(page.getByText(/Your circle · 1/)).toBeVisible();
+    await expect(page.getByText(/Following · 1/)).toBeVisible();
     const circleRow = page
       .locator('.bg-surface')
       .filter({ hasText: '@sam_j' })
