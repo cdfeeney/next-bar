@@ -5,6 +5,7 @@ import { expansionBars } from './bars.expansion';
 import { expansion2Bars } from './bars.expansion2';
 import { expansion3Bars } from './bars.expansion3';
 import { expansion4Bars } from './bars.expansion4';
+import { expansion5Bars } from './bars.expansion5';
 import { placesData } from './bars.places';
 
 // IMPORTANT: lastVerified dates below are PLACEHOLDERS so all bars pass the
@@ -557,4 +558,5 @@ export const bars: Bar[] = applyPlaces([
   ...expansion2Bars,
   ...expansion3Bars,
   ...expansion4Bars,
+  ...expansion5Bars,
 ]);

@@ -13,17 +13,23 @@ type BarPickerProps = {
 
 const NEIGHBORHOOD_ORDER: ManhattanNeighborhood[] = [
   'Midtown',
+  "Hell's Kitchen",
   'East Village',
   'LES',
+  'SoHo',
   'West Village',
   'Chelsea',
   'UWS',
   'UES',
+  'Harlem',
   'FiDi',
   'Williamsburg',
   'Greenpoint',
   'Bushwick',
   'Park Slope',
+  'Fort Greene',
+  'Astoria',
+  'LIC',
 ];
 
 export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {

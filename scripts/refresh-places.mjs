@@ -85,7 +85,7 @@ const PHOTO_DIR = path.join(REPO, 'public/bar-photos');
 const PHOTO_MAX_WIDTH = 640;
 const REVIEW_MAX = 3;
 const REVIEW_EXCERPT_CHARS = 200;
-const BAR_FILES = ['bars.ts', 'bars.extra.ts', 'bars.expansion.ts', 'bars.expansion2.ts', 'bars.expansion3.ts', 'bars.expansion4.ts'];
+const BAR_FILES = ['bars.ts', 'bars.extra.ts', 'bars.expansion.ts', 'bars.expansion2.ts', 'bars.expansion3.ts', 'bars.expansion4.ts', 'bars.expansion5.ts'];
 
 if (!KEY) {
   console.error('GOOGLE_MAPS_API_KEY is not set. Get a key with the Places API (New) enabled,\n' +

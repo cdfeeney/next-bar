@@ -1,25 +1,35 @@
 export type Coords = { lat: number; lng: number };
 
 // Service-area neighborhoods. Manhattan shipped first; Brooklyn added in the
-// catalog-expansion pass. `ManhattanNeighborhood` is kept as a back-compat
-// alias so existing imports keep working — it now spans both boroughs.
+// catalog-expansion pass; Hell's Kitchen/SoHo/Harlem + Queens + Fort Greene
+// in the new-neighborhoods pass (2026-07-24 — NYC has ~3-4.5k dedicated
+// bars; these were the highest-density unserved areas). `ManhattanNeighborhood`
+// is kept as a back-compat alias so existing imports keep working — it now
+// spans three boroughs.
 export type Neighborhood =
   // Manhattan
   | 'FiDi'
   | 'LES'
   | 'East Village'
   | 'West Village'
+  | 'SoHo'
   | 'Chelsea'
   | 'Midtown'
+  | "Hell's Kitchen"
   | 'UWS'
   | 'UES'
+  | 'Harlem'
   // Brooklyn
   | 'Williamsburg'
   | 'Greenpoint'
   | 'Bushwick'
-  | 'Park Slope';
+  | 'Park Slope'
+  | 'Fort Greene'
+  // Queens
+  | 'Astoria'
+  | 'LIC';
 
-/** @deprecated Use `Neighborhood`. Alias kept for back-compat; spans Manhattan + Brooklyn. */
+/** @deprecated Use `Neighborhood`. Alias kept for back-compat; spans Manhattan + Brooklyn + Queens. */
 export type ManhattanNeighborhood = Neighborhood;
 
 export type VibeTag =
