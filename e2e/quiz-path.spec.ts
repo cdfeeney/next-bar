@@ -33,6 +33,9 @@ async function completeQuiz(page: Page): Promise<void> {
   await expect(page.getByText('Who do you wanna be around?')).toBeVisible();
   await page.getByRole('button', { name: 'Industry / creative' }).click();
 
+  await expect(page.getByText('Who are you out with?')).toBeVisible();
+  await page.getByRole('button', { name: 'On a date' }).click();
+
   await expect(page.getByText('Spending vibe tonight?')).toBeVisible();
   await page.getByRole('button', { name: 'Treating myself' }).click();
 

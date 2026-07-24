@@ -21,6 +21,7 @@ async function completeCocktailQuiz(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Mellow — we wanna talk' }).click();
   await page.getByRole('button', { name: 'Jazz / lounge' }).click();
   await page.getByRole('button', { name: 'Industry / creative' }).click();
+  await page.getByRole('button', { name: 'On a date' }).click();
   await page.getByRole('button', { name: 'Treating myself' }).click();
   await page.getByRole('button', { name: 'Anywhere works' }).click();
   await page.getByRole('button', { name: /Or pick a neighborhood/i }).click();
