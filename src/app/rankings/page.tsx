@@ -238,7 +238,7 @@ export default function RankingsPage(): JSX.Element {
 
       <p className="text-muted text-xs text-center mt-8 pb-24">
         {auth.status === 'signed-in'
-          ? `Synced to ${auth.user.email}`
+          ? 'Synced to your account'
           : 'Stored on this device · sign in to sync'}
       </p>
     </main>

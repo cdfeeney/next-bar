@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import SetPassword from '@/components/SetPassword';
 import ClaimHandle from '@/components/ClaimHandle';
+import DisplayNameEditor from '@/components/DisplayNameEditor';
 import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
 import { fetchOutgoingRequests } from '@/lib/follows.server';
 import { getCacheEpoch } from '@/lib/accountCache';
@@ -35,6 +36,7 @@ export default function SettingsPage(): JSX.Element {
   // only renders once the fetch confirms handle IS NULL (handleKnown).
   const [handle, setHandle] = useState<string | null>(null);
   const [handleKnown, setHandleKnown] = useState(false);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [nudgeDismissed, setNudgeDismissed] = useState(true);
   // null = unknown until the profile fetch lands; the privacy toggle only
   // renders once the real value is known (no flash of a wrong default).
@@ -74,6 +76,7 @@ export default function SettingsPage(): JSX.Element {
       if (cancelled || getCacheEpoch() !== epoch || profile === null) return;
       setHandle(profile.handle);
       setHandleKnown(true);
+      setDisplayName(profile.displayName);
       setIsPrivate(profile.isPrivate);
     });
     void fetchOutgoingRequests(supabase).then((outgoing) => {
@@ -221,14 +224,21 @@ export default function SettingsPage(): JSX.Element {
             ) : auth.status === 'signed-in' ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-4">
+                  {/* Identity pair (name + @handle) — the email is
+                      login-only and never rendered here. */}
                   <div className="min-w-0">
                     <p className="text-xs text-muted uppercase tracking-widest mb-1">
                       Signed in as
                     </p>
                     <p className="font-display text-base truncate">
-                      {auth.user.email}
+                      {displayName ??
+                        (handle !== null
+                          ? `@${handle}`
+                          : handleKnown
+                            ? 'Your account'
+                            : '…')}
                     </p>
-                    {handle !== null ? (
+                    {handle !== null && displayName !== null ? (
                       <p className="text-accent text-sm mt-1 truncate">@{handle}</p>
                     ) : null}
                   </div>
@@ -259,6 +269,15 @@ export default function SettingsPage(): JSX.Element {
                       </div>
                     ) : null}
                     <ClaimHandle onClaimed={setHandle} />
+                  </div>
+                ) : null}
+                {handleKnown ? (
+                  <div className="pt-3 border-t border-border">
+                    <DisplayNameEditor
+                      userId={auth.user.id}
+                      initialName={displayName}
+                      onSaved={setDisplayName}
+                    />
                   </div>
                 ) : null}
                 <div className="pt-3 border-t border-border">

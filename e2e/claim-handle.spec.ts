@@ -160,6 +160,13 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
       'NEXT_PUBLIC_SUPABASE_URL not found in .env.local',
     );
     await signIn(page);
+    // This spec exercises ClaimHandle's UI on /settings for a handle-less
+    // account — exactly the state OnboardingGate redirects. Pre-set the
+    // once-per-session prompted flag so the gate stays quiet (the gate's
+    // own behavior is covered in onboarding-identity.spec.ts).
+    await page.addInitScript(() => {
+      window.sessionStorage.setItem('next-bar:onboarding-prompted:v1', '1');
+    });
   });
 
   test('renders the claim card, charset hint, and nudge; nudge dismisses', async ({
