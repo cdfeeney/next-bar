@@ -287,3 +287,48 @@ test.describe('/u/[handle] — signed in (real profiles)', () => {
     await expect(page.getByText(/\d\.\d/)).toHaveCount(0);
   });
 });
+
+test.describe('/friends/consensus — REAL group pick', () => {
+  test.beforeEach(async ({ page }) => {
+    test.skip(
+      SUPABASE_URL === null,
+      'NEXT_PUBLIC_SUPABASE_URL not found in .env.local',
+    );
+    await signIn(page);
+  });
+
+  test('real circle members appear as people and unanimous picks come from THEIR ratings', async ({
+    page,
+  }) => {
+    const CLAIRE = { id: 'uuid-claire', handle: 'claire_r', display_name: 'Claire R.' };
+    await stubSupabase(page, {
+      following: [SAM, CLAIRE],
+      friendRatings: [
+        // Both rated Attaboy highly → unanimous pick. Sam alone liked
+        // Death & Co → "also consider" territory.
+        { user_id: FRIEND_ID, bar_id: 'attaboy', tier: 'loved', rated_at: '2026-07-01T00:00:00.000Z' },
+        { user_id: 'uuid-claire', bar_id: 'attaboy', tier: 'liked', rated_at: '2026-07-02T00:00:00.000Z' },
+        { user_id: FRIEND_ID, bar_id: 'death-and-co', tier: 'liked', rated_at: '2026-07-03T00:00:00.000Z' },
+      ],
+    });
+    await page.goto('/friends/consensus');
+
+    // Real first names as selectable people — not the demo curators.
+    await expect(page.getByRole('button', { name: /Sam/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Claire/ })).toBeVisible();
+
+    // Unanimous section driven by their REAL (stubbed) ratings.
+    await expect(page.getByText(/You all agree on 1/)).toBeVisible();
+    await expect(page.getByText('Attaboy').first()).toBeVisible();
+  });
+
+  test('a circle with no rated friends explains itself instead of ghost-chipping', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { following: [SAM], friendRatings: [] });
+    await page.goto('/friends/consensus');
+    await expect(
+      page.getByText(/1 of your circle hasn't ranked any bars yet/),
+    ).toBeVisible();
+  });
+});

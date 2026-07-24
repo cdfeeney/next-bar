@@ -1,11 +1,18 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import Avatar from '@/components/Avatar';
 import GroupVote from '@/components/GroupVote';
+import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
+import { getBrowserSupabase } from '@/lib/supabase/client';
+import { getCacheEpoch } from '@/lib/accountCache';
+import {
+  fetchAllFriendRatings,
+  type FriendRating,
+} from '@/lib/follows.server';
 import {
   computeConsensus,
   demoFriends,
@@ -16,14 +23,98 @@ import {
 
 const YOU_ID = 'you';
 
-export default function ConsensusPage(): JSX.Element {
-  const { isFollowing } = useFollows();
-  const { ratings } = useRatings();
+/** A selectable person on the consensus screen — demo or real. */
+type Person = {
+  id: string;
+  label: string;
+  initials: string;
+  seed: string;
+  ratings: ReadonlyArray<{ barId: string; rating: 'loved' | 'liked' | 'pass'; ratedAt: string }>;
+};
 
-  const followedFriends = useMemo(
+function initialsFor(label: string): string {
+  return label
+    .split(/\s+/)
+    .map((w) => w[0] ?? '')
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+export default function ConsensusPage(): JSX.Element {
+  const { circle, mode, isFollowing } = useFollows();
+  const { ratings } = useRatings();
+  const auth = useAuth();
+  const isServer = mode === 'server';
+
+  // REAL consensus (operator: "make where should we go real"): in server
+  // mode the people are your actual circle and their tier-rated bars come
+  // from get_friend_ratings (tier-only — scores never cross the friend
+  // boundary; scoreOf falls back to tier midpoints). Demo mode keeps the
+  // seeded curators so signed-out visitors still see the feature work.
+  const [friendRatings, setFriendRatings] = useState<Record<string, FriendRating[]> | null>(null);
+  useEffect(() => {
+    if (!isServer || auth.status !== 'signed-in') return;
+    const supabase = getBrowserSupabase();
+    if (!supabase) return;
+    let cancelled = false;
+    const epoch = getCacheEpoch();
+    void (async () => {
+      const grouped = await fetchAllFriendRatings(supabase);
+      if (cancelled || getCacheEpoch() !== epoch) return;
+      if (grouped !== null) setFriendRatings(grouped);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isServer, auth.status, auth.status === 'signed-in' ? auth.user.id : null]);
+
+  const demoFollowed = useMemo(
     () => demoFriends.filter((f) => isFollowing(f.handle)),
     [isFollowing],
   );
+
+  // Unified person list. Real friends with ZERO rated bars are listed
+  // separately (they can't contribute picks — showing an inert chip reads
+  // as broken).
+  const { people, unratedFriendCount } = useMemo(() => {
+    if (!isServer) {
+      return {
+        people: demoFollowed.map((f) => ({
+          id: f.handle,
+          label: f.displayName.split(' ')[0],
+          initials: f.initials,
+          seed: f.handle,
+          ratings: f.ratings,
+        })) as Person[],
+        unratedFriendCount: 0,
+      };
+    }
+    const rated: Person[] = [];
+    let unrated = 0;
+    for (const p of circle) {
+      const theirs = friendRatings?.[p.id] ?? [];
+      if (theirs.length === 0) {
+        unrated++;
+        continue;
+      }
+      const label = (p.displayName ?? `@${p.handle}`).split(' ')[0];
+      rated.push({
+        id: p.id,
+        label,
+        initials: initialsFor(p.displayName ?? p.handle),
+        seed: p.handle,
+        ratings: theirs.map((r) => ({
+          barId: r.barId,
+          rating: r.rating,
+          ratedAt: r.ratedAt,
+        })),
+      });
+    }
+    return { people: rated, unratedFriendCount: unrated };
+  }, [isServer, demoFollowed, circle, friendRatings]);
+
+  const followedFriends = people;
 
   const youHasRatings = ratings.length > 0;
 
@@ -31,7 +122,7 @@ export default function ConsensusPage(): JSX.Element {
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const effectiveSelected = useMemo(() => {
     if (selected) return selected;
-    const init = new Set<string>(followedFriends.map((f) => f.handle));
+    const init = new Set<string>(followedFriends.map((f) => f.id));
     if (youHasRatings) init.add(YOU_ID);
     return init;
   }, [selected, followedFriends, youHasRatings]);
@@ -49,8 +140,8 @@ export default function ConsensusPage(): JSX.Element {
       list.push({ id: YOU_ID, label: 'You', ratings });
     }
     for (const f of followedFriends) {
-      if (effectiveSelected.has(f.handle)) {
-        list.push({ id: f.handle, label: f.displayName.split(' ')[0], ratings: f.ratings });
+      if (effectiveSelected.has(f.id)) {
+        list.push({ id: f.id, label: f.label, ratings: f.ratings });
       }
     }
     return list;
@@ -106,15 +197,23 @@ export default function ConsensusPage(): JSX.Element {
           ) : null}
           {followedFriends.map((f) => (
             <PersonChip
-              key={f.handle}
-              label={f.displayName.split(' ')[0]}
+              key={f.id}
+              label={f.label}
               initials={f.initials}
-              seed={f.handle}
-              selected={effectiveSelected.has(f.handle)}
-              onClick={() => toggle(f.handle)}
+              seed={f.seed}
+              selected={effectiveSelected.has(f.id)}
+              onClick={() => toggle(f.id)}
             />
           ))}
         </div>
+
+        {isServer && unratedFriendCount > 0 ? (
+          <p className="text-muted text-xs text-center -mt-4 mb-8">
+            {unratedFriendCount} of your circle{' '}
+            {unratedFriendCount === 1 ? "hasn't" : "haven't"} ranked any bars
+            yet — they&apos;ll appear here once they do.
+          </p>
+        ) : null}
 
         {!enoughPeople ? (
           <EmptyState

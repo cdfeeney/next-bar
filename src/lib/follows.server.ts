@@ -334,6 +334,29 @@ export async function fetchFollowerCount(
 }
 
 /**
+ * ALL friends' ratings in ONE get_friend_ratings call, grouped by owner
+ * (real consensus needs every participant at once — per-friend fetches
+ * would spend N round-trips on the same gated result set). Tier-only by
+ * design: score never crosses the friend boundary. Null on RPC error.
+ */
+export async function fetchAllFriendRatings(
+  supabase: SupabaseClient,
+): Promise<Record<string, FriendRating[]> | null> {
+  const { data, error } = await supabase.rpc('get_friend_ratings');
+  if (error || !Array.isArray(data)) return null;
+  const grouped: Record<string, FriendRating[]> = {};
+  for (const row of data as FriendRatingRow[]) {
+    (grouped[row.user_id] ??= []).push({
+      userId: row.user_id,
+      barId: row.bar_id,
+      rating: row.tier,
+      ratedAt: row.rated_at,
+    });
+  }
+  return grouped;
+}
+
+/**
  * Friends = MUTUAL follows (B3c): the intersection of who you follow and
  * who follows you, keyed by profile id. Pure derivation — no RPC.
  */
