@@ -12,6 +12,20 @@ export default defineConfig({
     baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Pre-acknowledge the 21+ age gate (H1) for every spec — the overlay
+    // would otherwise intercept the first click of all existing flows.
+    // app-store-pack.spec.ts overrides this with an empty storageState to
+    // test the gate itself. Specs that call localStorage.clear() re-seed
+    // the key at the clear site.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: 'http://localhost:3000',
+          localStorage: [{ name: 'next-bar:age-ack:v1', value: '1' }],
+        },
+      ],
+    },
   },
   projects: [
     {

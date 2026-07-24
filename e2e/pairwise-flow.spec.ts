@@ -39,6 +39,9 @@ async function clearStorage(page: Page): Promise<void> {
   await page.goto('/');
   await page.evaluate(() => {
     window.localStorage.clear();
+    // Re-ack the 21+ age gate (H1) — the config storageState seeded it,
+    // and clearing storage must not resurface the overlay mid-test.
+    window.localStorage.setItem('next-bar:age-ack:v1', '1');
   });
 }
 

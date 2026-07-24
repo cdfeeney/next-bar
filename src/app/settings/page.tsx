@@ -493,6 +493,21 @@ export default function SettingsPage(): JSX.Element {
                 Tell us if something&apos;s wrong.
               </Link>
             </p>
+            <p>
+              <Link
+                href="/privacy"
+                className="text-accent underline-offset-4 hover:underline"
+              >
+                Privacy Policy
+              </Link>
+              {' · '}
+              <Link
+                href="/terms"
+                className="text-accent underline-offset-4 hover:underline"
+              >
+                Terms of Use
+              </Link>
+            </p>
           </div>
         </div>
       </section>

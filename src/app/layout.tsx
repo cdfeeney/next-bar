@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Poppins } from 'next/font/google';
 import './globals.css';
 import 'leaflet/dist/leaflet.css';
+import AgeGate from '@/components/AgeGate';
 import BottomNav from '@/components/BottomNav';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 
@@ -69,6 +70,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body className="bg-bg text-text font-sans antialiased pb-[calc(64px+env(safe-area-inset-bottom))]">
         {children}
         <BottomNav />
+        <AgeGate />
         <ServiceWorkerRegister />
       </body>
     </html>
