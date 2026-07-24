@@ -90,6 +90,13 @@ begin
     return true;
   end if;
 
+  -- Per-user serialization (Opus + DeepSeek 0011 reviews): the count/
+  -- insert pair below is check-then-act, so without this two PARALLEL
+  -- suggests for different bars could race past the cap (3 → 4). The
+  -- xact-scoped advisory lock serializes one user's suggests without
+  -- touching anyone else's throughput; released automatically at commit.
+  perform pg_advisory_xact_lock(hashtextextended('bar_suggestions:' || uid::text, 0));
+
   select count(*) into live
     from public.bar_suggestions s
    where s.user_id = uid and s.night = suggest_bar.night;

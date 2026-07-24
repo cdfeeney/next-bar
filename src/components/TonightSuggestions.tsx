@@ -137,6 +137,11 @@ export default function TonightSuggestions(): JSX.Element | null {
           Couldn&apos;t load tonight&apos;s suggestions — pull to refresh or
           try again in a moment.
         </p>
+      ) : suggestions === null ? (
+        // Distinct loading branch (Opus review): rendering the empty-state
+        // copy before the first fetch lands reads as "no suggestions" and
+        // then pops — say nothing meaningful instead.
+        <p className="text-muted text-xs">Loading…</p>
       ) : grouped.length === 0 ? (
         <p className="text-muted text-xs leading-relaxed">
           Nobody&apos;s pitched a spot for tonight yet. Know where you wanna
