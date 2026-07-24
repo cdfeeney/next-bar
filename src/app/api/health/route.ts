@@ -27,13 +27,18 @@ let cachedProbe: { value: SupabaseHealth; until: number } | null = null;
 
 async function probeSupabase(): Promise<SupabaseHealth> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!url) return 'unconfigured';
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) return 'unconfigured';
   if (cachedProbe && Date.now() < cachedProbe.until) return cachedProbe.value;
   let value: SupabaseHealth;
   try {
+    // apikey header is REQUIRED: the Supabase gateway 401s /auth/v1/health
+    // without it (caught by the first prod smoke check — a healthy backend
+    // read as 'unreachable'). The anon key is the public client key.
     const res = await fetch(`${url}/auth/v1/health`, {
       signal: AbortSignal.timeout(SUPABASE_PROBE_TIMEOUT_MS),
       cache: 'no-store',
+      headers: { apikey: anonKey },
     });
     value = res.ok ? 'ok' : 'unreachable';
   } catch {
