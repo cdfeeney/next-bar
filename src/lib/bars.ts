@@ -1,4 +1,5 @@
 import type { Bar } from '@/types';
+import { SERVICE_AREA_BBOX } from './constants';
 import { extraBars } from './bars.extra';
 import { expansionBars } from './bars.expansion';
 import { expansion2Bars } from './bars.expansion2';
@@ -514,12 +515,29 @@ const coreBars: Bar[] = [
 
 // Core Manhattan set + the curated Manhattan-depth/Brooklyn expansion.
 // Overlay the Google Places refresh data (coords / hours / status) onto the
-// curated catalog by id. Empty until scripts/refresh-places.mjs runs, so this
-// is a no-op today.
+// curated catalog by id.
+//
+// WRONG-VENUE GUARD: the 2026-07-23 refresh matched a same-named bar in
+// Nassau County and dragged its coords in (caught by bars.test.ts's bbox
+// integrity check). A patch whose coords land OUTSIDE the service area was
+// resolved against the wrong venue, so NOTHING in it can be trusted —
+// hours and status belong to that other place too. Skip the whole patch
+// and keep the curated data; the B5c identity pass re-resolves these.
+function isInsideServiceArea(lat: number, lng: number): boolean {
+  const box = SERVICE_AREA_BBOX;
+  return (
+    lat >= box.minLat && lat <= box.maxLat &&
+    lng >= box.minLng && lng <= box.maxLng
+  );
+}
+
 function applyPlaces(list: Bar[]): Bar[] {
   return list.map((b) => {
     const p = placesData[b.id];
     if (!p) return b;
+    if (p.lat != null && p.lng != null && !isInsideServiceArea(p.lat, p.lng)) {
+      return b; // wrong-venue match — reject the entire patch
+    }
     return {
       ...b,
       ...(p.lat != null && p.lng != null ? { lat: p.lat, lng: p.lng } : {}),

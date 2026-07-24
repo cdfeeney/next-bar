@@ -108,6 +108,10 @@ export function matches(args: MatchesArgs): Bar[] {
   const exclude = new Set(excludeIds ?? []);
   let pool = bars
     .filter((b) => !exclude.has(b.id))
+    // Never SUGGEST a dead bar: Places refresh (2026-07-23) found ~31
+    // catalog bars permanently closed. Badge-only handling isn't enough —
+    // the matcher must hard-filter them.
+    .filter((b) => b.businessStatus !== 'CLOSED_PERMANENTLY')
     .filter((b) => daysAgo(b.lastVerified, now) <= LAST_VERIFIED_HARD_FILTER_DAYS);
 
   if (preferredNeighborhoods.length > 0) {

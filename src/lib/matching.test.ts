@@ -585,3 +585,24 @@ describe('matches — empty vibe profile (location-first suggest)', () => {
     expect(result[0].id).toBe('near');
   });
 });
+
+describe('permanently-closed hard filter (Places refresh 2026-07-23)', () => {
+  it('never suggests a CLOSED_PERMANENTLY bar even on perfect vibe match', () => {
+    const open = makeBar({ id: 'open-bar', tags: ['dive', 'chill'] });
+    const dead = makeBar({
+      id: 'dead-bar',
+      tags: ['dive', 'chill'],
+      businessStatus: 'CLOSED_PERMANENTLY',
+    });
+    const ranked = matches({
+      profile: { tags: ['dive', 'chill'], archetype: 't', preferredNeighborhoods: [] },
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [open, dead],
+      now: NOW,
+    });
+    expect(ranked.map((b) => b.id)).toContain('open-bar');
+    expect(ranked.map((b) => b.id)).not.toContain('dead-bar');
+  });
+});
