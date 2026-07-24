@@ -1,0 +1,39 @@
+name: CI
+
+# Push-protocol gate (operator ask 2026-07-25): every PR and every push to
+# main runs the same three gates the local workflow uses — type-check,
+# unit tests, production build. With branch protection requiring this
+# check, a build that would fail on Vercel can never reach main (today's
+# edge-bundle-size failure would have been caught at the PR).
+#
+# E2e (Playwright) is deliberately NOT here yet: it needs browser installs
+# + a dev server and roughly 10x the minutes. Add as a separate
+# nightly/PR-labeled job when the team grows.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npx vitest run
+      - name: Production build
+        run: npm run build
+        env:
+          # Build-time publics only — no secrets. Supabase URL/key are the
+          # anon publishables and are only needed if a page prerenders
+          # against them; the build tolerates their absence (dual-mode).
+          NEXT_TELEMETRY_DISABLED: '1'
