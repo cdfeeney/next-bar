@@ -11,6 +11,10 @@
 
 export type TagAction = 'add' | 'remove';
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Return `source` with `tag` added to / removed from the tags array of
  * the bar whose `id: '<barId>'` line appears in it. Throws when the bar
@@ -24,19 +28,26 @@ export function applyTagChange(
   action: TagAction,
   tag: string,
 ): string {
-  const idNeedle = `id: '${barId}',`;
-  const idAt = source.indexOf(idNeedle);
-  if (idAt === -1) {
+  // Line-anchored needle (DeepSeek review): a bare indexOf could match
+  // `id: 'x',` INSIDE a blurb string and silently edit a different bar.
+  // Requiring start-of-line + indentation restricts the match to real
+  // object-literal id fields.
+  const idRe = new RegExp(`^\\s+id: '${escapeRegex(barId)}',`, 'gm');
+  const idMatch = idRe.exec(source);
+  if (idMatch === null) {
     throw new Error(`bar '${barId}' not found in source`);
   }
-  if (source.indexOf(idNeedle, idAt + 1) !== -1) {
+  if (idRe.exec(source) !== null) {
     throw new Error(`bar '${barId}' appears more than once in source`);
   }
+  const idAt = idMatch.index;
 
   // The bar's block ends where the next entry begins (or EOF): the tags
   // line we edit must sit before that boundary.
-  const nextIdAt = source.indexOf("id: '", idAt + idNeedle.length);
-  const blockEnd = nextIdAt === -1 ? source.length : nextIdAt;
+  const nextId = /^\s+id: '/gm;
+  nextId.lastIndex = idAt + idMatch[0].length;
+  const nextIdMatch = nextId.exec(source);
+  const blockEnd = nextIdMatch === null ? source.length : nextIdMatch.index;
 
   const tagsMatch = /tags: \[([^\]]*)\],/.exec(source.slice(idAt, blockEnd));
   if (!tagsMatch || tagsMatch.index === undefined) {

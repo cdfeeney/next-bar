@@ -55,6 +55,22 @@ describe('applyTagChange', () => {
     expect(out).toContain("tags: ['dance', 'loud'],");
   });
 
+  it("an `id: 'x',` substring inside a blurb never matches (line-anchored needle)", () => {
+    // DeepSeek review scenario: without anchoring, this blurb would be
+    // the "match" for lost-bar and the transform would edit whatever
+    // tags line follows it — a different bar's.
+    const trap = SOURCE.replace(
+      "blurb: 'Lasers.',",
+      "blurb: \"mentions id: 'lost-bar', in passing\",",
+    );
+    expect(() => applyTagChange(trap, 'lost-bar', 'add', 'beer')).toThrow(
+      /lost-bar/,
+    );
+    // And the real bars in the same source still resolve correctly.
+    const out = applyTagChange(trap, 'space-bar', 'add', 'beer');
+    expect(out).toContain("tags: ['dance', 'loud', 'beer'],");
+  });
+
   it('throws on an unknown bar id', () => {
     expect(() => applyTagChange(SOURCE, 'nope', 'add', 'beer')).toThrow(/nope/);
   });

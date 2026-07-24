@@ -8,7 +8,9 @@
  *
  * Dry-run by default (prints the plan); `--write` edits the files.
  * All-or-nothing: any unlocatable bar/tag aborts before a single file is
- * written, so a stale input list can't half-apply.
+ * written, so a stale input list can't half-apply. (A crash mid-write can
+ * still leave some files updated — the catalog files are git-tracked, so
+ * `git checkout -- src/lib` is the recovery path; run from a clean tree.)
  *
  * Run: npx tsx scripts/review-mining-apply.mts <changes.json> [--write]
  */
@@ -43,6 +45,14 @@ if (badTag) {
   console.error(`ABORT: '${badTag.tag}' (${badTag.barId}) is not in TAG_VOCABULARY`);
   process.exit(1);
 }
+// Validate at the parse boundary (DeepSeek review): with a typo'd action
+// the add/else branch in applyTagChange would silently treat it as a
+// remove of a coincidentally-present tag.
+const badAction = changes.find((c) => c.action !== 'add' && c.action !== 'remove');
+if (badAction) {
+  console.error(`ABORT: action '${badAction.action}' (${badAction.barId}) is not add|remove`);
+  process.exit(1);
+}
 
 // Transform every file in memory first — nothing is written unless ALL
 // changes locate cleanly.
@@ -50,13 +60,20 @@ const sources = new Map(BAR_FILES.map((f) => [f, readFileSync(f, 'utf8')]));
 const applied: Array<Change & { file: string }> = [];
 
 for (const change of changes) {
-  const file = BAR_FILES.find((f) =>
+  // Exactly-one-file pre-flight (DeepSeek review): a bar id duplicated
+  // across catalog files would otherwise get patched only where it is
+  // found first, leaving a stale twin. (bars.test.ts would also catch the
+  // dup — but only AFTER files were written.)
+  const containing = BAR_FILES.filter((f) =>
     (sources.get(f) as string).includes(`id: '${change.barId}',`),
   );
-  if (!file) {
-    console.error(`ABORT: bar '${change.barId}' not found in any catalog file`);
+  if (containing.length !== 1) {
+    console.error(
+      `ABORT: bar '${change.barId}' found in ${containing.length} catalog files (expected exactly 1)`,
+    );
     process.exit(1);
   }
+  const file = containing[0];
   sources.set(
     file,
     applyTagChange(sources.get(file) as string, change.barId, change.action, change.tag),
