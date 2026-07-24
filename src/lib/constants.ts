@@ -49,15 +49,22 @@ export const NEIGHBORHOOD_CENTROIDS: Record<Neighborhood, Coords> = {
   'LES':          { lat: 40.7170, lng: -73.9870 },
   'East Village': { lat: 40.7270, lng: -73.9840 },
   'West Village': { lat: 40.7350, lng: -74.0030 },
+  'SoHo':         { lat: 40.7230, lng: -74.0000 },
   'Chelsea':      { lat: 40.7470, lng: -74.0010 },
   'Midtown':      { lat: 40.7550, lng: -73.9840 },
+  "Hell's Kitchen": { lat: 40.7630, lng: -73.9920 },
   'UWS':          { lat: 40.7870, lng: -73.9750 },
   'UES':          { lat: 40.7740, lng: -73.9610 },
+  'Harlem':       { lat: 40.8110, lng: -73.9450 },
   // Brooklyn
   'Williamsburg': { lat: 40.7140, lng: -73.9570 },
   'Greenpoint':   { lat: 40.7300, lng: -73.9510 },
   'Bushwick':     { lat: 40.6940, lng: -73.9210 },
   'Park Slope':   { lat: 40.6720, lng: -73.9790 },
+  'Fort Greene':  { lat: 40.6860, lng: -73.9740 },
+  // Queens
+  'Astoria':      { lat: 40.7640, lng: -73.9200 },
+  'LIC':          { lat: 40.7450, lng: -73.9490 },
 };
 
 // Service area now spans lower/mid Manhattan + north/central Brooklyn.

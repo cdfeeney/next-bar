@@ -104,15 +104,28 @@ export const quiz: QuizQuestion[] = [
     prompt: 'Any neighborhoods you love?',
     skipLabel: 'Anywhere works',
     doneLabel: 'Done',
+    // Full service area (2026-07-24): the picker was Manhattan-only-8 for
+    // historical reasons while the catalog served 12 hoods — now it lists
+    // everything, and "Anywhere works" stays the honest default.
     options: [
       'FiDi',
       'LES',
+      'SoHo',
       'East Village',
       'West Village',
       'Chelsea',
       'Midtown',
+      "Hell's Kitchen",
       'UWS',
       'UES',
+      'Harlem',
+      'Williamsburg',
+      'Greenpoint',
+      'Bushwick',
+      'Park Slope',
+      'Fort Greene',
+      'Astoria',
+      'LIC',
     ],
   },
 ];

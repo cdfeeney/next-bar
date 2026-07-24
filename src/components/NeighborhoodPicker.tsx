@@ -14,17 +14,24 @@ const ALL: ManhattanNeighborhood[] = [
   // Manhattan
   'FiDi',
   'LES',
+  'SoHo',
   'East Village',
   'West Village',
   'Chelsea',
   'Midtown',
+  "Hell's Kitchen",
   'UWS',
   'UES',
+  'Harlem',
   // Brooklyn
   'Williamsburg',
   'Greenpoint',
   'Bushwick',
   'Park Slope',
+  'Fort Greene',
+  // Queens
+  'Astoria',
+  'LIC',
 ];
 
 export default function NeighborhoodPicker({
