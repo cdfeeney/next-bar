@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import type { Bar, Coords, Radius, VibeProfile, VibeTag } from '@/types';
 import { deriveArchetype } from '@/lib/quiz';
 import { useGeolocation } from '@/hooks/useGeolocation';
+import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { loadProfile } from '@/lib/storedProfile';
 import { RADIUS_WALK } from '@/lib/constants';
 import BarPicker from '@/components/BarPicker';
@@ -235,6 +236,19 @@ export default function WhereNextFlow() {
           <p className="text-muted text-sm text-center mb-6">
             Pick the bar you&apos;re at — we&apos;ll find the next one.
           </p>
+          {/* Location blocked (operator report: iOS "never asks"): explain
+              the iOS settings paths instead of failing silently. The picker
+              below stays fully usable either way. */}
+          {geo.state.status === 'denied' || geo.permissionState === 'denied' ? (
+            <div className="mb-6">
+              <LocationAccessHelp
+                onRetry={() => {
+                  geo.reset();
+                  setStep({ kind: 'locating' });
+                }}
+              />
+            </div>
+          ) : null}
           <BarPicker onPick={handlePickBar} onNotListed={handleNotListed} />
         </div>
       </section>

@@ -69,3 +69,17 @@ test.describe('Home — location-first', () => {
     await expect(page).toHaveURL(/\/$/);
   });
 });
+
+test('a DENIED location explains itself with recovery steps instead of failing silently', async ({
+  page,
+}) => {
+  await denyGeolocation(page.context());
+  await page.goto('/');
+
+  // The manual picker still works…
+  await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
+  // …and the block is explained, with a retry affordance (operator report:
+  // iOS can silently refuse to ever show the prompt).
+  await expect(page.getByText(/location is blocked for this site/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /try again/i })).toBeVisible();
+});

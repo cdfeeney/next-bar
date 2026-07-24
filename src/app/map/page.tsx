@@ -6,6 +6,7 @@ import { useMemo } from 'react';
 import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
 import { useGeolocation } from '@/hooks/useGeolocation';
+import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { useSuggestions, MAP_SUGGESTION_COUNT } from '@/hooks/useSuggestions';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 
@@ -132,13 +133,17 @@ export default function MapPage(): JSX.Element {
               shows every bar.
             </p>
           )}
-          {locationFailed && (
-            <p className="text-muted text-xs" role="status">
-              {state.status === 'denied'
-                ? "Location's off — the map still shows every bar."
-                : "Your browser doesn't share location — the map still shows every bar."}
-            </p>
-          )}
+          {locationFailed &&
+            (state.status === 'denied' ? (
+              <div className="max-w-md mx-auto text-left">
+                <LocationAccessHelp onRetry={request} />
+              </div>
+            ) : (
+              <p className="text-muted text-xs" role="status">
+                Your browser doesn&apos;t share location — the map still
+                shows every bar.
+              </p>
+            ))}
         </div>
       </header>
 

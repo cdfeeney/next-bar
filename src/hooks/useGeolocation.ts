@@ -10,6 +10,15 @@ import type {
 import { COARSE_ACCURACY_M } from '@/lib/constants';
 import { snapToNeighborhoodCentroid } from '@/lib/geo';
 
+/**
+ * Browser permission posture, independent of any single fix attempt.
+ * 'denied' is the load-bearing value: iOS Safari (and the OS-level
+ * Location Services toggle) can put a site in a state where the prompt
+ * NEVER shows — surfaces must explain that instead of failing silently.
+ * 'unknown' = no Permissions API (older Safari) and nothing learned yet.
+ */
+export type GeoPermissionState = 'granted' | 'prompt' | 'denied' | 'unknown';
+
 export type UseGeolocationReturn = {
   state: GeoState;
   request: () => void;
@@ -17,6 +26,7 @@ export type UseGeolocationReturn = {
   coords: Coords | null;
   accuracyBand: AccuracyBand;
   snappedNeighborhood: ManhattanNeighborhood | null;
+  permissionState: GeoPermissionState;
 };
 
 const GEO_OPTIONS: PositionOptions = {
@@ -111,8 +121,37 @@ function hasGeolocation(): boolean {
 
 export function useGeolocation(): UseGeolocationReturn {
   const [state, setState] = useState<GeoState>({ status: 'idle' });
+  const [permissionState, setPermissionState] =
+    useState<GeoPermissionState>('unknown');
   const stateRef = useRef<GeoState>(state);
   stateRef.current = state;
+
+  // Track browser permission posture: Permissions API where available
+  // (live via onchange), and learned from request outcomes everywhere
+  // (a code-1 failure means denied even without the API).
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return;
+    if (typeof navigator.permissions?.query !== 'function') return;
+    let cancelled = false;
+    let statusRef: PermissionStatus | null = null;
+    const sync = (): void => {
+      if (!cancelled && statusRef) {
+        setPermissionState(statusRef.state as GeoPermissionState);
+      }
+    };
+    navigator.permissions
+      .query({ name: 'geolocation' })
+      .then((status) => {
+        statusRef = status;
+        sync();
+        status.addEventListener('change', sync);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      statusRef?.removeEventListener('change', sync);
+    };
+  }, []);
 
   useEffect(() => {
     if (!hasGeolocation()) {
@@ -144,7 +183,9 @@ export function useGeolocation(): UseGeolocationReturn {
         setState({ status: 'requesting' });
         navigator.geolocation.getCurrentPosition(
           (position) => {
-            if (!cancelled) setState(classifySuccess(position));
+            if (cancelled) return;
+            setState(classifySuccess(position));
+            setPermissionState('granted');
           },
           (error) => {
             // A SILENT attempt must not paint failure UI the user never
@@ -155,6 +196,7 @@ export function useGeolocation(): UseGeolocationReturn {
             setState(
               error.code === 1 ? classifyError(error) : { status: 'idle' },
             );
+            if (error.code === 1) setPermissionState('denied');
           },
           GEO_OPTIONS,
         );
@@ -187,9 +229,11 @@ export function useGeolocation(): UseGeolocationReturn {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         setState(classifySuccess(position));
+        setPermissionState('granted');
       },
       (error) => {
         setState(classifyError(error));
+        if (error.code === 1) setPermissionState('denied');
       },
       GEO_OPTIONS,
     );
@@ -208,5 +252,6 @@ export function useGeolocation(): UseGeolocationReturn {
     coords: derived.coords,
     accuracyBand: derived.accuracyBand,
     snappedNeighborhood: derived.snappedNeighborhood,
+    permissionState,
   };
 }
