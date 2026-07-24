@@ -105,3 +105,21 @@ test('an UNDECIDED permission shows the primer — the real prompt fires from th
   await page.getByRole('button', { name: /pick a bar instead/i }).click();
   await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
 });
+
+test('the manual screen keeps "use my location" one tap away (no reload needed)', async ({
+  page,
+}) => {
+  await page.goto('/');
+  // Wait for the PRIMER to settle before clicking — the spinner screen has
+  // its own "Pick a bar instead" whose mid-swap coordinates land on the
+  // primer's "Share my location" (detachment race caught in CI).
+  await expect(
+    page.getByRole('heading', { name: /find bars near you/i }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: /pick a bar instead/i }).click();
+  await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
+  // …and the location path is still right there.
+  await expect(
+    page.getByRole('button', { name: /use my location/i }),
+  ).toBeVisible();
+});

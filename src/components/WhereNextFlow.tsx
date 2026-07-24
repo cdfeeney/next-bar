@@ -316,7 +316,24 @@ export default function WhereNextFlow() {
                 }}
               />
             </div>
-          ) : null}
+          ) : (
+            // Location is always ONE TAP away (operator ask 2026-07-25):
+            // someone who skipped the primer — or landed here any other
+            // way — can still share their location without reloading. The
+            // request fires from this tap (gesture-bound prompt).
+            <div className="mb-6 text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  geo.request();
+                  setStep({ kind: 'locating' });
+                }}
+                className="text-accent font-display text-sm min-h-[44px] touch-manipulation hover:underline underline-offset-4"
+              >
+                📍 Or use my location
+              </button>
+            </div>
+          )}
           <BarPicker onPick={handlePickBar} onNotListed={handleNotListed} />
         </div>
       </section>
