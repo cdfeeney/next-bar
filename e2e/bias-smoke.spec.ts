@@ -27,6 +27,9 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     await expect(page.getByText('What energy are you bringing?')).toBeVisible();
     await page.getByRole('button', { name: 'Mellow — we wanna talk' }).click();
 
+    // Setting question (garden/rooftop axis, 2026-07-24)
+    await page.getByRole('button', { name: 'Tucked away inside' }).click();
+
     await expect(page.getByText('Soundtrack of the night?')).toBeVisible();
     await page.getByRole('button', { name: 'Jazz / lounge' }).click();
 

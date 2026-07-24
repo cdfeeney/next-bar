@@ -41,6 +41,18 @@ export const quiz: QuizQuestion[] = [
   },
   {
     kind: 'single',
+    // Setting axis (2026-07-24): garden(25 bars)/rooftop(20) were the last
+    // big quiz-inexpressible tags — 45 outdoor-space bars no new user
+    // could ask for. "Inside" keeps the pick honest for the default case.
+    prompt: 'Where do you wanna be?',
+    options: [
+      { label: 'A backyard or garden', tags: ['garden', 'chill'] },
+      { label: 'A rooftop with views', tags: ['rooftop', 'instagrammable'] },
+      { label: 'Tucked away inside', tags: ['lounge', 'speakeasy'] },
+    ],
+  },
+  {
+    kind: 'single',
     prompt: 'Soundtrack of the night?',
     options: [
       { label: 'Indie / rock', tags: ['indie', 'rough'] },
@@ -83,6 +95,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'Cheap and cheerful', tags: ['cheap', 'dive'] },
       { label: 'Solid middle', tags: ['mid'] },
       { label: 'Treating myself', tags: ['pricey', 'cocktail'] },
+      // splurge(10 bars) was quiz-inexpressible — audit F2 tail.
+      { label: 'Big night, no limits', tags: ['splurge', 'polished'] },
     ],
   },
   {
@@ -115,6 +129,7 @@ export function deriveArchetype(tags: VibeTag[]): string {
   if (has('trendy') && has('instagrammable')) return 'New-wave trendsetter';
   if (has('industry') && has('cocktail')) return 'Industry-crowd insider';
   if (has('rooftop')) return 'Skyline-view chaser';
+  if (has('garden') && has('chill')) return 'Backyard session regular';
   if (has('wine') && has('romantic')) return 'Wine-bar romantic';
   return 'NYC vibe explorer';
 }

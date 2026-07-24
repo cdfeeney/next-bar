@@ -19,6 +19,8 @@ import { denyGeolocation } from './helpers/geo';
 async function completeCocktailQuiz(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'A hidden cocktail spot' }).click();
   await page.getByRole('button', { name: 'Mellow — we wanna talk' }).click();
+  // Setting question (garden/rooftop axis, 2026-07-24)
+  await page.getByRole('button', { name: 'Tucked away inside' }).click();
   await page.getByRole('button', { name: 'Jazz / lounge' }).click();
   await page.getByRole('button', { name: 'Industry / creative' }).click();
   await page.getByRole('button', { name: 'On a date' }).click();
