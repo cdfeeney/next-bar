@@ -93,3 +93,47 @@ describe('applyTagChange', () => {
     expect(restored).toBe(SOURCE);
   });
 });
+
+// The bars.expansion*.ts files put each whole bar on ONE line — the
+// format 24 of the 28 first-batch edits actually hit (Opus review: this
+// path exercises the block-boundary logic hardest, so it gets its own
+// fixture).
+const SINGLE_LINE_SOURCE = `export const expansionBars = [
+  { id: 'alpha-bar', name: 'Alpha Bar', priceTier: 1, tags: ['dive', 'cheap'], blurb: 'First.', lastVerified: '2026-04-01' },
+  { id: 'beta-bar', name: 'Beta Bar', priceTier: 2, tags: ['cocktail'], blurb: 'Second.', lastVerified: '2026-04-01' },
+];
+`;
+
+describe('applyTagChange — single-line entry format (bars.expansion*.ts)', () => {
+  it('adds to the right bar without touching its same-line neighbours', () => {
+    const out = applyTagChange(SINGLE_LINE_SOURCE, 'alpha-bar', 'add', 'locals');
+    expect(out).toContain("tags: ['dive', 'cheap', 'locals'],");
+    expect(out).toContain("tags: ['cocktail'],");
+    expect(out).toContain("blurb: 'First.',");
+  });
+
+  it('removes without reaching into the next bar', () => {
+    const out = applyTagChange(SINGLE_LINE_SOURCE, 'alpha-bar', 'remove', 'cheap');
+    expect(out).toContain("tags: ['dive'],");
+    expect(out).toContain("tags: ['cocktail'],");
+  });
+
+  it('edits the LAST entry (EOF block boundary)', () => {
+    const out = applyTagChange(SINGLE_LINE_SOURCE, 'beta-bar', 'add', 'date');
+    expect(out).toContain("tags: ['cocktail', 'date'],");
+  });
+
+  it('round-trips on the single-line format too', () => {
+    const added = applyTagChange(SINGLE_LINE_SOURCE, 'beta-bar', 'add', 'wine');
+    expect(applyTagChange(added, 'beta-bar', 'remove', 'wine')).toBe(
+      SINGLE_LINE_SOURCE,
+    );
+  });
+
+  it('throws when a bar id appears twice', () => {
+    const dup = SINGLE_LINE_SOURCE.replace("id: 'beta-bar'", "id: 'alpha-bar'");
+    expect(() => applyTagChange(dup, 'alpha-bar', 'add', 'wine')).toThrow(
+      /more than once/,
+    );
+  });
+});

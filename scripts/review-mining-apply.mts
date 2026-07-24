@@ -39,7 +39,23 @@ if (!inputPath) {
 }
 const write = writeFlag === '--write';
 
-const changes: Change[] = JSON.parse(readFileSync(inputPath, 'utf8'));
+const parsed: unknown = JSON.parse(readFileSync(inputPath, 'utf8'));
+// Shape guard at the parse boundary (Opus review): reject malformed input
+// with a clear message instead of confusing downstream errors.
+if (
+  !Array.isArray(parsed) ||
+  !parsed.every(
+    (c) =>
+      typeof c === 'object' && c !== null &&
+      typeof (c as Change).barId === 'string' &&
+      typeof (c as Change).tag === 'string' &&
+      typeof (c as Change).action === 'string',
+  )
+) {
+  console.error('ABORT: input must be an array of {barId, action, tag} string objects');
+  process.exit(1);
+}
+const changes = parsed as Change[];
 const badTag = changes.find((c) => !(TAG_VOCABULARY as readonly string[]).includes(c.tag));
 if (badTag) {
   console.error(`ABORT: '${badTag.tag}' (${badTag.barId}) is not in TAG_VOCABULARY`);

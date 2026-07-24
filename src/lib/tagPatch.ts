@@ -30,9 +30,12 @@ export function applyTagChange(
 ): string {
   // Line-anchored needle (DeepSeek review): a bare indexOf could match
   // `id: 'x',` INSIDE a blurb string and silently edit a different bar.
-  // Requiring start-of-line + indentation restricts the match to real
-  // object-literal id fields.
-  const idRe = new RegExp(`^\\s+id: '${escapeRegex(barId)}',`, 'gm');
+  // Anchoring to start-of-line restricts the match to real object-literal
+  // id fields, in BOTH catalog formats: multi-line entries (`  id: 'x',`
+  // in bars.ts / bars.extra.ts) and single-line entries (`  { id: 'x',
+  // name: ... },` in the bars.expansion*.ts files) — hence the optional
+  // `{` between the indent and the field.
+  const idRe = new RegExp(`^\\s+\\{?\\s*id: '${escapeRegex(barId)}',`, 'gm');
   const idMatch = idRe.exec(source);
   if (idMatch === null) {
     throw new Error(`bar '${barId}' not found in source`);
@@ -44,7 +47,7 @@ export function applyTagChange(
 
   // The bar's block ends where the next entry begins (or EOF): the tags
   // line we edit must sit before that boundary.
-  const nextId = /^\s+id: '/gm;
+  const nextId = /^\s+\{?\s*id: '/gm;
   nextId.lastIndex = idAt + idMatch[0].length;
   const nextIdMatch = nextId.exec(source);
   const blockEnd = nextIdMatch === null ? source.length : nextIdMatch.index;
