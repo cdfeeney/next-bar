@@ -158,10 +158,10 @@ export function barImageUrl(bar: Pick<Bar, 'id' | 'photoRef'>): string | null {
  * nothing) for bars the multi ingest hasn't covered.
  */
 export function barImageUrls(
-  bar: Pick<Bar, 'id' | 'photoRef' | 'photoRefs'>,
+  bar: Pick<Bar, 'id' | 'photoRef' | 'photoCount'>,
 ): string[] {
-  if (bar.photoRefs && bar.photoRefs.length > 0) {
-    return bar.photoRefs.map((_, i) =>
+  if (bar.photoCount && bar.photoCount > 0) {
+    return Array.from({ length: bar.photoCount }, (_, i) =>
       i === 0
         ? `/bar-photos/${bar.id}.${PHOTO_EXT}`
         : `/bar-photos/${bar.id}-${i + 1}.${PHOTO_EXT}`,

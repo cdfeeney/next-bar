@@ -86,9 +86,9 @@ describe('barImageUrl', () => {
 });
 
 describe('barImageUrls (carousel)', () => {
-  it('maps photoRefs to legacy-first file names', () => {
+  it('maps photoCount to legacy-first file names', () => {
     expect(
-      barImageUrls({ id: 'attaboy', photoRef: 'places/x/photos/a', photoRefs: ['places/x/photos/a', 'places/x/photos/b', 'places/x/photos/c'] }),
+      barImageUrls({ id: 'attaboy', photoRef: 'places/x/photos/a', photoCount: 3 }),
     ).toEqual([
       '/bar-photos/attaboy.jpg',
       '/bar-photos/attaboy-2.jpg',

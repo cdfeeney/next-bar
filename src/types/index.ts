@@ -72,7 +72,7 @@ export type PlacePatch = {
   /** Places photo resource name (places/{id}/photos/{ref}); presence means a
    * local photo was ingested to public/bar-photos/<barId>.jpg. */
   photoRef?: string;
-  photoRefs?: string[];
+  photoCount?: number;
   photoAttributions?: string[];
   /** Photo author attribution (Google policy: must render when photo shown). */
   photoAttribution?: string;
@@ -98,9 +98,12 @@ export type Bar = {
   hours?: WeeklyHours;
   photoRef?: string;
   photoAttribution?: string;
-  /** Carousel photos (photos-multi ingest): resource names, order = display order. */
-  photoRefs?: string[];
-  /** Per-photo author attributions, index-aligned with photoRefs ('' = unknown). */
+  /** Carousel photo count (photos-multi ingest) — files are <id>.jpg,
+   * <id>-2.jpg … <id>-N.jpg. Photo resource names live in
+   * scripts/data/photo-refs.json (ingest bookkeeping, NOT bundled — they
+   * pushed the edge OG function past Vercel's 1MB limit). */
+  photoCount?: number;
+  /** Per-photo author attributions, index-aligned by photo order ('' = unknown). */
   photoAttributions?: string[];
   reviews?: BarReview[];
 };

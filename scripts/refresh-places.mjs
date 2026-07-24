@@ -309,6 +309,7 @@ async function runPhotosMulti() {
   console.log(`photos-multi: ${ids.length} bars, up to ${PHOTO_MULTI_COUNT} photos each${Number.isFinite(LIMIT) ? ` (--limit ${LIMIT})` : ''}`);
 
   const flags = [];
+  const allRefs = {};
   let details = 0, media = 0, skippedFiles = 0, updated = 0;
 
   for (const id of ids) {
@@ -340,8 +341,9 @@ async function runPhotosMulti() {
       if (refs.length > 0) {
         // MERGE into the existing entry — photo 1 fields stay for
         // back-compat with every current consumer.
-        patch.photoRefs = refs;
+        patch.photoCount = refs.length;
         patch.photoAttributions = attrs;
+        allRefs[id] = refs;
         patch.photoRef = refs[0];
         if (attrs[0]) patch.photoAttribution = attrs[0];
         updated++;
