@@ -256,10 +256,12 @@ describe('skipSession', () => {
 });
 
 describe('conflict flag', () => {
-  it('flags a session whose answer the transcript replay contradicts, and ends it', () => {
-    // Persisted scores say a > b, but the prior transcript says b > a — a
-    // stale-score divergence. Candidates order (from scores) disagrees with
-    // replay order, so consistent-looking answers can contradict replay.
+  it('B7a: stale-score divergence no longer conflicts — candidates come from replay, not scores', () => {
+    // Persisted scores say a > b, but the prior transcript says b > a. The
+    // pre-B7a session ordered candidates by SCORE and this exact scenario
+    // ended conflicted. Dynamic candidates order by REPLAY, so the session
+    // asks questions in the order replay will honor — no conflict, exact
+    // slot.
     const ratings = [
       rating('a', 'loved', 9.9),
       rating('b', 'loved', 9.5),
@@ -267,26 +269,198 @@ describe('conflict flag', () => {
     ];
     const prior = [comp('b', 'a')];
     const start = startInsertSession(ratings, prior, 'x', 'loved');
-    expect(start.candidates).toEqual(['a', 'b']);
-    expect(start.probeBarId).toBe('b');
+    // Replay order, not score order.
+    expect(start.candidates).toEqual(['b', 'a']);
+    expect(start.probeBarId).toBe('a');
 
-    // x > b: replay puts x above b → consistent so far.
+    // x > a → window narrows above a; next probe is b.
     const first = answerComparison(start, 'x', AT);
     expect(first.session.conflicted).toBe(false);
-    expect(first.session.probeBarId).toBe('a');
+    expect(first.session.probeBarId).toBe('b');
 
-    // a > x: replay moves x below a, which sits below b → the earlier
-    // "x > b" answer is now contradicted → conflicted, ended gracefully.
-    const second = answerComparison(first.session, 'a', AT);
-    expect(second.session.conflicted).toBe(true);
+    // b > x → x lands exactly between b and a. No contradiction anywhere.
+    const second = answerComparison(first.session, 'b', AT);
+    expect(second.session.conflicted).toBe(false);
     expect(second.session.done).toBe(true);
-    // The answer is STILL recorded — replay's later-wins handles it.
-    expect(second.comparison).toEqual({
-      winnerBarId: 'a',
-      loserBarId: 'x',
-      comparedAt: AT,
-    });
-    expect(second.session.answers).toHaveLength(2);
+    expect(insertPosition(second.session)).toBe(1);
+
+    // The replayed chain agrees with the converged slot.
+    const { orderedBarIds } = buildRankOrderForTier(
+      ratings,
+      [...prior, ...second.session.answers],
+      'loved',
+    );
+    expect(orderedBarIds).toEqual(['b', 'x', 'a']);
+  });
+
+  it('a mind-change history (repeated pair, opposite outcomes) is NOT a conflict — later row wins, like replay', () => {
+    // Prior: chain a > b, then b > x, then the user changed their mind:
+    // x > b. Replay resolves cleanly to a > x > b. The window must honor
+    // only the LATEST row per pair (Opus B7a review) — folding both rows
+    // produced a spurious lo > hi conflict.
+    const ratings = [
+      rating('a', 'loved', 9),
+      rating('b', 'loved', 8),
+      rating('x', 'loved'),
+    ];
+    const prior = [comp('a', 'b'), comp('b', 'x'), comp('x', 'b')];
+    const start = startInsertSession(ratings, prior, 'x', 'loved');
+    expect(start.conflicted).toBe(false);
+    // The x-vs-b relation is pinned (x above b); only x-vs-a is open.
+    expect(start.done).toBe(false);
+    expect(start.probeBarId).toBe('a');
+  });
+
+  it('contradictory PRIOR rows involving the bar end the session conflicted at start', () => {
+    // Prior transcript: b > a (chain), x > b (x above the chain) AND
+    // a > x (x below the chain) — impossible window (lo > hi).
+    const ratings = [
+      rating('a', 'loved'),
+      rating('b', 'loved'),
+      rating('x', 'loved'),
+    ];
+    const prior = [comp('b', 'a'), comp('x', 'b'), comp('a', 'x')];
+    const start = startInsertSession(ratings, prior, 'x', 'loved');
+    expect(start.done).toBe(true);
+    expect(start.conflicted).toBe(true);
+    expect(start.probeBarId).toBeNull();
+  });
+});
+
+describe('B7a dynamic candidates', () => {
+  it("Codex's u1/u2/u3 interleave case: unordered peers are never probed and cannot sit inside the probed window", () => {
+    // Ordered chain a > b > c (transcript) + unordered u1/u2/u3 whose
+    // midpoint scores interleave with the chain in the DISPLAYED sort.
+    // Pre-B7a the session probed by displayed order, so u's could tie or
+    // interleave past the probed window and the slot went approximate.
+    const mid = tierMidpoint('loved');
+    const ratings = [
+      rating('a', 'loved', 10),
+      rating('b', 'loved', mid + 0.1),
+      rating('u1', 'loved', mid),
+      rating('u2', 'loved', mid),
+      rating('u3', 'loved', mid),
+      rating('c', 'loved', mid - 0.1),
+      rating('x', 'loved'),
+    ];
+    const prior = [comp('a', 'b'), comp('b', 'c')];
+    const start = startInsertSession(ratings, prior, 'x', 'loved');
+
+    // Probe set = the replay-ordered chain ONLY.
+    expect(start.candidates).toEqual(['a', 'b', 'c']);
+
+    // Drive every possible answer path; no probe may ever be an unordered
+    // peer, and the converged slot must equal x's replayed position within
+    // the ordered chain.
+    for (let mask = 0; mask < 8; mask++) {
+      let session = start;
+      let bit = 0;
+      while (!session.done && session.probeBarId !== null) {
+        expect(['a', 'b', 'c']).toContain(session.probeBarId);
+        const newBarWins = ((mask >> bit) & 1) === 1;
+        bit += 1;
+        session = answerComparison(
+          session,
+          newBarWins ? 'x' : session.probeBarId,
+          AT,
+        ).session;
+      }
+      expect(session.conflicted).toBe(false);
+
+      const { orderedBarIds } = buildRankOrderForTier(
+        ratings,
+        [...prior, ...session.answers],
+        'loved',
+      );
+      // x's replayed position among the ordered chain = the session slot.
+      const chainPositions = orderedBarIds.filter((id) =>
+        ['a', 'b', 'c', 'x'].includes(id),
+      );
+      expect(chainPositions.indexOf('x')).toBe(insertPosition(session));
+      // The u's remain unordered — outside the replayed chain entirely.
+      for (const u of ['u1', 'u2', 'u3']) {
+        expect(orderedBarIds).not.toContain(u);
+      }
+    }
+  });
+
+  it('pure bootstrap: an all-unordered tier probes one peer, orders it, and stops', () => {
+    const ratings = [
+      rating('u1', 'loved'),
+      rating('u2', 'loved'),
+      rating('u3', 'loved'),
+      rating('x', 'loved'),
+    ];
+    const start = startInsertSession(ratings, [], 'x', 'loved');
+    // Bootstrap probe set: every peer (no chain exists yet).
+    expect(start.candidates).toEqual(['u1', 'u2', 'u3']);
+    expect(start.probeBarId).not.toBeNull();
+
+    const probed = start.probeBarId as string;
+    const result = answerComparison(start, 'x', AT);
+    // After one answer an order EXISTS (x > probed) — the remaining
+    // unordered peers leave the probe set and the window collapses.
+    expect(result.session.done).toBe(true);
+    expect(result.session.conflicted).toBe(false);
+    expect(result.session.candidates).toEqual([probed]);
+    expect(insertPosition(result.session)).toBe(0);
+  });
+
+  it('bootstrap probe joins the chain and the session continues on ordered peers only', () => {
+    // One ordered pair (a > b) + unordered u1. Start probes the chain;
+    // u1 never enters.
+    const ratings = [
+      rating('a', 'loved', 9),
+      rating('b', 'loved', 8),
+      rating('u1', 'loved'),
+      rating('x', 'loved'),
+    ];
+    const prior = [comp('a', 'b')];
+    let session = startInsertSession(ratings, prior, 'x', 'loved');
+    expect(session.candidates).toEqual(['a', 'b']);
+    while (!session.done && session.probeBarId !== null) {
+      expect(session.probeBarId).not.toBe('u1');
+      session = answerComparison(session, session.probeBarId, AT).session;
+    }
+    expect(session.conflicted).toBe(false);
+  });
+
+  it('n ≥ 128: the 7-probe cap leaves placement EXPLICITLY approximate (window wider than one slot)', () => {
+    // 300 ordered candidates → 301 slots. Seven halvings cannot resolve a
+    // single slot (2^7 = 128 < 301): the session must end at the cap with
+    // a window still wider than one slot, not conflicted — approximate
+    // placement is the POLICY, and replay lands inside the final window.
+    const { ratings, prior } = orderedFixture(300);
+    const start = startInsertSession(ratings, prior, 'new-bar', 'loved');
+    expect(start.maxSteps).toBe(7);
+
+    // Alternate answers to keep the window interior (worst case-ish).
+    let session = start;
+    let flip = false;
+    while (!session.done && session.probeBarId !== null) {
+      session = answerComparison(
+        session,
+        flip ? 'new-bar' : session.probeBarId,
+        AT,
+      ).session;
+      flip = !flip;
+    }
+    expect(session.step).toBe(7);
+    expect(session.done).toBe(true);
+    expect(session.conflicted).toBe(false);
+    // Approximate: the window did NOT collapse to a point.
+    expect(session.hi - session.lo).toBeGreaterThanOrEqual(1);
+
+    // Replay places the bar inside the final window (relative to the
+    // ordered candidates).
+    const { orderedBarIds } = buildRankOrderForTier(
+      ratings,
+      [...prior, ...session.answers],
+      'loved',
+    );
+    const barPos = orderedBarIds.indexOf('new-bar');
+    expect(barPos).toBeGreaterThanOrEqual(session.lo);
+    expect(barPos).toBeLessThanOrEqual(session.hi);
   });
 });
 
