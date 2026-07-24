@@ -5,6 +5,7 @@ import {
   cancelFollowRequest,
   declineFollowRequest,
   deriveMutuals,
+  fetchAllFriendRatings,
   fetchFollowerCount,
   fetchFollowers,
   fetchFollowRequests,
@@ -539,5 +540,42 @@ describe('B3c followers + count + mutuals', () => {
     expect(deriveMutuals(following, followers)).toEqual([me]);
     expect(deriveMutuals([], followers)).toEqual([]);
     expect(deriveMutuals(following, [])).toEqual([]);
+  });
+});
+
+describe('fetchAllFriendRatings (real consensus)', () => {
+  it('groups the single RPC result by owner, tier-only', async () => {
+    const { client, calls } = fakeSupabase({
+      rpcResults: {
+        get_friend_ratings: {
+          data: [
+            { user_id: 'u-a', bar_id: 'attaboy', tier: 'loved', rated_at: '2026-07-01T00:00:00.000Z' },
+            { user_id: 'u-b', bar_id: 'attaboy', tier: 'liked', rated_at: '2026-07-02T00:00:00.000Z' },
+            { user_id: 'u-a', bar_id: 'dante', tier: 'liked', rated_at: '2026-07-03T00:00:00.000Z' },
+          ],
+        },
+      },
+    });
+    const grouped = await fetchAllFriendRatings(client);
+    expect(calls.rpc).toEqual([{ fn: 'get_friend_ratings', args: undefined }]);
+    expect(Object.keys(grouped!).sort()).toEqual(['u-a', 'u-b']);
+    expect(grouped!['u-a']).toHaveLength(2);
+    expect(grouped!['u-b'][0]).toEqual({
+      userId: 'u-b',
+      barId: 'attaboy',
+      rating: 'liked',
+      ratedAt: '2026-07-02T00:00:00.000Z',
+    });
+  });
+
+  it('returns null on RPC error, {} on empty', async () => {
+    const errored = fakeSupabase({
+      rpcResults: { get_friend_ratings: { error: { message: 'boom' } } },
+    });
+    expect(await fetchAllFriendRatings(errored.client)).toBeNull();
+    const empty = fakeSupabase({
+      rpcResults: { get_friend_ratings: { data: [] } },
+    });
+    expect(await fetchAllFriendRatings(empty.client)).toEqual({});
   });
 });
