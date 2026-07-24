@@ -6,9 +6,31 @@
  *  2. Single-finger drag pans the map (gesture-handling is OFF on this full
  *     view, so default Leaflet one-pointer dragging is active).
  *  3. "Use my location" grabs geolocation and plots the user marker.
+ *  4. B6 marker tiers: suggested (loud) vs rated vs everything-else (quiet
+ *     grey), plus the legend chip row and the no-profile quiz hint.
  */
 
 import { test, expect } from '@playwright/test';
+
+/** How many bars the map's suggested tier may surface (useSuggestions). */
+const MAP_SUGGESTION_COUNT = 10;
+
+/**
+ * Seeds a saved vibe-quiz profile before the app boots, so /map computes a
+ * suggested tier. Shape must satisfy storedProfile.loadProfile's validation
+ * (tags + preferredNeighborhoods arrays, archetype + savedAt strings).
+ */
+const SEED_PROFILE_SCRIPT = () => {
+  window.localStorage.setItem(
+    'next-bar:profile:v1',
+    JSON.stringify({
+      tags: ['dive', 'chill', 'cheap'],
+      archetype: 'e2e-seeded',
+      preferredNeighborhoods: [],
+      savedAt: new Date().toISOString(),
+    }),
+  );
+};
 
 // NYC — inside the curated bar region, so a fix lands among the markers.
 const NYC = { latitude: 40.725, longitude: -73.985, accuracy: 20 };
@@ -98,5 +120,72 @@ test.describe('/map interaction', () => {
     await expect(
       page.getByText(/Showing your location on the map/i),
     ).toHaveCount(0);
+  });
+});
+
+test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)', () => {
+  test('legend chip row renders all three tiers', async ({ page }) => {
+    await page.goto('/map');
+    const legend = page.getByTestId('map-legend');
+    await expect(legend).toBeVisible();
+    await expect(legend).toContainText('Suggested');
+    await expect(legend).toContainText('Rated');
+    await expect(legend).toContainText('Everything else');
+  });
+
+  test('seeded profile: suggested markers ≤ 10 and grey markers exist', async ({
+    page,
+  }) => {
+    await page.addInitScript(SEED_PROFILE_SCRIPT);
+    await page.goto('/map');
+
+    // Map booted.
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const suggested = page.locator(
+      '.leaflet-marker-icon [data-tier="suggested"]',
+    );
+    const grey = page.locator('.leaflet-marker-icon [data-tier="other"]');
+
+    // At least one suggestion computes for the seeded profile, capped at
+    // the suggestion count — the rest of the catalog stays quiet grey.
+    await expect(suggested.first()).toBeVisible({ timeout: 15_000 });
+    const suggestedCount = await suggested.count();
+    expect(suggestedCount).toBeGreaterThan(0);
+    expect(suggestedCount).toBeLessThanOrEqual(MAP_SUGGESTION_COUNT);
+
+    await expect(grey.first()).toBeVisible({ timeout: 15_000 });
+    expect(await grey.count()).toBeGreaterThan(0);
+
+    // With a profile present, the quiz hint must NOT show.
+    await expect(page.getByTestId('map-quiz-hint')).toHaveCount(0);
+  });
+
+  test('no profile: zero suggested markers, all-grey map, quiz hint links to /quiz', async ({
+    page,
+  }) => {
+    await page.goto('/map');
+
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const grey = page.locator('.leaflet-marker-icon [data-tier="other"]');
+    await expect(grey.first()).toBeVisible({ timeout: 15_000 });
+
+    // No suggested tier without a quiz profile.
+    await expect(
+      page.locator('.leaflet-marker-icon [data-tier="suggested"]'),
+    ).toHaveCount(0);
+
+    // The hint card renders and links to the quiz.
+    const hint = page.getByTestId('map-quiz-hint');
+    await expect(hint).toBeVisible();
+    await expect(hint.getByRole('link', { name: /quiz/i })).toHaveAttribute(
+      'href',
+      '/quiz',
+    );
   });
 });

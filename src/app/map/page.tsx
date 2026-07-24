@@ -1,18 +1,52 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { useMemo } from 'react';
 import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
 import { useGeolocation } from '@/hooks/useGeolocation';
+import { useSuggestions, MAP_SUGGESTION_COUNT } from '@/hooks/useSuggestions';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 
 const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
+
+/** Legend swatches mirror the BarMap tier icons (same accent/grey). */
+const LEGEND_SWATCH = {
+  suggested: {
+    width: 14,
+    height: 14,
+    background: '#ff5b3a',
+    borderRadius: 9999,
+    boxShadow: '0 0 8px rgba(255,91,58,0.9)',
+  },
+  rated: {
+    width: 12,
+    height: 12,
+    background: 'transparent',
+    border: '2px solid #ff5b3a',
+    borderRadius: 9999,
+  },
+  other: {
+    width: 8,
+    height: 8,
+    background: '#9ca3af',
+    opacity: 0.6,
+    borderRadius: 9999,
+  },
+} as const;
 
 export default function MapPage(): JSX.Element {
   const bars = useBars();
   const { ratings } = useRatings();
   const { state, request, coords } = useGeolocation();
+
+  // Same matching pipeline as home (profile + ratings + user coords when
+  // granted), capped at MAP_SUGGESTION_COUNT for the suggested tier.
+  const { suggestedIds, hasProfile, profileChecked } = useSuggestions(
+    coords,
+    MAP_SUGGESTION_COUNT,
+  );
 
   const highlightIds = useMemo(
     () =>
@@ -38,9 +72,44 @@ export default function MapPage(): JSX.Element {
         </p>
         <h1 className="font-display text-3xl md:text-4xl mb-2">Map</h1>
         <p className="text-muted text-sm max-w-md mx-auto">
-          Every curated bar, plotted. Bars you&apos;ve Loved or Liked
-          glow in accent. Drag with one finger; pinch to zoom.
+          Every curated bar, plotted. Your suggested bars glow in accent;
+          bars you&apos;ve rated get a ring. Drag with one finger; pinch to
+          zoom.
         </p>
+
+        <div
+          className="mt-4 flex items-center justify-center gap-4 text-xs text-muted"
+          data-testid="map-legend"
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <span aria-hidden style={LEGEND_SWATCH.suggested} />
+            Suggested
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span aria-hidden style={LEGEND_SWATCH.rated} />
+            Rated
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span aria-hidden style={LEGEND_SWATCH.other} />
+            Everything else
+          </span>
+        </div>
+
+        {profileChecked && !hasProfile && (
+          <div
+            className="mt-4 mx-auto max-w-sm rounded-2xl border border-border px-4 py-3 text-sm text-muted"
+            data-testid="map-quiz-hint"
+          >
+            No suggestions yet —{' '}
+            <Link
+              href="/quiz"
+              className="text-accent underline-offset-4 hover:underline"
+            >
+              take the vibe quiz
+            </Link>{' '}
+            to light up your picks on the map.
+          </div>
+        )}
 
         <div className="mt-4 flex flex-col items-center gap-2">
           <button
@@ -78,6 +147,9 @@ export default function MapPage(): JSX.Element {
           bars={bars}
           userCoords={coords}
           highlightIds={highlightIds}
+          // Always defined on /map → tiered rendering. Empty (no quiz
+          // profile) means no suggested tier: grey dots + rated rings only.
+          suggestedIds={suggestedIds}
           fitToBars
           oneFingerPan
         />

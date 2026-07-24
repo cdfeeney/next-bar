@@ -12,7 +12,21 @@ import type { Bar, Coords } from '@/types';
 type BarMapProps = {
   bars: Bar[];
   userCoords?: Coords | null;
+  /**
+   * Bars the user has rated (Loved/Liked). Legacy mode (suggestedIds
+   * undefined): these get the loud accent glow and every other bar renders
+   * as an accent dot. Tiered mode (suggestedIds provided): these render as
+   * the mid-tier "rated" accent ring instead.
+   */
   highlightIds?: string[];
+  /**
+   * B6 marker tiers. When provided (even empty), the map switches to the
+   * three-tier scheme: `suggested` (loud accent glow, largest, top z-order)
+   * · `rated` (small accent ring, from highlightIds) · `other` (quiet 8px
+   * grey dot, lowest z-order). When undefined, legacy two-tier rendering is
+   * kept so embedded maps (WhereNextFlow results) are untouched.
+   */
+  suggestedIds?: string[];
   /** When set, the map zooms to fit every bar marker (used by the full catalog view). */
   fitToBars?: boolean;
   /**
@@ -39,6 +53,37 @@ const highlightIcon = L.divIcon({
   iconSize: [20, 20],
   iconAnchor: [10, 10],
 });
+
+// --- B6 marker tiers (used when `suggestedIds` is provided) ---------------
+// The `data-tier` attributes are load-bearing: e2e specs count markers per
+// tier through them. Keep them if the markup changes.
+
+/** Suggested: current accent glow, slightly larger than the old highlight. */
+const suggestedIcon = L.divIcon({
+  className: '',
+  html: '<div data-tier="suggested" style="width:22px;height:22px;background:#ff5b3a;border:3px solid #fff;border-radius:9999px;box-shadow:0 0 20px rgba(255,91,58,1),0 0 36px rgba(255,91,58,0.6);"></div>',
+  iconSize: [22, 22],
+  iconAnchor: [11, 11],
+});
+
+/** Rated (Loved/Liked): small accent ring — visible but quiet. */
+const ratedIcon = L.divIcon({
+  className: '',
+  html: '<div data-tier="rated" style="width:12px;height:12px;background:transparent;border:2px solid #ff5b3a;border-radius:9999px;box-shadow:0 0 8px rgba(255,91,58,0.5);"></div>',
+  iconSize: [12, 12],
+  iconAnchor: [6, 6],
+});
+
+/** Everything else: 8px light-grey dot at ~60% opacity, lowest z-order. */
+const otherIcon = L.divIcon({
+  className: '',
+  html: '<div data-tier="other" style="width:8px;height:8px;background:#9ca3af;opacity:0.6;border-radius:9999px;"></div>',
+  iconSize: [8, 8],
+  iconAnchor: [4, 4],
+});
+
+/** Marker stacking: suggested above rated above the grey long tail. */
+const TIER_Z_OFFSET = { suggested: 2000, rated: 1000, other: -1000 } as const;
 
 const userIcon = L.divIcon({
   className: '',
@@ -84,7 +129,7 @@ function FitBounds({ bars }: { bars: Bar[] }) {
   return null;
 }
 
-export default function BarMap({ bars, userCoords, highlightIds, fitToBars, oneFingerPan }: BarMapProps) {
+export default function BarMap({ bars, userCoords, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -93,6 +138,14 @@ export default function BarMap({ bars, userCoords, highlightIds, fitToBars, oneF
   const highlightSet = useMemo(
     () => new Set(highlightIds ?? []),
     [highlightIds],
+  );
+
+  // Tiered mode is on whenever the caller declares a suggested tier — an
+  // empty array means "tiers, but nothing is suggested" (e.g. no quiz yet).
+  const isTiered = suggestedIds !== undefined;
+  const suggestedSet = useMemo(
+    () => new Set(suggestedIds ?? []),
+    [suggestedIds],
   );
 
   return (
@@ -108,9 +161,18 @@ export default function BarMap({ bars, userCoords, highlightIds, fitToBars, oneF
             WebkitTapHighlightColor: 'transparent',
           }}
         >
+          {/*
+            preferCanvas: vector layers render to canvas instead of SVG so the
+            map stays cheap as the catalog grows (divIcon markers stay DOM
+            nodes regardless — the canvas renderer covers paths/circles).
+            SCALING TRIGGER (blueprint B6): at >500 markers, switch the grey
+            "other" tier to canvas CircleMarkers and add marker clustering
+            (e.g. leaflet.markercluster) — DOM divIcons don't scale past that.
+          */}
           <MapContainer
             center={[center.lat, center.lng]}
             zoom={13}
+            preferCanvas
             scrollWheelZoom={false}
             doubleClickZoom={false}
             tap={true}
@@ -129,6 +191,22 @@ export default function BarMap({ bars, userCoords, highlightIds, fitToBars, oneF
             )}
             {bars.map((bar) => {
               const isHighlighted = highlightSet.has(bar.id);
+              // Tier resolution: suggested wins over rated (a Loved bar can
+              // also be suggested), everything else falls to the quiet tier.
+              const tier: keyof typeof TIER_Z_OFFSET = suggestedSet.has(bar.id)
+                ? 'suggested'
+                : isHighlighted
+                ? 'rated'
+                : 'other';
+              const icon = isTiered
+                ? tier === 'suggested'
+                  ? suggestedIcon
+                  : tier === 'rated'
+                  ? ratedIcon
+                  : otherIcon
+                : isHighlighted
+                ? highlightIcon
+                : barIcon;
               const miles = userCoords
                 ? haversineMiles(userCoords, { lat: bar.lat, lng: bar.lng })
                 : null;
@@ -137,7 +215,8 @@ export default function BarMap({ bars, userCoords, highlightIds, fitToBars, oneF
                 <Marker
                   key={bar.id}
                   position={[bar.lat, bar.lng]}
-                  icon={isHighlighted ? highlightIcon : barIcon}
+                  icon={icon}
+                  zIndexOffset={isTiered ? TIER_Z_OFFSET[tier] : 0}
                 >
                   <Popup>
                     <div className="font-bold">{bar.name}</div>
