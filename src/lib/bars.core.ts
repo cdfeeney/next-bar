@@ -373,18 +373,6 @@ export const coreBars: Bar[] = [
 
   // ---- UWS (5) ----
   {
-    id: 'manhattan-cricket-club',
-    name: 'Manhattan Cricket Club',
-    neighborhood: 'UWS',
-    address: '226 W 79th St',
-    lat: 40.7833905,
-    lng: -73.9795578,
-    priceTier: 3,
-    tags: ['speakeasy', 'cocktail', 'polished', 'date', 'pricey', 'lounge'],
-    blurb: 'Above Burke & Wills. Press the buzzer. Wear something.',
-    lastVerified: PLACEHOLDER_VERIFIED,
-  },
-  {
     id: 'owls-tail',
     name: "The Owl's Tail",
     neighborhood: 'UWS',
@@ -444,18 +432,6 @@ export const coreBars: Bar[] = [
     priceTier: 4,
     tags: ['cocktail', 'jazz', 'live', 'polished', 'splurge', 'date', 'old-nyc'],
     blurb: 'Madeline murals, piano nightly, cover charge worth every cent.',
-    lastVerified: PLACEHOLDER_VERIFIED,
-  },
-  {
-    id: 'subway-inn',
-    name: 'The Subway Inn',
-    neighborhood: 'UES',
-    address: '1140 2nd Ave',
-    lat: 40.7613,
-    lng: -73.9627,
-    priceTier: 1,
-    tags: ['dive', 'cheap', 'old-nyc', 'locals', 'rough'],
-    blurb: 'They moved it, the soul came with. Cash bar, neon sign, no questions.',
     lastVerified: PLACEHOLDER_VERIFIED,
   },
   {
