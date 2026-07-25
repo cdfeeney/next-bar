@@ -320,6 +320,9 @@ async function runPhotosMulti() {
   const ids = Object.keys(existing)
     .filter((id) => existing[id].googlePlaceId)
     .filter((id) => existing[id].businessStatus !== 'CLOSED_PERMANENTLY')
+    // --only support (2026-07-25): targeted ingest for newly-landed bars
+    // instead of a full-sidecar sweep re-paying ~400 details calls.
+    .filter((id) => !ONLY || ONLY.has(id))
     .sort()
     .slice(0, LIMIT);
   console.log(`photos-multi: ${ids.length} bars, up to ${PHOTO_MULTI_COUNT} photos each${Number.isFinite(LIMIT) ? ` (--limit ${LIMIT})` : ''}`);
