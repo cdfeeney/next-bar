@@ -90,6 +90,9 @@ type StubOptions = {
   suggestDeclines?: boolean;
   /** Force rsvp_bar to decline (server-said-no path). */
   rsvpDeclines?: boolean;
+  /** Signed-in "you" server ratings (ratings table rows) — enables the
+   * consensus/vote participant path. */
+  youRatings?: Array<{ bar_id: string; tier: string; rated_at: string }>;
   /** get_circle_rsvps succeeds once, then 500s (degradation path). */
   rsvpsFailAfterFirst?: boolean;
 };
@@ -113,6 +116,9 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
 
   await page.route('**/rest/v1/**', fulfillJson(200, []));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
+  if (opts.youRatings) {
+    await page.route('**/rest/v1/ratings**', fulfillJson(200, opts.youRatings));
+  }
 
   await page.route('**/rest/v1/rpc/get_following**', fulfillJson(200, opts.following ?? []));
   await page.route(
@@ -371,6 +377,44 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await page.getByRole('button', { name: "I'm in at Attaboy" }).click();
     await expect(page.getByText(/Claire is in/)).toBeVisible();
     await expect(page.getByText(/nobody's pitched a spot/i)).toHaveCount(0);
+  });
+
+  test("a suggested bar joins the group vote, marked Suggested, and can win it", async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [FRIEND],
+      // Both of you rated Ace Bar loved → it's the unanimous algorithmic
+      // pick AND the friend's auto-vote.
+      friendRatings: [
+        { user_id: FRIEND.id, bar_id: 'ace-bar', tier: 'loved', rated_at: '2026-07-01T00:00:00Z' },
+      ],
+      youRatings: [
+        { bar_id: 'ace-bar', tier: 'loved', rated_at: '2026-07-02T00:00:00Z' },
+      ],
+      // The circle suggested Attaboy — NOT in anyone's ratings, so it can
+      // only appear in the vote via the suggestions merge (the feature
+      // under test; before it, only algorithmic picks were votable).
+      suggestionRows: [
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'attaboy' },
+      ],
+    });
+    await page.goto('/friends/consensus');
+
+    await expect(page.getByText('Attaboy')).toBeVisible();
+    await page.getByRole('button', { name: /put it to a vote/i }).click();
+
+    // The suggested bar is a candidate, marked as such.
+    const attaboyOption = page.getByRole('button', { name: /vote for attaboy/i });
+    await expect(attaboyOption).toBeVisible();
+    await expect(attaboyOption.getByText('Suggested')).toBeVisible();
+
+    // Your tap on the suggested bar decides it (1-1 tie breaks to the
+    // suggestion — human intent leads the candidate order).
+    await attaboyOption.click();
+    await expect(page.getByText(/tonight's pick/i)).toBeVisible();
+    const winnerCard = page.locator('section[aria-label="Vote result"]');
+    await expect(winnerCard.getByRole('heading', { name: 'Attaboy' })).toBeVisible();
   });
 
   test('a declined suggest (cap) surfaces the inline message', async ({ page }) => {

@@ -5,6 +5,8 @@ import {
   tally,
   winner,
   pickFavorite,
+  mergeVoteCandidates,
+  VOTE_CANDIDATE_CAP,
 } from '@/lib/groupVote';
 import type { BarRating } from '@/types/ratings';
 
@@ -152,5 +154,32 @@ describe('pickFavorite', () => {
     expect(pickFavorite([rating('elsewhere', 'loved', 9.9)], CANDIDATES)).toBe(
       'death-and-co',
     );
+  });
+});
+
+describe('mergeVoteCandidates', () => {
+  it('puts suggestions before algorithmic picks', () => {
+    expect(mergeVoteCandidates(['attaboy'], ['death-and-co', 'donna'])).toEqual([
+      'attaboy',
+      'death-and-co',
+      'donna',
+    ]);
+  });
+
+  it('dedupes a bar that is both suggested and an algorithmic pick', () => {
+    expect(
+      mergeVoteCandidates(['death-and-co'], ['death-and-co', 'donna']),
+    ).toEqual(['death-and-co', 'donna']);
+  });
+
+  it('caps the total and lets suggestions crowd out the algorithm', () => {
+    const suggested = ['a', 'b', 'c', 'd', 'e', 'f'];
+    const merged = mergeVoteCandidates(suggested, ['x', 'y']);
+    expect(merged).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(merged.length).toBe(VOTE_CANDIDATE_CAP);
+  });
+
+  it('is exactly the algorithmic list when nothing is suggested', () => {
+    expect(mergeVoteCandidates([], ['x', 'y', 'z'])).toEqual(['x', 'y', 'z']);
   });
 });

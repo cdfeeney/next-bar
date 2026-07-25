@@ -29,10 +29,14 @@ const YOU_ID = 'you';
 export default function GroupVote({
   participants,
   candidates,
+  suggestedIds = [],
 }: {
   participants: ConsensusParticipant[];
   /** Candidate barIds ranked best-first (the tie-break order). */
   candidates: string[];
+  /** Bars in the vote because the circle SUGGESTED them tonight (0011) —
+   * marked so voters can tell human picks from algorithmic ones. */
+  suggestedIds?: string[];
 }): JSX.Element {
   const [session, setSession] = useState<VoteSession | null>(null);
 
@@ -69,19 +73,36 @@ export default function GroupVote({
     return (
       <VotingScreen
         session={session}
+        suggestedIds={suggestedIds}
         onVote={(barId) => setSession(castVote(session, YOU_ID, barId))}
       />
     );
   }
 
-  return <ResultScreen session={session} onReset={() => setSession(null)} />;
+  return (
+    <ResultScreen
+      session={session}
+      suggestedIds={suggestedIds}
+      onReset={() => setSession(null)}
+    />
+  );
+}
+
+function SuggestedChip(): JSX.Element {
+  return (
+    <span className="text-[11px] px-2 py-0.5 rounded-full bg-accent/10 border border-accent/40 text-accent shrink-0">
+      Suggested
+    </span>
+  );
 }
 
 function VotingScreen({
   session,
+  suggestedIds,
   onVote,
 }: {
   session: VoteSession;
+  suggestedIds: string[];
   onVote: (barId: string) => void;
 }): JSX.Element {
   const friendVotesFor = (barId: string) =>
@@ -111,8 +132,9 @@ function VotingScreen({
               className="w-full text-left rounded-3xl p-4 border bg-surface border-border hover:border-accent transition-colors touch-manipulation"
             >
               <div className="flex items-baseline justify-between gap-3">
-                <span className="font-display text-lg leading-tight">
+                <span className="font-display text-lg leading-tight inline-flex items-center gap-2">
                   {bar.name}
+                  {suggestedIds.includes(barId) ? <SuggestedChip /> : null}
                 </span>
                 <span className="text-muted text-xs uppercase tracking-wider shrink-0">
                   {bar.neighborhood}
@@ -140,9 +162,11 @@ function VotingScreen({
 
 function ResultScreen({
   session,
+  suggestedIds,
   onReset,
 }: {
   session: VoteSession;
+  suggestedIds: string[];
   onReset: () => void;
 }): JSX.Element {
   const winnerId = winner(session);
@@ -176,7 +200,10 @@ function ResultScreen({
               key={row.barId}
               className="flex items-center justify-between gap-3 text-sm px-4 py-2 rounded-2xl bg-surface border border-border"
             >
-              <span className="truncate">{rowBar.name}</span>
+              <span className="truncate inline-flex items-center gap-2">
+                {rowBar.name}
+                {suggestedIds.includes(row.barId) ? <SuggestedChip /> : null}
+              </span>
               <span className="text-muted text-xs shrink-0">
                 {row.count} {row.count === 1 ? 'vote' : 'votes'}
                 {backers.length > 0
