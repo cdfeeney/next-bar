@@ -92,7 +92,9 @@ begin
 
   insert into public.bar_rsvps (user_id, bar_id, night)
   values (uid, bar, night)
-  on conflict (user_id, bar_id, night) do nothing;
+  -- ON CONSTRAINT, not a column list (2026-07-25 prod fix — same 42702
+  -- `night` param/column ambiguity as 0011's suggest_bar; see there).
+  on conflict on constraint bar_rsvps_pkey do nothing;
   return true;
 end;
 $$;
