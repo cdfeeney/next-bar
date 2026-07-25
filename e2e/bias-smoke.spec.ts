@@ -17,6 +17,11 @@ test.describe('Bias smoke — Midtown geolocation', () => {
   });
 
   test('top result is a Midtown / Chelsea / UWS / East Village bar', async ({ page }) => {
+    // Full quiz walk + first-load compile + location auto-resolve is
+    // legitimately slow under parallel-worker load, especially on WebKit
+    // (night-loop N1): the page reaches the right state, the budget just
+    // runs out. test.slow() = 3× the project timeout.
+    test.slow();
     await page.goto('/quiz');
 
     // First-load compile of /quiz can take >10s under concurrent worker load.
@@ -45,16 +50,26 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     await expect(page.getByText('Any neighborhoods you love?')).toBeVisible();
     await page.getByRole('button', { name: 'Anywhere works' }).click();
 
-    // LocationPrompt — granted_precise auto-resolves via useEffect. Wait for
-    // either the results heading OR the "Use my location" button (race), then
-    // click the button only if needed.
+    // LocationPrompt — granted_precise auto-resolves via useEffect, but the
+    // resolve can take >3s under concurrent worker load (night-loop N1: the
+    // old 3s race window was the real cause of the "drift" here — results
+    // arrived WHILE we waited for a button that never comes on the granted
+    // path). Race BOTH outcomes with one generous window, then branch.
     const resultsHeading = page.getByRole('heading', { name: /Your next \d+ bars?/i });
     const useLocationBtn = page.getByRole('button', { name: /Use my location/i });
 
-    const autoResolved = await resultsHeading.isVisible({ timeout: 3_000 }).catch(() => false);
-    if (!autoResolved) {
-      await expect(useLocationBtn).toBeVisible();
-      await useLocationBtn.click();
+    await expect(resultsHeading.or(useLocationBtn).first()).toBeVisible({
+      timeout: 15_000,
+    });
+    if (!(await resultsHeading.isVisible())) {
+      // The granted path renders a DISABLED "Use my location" ("Using your
+      // location…") while auto-resolving — results replace it on their own,
+      // sometimes mid-click (it can flash enabled). The click is therefore
+      // BEST-EFFORT with a short cap; the results assertion below is the
+      // real gate either way.
+      if (await useLocationBtn.isEnabled().catch(() => false)) {
+        await useLocationBtn.click({ timeout: 5_000 }).catch(() => {});
+      }
     }
 
     await expect(resultsHeading).toBeVisible({ timeout: 15_000 });
@@ -62,7 +77,11 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     const count = await cards.count();
     expect(count).toBeGreaterThanOrEqual(3);
 
+    // Hell's Kitchen joined the catalog 2026-07-24 — from Midtown coords its
+    // bars are legitimately the nearest strong matches (Bar Centrale 6/6).
     const firstCard = cards.first();
-    await expect(firstCard).toContainText(/Midtown|Chelsea|UWS|East Village/i);
+    await expect(firstCard).toContainText(
+      /Midtown|Hell's Kitchen|Chelsea|UWS|East Village/i,
+    );
   });
 });
