@@ -95,3 +95,53 @@ hoods, suggestions+RSVP live. Operator can stop the loop by adding a line
 - 2026-07-25 PM (attended): zombie `:3000` dev server from 22:06 killed +
   `.next` cleared; N7/g-981cbdde reconciled into g-db540bdb (see N7
   entry); N1 baseline re-run + commit/PR from this session.
+
+## SESSION SUMMARY (2026-07-25 afternoon, attended — queue complete)
+
+11 PRs merged (#16–#26), every one through gates CI + post-merge
+`/api/health` sha smoke. Final prod sha at close: `b6ca2a6` (N6 doc).
+
+**The headline: suggestions + RSVPs NEVER WORKED in prod.** The
+operator's first real phone-test surfaced 42702 ("column reference
+night is ambiguous") — plpgsql parses an `ON CONFLICT (col list)` as
+expressions over the table, `night` was both column and parameter, and
+plpgsql's lazy compile meant CREATE FUNCTION succeeded while every real
+call failed. Both tables were empty since ship; the stubbed e2e suite
+and existence-only migration "verify" were blind to it. Fixed via
+`ON CONFLICT ON CONSTRAINT` (0011/0012 edited in place — ledger-less
+runner), verified with NEW `scripts/rpc-smoke.mts` (throwaway confirmed
+user, full behavioral cycle, self-cleanup). **Standing rule: any
+migration touching an RPC gets an attended rpc-smoke run.**
+
+Queue results:
+- **N1** (#16): bias-smoke race + HK assertion + WebKit pan-motion skip.
+  Baseline ≤3 iPhone-only fails held.
+- **N2a** (#20): PR#14 LOWs — decline/outage e2e, night-scope stub
+  guards, going-list "+N others" (`goingList.ts`).
+- **N2b** (#18+#19): 0013 `unrsvp_bar` RPC + 0014 grant revoke, BOTH
+  applied + verified — the RSVP race is closed at the DB layer.
+- **N3** (#21): 6 bars → Hell's Kitchen (web-verified); Beer Authority
+  HELD (usage unanimously non-HK) — operator judgment call.
+- **N4** (#24): 26/27 contested closures CONFIRMED CLOSED, 1 unclear
+  (chelsea-music-hall). Google businessStatus right every time; lesson:
+  model-knowledge "still open" contests carry near-zero weight. Removal
+  PR recommended, awaiting operator word.
+- **N5** (#23): 88-row tag queue → top-20 apply / 27 discard / 41 mid.
+- **N6** (#26): 33-bar staged bench, all web-verified open, conflicts
+  flagged (madelines@113 Franklin vs Sereneco). Attended enrichment next.
+- **N6b** (#25): every ranked bar shows its number (tentative ~midpoint
+  when uncompared). LIVE.
+- **N7**: superseded into g-db540bdb v0.6 epics (vibe-night-cache in
+  Locked Decision 3; E1.4 refined = suggestions join the vote,
+  poll-style names+counts per operator phone feedback).
+
+Also: SUPABASE_SERVICE_ROLE_KEY in `.env.local` found INVALID (401) —
+operator re-copy needed (deletion-route dependency). Operator is buying
+next-bar.app. Successor leads for future passes: Sonny's Corner (staged),
+Saint Vitus Bushwick (watch, fall 2026); Frank Mac's lead was stale (dead
+since 2021).
+
+**Operator queue (open):** (1) word on the 26-bar removal PR; (2) word on
+the top-20 tag apply; (3) attended bench enrichment run; (4) phone-test
+suggest/RSVP + rankings numbers; (5) service-role key; (6) domain DNS
+when purchased; (7) Brevo password rotation; (8) deletion go-live.
