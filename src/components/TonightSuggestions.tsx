@@ -69,9 +69,11 @@ export default function TonightSuggestions(): JSX.Element | null {
     }
     setLoadFailed(false);
     setSuggestions(rows);
-    // RSVP load failure degrades quietly (going-lists empty) rather than
-    // blocking the whole section — suggestions are the primary content.
-    setRsvps(rsvpRows ?? []);
+    // RSVP load failure degrades quietly by KEEPING the previous rows
+    // (Opus review: overwriting with [] would blank every going-list and
+    // falsely flip the user's own "I'm in ✓" — a transient read error
+    // must not misreport their commitment).
+    setRsvps((prev) => rsvpRows ?? prev);
   }, [auth.status, night]);
 
   useEffect(() => {
@@ -95,8 +97,10 @@ export default function TonightSuggestions(): JSX.Element | null {
   }
   for (const r of rsvps) {
     const entry = grouped.find((g) => g.bar.id === r.barId);
-    // RSVPs only render on suggested bars (the RSVP button lives there);
-    // an RSVP for a bar nobody suggests anymore just doesn't display.
+    // Friends' RSVPs only render on suggested bars; YOUR own orphaned
+    // RSVP gets an escape-hatch row below (Opus review: the toggle is the
+    // only un-RSVP affordance — if the suggestion is withdrawn you'd be
+    // stuck "in" at a bar with no way out).
     if (!entry) continue;
     entry.going.push({ userId: r.userId, label: personLabel(r), isYou: r.userId === you });
   }
@@ -109,7 +113,17 @@ export default function TonightSuggestions(): JSX.Element | null {
   );
   const ownCount = (suggestions ?? []).filter((s) => s.userId === you).length;
   const yourRsvpBarId = rsvps.find((r) => r.userId === you)?.barId ?? null;
+  // Your RSVP on a bar nobody suggests anymore — needs its own way out.
+  const orphanedRsvpBar =
+    yourRsvpBarId !== null && !grouped.some((g) => g.bar.id === yourRsvpBarId)
+      ? getBarById(yourRsvpBarId)
+      : null;
 
+  // busy is held THROUGH the refresh in all three write handlers (Opus
+  // review HIGH): releasing it before the refetch lands re-enables the
+  // buttons while derived state (yourRsvpBarId especially) is stale — a
+  // second tap in that window would branch to the WRONG operation. The
+  // hold also prevents overlapping refreshes racing each other's setState.
   const handlePick = async (bar: Bar): Promise<void> => {
     setPickerOpen(false);
     if (busy) return;
@@ -117,17 +131,20 @@ export default function TonightSuggestions(): JSX.Element | null {
     if (!supabase) return;
     setBusy(true);
     setNotice(null);
-    const ok = await suggestBar(supabase, bar.id, night);
-    setBusy(false);
-    if (!ok) {
-      setNotice(
-        ownCount >= 3
-          ? "You've already suggested 3 bars tonight — remove one to swap."
-          : "Couldn't save that suggestion — try again in a moment.",
-      );
-      return;
+    try {
+      const ok = await suggestBar(supabase, bar.id, night);
+      if (!ok) {
+        setNotice(
+          ownCount >= 3
+            ? "You've already suggested 3 bars tonight — remove one to swap."
+            : "Couldn't save that suggestion — try again in a moment.",
+        );
+        return;
+      }
+      await refresh();
+    } finally {
+      setBusy(false);
     }
-    await refresh();
   };
 
   const handleRemove = async (barId: string): Promise<void> => {
@@ -136,13 +153,16 @@ export default function TonightSuggestions(): JSX.Element | null {
     if (!supabase) return;
     setBusy(true);
     setNotice(null);
-    const ok = await unsuggestBar(supabase, you, barId, night);
-    setBusy(false);
-    if (!ok) {
-      setNotice("Couldn't remove that — try again in a moment.");
-      return;
+    try {
+      const ok = await unsuggestBar(supabase, you, barId, night);
+      if (!ok) {
+        setNotice("Couldn't remove that — try again in a moment.");
+        return;
+      }
+      await refresh();
+    } finally {
+      setBusy(false);
     }
-    await refresh();
   };
 
   const handleToggleRsvp = async (barId: string): Promise<void> => {
@@ -151,18 +171,21 @@ export default function TonightSuggestions(): JSX.Element | null {
     if (!supabase) return;
     setBusy(true);
     setNotice(null);
-    // Tapping your current bar = "I'm out"; anywhere else = move there
-    // (rsvp_bar's server-side single-RSVP semantics).
-    const ok =
-      yourRsvpBarId === barId
-        ? await unrsvpBar(supabase, you, barId, night)
-        : await rsvpBar(supabase, barId, night);
-    setBusy(false);
-    if (!ok) {
-      setNotice("Couldn't update your RSVP — try again in a moment.");
-      return;
+    try {
+      // Tapping your current bar = "I'm out"; anywhere else = move there
+      // (rsvp_bar's server-side single-RSVP semantics).
+      const ok =
+        yourRsvpBarId === barId
+          ? await unrsvpBar(supabase, you, barId, night)
+          : await rsvpBar(supabase, barId, night);
+      if (!ok) {
+        setNotice("Couldn't update your RSVP — try again in a moment.");
+        return;
+      }
+      await refresh();
+    } finally {
+      setBusy(false);
     }
-    await refresh();
   };
 
   return (
@@ -226,8 +249,9 @@ export default function TonightSuggestions(): JSX.Element | null {
                       onClick={() => void handleToggleRsvp(bar.id)}
                       disabled={busy}
                       aria-pressed={youAreIn}
+                      aria-label={`I'm in at ${bar.name}`}
                       className={[
-                        'font-display text-xs px-4 py-2 rounded-full min-h-[38px] touch-manipulation disabled:opacity-50 border transition-colors',
+                        'font-display text-xs px-4 py-2 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50 border transition-colors',
                         youAreIn
                           ? 'bg-accent text-bg border-accent'
                           : 'bg-transparent text-accent border-accent/40 hover:border-accent',
@@ -241,7 +265,7 @@ export default function TonightSuggestions(): JSX.Element | null {
                         onClick={() => void handleRemove(bar.id)}
                         disabled={busy}
                         aria-label={`Remove your suggestion of ${bar.name}`}
-                        className="text-muted text-xs underline-offset-4 hover:underline min-h-[32px] touch-manipulation disabled:opacity-50"
+                        className="text-muted text-xs underline-offset-4 hover:underline min-h-[36px] touch-manipulation disabled:opacity-50"
                       >
                         Remove
                       </button>
@@ -253,6 +277,24 @@ export default function TonightSuggestions(): JSX.Element | null {
           })}
         </ul>
       )}
+
+      {orphanedRsvpBar ? (
+        <div className="mt-3 flex items-center justify-between gap-3 bg-surface border border-border rounded-3xl p-4">
+          <p className="text-muted text-xs min-w-0 truncate">
+            You&apos;re still in at{' '}
+            <span className="text-text">{orphanedRsvpBar.name}</span> — the
+            suggestion was withdrawn.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleToggleRsvp(orphanedRsvpBar.id)}
+            disabled={busy}
+            className="text-accent text-xs font-display underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0 disabled:opacity-50"
+          >
+            I&apos;m out
+          </button>
+        </div>
+      ) : null}
 
       {notice ? (
         <p className="text-accent text-xs mt-3" role="status">

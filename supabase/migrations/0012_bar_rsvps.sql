@@ -40,6 +40,13 @@ create table if not exists public.bar_rsvps (
 create index if not exists bar_rsvps_night_idx
   on public.bar_rsvps (night, user_id);
 
+-- The single-RSVP-per-night product rule, DECLARATIVELY (Opus 0012
+-- review): rsvp_bar's advisory lock + delete-then-insert enforce it
+-- procedurally, but only this unique index makes a future second write
+-- path fail LOUDLY instead of silently leaving a user in at two bars.
+create unique index if not exists bar_rsvps_one_per_night
+  on public.bar_rsvps (user_id, night);
+
 alter table public.bar_rsvps enable row level security;
 revoke all on table public.bar_rsvps from public, anon, authenticated;
 
@@ -128,5 +135,6 @@ grant execute on function public.get_circle_rsvps(date) to authenticated;
 --   revoke all on function public.rsvp_bar(text, date) from authenticated;
 --   drop function if exists public.rsvp_bar(text, date);
 --   drop policy if exists bar_rsvps_delete_own on public.bar_rsvps;
+--   drop index if exists public.bar_rsvps_one_per_night;
 --   drop table if exists public.bar_rsvps;
 ------------------------------------------------------------------------------

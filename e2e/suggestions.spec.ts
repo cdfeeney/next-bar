@@ -184,7 +184,10 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     const sheet = page.getByRole('dialog', { name: /suggest a bar/i });
     await expect(sheet).toBeVisible();
     // Pick a known catalog bar via the picker search.
-    await sheet.getByPlaceholder(/search/i).fill('Ace Bar');
+    // WebKit note (claim-handle.spec.ts pattern): click + pressSequentially,
+    // not fill — React controlled inputs need real key events on iOS.
+    await sheet.getByPlaceholder(/search/i).click();
+    await sheet.getByPlaceholder(/search/i).pressSequentially('Ace Bar');
     await sheet.getByRole('button', { name: /^Ace Bar/ }).first().click();
 
     // Sheet closes; the suggestion lands with "You" as the suggester.
@@ -240,23 +243,26 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     });
     await page.goto('/friends/consensus');
 
+    // Accessible names carry the bar (a11y label); aria-pressed carries
+    // the in/out state.
+    const aceButton = page.getByRole('button', { name: "I'm in at Ace Bar" });
+    const attaboyButton = page.getByRole('button', { name: "I'm in at Attaboy" });
     const aceRow = page.locator('li').filter({ hasText: 'Ace Bar' });
-    const attaboyRow = page.locator('li').filter({ hasText: 'Attaboy' });
 
     // In at Ace Bar.
-    await aceRow.getByRole('button', { name: /^I'm in$/ }).click();
-    await expect(aceRow.getByRole('button', { name: /I'm in ✓/ })).toBeVisible();
+    await aceButton.click();
+    await expect(aceButton).toHaveAttribute('aria-pressed', 'true');
     await expect(aceRow.getByText(/You.*are in/)).toBeVisible();
 
     // Move to Attaboy — Ace Bar must drop the RSVP (single-RSVP night).
-    await attaboyRow.getByRole('button', { name: /^I'm in$/ }).click();
-    await expect(attaboyRow.getByRole('button', { name: /I'm in ✓/ })).toBeVisible();
-    await expect(aceRow.getByRole('button', { name: /^I'm in$/ })).toBeVisible();
+    await attaboyButton.click();
+    await expect(attaboyButton).toHaveAttribute('aria-pressed', 'true');
+    await expect(aceButton).toHaveAttribute('aria-pressed', 'false');
     await expect(aceRow.getByText(/are in/)).toHaveCount(0);
 
     // Tap again — out entirely.
-    await attaboyRow.getByRole('button', { name: /I'm in ✓/ }).click();
-    await expect(attaboyRow.getByRole('button', { name: /^I'm in$/ })).toBeVisible();
+    await attaboyButton.click();
+    await expect(attaboyButton).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByText(/are in|is in/)).toHaveCount(0);
   });
 
@@ -291,7 +297,8 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
 
     await page.getByRole('button', { name: /\+ suggest a bar/i }).click();
     const sheet = page.getByRole('dialog', { name: /suggest a bar/i });
-    await sheet.getByPlaceholder(/search/i).fill('Dead Rabbit');
+    await sheet.getByPlaceholder(/search/i).click();
+    await sheet.getByPlaceholder(/search/i).pressSequentially('Dead Rabbit');
     await sheet.getByRole('button', { name: /Dead Rabbit/ }).first().click();
 
     await expect(
