@@ -6,6 +6,7 @@ import { expansion2Bars } from './bars.expansion2';
 import { expansion3Bars } from './bars.expansion3';
 import { expansion4Bars } from './bars.expansion4';
 import { expansion5Bars } from './bars.expansion5';
+import { expansion6Bars } from './bars.expansion6';
 
 /**
  * Sidecar-free catalog view for EDGE bundles (the share OG card).
@@ -32,6 +33,7 @@ const rawBars: Bar[] = [
   ...expansion3Bars,
   ...expansion4Bars,
   ...expansion5Bars,
+  ...expansion6Bars,
 ];
 
 /** Curated share-card fields for one bar, or null when the id is unknown. */

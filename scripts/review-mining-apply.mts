@@ -34,6 +34,7 @@ const BAR_FILES = [
   'bars.expansion3.ts',
   'bars.expansion4.ts',
   'bars.expansion5.ts',
+  'bars.expansion6.ts',
 ].map((f) => path.join(scriptDir, '..', 'src', 'lib', f));
 
 type Change = { barId: string; action: TagAction; tag: string };
