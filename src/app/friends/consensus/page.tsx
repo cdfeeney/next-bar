@@ -167,6 +167,14 @@ export default function ConsensusPage(): JSX.Element {
         : ids,
     );
   }, []);
+  // Reset on server→local mode flips (review MED): TonightSuggestions
+  // unmounts the instant isServer goes false (session expiry, another
+  // tab's sign-out), BEFORE its own effect can emit [] — without this,
+  // a real account's stale suggestion would leak into the demo vote.
+  // Mirrors the friendRatings reset pattern above.
+  useEffect(() => {
+    if (!isServer) setSuggestedBarIds([]);
+  }, [isServer]);
 
   // Vote candidates: circle suggestions LEAD (operator 2026-07-25 — what
   // your circle pitched must be votable), algorithmic picks fill (overlap
@@ -287,7 +295,15 @@ export default function ConsensusPage(): JSX.Element {
 
             {voteCandidates.length >= 2 ? (
               <GroupVote
-                key={participants.map((p) => p.id).join('+')}
+                // Keyed on participants AND the candidate SET (review MED):
+                // a suggestion arriving mid-vote would otherwise silently
+                // never become an option in the locked session. Membership
+                // change restarts the (seconds-long) vote; sorted so mere
+                // reorders (an RSVP shuffling most-backed) do NOT reset it.
+                key={[
+                  participants.map((p) => p.id).join('+'),
+                  [...voteCandidates].sort().join('+'),
+                ].join('|')}
                 participants={participants}
                 candidates={voteCandidates}
                 suggestedIds={suggestedBarIds}
