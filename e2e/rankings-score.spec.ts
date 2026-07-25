@@ -14,6 +14,8 @@
  *   - Score-desc sort breaking
  *   - The fallback to tier-then-recency disappearing for unscored bars
  *   - The 0.0–10.0 visual column not rendering when score is present
+ *   - The tentative ~midpoint number (N6b: EVERY bar shows its number)
+ *     vanishing or rendering as a firm score for unscored bars
  *   - The "Rank as you compare" hint vanishing for unscored bars
  */
 
@@ -37,7 +39,7 @@ async function seed(page: Page, ratings: LocalRating[]): Promise<void> {
 }
 
 test.describe('/rankings — score column + sort', () => {
-  test('renders 0.0–10.0 score for bars that have one and hides it for those that do not', async ({
+  test('renders a firm score when present and a tentative ~midpoint when not (N6b)', async ({
     page,
   }) => {
     // Use real bar ids from src/lib/bars.ts so the rankings row actually
@@ -62,14 +64,22 @@ test.describe('/rankings — score column + sort', () => {
     const cards = page.locator('article');
     await expect(cards).toHaveCount(2);
 
-    // Scored bar first (sortRatingsByScore puts scored above unscored).
+    // Scored bar first (9.5 > loved midpoint 9.0).
     const first = cards.first();
     await expect(first).toContainText('Attaboy');
-    await expect(first.getByLabel(/score 9\.5 out of 10/i)).toBeVisible();
+    await expect(first.getByLabel(/^score 9\.5 out of 10/i)).toBeVisible();
     await expect(first.getByText(/rank as you compare/i)).not.toBeVisible();
+    // Negative: a firm score never renders as tentative.
+    await expect(first.getByText('~9.5')).not.toBeVisible();
 
+    // Unscored bar shows the tentative tier-midpoint number (loved → ~9.0)
+    // plus the hint — never a bare/firm number (N6b).
     const second = cards.nth(1);
     await expect(second).toContainText('Death & Co');
+    await expect(second.getByText('~9.0')).toBeVisible();
+    await expect(
+      second.getByLabel(/tentative score 9\.0 out of 10/i),
+    ).toBeVisible();
     await expect(second.getByText(/rank as you compare/i)).toBeVisible();
   });
 

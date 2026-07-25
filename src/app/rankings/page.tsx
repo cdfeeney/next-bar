@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
-import { sortRatingsByScore } from '@/lib/pairwise';
+import { sortRatingsByScore, tierMidpoint } from '@/lib/pairwise';
 import { seedSampleNight } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
 import QuickAddBar from '@/components/QuickAddBar';
@@ -101,8 +101,8 @@ export default function RankingsPage(): JSX.Element {
         <h1 className="font-display text-3xl md:text-4xl mb-2">Rankings</h1>
         <p className="text-muted text-sm max-w-md mx-auto">
           Bars you&apos;ve rated, ordered by your personal 0–10 score.
-          Unscored bars fall back to Loved → Liked → Pass; score firms up
-          as you answer comparison prompts.
+          A ~score is tentative — it sits at your tier&apos;s midpoint and
+          firms up as you answer comparison prompts.
         </p>
         <Link
           href="/lists"
@@ -201,7 +201,18 @@ export default function RankingsPage(): JSX.Element {
                         >
                           {(rating.score as number).toFixed(1)}
                         </span>
-                      ) : null}
+                      ) : (
+                        // N6b (operator): EVERY ranked bar shows its number.
+                        // No comparisons yet → tentative tier-band midpoint
+                        // (what the sort already uses), muted + ~ so it
+                        // reads as provisional, firming up via comparisons.
+                        <span
+                          className="font-display text-2xl tabular-nums text-muted"
+                          aria-label={`Tentative score ${tierMidpoint(rating.rating).toFixed(1)} out of 10 — firms up as you compare`}
+                        >
+                          ~{tierMidpoint(rating.rating).toFixed(1)}
+                        </span>
+                      )}
                       <span className="text-muted text-xs">
                         {'$'.repeat(bar.priceTier)}
                       </span>
