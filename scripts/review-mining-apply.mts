@@ -22,12 +22,18 @@ import { TAG_VOCABULARY } from '../src/lib/catalog';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
+// Every hand-authored catalog file (drift fix 2026-07-25: core split +
+// expansions 4/5 were missing, aborting applies for bars living there —
+// keep in lockstep with bars.ts's imports, same as refresh-places).
 const BAR_FILES = [
   'bars.ts',
+  'bars.core.ts',
   'bars.extra.ts',
   'bars.expansion.ts',
   'bars.expansion2.ts',
   'bars.expansion3.ts',
+  'bars.expansion4.ts',
+  'bars.expansion5.ts',
 ].map((f) => path.join(scriptDir, '..', 'src', 'lib', f));
 
 type Change = { barId: string; action: TagAction; tag: string };
