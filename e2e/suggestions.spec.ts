@@ -84,12 +84,15 @@ type StubOptions = {
   friendRatings?: Array<{ user_id: string; bar_id: string; tier: string; rated_at: string }>;
   /** Initial suggestion rows; mutated by suggest/remove. */
   suggestionRows?: SuggestionRow[];
+  /** Initial RSVP rows; mutated by rsvp/unrsvp (move semantics mirrored). */
+  rsvpRows?: SuggestionRow[];
   /** Force suggest_bar to decline (cap-hit path). */
   suggestDeclines?: boolean;
 };
 
 async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   const rows: SuggestionRow[] = opts.suggestionRows ?? [];
+  const rsvps: SuggestionRow[] = opts.rsvpRows ?? [];
 
   await page.route('**/rest/v1/**', fulfillJson(200, []));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
@@ -102,6 +105,9 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/rpc/get_circle_suggestions**', async (route) => {
     await fulfillJson(200, rows)(route);
   });
+  await page.route('**/rest/v1/rpc/get_circle_rsvps**', async (route) => {
+    await fulfillJson(200, rsvps)(route);
+  });
   await page.route('**/rest/v1/rpc/suggest_bar**', async (route) => {
     if (opts.suggestDeclines) {
       await fulfillJson(200, false)(route);
@@ -112,6 +118,28 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
       rows.push({ user_id: USER_ID, handle: 'connor_f', display_name: 'Conor F', bar_id: body.bar });
     }
     await fulfillJson(200, true)(route);
+  });
+  await page.route('**/rest/v1/rpc/rsvp_bar**', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string };
+    // Mirror 0012 move semantics: one RSVP per night — drop own others.
+    for (let i = rsvps.length - 1; i >= 0; i--) {
+      if (rsvps[i].user_id === USER_ID) rsvps.splice(i, 1);
+    }
+    if (body.bar) {
+      rsvps.push({ user_id: USER_ID, handle: 'connor_f', display_name: 'Conor F', bar_id: body.bar });
+    }
+    await fulfillJson(200, true)(route);
+  });
+  await page.route('**/rest/v1/bar_rsvps**', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      const url = new URL(route.request().url());
+      const barId = (url.searchParams.get('bar_id') ?? '').replace(/^eq\./, '');
+      const idx = rsvps.findIndex((r) => r.user_id === USER_ID && r.bar_id === barId);
+      if (idx !== -1) rsvps.splice(idx, 1);
+      await route.fulfill({ status: 204, body: '' });
+      return;
+    }
+    await fulfillJson(200, [])(route);
   });
   await page.route('**/rest/v1/bar_suggestions**', async (route) => {
     if (route.request().method() === 'DELETE') {
@@ -156,7 +184,10 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     const sheet = page.getByRole('dialog', { name: /suggest a bar/i });
     await expect(sheet).toBeVisible();
     // Pick a known catalog bar via the picker search.
-    await sheet.getByPlaceholder(/search/i).fill('Ace Bar');
+    // WebKit note (claim-handle.spec.ts pattern): click + pressSequentially,
+    // not fill — React controlled inputs need real key events on iOS.
+    await sheet.getByPlaceholder(/search/i).click();
+    await sheet.getByPlaceholder(/search/i).pressSequentially('Ace Bar');
     await sheet.getByRole('button', { name: /^Ace Bar/ }).first().click();
 
     // Sheet closes; the suggestion lands with "You" as the suggester.
@@ -200,6 +231,58 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await expect(page.getByText(/nobody's pitched a spot/i)).toBeVisible();
   });
 
+  test("RSVP: I'm-in toggles on, MOVES between bars, and toggles off", async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [FRIEND],
+      suggestionRows: [
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'attaboy' },
+      ],
+    });
+    await page.goto('/friends/consensus');
+
+    // Accessible names carry the bar (a11y label); aria-pressed carries
+    // the in/out state.
+    const aceButton = page.getByRole('button', { name: "I'm in at Ace Bar" });
+    const attaboyButton = page.getByRole('button', { name: "I'm in at Attaboy" });
+    const aceRow = page.locator('li').filter({ hasText: 'Ace Bar' });
+
+    // In at Ace Bar.
+    await aceButton.click();
+    await expect(aceButton).toHaveAttribute('aria-pressed', 'true');
+    await expect(aceRow.getByText(/You.*are in/)).toBeVisible();
+
+    // Move to Attaboy — Ace Bar must drop the RSVP (single-RSVP night).
+    await attaboyButton.click();
+    await expect(attaboyButton).toHaveAttribute('aria-pressed', 'true');
+    await expect(aceButton).toHaveAttribute('aria-pressed', 'false');
+    await expect(aceRow.getByText(/are in/)).toHaveCount(0);
+
+    // Tap again — out entirely.
+    await attaboyButton.click();
+    await expect(attaboyButton).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByText(/are in|is in/)).toHaveCount(0);
+  });
+
+  test("a friend's RSVP renders in the going-list with their name", async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [FRIEND],
+      suggestionRows: [
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
+      ],
+      rsvpRows: [
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
+      ],
+    });
+    await page.goto('/friends/consensus');
+
+    await expect(page.getByText(/Claire is in/)).toBeVisible();
+  });
+
   test('a declined suggest (cap) surfaces the inline message', async ({ page }) => {
     await stubSupabase(page, {
       following: [FRIEND],
@@ -214,7 +297,8 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
 
     await page.getByRole('button', { name: /\+ suggest a bar/i }).click();
     const sheet = page.getByRole('dialog', { name: /suggest a bar/i });
-    await sheet.getByPlaceholder(/search/i).fill('Dead Rabbit');
+    await sheet.getByPlaceholder(/search/i).click();
+    await sheet.getByPlaceholder(/search/i).pressSequentially('Dead Rabbit');
     await sheet.getByRole('button', { name: /Dead Rabbit/ }).first().click();
 
     await expect(
