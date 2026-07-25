@@ -58,19 +58,31 @@ hoods, suggestions+RSVP live. Operator can stop the loop by adding a line
   benches, re-verify open-status web-side, dedupe vs current catalog,
   emit a ready-to-enrich staging list (ids + entries) in a doc. NO
   enrichment, NO catalog merge — morning: attended `--only` run lands it.
-- **N7 — Night mode (goal g-981cbdde).** "Start your night" flow: home
-  entry → neighborhood-or-near-me anchor → results; mid-night "next bar"
-  re-search keeping or switching the anchor. Matcher already supports
-  both anchors — this is flow/UI. Feature branch, fresh-review pass,
-  **PR OPEN, NOT merged** — operator phone-tests in the morning.
+- **N6b — Rankings show the number (operator request 2026-07-25 ~01:00).**
+  /rankings displays each ranked bar's numeric score (own scores only —
+  the tier-only friend boundary is untouched). Beli-style: the number is
+  the point of the comparison chain; surface it. Small UI + tests.
+  Auto-merge (operator explicitly requested the change).
+- **N7 — Night mode: SUPERSEDED (reconciled 2026-07-25 PM, attended).**
+  The loop died mid-N1; no N7 work was started. N7's full scope ("start
+  your night" flow, mid-night next-bar re-search, anchors) is already
+  covered by goal **g-db540bdb (v0.6 epics)** as E2 + E3 + E0.2, written
+  at ~01:41 the same night. The operator's vibe-cached-for-the-night
+  refinement (per-search vibe pick, cached under the night-key infra so
+  same-night re-searches skip re-asking) was the only N7-unique piece —
+  now folded into g-db540bdb's Locked Decision 3. Goal g-981cbdde marked
+  abandoned-as-superseded. Build once, under the epic.
 - **N8 — Morning summary.** Append MORNING SUMMARY here: shipped shas,
   open PRs awaiting the operator, ⏸ items, the attended to-do list
   (apply 0013, bench enrichment run, N7 phone test).
 
 ## Morning operator queue (pre-seeded)
 
-1. Phone-test N7's preview URL; merge if good.
+1. ~~Phone-test N7's preview URL~~ — N7 never started; superseded by
+   g-db540bdb v0.6 epics (see N7 entry). Night-mode phone tests come with
+   E2/E3 PRs instead.
 2. Apply migration 0013 (`npm run db:migrate`, attended) → merge N2b PR.
+   (As of 2026-07-25 PM: 0013 not yet authored — loop died mid-N1.)
 3. Attended bench enrichment (`refresh-places --only` on N6's list) → PR.
 4. Standing items: next-bar.app domain, Brevo password rotation,
    deletion go-live.
@@ -78,3 +90,8 @@ hoods, suggestions+RSVP live. Operator can stop the loop by adding a line
 ## Tick log
 
 - (loop start 2026-07-25 ~00:30 — no ticks yet)
+- 2026-07-25 ~02:00: session died mid-N1 (e2e fixes in working tree,
+  uncommitted). No N2–N8 work happened; no PRs were opened overnight.
+- 2026-07-25 PM (attended): zombie `:3000` dev server from 22:06 killed +
+  `.next` cleared; N7/g-981cbdde reconciled into g-db540bdb (see N7
+  entry); N1 baseline re-run + commit/PR from this session.
