@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import Avatar from '@/components/Avatar';
 import GroupVote from '@/components/GroupVote';
@@ -21,6 +21,7 @@ import {
   type ConsensusParticipant,
   type ConsensusEntry,
 } from '@/lib/demo';
+import { mergeVoteCandidates } from '@/lib/groupVote';
 
 const YOU_ID = 'you';
 
@@ -155,12 +156,29 @@ export default function ConsensusPage(): JSX.Element {
 
   const enoughPeople = participants.length >= 2;
 
-  // Vote candidates: the group's top picks, best-first (overlap outranks
-  // "also consider"). That order doubles as the tie-break in groupVote.
+  // Tonight's suggested bars (live from TonightSuggestions, most-backed
+  // first). Functional set-state with an equality guard so the child's
+  // emit-on-every-refresh never loops a render.
+  const [suggestedBarIds, setSuggestedBarIds] = useState<string[]>([]);
+  const handleSuggestedBars = useCallback((ids: string[]) => {
+    setSuggestedBarIds((prev) =>
+      prev.length === ids.length && prev.every((v, i) => v === ids[i])
+        ? prev
+        : ids,
+    );
+  }, []);
+
+  // Vote candidates: circle suggestions LEAD (operator 2026-07-25 — what
+  // your circle pitched must be votable), algorithmic picks fill (overlap
+  // outranks "also consider", top 3 as before). Order doubles as the
+  // groupVote tie-break and the unrated-participant fallback.
   const voteCandidates = useMemo(
     () =>
-      [...overlap, ...alsoConsider].slice(0, 3).map((entry) => entry.barId),
-    [overlap, alsoConsider],
+      mergeVoteCandidates(
+        suggestedBarIds,
+        [...overlap, ...alsoConsider].slice(0, 3).map((entry) => entry.barId),
+      ),
+    [suggestedBarIds, overlap, alsoConsider],
   );
 
   return (
@@ -218,7 +236,9 @@ export default function ConsensusPage(): JSX.Element {
 
         {/* Nominations (0011): real circles only — the demo curators can't
             suggest, and rendering an inert section would read as broken. */}
-        {isServer ? <TonightSuggestions /> : null}
+        {isServer ? (
+          <TonightSuggestions onSuggestedBarsChange={handleSuggestedBars} />
+        ) : null}
 
         {!enoughPeople ? (
           <EmptyState
@@ -270,6 +290,7 @@ export default function ConsensusPage(): JSX.Element {
                 key={participants.map((p) => p.id).join('+')}
                 participants={participants}
                 candidates={voteCandidates}
+                suggestedIds={suggestedBarIds}
               />
             ) : null}
           </>

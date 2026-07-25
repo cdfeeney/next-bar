@@ -155,3 +155,27 @@ export function pickFavorite(
   }
   return best ? best.barId : candidates[0];
 }
+
+/** Poll options stay tappable on one phone screen. */
+export const VOTE_CANDIDATE_CAP = 5;
+
+/**
+ * Vote candidates = circle SUGGESTIONS first (explicit human intent,
+ * operator 2026-07-25: "it should be added to the bars you can vote on"),
+ * then algorithmic consensus picks, deduped, capped. Order matters twice:
+ * it's the groupVote tie-break AND pickFavorite's fallback for a
+ * participant who rated none of the candidates — both should favor what
+ * the circle actually pitched over what the algorithm inferred.
+ */
+export function mergeVoteCandidates(
+  suggested: ReadonlyArray<string>,
+  algorithmic: ReadonlyArray<string>,
+  cap: number = VOTE_CANDIDATE_CAP,
+): string[] {
+  const out: string[] = [];
+  for (const id of [...suggested, ...algorithmic]) {
+    if (out.length >= cap) break;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
