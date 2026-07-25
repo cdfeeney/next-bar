@@ -5,8 +5,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * migration 0012). House pattern: null/false on error, never throw.
  *
  * MOVE semantics live server-side in `rsvp_bar`: one RSVP per night —
- * RSVPing elsewhere moves you. "I'm out" is the own-row delete.
- * Reads go through the circle-scoped `get_circle_rsvps` definer.
+ * RSVPing elsewhere moves you. "I'm out" goes through `unrsvp_bar`
+ * (migration 0013) so BOTH RSVP writes serialize under the same
+ * per-user advisory lock — a raw table delete raced `rsvp_bar`'s
+ * delete-then-insert across tabs. Reads go through the circle-scoped
+ * `get_circle_rsvps` definer.
  */
 
 /** One friend-or-own RSVP for a given night. */
@@ -41,21 +44,18 @@ export async function rsvpBar(
   return !error && data === true;
 }
 
-/** Withdraw the caller's own RSVP ("I'm out") — own-row RLS delete. */
+/** Withdraw the caller's own RSVP ("I'm out") — serialized RPC. */
 export async function unrsvpBar(
   supabase: SupabaseClient,
-  userId: string,
   barId: string,
   night: string,
 ): Promise<boolean> {
   if (!BAR_ID_RE.test(barId) || !NIGHT_RE.test(night)) return false;
-  const { error } = await supabase
-    .from('bar_rsvps')
-    .delete()
-    .eq('user_id', userId)
-    .eq('bar_id', barId)
-    .eq('night', night);
-  return !error;
+  const { data, error } = await supabase.rpc('unrsvp_bar', {
+    bar: barId,
+    night,
+  });
+  return !error && data === true;
 }
 
 /**
