@@ -15,9 +15,10 @@
 --
 -- The own-row DELETE grant + policy from 0012 are RETAINED for the
 -- deploy window (already-loaded clients still table-delete until the
--- lib-swap deploy replaces them). Candidate for revocation in a later
--- migration once the swap is verified in prod — at that point the two
--- RPCs become the only write paths and the lock covers everything.
+-- lib-swap deploy replaces them). They are REVOKED by migration 0014
+-- (authored alongside this one; applied attended AFTER this PR's
+-- deploy is smoke-verified in prod) — at that point the two RPCs
+-- become the only write paths and the lock covers everything.
 --
 -- Idempotent: safe to re-run.
 
