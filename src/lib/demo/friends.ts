@@ -73,7 +73,9 @@ export const demoFriends: DemoFriend[] = [
       r('jimmys-corner', 8.9, '2026-05-21T03:10:00.000Z'),
       r('welcome-johnsons', 8.4, '2026-05-12T03:50:00.000Z'),
       r('ace-bar', 8.1, '2026-05-04T02:30:00.000Z'),
-      r('subway-inn', 7.2, '2026-04-30T03:15:00.000Z'),
+      // subway-inn removed (closed Dec 2024, N4 verdicts) — Rudy's keeps
+      // the Dive Loyalist's mid-list slot.
+      r('rudys-bar-and-grill', 7.2, '2026-04-30T03:15:00.000Z'),
       r('dive-bar-uws', 6.6, '2026-04-22T02:40:00.000Z'),
       r('white-horse-tavern', 6.1, '2026-05-08T01:25:00.000Z'),
       r('mr-purple', 3.8, '2026-05-16T03:00:00.000Z'),
