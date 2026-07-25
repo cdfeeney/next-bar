@@ -130,13 +130,18 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     }
     await fulfillJson(200, true)(route);
   });
+  await page.route('**/rest/v1/rpc/unrsvp_bar**', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string };
+    const idx = rsvps.findIndex((r) => r.user_id === USER_ID && r.bar_id === body.bar);
+    if (idx !== -1) rsvps.splice(idx, 1);
+    await fulfillJson(200, true)(route);
+  });
   await page.route('**/rest/v1/bar_rsvps**', async (route) => {
+    // 0013 closed the raw-table-delete race path — "I'm out" must go
+    // through the serialized unrsvp_bar RPC. A DELETE landing here is a
+    // regression; fail it loudly so the toggle test goes red.
     if (route.request().method() === 'DELETE') {
-      const url = new URL(route.request().url());
-      const barId = (url.searchParams.get('bar_id') ?? '').replace(/^eq\./, '');
-      const idx = rsvps.findIndex((r) => r.user_id === USER_ID && r.bar_id === barId);
-      if (idx !== -1) rsvps.splice(idx, 1);
-      await route.fulfill({ status: 204, body: '' });
+      await route.fulfill({ status: 500, body: 'unserialized bar_rsvps DELETE (should use unrsvp_bar RPC)' });
       return;
     }
     await fulfillJson(200, [])(route);
