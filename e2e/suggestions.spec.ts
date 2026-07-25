@@ -88,11 +88,28 @@ type StubOptions = {
   rsvpRows?: SuggestionRow[];
   /** Force suggest_bar to decline (cap-hit path). */
   suggestDeclines?: boolean;
+  /** Force rsvp_bar to decline (server-said-no path). */
+  rsvpDeclines?: boolean;
+  /** get_circle_rsvps succeeds once, then 500s (degradation path). */
+  rsvpsFailAfterFirst?: boolean;
 };
+
+/** YYYY-MM-DD; every night-scoped write must carry it (see NIGHT_GUARD). */
+const NIGHT_BODY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   const rows: SuggestionRow[] = opts.suggestionRows ?? [];
   const rsvps: SuggestionRow[] = opts.rsvpRows ?? [];
+
+  // NIGHT_GUARD (PR #14 review LOW): the real RPCs/tables are night-
+  // scoped; a client that drops the night from a write would silently
+  // hit every night. Stubs 500 on a missing/malformed night so that
+  // regression turns tests red instead of passing by accident.
+  const nightGuard = async (route: Route, night: unknown): Promise<boolean> => {
+    if (typeof night === 'string' && NIGHT_BODY_RE.test(night)) return true;
+    await route.fulfill({ status: 500, body: 'missing/malformed night scope' });
+    return false;
+  };
 
   await page.route('**/rest/v1/**', fulfillJson(200, []));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
@@ -105,22 +122,34 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/rpc/get_circle_suggestions**', async (route) => {
     await fulfillJson(200, rows)(route);
   });
+  let rsvpFetches = 0;
   await page.route('**/rest/v1/rpc/get_circle_rsvps**', async (route) => {
+    rsvpFetches += 1;
+    if (opts.rsvpsFailAfterFirst && rsvpFetches > 1) {
+      await route.fulfill({ status: 500, body: 'stubbed rsvps outage' });
+      return;
+    }
     await fulfillJson(200, rsvps)(route);
   });
   await page.route('**/rest/v1/rpc/suggest_bar**', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string; night?: string };
+    if (!(await nightGuard(route, body.night))) return;
     if (opts.suggestDeclines) {
       await fulfillJson(200, false)(route);
       return;
     }
-    const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string };
     if (body.bar && !rows.some((r) => r.user_id === USER_ID && r.bar_id === body.bar)) {
       rows.push({ user_id: USER_ID, handle: 'connor_f', display_name: 'Conor F', bar_id: body.bar });
     }
     await fulfillJson(200, true)(route);
   });
   await page.route('**/rest/v1/rpc/rsvp_bar**', async (route) => {
-    const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string };
+    const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string; night?: string };
+    if (!(await nightGuard(route, body.night))) return;
+    if (opts.rsvpDeclines) {
+      await fulfillJson(200, false)(route);
+      return;
+    }
     // Mirror 0012 move semantics: one RSVP per night — drop own others.
     for (let i = rsvps.length - 1; i >= 0; i--) {
       if (rsvps[i].user_id === USER_ID) rsvps.splice(i, 1);
@@ -130,13 +159,19 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     }
     await fulfillJson(200, true)(route);
   });
+  await page.route('**/rest/v1/rpc/unrsvp_bar**', async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string; night?: string };
+    if (!(await nightGuard(route, body.night))) return;
+    const idx = rsvps.findIndex((r) => r.user_id === USER_ID && r.bar_id === body.bar);
+    if (idx !== -1) rsvps.splice(idx, 1);
+    await fulfillJson(200, true)(route);
+  });
   await page.route('**/rest/v1/bar_rsvps**', async (route) => {
+    // 0013 closed the raw-table-delete race path — "I'm out" must go
+    // through the serialized unrsvp_bar RPC. A DELETE landing here is a
+    // regression; fail it loudly so the toggle test goes red.
     if (route.request().method() === 'DELETE') {
-      const url = new URL(route.request().url());
-      const barId = (url.searchParams.get('bar_id') ?? '').replace(/^eq\./, '');
-      const idx = rsvps.findIndex((r) => r.user_id === USER_ID && r.bar_id === barId);
-      if (idx !== -1) rsvps.splice(idx, 1);
-      await route.fulfill({ status: 204, body: '' });
+      await route.fulfill({ status: 500, body: 'unserialized bar_rsvps DELETE (should use unrsvp_bar RPC)' });
       return;
     }
     await fulfillJson(200, [])(route);
@@ -144,6 +179,8 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/bar_suggestions**', async (route) => {
     if (route.request().method() === 'DELETE') {
       const url = new URL(route.request().url());
+      const night = (url.searchParams.get('night') ?? '').replace(/^eq\./, '');
+      if (!(await nightGuard(route, night))) return;
       const barId = (url.searchParams.get('bar_id') ?? '').replace(/^eq\./, '');
       const idx = rows.findIndex((r) => r.user_id === USER_ID && r.bar_id === barId);
       if (idx !== -1) rows.splice(idx, 1);
@@ -247,7 +284,12 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     // the in/out state.
     const aceButton = page.getByRole('button', { name: "I'm in at Ace Bar" });
     const attaboyButton = page.getByRole('button', { name: "I'm in at Attaboy" });
-    const aceRow = page.locator('li').filter({ hasText: 'Ace Bar' });
+    // Scoped to the named list (PR #14 review LOW): a bare page-wide
+    // locator('li') would match nav items or any future list on the page.
+    const aceRow = page
+      .getByRole('list', { name: /tonight's suggestions/i })
+      .getByRole('listitem')
+      .filter({ hasText: 'Ace Bar' });
 
     // In at Ace Bar.
     await aceButton.click();
@@ -281,6 +323,54 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await page.goto('/friends/consensus');
 
     await expect(page.getByText(/Claire is in/)).toBeVisible();
+  });
+
+  test("a declined RSVP surfaces the notice and leaves the toggle out (PR #14 LOW)", async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [FRIEND],
+      rsvpDeclines: true,
+      suggestionRows: [
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
+      ],
+    });
+    await page.goto('/friends/consensus');
+
+    const aceButton = page.getByRole('button', { name: "I'm in at Ace Bar" });
+    await aceButton.click();
+
+    await expect(page.getByText(/couldn't update your rsvp/i)).toBeVisible();
+    // Negative assertion: the decline must not flip local state.
+    await expect(aceButton).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByText(/are in|is in/)).toHaveCount(0);
+  });
+
+  test('an RSVP fetch outage keeps the previous going-list instead of blanking it (PR #14 LOW)', async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [FRIEND],
+      rsvpsFailAfterFirst: true,
+      suggestionRows: [
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'attaboy' },
+      ],
+      rsvpRows: [
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
+      ],
+    });
+    await page.goto('/friends/consensus');
+
+    // First load succeeds: Claire's RSVP renders.
+    await expect(page.getByText(/Claire is in/)).toBeVisible();
+
+    // A write triggers a refetch whose RSVP leg 500s — the going-list
+    // must KEEP the last-known rows (blanking would falsely read as
+    // "nobody's in"; see the setRsvps prev-keep in TonightSuggestions).
+    await page.getByRole('button', { name: "I'm in at Attaboy" }).click();
+    await expect(page.getByText(/Claire is in/)).toBeVisible();
+    await expect(page.getByText(/nobody's pitched a spot/i)).toHaveCount(0);
   });
 
   test('a declined suggest (cap) surfaces the inline message', async ({ page }) => {

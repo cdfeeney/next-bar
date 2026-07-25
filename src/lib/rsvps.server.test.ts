@@ -72,21 +72,30 @@ describe('rsvpBar', () => {
 });
 
 describe('unrsvpBar', () => {
-  it('deletes the own row scoped by user, bar, and night', async () => {
-    const { client, calls } = fakeSupabase({});
-    expect(await unrsvpBar(client, 'uuid-me', 'ace-bar', '2026-07-24')).toBe(true);
-    expect(calls.from).toEqual(['bar_rsvps']);
-    expect(calls.deletes).toBe(1);
-    expect(calls.eq).toEqual([
-      { column: 'user_id', value: 'uuid-me' },
-      { column: 'bar_id', value: 'ace-bar' },
-      { column: 'night', value: '2026-07-24' },
+  it('calls the unrsvp_bar RPC — never a raw table delete (0013 race fix)', async () => {
+    const { client, calls } = fakeSupabase({ rpcData: true });
+    expect(await unrsvpBar(client, 'ace-bar', '2026-07-24')).toBe(true);
+    expect(calls.rpc).toEqual([
+      { fn: 'unrsvp_bar', args: { bar: 'ace-bar', night: '2026-07-24' } },
     ]);
+    // The old path was supabase.from('bar_rsvps').delete() — unserialized,
+    // raced rsvp_bar's delete-then-insert across tabs. Must stay dead.
+    expect(calls.from).toEqual([]);
+    expect(calls.deletes).toBe(0);
   });
 
-  it('false on delete error', async () => {
-    const { client } = fakeSupabase({ deleteError: { message: 'RLS' } });
-    expect(await unrsvpBar(client, 'uuid-me', 'ace-bar', '2026-07-24')).toBe(false);
+  it('rejects malformed input client-side — the RPC is never hit', async () => {
+    const { client, calls } = fakeSupabase({ rpcData: true });
+    expect(await unrsvpBar(client, 'Bad Id', '2026-07-24')).toBe(false);
+    expect(await unrsvpBar(client, 'ace-bar', 'not-a-date')).toBe(false);
+    expect(calls.rpc).toEqual([]);
+  });
+
+  it('false on RPC decline or error', async () => {
+    const declined = fakeSupabase({ rpcData: false });
+    expect(await unrsvpBar(declined.client, 'ace-bar', '2026-07-24')).toBe(false);
+    const errored = fakeSupabase({ rpcError: { message: 'boom' } });
+    expect(await unrsvpBar(errored.client, 'ace-bar', '2026-07-24')).toBe(false);
   });
 });
 

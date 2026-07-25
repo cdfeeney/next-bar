@@ -265,7 +265,9 @@ export const extraBars: Bar[] = [
   {
     id: 'birdland',
     name: 'Birdland Jazz Club',
-    neighborhood: 'Midtown',
+    // N3 2026-07-25: 315 W 44th is west of 8th Ave — physically HK
+    // (grid rule), though listings often say "Theater District".
+    neighborhood: "Hell's Kitchen",
     address: '315 W 44th St',
     lat: 40.7590853,
     lng: -73.9896379,

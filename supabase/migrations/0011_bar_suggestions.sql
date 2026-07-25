@@ -106,7 +106,12 @@ begin
 
   insert into public.bar_suggestions (user_id, bar_id, night)
   values (uid, bar, night)
-  on conflict (user_id, bar_id, night) do nothing;
+  -- ON CONSTRAINT, not a column list (2026-07-25 prod fix): plpgsql
+  -- parses a conflict-target column list as expressions over the table,
+  -- where `night` is BOTH a column and this function's parameter →
+  -- 42702 "column reference night is ambiguous" at first execution.
+  -- Broke every suggest in prod; invisible to the stubbed e2e suite.
+  on conflict on constraint bar_suggestions_pkey do nothing;
   return true;
 end;
 $$;

@@ -19,6 +19,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
 import { getBarById } from '@/lib/catalog';
+import { formatGoingList } from '@/lib/goingList';
 import { nycNightKey } from '@/lib/nightKey';
 import {
   fetchCircleSuggestions,
@@ -176,7 +177,7 @@ export default function TonightSuggestions(): JSX.Element | null {
       // (rsvp_bar's server-side single-RSVP semantics).
       const ok =
         yourRsvpBarId === barId
-          ? await unrsvpBar(supabase, you, barId, night)
+          ? await unrsvpBar(supabase, barId, night)
           : await rsvpBar(supabase, barId, night);
       if (!ok) {
         setNotice("Couldn't update your RSVP — try again in a moment.");
@@ -220,7 +221,7 @@ export default function TonightSuggestions(): JSX.Element | null {
           go? Suggest it and your circle will see it here.
         </p>
       ) : (
-        <ul className="space-y-3">
+        <ul aria-label="Tonight's suggestions" className="space-y-3">
           {grouped.map(({ bar, suggesters, going }) => {
             const youAreIn = yourRsvpBarId === bar.id;
             return (
@@ -236,10 +237,9 @@ export default function TonightSuggestions(): JSX.Element | null {
                       {suggesters.map((s) => s.label).join(', ')}
                     </p>
                     {going.length > 0 ? (
-                      <p className="text-xs mt-1 truncate">
+                      <p className="text-xs mt-1">
                         <span className="text-accent" aria-hidden="true">● </span>
-                        {going.map((g) => g.label).join(', ')}{' '}
-                        {going.length === 1 && !going[0].isYou ? 'is' : 'are'} in
+                        {formatGoingList(going.map((g) => g.label))}
                       </p>
                     ) : null}
                   </div>
