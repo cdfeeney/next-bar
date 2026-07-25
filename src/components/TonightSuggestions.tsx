@@ -176,7 +176,7 @@ export default function TonightSuggestions(): JSX.Element | null {
       // (rsvp_bar's server-side single-RSVP semantics).
       const ok =
         yourRsvpBarId === barId
-          ? await unrsvpBar(supabase, you, barId, night)
+          ? await unrsvpBar(supabase, barId, night)
           : await rsvpBar(supabase, barId, night);
       if (!ok) {
         setNotice("Couldn't update your RSVP — try again in a moment.");
