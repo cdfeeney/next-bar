@@ -248,6 +248,17 @@ describe('excludeClosedBars (E3.3 hard filter)', () => {
       expect(excludeClosedBars([laterOpener], thu1130pm, 60)).toEqual([]);
     });
 
+    it('exact-midnight boundary: at 23:00 sharp a 00:00 opener qualifies (review HIGH)', () => {
+      const midnightOpener = makeBar({
+        id: 'midnight-opener',
+        hours: { 5: [{ open: '00:00', close: '04:00' }] } as unknown as WeeklyHours,
+      });
+      const thu11pmSharp = new Date('2026-01-16T04:00:00Z'); // NYC Thu 23:00:00
+      expect(
+        excludeClosedBars([midnightOpener], thu11pmSharp, 60).map((b) => b.id),
+      ).toEqual(['midnight-opener']);
+    });
+
     it('opensSoon is false for unknown hours and for already-open bars', () => {
       expect(opensSoon(undefined, T_MINUS_45, 60)).toBe(false);
       // Open right now: not "opening soon" (the filter never asks, but the

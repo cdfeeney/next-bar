@@ -54,8 +54,11 @@ export function opensSoon(
     const open = toMinutes(r.open);
     if (open > minutes && open - minutes <= withinMinutes) return true;
   }
+  // >= 0: at exactly 23:00 with a 60-min window, a midnight opener sits
+  // ON the boundary and qualifies — same inclusive rule as the same-day
+  // branch (review HIGH: `> 0` silently dropped it).
   const overflow = minutes + withinMinutes - 24 * 60;
-  if (overflow > 0) {
+  if (overflow >= 0) {
     const tomorrow = (day + 1) % 7;
     for (const r of hours[tomorrow] ?? []) {
       if (toMinutes(r.open) <= overflow) return true;
