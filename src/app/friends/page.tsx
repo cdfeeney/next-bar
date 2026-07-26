@@ -79,9 +79,9 @@ export default function FriendsPage(): JSX.Element {
         {/* The one primary action (R2). */}
         <Link
           href="/friends/consensus"
-          className="block bg-accent text-bg rounded-3xl p-6 text-center touch-manipulation hover:bg-accentDim transition-colors"
+          className="block bg-accent text-bg rounded-2xl px-5 py-3 text-center touch-manipulation hover:bg-accentDim transition-colors"
         >
-          <p className="font-display text-2xl leading-snug">Plan Night Out →</p>
+          <p className="font-display text-lg leading-snug">Plan Night Out →</p>
         </Link>
 
         {/* Tonight — your status (one tap; tap again clears) and who's
