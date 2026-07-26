@@ -231,7 +231,7 @@ export default function TonightSuggestions({
     <div className="mb-10">
       <div className="flex items-center justify-between gap-3 mb-4">
         <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted">
-          Tonight&apos;s suggestions
+          People&apos;s Choice
         </h2>
         <button
           type="button"
@@ -239,7 +239,7 @@ export default function TonightSuggestions({
           disabled={busy}
           className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation disabled:opacity-50"
         >
-          + Suggest a bar
+          + Find a bar
         </button>
       </div>
 
@@ -255,11 +255,11 @@ export default function TonightSuggestions({
         <p className="text-muted text-xs">Loading…</p>
       ) : grouped.length === 0 ? (
         <p className="text-muted text-xs leading-relaxed">
-          Nobody&apos;s pitched a spot for tonight yet. Know where you wanna
-          go? Suggest it and your circle will see it here.
+          Nobody&apos;s picked a spot yet — find one and your circle sees it
+          here.
         </p>
       ) : (
-        <ul aria-label="Tonight's suggestions" className="space-y-3">
+        <ul aria-label="People's Choice" className="space-y-3">
           {grouped.map(({ bar, suggesters, going }) => {
             const youAreIn = yourRsvpBarId === bar.id;
             return (

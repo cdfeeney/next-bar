@@ -36,14 +36,18 @@ test.describe('Friends + consensus', () => {
     await expect(page.getByText('@sasha')).toBeVisible();
   });
 
-  test('consensus shows bars the group all rated', async ({ page }) => {
+  test('Group Favorites shows bars the group all rated, top pick shareable (UX-B)', async ({ page }) => {
     await page.goto('/friends/consensus');
 
     // With the default group (claire + john), there is overlap.
-    await expect(page.getByText(/You all agree on/i)).toBeVisible();
-    // Death & Co is loved by both curators → appears as a group pick.
+    await expect(page.getByText(/Group Favorites/i)).toBeVisible();
+    // Death & Co is loved by both curators → appears as a group pick,
+    // and the TOP pick carries the share moment (no vote step anymore).
     await expect(
       page.getByRole('heading', { name: /Death & Co/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: /Share the pick/i }),
     ).toBeVisible();
   });
 
@@ -89,35 +93,9 @@ test.describe('Friends + consensus', () => {
     await expect(goingAfter).toHaveAttribute('aria-pressed', 'false');
   });
 
-  test('friends-only vote settles instantly with a winner', async ({ page }) => {
-    await page.goto('/friends/consensus');
-
-    // Default group is claire + john (no "You" without ratings), so their
-    // auto-votes decide it the moment the vote starts.
-    await page.getByRole('button', { name: /Put it to a vote/i }).click();
-    await expect(page.getByText(/Tonight's pick/i)).toBeVisible();
-    await expect(page.getByText(/votes?\b/i).first()).toBeVisible();
-  });
-
-  test('your tap decides the group vote (happy path)', async ({ page }) => {
-    // Seed your own ratings so "You" joins the group.
-    await page.goto('/rankings');
-    await page.getByRole('button', { name: /load a sample night/i }).click();
-
-    await page.goto('/friends/consensus');
-    await page.getByRole('button', { name: /Put it to a vote/i }).click();
-
-    // Three participants → your vote is still outstanding.
-    await expect(page.getByText(/Your call/i)).toBeVisible();
-    await page.getByRole('button', { name: /^Vote for/ }).first().click();
-
-    await expect(page.getByText(/Tonight's pick/i)).toBeVisible();
-    // Restart path returns to the CTA.
-    await page.getByRole('button', { name: /Vote again/i }).click();
-    await expect(
-      page.getByRole('button', { name: /Put it to a vote/i }),
-    ).toBeVisible();
-  });
+  // The multi-step Put-it-to-a-vote flow is DELETED (UX-B): Group
+  // Favorites + People's Choice replace it; the winner-share moment moved
+  // to the top Group Favorite (covered above and in share-card.spec).
 
   test('profile follow toggle flips label', async ({ page }) => {
     await page.goto('/u/sasha');
