@@ -5,7 +5,6 @@ import Link from 'next/link';
 import type { Bar, VibeTag } from '@/types';
 import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
-import { formatVerified, isFresh } from '@/lib/freshness';
 import { barImageUrls } from '@/lib/barVisual';
 import OpenNowBadge from '@/components/OpenNowBadge';
 import BarVisualTile from '@/components/BarVisualTile';
@@ -20,147 +19,88 @@ type ResultCardProps = {
 };
 
 /**
- * E2.3 photo-first card (R7): when the bar has an ingested photo the card
- * LEADS with it full-bleed — name/neighborhood/price sit on a gradient
- * overlay, Instagram-register not Yelp. Photo-less bars (and live 404s,
- * via onError) fall back to the compact glyph-tile header row.
- *
- * U2-3 (operator decision 2026-07-25): suggestion cards are for DECIDING,
- * not rating — ranking happens on /rankings ("Rank it →" deep-links into
- * the quick-add + comparison chain there). A compact RatingBadge still
- * shows an existing tier. Tapping the photo (or the fallback tile) opens
- * the full-screen BarLightbox (carousel, weekly hours, review).
+ * COMPACT card (operator 2026-07-26: "they are drunk — they need the
+ * next bar in 10 seconds"). ~3 bars per phone screen: small photo tile,
+ * name + walk time as the loud data, one meta line, tiny actions. The
+ * full-bleed hero, blurb, and review quote moved into the lightbox —
+ * tap the photo for the big version. Broken photos advance through the
+ * carousel then fall back to the glyph tile (E2.3 semantics kept).
+ * U2-3: cards are for DECIDING — ranking lives on /rankings.
  */
 export default function ResultCard({ bar, rank, miles, userTags }: ResultCardProps) {
   const lead = leadCopy(miles, bar.neighborhood);
   const badge = vibeMatchBadge(userTags, bar.tags);
-  const fresh = isFresh(bar.lastVerified);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  // A broken photo advances to the NEXT carousel photo before giving up —
-  // a multi-photo bar with one corrupt file keeps its photo-first card.
-  const [heroIdx, setHeroIdx] = useState(0);
-  const [heroFailed, setHeroFailed] = useState(false);
+  const [thumbIdx, setThumbIdx] = useState(0);
+  const [thumbFailed, setThumbFailed] = useState(false);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
 
   const photos = barImageUrls(bar);
-  const showHero = photos.length > 0 && !heroFailed;
-  // Google policy: attribution must render whenever the photo is shown.
-  // Index-aligned with the carousel ('' = unknown author). Bars that went
-  // through the multi ingest must NOT fall back to the legacy field — it
-  // can hold a stale author from an older single-photo ingest.
-  const heroAttribution = bar.photoAttributions
-    ? bar.photoAttributions[heroIdx] || null
+  const showThumb = photos.length > 0 && !thumbFailed;
+  // Multi-ingest bars must NOT fall back to the legacy field — it can
+  // hold a stale author from an older single-photo ingest (E2.3 review
+  // rule, re-caught by this rewrite's review).
+  const attribution = bar.photoAttributions
+    ? bar.photoAttributions[thumbIdx] || null
     : bar.photoAttribution;
-  const review = bar.reviews?.[0];
 
   return (
-    <article className="bg-surface border border-border rounded-3xl overflow-hidden flex flex-col">
-      {showHero ? (
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setLightboxOpen(true)}
-            aria-label={`See photos and hours for ${bar.name}`}
-            className="block w-full touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={photos[heroIdx]}
-              alt=""
-              data-testid="bar-visual"
-              // Rank 1's hero is the likely LCP element — eager, like the
-              // lightbox carousel's first photo.
-              loading={rank === 1 ? 'eager' : 'lazy'}
-              className="w-full aspect-[16/10] object-cover"
-              onError={() =>
-                heroIdx + 1 < photos.length
-                  ? setHeroIdx(heroIdx + 1)
-                  : setHeroFailed(true)
-              }
-            />
-            <span
-              aria-hidden="true"
-              className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/85 via-black/40 to-transparent"
-            />
-          </button>
-          {photos.length > 1 ? (
-            <span className="absolute top-3 right-3 pointer-events-none rounded-full bg-black/60 text-white/90 text-[11px] px-2.5 py-1">
-              {photos.length} photos
-            </span>
-          ) : null}
-          <div className="absolute inset-x-0 bottom-0 p-4 pointer-events-none flex flex-col gap-1">
-            <h3 className="font-display text-2xl leading-tight text-white drop-shadow-sm">
-              {rank}. {bar.name}
-            </h3>
-            <p className="text-xs uppercase tracking-wider text-white/85">
-              {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
-            </p>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="p-5 pt-4 flex flex-col gap-3">
-        {showHero ? (
-          <div className="flex items-center gap-3 flex-wrap">
-            <OpenNowBadge bar={bar} />
-            <RatingBadge barId={bar.id} />
-          </div>
+    <article className="bg-surface border border-border rounded-2xl p-3 flex gap-3">
+      <button
+        type="button"
+        onClick={() => setLightboxOpen(true)}
+        aria-label={`See photos and hours for ${bar.name}`}
+        className="shrink-0 touch-manipulation rounded-xl overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-accent self-start"
+      >
+        {showThumb ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={photos[thumbIdx]}
+            alt=""
+            data-testid="bar-visual"
+            loading={rank === 1 ? 'eager' : 'lazy'}
+            className="w-20 h-20 object-cover"
+            onError={() =>
+              thumbIdx + 1 < photos.length
+                ? setThumbIdx(thumbIdx + 1)
+                : setThumbFailed(true)
+            }
+          />
         ) : (
-          <div className="flex items-start gap-3">
-            <button
-              type="button"
-              onClick={() => setLightboxOpen(true)}
-              aria-label={`See photos and hours for ${bar.name}`}
-              className="shrink-0 touch-manipulation rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              {/* photoDisabled: the hero already exhausted every photo URL —
-                  don't re-request a known-broken file. */}
-              <BarVisualTile bar={bar} size={56} photoDisabled={heroFailed} />
-            </button>
-            <div className="flex-1 min-w-0 flex flex-col gap-1">
-              <div className="flex items-baseline justify-between gap-3">
-                <h3 className="font-display text-2xl leading-tight">
-                  {rank}. {bar.name}
-                </h3>
-                <span className="text-muted text-xs shrink-0">
-                  {'$'.repeat(bar.priceTier)}
-                </span>
-              </div>
-              <div className="flex items-center gap-3 flex-wrap">
-                <p className="text-muted text-xs uppercase tracking-wider">{bar.neighborhood}</p>
-                <OpenNowBadge bar={bar} />
-                <RatingBadge barId={bar.id} />
-              </div>
-            </div>
-          </div>
+          <BarVisualTile bar={bar} size={56} photoDisabled={thumbFailed} />
         )}
-        {showHero ? (
-          // Attribution renders whenever the photo does (Google policy);
-          // unknown author still credits the source.
-          <p className="text-[10px] text-muted leading-tight">
-            {heroAttribution ? `Photo: ${heroAttribution} · Google` : 'Photo · Google'}
-          </p>
-        ) : null}
-        <p className="font-display text-accent text-3xl">{lead.text}</p>
-        <p className="text-sm text-muted">
-          Vibe match · {badge.num} of {badge.den}
-        </p>
-        <p className="text-sm italic line-clamp-2">{bar.blurb}</p>
-        {review ? (
-          <p className="text-xs text-muted line-clamp-2">
-            &ldquo;{review.text}&rdquo; &mdash; {review.author}, Google review
-          </p>
-        ) : null}
+      </button>
 
-        <div className="flex items-center justify-between gap-3 pt-1">
-          <p className="text-xs text-muted">
-            Verified {formatVerified(bar.lastVerified)}
-            {!fresh && ' · older info'}
-          </p>
-          <div className="flex items-center gap-4">
+      <div className="flex-1 min-w-0 flex flex-col gap-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <h3 className="font-display text-base leading-tight truncate">
+            {rank}. {bar.name}
+          </h3>
+          <span className="font-display text-accent text-base shrink-0">
+            {lead.text}
+          </span>
+        </div>
+        <p className="text-muted text-xs truncate">
+          {bar.neighborhood} · {'$'.repeat(bar.priceTier)} · Vibe match{' '}
+          {badge.num}/{badge.den}
+        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <OpenNowBadge bar={bar} />
+          <RatingBadge barId={bar.id} />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          {showThumb ? (
+            // Google policy: attribution renders whenever a photo does.
+            <p className="text-[9px] text-muted leading-tight truncate">
+              {attribution ? `Photo: ${attribution} · Google` : 'Photo · Google'}
+            </p>
+          ) : (
+            <span />
+          )}
+          <div className="flex items-center gap-3 shrink-0">
             <Link
               href={`/rankings?add=${bar.id}`}
-              className="text-xs text-accent font-display min-h-[56px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
+              className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
             >
               Rank it →
             </Link>
@@ -170,7 +110,7 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
               )}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-accent font-display min-h-[56px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
+              className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
             >
               Maps →
             </a>
@@ -178,9 +118,7 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
         </div>
       </div>
 
-      {lightboxOpen ? (
-        <BarLightbox bar={bar} onClose={closeLightbox} />
-      ) : null}
+      {lightboxOpen ? <BarLightbox bar={bar} onClose={closeLightbox} /> : null}
     </article>
   );
 }
