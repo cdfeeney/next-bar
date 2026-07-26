@@ -45,7 +45,9 @@ export default function MapPage(): JSX.Element {
   // UX-C: the search that never shipped — matching a bar pans/zooms the
   // map to it and opens its popup.
   const [query, setQuery] = useState('');
-  const [focusBarId, setFocusBarId] = useState<string | null>(null);
+  // Nonce per selection (review MED): re-picking the SAME bar after
+  // panning away must re-fly — a bare id state bails on same-value sets.
+  const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
   const q = query.trim().toLowerCase();
   const searchMatches = useMemo(() => {
     if (q.length < 2) return [];
@@ -143,7 +145,7 @@ export default function MapPage(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => {
-                      setFocusBarId(b.id);
+                      setFocus({ id: b.id, nonce: Date.now() });
                       setQuery('');
                     }}
                     className="w-full text-left px-4 py-3 min-h-[44px] touch-manipulation hover:bg-bg transition-colors"
@@ -199,7 +201,8 @@ export default function MapPage(): JSX.Element {
           bars={bars}
           userCoords={coords}
           panToUser
-          focusBarId={focusBarId}
+          focusBarId={focus?.id ?? null}
+          focusNonce={focus?.nonce}
           highlightIds={highlightIds}
           // Always defined on /map → tiered rendering. Empty (no quiz
           // profile) means no suggested tier: grey dots + rated rings only.

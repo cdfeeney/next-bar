@@ -75,7 +75,9 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
 }
 
 export type UseSuggestionsReturn = {
-  /** Ranked suggested bar ids. Empty until a saved quiz profile exists. */
+  /** Ranked suggested bar ids. Empty only before profileChecked; with no
+   *  saved quiz profile it falls back to the empty-tag profile
+   *  (proximity/affinity-ranked) — never blank for lack of a quiz. */
   suggestedIds: string[];
   /** True when loadProfile() found a saved quiz profile. */
   hasProfile: boolean;

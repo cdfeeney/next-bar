@@ -16,6 +16,8 @@ type BarMapProps = {
   panToUser?: boolean;
   /** UX-C map search: fly to this bar and open its popup. */
   focusBarId?: string | null;
+  /** Bumped per selection so re-picking the SAME bar re-flies (review MED). */
+  focusNonce?: number;
   /**
    * Bars the user has rated (Loved/Liked). Legacy mode (suggestedIds
    * undefined): these get the loud accent glow and every other bar renders
@@ -162,7 +164,7 @@ function PanToUser({ coords }: { coords: Coords | null | undefined }) {
  * UX-C: flies to a searched bar and opens a popup on it. Id-keyed so a
  * re-render with the same focus never re-flies against the user's pan.
  */
-function FocusBar({ bar }: { bar: Bar | null }) {
+function FocusBar({ bar, nonce }: { bar: Bar | null; nonce?: number }) {
   const map = useMap();
   const barId = bar?.id ?? null;
   useEffect(() => {
@@ -178,12 +180,12 @@ function FocusBar({ bar }: { bar: Bar | null }) {
     sub.textContent = `${bar.neighborhood} · ${'$'.repeat(bar.priceTier)}`;
     el.append(name, sub);
     map.openPopup(L.popup().setLatLng([bar.lat, bar.lng]).setContent(el));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- barId stands in for bar
-  }, [map, barId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- barId+nonce stand in for bar
+  }, [map, barId, nonce]);
   return null;
 }
 
-export default function BarMap({ bars, userCoords, panToUser, focusBarId, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
+export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -237,6 +239,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, highli
             {panToUser ? <PanToUser coords={userCoords} /> : null}
             <FocusBar
               bar={focusBarId ? (bars.find((b) => b.id === focusBarId) ?? null) : null}
+              nonce={focusNonce}
             />
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
