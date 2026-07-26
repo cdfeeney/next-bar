@@ -86,7 +86,7 @@ test.describe('App-shell smoke', () => {
   test('/friends/consensus renders the group picker', async ({ page }) => {
     await page.goto('/friends/consensus');
     await expect(
-      page.getByRole('heading', { name: /Where should we go\?/i }),
+      page.getByRole('heading', { name: /Plan Night Out/i }),
     ).toBeVisible();
     await expectNoConsoleErrors(page, '/friends/consensus');
   });

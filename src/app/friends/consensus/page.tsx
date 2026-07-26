@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import Avatar from '@/components/Avatar';
-import GroupVote from '@/components/GroupVote';
+import ShareButton from '@/components/ShareButton';
 import TonightSuggestions from '@/components/TonightSuggestions';
+import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
@@ -21,7 +22,6 @@ import {
   type ConsensusParticipant,
   type ConsensusEntry,
 } from '@/lib/demo';
-import { mergeVoteCandidates } from '@/lib/groupVote';
 
 const YOU_ID = 'you';
 
@@ -156,41 +156,18 @@ export default function ConsensusPage(): JSX.Element {
 
   const enoughPeople = participants.length >= 2;
 
-  // Tonight's suggested bars (live from TonightSuggestions, most-backed
-  // first). Functional set-state with an equality guard so the child's
-  // emit-on-every-refresh never loops a render.
-  const [suggestedBarIds, setSuggestedBarIds] = useState<string[]>([]);
-  const handleSuggestedBars = useCallback((ids: string[]) => {
-    setSuggestedBarIds((prev) =>
-      prev.length === ids.length && prev.every((v, i) => v === ids[i])
-        ? prev
-        : ids,
-    );
-  }, []);
-  // Reset on server→local mode flips (review MED): TonightSuggestions
-  // unmounts the instant isServer goes false (session expiry, another
-  // tab's sign-out), BEFORE its own effect can emit [] — without this,
-  // a real account's stale suggestion would leak into the demo vote.
-  // Mirrors the friendRatings reset pattern above.
-  useEffect(() => {
-    if (!isServer) setSuggestedBarIds([]);
-  }, [isServer]);
-
-  // Vote candidates: circle suggestions LEAD (operator 2026-07-25 — what
-  // your circle pitched must be votable), algorithmic picks fill (overlap
-  // outranks "also consider", top 3 as before). Order doubles as the
-  // groupVote tie-break and the unrated-participant fallback.
-  const voteCandidates = useMemo(
-    () =>
-      mergeVoteCandidates(
-        suggestedBarIds,
-        [...overlap, ...alsoConsider].slice(0, 3).map((entry) => entry.barId),
-      ),
-    [suggestedBarIds, overlap, alsoConsider],
+  // UX-B: ONE Group Favorites list — unanimous overlap leads, near-misses
+  // fill, capped at 5. (The multi-step vote flow is deleted; People's
+  // Choice carries the human signal via suggest + I'm-in.)
+  const groupFavorites = useMemo(
+    () => [...overlap, ...alsoConsider].slice(0, 5),
+    [overlap, alsoConsider],
   );
 
   return (
     <main className="min-h-screen pb-28">
+      {/* UX-B (operator 2026-07-26): minimum words — the two labeled
+          sections below do the explaining. */}
       <header className="px-6 pt-8 pb-4">
         <Link
           href="/friends"
@@ -198,16 +175,9 @@ export default function ConsensusPage(): JSX.Element {
         >
           ← Friends
         </Link>
-        <p className="text-accent uppercase tracking-[0.25em] text-xs mt-4 mb-2 text-center">
-          Group pick
-        </p>
         <h1 className="font-display text-3xl md:text-4xl mb-2 text-center">
-          Where should we go?
+          Plan Night Out
         </h1>
-        <p className="text-muted text-sm max-w-md mx-auto text-center">
-          Pick who&apos;s out tonight. We&apos;ll surface the bars everyone&apos;s
-          rated highly — and quietly drop the ones anyone passed on.
-        </p>
       </header>
 
       <section className="max-w-md mx-auto px-6">
@@ -242,28 +212,26 @@ export default function ConsensusPage(): JSX.Element {
           </p>
         ) : null}
 
-        {/* Nominations (0011): real circles only — the demo curators can't
-            suggest, and rendering an inert section would read as broken. */}
-        {isServer ? (
-          <TonightSuggestions onSuggestedBarsChange={handleSuggestedBars} />
-        ) : null}
-
+        {/* Part 1 — GROUP FAVORITES: the algorithm's picks for whoever's
+            selected (operator structure 2026-07-26). One list; the top
+            pick carries the share moment. */}
         {!enoughPeople ? (
           <EmptyState
             youHasRatings={youHasRatings}
             anyFollowed={followedFriends.length > 0}
           />
         ) : (
-          <>
+          <div className="mb-10">
             <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
-              {overlap.length > 0
-                ? `You all agree on ${overlap.length}`
-                : 'No unanimous picks yet'}
+              Group Favorites
             </h2>
-
-            {overlap.length > 0 ? (
+            {groupFavorites.length === 0 ? (
+              <p className="text-muted text-sm leading-relaxed">
+                No shared history yet — rate a few bars and this fills in.
+              </p>
+            ) : (
               <div className="space-y-4">
-                {overlap.map((entry, i) => (
+                {groupFavorites.map((entry, i) => (
                   <ConsensusCard
                     key={entry.barId}
                     entry={entry}
@@ -273,44 +241,14 @@ export default function ConsensusPage(): JSX.Element {
                   />
                 ))}
               </div>
-            ) : (
-              <p className="text-muted text-sm mb-6 leading-relaxed">
-                This group hasn&apos;t all been to the same bar yet. Here&apos;s
-                where most of you have had good nights:
-              </p>
             )}
-
-            {alsoConsider.length > 0 ? (
-              <div className="mt-10">
-                <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
-                  Also worth a look
-                </h2>
-                <div className="space-y-4">
-                  {alsoConsider.slice(0, 5).map((entry, i) => (
-                    <ConsensusCard key={entry.barId} entry={entry} index={i} />
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {voteCandidates.length >= 2 ? (
-              <GroupVote
-                // Keyed on participants AND the candidate SET (review MED):
-                // a suggestion arriving mid-vote would otherwise silently
-                // never become an option in the locked session. Membership
-                // change restarts the (seconds-long) vote; sorted so mere
-                // reorders (an RSVP shuffling most-backed) do NOT reset it.
-                key={[
-                  participants.map((p) => p.id).join('+'),
-                  [...voteCandidates].sort().join('+'),
-                ].join('|')}
-                participants={participants}
-                candidates={voteCandidates}
-                suggestedIds={suggestedBarIds}
-              />
-            ) : null}
-          </>
+          </div>
         )}
+
+        {/* Part 2 — PEOPLE'S CHOICE: the bars people are thinking about
+            (suggest + I'm-in live inside; real circles only — demo
+            curators can't suggest). */}
+        {isServer ? <TonightSuggestions /> : null}
       </section>
     </main>
   );
@@ -409,6 +347,18 @@ function ConsensusCard({
           </span>
         ))}
       </div>
+      {/* The winner-share moment lives on the TOP pick (works signed-out
+          too — the demo path is the share-card loop's entry). */}
+      {highlight ? (
+        <div className="mt-4">
+          <ShareButton
+            path={buildPickPath(bar.id)}
+            text={sharePickText(bar)}
+            label="Share the pick"
+            ariaLabel={`Share the pick: ${bar.name}`}
+          />
+        </div>
+      ) : null}
     </article>
   );
 }
