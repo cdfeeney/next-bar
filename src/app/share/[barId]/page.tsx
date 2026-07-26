@@ -8,6 +8,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import RecipientVote from '@/components/RecipientVote';
 import { getBarById } from '@/lib/catalog';
 import { buildMapsHref } from '@/lib/share';
 
@@ -47,6 +48,13 @@ export default function SharePickPage({ params }: ShareParams): JSX.Element {
           <p className="text-sm italic mt-3">{bar.blurb}</p>
           <p className="text-muted text-xs mt-3">{bar.address}</p>
         </article>
+
+        {/* Above the CTAs deliberately (goal acceptance 6). The recipient's
+            highest-intent moment is right now, holding a bar someone they
+            know just sent them — spending it on "go install the app" is what
+            kept the loop open. Rating is free, accountless, and it is the
+            onboarding. */}
+        <RecipientVote barId={bar.id} barName={bar.name} />
 
         <div className="text-center mt-8">
           <p className="text-muted text-sm mb-4 leading-relaxed">

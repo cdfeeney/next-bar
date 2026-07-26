@@ -76,3 +76,55 @@ test.describe('Shareable pick cards', () => {
     ).toBeVisible();
   });
 });
+
+/**
+ * Week-2 recipient landing (goal acceptance 6).
+ *
+ * The recipient is signed out and always will be at this point in the loop —
+ * they were texted a link by a friend, that is all. These run on both
+ * iPhone 13 and Pixel 7 via the project matrix.
+ */
+test.describe('Signed-out recipient can vote before signup', () => {
+  test('casting a vote never routes to /auth', async ({ page }) => {
+    await page.goto('/share/death-and-co');
+
+    const vote = page.getByRole('region', { name: /Rate Death & Co/i });
+    await expect(vote).toBeVisible();
+    await expect(page.getByText(/No signup, no email/i)).toBeVisible();
+
+    await page.getByRole('button', { name: /Loved it/i }).click();
+
+    // THE negative assertion: the one moment of intent the share bought must
+    // not be spent on a signup wall.
+    await expect(page).toHaveURL(/\/share\/death-and-co$/);
+    await expect(page.getByText(/That is your list started/i)).toBeVisible();
+
+    // And there is no route to /auth on the page at all, post-vote.
+    await expect(page.locator('a[href^="/auth"]')).toHaveCount(0);
+  });
+
+  test('the vote survives a reload without an account', async ({ page }) => {
+    await page.goto('/share/death-and-co');
+    await page.getByRole('button', { name: /Liked it/i }).click();
+    await expect(
+      page.getByRole('button', { name: /Liked it/i }),
+    ).toHaveAttribute('aria-pressed', 'true');
+
+    await page.reload();
+
+    // Persisted through useRatings' signed-out localStorage path — no
+    // account, no server round-trip, and the sign-in merge will carry it up.
+    await expect(
+      page.getByRole('button', { name: /Liked it/i }),
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('the reward for voting is the list, not a form', async ({ page }) => {
+    await page.goto('/share/death-and-co');
+    await page.getByRole('button', { name: /Loved it/i }).click();
+
+    const cta = page.getByRole('link', { name: /See your list/i });
+    await expect(cta).toBeVisible();
+    await expect(cta).toHaveAttribute('href', '/rankings');
+  });
+});
