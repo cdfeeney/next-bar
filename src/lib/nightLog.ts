@@ -20,7 +20,9 @@ import type { BarRating } from '@/types/ratings';
  * because writing tonight's first visit is what replaces it.
  */
 
-const STORAGE_KEY = 'next-bar:night-log:v1';
+/** Exported so storage-event consumers can filter by key (house pattern). */
+export const NIGHT_LOG_STORAGE_KEY = 'next-bar:night-log:v1';
+const STORAGE_KEY = NIGHT_LOG_STORAGE_KEY;
 
 /** Degenerate-night guard: nobody legitimately hits 20 bars; beyond it
  *  new visits are ignored rather than evicting the route's start. */
