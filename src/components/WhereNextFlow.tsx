@@ -8,6 +8,7 @@ import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { loadProfile } from '@/lib/storedProfile';
 import { loadNightVibe, saveNightVibe } from '@/lib/vibeNightCache';
+import { recordVisit } from '@/lib/nightLog';
 import { RADIUS_WALK } from '@/lib/constants';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -132,6 +133,10 @@ export default function WhereNextFlow() {
     if (geo.state.status === 'idle' && geo.permissionState === 'granted') {
       geo.request();
     }
+    // E4.1: "the bar you're at" IS the visit signal — tonight's Night
+    // object records it with zero extra questions. The lib itself
+    // refuses synthetic free-text seeds.
+    recordVisit(seedBar.id);
     setSelectedRadius(DEFAULT_RADIUS);
     // E2.2 (locked decision 3): the vibe belongs to the NIGHT — a pick
     // applied earlier tonight pre-fills every re-search until the 6am
