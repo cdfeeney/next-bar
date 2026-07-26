@@ -45,6 +45,11 @@ export const ALLOWED = Object.freeze({
   ]),
   DRAFT: Object.freeze([
     'write_draft', 'write_report', 'write_decision_doc', 'update_state',
+    // Writing an outreach email to a file. Deliberately DRAFT and not CONTACT_EXTERNAL: it makes
+    // no contact, and filing it under the never-granted capability would have forced that
+    // capability open — the rot that starts every "we only widened it slightly" story. Sending
+    // stays impossible the honest way: this repository has no transport. See ceo-outreach.mjs.
+    'write_outreach_draft',
   ]),
   MUTATE_BRANCH: Object.freeze([
     'create_branch', 'commit_to_branch', 'open_pull_request', 'write_repo_file',
@@ -153,7 +158,10 @@ export function assertActionAllowed({ capability, action, branch } = {}) {
  * come through the agent path at all — see assertMeasurementUpdate.
  */
 export const AGENT_PROTECTED_FIELDS = Object.freeze([
-  'objective', 'kill_criterion', 'modules', 'metrics',
+  // `repo` joins them because it is what scopes a pr_sha. An agent that could rewrite it could
+  // point the evidence rule at a repository whose shas it controls, and every "shipped" claim
+  // would verify against work nobody asked for.
+  'repo', 'objective', 'kill_criterion', 'modules', 'metrics',
 ]);
 
 /** Only these may differ on a measurement write. */

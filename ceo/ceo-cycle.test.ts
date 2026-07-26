@@ -49,6 +49,10 @@ const MEASURED_METRICS = {
   max_neighborhood_wau: 7,
   claimed_venues: 0,
   self_maintaining_venues: 0,
+  venue_active_maintainers: 0,
+  // One conversation happened this week, so the discovery floor lets the cycle run. Its own tests
+  // set this to zero on purpose.
+  user_interviews_this_week: 1,
   revenue: 0,
   operator_hours_available: 8,
 };
@@ -234,16 +238,92 @@ describe('assess', () => {
     expect(assessment.kill.tripped).toBe(true);
   });
 
-  it('does not trip at the deadline once the thresholds are met', () => {
+  it('does not trip at the deadline once BOTH thresholds are met', () => {
     const measured = measure(
       freshState(),
       measurement({
-        metrics: { ...MEASURED_METRICS, wau: 80, self_maintaining_venues: 20 },
+        metrics: {
+          ...MEASURED_METRICS,
+          wau: 80,
+          max_neighborhood_wau: 80,
+          self_maintaining_venues: 20,
+        },
       }),
     );
     const assessment = assess(measured, measurement({ at: '2027-01-01' }));
 
     expect(assessment.kill.tripped).toBe(false);
+    expect(assessment.kill.verdict).toBe('CONTINUE');
+  });
+
+  // The operator wrote "if exactly one passes, do not kill — re-scope to the side that worked".
+  // The previous inline version ORed the sides and reported TRIPPED here, condemning a working
+  // half on the strength of a failing one.
+  it('re-scopes rather than kills when exactly one side of the criterion passes', () => {
+    const measured = measure(
+      freshState(),
+      measurement({
+        metrics: { ...MEASURED_METRICS, max_neighborhood_wau: 5, self_maintaining_venues: 20 },
+      }),
+    );
+    const assessment = assess(measured, measurement({ at: '2027-01-01' }));
+
+    expect(assessment.kill.verdict).toBe('RESCOPE');
+    expect(assessment.kill.tripped).toBe(false);
+    expect(assessment.kill.rescope).toBe(true);
+  });
+
+  // The criterion is about ONE neighbourhood. A global total is the wrong number and is always
+  // the more flattering one, because it sums every neighbourhood the app is spread too thin across.
+  it('judges the neighbourhood number, not the global total', () => {
+    const measured = measure(
+      freshState(),
+      measurement({
+        metrics: {
+          ...MEASURED_METRICS,
+          wau: 400,
+          max_neighborhood_wau: 5,
+          self_maintaining_venues: 1,
+        },
+      }),
+    );
+    const assessment = assess(measured, measurement({ at: '2027-01-01' }));
+
+    expect(assessment.kill.verdict).toBe('KILL');
+  });
+});
+
+describe('the discovery floor', () => {
+  it('refuses to run a cycle in a week with no customer conversations', () => {
+    // The rail against the comfortable substitution: an articulate strategy partner instead of a
+    // conversation with an actual bar-goer or bar owner.
+    expectHardAbort(
+      () =>
+        runCycle({
+          state: freshState(),
+          measurement: measurement({
+            metrics: { ...MEASURED_METRICS, user_interviews_this_week: 0 },
+          }),
+          candidates: [ANALYTICS_CANDIDATE],
+          reportsDir: path.join(mkdtempSync(path.join(tmpdir(), 'ceo-floor-')), 'reports'),
+        }),
+      'DISCOVERY FLOOR',
+    );
+  });
+
+  it('runs once at least one conversation happened', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ceo-floor-'));
+    expect(() =>
+      runCycle({
+        state: freshState(),
+        measurement: measurement({
+          metrics: { ...MEASURED_METRICS, user_interviews_this_week: 1 },
+        }),
+        candidates: [ANALYTICS_CANDIDATE],
+        reportsDir: path.join(dir, 'reports'),
+      }),
+    ).not.toThrow();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -654,6 +734,28 @@ describe('detectors are wired into decide', () => {
           { branch: 'feat/share-loop-week1' },
         ),
       'STOP_AND_REASSESS',
+    );
+  });
+
+  // The same rail, for the halt that was added later. An identity check against the FIRST
+  // directive would have let the second one ship — the standard way a widened system stops
+  // covering the case it was widened for.
+  it('refuses to ship a GO_MEASURE cycle too', () => {
+    expectHardAbort(
+      () =>
+        enterShip(
+          {
+            cycle: 5,
+            recommendation_id: null,
+            directive: 'GO_MEASURE',
+            drafted: true,
+            shipped: false,
+            evidence: null,
+            review: { verdict: 'pass', reviewer: 'deepseek', at: '2026-07-26' },
+          },
+          { branch: 'feat/share-loop-week1' },
+        ),
+      'GO_MEASURE',
     );
   });
 

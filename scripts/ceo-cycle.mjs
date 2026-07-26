@@ -11,16 +11,19 @@
 // The runner is offline and clock-free: every timestamp arrives inside the measurement envelope,
 // so the same input always renders the same report. That is what makes it testable at all.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LOCK_RESULTS, acquireCycleLock, releaseCycleLock } from './ceo-lock.mjs';
 import { validateCeoState } from '../ceo/state.schema.mjs';
 import {
   assertActionAllowed,
   assertMeasurementUpdate,
   assertStateMutationAllowed,
 } from './ceo-guard.mjs';
-import { DIRECTIVE_STOP_AND_REASSESS, runDetectors } from './ceo-detectors.mjs';
+import { HALT_DIRECTIVES, runDetectors } from './ceo-detectors.mjs';
+import { VERDICTS, auditKill } from './ceo-board.mjs';
 
 export class CeoCycleAbort extends Error {
   constructor(message) {
@@ -191,6 +194,16 @@ export function assess(state, measurement) {
   const { deadline, wau_threshold: wauThreshold, venue_threshold: venueThreshold } =
     state.kill_criterion;
 
+  // The kill verdict is NOT computed here. It comes from the board (scripts/ceo-board.mjs), which
+  // is separate for the same reason a board is separate from a CEO: the function that reports
+  // progress must not also be the one that judges whether progress was enough.
+  //
+  // The previous inline version got the operator's own criterion wrong twice, both times in the
+  // lenient-in-the-moment direction: it ORed the two sides (so one failing half condemned a
+  // working one, where the operator wrote "if exactly one passes, do not kill — re-scope"), and
+  // it tested the GLOBAL wau against a threshold the operator wrote about ONE neighbourhood.
+  const board = at === null ? null : auditKill(state, { at });
+
   return {
     cycle: state.cycle,
     at,
@@ -198,26 +211,54 @@ export function assess(state, measurement) {
     primary_value: primaryValue,
     measurable,
     bottleneck: state.bottleneck,
+    board,
     kill: {
       deadline,
       wau_threshold: wauThreshold,
       venue_threshold: venueThreshold,
       // A criterion you cannot evaluate has not been met and has not been missed. Saying so is
       // the difference between an honest dashboard and a green light nobody earned.
-      evaluable: measurable,
-      // Finding F3: `measurable && ...` meant a null metric held `tripped` at false FOREVER, so
-      // never building analytics was indistinguishable from passing. Arriving at the deadline
-      // unable to measure is not a pending result — it is the failure. It trips.
-      // ISO dates compare correctly with >= because YYYY-MM-DD sorts lexicographically.
-      tripped:
-        at !== null && at >= deadline
-          ? !measurable ||
-            primaryValue < wauThreshold ||
-            state.metrics.self_maintaining_venues < venueThreshold
-          : false,
+      evaluable: board !== null && board.sides.users.measurable,
+      verdict: board?.verdict ?? null,
+      // Finding F3 still holds and now lives in the board: arriving at the deadline unable to
+      // measure is not a pending result, it is a failed side.
+      tripped: board?.verdict === VERDICTS.KILL,
+      rescope: board?.verdict === VERDICTS.RESCOPE,
     },
     open_bets: state.active_bets.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// discovery floor
+// ---------------------------------------------------------------------------
+
+/**
+ * The cycle does not run in a week with zero customer conversations.
+ *
+ * This is the rail against the failure mode nobody notices while it is happening: an articulate
+ * strategy partner is the most comfortable possible substitute for talking to actual bar-goers and
+ * bar owners, and a solo operator with a demanding day job will take the comfortable option every
+ * time. The orchestrator refuses to be that substitute.
+ *
+ * It aborts rather than flags. A flag here would be read, agreed with, and scrolled past.
+ */
+export function assertDiscoveryFloor(state) {
+  const interviews = state?.metrics?.user_interviews_this_week;
+
+  if (!Number.isFinite(interviews)) {
+    abort(
+      'metrics.user_interviews_this_week is missing. The cycle cannot run without knowing whether ' +
+        'anyone talked to a user this week.',
+    );
+  }
+  if (interviews <= 0) {
+    abort(
+      'DISCOVERY FLOOR: user_interviews_this_week is 0. This cycle does not run. Talk to one ' +
+        'bar-goer or one bar owner first — the orchestrator is not a substitute for that ' +
+        'conversation, and a plan built without one is a plan about a market nobody checked.',
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +423,25 @@ function selfAuditAnswer(state, assessment) {
   return `Yes. Cycle ${prior.cycle} shipped "${prior.recommendation_id}" and ${PRIMARY_METRIC} moved ${delta > 0 ? '+' : ''}${delta} to ${assessment.primary_value}.`;
 }
 
+// ---------------------------------------------------------------------------
+// durable writes
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a file so a concurrent reader sees either the old bytes or the new ones, never half.
+ *
+ * Three agent terminals hold worktrees of this repository. A plain writeFileSync truncates first
+ * and fills after, so a peer reading `state.json` in that gap gets a torn file — and a torn file
+ * that happens to still parse is worse than one that does not, because a missing `cycle` reads as
+ * `undefined` and sails into a detector. `rename` is atomic within a directory on NTFS and POSIX
+ * alike, so the temp file must be a sibling of the target, never in the system temp dir.
+ */
+export function writeFileAtomic(filePath, contents) {
+  const temporary = `${filePath}.tmp-${process.pid}`;
+  writeFileSync(temporary, contents, 'utf8');
+  renameSync(temporary, filePath);
+}
+
 /** The measurement block, shared by both report shapes — a halt report still owes the numbers. */
 function measurementLines(state, measurement) {
   const metrics = state.metrics;
@@ -461,9 +521,7 @@ function draftPlan(state, assessment, decision, measurement) {
     assessment.measurable
       ? `Primary metric ${PRIMARY_METRIC} reads ${assessment.primary_value}. Bottleneck: ${assessment.bottleneck}.`
       : `Primary metric ${PRIMARY_METRIC} is UNMEASURABLE. Bottleneck: ${assessment.bottleneck}. Until this is fixed, no growth claim on this project is checkable.`,
-    assessment.kill.evaluable
-      ? `Kill criterion (${assessment.kill.deadline}, ${assessment.kill.wau_threshold} ${PRIMARY_METRIC} / ${assessment.kill.venue_threshold} venues): ${assessment.kill.tripped ? 'TRIPPED' : 'not tripped'}.`
-      : `Kill criterion (${assessment.kill.deadline}) cannot be evaluated — the metric it tests is null. The clock runs anyway.`,
+    `Board verdict: ${assessment.board?.verdict ?? 'none'}. ${assessment.board?.detail ?? ''}`.trim(),
     // Flags that did not rise to a halt still get read out. A detector that fires into a variable
     // nobody prints is not a detector.
     ...(decision.preamble.length === 0
@@ -558,9 +616,12 @@ export function enterShip(record, { branch } = {}) {
   // nothing stopped a halted RECORD from being reviewed and shipped anyway — which would let a
   // STOP_AND_REASSESS ship whatever the loop happened to be holding. A halt has nothing to ship,
   // and no review can supply one.
-  if (record?.directive === DIRECTIVE_STOP_AND_REASSESS) {
+  // Every halting directive, not just STOP_AND_REASSESS. When GO_MEASURE was added as a second
+  // halt, an identity check against the first one would have quietly made the new halt shippable —
+  // the classic way a rail stops covering the case it was widened for.
+  if (HALT_DIRECTIVES.includes(record?.directive)) {
     abort(
-      `cannot enter SHIP: cycle ${record?.cycle ?? '?'} emitted ${DIRECTIVE_STOP_AND_REASSESS}. ` +
+      `cannot enter SHIP: cycle ${record?.cycle ?? '?'} emitted ${record.directive}. ` +
         'A halted cycle produced no recommendation, so there is nothing a review could approve.',
     );
   }
@@ -605,6 +666,9 @@ export function enterShip(record, { branch } = {}) {
  */
 export function runCycle({ state, measurement, candidates, reportsDir }) {
   const measured = measure(state, measurement);
+  // Before anything is assessed or recommended. A cycle that has already produced a plan is one
+  // the operator will want to keep, and a floor that can be cleared retroactively is not a floor.
+  assertDiscoveryFloor(measured);
   const assessment = assess(measured, measurement);
   const decision = decide(measured, assessment, candidates);
   const report = draft(measured, assessment, decision, measurement);
@@ -612,7 +676,7 @@ export function runCycle({ state, measurement, candidates, reportsDir }) {
   act('write_report_file');
   mkdirSync(reportsDir, { recursive: true });
   const reportPath = path.join(reportsDir, `cycle-${measured.cycle}.md`);
-  writeFileSync(reportPath, report, 'utf8');
+  writeFileAtomic(reportPath, report);
 
   const nextState = log(measured, decision, { report_path: reportPath });
 
@@ -686,6 +750,35 @@ function readJson(filePath, label) {
 
 function main(argv) {
   const options = parseArgs(argv);
+
+  // The clock lives at this boundary and nowhere inside the cycle. Three agent terminals hold
+  // worktrees of this repository; two cycles interleaving over one state.json would write a
+  // history that never happened.
+  const lockPath = path.join(path.dirname(path.resolve(options.state)), '.cycle.lock');
+  const lock = acquireCycleLock(lockPath, { now: Date.now(), host: hostname() });
+  if (!lock.ok) {
+    console.error(`[ceo-cycle] ${lock.detail}`);
+    process.exit(3);
+    return;
+  }
+  if (lock.result === LOCK_RESULTS.BROKE_STALE) {
+    console.error(`[ceo-cycle] ${lock.detail}`);
+  }
+
+  // `finally` is not enough, and the first behavioural run proved it: every refusal in this file
+  // goes through abort(), which calls process.exit — that unwinds nothing, so a cycle that halted
+  // for a perfectly good reason left its lock behind and locked the operator out for the full
+  // staleness window. An exit hook fires on the abort path too.
+  process.on('exit', () => releaseCycleLock(lockPath));
+
+  try {
+    runCommitted(options);
+  } finally {
+    releaseCycleLock(lockPath);
+  }
+}
+
+function runCommitted(options) {
   const state = readJson(options.state, 'state');
   const measurementFile = readJson(options.measurement, 'measurement');
   const candidatesFile = readJson(options.candidates, 'candidates');
@@ -700,7 +793,7 @@ function main(argv) {
   if (options.commit) {
     // Not gated behind LOOP_UNATTENDED: this writes a local JSON file on a feature branch, which
     // is the same blast radius as any other repo edit. Landing it is still a reviewed PR.
-    writeFileSync(options.state, JSON.stringify(result.state, null, 2) + '\n', 'utf8');
+    writeFileAtomic(options.state, JSON.stringify(result.state, null, 2) + '\n');
   }
 
   console.log(result.report);

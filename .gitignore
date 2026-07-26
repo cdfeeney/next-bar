@@ -14,3 +14,7 @@ tsconfig.tsbuildinfo
 
 # Generated ingestion candidates (regenerable via scripts/ingest-bars.ts)
 scripts/data/
+
+# CEO cycle single-writer lock — runtime state, never committed
+ceo/.cycle.lock
+ceo/*.tmp-*

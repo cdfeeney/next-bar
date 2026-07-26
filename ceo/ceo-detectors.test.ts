@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DIRECTIVE_GO_MEASURE,
   DIRECTIVE_STOP_AND_REASSESS,
   countsAsProgress,
   detectBetClosure,
@@ -8,6 +9,10 @@ import {
   evidenceIsReal,
   runDetectors,
 } from '../scripts/ceo-detectors.mjs';
+
+/** The repository this state is about. A sha from anywhere else proves nothing about it. */
+const REPO = 'cdfeeney/next-bar';
+const scope = { repo: REPO };
 
 /**
  * Synthetic history. Defaults describe the ordinary case — a cycle that drafted a plan, shipped
@@ -19,7 +24,7 @@ function cycleEntry(overrides = {}) {
     recommendation_id: 'some-bet',
     drafted: true,
     shipped: true,
-    evidence: { kind: 'pr_sha', ref: 'a1b2c3d' },
+    evidence: { kind: 'pr_sha', repo: REPO, ref: 'a1b2c3d', class: 'user_facing' },
     report_path: 'ceo/reports/cycle-1.md',
     primary_metric: 'wau',
     primary_value: 10,
@@ -35,13 +40,20 @@ function history(...entries: Array<Record<string, unknown>>) {
 }
 
 describe('evidence rule', () => {
-  it('accepts a plausible PR sha', () => {
-    expect(evidenceIsReal({ kind: 'pr_sha', ref: 'a1b2c3d' })).toBe(true);
-    expect(evidenceIsReal({ kind: 'pr_sha', ref: '5393a90f1e2d3c4b5a6978899aabbccddeeff001' })).toBe(true);
+  it('accepts a plausible PR sha in the right repo', () => {
+    expect(
+      evidenceIsReal({ kind: 'pr_sha', repo: REPO, ref: 'a1b2c3d', class: 'user_facing' }, scope),
+    ).toBe(true);
+    expect(
+      evidenceIsReal(
+        { kind: 'pr_sha', repo: REPO, ref: '5393a90f1e2d3c4b5a6978899aabbccddeeff001', class: 'chore' },
+        scope,
+      ),
+    ).toBe(true);
   });
 
   it('accepts a real user-event id', () => {
-    expect(evidenceIsReal({ kind: 'user_event', ref: 'evt_01HZX9' })).toBe(true);
+    expect(evidenceIsReal({ kind: 'user_event', ref: 'evt_01HZX9' }, scope)).toBe(true);
   });
 
   it.each([
@@ -51,35 +63,56 @@ describe('evidence rule', () => {
     ['a number', 42],
     ['an array', []],
     ['an empty object', {}],
-    ['a sha that is too short', { kind: 'pr_sha', ref: 'a1b' }],
-    ['a sha that is not hex', { kind: 'pr_sha', ref: 'zzzzzzz' }],
-    ['a sha longer than a sha', { kind: 'pr_sha', ref: 'a'.repeat(41) }],
+    ['a sha that is too short', { kind: 'pr_sha', repo: REPO, ref: 'a1b', class: 'user_facing' }],
+    ['a sha that is not hex', { kind: 'pr_sha', repo: REPO, ref: 'zzzzzzz', class: 'user_facing' }],
+    ['a sha longer than a sha', { kind: 'pr_sha', repo: REPO, ref: 'a'.repeat(41), class: 'user_facing' }],
     ['a stubby event id', { kind: 'user_event', ref: 'evt' }],
     ['a whitespace event id', { kind: 'user_event', ref: '          ' }],
     ['an invented kind', { kind: 'vibes', ref: 'it felt like it worked' }],
-    ['a kind with no ref', { kind: 'pr_sha' }],
+    ['a kind with no ref', { kind: 'pr_sha', repo: REPO, class: 'user_facing' }],
     ['prose where a ref belongs', { kind: 'user_event', ref: 12345 }],
+    // The sha is real, the work is real, and neither is this project's.
+    ['a sha from another repository', { kind: 'pr_sha', repo: 'cdfeeney/scratch', ref: 'a1b2c3d', class: 'user_facing' }],
+    ['a sha that names no repository', { kind: 'pr_sha', ref: 'a1b2c3d', class: 'user_facing' }],
+    ['a sha that says nothing about what it was', { kind: 'pr_sha', repo: REPO, ref: 'a1b2c3d' }],
+    ['a sha with an invented class', { kind: 'pr_sha', repo: REPO, ref: 'a1b2c3d', class: 'important' }],
   ])('rejects %s', (_label, evidence) => {
-    expect(evidenceIsReal(evidence)).toBe(false);
+    expect(evidenceIsReal(evidence, scope)).toBe(false);
+  });
+
+  it('rejects an otherwise-perfect sha when no repository is configured', () => {
+    // Fail closed. An unscoped sha is the exact thing the repo field was added to reject.
+    expect(
+      evidenceIsReal({ kind: 'pr_sha', repo: REPO, ref: 'a1b2c3d', class: 'user_facing' }, {}),
+    ).toBe(false);
   });
 
   it('counts a shipped, evidenced cycle as progress', () => {
-    expect(countsAsProgress(cycleEntry())).toBe(true);
+    expect(countsAsProgress(cycleEntry(), scope)).toBe(true);
   });
 
   it('does not count a shipped cycle with no evidence as progress', () => {
     // The whole point: "we shipped it" is a claim, not a result.
-    expect(countsAsProgress(cycleEntry({ evidence: null }))).toBe(false);
+    expect(countsAsProgress(cycleEntry({ evidence: null }), scope)).toBe(false);
+  });
+
+  it('does not count a merged chore as progress', () => {
+    // A chore is real work with a real sha. It is not movement on the objective, and letting it
+    // count means twenty housekeeping PRs read as twenty cycles of progress.
+    const chore = cycleEntry({
+      evidence: { kind: 'pr_sha', repo: REPO, ref: 'a1b2c3d', class: 'chore' },
+    });
+
+    expect(evidenceIsReal(chore.evidence, scope)).toBe(true);
+    expect(countsAsProgress(chore, scope)).toBe(false);
   });
 
   it('does not count a drafted-but-unshipped cycle as progress', () => {
-    expect(countsAsProgress(cycleEntry({ shipped: false }))).toBe(false);
+    expect(countsAsProgress(cycleEntry({ shipped: false }), scope)).toBe(false);
   });
 
   it('does not count an unshipped cycle even when it carries evidence', () => {
-    expect(
-      countsAsProgress(cycleEntry({ shipped: false, evidence: { kind: 'pr_sha', ref: 'a1b2c3d' } })),
-    ).toBe(false);
+    expect(countsAsProgress(cycleEntry({ shipped: false }), scope)).toBe(false);
   });
 });
 
@@ -87,6 +120,7 @@ describe('theater tax', () => {
   it('flags two consecutive cycles that drafted and did not ship', () => {
     const result = detectTheaterTax(
       history({ shipped: false }, { shipped: false }),
+      scope,
     );
 
     expect(result.flagged).toBe(true);
@@ -94,7 +128,7 @@ describe('theater tax', () => {
   });
 
   it('does not flag a single unshipped cycle', () => {
-    const result = detectTheaterTax(history({ shipped: true }, { shipped: false }));
+    const result = detectTheaterTax(history({ shipped: true }, { shipped: false }), scope);
 
     expect(result.flagged).toBe(false);
   });
@@ -103,19 +137,21 @@ describe('theater tax', () => {
     // The streak has to be current. A cycle that shipped clears the tax.
     const result = detectTheaterTax(
       history({ shipped: false }, { shipped: false }, { shipped: true }),
+      scope,
     );
 
     expect(result.flagged).toBe(false);
   });
 
   it('does not flag an empty history', () => {
-    expect(detectTheaterTax([]).flagged).toBe(false);
+    expect(detectTheaterTax([], scope).flagged).toBe(false);
   });
 
   it('treats a shipped cycle with no real evidence as not shipped', () => {
     // Otherwise the tax is dodged by writing shipped: true and nothing else.
     const result = detectTheaterTax(
       history({ shipped: true, evidence: null }, { shipped: true, evidence: null }),
+      scope,
     );
 
     expect(result.flagged).toBe(true);
@@ -129,6 +165,7 @@ describe('theater tax', () => {
         { drafted: false, shipped: false, evidence: null, report_path: null },
         { drafted: false, shipped: false, evidence: null, report_path: null },
       ),
+      scope,
     );
 
     expect(result.flagged).toBe(true);
@@ -140,6 +177,7 @@ describe('theater tax', () => {
         { drafted: true, shipped: false, evidence: null },
         { drafted: false, shipped: false, evidence: null },
       ),
+      scope,
     );
 
     expect(result.flagged).toBe(true);
@@ -147,7 +185,7 @@ describe('theater tax', () => {
 });
 
 describe('flat-metric halt', () => {
-  it('emits STOP_AND_REASSESS after three flat cycles', () => {
+  it('emits STOP_AND_REASSESS after two flat cycles', () => {
     const result = detectFlatMetricHalt(
       history(
         { primary_value: 10 },
@@ -161,7 +199,7 @@ describe('flat-metric halt', () => {
     expect(result.directive).toBe(DIRECTIVE_STOP_AND_REASSESS);
   });
 
-  it('emits STOP_AND_REASSESS after three declining cycles', () => {
+  it('emits STOP_AND_REASSESS after two declining cycles', () => {
     const result = detectFlatMetricHalt(
       history(
         { primary_value: 40 },
@@ -203,14 +241,14 @@ describe('flat-metric halt', () => {
 
   it('does not halt before there is enough history to judge', () => {
     const result = detectFlatMetricHalt(
-      history({ primary_value: 10 }, { primary_value: 10 }, { primary_value: 10 }),
+      history({ primary_value: 10 }, { primary_value: 10 }),
     );
 
     expect(result.halt).toBe(false);
     expect(result.detail).toMatch(/not enough history/i);
   });
 
-  it('halts on three unmeasurable cycles — a metric nobody can read is not a metric that moved', () => {
+  it('halts on an unmeasurable window, and says the remedy is to measure', () => {
     const result = detectFlatMetricHalt(
       history(
         { primary_value: null },
@@ -221,6 +259,21 @@ describe('flat-metric halt', () => {
     );
 
     expect(result.halt).toBe(true);
+    expect(result.unmeasured).toBe(true);
+    expect(result.directive).toBe(DIRECTIVE_GO_MEASURE);
+    expect(result.detail).toMatch(/instrumentation/i);
+  });
+
+  it('emits STOP_AND_REASSESS when the window holds even one real reading that did not move', () => {
+    // One readable cycle is enough to make this a judgement about the plans rather than about
+    // the instrumentation, and the two have opposite remedies.
+    const result = detectFlatMetricHalt(
+      history({ primary_value: 10 }, { primary_value: 10 }, { primary_value: null }),
+    );
+
+    expect(result.halt).toBe(true);
+    expect(result.unmeasured).toBe(false);
+    expect(result.directive).toBe(DIRECTIVE_STOP_AND_REASSESS);
   });
 
   // Review finding H2. A delta must span exactly one cycle. Without the check, skipping a cycle
@@ -236,7 +289,7 @@ describe('flat-metric halt', () => {
 
     const result = detectFlatMetricHalt(gapped);
 
-    expect(result.deltas).toEqual([0, 0, null]);
+    expect(result.deltas).toEqual([0, null]);
     expect(result.halt).toBe(true);
   });
 
@@ -250,7 +303,7 @@ describe('flat-metric halt', () => {
 
     const result = detectFlatMetricHalt(consecutive);
 
-    expect(result.deltas).toEqual([0, 0, 8]);
+    expect(result.deltas).toEqual([0, 8]);
     expect(result.halt).toBe(false);
   });
 
@@ -322,6 +375,7 @@ describe('bet closure', () => {
 describe('runDetectors', () => {
   const state = (overrides = {}) => ({
     cycle: 5,
+    repo: REPO,
     history: [],
     active_bets: [],
     ...overrides,
@@ -357,6 +411,37 @@ describe('runDetectors', () => {
     );
 
     expect(result.halt).toBe(true);
+    expect(result.directive).toBe(DIRECTIVE_STOP_AND_REASSESS);
+  });
+
+  it('carries GO_MEASURE up when the only halt is an unmeasured window', () => {
+    const result = runDetectors(
+      state({
+        history: history(
+          { primary_value: null },
+          { primary_value: null },
+          { primary_value: null },
+        ),
+      }),
+    );
+
+    expect(result.halt).toBe(true);
+    expect(result.directive).toBe(DIRECTIVE_GO_MEASURE);
+  });
+
+  it('prefers STOP_AND_REASSESS when an unclosed bet halts alongside an unmeasured window', () => {
+    // Two problems, and the harder one wins: an unjudged bet is not fixed by instrumentation.
+    const result = runDetectors(
+      state({
+        active_bets: [{ id: 'bet-a', claim: 'c', review_cycle: 2, verdict: null }],
+        history: history(
+          { primary_value: null },
+          { primary_value: null },
+          { primary_value: null },
+        ),
+      }),
+    );
+
     expect(result.directive).toBe(DIRECTIVE_STOP_AND_REASSESS);
   });
 
