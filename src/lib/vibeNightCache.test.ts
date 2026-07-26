@@ -37,6 +37,19 @@ describe('vibeNightCache (E2.2 / R11)', () => {
     expect(loadNightVibe(saturday2am)).toEqual(['beer', 'pub']);
   });
 
+  it('filters unknown tags out of a cached pick (membership validation)', () => {
+    // Write a real pick, then corrupt its tag list in place.
+    saveNightVibe(['cocktail'], friday11pm);
+    const stored = JSON.parse(
+      window.localStorage.getItem('next-bar:night-vibe:v1') as string,
+    ) as { night: string; tags: string[] };
+    stored.tags = ['cocktail', 'zombie-tag', 'jazz'];
+    window.localStorage.setItem('next-bar:night-vibe:v1', JSON.stringify(stored));
+
+    // The garbage member vanishes; the valid remainder survives.
+    expect(loadNightVibe(friday11pm)).toEqual(['cocktail', 'jazz']);
+  });
+
   it('corrupt storage reads as no-pick, never throws', () => {
     window.localStorage.setItem('next-bar:night-vibe:v1', '{not json');
     expect(loadNightVibe(friday11pm)).toBeNull();
