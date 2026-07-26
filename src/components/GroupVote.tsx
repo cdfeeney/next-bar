@@ -13,8 +13,9 @@
  */
 
 import { useState } from 'react';
+import ShareButton from '@/components/ShareButton';
 import { barById, type ConsensusParticipant } from '@/lib/demo';
-import { buildPickPath, isShareAbort, sharePickText } from '@/lib/share';
+import { buildPickPath, sharePickText } from '@/lib/share';
 import {
   createSession,
   castVote,
@@ -229,40 +230,21 @@ function ResultScreen({
   );
 }
 
-function SharePickButton({ barId }: { barId: string }): JSX.Element {
-  const [copied, setCopied] = useState(false);
+/**
+ * Now a thin wrapper over the shared ShareButton — the native-sheet /
+ * clipboard / dismiss-is-not-consent logic lives in one place so the
+ * profile and pick surfaces cannot drift apart.
+ */
+function SharePickButton({ barId }: { barId: string }): JSX.Element | null {
   const bar = barById(barId);
-
-  const share = async (): Promise<void> => {
-    if (!bar) return;
-    const url = `${window.location.origin}${buildPickPath(barId)}`;
-    const text = sharePickText(bar);
-    // Native share sheet where available (iOS PWA); clipboard elsewhere.
-    if (typeof navigator.share === 'function') {
-      try {
-        await navigator.share({ title: text, text, url });
-        return;
-      } catch (err) {
-        // User dismissed the sheet — dismiss ≠ consent. Do nothing.
-        if (isShareAbort(err)) return;
-        // Unsupported payload / share failure — fall through to clipboard.
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(`${text} ${url}`);
-      setCopied(true);
-    } catch {
-      // Clipboard blocked — nothing sensible left to do silently.
-    }
-  };
+  if (!bar) return null;
 
   return (
-    <button
-      type="button"
-      onClick={() => void share()}
-      className="bg-accent text-bg font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation"
-    >
-      {copied ? 'Link copied ✓' : 'Share the pick'}
-    </button>
+    <ShareButton
+      path={buildPickPath(barId)}
+      text={sharePickText(bar)}
+      label="Share the pick"
+      variant="primary"
+    />
   );
 }

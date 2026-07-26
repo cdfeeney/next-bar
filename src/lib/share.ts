@@ -19,20 +19,52 @@ export function sharePickText(bar: Bar): string {
 }
 
 /**
- * True when a navigator.share rejection means the user dismissed the sheet
- * (AbortError). Dismiss ≠ consent — callers must NOT fall back to the
- * clipboard on a dismissal, only on genuine share failures.
+ * Profile share path — the ranked list is the loop-STARTING artifact.
+ *
+ * A pick card ("we're going here") only travels between people already
+ * coordinating; a ranked list travels to anyone, because it carries a
+ * person's taste rather than one night's logistics. This is the surface
+ * a recipient can browse cold.
+ */
+export function buildProfilePath(handle: string): string {
+  return `/u/${encodeURIComponent(handle)}`;
+}
+
+/**
+ * Share-sheet text for a profile. Leads with the person, not the product —
+ * the thing worth opening is whose taste it is.
+ */
+export function shareProfileText(
+  handle: string,
+  displayName?: string | null,
+): string {
+  const who = displayName?.trim() ? displayName.trim() : `@${handle}`;
+  return `${who}'s bar list, ranked. On Next Bar.`;
+}
+
+/**
+ * True when a navigator.share rejection means we must NOT fall back to the
+ * clipboard. Dismiss ≠ consent: silently writing a link to someone's
+ * clipboard after they backed out of the share sheet is a privacy surprise,
+ * and this app has already shipped that bug once (audit MED-16).
+ *
+ * The spec says dismissal is `AbortError`, but browsers deviate and the
+ * failure mode of guessing wrong is asymmetric — guess "dismissed" and the
+ * user sees nothing happen; guess "failed" and we touch their clipboard
+ * uninvited. So `NotAllowedError` counts too:
+ *   - Firefox Android has reported cancel as NotAllowedError;
+ *   - Chrome throws NotAllowedError when transient user activation is
+ *     absent or expired, in which case the clipboard write would very
+ *     likely be blocked anyway.
+ * Anything else is a genuine share failure and DOES fall through.
  *
  * Duck-typed on `name` rather than `instanceof Error`: DOMException doesn't
  * reliably sit on the realm's Error prototype chain (jsdom, cross-realm).
  */
 export function isShareAbort(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'name' in err &&
-    (err as { name: unknown }).name === 'AbortError'
-  );
+  if (typeof err !== 'object' || err === null || !('name' in err)) return false;
+  const name = (err as { name: unknown }).name;
+  return name === 'AbortError' || name === 'NotAllowedError';
 }
 
 /**

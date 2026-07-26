@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMapsHref,
   buildPickPath,
+  buildProfilePath,
   isShareAbort,
   sharePickText,
+  shareProfileText,
 } from '@/lib/share';
 import type { Bar } from '@/types';
 
@@ -38,6 +40,44 @@ describe('sharePickText', () => {
   });
 });
 
+describe('buildProfilePath', () => {
+  it('builds the profile path from the handle', () => {
+    expect(buildProfilePath('connor')).toBe('/u/connor');
+  });
+
+  it('URL-encodes handles defensively', () => {
+    expect(buildProfilePath('we ird')).toBe('/u/we%20ird');
+  });
+});
+
+describe('shareProfileText', () => {
+  it('leads with the display name when there is one', () => {
+    expect(shareProfileText('connor', 'Connor F')).toBe(
+      "Connor F's bar list, ranked. On Next Bar.",
+    );
+  });
+
+  it('falls back to the @handle when no display name', () => {
+    expect(shareProfileText('connor')).toBe(
+      "@connor's bar list, ranked. On Next Bar.",
+    );
+  });
+
+  it('treats a null display name as absent', () => {
+    expect(shareProfileText('connor', null)).toContain('@connor');
+  });
+
+  it('treats a whitespace-only display name as absent', () => {
+    expect(shareProfileText('connor', '   ')).toContain('@connor');
+  });
+
+  it('trims a padded display name rather than emitting the padding', () => {
+    expect(shareProfileText('connor', '  Connor F  ')).toBe(
+      "Connor F's bar list, ranked. On Next Bar.",
+    );
+  });
+});
+
 describe('isShareAbort', () => {
   it('is true for an AbortError (user dismissed the share sheet)', () => {
     const err = new Error('Share canceled');
@@ -51,11 +91,25 @@ describe('isShareAbort', () => {
     );
   });
 
-  it('is false for other share failures (clipboard fallback allowed)', () => {
-    expect(isShareAbort(new TypeError('Invalid share payload'))).toBe(false);
+  /**
+   * Deliberately inverted 2026-07-26 (DeepSeek review). This previously
+   * asserted NotAllowedError => false, i.e. "fall through and write the
+   * clipboard". That is the wrong side of an asymmetric bet: Firefox
+   * Android has reported share-sheet CANCEL as NotAllowedError, and Chrome
+   * raises it when transient user activation is missing. Guessing
+   * "dismissed" costs a no-op; guessing "failed" silently writes to the
+   * user's clipboard after they backed out — the exact bug this app
+   * already shipped once (audit MED-16).
+   */
+  it('is true for NotAllowedError — treated as dismissal, never clipboard', () => {
     expect(isShareAbort(new DOMException('denied', 'NotAllowedError'))).toBe(
-      false,
+      true,
     );
+  });
+
+  it('is false for genuine share failures (clipboard fallback allowed)', () => {
+    expect(isShareAbort(new TypeError('Invalid share payload'))).toBe(false);
+    expect(isShareAbort(new DOMException('bad data', 'DataError'))).toBe(false);
   });
 
   it('is false for non-Error rejections', () => {

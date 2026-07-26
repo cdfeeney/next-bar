@@ -1,0 +1,30 @@
+{
+  "cycle": 0,
+  "objective": "wau_one_neighborhood + self_maintaining_venues",
+  "bottleneck": "users",
+  "metrics": {
+    "wau": null,
+    "max_neighborhood_wau": null,
+    "claimed_venues": 0,
+    "self_maintaining_venues": 0,
+    "revenue": 0,
+    "operator_hours_available": 8
+  },
+  "active_bets": [],
+  "kill_criterion": {
+    "deadline": "2026-12-31",
+    "wau_threshold": 50,
+    "venue_threshold": 15,
+    "tripped": false
+  },
+  "modules": {
+    "growth": "active",
+    "tech": "active",
+    "venue_sales": "dormant",
+    "hiring": "dormant",
+    "finance": "dormant",
+    "exit": "dormant"
+  },
+  "history": [],
+  "approval_queue": []
+}
