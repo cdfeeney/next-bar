@@ -42,17 +42,7 @@ type Grouped = {
   going: Array<{ userId: string; label: string; isYou: boolean }>;
 };
 
-export default function TonightSuggestions({
-  onSuggestedBarsChange,
-}: {
-  /**
-   * Live ordered list of tonight's suggested bar ids (most-going, then
-   * most-backed — the same order the list renders). The consensus page
-   * feeds these into the group-vote candidates (operator 2026-07-25:
-   * suggested bars must be votable). Called with [] when signed out.
-   */
-  onSuggestedBarsChange?: (barIds: string[]) => void;
-} = {}): JSX.Element | null {
+export default function TonightSuggestions(): JSX.Element | null {
   const auth = useAuth();
   const [suggestions, setSuggestions] = useState<CircleSuggestion[] | null>(
     null,
@@ -90,34 +80,6 @@ export default function TonightSuggestions({
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  // Emit the suggested-bar order for the vote (must live ABOVE the early
-  // return — hooks rules). Mirrors the render grouping's sort: most IN
-  // first, then most-backed.
-  useEffect(() => {
-    if (!onSuggestedBarsChange) return;
-    if (auth.status !== 'signed-in') {
-      onSuggestedBarsChange([]);
-      return;
-    }
-    const counts = new Map<string, { backers: number; going: number }>();
-    for (const s of suggestions ?? []) {
-      if (!getBarById(s.barId)) continue; // unknown/retired id — never emit
-      const c = counts.get(s.barId) ?? { backers: 0, going: 0 };
-      c.backers += 1;
-      counts.set(s.barId, c);
-    }
-    for (const r of rsvps) {
-      const c = counts.get(r.barId);
-      if (c) c.going += 1;
-    }
-    const ids = [...counts.entries()]
-      .sort(
-        (a, b) => b[1].going - a[1].going || b[1].backers - a[1].backers,
-      )
-      .map(([id]) => id);
-    onSuggestedBarsChange(ids);
-  }, [onSuggestedBarsChange, auth.status, suggestions, rsvps]);
 
   if (auth.status !== 'signed-in') return null;
 
