@@ -192,8 +192,10 @@ function IntentPills(): JSX.Element {
         onClick={() => toggleIntent(status)}
         className={[
           'min-h-[44px] touch-manipulation px-5 rounded-full font-display text-sm border transition-colors',
+          // Active = OUTLINED accent, never filled — the Plan Night Out
+          // card owns the screen's one accent fill (R2, review HIGH).
           active
-            ? 'bg-accent border-accent text-bg'
+            ? 'bg-transparent border-accent text-accent'
             : 'bg-transparent border-border text-muted hover:text-text',
         ].join(' ')}
       >

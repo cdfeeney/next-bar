@@ -23,8 +23,8 @@ export type UseIntentReturn = {
  * Fire `refresh` once after mount, then every minute and whenever the tab
  * becomes visible again — the shared "the clock moved" signal that catches
  * the midnight/5am rollover while a tab stays open (F5). Used here to
- * expire stale intents and by TonightSection for the cadence banner and
- * demo signals.
+ * expire stale intents, and by every other nightKey-scoped consumer
+ * (phase home, tonight-exclusion, the /friends Tonight strip).
  */
 export function useNightRefresh(refresh: () => void): void {
   // Latest-callback ref so a new closure each render doesn't tear down

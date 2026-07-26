@@ -35,7 +35,15 @@ export default function FollowingPage(): JSX.Element {
       <section className="max-w-md mx-auto px-6">
         {mode !== 'server' ? (
           demoFollowed.length === 0 ? (
-            <p className="text-muted text-sm">Not following anyone yet.</p>
+            <p className="text-muted text-sm">
+              Not following anyone yet.{' '}
+              <Link
+                href="/friends"
+                className="text-accent underline-offset-4 hover:underline"
+              >
+                Find friends →
+              </Link>
+            </p>
           ) : (
             <div className="space-y-3">
               {demoFollowed.map((f) => (
@@ -56,7 +64,15 @@ export default function FollowingPage(): JSX.Element {
             Loading…
           </p>
         ) : circle.length === 0 && requested.length === 0 ? (
-          <p className="text-muted text-sm">Not following anyone yet.</p>
+          <p className="text-muted text-sm">
+            Not following anyone yet.{' '}
+            <Link
+              href="/friends"
+              className="text-accent underline-offset-4 hover:underline"
+            >
+              Find friends →
+            </Link>
+          </p>
         ) : (
           <div className="space-y-3">
             {circle.map((p) => (

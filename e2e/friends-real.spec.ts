@@ -206,6 +206,48 @@ test.describe('/friends — signed in (real graph)', () => {
     await expect(page).toHaveURL(/\/friends$/);
   });
 
+  test('the Tonight strip shows circle RSVPs — who → which bar; hidden without any (UX-A)', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { following: [SAM] });
+    // Later-registered routes take precedence over stubSupabase's.
+    await page.route('**/rest/v1/rpc/get_circle_rsvps', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            user_id: FRIEND_ID,
+            handle: 'sam_j',
+            display_name: 'Sam J.',
+            bar_id: 'attaboy',
+          },
+        ]),
+      }),
+    );
+    await page.goto('/friends');
+
+    const strip = page.getByTestId('friends-tonight');
+    await expect(strip.getByText('Sam J.')).toBeVisible();
+    await expect(strip.getByText(/→ Attaboy/)).toBeVisible();
+  });
+
+  test('the Tonight strip renders no RSVP rows when the circle has none (UX-A)', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { following: [SAM] });
+    await page.route('**/rest/v1/rpc/get_circle_rsvps', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+    );
+    await page.goto('/friends');
+
+    const strip = page.getByTestId('friends-tonight');
+    // The status pills still render (they live in the same block)…
+    await expect(strip.getByRole('button', { name: /^Going out$/ })).toBeVisible();
+    // …but no committed-friend rows.
+    await expect(strip.getByText(/→ /)).toHaveCount(0);
+  });
+
   test('unfollow on the Following list removes the row (UX-A)', async ({
     page,
   }) => {

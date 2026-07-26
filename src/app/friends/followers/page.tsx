@@ -33,7 +33,15 @@ export default function FollowersPage(): JSX.Element {
             Loading…
           </p>
         ) : followers.length === 0 ? (
-          <p className="text-muted text-sm">No followers yet.</p>
+          <p className="text-muted text-sm">
+            No followers yet.{' '}
+            <Link
+              href="/friends"
+              className="text-accent underline-offset-4 hover:underline"
+            >
+              Find friends →
+            </Link>
+          </p>
         ) : (
           <div className="space-y-3">
             {followers.map((p) => (
