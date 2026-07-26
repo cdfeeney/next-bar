@@ -1,7 +1,7 @@
 /**
  * suggestions.spec.ts
  *
- * Coverage for "Tonight's suggestions" on /friends/consensus (migration
+ * Coverage for "people's choice" on /friends/consensus (migration
  * 0011): the suggest flow (BarPicker sheet → suggest_bar RPC → list),
  * friend suggestions rendering as the identity pair, own-row removal,
  * and the 3-per-night cap message.
@@ -221,9 +221,9 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await stubSupabase(page, { following: [FRIEND] });
     await page.goto('/friends/consensus');
 
-    await expect(page.getByText(/nobody's pitched a spot/i)).toBeVisible();
+    await expect(page.getByText(/nobody's picked a spot/i)).toBeVisible();
 
-    await page.getByRole('button', { name: /\+ suggest a bar/i }).click();
+    await page.getByRole('button', { name: /\+ find a bar/i }).click();
     const sheet = page.getByRole('dialog', { name: /suggest a bar/i });
     await expect(sheet).toBeVisible();
     // Pick a known catalog bar via the picker search.
@@ -271,7 +271,7 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
 
     await expect(page.getByText('Ace Bar')).toBeVisible();
     await page.getByRole('button', { name: /remove your suggestion of ace bar/i }).click();
-    await expect(page.getByText(/nobody's pitched a spot/i)).toBeVisible();
+    await expect(page.getByText(/nobody's picked a spot/i)).toBeVisible();
   });
 
   test("RSVP: I'm-in toggles on, MOVES between bars, and toggles off", async ({
@@ -293,7 +293,7 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     // Scoped to the named list (PR #14 review LOW): a bare page-wide
     // locator('li') would match nav items or any future list on the page.
     const aceRow = page
-      .getByRole('list', { name: /tonight's suggestions/i })
+      .getByRole('list', { name: /people's choice/i })
       .getByRole('listitem')
       .filter({ hasText: 'Ace Bar' });
 
@@ -376,45 +376,41 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     // "nobody's in"; see the setRsvps prev-keep in TonightSuggestions).
     await page.getByRole('button', { name: "I'm in at Attaboy" }).click();
     await expect(page.getByText(/Claire is in/)).toBeVisible();
-    await expect(page.getByText(/nobody's pitched a spot/i)).toHaveCount(0);
+    await expect(page.getByText(/nobody's picked a spot/i)).toHaveCount(0);
   });
 
-  test("a suggested bar joins the group vote, marked Suggested, and can win it", async ({
+  test("the board shows BOTH parts: Group Favorites (algo) and the suggested bar in People's Choice (UX-B)", async ({
     page,
   }) => {
     await stubSupabase(page, {
       following: [FRIEND],
       // Both of you rated Ace Bar loved → it's the unanimous algorithmic
-      // pick AND the friend's auto-vote.
+      // pick (Group Favorites).
       friendRatings: [
         { user_id: FRIEND.id, bar_id: 'ace-bar', tier: 'loved', rated_at: '2026-07-01T00:00:00Z' },
       ],
       youRatings: [
         { bar_id: 'ace-bar', tier: 'loved', rated_at: '2026-07-02T00:00:00Z' },
       ],
-      // The circle suggested Attaboy — NOT in anyone's ratings, so it can
-      // only appear in the vote via the suggestions merge (the feature
-      // under test; before it, only algorithmic picks were votable).
+      // The circle suggested Attaboy — NOT in anyone's ratings, so it
+      // appears only via People's Choice (the human signal).
       suggestionRows: [
         { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'attaboy' },
       ],
     });
     await page.goto('/friends/consensus');
 
-    await expect(page.getByText('Attaboy')).toBeVisible();
-    await page.getByRole('button', { name: /put it to a vote/i }).click();
+    // Part 1: Group Favorites carries the algorithmic pick + the share
+    // moment on the top card. (The Put-it-to-a-vote flow is deleted.)
+    await expect(page.getByText(/Group Favorites/i)).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Ace Bar' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Share the pick/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /put it to a vote/i })).toHaveCount(0);
 
-    // The suggested bar is a candidate, marked as such.
-    const attaboyOption = page.getByRole('button', { name: /vote for attaboy/i });
-    await expect(attaboyOption).toBeVisible();
-    await expect(attaboyOption.getByText('Suggested')).toBeVisible();
-
-    // Your tap on the suggested bar decides it (1-1 tie breaks to the
-    // suggestion — human intent leads the candidate order).
-    await attaboyOption.click();
-    await expect(page.getByText(/tonight's pick/i)).toBeVisible();
-    const winnerCard = page.locator('section[aria-label="Vote result"]');
-    await expect(winnerCard.getByRole('heading', { name: 'Attaboy' })).toBeVisible();
+    // Part 2: People's Choice carries the human suggestion.
+    const choice = page.getByRole('list', { name: /people's choice/i });
+    await expect(choice.getByText('Attaboy')).toBeVisible();
+    await expect(choice.getByText(/suggested by.*Claire/i)).toBeVisible();
   });
 
   test('a declined suggest (cap) surfaces the inline message', async ({ page }) => {
@@ -429,7 +425,7 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     });
     await page.goto('/friends/consensus');
 
-    await page.getByRole('button', { name: /\+ suggest a bar/i }).click();
+    await page.getByRole('button', { name: /\+ find a bar/i }).click();
     const sheet = page.getByRole('dialog', { name: /suggest a bar/i });
     await sheet.getByPlaceholder(/search/i).click();
     await sheet.getByPlaceholder(/search/i).pressSequentially('Dead Rabbit');

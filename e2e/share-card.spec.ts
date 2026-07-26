@@ -67,10 +67,9 @@ test.describe('Shareable pick cards', () => {
     expect(response?.status()).toBe(404);
   });
 
-  test('vote result screen offers the share button', async ({ page }) => {
+  test('the top Group Favorite offers the share button (UX-B: vote flow deleted)', async ({ page }) => {
     await page.goto('/friends/consensus');
-    await page.getByRole('button', { name: /Put it to a vote/i }).click();
-    await expect(page.getByText(/Tonight's pick/i)).toBeVisible();
+    await expect(page.getByText(/Group Favorites/i)).toBeVisible();
     await expect(
       page.getByRole('button', { name: /Share the pick/i }),
     ).toBeVisible();
