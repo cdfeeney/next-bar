@@ -98,6 +98,28 @@ export function loadIntent(now: Date = new Date()): TonightIntent | null {
   }
 }
 
+/**
+ * Did LAST night involve going out? True when the stored intent belongs
+ * to the previous night and was a commitment ('going' or 'here') —
+ * 'maybe' never counts. nightPhase's morning branch uses this to pick
+ * recap over planning (E0.3); the E4 Night object will replace it as
+ * the source of truth.
+ */
+export function wasOutLastNight(now: Date = new Date()): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = window.localStorage.getItem(KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isTonightIntent(parsed)) return false;
+    if (parsed.status === 'maybe') return false;
+    const previousNight = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    return nightOf(parsed.setAt) === nightOfDate(previousNight);
+  } catch {
+    return false;
+  }
+}
+
 export function setIntent(status: IntentStatus): void {
   if (typeof window === 'undefined') return;
   const intent: TonightIntent = {
