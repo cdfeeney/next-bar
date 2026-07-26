@@ -136,7 +136,9 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
     await expect(legend).toBeVisible();
     await expect(legend).toContainText('Suggested');
     await expect(legend).toContainText('Rated');
-    await expect(legend).toContainText('Everything else');
+    // UX-C: the grey dot is just "Bar" — minimum words.
+    await expect(legend).toContainText('Bar');
+    await expect(legend).not.toContainText('Everything else');
   });
 
   test('seeded profile: suggested markers ≤ 10 and grey markers exist', async ({
@@ -169,7 +171,7 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
     await expect(page.getByTestId('map-quiz-hint')).toHaveCount(0);
   });
 
-  test('no profile: zero suggested markers, all-grey map, quiz hint links to /quiz', async ({
+  test('no profile: suggested dots STILL show (empty-profile fallback), quiz hint links to /quiz (UX-C)', async ({
     page,
   }) => {
     await page.goto('/map');
@@ -181,17 +183,43 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
     const grey = page.locator('.leaflet-marker-icon [data-tier="other"]');
     await expect(grey.first()).toBeVisible({ timeout: 15_000 });
 
-    // No suggested tier without a quiz profile.
-    await expect(
-      page.locator('.leaflet-marker-icon [data-tier="suggested"]'),
-    ).toHaveCount(0);
+    // UX-C (operator: "no suggested bars for me now"): a missing quiz
+    // profile falls back to the empty profile — the suggested tier is
+    // NEVER blank.
+    const suggested = page.locator(
+      '.leaflet-marker-icon [data-tier="suggested"]',
+    );
+    await expect(suggested.first()).toBeVisible({ timeout: 15_000 });
+    expect(await suggested.count()).toBeLessThanOrEqual(MAP_SUGGESTION_COUNT);
 
-    // The hint card renders and links to the quiz.
+    // The one-line personalize hint still links to the quiz.
     const hint = page.getByTestId('map-quiz-hint');
     await expect(hint).toBeVisible();
     await expect(hint.getByRole('link', { name: /quiz/i })).toHaveAttribute(
       'href',
       '/quiz',
     );
+  });
+
+  test('map search flies to the picked bar and opens its popup (UX-C)', async ({
+    page,
+  }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    await page.getByRole('searchbox', { name: /Search bars/i }).fill('Attaboy');
+    await page
+      .getByRole('list', { name: /Matching bars/i })
+      .getByRole('button', { name: /Attaboy/ })
+      .click();
+
+    // The popup names the bar (fly animation settles under the retry).
+    await expect(page.locator('.leaflet-popup')).toContainText('Attaboy', {
+      timeout: 10_000,
+    });
+    // Picking clears the query so the dropdown leaves the screen.
+    await expect(page.getByRole('list', { name: /Matching bars/i })).toHaveCount(0);
   });
 });
