@@ -201,6 +201,10 @@ export default function SettingsPage(): JSX.Element {
     // Settings "Demo" section still shows "Remove sample night" while Rankings is empty (Codex review).
     window.localStorage.removeItem('next-bar:demo:seeded:v1');
     window.localStorage.removeItem('next-bar:demo:seeded-ids:v1');
+    // E4.1: the night visit log is the most sensitive local record (which
+    // bars, in order, when) — the documented wipe control must cover it
+    // (privacy page: "wiped any time from Settings").
+    window.localStorage.removeItem('next-bar:night-log:v1');
     // useRatings reads on next mount; a hard reload is the simplest correct refresh.
     window.location.reload();
   };
