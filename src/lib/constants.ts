@@ -45,6 +45,10 @@ export const RADIUS_ANYWHERE = null;
 // contradict the "Walkable" chip that surfaced the bar (review HIGH:
 // after the 1 -> 1.5 bump, a 1.2mi bar under "Walkable" read "by Uber").
 export const WALK_BOUNDARY_MI = RADIUS_WALK;
+
+// E3.3 refinement (operator 2026-07-26): the open-now hard filter keeps
+// bars OPENING within this window — day drinkers search before doors.
+export const OPENS_SOON_WINDOW_MIN = 60;
 export const WALK_MIN_PER_MILE = 20;
 export const UBER_MIN_PER_MILE = 6;
 

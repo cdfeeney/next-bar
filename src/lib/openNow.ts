@@ -38,15 +38,50 @@ export function isOpenNow(hours: WeeklyHours | undefined, now: Date): boolean | 
 }
 
 /**
- * E3.3 hard filter: drop bars that are KNOWN closed at `now` (or gone for
- * good). Bars without hours data stay — unknown must never read as
- * closed, so a missing ingest can't false-negative a bar out of
- * existence. Pure; callers on live surfaces decide when to apply it.
+ * Is a closed bar OPENING within `withinMinutes` of `now`? Checks
+ * today's later windows and — when the lookahead crosses midnight —
+ * tomorrow's early windows. False for open bars (callers ask only after
+ * an isOpenNow(...) === false answer) and for unknown hours.
  */
-export function excludeClosedBars(bars: Bar[], now: Date): Bar[] {
+export function opensSoon(
+  hours: WeeklyHours | undefined,
+  now: Date,
+  withinMinutes: number,
+): boolean {
+  if (!hours) return false;
+  const { day, minutes } = nycNow(now);
+  for (const r of hours[day] ?? []) {
+    const open = toMinutes(r.open);
+    if (open > minutes && open - minutes <= withinMinutes) return true;
+  }
+  const overflow = minutes + withinMinutes - 24 * 60;
+  if (overflow > 0) {
+    const tomorrow = (day + 1) % 7;
+    for (const r of hours[tomorrow] ?? []) {
+      if (toMinutes(r.open) <= overflow) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * E3.3 hard filter: drop bars that are KNOWN closed at `now` (or gone for
+ * good) — UNLESS they open within `opensSoonWithinMin` (operator
+ * 2026-07-26: day drinkers search before doors; those bars stay and
+ * their badge honestly reads "Opens 5 PM"). Bars without hours data
+ * stay — unknown must never read as closed, so a missing ingest can't
+ * false-negative a bar out of existence. Pure; callers on live surfaces
+ * decide when to apply it.
+ */
+export function excludeClosedBars(
+  bars: Bar[],
+  now: Date,
+  opensSoonWithinMin = 0,
+): Bar[] {
   return bars.filter((bar) => {
     if (bar.businessStatus === 'CLOSED_PERMANENTLY') return false;
-    return isOpenNow(bar.hours, now) !== false;
+    if (isOpenNow(bar.hours, now) !== false) return true;
+    return opensSoonWithinMin > 0 && opensSoon(bar.hours, now, opensSoonWithinMin);
   });
 }
 

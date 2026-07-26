@@ -12,7 +12,7 @@ import { useBars } from '@/lib/useBars';
 import { excludeClosedBars } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
-import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
+import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
 import { useRatings } from '@/hooks/useRatings';
 import ResultCard from '@/components/ResultCard';
 
@@ -90,7 +90,9 @@ export default function ResultsView({
 
   const pool = useMemo(
     () =>
-      hideClosedNow && filterNow ? excludeClosedBars(bars, filterNow) : bars,
+      hideClosedNow && filterNow
+        ? excludeClosedBars(bars, filterNow, OPENS_SOON_WINDOW_MIN)
+        : bars,
     [bars, hideClosedNow, filterNow],
   );
 
