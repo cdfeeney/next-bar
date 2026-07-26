@@ -233,16 +233,17 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await sheet.getByPlaceholder(/search/i).pressSequentially('Ace Bar');
     await sheet.getByRole('button', { name: /^Ace Bar/ }).first().click();
 
-    // Sheet closes; the suggestion lands with "You" as the suggester.
+    // Sheet closes; the suggestion lands with "You" backing it — the
+    // VOTE toggle is lit with a tally of 1 (UX-B2: the vote is visible).
     await expect(sheet).not.toBeVisible();
     await expect(page.getByText('Ace Bar')).toBeVisible();
     await expect(page.getByText(/suggested by.*You/i)).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: /remove your suggestion of ace bar/i }),
-    ).toBeVisible();
+    const vote = page.getByRole('button', { name: 'Vote for Ace Bar' });
+    await expect(vote).toHaveAttribute('aria-pressed', 'true');
+    await expect(vote).toContainText('1');
   });
 
-  test("a friend's suggestion renders with their name; Remove only on own rows", async ({
+  test("a friend's suggestion renders with their name; your vote toggle starts OFF", async ({
     page,
   }) => {
     await stubSupabase(page, {
@@ -255,10 +256,12 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
 
     await expect(page.getByText('Attaboy')).toBeVisible();
     await expect(page.getByText(/suggested by.*Claire/i)).toBeVisible();
-    await expect(page.getByRole('button', { name: /remove your suggestion/i })).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: 'Vote for Attaboy' }),
+    ).toHaveAttribute('aria-pressed', 'false');
   });
 
-  test('removing an own suggestion deletes it and returns to the empty state', async ({
+  test('un-voting your own suggestion withdraws it back to the empty state', async ({
     page,
   }) => {
     await stubSupabase(page, {
@@ -270,8 +273,27 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await page.goto('/friends/consensus');
 
     await expect(page.getByText('Ace Bar')).toBeVisible();
-    await page.getByRole('button', { name: /remove your suggestion of ace bar/i }).click();
+    await page.getByRole('button', { name: 'Vote for Ace Bar' }).click();
     await expect(page.getByText(/nobody's picked a spot/i)).toBeVisible();
+  });
+
+  test("voting a FRIEND's suggestion adds your backing to the tally (UX-B2)", async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [FRIEND],
+      suggestionRows: [
+        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'attaboy' },
+      ],
+    });
+    await page.goto('/friends/consensus');
+
+    const vote = page.getByRole('button', { name: 'Vote for Attaboy' });
+    await expect(vote).toContainText('1');
+    await vote.click();
+    await expect(vote).toHaveAttribute('aria-pressed', 'true');
+    await expect(vote).toContainText('2');
+    await expect(page.getByText(/suggested by.*Claire.*You|suggested by.*You.*Claire/i)).toBeVisible();
   });
 
   test("RSVP: I'm-in toggles on, MOVES between bars, and toggles off", async ({

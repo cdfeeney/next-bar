@@ -243,7 +243,35 @@ export default function TonightSuggestions(): JSX.Element | null {
                       </p>
                     ) : null}
                   </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* THE VOTE (operator: "that's hidden") — backing a
+                        bar IS the vote. Tally always visible; tapping
+                        toggles your backing (your own suggestion off =
+                        withdrawing it). */}
+                    {(() => {
+                      const youBack = suggesters.some((s) => s.isYou);
+                      return (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void (youBack
+                              ? handleRemove(bar.id)
+                              : handlePick(bar))
+                          }
+                          disabled={busy}
+                          aria-pressed={youBack}
+                          aria-label={`Vote for ${bar.name}`}
+                          className={[
+                            'font-display text-xs px-3 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50 border transition-colors tabular-nums',
+                            youBack
+                              ? 'bg-accent text-bg border-accent'
+                              : 'bg-transparent text-accent border-accent/40 hover:border-accent',
+                          ].join(' ')}
+                        >
+                          ▲ {suggesters.length}
+                        </button>
+                      );
+                    })()}
                     <button
                       type="button"
                       onClick={() => void handleToggleRsvp(bar.id)}
@@ -259,17 +287,6 @@ export default function TonightSuggestions(): JSX.Element | null {
                     >
                       {youAreIn ? "I'm in ✓" : "I'm in"}
                     </button>
-                    {suggesters.some((s) => s.isYou) ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleRemove(bar.id)}
-                        disabled={busy}
-                        aria-label={`Remove your suggestion of ${bar.name}`}
-                        className="text-muted text-xs underline-offset-4 hover:underline min-h-[36px] touch-manipulation disabled:opacity-50"
-                      >
-                        Remove
-                      </button>
-                    ) : null}
                   </div>
                 </div>
               </li>
