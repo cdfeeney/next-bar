@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NIGHT_PHASES, type NightPhase } from '@/lib/nightPhase';
 
 /** User-facing phase names (status labels, not commands). */
@@ -25,9 +25,31 @@ type PhaseChipProps = {
  */
 export default function PhaseChip({ phase, onSelect }: PhaseChipProps) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Escape and outside-tap dismiss the panel — the codebase's overlay
+  // convention (BarLightbox et al.); without it a keyboard user's only
+  // exit is picking a phase (review finding).
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    const onPointerDown = (e: PointerEvent): void => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [open]);
 
   return (
-    <div className="relative">
+    <div className="relative" ref={rootRef}>
       <button
         type="button"
         aria-expanded={open}

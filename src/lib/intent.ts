@@ -98,6 +98,19 @@ export function loadIntent(now: Date = new Date()): TonightIntent | null {
   }
 }
 
+// The calendar day before a YYYY-MM-DD night date. Pure Date.UTC calendar
+// math — a raw 24h-in-ms subtraction lands one local hour early on the
+// spring-forward Sunday and can cross the 5am rollover (review finding),
+// misreading "last night" for the 5:00–5:59am window that morning.
+function previousNightDate(night: string): string {
+  const [y, m, d] = night.split('-').map(Number);
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  const py = prev.getUTCFullYear();
+  const pm = String(prev.getUTCMonth() + 1).padStart(2, '0');
+  const pd = String(prev.getUTCDate()).padStart(2, '0');
+  return `${py}-${pm}-${pd}`;
+}
+
 /**
  * Did LAST night involve going out? True when the stored intent belongs
  * to the previous night and was a commitment ('going' or 'here') —
@@ -113,8 +126,7 @@ export function wasOutLastNight(now: Date = new Date()): boolean {
     const parsed = JSON.parse(raw) as unknown;
     if (!isTonightIntent(parsed)) return false;
     if (parsed.status === 'maybe') return false;
-    const previousNight = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    return nightOf(parsed.setAt) === nightOfDate(previousNight);
+    return nightOf(parsed.setAt) === previousNightDate(nightOfDate(now));
   } catch {
     return false;
   }

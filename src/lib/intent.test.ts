@@ -140,6 +140,38 @@ describe('wasOutLastNight (E2.4 nightPhase input)', () => {
     expect(wasOutLastNight(SAT_9AM)).toBe(false);
   });
 
+  it('crosses month and year boundaries with calendar math', () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'here', setAt: '2026-07-31T23:00:00' }),
+    );
+    expect(wasOutLastNight(new Date('2026-08-01T09:00:00'))).toBe(true);
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'here', setAt: '2026-12-31T23:00:00' }),
+    );
+    expect(wasOutLastNight(new Date('2027-01-01T09:00:00'))).toBe(true);
+  });
+
+  // DST regression (review finding): the 24h-in-ms subtraction this
+  // replaced lands an hour early on the spring-forward Sunday and crosses
+  // the 5am rollover for the 5:00–5:59am window. Only reproducible on a
+  // runner whose local zone observes US DST, so gate on that.
+  const observesUsDst =
+    new Date('2026-03-08T05:30:00').getTime() -
+      new Date('2026-03-07T05:30:00').getTime() ===
+    23 * 60 * 60 * 1000;
+  it.runIf(observesUsDst)(
+    'spring-forward Sunday 5am hour still sees last night (DST regression)',
+    () => {
+      window.localStorage.setItem(
+        KEY,
+        JSON.stringify({ status: 'here', setAt: '2026-03-07T23:00:00' }),
+      );
+      expect(wasOutLastNight(new Date('2026-03-08T05:30:00'))).toBe(true);
+    },
+  );
+
   it("tonight's own intent does not read as LAST night", () => {
     window.localStorage.setItem(
       KEY,

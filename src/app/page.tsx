@@ -56,8 +56,11 @@ export default function HomePage() {
   // startResultsFrom (E2.2).
   return (
     <main>
-      <header className="px-6 py-4 flex items-center justify-between border-b border-border">
-        <p className="font-display text-accent text-sm uppercase tracking-[0.3em]">
+      {/* flex-wrap: with three items the row overflows ~320-360px
+          viewports — the chip+link pair wraps under the wordmark there
+          instead of breaking the wordmark itself (review finding). */}
+      <header className="px-6 py-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border">
+        <p className="font-display text-accent text-sm uppercase tracking-[0.3em] whitespace-nowrap">
           Next Bar
         </p>
         <div className="flex items-center gap-3">
