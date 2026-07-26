@@ -115,32 +115,37 @@ export default function WhereNextFlow() {
     return () => clearTimeout(timer);
   }, [step.kind, geo.permissionState]);
 
-  // E2.1: picking a seed bar lands on RESULTS immediately. If location
-  // permission is already granted the hook resolves coords silently in
-  // the background (results re-rank when they arrive); any failure just
-  // means seed-bar coords — never narrated, no confirm screen (R6).
-  const handlePickBar = (bar: Bar) => {
+  // Radius fine-tune lives on the results surface (E2.1) — changing it
+  // re-ranks live. Walking default.
+  const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
+
+  // E2.1: EVERY seed-bar entry lands on RESULTS immediately through this
+  // one helper (review HIGH: the picker and not-listed paths must behave
+  // identically). If permission is already granted but the hook's
+  // auto-resume hasn't fired, resolve coords silently in the background —
+  // results re-rank when they arrive; failure just means seed-bar coords,
+  // never narrated (R6). A NEW seed is a NEW search: the radius resets to
+  // the walking default (review MED — sticky radius crossed search
+  // contexts).
+  const startResultsFrom = (seedBar: Bar) => {
     if (geo.state.status === 'idle' && geo.permissionState === 'granted') {
       geo.request();
     }
-    setStep({ kind: 'results', seedBar: bar, tags: bar.tags });
+    setSelectedRadius(DEFAULT_RADIUS);
+    setStep({ kind: 'results', seedBar, tags: seedBar.tags });
   };
+
+  const handlePickBar = (bar: Bar) => startResultsFrom(bar);
 
   const handleNotListed = () => {
     setStep({ kind: 'freeTextSeed' });
   };
 
-  const handleFreeTextSubmit = (synthetic: Bar) => {
-    setStep({ kind: 'results', seedBar: synthetic, tags: synthetic.tags });
-  };
+  const handleFreeTextSubmit = (synthetic: Bar) => startResultsFrom(synthetic);
 
   const handleFreeTextCancel = () => {
     setStep({ kind: 'pickBar' });
   };
-
-  // Radius fine-tune lives on the results surface (E2.1) — changing it
-  // re-ranks live. Walking default.
-  const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
 
   const handleApplyTweak = (nextTags: VibeTag[]) => {
     if (step.kind !== 'tweakVibe') return;
