@@ -1,3 +1,4 @@
+import { TAG_VOCABULARY } from '@/lib/catalog';
 import { nycNightKey } from '@/lib/nightKey';
 import type { VibeTag } from '@/types';
 
@@ -32,7 +33,14 @@ export function loadNightVibe(now: Date = new Date()): VibeTag[] | null {
     const parsed = JSON.parse(raw) as StoredNightVibe;
     if (parsed?.night !== nycNightKey(now)) return null;
     if (!Array.isArray(parsed.tags)) return null;
-    return parsed.tags;
+    // Membership-validate against the canonical vocabulary (review MED):
+    // an unknown tag has NO chip in the axis UI, so the user could never
+    // see or remove it, and every Apply would re-save it — silent,
+    // sticky match-quality corruption. Filtering (not rejecting) keeps
+    // the valid remainder of the pick.
+    return parsed.tags.filter((t): t is VibeTag =>
+      (TAG_VOCABULARY as readonly string[]).includes(t),
+    );
   } catch {
     return null; // corrupt storage reads as "no pick" — never throws
   }
