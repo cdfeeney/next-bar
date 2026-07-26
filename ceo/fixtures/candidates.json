@@ -1,0 +1,37 @@
+{
+  "_comment": "AGENT-AUTHORED. Candidate actions the orchestrator may choose between. Exactly one is selected per cycle. Deliberately a different file from ceo/measurements/ — the agent proposes the work, it does not also report the numbers it will be judged against.",
+  "candidates": [
+    {
+      "id": "share-funnel-analytics",
+      "statement": "Ship share_clicked / share_landed / signup_from_share and a WAU rollup, so the objective's primary metric stops being null.",
+      "expected_lift": { "metric": "wau", "delta": 0, "unit": "users" },
+      "operator_hours": 3,
+      "restores_measurement": true,
+      "rationale": "Every other candidate on this list claims a lift nobody can currently observe. This one buys the ability to check them."
+    },
+    {
+      "id": "share-cta-copy",
+      "statement": "Rewrite the /share/[barId] CTA to name the recipient's benefit rather than the sender's action.",
+      "expected_lift": { "metric": "wau", "delta": 6, "unit": "users" },
+      "operator_hours": 1,
+      "restores_measurement": false,
+      "rationale": "Measured CTR on the live catalog is 1.485%; the click, not the landing, is the funnel's narrow point."
+    },
+    {
+      "id": "recipient-vote-before-signup",
+      "statement": "Let a signed-out recipient cast one 0-10 vote on the shared bar before any auth wall.",
+      "expected_lift": { "metric": "wau", "delta": 9, "unit": "users" },
+      "operator_hours": 6,
+      "restores_measurement": false,
+      "rationale": "The vote is the onboarding; a signup wall in front of it spends the one moment of intent the share bought."
+    },
+    {
+      "id": "venue-claim-outreach",
+      "statement": "Walk one neighborhood and hand-claim 40 venues.",
+      "expected_lift": { "metric": "claimed_venues", "delta": 40, "unit": "venues" },
+      "operator_hours": 40,
+      "restores_measurement": false,
+      "rationale": "Supply side of the two-sided objective."
+    }
+  ]
+}
