@@ -72,6 +72,8 @@ adding a line `[STOP]` at the top of this file â€” every tick re-reads it.
 - Tick 2 (M2): tagDisplay.ts + enforcement test (RED on 4 sites -> migrated -> GREEN); pricey renders as $$ everywhere; e2e both devices. 586 vitest.
 - Tick 3 (M3): vibeAxes.ts - 6-axis total partition of the 33 tags w/ exhaustiveness guard + axisOf. 590 vitest.
 - Tick 4 (M4): nightPhase.ts - planning/starting/out/recap derivation; override always wins, here->out, maybe never commits, fail-safe starting incl. broken clocks. 597 vitest.
+- Tick 5 (M5): full sweep. 2 REAL fixes: a11y spec O(1) in-page measurement (406-bar catalog blew serial boundingBox budget); app-store-pack asserts FINALIZED legal state (was asserting placeholders #35 removed). iPhone environmental set unchanged: picker pair + 2 rating-and-nav timeout shapes (baseline-known); age-gate cold-compile race proven green warm. Pixel green.
+
 
 
 

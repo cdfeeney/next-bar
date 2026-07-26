@@ -60,7 +60,7 @@ test.describe('21+ age gate', () => {
 });
 
 test.describe('legal pages', () => {
-  test('/privacy renders the honest v1 policy with marked placeholders', async ({
+  test('/privacy renders the FINALIZED policy — no placeholders, live deletion copy', async ({
     page,
   }) => {
     await page.goto('/privacy');
@@ -68,8 +68,14 @@ test.describe('legal pages', () => {
       page.getByRole('heading', { name: /privacy policy/i }),
     ).toBeVisible();
     await expect(page.getByText(/the short version/i)).toBeVisible();
-    // Placeholders are deliberately visible pre-launch.
-    await expect(page.getByText(/\[PLACEHOLDER/).first()).toBeVisible();
+    // Finalized 2026-07-25 (#35): placeholders are GONE for good, the
+    // deletion copy reflects the live Settings flow, and the entity
+    // line exists. Regressing any of these re-blocks App Store review.
+    await expect(page.getByText(/\[PLACEHOLDER/)).toHaveCount(0);
+    await expect(page.getByText(/Settings → Delete account/)).toBeVisible();
+    await expect(
+      page.getByText(/independent, individually operated/i),
+    ).toBeVisible();
     await expect(
       page.getByRole('link', { name: /terms of use/i }),
     ).toBeVisible();
