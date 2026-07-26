@@ -9,6 +9,7 @@ import type {
   VibeTag,
 } from '@/types';
 import { useBars } from '@/lib/useBars';
+import { excludeClosedBars } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
@@ -26,6 +27,12 @@ type ResultsViewProps = {
   excludeIds?: string[];
   maxResults?: number;
   /**
+   * E3.3: hard-filter bars KNOWN closed right now (live "find a bar"
+   * surfaces only — quiz/planning surfaces browse the full catalog).
+   * No-hours bars always stay; unknown never reads as closed.
+   */
+  hideClosedNow?: boolean;
+  /**
    * Fires with the ranked bar ids whenever the list changes — the single
    * source of truth for any companion surface (quiz map highlights,
    * MED-11: the parent must NOT recompute matches with different inputs).
@@ -39,6 +46,7 @@ export default function ResultsView({
   maxMiles,
   excludeIds,
   maxResults,
+  hideClosedNow,
   onRanked,
 }: ResultsViewProps) {
   const userCoords: Coords =
@@ -60,6 +68,31 @@ export default function ResultsView({
 
   const { ratings, setRating, clearRating } = useRatings();
   const bars = useBars();
+
+  // E3.3 clock for the hard filter: null until mount (the filter would
+  // otherwise change the card list between SSR and hydration — same
+  // rationale as OpenNowBadge computing after mount), then re-checked
+  // each minute so a long-open results page drops bars as they close.
+  // ACCEPTED TRADEOFF (review): the first committed frame renders the
+  // unfiltered pool, so a closed bar can flash for one paint before the
+  // effect narrows it — the same hydration-safe flash OpenNowBadge
+  // already accepts for its pill.
+  const [filterNow, setFilterNow] = useState<Date | null>(null);
+  useEffect(() => {
+    if (!hideClosedNow) {
+      setFilterNow(null);
+      return;
+    }
+    setFilterNow(new Date());
+    const t = setInterval(() => setFilterNow(new Date()), 60_000);
+    return () => clearInterval(t);
+  }, [hideClosedNow]);
+
+  const pool = useMemo(
+    () =>
+      hideClosedNow && filterNow ? excludeClosedBars(bars, filterNow) : bars,
+    [bars, hideClosedNow, filterNow],
+  );
 
   const effectiveExcludeIds = useMemo(() => {
     const merged = new Set(excludeIds ?? []);
@@ -92,12 +125,12 @@ export default function ResultsView({
         coords: userCoords,
         preferredNeighborhoods,
         maxMiles,
-        bars,
+        bars: pool,
         excludeIds: effectiveExcludeIds,
         maxResults,
         lovedTags,
       }),
-    [profile, userCoords, preferredNeighborhoods, maxMiles, bars, effectiveExcludeIds, maxResults, lovedTags],
+    [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags],
   );
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own

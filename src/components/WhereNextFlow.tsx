@@ -11,7 +11,7 @@ import { loadNightVibe, saveNightVibe } from '@/lib/vibeNightCache';
 import { RADIUS_WALK } from '@/lib/constants';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
-import RadiusSlider from '@/components/RadiusSlider';
+import DistanceChips from '@/components/DistanceChips';
 import VibeTweak from '@/components/VibeTweak';
 import ResultsView from '@/components/ResultsView';
 
@@ -255,6 +255,7 @@ export default function WhereNextFlow() {
           }}
           maxMiles={null}
           maxResults={SUGGEST_COUNT}
+          hideClosedNow
         />
         <div className="px-6 pb-10 text-center">
           <button
@@ -353,9 +354,9 @@ export default function WhereNextFlow() {
         <p className="text-muted text-sm mb-1">From {step.seedBar.name}</p>
         <p className="font-display text-2xl mb-4">Next bars</p>
         {/* E2.1: the radius fine-tune lives HERE now — one screen, live
-            re-rank, walking default. The old "How far you wanna go?"
-            interstitial is deleted. */}
-        <RadiusSlider value={selectedRadius} onChange={setSelectedRadius} />
+            re-rank, walking default. E3.2: distance is two intent chips
+            + the Anywhere escape, not units. */}
+        <DistanceChips value={selectedRadius} onChange={setSelectedRadius} />
         <div className="mt-3">
           <button
             type="button"
@@ -382,6 +383,7 @@ export default function WhereNextFlow() {
         }}
         maxMiles={selectedRadius.maxMiles}
         excludeIds={[step.seedBar.id]}
+        hideClosedNow
       />
       <BarMap
         bars={[step.seedBar]}

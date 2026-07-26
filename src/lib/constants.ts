@@ -22,7 +22,7 @@ export const RATING_WEIGHT = 0.1;
 
 // Proximity uses a scale-free exponential decay exp(-miles / DIST_DECAY_MILES)
 // rather than pool-relative normalization (which would make a bar's rank depend
-// on the other bars in the pool). 1/e at 1.5 mi ≈ the walk/short-Uber boundary.
+// on the other bars in the pool). 1/e at 1.5 mi ≈ the walkable/cab boundary.
 export const DIST_DECAY_MILES = 1.5;
 
 // Bumped from 180 to 365 for v0.3.1 to buy time until per-bar verification
@@ -34,11 +34,17 @@ export const COARSE_ACCURACY_M = 200;
 export const MAX_SNAP_MILES = 2;
 export const GPS_CONFIRM_MILES = 0.124;
 
-export const RADIUS_WALK = 1;
-export const RADIUS_SHORT_UBER = 3;
+// E3.2 distance chips: "Walkable" ~ a determined 25-30min walk;
+// "Worth a cab" ~ a short cross-town ride. Literal types in types/index.ts
+// (Radius) must match these values.
+export const RADIUS_WALK = 1.5;
+export const RADIUS_CAB = 4;
 export const RADIUS_ANYWHERE = null;
 
-export const WALK_BOUNDARY_MI = 1;
+// Derived from RADIUS_WALK so the card's walk/cab lead copy can never
+// contradict the "Walkable" chip that surfaced the bar (review HIGH:
+// after the 1 -> 1.5 bump, a 1.2mi bar under "Walkable" read "by Uber").
+export const WALK_BOUNDARY_MI = RADIUS_WALK;
 export const WALK_MIN_PER_MILE = 20;
 export const UBER_MIN_PER_MILE = 6;
 
