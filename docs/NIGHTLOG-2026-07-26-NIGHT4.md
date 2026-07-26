@@ -73,3 +73,63 @@ adding `[STOP]` at the top of this file — every tick re-reads it.
 
 - (queued 2026-07-26 ~00:15 ET; loop starts when the continuation
   session binds goal + arms ScheduleWakeup)
+- ~00:40 continuation session bound goal g-818a108c (lease held), built in
+  isolated worktree wt-night4 (junction node_modules). Also fixed
+  ~/.claude/bin/harness-state.mjs (backtick-in-template syntax error had
+  bricked the goal CLI).
+- ~00:58 P1 done → PR #48 OPEN. ~01:20 P2 done → PR #49 OPEN. ~02:00 P3
+  done → PR #50 OPEN. Each: fresh Opus review, HIGH/MEDs fixed forward,
+  gates green.
+- ~02:10-02:50 P4 sweep saga: two background runs killed by the
+  environment; then a run silently REUSED the other session's :3000 dev
+  server (next-bar-share worktree, started 01:58) → bogus mass failures.
+  Per the port rule it was left alone; sweep re-ran on an UNTRACKED
+  port-3013 playwright config (playwright.night4.config.ts, do not
+  commit). Also: worktree needed .env.local copied in (gitignored) — 14
+  auth-surface specs fail without Supabase env (useAuth 'unavailable').
+
+## MORNING SUMMARY (written ~03:00 ET)
+
+**Queue result: P1-P5 complete. 3 feature PRs OPEN for your
+merge-and-phone-test — no auto-merges overnight, per protocol.**
+
+Merge these one at a time (post-merge /api/health sha smoke each; a
+`gh pr update-branch` nudge may be needed after each merge since
+protect-main requires up-to-date branches):
+
+1. **PR #48 — E2.3 photo-first result card.** Full-bleed 16/10 hero,
+   name/hood/price on gradient overlay, photo-count chip, tap → lightbox;
+   glyph-tile fallback for photo-less bars and live 404s (multi-photo
+   advance before giving up). Rank-1 hero eager (LCP). CTAs ≥56px.
+2. **PR #49 — E2.4+E3.4 phase-adaptive home.** Header phase chip
+   (planning/starting/out/recap), any phase in ≤2 taps, night-scoped
+   override (rollover forgets); planning/recap lead cards ABOVE the flow
+   (misdetection never strands); starting/out = the flow. DST bug in
+   wasOutLastNight found by reviewer + fixed with regression test.
+3. **PR #50 — E3.2+E3.3 distance chips + open-now hard filter.**
+   Walkable (1.5mi) / Worth a cab (4mi) / Anywhere; RadiusSlider deleted.
+   KNOWN-closed bars hard-filtered from live surfaces (no-hours bars
+   protected; quiz untouched). WALK_BOUNDARY_MI now derives from
+   RADIUS_WALK (review HIGH: lead copy contradicted the Walkable chip).
+   **Phone-test note: daytime testing will show fewer/zero home-flow
+   results — that's the feature.**
+
+**Gates at close:** per-PR tsc 0 / vitest green (#48: 595, #49: 608,
+#50: 599) / build clean / gates CI SUCCESS on all three. Full sweep
+(port-3013): **Pixel 7 117/117; iPhone 13 112/117** — all 5 in the
+documented environmental set (suggestions picker pair ⏸; bias-smoke +
+account-delete pass warm in isolation; rating-and-nav deep-link =
+documented navigation-interrupted cold-compile race).
+
+**⏸ / notes:**
+- Concurrent session (CEO orchestrator, goal g-00210951) is ACTIVE in
+  projects/next-bar-share and holds :3000 — untouched per rule. Its
+  feat/share-loop-week1 branch is its own business.
+- wt-night4's playwright.night4.config.ts + .env.local are untracked
+  local artifacts; delete with the worktree when done.
+- E2 + E3 are now COMPLETE in g-db540bdb once #48-#50 merge.
+
+**Next attended targets:** E4 Night object + auto-recap (say "start E4"
+— the K-factor surface), E1.4 persistent votes, E5.2 App Store wrap
+after E2/E3 merge. Operator errands unchanged: Apple enrollment,
+next-bar.app DNS + hi@ forwarding, Brevo rotation.
