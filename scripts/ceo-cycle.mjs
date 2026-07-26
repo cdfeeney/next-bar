@@ -403,17 +403,36 @@ export function decide(state, assessment, candidates) {
 
   const hoursAvailable = state.metrics.operator_hours_available;
   const affordable = candidates.filter((c) => c.operator_hours <= hoursAvailable);
-  const eligible = assessment.measurable
-    ? affordable
-    : affordable.filter((c) => c.restores_measurement === true);
+
+  // The anti-theater rule, stated as what it actually means: do not recommend work whose effect
+  // nobody can observe. Either the work restores a measurement, or the metric it claims to move is
+  // one we can currently read.
+  //
+  // The previous version keyed on the PRIMARY metric alone, which turned out to be too narrow the
+  // moment a real sequence existed: with `wau` null it refused walk-in venue claims — work whose own
+  // metric, `claimed_venues`, is perfectly readable and is half the kill criterion. That is not
+  // theater, it is the operator's own next step, and the rule was blocking it for being adjacent to
+  // an unreadable number.
+  const targetsAReadableMetric = (candidate) => {
+    const target = candidate.expected_lift?.metric;
+    if (typeof target !== 'string') return false;
+    const reading = state.metrics[target];
+    return reading !== null && reading !== undefined;
+  };
+
+  const eligible = affordable.filter(
+    (candidate) => candidate.restores_measurement === true || targetsAReadableMetric(candidate),
+  );
 
   if (eligible.length === 0) {
     abort(
       'no eligible candidate: ' +
-        `${candidates.length} offered, ${affordable.length} within ${hoursAvailable} operator hours` +
-        (assessment.measurable
-          ? '.'
-          : `, and while ${PRIMARY_METRIC} is unmeasurable only measurement-restoring work is eligible.`),
+        `${candidates.length} offered, ${affordable.length} within ${hoursAvailable} operator hours, ` +
+        'and none of those either restores a measurement or moves a metric we can currently read. ' +
+        `Unreadable right now: [${Object.entries(state.metrics)
+          .filter(([, value]) => value === null)
+          .map(([key]) => key)
+          .join(', ') || 'none'}].`,
     );
   }
 
