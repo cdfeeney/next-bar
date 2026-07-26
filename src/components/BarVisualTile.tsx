@@ -8,6 +8,9 @@ type BarVisualTileProps = {
   bar: Bar;
   /** Tile edge in px — 56 on ResultCard, 32 on BarPicker rows. */
   size: 32 | 56;
+  /** Skip the photo entirely (caller already knows the URL is broken —
+   *  E2.3 hero fallback) and render the glyph directly. */
+  photoDisabled?: boolean;
 };
 
 /**
@@ -21,11 +24,11 @@ type BarVisualTileProps = {
  * Plain <img>, not next/image: the assets are small local static files and
  * the glyph fallback needs a synchronous onError.
  */
-export default function BarVisualTile({ bar, size }: BarVisualTileProps) {
+export default function BarVisualTile({ bar, size, photoDisabled }: BarVisualTileProps) {
   const [imgFailed, setImgFailed] = useState(false);
   const url = barImageUrl(bar);
   const visual = barVisual(bar);
-  const showPhoto = url !== null && !imgFailed;
+  const showPhoto = !photoDisabled && url !== null && !imgFailed;
 
   return (
     <span
