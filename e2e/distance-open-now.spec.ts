@@ -73,12 +73,16 @@ test.describe('E3.3 open-now hard filter', () => {
     await page.clock.setFixedTime(LATE_EVENING);
     const cards = await seedResultsFromAttaboy(page);
 
-    // At Friday 11pm the surviving cards' hours badges are open-state.
+    // At Friday 11pm the surviving cards are open-state — or, since the
+    // opens-soon refinement, opening by midnight at the latest.
     await expect(cards.getByText(/Open ·|Open 24 hours/).first()).toBeVisible();
-    await expect(cards.getByText(/Opens |Closed/)).toHaveCount(0);
+    await expect(cards.getByText(/Closed/)).toHaveCount(0);
+    for (const badge of await cards.getByText(/^Opens /).allInnerTexts()) {
+      expect(badge).toMatch(/^Opens (11(:\d{2})? PM|midnight)$/);
+    }
   });
 
-  test('morning: KNOWN-closed bars never render — no closed-state badge leaks (negative)', async ({
+  test('morning: KNOWN-closed bars never render unless opening within the hour (negative)', async ({
     page,
   }) => {
     await denyGeolocation(page.context());
@@ -88,12 +92,15 @@ test.describe('E3.3 open-now hard filter', () => {
     await page.getByRole('button', { name: /Attaboy/ }).click();
 
     // At Monday 9am the filter may thin the pool all the way to the
-    // honest empty state — either outcome proves the surface, but a
-    // closed-state hours badge ("Opens…"/"Closed…") would mean the hard
-    // filter leaked a KNOWN-closed bar onto it.
+    // honest empty state — either outcome proves the surface. A "Closed"
+    // badge, or an "Opens" time later than 10 AM (the one-hour day-
+    // drinker window), would mean the hard filter leaked.
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
     const empty = page.getByText(/No matches found nearby/i);
     await expect(cards.first().or(empty).first()).toBeVisible();
-    await expect(page.getByText(/Opens |Closed/)).toHaveCount(0);
+    await expect(page.getByText(/Closed/)).toHaveCount(0);
+    for (const badge of await cards.getByText(/^Opens /).allInnerTexts()) {
+      expect(badge).toMatch(/^Opens (9(:\d{2})? AM|10 AM)$/);
+    }
   });
 });

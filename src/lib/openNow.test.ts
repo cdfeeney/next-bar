@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   excludeClosedBars,
   isOpenNow,
+  opensSoon,
   todayHoursLine,
   weekHoursRows,
 } from '@/lib/openNow';
@@ -212,5 +213,57 @@ describe('excludeClosedBars (E3.3 hard filter)', () => {
       }),
     ];
     expect(excludeClosedBars(bars, OPEN_AT)).toEqual([]);
+  });
+
+  describe('opens-soon window (operator 2026-07-26: day drinkers search before doors)', () => {
+    // NYC Thu 16:15 — 45min before the 5pm open; Thu 13:00 — 4h before.
+    const T_MINUS_45 = new Date('2026-01-15T21:15:00Z');
+    const T_MINUS_4H = new Date('2026-01-15T18:00:00Z');
+    const bar = makeBar({ id: 'happy-hour-soon', hours: THU_NIGHT });
+
+    it('keeps a closed bar opening within the window; still drops one hours away', () => {
+      expect(excludeClosedBars([bar], T_MINUS_45, 60).map((b) => b.id)).toEqual([
+        'happy-hour-soon',
+      ]);
+      expect(excludeClosedBars([bar], T_MINUS_4H, 60)).toEqual([]);
+      // Default window 0 keeps the strict pre-refinement behavior.
+      expect(excludeClosedBars([bar], T_MINUS_45)).toEqual([]);
+    });
+
+    it('lookahead crosses midnight into tomorrow’s early windows', () => {
+      // Fri opens 00:15 (i.e. Friday's day array); checked Thu 23:30 NYC.
+      const lateOpener = makeBar({
+        id: 'after-midnight',
+        hours: { 5: [{ open: '00:15', close: '04:00' }] } as unknown as WeeklyHours,
+      });
+      const thu1130pm = new Date('2026-01-16T04:30:00Z'); // NYC Thu 23:30
+      expect(
+        excludeClosedBars([lateOpener], thu1130pm, 60).map((b) => b.id),
+      ).toEqual(['after-midnight']);
+      // Opening 01:30 — beyond the hour — still drops.
+      const laterOpener = makeBar({
+        id: 'way-later',
+        hours: { 5: [{ open: '01:30', close: '04:00' }] } as unknown as WeeklyHours,
+      });
+      expect(excludeClosedBars([laterOpener], thu1130pm, 60)).toEqual([]);
+    });
+
+    it('exact-midnight boundary: at 23:00 sharp a 00:00 opener qualifies (review HIGH)', () => {
+      const midnightOpener = makeBar({
+        id: 'midnight-opener',
+        hours: { 5: [{ open: '00:00', close: '04:00' }] } as unknown as WeeklyHours,
+      });
+      const thu11pmSharp = new Date('2026-01-16T04:00:00Z'); // NYC Thu 23:00:00
+      expect(
+        excludeClosedBars([midnightOpener], thu11pmSharp, 60).map((b) => b.id),
+      ).toEqual(['midnight-opener']);
+    });
+
+    it('opensSoon is false for unknown hours and for already-open bars', () => {
+      expect(opensSoon(undefined, T_MINUS_45, 60)).toBe(false);
+      // Open right now: not "opening soon" (the filter never asks, but the
+      // primitive stays honest).
+      expect(opensSoon(THU_NIGHT, OPEN_AT, 60)).toBe(false);
+    });
   });
 });
