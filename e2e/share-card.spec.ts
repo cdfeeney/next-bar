@@ -10,7 +10,7 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Shareable pick cards', () => {
-  test('share page renders the pick card, Maps CTA, and app link', async ({
+  test('share page leads with the in-product CTA, keeps Maps secondary', async ({
     page,
   }) => {
     await page.goto('/share/death-and-co');
@@ -21,18 +21,45 @@ test.describe('Shareable pick cards', () => {
     ).toBeVisible();
     await expect(page.getByText(/East Village/i)).toBeVisible();
 
-    // Primary CTA is bar-actionable: Google Maps for the picked bar.
+    // PRIMARY is now in-product — this is the whole point of the change.
+    const appCta = page.getByRole('link', { name: /Find your next bar/i });
+    await expect(appCta).toBeVisible();
+    await expect(appCta).toHaveAttribute('href', '/');
+
+    // Maps survives as a real, tappable secondary — a recipient who was
+    // just texted tonight's plan still needs directions.
     const mapsCta = page.getByRole('link', { name: /Open in Maps/i });
     await expect(mapsCta).toBeVisible();
-    await expect(mapsCta).toHaveAttribute(
-      'href',
-      /google\.com\/maps\/search/,
-    );
+    await expect(mapsCta).toHaveAttribute('href', /google\.com\/maps\/search/);
 
-    // Secondary link still routes into the app.
-    const appLink = page.getByRole('link', { name: /Get Next Bar/i });
-    await expect(appLink).toBeVisible();
-    await expect(appLink).toHaveAttribute('href', '/');
+    // NEGATIVE ASSERTION (goal acceptance 5): Maps must no longer be the
+    // primary. The accent-filled pill is the primary treatment; Maps must
+    // not wear it, and the in-product CTA must.
+    await expect(appCta).toHaveClass(/bg-accent/);
+    await expect(mapsCta).not.toHaveClass(/bg-accent/);
+
+    // NEGATIVE ASSERTION: the dead-end "Get Next Bar" footnote is gone —
+    // it was the demoted treatment that made the loop leak.
+    await expect(
+      page.getByRole('link', { name: /Get Next Bar/i }),
+    ).toHaveCount(0);
+  });
+
+  test('a signed-out profile is shareable — the loop-starting artifact', async ({
+    page,
+  }) => {
+    // Signed out is the case that matters: a share recipient has no account,
+    // and if THEY can't share onward the loop dies one hop in.
+    await page.goto('/u/claire');
+
+    const shareBtn = page.getByRole('button', { name: /Share @claire's list/i });
+    await expect(shareBtn).toBeVisible();
+
+    // Tapping must not navigate away — the share sheet/clipboard is a
+    // side effect, not a route change. (Negative assertion: this is exactly
+    // the class of bug the CLAUDE.md testing rule was written for.)
+    await shareBtn.click();
+    await expect(page).toHaveURL(/\/u\/claire$/);
   });
 
   test('unknown bar id 404s', async ({ page }) => {

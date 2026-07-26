@@ -53,23 +53,29 @@ export default function SharePickPage({ params }: ShareParams): JSX.Element {
             Your friends settled it on Next Bar — the app that finds the bar
             your whole group agrees on.
           </p>
-          {/* Primary CTA is bar-actionable: the recipient of tonight's plan
-              needs directions, not a marketing page. */}
-          <a
-            href={buildMapsHref(bar)}
-            target="_blank"
-            rel="noopener noreferrer"
+          {/* CTA order inverted (goal E-week1). The previous primary sent
+              recipients to Google Maps — i.e. the only shareable artifact
+              in the product optimized for leaving it, which is why the
+              loop never closed. In-product is now primary.
+
+              The old comment's point still stands though: someone who was
+              just texted tonight's plan genuinely needs directions. So Maps
+              stays one tap away as a full-size secondary, not a footnote. */}
+          <Link
+            href="/"
             className="inline-flex items-center justify-center bg-accent text-bg font-display text-lg px-6 py-3 rounded-full min-h-[44px] touch-manipulation"
           >
-            Open in Maps →
-          </a>
-          <p className="mt-4">
-            <Link
-              href="/"
-              className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
+            Find your next bar →
+          </Link>
+          <p className="mt-3">
+            <a
+              href={buildMapsHref(bar)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center border border-border text-muted font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation"
             >
-              Get Next Bar →
-            </Link>
+              Open in Maps →
+            </a>
           </p>
         </div>
       </section>
