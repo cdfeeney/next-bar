@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import type { Bar, Coords, Radius, VibeProfile, VibeTag } from '@/types';
 import { deriveArchetype } from '@/lib/quiz';
@@ -8,7 +8,13 @@ import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { loadProfile } from '@/lib/storedProfile';
 import { loadNightVibe, saveNightVibe } from '@/lib/vibeNightCache';
-import { recordVisit } from '@/lib/nightLog';
+import {
+  NIGHT_LOG_STORAGE_KEY,
+  loadNightVisits,
+  recordVisit,
+} from '@/lib/nightLog';
+import { nycNightKey } from '@/lib/nightKey';
+import { useNightRefresh } from '@/hooks/useIntent';
 import { RADIUS_WALK } from '@/lib/constants';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -120,6 +126,44 @@ export default function WhereNextFlow() {
   // Radius fine-tune lives on the results surface (E2.1) — changing it
   // re-ranks live. Walking default.
   const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
+
+  // E3.1: "not the places I've already been tonight." The night log's
+  // visited set hard-excludes on the live surfaces (never the quiz).
+  // Mount-gated (SSR has no storage); recordVisit's manual storage-event
+  // dispatch keeps it fresh same-tab (key-filtered — unrelated writes
+  // like rating taps must not churn the memo chain), and useNightRefresh
+  // clears an IDLE tab at the 6am rollover (review HIGH: storage events
+  // alone never fire for a tab left open past 6am — same F5 class the
+  // hook was built for). Identity is preserved when the id list is
+  // unchanged so refresh ticks don't re-rank.
+  const [visitedIds, setVisitedIds] = useState<string[]>([]);
+  const refreshVisits = useCallback((): void => {
+    setVisitedIds((prev) => {
+      const next = loadNightVisits(nycNightKey()).map((v) => v.barId);
+      return prev.length === next.length && prev.every((id, i) => id === next[i])
+        ? prev
+        : next;
+    });
+  }, []);
+  useNightRefresh(refreshVisits);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent): void => {
+      if (event.key !== null && event.key !== NIGHT_LOG_STORAGE_KEY) return;
+      refreshVisits();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [refreshVisits]);
+
+  // Stable identity for the manual-results exclusion list (seed bar +
+  // tonight's visits) so ResultsView's memo chain only re-ranks when the
+  // contents actually change.
+  const seedBarId =
+    step.kind === 'results' || step.kind === 'tweakVibe' ? step.seedBar.id : null;
+  const manualExcludeIds = useMemo(
+    () => (seedBarId ? [seedBarId, ...visitedIds] : visitedIds),
+    [seedBarId, visitedIds],
+  );
 
   // E2.1: EVERY seed-bar entry lands on RESULTS immediately through this
   // one helper (review HIGH: the picker and not-listed paths must behave
@@ -261,6 +305,7 @@ export default function WhereNextFlow() {
           maxMiles={null}
           maxResults={SUGGEST_COUNT}
           hideClosedNow
+          excludeIds={visitedIds}
         />
         <div className="px-6 pb-10 text-center">
           <button
@@ -387,7 +432,7 @@ export default function WhereNextFlow() {
           snappedTo: geo.snappedNeighborhood,
         }}
         maxMiles={selectedRadius.maxMiles}
-        excludeIds={[step.seedBar.id]}
+        excludeIds={manualExcludeIds}
         hideClosedNow
       />
       <BarMap

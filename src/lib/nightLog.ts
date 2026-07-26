@@ -20,7 +20,9 @@ import type { BarRating } from '@/types/ratings';
  * because writing tonight's first visit is what replaces it.
  */
 
-const STORAGE_KEY = 'next-bar:night-log:v1';
+/** Exported so storage-event consumers can filter by key (house pattern). */
+export const NIGHT_LOG_STORAGE_KEY = 'next-bar:night-log:v1';
+const STORAGE_KEY = NIGHT_LOG_STORAGE_KEY;
 
 /** Degenerate-night guard: nobody legitimately hits 20 bars; beyond it
  *  new visits are ignored rather than evicting the route's start. */
@@ -75,6 +77,17 @@ function writeLog(log: StoredNightLog): void {
   }
 }
 
+// Native storage events only fire cross-tab; same-tab consumers (E3.1's
+// exclusion set) need the manual dispatch — same pattern as intent.ts.
+function notifyChange(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY }));
+  } catch {
+    // Ignore — some environments may not support the constructor.
+  }
+}
+
 /**
  * Record "I'm at this bar" for TONIGHT. Called from the home flow's
  * seed-bar entry. Synthetic free-text seeds (`synthetic:` ids) are
@@ -97,6 +110,7 @@ export function recordVisit(barId: string, now: Date = new Date()): void {
     night: log.night,
     visits: [...log.visits, { barId, at: now.toISOString() }],
   });
+  notifyChange();
 }
 
 /** The visit list for a night, oldest first ([] for any other night). */
@@ -129,4 +143,5 @@ export function clearNightLog(): void {
   } catch {
     /* ignore */
   }
+  notifyChange();
 }
