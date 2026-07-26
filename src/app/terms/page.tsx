@@ -2,9 +2,8 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 /**
- * /terms — honest v1 terms of use (H1 App-Store pack). Same rules as
- * /privacy: describes actual behavior, bracketed [PLACEHOLDER] items need
- * operator/legal review before App Store submission.
+ * /terms — honest v1 terms of use (H1 App-Store pack; finalized
+ * 2026-07-25 on operator instruction, same conventions as /privacy).
  */
 export const metadata: Metadata = {
   title: 'Terms of Use — Next Bar',
@@ -79,28 +78,23 @@ export default function TermsPage(): JSX.Element {
           We&apos;re a small operation; we&apos;ll be decent about it.
         </Block>
 
-        <Block title="Liability">
-          To the maximum extent the law allows, Next Bar isn&apos;t liable
-          for indirect or consequential damages arising from using the
-          service.
-          <span className="block mt-2 text-muted text-xs">
-            [PLACEHOLDER — operator: liability + governing-law language
-            needs a real legal review before App Store submission. Governing
-            law presumably New York.]
-          </span>
+        <Block title="Liability & governing law">
+          To the maximum extent the law allows, Next Bar is not liable for
+          indirect or consequential damages arising from using the service.
+          These terms are governed by the laws of the State of New York,
+          and any disputes belong in New York courts.
         </Block>
 
         <Block title="Contact">
+          Next Bar is an independent, individually operated service based in
+          New York. Reach us at{' '}
           <a
             href="mailto:hi@next-bar.app"
             className="text-accent underline-offset-4 hover:underline"
           >
             hi@next-bar.app
           </a>
-          <span className="block mt-2 text-muted text-xs">
-            [PLACEHOLDER — operator: confirm inbox + add legal entity name,
-            same as /privacy.]
-          </span>
+          .
         </Block>
 
         <p className="text-muted text-xs text-center pt-4">
