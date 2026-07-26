@@ -30,6 +30,17 @@ test.describe('Where-next path', () => {
     await expect(page.getByRole('group', { name: 'Search radius' })).toBeVisible();
     await page.getByRole('button', { name: 'Walking' }).click();
 
+    // E0.1 (locked decision 2): enter the optional vibe step — Attaboy's
+    // seed tags include the `pricey` DATA tag, whose chip must render as
+    // the $$$ glyph via displayTag; the word "pricey" appears NOWHERE.
+    await page.getByRole('button', { name: /Tweak the vibe/i }).click();
+    await expect(
+      page.getByRole('button', { name: 'Cocktails', exact: false }),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: '$$$', exact: false })).toBeVisible();
+    await expect(page.getByText(/pricey/i)).toHaveCount(0);
+    await page.getByRole('button', { name: 'Apply' }).click();
+
     await page.getByRole('button', { name: /Show me bars/i }).click();
 
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });

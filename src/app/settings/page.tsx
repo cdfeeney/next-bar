@@ -20,6 +20,7 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import { deriveTasteProfile } from '@/lib/tasteProfile';
 import { deriveBadges } from '@/lib/badges';
 import { useBars } from '@/lib/useBars';
+import { displayTag } from '@/lib/tagDisplay';
 
 // Dismissal flag for the claim-your-username nudge. UI preference only —
 // deliberately NOT in accountCache ALL_KEYS (it holds no account data; a
@@ -410,7 +411,7 @@ export default function SettingsPage(): JSX.Element {
                     key={t.tag}
                     className="text-xs border border-border rounded-full px-3 py-1 text-muted"
                   >
-                    {t.tag}
+                    {displayTag(t.tag)}
                   </span>
                 ))}
               </div>
