@@ -10,7 +10,6 @@ import { loadProfile } from '@/lib/storedProfile';
 import { RADIUS_WALK } from '@/lib/constants';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
-import GpsConfirm from '@/components/GpsConfirm';
 import RadiusSlider from '@/components/RadiusSlider';
 import VibeTweak from '@/components/VibeTweak';
 import ResultsView from '@/components/ResultsView';
@@ -25,15 +24,21 @@ type Step =
   // shown and approved; load-time auto-prompts get reflex-dismissed and
   // iOS remembers that as a permanent deny). Denied goes straight to
   // pickBar, where the recovery card lives.
+  //
+  // E2.1 flow collapse (2026-07-25, EPICS-v0.6 + DESIGN-SYSTEM R6): the
+  // `confirmGps` and `pickRadius` steps are DELETED, not restyled.
+  // Picking a bar goes straight to results — geolocation resolves
+  // silently in the background if available and is never narrated
+  // (closes audit HIGH-10); the radius fine-tune lives ON the results
+  // surface with a walking default. Vibe tweaking is entered from
+  // results and returns to results.
   | { kind: 'locating' }
   | { kind: 'askLocation' }
   | { kind: 'autoResults'; coords: Coords }
   | { kind: 'pickBar' }
   | { kind: 'freeTextSeed' }
-  | { kind: 'confirmGps'; seedBar: Bar }
-  | { kind: 'pickRadius'; seedBar: Bar; tags: VibeTag[] }
-  | { kind: 'tweakVibe'; seedBar: Bar; tags: VibeTag[]; radius: Radius }
-  | { kind: 'results'; seedBar: Bar; tags: VibeTag[]; radius: Radius };
+  | { kind: 'tweakVibe'; seedBar: Bar; tags: VibeTag[] }
+  | { kind: 'results'; seedBar: Bar; tags: VibeTag[] };
 
 const DEFAULT_RADIUS: Radius = { kind: 'walking', maxMiles: RADIUS_WALK };
 /** How many bars the location-first auto-suggester surfaces. */
@@ -110,15 +115,15 @@ export default function WhereNextFlow() {
     return () => clearTimeout(timer);
   }, [step.kind, geo.permissionState]);
 
-  // Request geolocation when we move into confirmGps via the manual path.
-  useEffect(() => {
-    if (step.kind === 'confirmGps' && geo.state.status === 'idle') {
+  // E2.1: picking a seed bar lands on RESULTS immediately. If location
+  // permission is already granted the hook resolves coords silently in
+  // the background (results re-rank when they arrive); any failure just
+  // means seed-bar coords — never narrated, no confirm screen (R6).
+  const handlePickBar = (bar: Bar) => {
+    if (geo.state.status === 'idle' && geo.permissionState === 'granted') {
       geo.request();
     }
-  }, [step.kind, geo]);
-
-  const handlePickBar = (bar: Bar) => {
-    setStep({ kind: 'confirmGps', seedBar: bar });
+    setStep({ kind: 'results', seedBar: bar, tags: bar.tags });
   };
 
   const handleNotListed = () => {
@@ -126,69 +131,25 @@ export default function WhereNextFlow() {
   };
 
   const handleFreeTextSubmit = (synthetic: Bar) => {
-    setStep({ kind: 'confirmGps', seedBar: synthetic });
+    setStep({ kind: 'results', seedBar: synthetic, tags: synthetic.tags });
   };
 
   const handleFreeTextCancel = () => {
     setStep({ kind: 'pickBar' });
   };
 
-  const handleGpsProceed = () => {
-    if (step.kind !== 'confirmGps') return;
-    setStep({
-      kind: 'pickRadius',
-      seedBar: step.seedBar,
-      tags: step.seedBar.tags,
-    });
-  };
-
-  const handlePickDifferent = () => {
-    geo.reset();
-    setStep({ kind: 'pickBar' });
-  };
-
+  // Radius fine-tune lives on the results surface (E2.1) — changing it
+  // re-ranks live. Walking default.
   const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
-
-  const handleRadiusChange = (next: Radius) => {
-    setSelectedRadius(next);
-  };
-
-  const handleShowResults = () => {
-    if (step.kind !== 'pickRadius') return;
-    setStep({
-      kind: 'results',
-      seedBar: step.seedBar,
-      tags: step.tags,
-      radius: selectedRadius,
-    });
-  };
-
-  const handleOpenTweak = () => {
-    if (step.kind !== 'pickRadius') return;
-    setStep({
-      kind: 'tweakVibe',
-      seedBar: step.seedBar,
-      tags: step.tags,
-      radius: selectedRadius,
-    });
-  };
 
   const handleApplyTweak = (nextTags: VibeTag[]) => {
     if (step.kind !== 'tweakVibe') return;
-    setStep({
-      kind: 'pickRadius',
-      seedBar: step.seedBar,
-      tags: nextTags,
-    });
+    setStep({ kind: 'results', seedBar: step.seedBar, tags: nextTags });
   };
 
   const handleCancelTweak = () => {
     if (step.kind !== 'tweakVibe') return;
-    setStep({
-      kind: 'pickRadius',
-      seedBar: step.seedBar,
-      tags: step.tags,
-    });
+    setStep({ kind: 'results', seedBar: step.seedBar, tags: step.tags });
   };
 
   // Effective coord for ranking: real geolocation if granted, else seed bar's coord.
@@ -199,7 +160,6 @@ export default function WhereNextFlow() {
     if (step.kind === 'autoResults') return step.coords;
     if (step.kind === 'pickBar') return null;
     if (step.kind === 'freeTextSeed') return null;
-    if (step.kind === 'confirmGps') return null;
     return { lat: step.seedBar.lat, lng: step.seedBar.lng };
   }, [geo.coords, step]);
 
@@ -349,53 +309,6 @@ export default function WhereNextFlow() {
     );
   }
 
-  if (step.kind === 'confirmGps') {
-    return (
-      <GpsConfirm
-        seedBar={step.seedBar}
-        userCoords={geo.coords}
-        accuracyBand={geo.accuracyBand}
-        geoStatus={geo.state.status}
-        onProceed={handleGpsProceed}
-        onPickDifferent={handlePickDifferent}
-      />
-    );
-  }
-
-  if (step.kind === 'pickRadius') {
-    return (
-      <section className="min-h-screen px-6 py-12">
-        <div className="max-w-2xl mx-auto text-center">
-          <p className="text-muted text-sm mb-2">From {step.seedBar.name}</p>
-          <h1 className="font-display text-3xl md:text-4xl mb-8">
-            How far you wanna go?
-          </h1>
-          <RadiusSlider value={selectedRadius} onChange={handleRadiusChange} />
-
-          <div className="mt-8">
-            <button
-              type="button"
-              onClick={handleOpenTweak}
-              className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
-            >
-              Tweak the vibe
-            </button>
-          </div>
-
-          <div className="mt-8">
-            <button
-              type="button"
-              onClick={handleShowResults}
-              className="min-h-[44px] touch-manipulation bg-accent text-bg hover:bg-accentDim transition-colors font-display text-lg px-8 py-3 rounded-full"
-            >
-              Show me bars
-            </button>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
   if (step.kind === 'tweakVibe') {
     return (
       <VibeTweak
@@ -420,13 +333,26 @@ export default function WhereNextFlow() {
     <main>
       <section className="px-6 py-6 text-center">
         <p className="text-muted text-sm mb-1">From {step.seedBar.name}</p>
-        <p className="font-display text-2xl">
-          Next bars · {step.radius.kind === 'walking'
-            ? 'within walking'
-            : step.radius.kind === 'shortUber'
-            ? 'short Uber'
-            : 'anywhere in Manhattan'}
-        </p>
+        <p className="font-display text-2xl mb-4">Next bars</p>
+        {/* E2.1: the radius fine-tune lives HERE now — one screen, live
+            re-rank, walking default. The old "How far you wanna go?"
+            interstitial is deleted. */}
+        <RadiusSlider value={selectedRadius} onChange={setSelectedRadius} />
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() =>
+              setStep({
+                kind: 'tweakVibe',
+                seedBar: step.seedBar,
+                tags: step.tags,
+              })
+            }
+            className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
+          >
+            Tweak the vibe
+          </button>
+        </div>
       </section>
       <ResultsView
         profile={seedProfile}
@@ -436,7 +362,7 @@ export default function WhereNextFlow() {
           band: geo.accuracyBand,
           snappedTo: geo.snappedNeighborhood,
         }}
-        maxMiles={step.radius.maxMiles}
+        maxMiles={selectedRadius.maxMiles}
         excludeIds={[step.seedBar.id]}
       />
       <BarMap

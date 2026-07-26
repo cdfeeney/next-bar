@@ -118,12 +118,10 @@ test.describe('Bottom nav + rating flow', () => {
   test('"Rank it" works from the Where-next results on /', async ({ page }) => {
     await page.goto('/');
 
-    // Pick Attaboy → bypass GPS (denied in headless) → Walking radius → results
+    // E2.1 collapsed flow: pick Attaboy → results DIRECTLY (no GPS
+    // confirm, no radius interstitial).
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await page.getByRole('button', { name: 'Walking' }).click();
-    await page.getByRole('button', { name: /Show me bars/i }).click();
 
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
     await expect(cards.first()).toBeVisible();
