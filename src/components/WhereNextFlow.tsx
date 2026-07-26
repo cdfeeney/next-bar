@@ -307,7 +307,10 @@ export default function WhereNextFlow() {
           hideClosedNow
           excludeIds={visitedIds}
         />
-        <div className="px-6 pb-10 text-center">
+        {/* pb-28 clears the fixed bottom nav (operator: "never able to
+            see the bottom option on mobile" — same R5 class as the
+            manual results' escape). */}
+        <div className="px-6 pt-2 pb-28 text-center">
           <button
             type="button"
             onClick={() => {
@@ -316,7 +319,7 @@ export default function WhereNextFlow() {
             }}
             className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
           >
-            Coming from a specific bar?
+            Not at these bars? Pick yours →
           </button>
         </div>
       </main>
