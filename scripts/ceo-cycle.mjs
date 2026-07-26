@@ -22,7 +22,12 @@ import {
   assertMeasurementUpdate,
   assertStateMutationAllowed,
 } from './ceo-guard.mjs';
-import { HALT_DIRECTIVES, runDetectors } from './ceo-detectors.mjs';
+import {
+  DIRECTIVE_BOARD_KILL,
+  DIRECTIVE_BOARD_RESCOPE,
+  HALT_DIRECTIVES,
+  runDetectors,
+} from './ceo-detectors.mjs';
 import { VERDICTS, auditKill } from './ceo-board.mjs';
 
 export class CeoCycleAbort extends Error {
@@ -329,6 +334,33 @@ function byId(a, b) {
 export function decide(state, assessment, candidates) {
   act('decide');
 
+  // The board outranks everything below, including the detectors.
+  //
+  // Found by running it (independent review): the board returned KILL, the report printed
+  // "Board verdict: KILL", and the cycle then recommended rewriting the share CTA underneath it.
+  // A verdict a plan is allowed to sit below is not a verdict — the reader's eye goes to the plan,
+  // which is the same reason draftHalt has no Recommendation section at all.
+  const verdict = assessment.board?.verdict;
+  const boardDirective =
+    verdict === VERDICTS.KILL
+      ? DIRECTIVE_BOARD_KILL
+      : verdict === VERDICTS.RESCOPE
+        ? DIRECTIVE_BOARD_RESCOPE
+        : null;
+
+  if (boardDirective !== null) {
+    return {
+      halt: true,
+      directive: boardDirective,
+      recommendation: null,
+      assessment,
+      detectors: null,
+      preamble: [assessment.board.detail, assessment.board.remedy].filter(Boolean),
+      considered: Array.isArray(candidates) ? candidates.length : 0,
+      dropped: [],
+    };
+  }
+
   // Detectors run BEFORE the candidate list is even read. When the record says the loop is
   // producing plans and not results, the correct response is not a better-chosen plan — and a
   // runner that picks one anyway has quietly turned the halt into a suggestion.
@@ -462,6 +494,12 @@ function measurementLines(state, measurement) {
  * the reader's eye goes to the plan, and the loop carries on exactly as before.
  */
 function draftHalt(state, assessment, decision, measurement) {
+  // A board halt and a detector halt are different news and deserve different words. The board
+  // is not saying the plan was poorly chosen; it is saying the criterion the operator wrote in
+  // advance has been reached.
+  const fromBoard =
+    decision.directive === DIRECTIVE_BOARD_KILL || decision.directive === DIRECTIVE_BOARD_RESCOPE;
+
   const lines = [
     `# CEO cycle ${state.cycle} — ${decision.directive}`,
     '',
@@ -473,15 +511,29 @@ function draftHalt(state, assessment, decision, measurement) {
     '',
     '## No plan this cycle',
     '',
-    'The detectors halted this cycle. A new recommendation is not issued, because the record says',
-    'the problem is not which action to pick next:',
+    ...(fromBoard
+      ? [
+          'The BOARD reached a verdict. No recommendation is issued, because what to build next is',
+          'not the open question:',
+        ]
+      : [
+          'The detectors halted this cycle. A new recommendation is not issued, because the record says',
+          'the problem is not which action to pick next:',
+        ]),
     '',
     ...decision.preamble.map((detail) => `- ${detail}`),
     '',
     '## What has to happen instead',
     '',
-    'Close the open bets with an honest hit/miss, or find out why the metric is not moving, before',
-    'this loop produces another plan. Resume when a human has reassessed.',
+    ...(fromBoard
+      ? [
+          'This is the criterion you pre-registered, on the date you chose, against numbers you',
+          'counted. Act on it or amend it in writing — do not run another cycle over it.',
+        ]
+      : [
+          'Close the open bets with an honest hit/miss, or find out why the metric is not moving, before',
+          'this loop produces another plan. Resume when a human has reassessed.',
+        ]),
   ];
 
   return lines.join('\n') + '\n';

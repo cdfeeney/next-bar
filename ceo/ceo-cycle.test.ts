@@ -293,6 +293,73 @@ describe('assess', () => {
   });
 });
 
+describe('the board has teeth in the runner', () => {
+  // Found by running it (independent review). The board returned KILL, the report printed
+  // "Board verdict: KILL", and the cycle recommended rewriting the share CTA underneath it. A
+  // verdict a plan is allowed to sit below is not a verdict.
+  const pastDeadline = (metrics: Record<string, unknown>) =>
+    measurement({ at: '2027-01-01', metrics: { ...MEASURED_METRICS, ...metrics } });
+
+  it('issues no recommendation under a KILL verdict', () => {
+    const m = pastDeadline({ max_neighborhood_wau: 3, self_maintaining_venues: 1 });
+    const measured = measure(freshState(), m);
+    const decision = decide(measured, assess(measured, m), [GROWTH_CANDIDATE, ANALYTICS_CANDIDATE]);
+
+    expect(decision.halt).toBe(true);
+    expect(decision.directive).toBe('BOARD_KILL');
+    expect(decision.recommendation).toBeNull();
+  });
+
+  it('issues no recommendation under a RESCOPE verdict either', () => {
+    const m = pastDeadline({ max_neighborhood_wau: 3, self_maintaining_venues: 20 });
+    const measured = measure(freshState(), m);
+    const decision = decide(measured, assess(measured, m), [GROWTH_CANDIDATE]);
+
+    expect(decision.directive).toBe('BOARD_RESCOPE');
+    expect(decision.recommendation).toBeNull();
+  });
+
+  it('writes a halt report with no Recommendation section and the board reasoning in it', () => {
+    const m = pastDeadline({ max_neighborhood_wau: 3, self_maintaining_venues: 1 });
+    const measured = measure(freshState(), m);
+    const assessment = assess(measured, m);
+    const report = draft(measured, assessment, decide(measured, assessment, [GROWTH_CANDIDATE]), m);
+
+    expect(report).toContain('BOARD_KILL');
+    expect(report).not.toContain('## Recommendation');
+    expect(report).toMatch(/BOTH sides failed/);
+    expect(report).toMatch(/pre-registered/);
+  });
+
+  it('cannot be shipped', () => {
+    expectHardAbort(
+      () =>
+        enterShip(
+          {
+            cycle: 5,
+            recommendation_id: null,
+            directive: 'BOARD_KILL',
+            drafted: true,
+            shipped: false,
+            evidence: null,
+            review: { verdict: 'pass', reviewer: 'deepseek', at: '2027-01-01' },
+          },
+          { branch: 'feat/whatever' },
+        ),
+      'BOARD_KILL',
+    );
+  });
+
+  it('still plans normally while the board says CONTINUE', () => {
+    const m = pastDeadline({ max_neighborhood_wau: 80, self_maintaining_venues: 20 });
+    const measured = measure(freshState(), m);
+    const decision = decide(measured, assess(measured, m), [GROWTH_CANDIDATE]);
+
+    expect(decision.halt).toBe(false);
+    expect(decision.recommendation?.id).toBe('share-cta-copy');
+  });
+});
+
 describe('the discovery floor', () => {
   it('refuses to run a cycle in a week with no customer conversations', () => {
     // The rail against the comfortable substitution: an articulate strategy partner instead of a

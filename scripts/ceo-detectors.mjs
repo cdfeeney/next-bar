@@ -24,8 +24,23 @@ export const DIRECTIVE_STOP_AND_REASSESS = 'STOP_AND_REASSESS';
  */
 export const DIRECTIVE_GO_MEASURE = 'GO_MEASURE';
 
+/**
+ * The board reached a verdict the cycle is not entitled to plan past.
+ *
+ * KILL and RESCOPE are decisions about whether this company continues in its current shape. A
+ * cycle that prints one and then recommends a copy tweak underneath it has not delivered a
+ * verdict, it has delivered a mood — and the operator's eye goes to the plan, every time.
+ */
+export const DIRECTIVE_BOARD_KILL = 'BOARD_KILL';
+export const DIRECTIVE_BOARD_RESCOPE = 'BOARD_RESCOPE';
+
 /** Every directive that halts a cycle. enterShip refuses all of them. */
-export const HALT_DIRECTIVES = Object.freeze([DIRECTIVE_STOP_AND_REASSESS, DIRECTIVE_GO_MEASURE]);
+export const HALT_DIRECTIVES = Object.freeze([
+  DIRECTIVE_STOP_AND_REASSESS,
+  DIRECTIVE_GO_MEASURE,
+  DIRECTIVE_BOARD_KILL,
+  DIRECTIVE_BOARD_RESCOPE,
+]);
 
 /**
  * How many consecutive non-improving cycles it takes to stop.
