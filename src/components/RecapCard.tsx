@@ -7,6 +7,7 @@ import type { Recap } from '@/lib/recap';
 import { barImageUrls } from '@/lib/barVisual';
 import BarVisualTile from '@/components/BarVisualTile';
 import RatingBadge from '@/components/RatingBadge';
+import ShareNightButton from '@/components/ShareNightButton';
 
 const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
 
@@ -89,7 +90,7 @@ export default function RecapCard({ recap }: RecapCardProps) {
         ))}
       </ol>
 
-      <div className="px-5 pb-4">
+      <div className="px-5 pb-4 flex items-center gap-3 flex-wrap">
         <Link
           href="/rankings"
           className="inline-flex items-center min-h-[56px] px-6 rounded-full border border-accent text-accent font-display text-sm touch-manipulation hover:bg-accent hover:text-bg transition-colors"
@@ -98,6 +99,9 @@ export default function RecapCard({ recap }: RecapCardProps) {
             ? 'Rank last night →'
             : 'See your rankings →'}
         </Link>
+        {/* E4.4: publish + share the night (signed-in with a handle only —
+            renders nothing otherwise). */}
+        <ShareNightButton recap={recap} />
       </div>
 
       <div className="h-48">
