@@ -78,3 +78,34 @@ adding a line `[STOP]` at the top of this file â€” every tick re-reads it.
 
 
 
+
+## MORNING SUMMARY (loop complete, 5 PRs #37-#41, prod sha 9e368fa91599)
+
+E0 FOUNDATIONS ARE DONE. Every PR gated + sha-smoked:
+
+- #37 M1: EPICS-v0.6.md (E0-E5, IDs/deps/test obligations) +
+  DESIGN-SYSTEM.md (R1-R12 checkable drunk-UX rules).
+- #38 M2: tagDisplay.ts LIVE - "pricey" is gone from the UI (chips read
+  Cocktails/Speakeasy/$$$), enforcement grep-test blocks regressions.
+  Goal acceptance 3+4 met.
+- #39 M3: vibeAxes.ts - 6-axis total partition (Drink/Energy/Setting/
+  Scene/Sound/Spend), exhaustiveness-guarded. Lib only.
+- #40 M4: nightPhase.ts - planning/starting/out/recap, override-first,
+  fail-safe starting. Goal acceptance 5 met. Lib only.
+- #41 M5: sweep fixes - a11y scales to the 406-bar catalog (one in-page
+  measurement); legal-pages spec asserts the finalized state.
+
+Vitest 597 -> 599* (47->49 files). Pixel 7 fully green. iPhone-13
+environmental set UNCHANGED: suggestions picker pair (⏸, needs pw:api
+trace) + 2 rating-and-nav timeout shapes under load + the /map
+cold-compile race (proven green warm). No regressions from E0.
+
+## Attended queue (weekend)
+
+1. Phone-check: chips show $$$/human labels everywhere (quiz tweak,
+   settings taste).
+2. E2 flow collapse (deletion-first: confirmGps + pickRadius die),
+   axis-picker UI (E2.2 on vibeAxes), photo-first result card, home
+   phases (E2.4/E3.4 on nightPhase). All attended - user-facing.
+3. Errands: Apple enrollment, domain -> DNS+hi@ forwarding sitting,
+   Brevo rotation.
