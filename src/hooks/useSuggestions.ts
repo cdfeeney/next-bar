@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Bar, Coords, VibeProfile, VibeTag } from '@/types';
 import type { BarRating } from '@/types/ratings';
 import { matches } from '@/lib/matching';
+import { deriveArchetype } from '@/lib/quiz';
 import { loadProfile } from '@/lib/storedProfile';
 import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
@@ -74,7 +75,9 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
 }
 
 export type UseSuggestionsReturn = {
-  /** Ranked suggested bar ids. Empty until a saved quiz profile exists. */
+  /** Ranked suggested bar ids. Empty only before profileChecked; with no
+   *  saved quiz profile it falls back to the empty-tag profile
+   *  (proximity/affinity-ranked) — never blank for lack of a quiz. */
   suggestedIds: string[];
   /** True when loadProfile() found a saved quiz profile. */
   hasProfile: boolean;
@@ -119,11 +122,26 @@ export function useSuggestions(
     setProfileChecked(true);
   }, []);
 
+  // UX-C (operator: "no suggested bars for me now"): a missing quiz
+  // profile must not blank the suggested tier — fall back to the EMPTY
+  // profile (the home flow's defaultProfile pattern: distance/affinity-
+  // ranked). hasProfile still reports the truth for the personalize hint.
   const suggestedIds = useMemo(() => {
-    if (!profile) return [];
-    return computeSuggestions({ profile, coords, bars, ratings, maxResults })
-      .map((b) => b.id);
-  }, [profile, coords, bars, ratings, maxResults]);
+    if (!profileChecked) return [];
+    const effective: VibeProfile =
+      profile ?? {
+        tags: [],
+        archetype: deriveArchetype([]),
+        preferredNeighborhoods: [],
+      };
+    return computeSuggestions({
+      profile: effective,
+      coords,
+      bars,
+      ratings,
+      maxResults,
+    }).map((b) => b.id);
+  }, [profile, profileChecked, coords, bars, ratings, maxResults]);
 
   return { suggestedIds, hasProfile: profile !== null, profileChecked };
 }

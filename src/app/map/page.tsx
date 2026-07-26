@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
 import { useGeolocation } from '@/hooks/useGeolocation';
@@ -42,6 +42,24 @@ export default function MapPage(): JSX.Element {
   const { ratings } = useRatings();
   const { state, request, coords } = useGeolocation();
 
+  // UX-C: the search that never shipped — matching a bar pans/zooms the
+  // map to it and opens its popup.
+  const [query, setQuery] = useState('');
+  // Nonce per selection (review MED): re-picking the SAME bar after
+  // panning away must re-fly — a bare id state bails on same-value sets.
+  const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
+  const q = query.trim().toLowerCase();
+  const searchMatches = useMemo(() => {
+    if (q.length < 2) return [];
+    return bars
+      .filter(
+        (b) =>
+          b.name.toLowerCase().includes(q) ||
+          b.neighborhood.toLowerCase().includes(q),
+      )
+      .slice(0, 5);
+  }, [bars, q]);
+
   // Same matching pipeline as home (profile + ratings + user coords when
   // granted), capped at MAP_SUGGESTION_COUNT for the suggested tier.
   const { suggestedIds, hasProfile, profileChecked } = useSuggestions(
@@ -67,16 +85,10 @@ export default function MapPage(): JSX.Element {
 
   return (
     <main className="min-h-screen">
+      {/* UX-C: minimum words — the legend explains the dots, nothing else
+          needs prose. */}
       <header className="px-6 pt-8 pb-4 text-center">
-        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
-          Manhattan + Brooklyn
-        </p>
         <h1 className="font-display text-3xl md:text-4xl mb-2">Map</h1>
-        <p className="text-muted text-sm max-w-md mx-auto">
-          Every curated bar, plotted. Your suggested bars glow in accent;
-          bars you&apos;ve rated get a ring. Drag with one finger; pinch to
-          zoom.
-        </p>
 
         <div
           className="mt-4 flex items-center justify-center gap-4 text-xs text-muted"
@@ -92,25 +104,62 @@ export default function MapPage(): JSX.Element {
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span aria-hidden style={LEGEND_SWATCH.other} />
-            Everything else
+            Bar
           </span>
         </div>
 
         {profileChecked && !hasProfile && (
-          <div
-            className="mt-4 mx-auto max-w-sm rounded-2xl border border-border px-4 py-3 text-sm text-muted"
-            data-testid="map-quiz-hint"
-          >
-            No suggestions yet —{' '}
+          <p className="mt-3 text-xs text-muted" data-testid="map-quiz-hint">
             <Link
               href="/quiz"
               className="text-accent underline-offset-4 hover:underline"
             >
-              take the vibe quiz
+              Take the quiz →
             </Link>{' '}
-            to light up your picks on the map.
-          </div>
+            sharper picks.
+          </p>
         )}
+
+        {/* Search — pick a match and the map flies there. */}
+        <div className="mt-4 max-w-sm mx-auto text-left">
+          <label htmlFor="map-search" className="sr-only">
+            Search bars
+          </label>
+          <input
+            id="map-search"
+            type="search"
+            inputMode="text"
+            autoComplete="off"
+            placeholder="Search bars…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
+          />
+          {searchMatches.length > 0 ? (
+            <ul
+              aria-label="Matching bars"
+              className="mt-2 bg-surface border border-border rounded-2xl overflow-hidden divide-y divide-border"
+            >
+              {searchMatches.map((b) => (
+                <li key={b.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFocus({ id: b.id, nonce: Date.now() });
+                      setQuery('');
+                    }}
+                    className="w-full text-left px-4 py-3 min-h-[44px] touch-manipulation hover:bg-bg transition-colors"
+                  >
+                    <span className="font-display text-sm">{b.name}</span>
+                    <span className="text-muted text-xs ml-2">
+                      {b.neighborhood}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
 
         <div className="mt-4 flex flex-col items-center gap-2">
           <button
@@ -152,6 +201,8 @@ export default function MapPage(): JSX.Element {
           bars={bars}
           userCoords={coords}
           panToUser
+          focusBarId={focus?.id ?? null}
+          focusNonce={focus?.nonce}
           highlightIds={highlightIds}
           // Always defined on /map → tiered rendering. Empty (no quiz
           // profile) means no suggested tier: grey dots + rated rings only.

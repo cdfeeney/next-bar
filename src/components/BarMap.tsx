@@ -14,6 +14,10 @@ type BarMapProps = {
   userCoords?: Coords | null;
   /** MED-15: fly to the user's coords when they land (the /map surface). */
   panToUser?: boolean;
+  /** UX-C map search: fly to this bar and open its popup. */
+  focusBarId?: string | null;
+  /** Bumped per selection so re-picking the SAME bar re-flies (review MED). */
+  focusNonce?: number;
   /**
    * Bars the user has rated (Loved/Liked). Legacy mode (suggestedIds
    * undefined): these get the loud accent glow and every other bar renders
@@ -156,7 +160,32 @@ function PanToUser({ coords }: { coords: Coords | null | undefined }) {
   return null;
 }
 
-export default function BarMap({ bars, userCoords, panToUser, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
+/**
+ * UX-C: flies to a searched bar and opens a popup on it. Id-keyed so a
+ * re-render with the same focus never re-flies against the user's pan.
+ */
+function FocusBar({ bar, nonce }: { bar: Bar | null; nonce?: number }) {
+  const map = useMap();
+  const barId = bar?.id ?? null;
+  useEffect(() => {
+    if (!bar) return;
+    map.flyTo([bar.lat, bar.lng], Math.max(map.getZoom(), 16), {
+      duration: 0.6,
+    });
+    // textContent-built popup — never string-interpolated HTML.
+    const el = document.createElement('div');
+    const name = document.createElement('b');
+    name.textContent = bar.name;
+    const sub = document.createElement('div');
+    sub.textContent = `${bar.neighborhood} · ${'$'.repeat(bar.priceTier)}`;
+    el.append(name, sub);
+    map.openPopup(L.popup().setLatLng([bar.lat, bar.lng]).setContent(el));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- barId+nonce stand in for bar
+  }, [map, barId, nonce]);
+  return null;
+}
+
+export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -208,6 +237,10 @@ export default function BarMap({ bars, userCoords, panToUser, highlightIds, sugg
             {oneFingerPan ? null : <GestureController />}
             {fitToBars ? <FitBounds bars={bars} /> : null}
             {panToUser ? <PanToUser coords={userCoords} /> : null}
+            <FocusBar
+              bar={focusBarId ? (bars.find((b) => b.id === focusBarId) ?? null) : null}
+              nonce={focusNonce}
+            />
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
               attribution="&copy; OpenStreetMap &copy; CARTO"
