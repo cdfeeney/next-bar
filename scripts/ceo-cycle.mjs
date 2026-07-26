@@ -20,6 +20,7 @@ import {
   assertMeasurementUpdate,
   assertStateMutationAllowed,
 } from './ceo-guard.mjs';
+import { DIRECTIVE_STOP_AND_REASSESS, runDetectors } from './ceo-detectors.mjs';
 
 export class CeoCycleAbort extends Error {
   constructor(message) {
@@ -287,6 +288,23 @@ function byId(a, b) {
 export function decide(state, assessment, candidates) {
   act('decide');
 
+  // Detectors run BEFORE the candidate list is even read. When the record says the loop is
+  // producing plans and not results, the correct response is not a better-chosen plan — and a
+  // runner that picks one anyway has quietly turned the halt into a suggestion.
+  const detected = runDetectors(state);
+  if (detected.halt) {
+    return {
+      halt: true,
+      directive: detected.directive,
+      recommendation: null,
+      assessment,
+      detectors: detected,
+      preamble: detected.preamble,
+      considered: Array.isArray(candidates) ? candidates.length : 0,
+      dropped: [],
+    };
+  }
+
   if (!Array.isArray(candidates)) {
     abort('candidates must be an array.');
   }
@@ -313,8 +331,12 @@ export function decide(state, assessment, candidates) {
   const [recommendation, ...runnersUp] = ranked;
 
   return {
+    halt: false,
+    directive: null,
     recommendation,
     assessment,
+    detectors: detected,
+    preamble: detected.preamble,
     considered: candidates.length,
     dropped: [
       ...runnersUp.map((c) => c.id),
@@ -360,13 +382,70 @@ function selfAuditAnswer(state, assessment) {
   return `Yes. Cycle ${prior.cycle} shipped "${prior.recommendation_id}" and ${PRIMARY_METRIC} moved ${delta > 0 ? '+' : ''}${delta} to ${assessment.primary_value}.`;
 }
 
+/** The measurement block, shared by both report shapes — a halt report still owes the numbers. */
+function measurementLines(state, measurement) {
+  const metrics = state.metrics;
+  return [
+    `## Measurement (${measurement.at}, ${measurement.source})`,
+    '',
+    `- ${PRIMARY_METRIC}: ${formatMetric(metrics.wau)}`,
+    `- max neighborhood ${PRIMARY_METRIC}: ${formatMetric(metrics.max_neighborhood_wau)}`,
+    `- claimed venues: ${metrics.claimed_venues} (${metrics.self_maintaining_venues} self-maintaining)`,
+    `- operator hours available: ${metrics.operator_hours_available}`,
+  ];
+}
+
+/**
+ * The halt report. Deliberately has no `## Recommendation` section at all.
+ *
+ * Emitting STOP_AND_REASSESS and then also suggesting something would be the halt in name only —
+ * the reader's eye goes to the plan, and the loop carries on exactly as before.
+ */
+function draftHalt(state, assessment, decision, measurement) {
+  const lines = [
+    `# CEO cycle ${state.cycle} — ${decision.directive}`,
+    '',
+    `**Self-audit.** ${SELF_AUDIT_LINE}`,
+    '',
+    selfAuditAnswer(state, assessment),
+    '',
+    ...measurementLines(state, measurement),
+    '',
+    '## No plan this cycle',
+    '',
+    'The detectors halted this cycle. A new recommendation is not issued, because the record says',
+    'the problem is not which action to pick next:',
+    '',
+    ...decision.preamble.map((detail) => `- ${detail}`),
+    '',
+    '## What has to happen instead',
+    '',
+    'Close the open bets with an honest hit/miss, or find out why the metric is not moving, before',
+    'this loop produces another plan. Resume when a human has reassessed.',
+  ];
+
+  return lines.join('\n') + '\n';
+}
+
 /** Render the cycle report. Capped, so it cannot grow into something nobody reads. */
 export function draft(state, assessment, decision, measurement) {
   act('draft');
 
+  const report = decision.halt
+    ? draftHalt(state, assessment, decision, measurement)
+    : draftPlan(state, assessment, decision, measurement);
+
+  const words = report.split(/\s+/).filter((word) => word.length > 0).length;
+  if (words > REPORT_WORD_LIMIT) {
+    abort(`report is ${words} words, over the ${REPORT_WORD_LIMIT}-word ceiling.`);
+  }
+
+  return report;
+}
+
+function draftPlan(state, assessment, decision, measurement) {
   const { recommendation } = decision;
   const lift = recommendation.expected_lift;
-  const metrics = state.metrics;
 
   const lines = [
     `# CEO cycle ${state.cycle}`,
@@ -375,12 +454,7 @@ export function draft(state, assessment, decision, measurement) {
     '',
     selfAuditAnswer(state, assessment),
     '',
-    `## Measurement (${measurement.at}, ${measurement.source})`,
-    '',
-    `- ${PRIMARY_METRIC}: ${formatMetric(metrics.wau)}`,
-    `- max neighborhood ${PRIMARY_METRIC}: ${formatMetric(metrics.max_neighborhood_wau)}`,
-    `- claimed venues: ${metrics.claimed_venues} (${metrics.self_maintaining_venues} self-maintaining)`,
-    `- operator hours available: ${metrics.operator_hours_available}`,
+    ...measurementLines(state, measurement),
     '',
     '## Assessment',
     '',
@@ -390,6 +464,11 @@ export function draft(state, assessment, decision, measurement) {
     assessment.kill.evaluable
       ? `Kill criterion (${assessment.kill.deadline}, ${assessment.kill.wau_threshold} ${PRIMARY_METRIC} / ${assessment.kill.venue_threshold} venues): ${assessment.kill.tripped ? 'TRIPPED' : 'not tripped'}.`
       : `Kill criterion (${assessment.kill.deadline}) cannot be evaluated — the metric it tests is null. The clock runs anyway.`,
+    // Flags that did not rise to a halt still get read out. A detector that fires into a variable
+    // nobody prints is not a detector.
+    ...(decision.preamble.length === 0
+      ? []
+      : ['', '## Flagged', '', ...decision.preamble.map((detail) => `- ${detail}`)]),
     '',
     '## Recommendation',
     '',
@@ -406,13 +485,7 @@ export function draft(state, assessment, decision, measurement) {
       : `${plural(decision.dropped.length, 'candidate')} dropped: ${decision.dropped.join(', ')}.`,
   ];
 
-  const report = lines.join('\n') + '\n';
-  const words = report.split(/\s+/).filter((word) => word.length > 0).length;
-  if (words > REPORT_WORD_LIMIT) {
-    abort(`report is ${words} words, over the ${REPORT_WORD_LIMIT}-word ceiling.`);
-  }
-
-  return report;
+  return lines.join('\n') + '\n';
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +519,10 @@ export function log(state, decision, extras = {}) {
 
   const entry = {
     cycle: state.cycle,
-    recommendation_id: decision.recommendation.id,
+    // A halted cycle recommended nothing, and says so. Writing the last-considered candidate here
+    // would let a STOP_AND_REASSESS read, three cycles later, as an ordinary plan.
+    recommendation_id: decision.recommendation?.id ?? null,
+    directive: decision.directive ?? null,
     drafted,
     shipped: false,
     evidence: extras.evidence ?? null,
@@ -478,6 +554,17 @@ export function log(state, decision, extras = {}) {
  * action and gets no exemption for having been reviewed.
  */
 export function enterShip(record, { branch } = {}) {
+  // Review finding C1. draft() already refuses to render a recommendation for a halted cycle, but
+  // nothing stopped a halted RECORD from being reviewed and shipped anyway — which would let a
+  // STOP_AND_REASSESS ship whatever the loop happened to be holding. A halt has nothing to ship,
+  // and no review can supply one.
+  if (record?.directive === DIRECTIVE_STOP_AND_REASSESS) {
+    abort(
+      `cannot enter SHIP: cycle ${record?.cycle ?? '?'} emitted ${DIRECTIVE_STOP_AND_REASSESS}. ` +
+        'A halted cycle produced no recommendation, so there is nothing a review could approve.',
+    );
+  }
+
   const review = record?.review;
 
   if (review === null || review === undefined || typeof review !== 'object') {

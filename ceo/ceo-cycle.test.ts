@@ -559,6 +559,165 @@ describe('enterShip refuses without a REVIEW pass', () => {
   });
 });
 
+// N2 wiring. The detectors are tested in isolation in ceo-detectors.test.ts; these assert that
+// decide() actually OBEYS them, which is the part that can silently rot.
+describe('detectors are wired into decide', () => {
+  function flatEntry(cycle: number, value: number | null) {
+    return {
+      cycle,
+      recommendation_id: 'share-cta-copy',
+      directive: null,
+      drafted: true,
+      shipped: true,
+      evidence: { kind: 'pr_sha', ref: 'a1b2c3d' },
+      report_path: `ceo/reports/cycle-${cycle}.md`,
+      primary_metric: 'wau',
+      primary_value: value,
+    };
+  }
+
+  function stalledState() {
+    const measured = measure(freshState(), measurement());
+    return {
+      ...measured,
+      history: [1, 2, 3, 4].map((cycle) => flatEntry(cycle, 12)),
+    };
+  }
+
+  it('halts instead of recommending when the metric has been flat for three cycles', () => {
+    const state = stalledState();
+    const decision = decide(state, assess(state, measurement()), [
+      GROWTH_CANDIDATE,
+      ANALYTICS_CANDIDATE,
+    ]);
+
+    expect(decision.halt).toBe(true);
+    expect(decision.directive).toBe('STOP_AND_REASSESS');
+    // Perfectly good candidates were on the table. It still does not pick one.
+    expect(decision.recommendation).toBeNull();
+  });
+
+  it('halts on a bet that passed its review cycle unjudged', () => {
+    const measured = measure(freshState(), measurement());
+    const state = {
+      ...measured,
+      active_bets: [
+        { id: 'bet-share-cta', claim: 'CTA copy lifts WAU by 6', review_cycle: 0, verdict: null },
+      ],
+    };
+    const decision = decide(state, assess(state, measurement()), [GROWTH_CANDIDATE]);
+
+    expect(decision.halt).toBe(true);
+    expect(decision.recommendation).toBeNull();
+  });
+
+  it('does not halt on a healthy record', () => {
+    const measured = measure(freshState(), measurement());
+    const state = {
+      ...measured,
+      history: [10, 20, 30, 40].map((value, index) => flatEntry(index + 1, value)),
+    };
+    const decision = decide(state, assess(state, measurement()), [GROWTH_CANDIDATE]);
+
+    expect(decision.halt).toBe(false);
+    expect(decision.recommendation.id).toBe(GROWTH_CANDIDATE.id);
+  });
+
+  it('renders a halt report with no recommendation section at all', () => {
+    const state = stalledState();
+    const assessment = assess(state, measurement());
+    const decision = decide(state, assessment, [GROWTH_CANDIDATE]);
+    const report = draft(state, assessment, decision, measurement());
+
+    expect(report).toContain('STOP_AND_REASSESS');
+    expect(report).toContain(SELF_AUDIT_LINE);
+    // Emitting a halt and a plan in the same breath is the halt in name only.
+    expect(report).not.toContain('## Recommendation');
+    expect(report.split(/\s+/).filter((word) => word.length > 0).length).toBeLessThanOrEqual(400);
+  });
+
+  // Review finding C1. draft() already refuses to render a recommendation for a halted cycle, but
+  // a halted RECORD could still be reviewed and shipped — shipping whatever the loop was holding.
+  it('refuses to ship a halted cycle even with a clean review', () => {
+    expectHardAbort(
+      () =>
+        enterShip(
+          {
+            cycle: 5,
+            recommendation_id: null,
+            directive: 'STOP_AND_REASSESS',
+            drafted: true,
+            shipped: false,
+            evidence: null,
+            review: { verdict: 'pass', reviewer: 'deepseek', at: '2026-07-26' },
+          },
+          { branch: 'feat/share-loop-week1' },
+        ),
+      'STOP_AND_REASSESS',
+    );
+  });
+
+  // The reviewer assumed the halt report drops the flagged section. It does not — assert it, so
+  // that stays true.
+  it('keeps other findings visible in a halt report', () => {
+    const measured = measure(freshState(), measurement());
+    const state = {
+      ...measured,
+      history: [1, 2, 3, 4].map((cycle) => ({
+        cycle,
+        recommendation_id: 'share-cta-copy',
+        directive: null,
+        drafted: true,
+        shipped: false,
+        evidence: null,
+        report_path: `ceo/reports/cycle-${cycle}.md`,
+        primary_metric: 'wau',
+        primary_value: 12,
+      })),
+    };
+    const assessment = assess(state, measurement());
+    const decision = decide(state, assessment, [GROWTH_CANDIDATE]);
+    const report = draft(state, assessment, decision, measurement());
+
+    expect(decision.halt).toBe(true);
+    expect(report).toContain('STOP_AND_REASSESS');
+    // Both the halt and the co-occurring theater tax are reported, not just the halt.
+    expect(report).toContain('THEATER TAX');
+  });
+
+  it('logs a halted cycle with no recommendation id and the directive recorded', () => {
+    const state = stalledState();
+    const assessment = assess(state, measurement());
+    const decision = decide(state, assessment, [GROWTH_CANDIDATE]);
+    const next = log(state, decision, {});
+
+    const entry = next.history[next.history.length - 1];
+    expect(entry.recommendation_id).toBeNull();
+    expect(entry.directive).toBe('STOP_AND_REASSESS');
+  });
+
+  it('reads the theater tax into the report without halting', () => {
+    const measured = measure(freshState(), measurement());
+    const state = {
+      ...measured,
+      history: [3, 4].map((cycle) => ({
+        ...flatEntry(cycle, 12),
+        shipped: false,
+        evidence: null,
+      })),
+    };
+    const assessment = assess(state, measurement());
+    const decision = decide(state, assessment, [GROWTH_CANDIDATE]);
+    const report = draft(state, assessment, decision, measurement());
+
+    expect(decision.halt).toBe(false);
+    expect(report).toContain('## Flagged');
+    expect(report).toContain('THEATER TAX');
+    // Still recommends — two barren cycles is a smell, not a verdict.
+    expect(report).toContain('## Recommendation');
+  });
+});
+
 describe('runCycle, offline against the fixture', () => {
   let outDir: string;
 
