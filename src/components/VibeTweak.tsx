@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { displayTag } from '@/lib/tagDisplay';
 import type { VibeTag } from '@/types';
 
 type VibeTweakProps = {
@@ -100,7 +101,7 @@ export default function VibeTweak({
                   isActive ? CHIP_ACTIVE : CHIP_INACTIVE,
                 ].join(' ')}
               >
-                {tag}
+                {displayTag(tag)}
                 {isActive ? ' ×' : ''}
               </button>
             );
@@ -129,7 +130,7 @@ export default function VibeTweak({
                     isActive ? CHIP_ACTIVE : CHIP_INACTIVE,
                   ].join(' ')}
                 >
-                  {tag}
+                  {displayTag(tag)}
                 </button>
               );
             })}

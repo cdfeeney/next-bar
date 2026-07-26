@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { Bar, ManhattanNeighborhood, VibeTag } from '@/types';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 import NeighborhoodPicker from '@/components/NeighborhoodPicker';
+import { displayTag } from '@/lib/tagDisplay';
 
 type FreeTextSeedProps = {
   onSubmit: (synthetic: Bar) => void;
@@ -142,7 +143,7 @@ export default function FreeTextSeed({
                 isActive ? CHIP_ACTIVE : CHIP_INACTIVE,
               ].join(' ')}
             >
-              {tag}
+              {displayTag(tag)}
             </button>
           );
         })}
