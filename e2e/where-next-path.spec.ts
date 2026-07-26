@@ -49,7 +49,7 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     await expect(page).toHaveURL('/');
   });
 
-  test('vibe tweak from results: glyph chips (E0.1), applies, and returns to results', async ({
+  test('E2.2 axis vibe surface: six axes, one open at a time, glyphs (E0.1), and the pick is CACHED for the night', async ({
     page,
   }) => {
     await denyGeolocation(page.context());
@@ -63,17 +63,44 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
 
     // Enter the vibe surface from RESULTS (there is no pre-results stop).
     await page.getByRole('button', { name: /Tweak the vibe/i }).click();
-    // E0.1: Attaboy's `pricey` DATA tag renders as the $$$ glyph; the
-    // word "pricey" appears nowhere.
-    await expect(
-      page.getByRole('button', { name: 'Cocktails', exact: false }),
-    ).toBeVisible();
-    await expect(page.getByRole('button', { name: '$$$', exact: false })).toBeVisible();
+
+    // Six axis rows, progressive disclosure: exactly one expanded at a
+    // time (the first axis holding a seeded pick opens initially).
+    for (const axis of ['Drink', 'Energy', 'Setting', 'Scene', 'Sound', 'Spend']) {
+      await expect(page.getByRole('button', { name: new RegExp(`^${axis}`) })).toBeVisible();
+    }
+    const expanded = page.locator('button[aria-expanded="true"]');
+    await expect(expanded).toHaveCount(1);
+
+    // Open Spend: Attaboy's `pricey` DATA tag renders as an ACTIVE $$$
+    // glyph chip (E0.1); the word "pricey" appears nowhere. Opening a
+    // second axis closes the first (still exactly one expanded).
+    await page.getByRole('button', { name: /^Spend/ }).click();
+    await expect(expanded).toHaveCount(1);
+    const spendGroup = page.getByRole('group', { name: 'Spend vibes' });
+    const triple = spendGroup.getByRole('button', { name: '$$$', exact: false }).first();
+    await expect(triple).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByText(/pricey/i)).toHaveCount(0);
 
+    // Drop $$$ from tonight's vibe and apply.
+    await triple.click();
+    await expect(triple).toHaveAttribute('aria-pressed', 'false');
     await page.getByRole('button', { name: 'Apply' }).click();
     await expect(
-      page.locator('article').filter({ hasText: /Vibe match/i }),
-    ).toHaveCount(3);
+      page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+    ).toBeVisible();
+
+    // NIGHT CACHE (locked decision 3): start a NEW search from the same
+    // seed bar — its own tags would restore $$$, but tonight's cached
+    // pick pre-fills instead, so $$$ is still off. Pre-fills, never
+    // locks: the chip remains tappable.
+    await page.getByRole('button', { name: /Pick a different bar/i }).click();
+    await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
+    await page.getByRole('button', { name: /Attaboy/ }).click();
+    await page.getByRole('button', { name: /Tweak the vibe/i }).click();
+    await page.getByRole('button', { name: /^Spend/ }).click();
+    await expect(
+      page.getByRole('group', { name: 'Spend vibes' }).getByRole('button', { name: '$$$', exact: false }).first(),
+    ).toHaveAttribute('aria-pressed', 'false');
   });
 });
