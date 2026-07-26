@@ -11,7 +11,11 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    // ceo/** holds the CEO orchestrator's guard + state tests. They live in
+    // the ONE gate rather than a second config, because a suite you have to
+    // remember a --config flag to run is not a gate. (Replaces the separate
+    // ceo/vitest.config.mjs, deleted.)
+    include: ['src/**/*.test.{ts,tsx}', 'ceo/**/*.test.{ts,tsx}'],
   },
   resolve: {
     alias: {

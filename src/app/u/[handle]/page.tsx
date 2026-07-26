@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import Avatar from '@/components/Avatar';
+import ShareButton from '@/components/ShareButton';
+import { buildProfilePath, shareProfileText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { findDemoFriend, topRatedBars, lovedCount } from '@/lib/demo';
@@ -189,6 +191,15 @@ export default function ProfilePage({
             >
               {following ? 'Following' : 'Follow'}
             </button>
+            {/* The ranked list is the loop-starting artifact (goal E-week1):
+                a profile travels to people who aren't in the app yet, which
+                a pick card cannot do. */}
+            <ShareButton
+              path={buildProfilePath(p.handle)}
+              text={shareProfileText(p.handle, p.displayName)}
+              label="Share"
+              ariaLabel={`Share @${p.handle}'s list`}
+            />
           </div>
         </div>
 
@@ -344,6 +355,14 @@ function DemoProfile({ handle }: { handle: string }): JSX.Element {
             >
               Where to? →
             </Link>
+            {/* Signed-out surface — this is the one a share recipient
+                actually lands on, so it must be shareable onward too. */}
+            <ShareButton
+              path={buildProfilePath(friend.handle)}
+              text={shareProfileText(friend.handle, friend.displayName)}
+              label="Share"
+              ariaLabel={`Share @${friend.handle}'s list`}
+            />
           </div>
         </div>
 
