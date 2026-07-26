@@ -16,21 +16,24 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Friends + consensus', () => {
-  test('following a suggested curator adds them to your circle', async ({ page }) => {
+  test('following a suggested curator bumps the Following stat and lands them in the list (UX-A)', async ({ page }) => {
     await page.goto('/friends');
 
-    // Default circle is 2 (claire, john); Sasha is in the suggested list.
-    await expect(page.getByText(/Your circle · 2/)).toBeVisible();
+    // Instagram-model stats: default demo circle is 2 (claire, john).
+    const followingStat = page.getByRole('link', { name: /2\s+Following/i });
+    await expect(followingStat).toBeVisible();
 
-    // The suggested row (only Sasha, who isn't followed by default, shows
-    // @sasha) has a Follow button. Scope to that row, not a broad div.
+    // Follow Sasha from Find friends; the stat ticks to 3.
     const sashaRow = page
       .locator('.bg-surface')
       .filter({ hasText: '@sasha' });
     await sashaRow.getByRole('button', { name: /^Follow$/ }).click();
+    await expect(page.getByRole('link', { name: /3\s+Following/i })).toBeVisible();
 
-    // Circle grows to 3.
-    await expect(page.getByText(/Your circle · 3/)).toBeVisible();
+    // Tap the stat → the Following LIST page has her row.
+    await page.getByRole('link', { name: /3\s+Following/i }).click();
+    await expect(page).toHaveURL('/friends/following');
+    await expect(page.getByText('@sasha')).toBeVisible();
   });
 
   test('consensus shows bars the group all rated', async ({ page }) => {
@@ -71,38 +74,17 @@ test.describe('Friends + consensus', () => {
     ).toHaveCount(0);
   });
 
-  test('tonight intent toggles, persists, and shows circle signals', async ({ page }) => {
-    // Demo intents are day-varying since F3/F5 (no more "Claire goes out every
-    // night") — pin the clock to a Friday night, where the classic trio
-    // (claire going / john maybe) is guaranteed by the rhythm table.
-    await page.clock.install({ time: new Date('2026-07-24T22:00:00') });
+  test('tonight intent pills toggle, persist, and clear (UX-A compact row)', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-07-24T22:00:00'));
     await page.goto('/friends');
 
-    // Default circle (claire + john) has seeded demo signals.
-    await expect(page.getByText(/Claire/).first()).toBeVisible();
-    await expect(page.getByText(/is going out tonight/i)).toBeVisible();
-    await expect(page.getByText(/might be out later/i)).toBeVisible();
-
-    // Reciprocity gate (C1): friends' picks are hidden until you commit.
-    // Scoped to the Tonight region — Claire's friend card elsewhere on the
-    // page also names her top bars.
-    const tonight = page.getByRole('region', { name: 'Tonight' });
-    await expect(tonight.getByText(/Set your status to see/i)).toBeVisible();
-    await expect(tonight.getByText(/Death & Co/)).toHaveCount(0);
-
-    // Set your own status; it sticks across reload.
+    // One tap sets; it sticks across reload; tapping the lit pill clears.
     const goingBtn = page.getByRole('button', { name: /^Going out$/ });
     await goingBtn.click();
     await expect(goingBtn).toHaveAttribute('aria-pressed', 'true');
-
-    // Picks unlock: Claire's tonight pick appears.
-    await expect(tonight.getByText(/Death & Co/)).toBeVisible();
-    await expect(tonight.getByText(/Set your status to see/i)).toHaveCount(0);
     await page.reload();
     const goingAfter = page.getByRole('button', { name: /^Going out$/ });
     await expect(goingAfter).toHaveAttribute('aria-pressed', 'true');
-
-    // Tapping the active status clears it.
     await goingAfter.click();
     await expect(goingAfter).toHaveAttribute('aria-pressed', 'false');
   });

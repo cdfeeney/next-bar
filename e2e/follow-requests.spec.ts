@@ -253,11 +253,11 @@ test.describe('/friends — follow requests (B3b)', () => {
     await resultRow.getByRole('button', { name: /^Follow$/ }).click();
 
     // The server said 'requested' — the row settles into Requested, and the
-    // circle count must NOT grow to 1.
+    // Following stat must NOT grow (pending is not a follow, UX-A).
     await expect(
       resultRow.getByRole('button', { name: /^Requested$/ }),
     ).toBeVisible();
-    await expect(page.getByText(/Your circle · 1/)).not.toBeVisible();
+    await expect(page.getByRole('link', { name: /0\s+Following/i })).toBeVisible();
 
     // Tap again withdraws the request → back to Follow.
     await resultRow.getByRole('button', { name: /^Requested$/ }).click();
@@ -273,15 +273,16 @@ test.describe('/friends — follow requests (B3b)', () => {
       following: [],
       outgoingRequests: [AVA],
     });
+    // UX-A: pending targets live on the Following LIST page as
+    // withdrawable Requested rows; the /friends stat stays at 0.
     await page.goto('/friends');
+    await expect(page.getByRole('link', { name: /0\s+Following/i })).toBeVisible();
 
-    // The pending target renders under Your circle with a Requested button
-    // (withdrawable), not as a follower row.
+    await page.goto('/friends/following');
     await expect(page.getByText('@ava_p').first()).toBeVisible();
     await expect(
       page.getByRole('button', { name: /^Requested$/ }).first(),
     ).toBeVisible();
-    await expect(page.getByText(/Your circle · 1/)).not.toBeVisible();
   });
 
   test('the Requests inbox renders and accept/decline clear their rows', async ({
@@ -337,7 +338,7 @@ test.describe('/friends — follow requests (B3b)', () => {
     await stubSupabase(page, { following: [], incomingRequests: [] });
     await page.goto('/friends');
 
-    await expect(page.getByText(/no one in your circle yet/i)).toBeVisible();
+    await expect(page.getByRole('link', { name: /0\s+Following/i })).toBeVisible();
     await expect(page.getByText(/Requests ·/)).not.toBeVisible();
   });
 });
@@ -399,24 +400,30 @@ test.describe('/friends — friends list (B3c)', () => {
       following: [AVA],
       followers: [AVA, SAM],
     });
+    // UX-A: the stats carry the counts; the followers LIST carries the rows.
     await page.goto('/friends');
+    await expect(page.getByRole('link', { name: /2\s+Followers/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /1\s+Following/i })).toBeVisible();
 
-    // Ava is mutual → Friends section.
-    await expect(page.getByText(/Friends · 1/)).toBeVisible();
-    // Sam follows you but you don't follow back → Followers section with CTA.
-    await expect(page.getByText(/Followers · 2/)).toBeVisible();
+    await page.goto('/friends/followers');
+    // Ava is mutual → her row reads Following (quiet); Sam gets the accent CTA.
+    const avaRow = page
+      .locator('.bg-surface')
+      .filter({ hasText: '@ava_p' })
+      .first();
+    await expect(
+      avaRow.getByRole('button', { name: /^Following$/ }),
+    ).toBeVisible();
     const samRow = page
       .locator('.bg-surface')
-      .filter({ hasText: 'follows you' })
       .filter({ hasText: '@sam_j' })
       .first();
-    await expect(samRow).toBeVisible();
     await expect(
       samRow.getByRole('button', { name: /follow back/i }),
     ).toBeVisible();
   });
 
-  test('follow back creates the edge and the follower becomes a Friend', async ({
+  test('follow back creates the edge and the row settles into Following', async ({
     page,
   }) => {
     await stubSupabase(page, {
@@ -425,16 +432,18 @@ test.describe('/friends — friends list (B3c)', () => {
       profileByHandle: [SAM],
       followResult: 'followed',
     });
-    await page.goto('/friends');
+    await page.goto('/friends/followers');
 
     const samRow = page
       .locator('.bg-surface')
-      .filter({ hasText: 'follows you' })
+      .filter({ hasText: '@sam_j' })
       .first();
     await samRow.getByRole('button', { name: /follow back/i }).click();
 
-    // Mutual now → Friends section counts them.
-    await expect(page.getByText(/Friends · 1/)).toBeVisible();
+    // Mutual now — the same row flips to the quiet Following state.
+    await expect(
+      samRow.getByRole('button', { name: /^Following$/ }),
+    ).toBeVisible();
   });
 
   test('pending incoming requests badge the Friends tab in the nav', async ({

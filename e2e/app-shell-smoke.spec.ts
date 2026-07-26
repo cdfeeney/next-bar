@@ -61,14 +61,26 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/rankings');
   });
 
-  test('/friends renders the social feed with curators', async ({ page }) => {
+  test('/friends renders the Instagram-model page (UX-A)', async ({ page }) => {
     await page.goto('/friends');
     await expect(page.getByRole('heading', { name: /^Friends$/ })).toBeVisible();
-    // Marquee consensus CTA.
-    await expect(page.getByRole('link', { name: /Where should we go\?/i })).toBeVisible();
-    // A default-followed curator card is present.
-    await expect(page.getByRole('heading', { name: /Claire R\./i })).toBeVisible();
+    // The one primary action + the two stats.
+    await expect(page.getByRole('link', { name: /Plan Night Out/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /Followers/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /Following/i })).toBeVisible();
     await expectNoConsoleErrors(page, '/friends');
+  });
+
+  test('/friends/followers renders its list heading', async ({ page }) => {
+    await page.goto('/friends/followers');
+    await expect(page.getByRole('heading', { name: /^Followers$/ })).toBeVisible();
+    await expectNoConsoleErrors(page, '/friends/followers');
+  });
+
+  test('/friends/following renders its list heading', async ({ page }) => {
+    await page.goto('/friends/following');
+    await expect(page.getByRole('heading', { name: /^Following$/ })).toBeVisible();
+    await expectNoConsoleErrors(page, '/friends/following');
   });
 
   test('/friends/consensus renders the group picker', async ({ page }) => {
