@@ -37,7 +37,12 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
 
   const photos = barImageUrls(bar);
   const showThumb = photos.length > 0 && !thumbFailed;
-  const attribution = bar.photoAttributions?.[thumbIdx] || bar.photoAttribution;
+  // Multi-ingest bars must NOT fall back to the legacy field — it can
+  // hold a stale author from an older single-photo ingest (E2.3 review
+  // rule, re-caught by this rewrite's review).
+  const attribution = bar.photoAttributions
+    ? bar.photoAttributions[thumbIdx] || null
+    : bar.photoAttribution;
 
   return (
     <article className="bg-surface border border-border rounded-2xl p-3 flex gap-3">

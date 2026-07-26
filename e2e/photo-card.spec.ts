@@ -38,7 +38,9 @@ test.describe('Compact result card', () => {
     expect(thumbBox!.width).toBeLessThan(cardBox!.width / 3);
 
     // 10-second rule: a card stays SHORT so ~3 fit a phone viewport.
-    expect(cardBox!.height).toBeLessThanOrEqual(160);
+    // (180 leaves headroom for a wrapped hours badge / OS font scaling —
+    // review MED: a tight bound flakes on long "Open · until…" strings.)
+    expect(cardBox!.height).toBeLessThanOrEqual(180);
 
     // The loud data is on the row: name + walk/ride time.
     await expect(cards.first().getByRole('heading')).toBeVisible();
