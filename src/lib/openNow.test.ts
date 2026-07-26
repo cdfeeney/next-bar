@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { isOpenNow, todayHoursLine, weekHoursRows } from '@/lib/openNow';
-import type { WeeklyHours } from '@/types';
+import {
+  excludeClosedBars,
+  isOpenNow,
+  todayHoursLine,
+  weekHoursRows,
+} from '@/lib/openNow';
+import type { Bar, WeeklyHours } from '@/types';
 
 // All fixtures use January 2026 dates so NYC is on EST (UTC-5), keeping the
 // UTC↔NYC conversion unambiguous. 2026-01-15 is a Thursday (day 4).
@@ -144,5 +149,68 @@ describe('todayHoursLine — DeepSeek review fixes', () => {
     expect(todayHoursLine(WED_THU, new Date('2026-07-22T20:00:00-04:00'))).toBe(
       'Closed · opens tomorrow',
     );
+  });
+});
+
+describe('excludeClosedBars (E3.3 hard filter)', () => {
+  const makeBar = (overrides: Partial<Bar> & { id: string }): Bar =>
+    ({
+      name: overrides.id,
+      neighborhood: 'LES',
+      address: '1 Test St',
+      lat: 40.72,
+      lng: -73.99,
+      tags: ['dive'],
+      priceTier: 1,
+      blurb: 'test',
+      lastVerified: '2026-04-01',
+      ...overrides,
+    }) as Bar;
+
+  // Thu 5pm–2am overnight bar; NYC Thu 19:00 = open, NYC Thu 15:00 = closed.
+  const THU_NIGHT: WeeklyHours = {
+    4: [{ open: '17:00', close: '02:00' }],
+  } as unknown as WeeklyHours;
+  const OPEN_AT = new Date('2026-01-16T00:00:00Z'); // NYC Thu 7pm
+  const CLOSED_AT = new Date('2026-01-15T20:00:00Z'); // NYC Thu 3pm
+
+  it('drops KNOWN-closed bars, keeps open ones', () => {
+    const bars = [
+      makeBar({ id: 'open-bar', hours: THU_NIGHT }),
+      makeBar({ id: 'closed-bar', hours: THU_NIGHT }),
+    ];
+    expect(excludeClosedBars(bars, OPEN_AT).map((b) => b.id)).toEqual([
+      'open-bar',
+      'closed-bar',
+    ]);
+    expect(excludeClosedBars(bars, CLOSED_AT)).toEqual([]);
+  });
+
+  it('no-hours bars ALWAYS stay — unknown never reads as closed', () => {
+    const bars = [makeBar({ id: 'no-hours' })];
+    expect(excludeClosedBars(bars, CLOSED_AT).map((b) => b.id)).toEqual([
+      'no-hours',
+    ]);
+  });
+
+  it("keeps the morning tail of yesterday's overnight window", () => {
+    const bars = [makeBar({ id: 'late-bar', hours: THU_NIGHT })];
+    // NYC Fri 01:00 — still inside Thursday's 5pm–2am window.
+    expect(
+      excludeClosedBars(bars, new Date('2026-01-16T06:00:00Z')).map((b) => b.id),
+    ).toEqual(['late-bar']);
+    // NYC Fri 03:00 — past close.
+    expect(excludeClosedBars(bars, new Date('2026-01-16T08:00:00Z'))).toEqual([]);
+  });
+
+  it('drops permanently-closed bars regardless of hours', () => {
+    const bars = [
+      makeBar({
+        id: 'gone-bar',
+        hours: THU_NIGHT,
+        businessStatus: 'CLOSED_PERMANENTLY',
+      }),
+    ];
+    expect(excludeClosedBars(bars, OPEN_AT)).toEqual([]);
   });
 });

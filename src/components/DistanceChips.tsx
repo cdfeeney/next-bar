@@ -1,33 +1,34 @@
 'use client';
 
 import type { Radius } from '@/types';
-import {
-  RADIUS_ANYWHERE,
-  RADIUS_SHORT_UBER,
-  RADIUS_WALK,
-} from '@/lib/constants';
+import { RADIUS_ANYWHERE, RADIUS_CAB, RADIUS_WALK } from '@/lib/constants';
 
-type RadiusSliderProps = {
+type DistanceChipsProps = {
   value: Radius;
   onChange: (next: Radius) => void;
 };
 
-type Segment = {
+type Chip = {
   kind: Radius['kind'];
   label: string;
   toRadius: () => Radius;
 };
 
-const SEGMENTS: Segment[] = [
+/**
+ * E3.2: distance as intent — "Walkable" / "Worth a cab" — with the
+ * "Anywhere" escape hatch (R5). Replaces RadiusSlider (deleted); same
+ * group semantics on the results surface, live re-rank on tap (R8).
+ */
+const CHIPS: Chip[] = [
   {
     kind: 'walking',
-    label: 'Walking',
+    label: 'Walkable',
     toRadius: () => ({ kind: 'walking', maxMiles: RADIUS_WALK }),
   },
   {
-    kind: 'shortUber',
-    label: 'Short Uber',
-    toRadius: () => ({ kind: 'shortUber', maxMiles: RADIUS_SHORT_UBER }),
+    kind: 'cab',
+    label: 'Worth a cab',
+    toRadius: () => ({ kind: 'cab', maxMiles: RADIUS_CAB }),
   },
   {
     kind: 'anywhere',
@@ -36,27 +37,27 @@ const SEGMENTS: Segment[] = [
   },
 ];
 
-export default function RadiusSlider({ value, onChange }: RadiusSliderProps) {
+export default function DistanceChips({ value, onChange }: DistanceChipsProps) {
   return (
     <div
       role="group"
       aria-label="Search radius"
       className="flex bg-surface border border-border rounded-full p-1 max-w-md mx-auto"
     >
-      {SEGMENTS.map((segment) => {
-        const isActive = value.kind === segment.kind;
+      {CHIPS.map((chip) => {
+        const isActive = value.kind === chip.kind;
         return (
           <button
-            key={segment.kind}
+            key={chip.kind}
             type="button"
             aria-pressed={isActive}
-            onClick={() => onChange(segment.toRadius())}
+            onClick={() => onChange(chip.toRadius())}
             className={[
               'flex-1 min-h-[44px] touch-manipulation rounded-full font-display text-sm md:text-base transition-colors',
               isActive ? 'bg-accent text-bg' : 'text-text hover:text-accent',
             ].join(' ')}
           >
-            {segment.label}
+            {chip.label}
           </button>
         );
       })}

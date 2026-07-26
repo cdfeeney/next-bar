@@ -118,10 +118,13 @@ export type Bar = {
   reviews?: BarReview[];
 };
 
+// E3.2: distance as intent, not units — "Walkable" / "Worth a cab" chips
+// (values live in constants.ts: RADIUS_WALK / RADIUS_CAB) plus the
+// "Anywhere" escape (R5).
 export type Radius =
-  | { kind: 'walking';   maxMiles: 1 }
-  | { kind: 'shortUber'; maxMiles: 3 }
-  | { kind: 'anywhere';  maxMiles: null };
+  | { kind: 'walking';  maxMiles: 1.5 }
+  | { kind: 'cab';      maxMiles: 4 }
+  | { kind: 'anywhere'; maxMiles: null };
 
 export type SearchMode = 'quiz' | 'whereNext';
 

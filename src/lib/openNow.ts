@@ -1,4 +1,4 @@
-import type { WeeklyHours } from '@/types';
+import type { Bar, WeeklyHours } from '@/types';
 
 /**
  * Compute whether a bar is open at `now`, entirely client-side, from its stored
@@ -35,6 +35,19 @@ export function isOpenNow(hours: WeeklyHours | undefined, now: Date): boolean | 
   }
 
   return false;
+}
+
+/**
+ * E3.3 hard filter: drop bars that are KNOWN closed at `now` (or gone for
+ * good). Bars without hours data stay — unknown must never read as
+ * closed, so a missing ingest can't false-negative a bar out of
+ * existence. Pure; callers on live surfaces decide when to apply it.
+ */
+export function excludeClosedBars(bars: Bar[], now: Date): Bar[] {
+  return bars.filter((bar) => {
+    if (bar.businessStatus === 'CLOSED_PERMANENTLY') return false;
+    return isOpenNow(bar.hours, now) !== false;
+  });
 }
 
 function toMinutes(hhmm: string): number {

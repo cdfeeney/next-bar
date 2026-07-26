@@ -34,8 +34,11 @@ export const COARSE_ACCURACY_M = 200;
 export const MAX_SNAP_MILES = 2;
 export const GPS_CONFIRM_MILES = 0.124;
 
-export const RADIUS_WALK = 1;
-export const RADIUS_SHORT_UBER = 3;
+// E3.2 distance chips: "Walkable" ~ a determined 25-30min walk;
+// "Worth a cab" ~ a short cross-town ride. Literal types in types/index.ts
+// (Radius) must match these values.
+export const RADIUS_WALK = 1.5;
+export const RADIUS_CAB = 4;
 export const RADIUS_ANYWHERE = null;
 
 export const WALK_BOUNDARY_MI = 1;
