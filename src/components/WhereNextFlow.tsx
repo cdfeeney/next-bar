@@ -8,7 +8,8 @@ import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { loadProfile } from '@/lib/storedProfile';
 import { loadNightVibe, saveNightVibe } from '@/lib/vibeNightCache';
-import { recordVisit } from '@/lib/nightLog';
+import { loadNightVisits, recordVisit } from '@/lib/nightLog';
+import { nycNightKey } from '@/lib/nightKey';
 import { RADIUS_WALK } from '@/lib/constants';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -120,6 +121,21 @@ export default function WhereNextFlow() {
   // Radius fine-tune lives on the results surface (E2.1) — changing it
   // re-ranks live. Walking default.
   const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
+
+  // E3.1: "not the places I've already been tonight." The night log's
+  // visited set hard-excludes on the live surfaces (never the quiz).
+  // Mount-gated (SSR has no storage); recordVisit's manual storage-event
+  // dispatch keeps it fresh same-tab, and the listener also catches
+  // cross-tab visits. Reads TONIGHT's key at event time, so the 6am
+  // rollover naturally empties it on the next update.
+  const [visitedIds, setVisitedIds] = useState<string[]>([]);
+  useEffect(() => {
+    const refresh = (): void =>
+      setVisitedIds(loadNightVisits(nycNightKey()).map((v) => v.barId));
+    refresh();
+    window.addEventListener('storage', refresh);
+    return () => window.removeEventListener('storage', refresh);
+  }, []);
 
   // E2.1: EVERY seed-bar entry lands on RESULTS immediately through this
   // one helper (review HIGH: the picker and not-listed paths must behave
@@ -261,6 +277,7 @@ export default function WhereNextFlow() {
           maxMiles={null}
           maxResults={SUGGEST_COUNT}
           hideClosedNow
+          excludeIds={visitedIds}
         />
         <div className="px-6 pb-10 text-center">
           <button
@@ -387,7 +404,7 @@ export default function WhereNextFlow() {
           snappedTo: geo.snappedNeighborhood,
         }}
         maxMiles={selectedRadius.maxMiles}
-        excludeIds={[step.seedBar.id]}
+        excludeIds={[step.seedBar.id, ...visitedIds]}
         hideClosedNow
       />
       <BarMap
