@@ -2,10 +2,10 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 /**
- * /privacy — honest v1 privacy policy (H1 App-Store pack). Written to match
- * what the app ACTUALLY does today; bracketed [PLACEHOLDER] items need an
- * operator decision before App Store submission and are deliberately
- * visible so nobody mistakes this draft for reviewed legal copy.
+ * /privacy — honest v1 privacy policy (H1 App-Store pack; finalized
+ * 2026-07-25 on operator instruction). Written to match what the app
+ * ACTUALLY does. hi@next-bar.app must be receiving mail (registrar
+ * forwarding after the domain purchase) before App Store submission.
  */
 export const metadata: Metadata = {
   title: 'Privacy Policy — Next Bar',
@@ -91,35 +91,27 @@ export default function PrivacyPage(): JSX.Element {
 
         <Block title="Deleting your data">
           Signed-out data can be wiped any time from Settings → Clear all
-          ratings, or by clearing your browser storage. In-app account
-          deletion (login, profile, ratings, follows — everything) is
-          rolling out in Settings; until it reaches you, email us and
-          we&apos;ll delete your account by hand, promptly.
+          ratings, or by clearing your browser storage. Signed in, go to
+          Settings → Delete account: it permanently removes your login,
+          profile, ratings, rankings, and follows — everything, immediately.
+          Prefer to ask a human? Email us and we&apos;ll do it for you.
         </Block>
 
         <Block title="Contact">
-          Questions or requests:{' '}
+          Next Bar is an independent, individually operated service based in
+          New York. Questions or requests:{' '}
           <a
             href="mailto:hi@next-bar.app"
             className="text-accent underline-offset-4 hover:underline"
           >
             hi@next-bar.app
           </a>
-          <span className="block mt-2 text-muted text-xs">
-            [PLACEHOLDER — operator: confirm this inbox is monitored, and add
-            a legal entity name + mailing address before App Store
-            submission.]
-          </span>
+          . Privacy requests get a reply within a few days.
         </Block>
 
         <Block title="Changes">
           If this policy changes in a way that matters, we&apos;ll note it
           here with a new date up top.
-          <span className="block mt-2 text-muted text-xs">
-            [PLACEHOLDER — operator: have a human review this draft before
-            launch. It describes current behavior honestly but is not
-            lawyer-reviewed.]
-          </span>
         </Block>
 
         <p className="text-muted text-xs text-center pt-4">
