@@ -5,7 +5,6 @@ import { useCallback, useEffect, useState } from 'react';
 import WhereNextFlow from '@/components/WhereNextFlow';
 import PhaseChip from '@/components/PhaseChip';
 import RecapCard from '@/components/RecapCard';
-import { loadProfile } from '@/lib/storedProfile';
 import { deriveNightPhase, type NightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
 import { loadPhaseOverride, savePhaseOverride } from '@/lib/phaseOverride';
@@ -15,15 +14,6 @@ import { useBars } from '@/lib/useBars';
 import { useNightRefresh } from '@/hooks/useIntent';
 
 export default function HomePage() {
-  // MED-26: `/` never prompted the quiz — profile-less visitors got the
-  // location flow with generic (vibe-less) suggestions and no hint that a
-  // 60-second quiz personalizes everything. localStorage read must wait
-  // for mount (SSR has no storage); until then render nothing extra.
-  const [hasProfile, setHasProfile] = useState<boolean | null>(null);
-  useEffect(() => {
-    setHasProfile(loadProfile() !== null);
-  }, []);
-
   // E2.4/E3.4 phase-adaptive home (EPICS-v0.6, locked decision 1: content
   // adapts, the 5-tab nav never does). Derived on mount — SSR has neither
   // storage nor a clock worth trusting; until then the default flow
@@ -95,28 +85,11 @@ export default function HomePage() {
         </p>
         <div className="flex items-center gap-3">
           {phase ? <PhaseChip phase={phase} onSelect={selectPhase} /> : null}
-          <Link
-            href="/install"
-            className="text-muted hover:text-text underline-offset-4 hover:underline text-sm min-h-[44px] inline-flex items-center touch-manipulation"
-          >
-            Get the app →
-          </Link>
         </div>
       </header>
-      {/* Operator 2026-07-26: the quiz nudge is gone — this slot teases
-          the APP instead (the quiz still lives at /quiz and /install). */}
-      {hasProfile === false ? (
-        <div className="px-6 pt-4">
-          <Link
-            href="/install"
-            className="block max-w-md mx-auto bg-surface border border-accent/40 rounded-2xl px-5 py-3 touch-manipulation hover:border-accent transition-colors"
-          >
-            <p className="font-display text-sm">
-              Next Bar, on your phone →
-            </p>
-          </Link>
-        </div>
-      ) : null}
+      {/* Operator 2026-07-26: NO install/get-the-app teasers on home —
+          this IS the mobile UI (native wrap incoming). /install still
+          exists as the marketing landing for external traffic. */}
       {phase === 'planning' ? (
         <div className="px-6 pt-4" data-testid="phase-card-planning">
           <div className="max-w-md mx-auto bg-surface border border-border rounded-2xl px-5 py-4">
