@@ -291,7 +291,7 @@ export function decide(state, assessment, candidates) {
   // Detectors run BEFORE the candidate list is even read. When the record says the loop is
   // producing plans and not results, the correct response is not a better-chosen plan — and a
   // runner that picks one anyway has quietly turned the halt into a suggestion.
-  const detected = runDetectors(state);
+  const detected = runDetectors(state, { assessment });
   if (detected.halt) {
     return {
       halt: true,

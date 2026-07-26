@@ -8,6 +8,8 @@
 // The failure mode they exist to catch is not malice, it is the very natural drift where a loop
 // keeps producing plans, each plan sounds reasonable, and nothing observable ever changes.
 
+import { detectDormantReadiness } from './ceo-modules.mjs';
+
 /** Emitted instead of a new plan. The point is to stop planning, not to plan harder. */
 export const DIRECTIVE_STOP_AND_REASSESS = 'STOP_AND_REASSESS';
 
@@ -205,13 +207,18 @@ export function detectBetClosure(activeBets, currentCycle) {
  * Returns findings for ALL detectors, flagged or not, so a report can honestly say what was
  * checked rather than only what fired.
  */
-export function runDetectors(state) {
+export function runDetectors(state, context = {}) {
   const history = asArray(state?.history);
   const theater = detectTheaterTax(history);
   const flat = detectFlatMetricHalt(history);
   const bets = detectBetClosure(state?.active_bets, state?.cycle ?? 0);
+  // A dormant module reaching its activation condition is news the operator needs and the
+  // orchestrator cannot act on — exactly the shape of a preamble line. `context` carries this
+  // cycle's freshly computed assessment, because the exit module's trigger is the kill criterion
+  // and the stored flag for it is never written by anything.
+  const dormant = detectDormantReadiness(state, context);
 
-  const findings = [theater, flat, bets];
+  const findings = [theater, flat, bets, dormant];
   const halt = flat.halt || bets.blocking;
 
   return {
@@ -219,6 +226,7 @@ export function runDetectors(state) {
     theater,
     flat,
     bets,
+    dormant,
     halt,
     directive: halt ? DIRECTIVE_STOP_AND_REASSESS : null,
     preamble: findings

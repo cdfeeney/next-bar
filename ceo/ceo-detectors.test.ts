@@ -383,9 +383,22 @@ describe('runDetectors', () => {
 
     expect(result.findings.map((finding) => finding.id).sort()).toEqual([
       'bet_closure',
+      'dormant_module_ready',
       'flat_metric_halt',
       'theater_tax',
     ]);
+  });
+
+  it('carries a woken dormant module into the preamble without halting', () => {
+    const result = runDetectors(
+      state({
+        modules: { growth: 'active', tech: 'active', venue_sales: 'dormant', hiring: 'dormant', finance: 'dormant', exit: 'dormant' },
+        metrics: { revenue: 250 },
+      }),
+    );
+
+    expect(result.halt).toBe(false);
+    expect(result.preamble.join(' ')).toContain('finance');
   });
 
   it('tolerates a state with no history or bets at all', () => {
