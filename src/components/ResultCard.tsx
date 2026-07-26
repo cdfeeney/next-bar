@@ -36,14 +36,21 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
   const badge = vibeMatchBadge(userTags, bar.tags);
   const fresh = isFresh(bar.lastVerified);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  // A broken photo advances to the NEXT carousel photo before giving up —
+  // a multi-photo bar with one corrupt file keeps its photo-first card.
+  const [heroIdx, setHeroIdx] = useState(0);
   const [heroFailed, setHeroFailed] = useState(false);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
 
   const photos = barImageUrls(bar);
   const showHero = photos.length > 0 && !heroFailed;
   // Google policy: attribution must render whenever the photo is shown.
-  // Index-aligned with the carousel; '' means unknown author.
-  const heroAttribution = bar.photoAttributions?.[0] || bar.photoAttribution;
+  // Index-aligned with the carousel ('' = unknown author). Bars that went
+  // through the multi ingest must NOT fall back to the legacy field — it
+  // can hold a stale author from an older single-photo ingest.
+  const heroAttribution = bar.photoAttributions
+    ? bar.photoAttributions[heroIdx] || null
+    : bar.photoAttribution;
   const review = bar.reviews?.[0];
 
   return (
@@ -58,12 +65,18 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={photos[0]}
+              src={photos[heroIdx]}
               alt=""
               data-testid="bar-visual"
-              loading="lazy"
+              // Rank 1's hero is the likely LCP element — eager, like the
+              // lightbox carousel's first photo.
+              loading={rank === 1 ? 'eager' : 'lazy'}
               className="w-full aspect-[16/10] object-cover"
-              onError={() => setHeroFailed(true)}
+              onError={() =>
+                heroIdx + 1 < photos.length
+                  ? setHeroIdx(heroIdx + 1)
+                  : setHeroFailed(true)
+              }
             />
             <span
               aria-hidden="true"
@@ -98,9 +111,11 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
               type="button"
               onClick={() => setLightboxOpen(true)}
               aria-label={`See photos and hours for ${bar.name}`}
-              className="shrink-0 touch-manipulation rounded-2xl focus:outline-none focus:ring-2 focus:ring-accent"
+              className="shrink-0 touch-manipulation rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <BarVisualTile bar={bar} size={56} />
+              {/* photoDisabled: the hero already exhausted every photo URL —
+                  don't re-request a known-broken file. */}
+              <BarVisualTile bar={bar} size={56} photoDisabled={heroFailed} />
             </button>
             <div className="flex-1 min-w-0 flex flex-col gap-1">
               <div className="flex items-baseline justify-between gap-3">
@@ -119,9 +134,11 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
             </div>
           </div>
         )}
-        {showHero && heroAttribution ? (
+        {showHero ? (
+          // Attribution renders whenever the photo does (Google policy);
+          // unknown author still credits the source.
           <p className="text-[10px] text-muted leading-tight">
-            Photo: {heroAttribution} · Google
+            {heroAttribution ? `Photo: ${heroAttribution} · Google` : 'Photo · Google'}
           </p>
         ) : null}
         <p className="font-display text-accent text-3xl">{lead.text}</p>
