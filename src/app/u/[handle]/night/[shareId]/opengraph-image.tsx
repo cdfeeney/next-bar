@@ -2,6 +2,8 @@ import { ImageResponse } from 'next/og';
 // SLIM import only (edge 1MB limit — the PR #10 deploy failure): the full
 // catalog drags the Places sidecar into this bundle. See catalog.slim.ts.
 import { getBarCard } from '@/lib/catalog.slim';
+// Type-only supabase import inside — safe for the edge bundle.
+import { isShareToken } from '@/lib/nights.server';
 
 export const runtime = 'edge';
 export const alt = 'A night out — Next Bar';
@@ -25,7 +27,8 @@ async function loadNight(token: string): Promise<NightRow | null> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
-  if (!/^[0-9a-f-]{36}$/i.test(token)) return null;
+  // The SAME canonical gate as the page path (review LOW: no drift).
+  if (!isShareToken(token)) return null;
   try {
     const res = await fetch(`${url}/rest/v1/rpc/get_shared_night`, {
       method: 'POST',
@@ -61,7 +64,17 @@ export default async function SharedNightImage({
 }: {
   params: { handle: string; shareId: string };
 }) {
-  const night = await loadNight(decodeURIComponent(params.shareId));
+  let night = await loadNight(decodeURIComponent(params.shareId));
+  // Handle-spoof guard, mirroring page.tsx (review MED): a rewritten
+  // handle must not unfurl someone else's night under a claimed URL —
+  // mismatches fall back to the brand card exactly like not-found.
+  if (
+    night &&
+    night.handle.toLowerCase() !==
+      decodeURIComponent(params.handle).toLowerCase()
+  ) {
+    night = null;
+  }
   const who = night
     ? (night.display_name?.trim() || `@${night.handle}`)
     : 'A night out';

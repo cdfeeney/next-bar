@@ -56,6 +56,10 @@ export default function SharedNightPage({
   const auth = useAuth();
   const { isFollowing, toggleFollow } = useFollows();
   const [state, setState] = useState<NightState>({ kind: 'loading' });
+  // Decode once; every use below (fetch, spoof check, share-onward link)
+  // works from the same decoded values (review LOW).
+  const shareId = decodeURIComponent(params.shareId);
+  const urlHandle = decodeURIComponent(params.handle);
 
   useEffect(() => {
     const supabase = getBrowserSupabase();
@@ -65,18 +69,11 @@ export default function SharedNightPage({
     }
     let cancelled = false;
     void (async () => {
-      const night = await fetchSharedNight(
-        supabase,
-        decodeURIComponent(params.shareId),
-      );
+      const night = await fetchSharedNight(supabase, shareId);
       if (cancelled) return;
       // URL-handle honesty: the payload's handle is authoritative; a link
       // rewritten to someone else's handle reads as gone, never as theirs.
-      if (
-        night &&
-        night.handle.toLowerCase() !==
-          decodeURIComponent(params.handle).toLowerCase()
-      ) {
+      if (night && night.handle.toLowerCase() !== urlHandle.toLowerCase()) {
         setState({ kind: 'gone' });
         return;
       }
@@ -85,7 +82,7 @@ export default function SharedNightPage({
     return () => {
       cancelled = true;
     };
-  }, [params.handle, params.shareId]);
+  }, [shareId, urlHandle]);
 
   if (state.kind === 'loading') {
     return (
@@ -167,7 +164,7 @@ export default function SharedNightPage({
               </Link>
             )}
             <ShareButton
-              path={buildNightPath(night.handle, params.shareId)}
+              path={buildNightPath(night.handle, shareId)}
               text={shareNightText(night.handle, night.displayName, bars.length)}
               label="Share"
               ariaLabel={`Share ${who}'s night`}
