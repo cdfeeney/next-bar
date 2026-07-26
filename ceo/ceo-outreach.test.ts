@@ -57,6 +57,7 @@ const state = {
 
 const POSTAL = '123 Somewhere St, Brooklyn NY 11211';
 const OPT_OUT = 'Reply STOP and I will never write again.';
+const DISCLOSURE = 'This is a commercial message about a product I built.';
 
 function draft(overrides: Record<string, unknown> = {}) {
   const base = {
@@ -65,6 +66,7 @@ function draft(overrides: Record<string, unknown> = {}) {
     sender: { name: 'Connor', email: 'connor@nextbar.example' },
     postal_address: POSTAL,
     opt_out: OPT_OUT,
+    commercial_disclosure: DISCLOSURE,
     metrics_cited: [],
     ...overrides,
   };
@@ -73,7 +75,7 @@ function draft(overrides: Record<string, unknown> = {}) {
     ...base,
     body:
       (overrides.body as string) ??
-      `Hi — I run a small bar-finder in NYC and your hours are out of date.\n\n${base.postal_address}\n${base.opt_out}`,
+      `Hi — I run a small bar-finder in NYC and your hours are out of date.\n\n${base.commercial_disclosure}\n${base.postal_address}\n${base.opt_out}`,
   };
 }
 
@@ -143,16 +145,22 @@ describe('draft compliance', () => {
     ['no reply-to address', { sender: { name: 'Connor', email: 'not-an-email' } }],
     ['no postal address', { postal_address: '' }],
     ['no opt-out', { opt_out: '' }],
+    // "The law makes no exception for business-to-business email" — FTC CAN-SPAM compliance guide.
+    ['no commercial disclosure', { commercial_disclosure: '' }],
   ])('refuses a draft with %s', (_label, overrides) => {
     expectHardAbort(() => assertDraftCompliant(draft(overrides), { recipients, state }));
   });
+
+  // Each of these three omits exactly one required line from the body and keeps the other two, so
+  // the test fails for its own reason rather than borrowing a neighbour's.
+  const bodyWith = (...parts: string[]) => ['Hi — your hours are wrong.', ...parts].join('\n');
 
   it('refuses a draft whose opt-out never appears in the body', () => {
     // A structural check that stops at the metadata field is satisfied by a template that drops
     // the line, and the recipient is the one who finds out.
     expectHardAbort(() =>
       assertDraftCompliant(
-        draft({ body: 'Hi — your hours are wrong.\n' + POSTAL }),
+        draft({ body: bodyWith(DISCLOSURE, POSTAL) }),
         { recipients, state },
       ),
     );
@@ -161,7 +169,18 @@ describe('draft compliance', () => {
   it('refuses a draft whose postal address never appears in the body', () => {
     expectHardAbort(() =>
       assertDraftCompliant(
-        draft({ body: 'Hi — your hours are wrong.\n' + OPT_OUT }),
+        draft({ body: bodyWith(DISCLOSURE, OPT_OUT) }),
+        { recipients, state },
+      ),
+    );
+  });
+
+  it('refuses a draft that never tells the recipient it is a commercial message', () => {
+    // "The law makes no exception for business-to-business email" — FTC CAN-SPAM compliance guide.
+    // A friendly note to a bar owner about a product is an advertisement, whatever it feels like.
+    expectHardAbort(() =>
+      assertDraftCompliant(
+        draft({ body: bodyWith(POSTAL, OPT_OUT) }),
         { recipients, state },
       ),
     );

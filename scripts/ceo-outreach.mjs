@@ -206,6 +206,19 @@ export function assertDraftCompliant(draft, { recipients, state }, index = 0) {
   if (!nonEmptyString(draft.opt_out)) {
     abort(`${where}.opt_out is required — a recipient must be told how to make this stop.`);
   }
+  // The element that is easiest to forget because it feels rude. The FTC's compliance guide is
+  // explicit that a commercial message must identify itself as one, and equally explicit that
+  // "the law makes no exception for business-to-business email" — so a friendly note to a bar
+  // owner about a product is an advertisement, whatever it feels like to write.
+  if (!nonEmptyString(draft.commercial_disclosure)) {
+    abort(
+      `${where}.commercial_disclosure is required: an unsolicited commercial email must say that ` +
+        'it is one. B2B is not exempt.',
+    );
+  }
+  if (!draft.body.includes(draft.commercial_disclosure)) {
+    abort(`${where}.commercial_disclosure does not appear in the body the recipient will read.`);
+  }
 
   // In the body, not merely in a field. An opt-out the recipient never sees is not an opt-out,
   // and a structural check that stops at the metadata is satisfied by a template that drops it.
