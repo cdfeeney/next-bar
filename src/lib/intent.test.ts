@@ -5,6 +5,7 @@ import {
   loadIntent,
   nightOf,
   setIntent,
+  wasOutLastNight,
 } from '@/lib/intent';
 
 const KEY = 'next-bar:intent:v1';
@@ -87,5 +88,96 @@ describe('intent storage', () => {
       JSON.stringify({ status: 'raving', setAt: FRI_10PM }),
     );
     expect(loadIntent()).toBeNull();
+  });
+});
+
+describe('wasOutLastNight (E2.4 nightPhase input)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  const SAT_9AM = new Date('2026-07-25T09:00:00');
+  const SUN_9AM = new Date('2026-07-26T09:00:00');
+
+  it('true the morning after a committed night (here / going)', () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'here', setAt: FRI_10PM }),
+    );
+    expect(wasOutLastNight(SAT_9AM)).toBe(true);
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'going', setAt: FRI_10PM }),
+    );
+    expect(wasOutLastNight(SAT_9AM)).toBe(true);
+  });
+
+  it("small-hours intents count toward the night they belong to", () => {
+    // Set at Sat 1am = Friday's night — Saturday morning is "the morning after".
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'here', setAt: SAT_1AM }),
+    );
+    expect(wasOutLastNight(SAT_9AM)).toBe(true);
+  });
+
+  it("'maybe' is not a night out", () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'maybe', setAt: FRI_10PM }),
+    );
+    expect(wasOutLastNight(SAT_9AM)).toBe(false);
+  });
+
+  it('false when the intent is older than last night, unset, or corrupt', () => {
+    expect(wasOutLastNight(SAT_9AM)).toBe(false);
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'here', setAt: FRI_10PM }),
+    );
+    expect(wasOutLastNight(SUN_9AM)).toBe(false); // two mornings later
+    window.localStorage.setItem(KEY, '{not json');
+    expect(wasOutLastNight(SAT_9AM)).toBe(false);
+  });
+
+  it('crosses month and year boundaries with calendar math', () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'here', setAt: '2026-07-31T23:00:00' }),
+    );
+    expect(wasOutLastNight(new Date('2026-08-01T09:00:00'))).toBe(true);
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'here', setAt: '2026-12-31T23:00:00' }),
+    );
+    expect(wasOutLastNight(new Date('2027-01-01T09:00:00'))).toBe(true);
+  });
+
+  // DST regression (review finding): the 24h-in-ms subtraction this
+  // replaced lands an hour early on the spring-forward Sunday and crosses
+  // the 5am rollover for the 5:00–5:59am window. Only reproducible on a
+  // runner whose local zone observes US DST, so gate on that.
+  const observesUsDst =
+    new Date('2026-03-08T05:30:00').getTime() -
+      new Date('2026-03-07T05:30:00').getTime() ===
+    23 * 60 * 60 * 1000;
+  it.runIf(observesUsDst)(
+    'spring-forward Sunday 5am hour still sees last night (DST regression)',
+    () => {
+      window.localStorage.setItem(
+        KEY,
+        JSON.stringify({ status: 'here', setAt: '2026-03-07T23:00:00' }),
+      );
+      expect(wasOutLastNight(new Date('2026-03-08T05:30:00'))).toBe(true);
+    },
+  );
+
+  it("tonight's own intent does not read as LAST night", () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'here', setAt: FRI_10PM }),
+    );
+    // Still Friday night (1am): the intent is TONIGHT's, not last night's.
+    expect(wasOutLastNight(new Date(SAT_1AM))).toBe(false);
   });
 });
