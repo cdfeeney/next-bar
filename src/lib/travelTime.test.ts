@@ -39,15 +39,17 @@ describe('leadCopy', () => {
     expect(result).toEqual({ kind: 'walk', minutes: 10, text: '~10 min walk' });
   });
 
-  it('returns walk result at exactly 1.0 mile (boundary inclusive on walk side)', () => {
-    const result = leadCopy(1.0);
+  it('returns walk result at exactly 1.5 miles (boundary = RADIUS_WALK, inclusive on walk side)', () => {
+    // E3.2: the boundary derives from RADIUS_WALK so lead copy can never
+    // contradict the "Walkable" chip that surfaced the bar.
+    const result = leadCopy(1.5);
     expect(result.kind).toBe('walk');
-    expect((result as { kind: 'walk'; minutes: number; text: string }).minutes).toBe(20);
-    expect(result.text).toBe('~20 min walk');
+    expect((result as { kind: 'walk'; minutes: number; text: string }).minutes).toBe(30);
+    expect(result.text).toBe('~30 min walk');
   });
 
-  it('flips to uber at 1.01 miles', () => {
-    const result = leadCopy(1.01);
+  it('flips to uber at 1.51 miles', () => {
+    const result = leadCopy(1.51);
     expect(result.kind).toBe('uber');
     expect(result.text).toContain('min by Uber');
   });

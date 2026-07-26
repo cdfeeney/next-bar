@@ -73,6 +73,10 @@ export default function ResultsView({
   // otherwise change the card list between SSR and hydration — same
   // rationale as OpenNowBadge computing after mount), then re-checked
   // each minute so a long-open results page drops bars as they close.
+  // ACCEPTED TRADEOFF (review): the first committed frame renders the
+  // unfiltered pool, so a closed bar can flash for one paint before the
+  // effect narrows it — the same hydration-safe flash OpenNowBadge
+  // already accepts for its pill.
   const [filterNow, setFilterNow] = useState<Date | null>(null);
   useEffect(() => {
     if (!hideClosedNow) {
