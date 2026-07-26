@@ -43,6 +43,26 @@ export function shareProfileText(
 }
 
 /**
+ * E4.4: the shared-night link. The shareId is the bearer token minted by
+ * share_night — the handle in the path is identity/display, the token is
+ * the authorization (DeepSeek review: never make handle+date the key).
+ */
+export function buildNightPath(handle: string, shareId: string): string {
+  return `/u/${encodeURIComponent(handle)}/night/${encodeURIComponent(shareId)}`;
+}
+
+/** Share-sheet text for a night. Leads with the night, names the person. */
+export function shareNightText(
+  handle: string,
+  displayName: string | null | undefined,
+  stops: number,
+): string {
+  const who = displayName?.trim() ? displayName.trim() : `@${handle}`;
+  const route = stops === 1 ? 'one stop' : `${stops} stops`;
+  return `${who}'s night out — ${route}. On Next Bar.`;
+}
+
+/**
  * True when a navigator.share rejection means we must NOT fall back to the
  * clipboard. Dismiss ≠ consent: silently writing a link to someone's
  * clipboard after they backed out of the share sheet is a privacy surprise,
