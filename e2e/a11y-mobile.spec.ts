@@ -34,23 +34,24 @@ test.describe('Mobile a11y — home page', () => {
       page.getByRole('heading', { name: /Where are you\?/i }),
     ).toBeVisible();
 
-    const buttons = page.getByRole('button');
-    const count = await buttons.count();
-
-    for (let i = 0; i < count; i++) {
-      const btn = buttons.nth(i);
-
-      const isVisible = await btn.isVisible();
-      if (!isVisible) continue;
-
-      const box = await btn.boundingBox();
-      if (box === null) continue;
-      if (box.height === 0) continue;
-
-      expect(
-        box.height,
-        `Button "${await btn.textContent()}" has height ${box.height}px — expected ≥ 44px`,
-      ).toBeGreaterThanOrEqual(44);
-    }
+    // ONE in-page pass instead of per-button Playwright round-trips: the
+    // home BarPicker lists the whole catalog (400+ buttons at 406 bars),
+    // and serial boundingBox calls blew the test budget as the catalog
+    // grew (night-3 M5). Same coverage — every rendered button — O(1)
+    // protocol round trips at any catalog size.
+    const offenders = await page.evaluate(() => {
+      const bad: string[] = [];
+      for (const el of Array.from(document.querySelectorAll('button'))) {
+        const rect = el.getBoundingClientRect();
+        if (rect.height === 0 || rect.width === 0) continue; // hidden
+        if (rect.height < 44) {
+          bad.push(
+            `"${(el.textContent ?? '').trim().slice(0, 40)}" height ${rect.height}px`,
+          );
+        }
+      }
+      return bad;
+    });
+    expect(offenders, 'buttons under 44px').toEqual([]);
   });
 });
