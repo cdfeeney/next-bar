@@ -41,8 +41,10 @@ export default function PrivacyPage(): JSX.Element {
           <ul className="list-disc pl-5 space-y-2">
             <li>
               <strong>On your device only (signed out):</strong> vibe-quiz
-              answers, bar ratings and comparisons, saved lists, and app
-              preferences — stored in your browser&apos;s local storage.
+              answers, bar ratings and comparisons, saved lists, app
+              preferences, and your night log (the bars you tell us
+              you&apos;re at, so we can recap your night) — stored in your
+              browser&apos;s local storage and never sent to us.
             </li>
             <li>
               <strong>If you create an account:</strong> your email address,
