@@ -44,6 +44,12 @@ function writeLock(lockPath, holder, { exclusive }) {
  *
  * Returns a result rather than throwing, because "someone else is running a cycle" is an ordinary
  * outcome the CLI should report calmly, not a crash.
+ *
+ * `now` is annotated optional so the signature stays callable, and required in practice by
+ * assertNow — a lock with no clock can never go stale, so it would wedge the cycle forever.
+ *
+ * @param {string} lockPath
+ * @param {{ now?: number, pid?: number, host?: string }} [options]
  */
 export function acquireCycleLock(lockPath, { now, pid = process.pid, host = 'unknown' } = {}) {
   assertNow(now);
@@ -81,16 +87,35 @@ export function acquireCycleLock(lockPath, { now, pid = process.pid, host = 'unk
 
   const age = now - (Number.isFinite(existing?.at) ? existing.at : now);
   if (age > STALE_AFTER_MS) {
-    // Loud on purpose: breaking someone else's lock is a thing the operator should see happen.
-    writeLock(lockPath, holder, { exclusive: false });
-    return {
-      result: LOCK_RESULTS.BROKE_STALE,
-      ok: true,
-      holder,
-      detail:
-        `Broke a stale lock: pid ${existing?.pid ?? '?'} on ${existing?.host ?? '?'} held it for ` +
-        `${Math.round(age / 60000)} minutes (stale after ${STALE_AFTER_MS / 60000}).`,
-    };
+    // Break it by REMOVING and re-creating exclusively, never by overwriting.
+    //
+    // Review finding (DeepSeek): a plain overwrite here is the one path where two terminals can
+    // both win. Both read the same stale lock, both decide to break it, both write, and both
+    // return ok — which is precisely the interleaved-cycle outcome this file exists to prevent,
+    // and it happens exactly when the system has been left alone long enough for two people to
+    // come back to it. With 'wx' the filesystem picks one winner; the loser falls through to the
+    // ordinary HELD path below and sees the fresh lock.
+    rmSync(lockPath, { force: true });
+    try {
+      writeLock(lockPath, holder, { exclusive: true });
+      // Loud on purpose: breaking someone else's lock is a thing the operator should see happen.
+      return {
+        result: LOCK_RESULTS.BROKE_STALE,
+        ok: true,
+        holder,
+        detail:
+          `Broke a stale lock: pid ${existing?.pid ?? '?'} on ${existing?.host ?? '?'} held it for ` +
+          `${Math.round(age / 60000)} minutes (stale after ${STALE_AFTER_MS / 60000}).`,
+      };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      return {
+        result: LOCK_RESULTS.HELD,
+        ok: false,
+        holder: null,
+        detail: 'Lost the race to break a stale lock; another cycle took it first. Not running.',
+      };
+    }
   }
 
   return {

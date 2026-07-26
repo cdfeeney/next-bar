@@ -58,6 +58,23 @@ describe('single-writer lock', () => {
     expect(later.detail).toMatch(/stale/i);
   });
 
+  it('lets only one of two terminals break the same stale lock', () => {
+    // Review finding (DeepSeek). The break used to overwrite, so two terminals reading the same
+    // stale lock both "acquired" it — the interleaved-cycle outcome this file exists to prevent,
+    // arriving exactly when the system has been left alone long enough for two people to return
+    // to it. Exclusive create makes the filesystem pick the winner.
+    acquireCycleLock(lockPath, { now: NOW, pid: 111, host: 'a' });
+    const past = NOW + STALE_AFTER_MS + 1;
+
+    const first = acquireCycleLock(lockPath, { now: past, pid: 222, host: 'b' });
+    const second = acquireCycleLock(lockPath, { now: past, pid: 333, host: 'c' });
+
+    expect(first.result).toBe(LOCK_RESULTS.BROKE_STALE);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    expect(JSON.parse(readFileSync(lockPath, 'utf8')).pid).toBe(222);
+  });
+
   it('does not break a lock one millisecond before it goes stale', () => {
     acquireCycleLock(lockPath, { now: NOW, pid: 111, host: 'a' });
     const later = acquireCycleLock(lockPath, { now: NOW + STALE_AFTER_MS, pid: 222, host: 'b' });

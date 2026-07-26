@@ -16,6 +16,7 @@ import { VERDICTS, auditKill } from '../scripts/ceo-board.mjs';
  * global total).
  */
 function state(overrides: Record<string, unknown> = {}) {
+  const { metrics: metricOverrides, ...rest } = overrides;
   const metrics = {
     wau: 120,
     max_neighborhood_wau: 60,
@@ -25,7 +26,7 @@ function state(overrides: Record<string, unknown> = {}) {
     user_interviews_this_week: 1,
     revenue: 0,
     operator_hours_available: 8,
-    ...((overrides.metrics as Record<string, unknown>) ?? {}),
+    ...((metricOverrides as Record<string, unknown>) ?? {}),
   };
 
   return {
@@ -51,8 +52,7 @@ function state(overrides: Record<string, unknown> = {}) {
     },
     history: [],
     approval_queue: [],
-    ...overrides,
-    metrics,
+    ...rest,
   };
 }
 
@@ -159,6 +159,40 @@ describe('kill audit — before the deadline', () => {
 
     expect(result.verdict).toBe(VERDICTS.CONTINUE);
     expect(result.due).toBe(false);
+  });
+});
+
+describe('kill audit — hostile numbers', () => {
+  // Raised in review as a way to slip past the criterion: NaN compares false against every
+  // threshold, so a naive `value < threshold` would read NaN as "passing". numberOrNull uses
+  // Number.isFinite, so NaN lands in the unmeasured bucket and FAILS, which is what an unreadable
+  // number should do at the deadline.
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['a numeric string', '10'],
+    ['undefined', undefined],
+  ])('treats %s as unmeasured, not as passing', (_label, value) => {
+    const result = auditKill(
+      state({ metrics: { max_neighborhood_wau: value, self_maintaining_venues: 2 } }),
+      { at: AFTER },
+    );
+
+    expect(result.sides.users.measurable).toBe(false);
+    expect(result.sides.users.failed).toBe(true);
+    expect(result.verdict).toBe(VERDICTS.KILL);
+  });
+
+  it('does not kill on an unreadable venue count alone', () => {
+    // Defensive only — state.schema requires self_maintaining_venues to be a non-negative integer,
+    // so measure() aborts before an unreadable one could reach the board. If it ever does, the
+    // conservative answer is RESCOPE: an unread number is not evidence the venue side failed.
+    const result = auditKill(
+      state({ metrics: { max_neighborhood_wau: 80, self_maintaining_venues: null } }),
+      { at: AFTER },
+    );
+
+    expect(result.verdict).toBe(VERDICTS.RESCOPE);
   });
 });
 

@@ -29,6 +29,9 @@ const DECEPTIVE_SUBJECT_PREFIX = /^\s*(re|fw|fwd)\s*:/i;
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Everything a metric claim may carry. Anything else is a smuggled adjective. */
+const CLAIM_KEYS = ['metric', 'value'];
+
 export class CeoOutreachAbort extends Error {
   constructor(message) {
     super(message);
@@ -154,6 +157,14 @@ function assertClaimsAreMeasured(draft, state, where) {
     const at = `${where}.metrics_cited[${index}]`;
     if (!isPlainObject(claim) || !nonEmptyString(claim.metric)) {
       abort(`${at}.metric must name a metric.`);
+    }
+    // Closed envelope, same discipline as the measurement envelope. Review finding (DeepSeek): an
+    // open shape lets a checked number arrive wearing an unchecked adjective — `{metric, value,
+    // interpretation: "growing fast"}` passes a validator that only ever looks at two fields.
+    for (const key of Object.keys(claim)) {
+      if (!CLAIM_KEYS.includes(key)) {
+        abort(`${at} carries unknown field ${JSON.stringify(key)}; permitted: [${CLAIM_KEYS.join(', ')}].`);
+      }
     }
     if (!Object.hasOwn(state?.metrics ?? {}, claim.metric)) {
       abort(`${at} cites ${JSON.stringify(claim.metric)}, which is not a measured metric.`);

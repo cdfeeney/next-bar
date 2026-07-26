@@ -214,6 +214,17 @@ describe('draft compliance', () => {
     );
   });
 
+  it('refuses a claim carrying anything beyond the metric and its value', () => {
+    // Review finding (DeepSeek): an open shape lets a checked number arrive wearing an unchecked
+    // adjective, and the adjective is the part that misleads.
+    expectHardAbort(() =>
+      assertDraftCompliant(
+        draft({ metrics_cited: [{ metric: 'claimed_venues', value: 4, interpretation: 'growing fast!' }] }),
+        { recipients, state },
+      ),
+    );
+  });
+
   it('accepts a metric quoted at the value that was actually measured', () => {
     expect(() =>
       assertDraftCompliant(
