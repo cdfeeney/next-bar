@@ -36,7 +36,13 @@ export function composeRecap(
   if (bars.length === 0) return null;
 
   const ratedIds = new Set(night.ratings.map((r) => r.barId));
-  const lovedRating = night.ratings.find((r) => r.rating === 'loved');
+  // The Loved pick must be part of the VISITED route (review HIGH): a
+  // rating tapped on some results-list bar you never went to would
+  // otherwise headline a bar that appears nowhere in the card.
+  const routeIds = new Set(bars.map((b) => b.id));
+  const lovedRating = night.ratings.find(
+    (r) => r.rating === 'loved' && routeIds.has(r.barId),
+  );
   const loved = lovedRating ? (byId.get(lovedRating.barId) ?? null) : null;
 
   const unratedBarIds = Array.from(

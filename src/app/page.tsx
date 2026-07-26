@@ -12,6 +12,7 @@ import { loadPhaseOverride, savePhaseOverride } from '@/lib/phaseOverride';
 import { assembleNight, lastNightKey, loadNightVisits } from '@/lib/nightLog';
 import { composeRecap, type Recap } from '@/lib/recap';
 import { useBars } from '@/lib/useBars';
+import { useNightRefresh } from '@/hooks/useIntent';
 
 export default function HomePage() {
   // MED-26: `/` never prompted the quiz — profile-less visitors got the
@@ -31,6 +32,10 @@ export default function HomePage() {
   // storage listener keeps the phase honest when intent changes in
   // another tab.
   const [phase, setPhase] = useState<NightPhase | null>(null);
+  // The recap composes for THIS key — state (not read at render) so a
+  // rollover in a long-lived tab re-keys the effect even when the phase
+  // string lands on 'recap' again (review HIGH: same-value deps bail).
+  const [recapNightKey, setRecapNightKey] = useState<string | null>(null);
   const computePhase = useCallback(() => {
     const now = new Date();
     setPhase(
@@ -45,25 +50,28 @@ export default function HomePage() {
         override: loadPhaseOverride(now),
       }),
     );
+    setRecapNightKey(lastNightKey(now));
   }, []);
+  // Mount + storage events + the shared "clock moved" signal — without
+  // the night refresh an idle tab never re-derives across the 6am
+  // rollover (the same F5 class useNightRefresh exists for).
+  useNightRefresh(computePhase);
   useEffect(() => {
-    computePhase();
     window.addEventListener('storage', computePhase);
     return () => window.removeEventListener('storage', computePhase);
   }, [computePhase]);
 
-  // E4.2/E4.5: last night's recap, composed with zero input. Mount-gated
-  // (storage) and recomputed with the phase. Null → the plain
-  // rank-last-night card keeps the slot.
+  // E4.2/E4.5: last night's recap, composed with zero input. Null → the
+  // plain rank-last-night card keeps the slot.
   const bars = useBars();
   const [recap, setRecap] = useState<Recap | null>(null);
   useEffect(() => {
-    if (phase !== 'recap') {
+    if (phase !== 'recap' || !recapNightKey) {
       setRecap(null);
       return;
     }
-    setRecap(composeRecap(assembleNight(lastNightKey()), bars));
-  }, [phase, bars]);
+    setRecap(composeRecap(assembleNight(recapNightKey), bars));
+  }, [phase, recapNightKey, bars]);
 
   const selectPhase = (p: NightPhase) => {
     savePhaseOverride(p);

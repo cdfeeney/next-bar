@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
+import { useState } from 'react';
 import type { Recap } from '@/lib/recap';
 import { barImageUrls } from '@/lib/barVisual';
 import BarVisualTile from '@/components/BarVisualTile';
@@ -22,7 +23,10 @@ type RecapCardProps = {
  */
 export default function RecapCard({ recap }: RecapCardProps) {
   const heroBar = recap.loved ?? recap.bars[0];
-  const heroPhoto = barImageUrls(heroBar)[0] ?? null;
+  // A broken photo degrades to the text header (ResultCard's heroFailed
+  // pattern) — never a broken-image glyph under the headline.
+  const [heroFailed, setHeroFailed] = useState(false);
+  const heroPhoto = heroFailed ? null : (barImageUrls(heroBar)[0] ?? null);
   const stops = recap.bars.length;
 
   return (
@@ -38,6 +42,7 @@ export default function RecapCard({ recap }: RecapCardProps) {
             alt=""
             loading="eager"
             className="w-full aspect-[16/9] object-cover"
+            onError={() => setHeroFailed(true)}
           />
           <span
             aria-hidden="true"
@@ -75,7 +80,8 @@ export default function RecapCard({ recap }: RecapCardProps) {
             <span className="flex-1 min-w-0 truncate font-display text-sm">
               {bar.name}
               {recap.loved?.id === bar.id ? (
-                <span className="text-accent"> ♥</span>
+                // Decorative — the headline already says "you loved X".
+                <span className="text-accent" aria-hidden="true"> ♥</span>
               ) : null}
             </span>
             <RatingBadge barId={bar.id} />

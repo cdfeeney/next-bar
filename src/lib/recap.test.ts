@@ -78,6 +78,21 @@ describe('composeRecap (E4.2)', () => {
     expect(recap!.unratedBarIds).toEqual(['mister-paradise']);
   });
 
+  it('a Loved rating for a bar NOT in the route never headlines (review HIGH)', () => {
+    // Rated sisters from a results list that night but never went.
+    const recap = composeRecap(
+      night(['attaboy'], [rating('sisters', 'loved')]),
+      catalog,
+    );
+    expect(recap!.loved).toBeNull();
+    // A loved rating for a VISITED bar still wins over the stray one.
+    const recap2 = composeRecap(
+      night(['attaboy'], [rating('sisters', 'loved'), rating('attaboy', 'loved')]),
+      catalog,
+    );
+    expect(recap2!.loved?.id).toBe('attaboy');
+  });
+
   it('no Loved rating that night → loved is null', () => {
     const recap = composeRecap(
       night(['attaboy'], [rating('attaboy', 'liked')]),
