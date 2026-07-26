@@ -72,17 +72,18 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
       </button>
 
       <div className="flex-1 min-w-0 flex flex-col gap-1">
-        <div className="flex items-baseline justify-between gap-2">
-          <h3 className="font-display text-base leading-tight truncate">
-            {rank}. {bar.name}
-          </h3>
-          <span className="font-display text-accent text-base shrink-0">
-            {lead.text}
+        {/* The NAME owns its full line (operator: "I can't see the name
+            of the bars") — it may wrap to two lines; nothing competes
+            with it. Walk time leads the meta line instead. */}
+        <h3 className="font-display text-base leading-tight">
+          {rank}. {bar.name}
+        </h3>
+        <p className="text-xs truncate">
+          <span className="font-display text-accent">{lead.text}</span>
+          <span className="text-muted">
+            {' '}· {bar.neighborhood} · {'$'.repeat(bar.priceTier)} · Vibe
+            match {badge.num}/{badge.den}
           </span>
-        </div>
-        <p className="text-muted text-xs truncate">
-          {bar.neighborhood} · {'$'.repeat(bar.priceTier)} · Vibe match{' '}
-          {badge.num}/{badge.den}
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           <OpenNowBadge bar={bar} />
