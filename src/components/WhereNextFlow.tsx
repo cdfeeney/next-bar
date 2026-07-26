@@ -7,6 +7,7 @@ import { deriveArchetype } from '@/lib/quiz';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { loadProfile } from '@/lib/storedProfile';
+import { loadNightVibe, saveNightVibe } from '@/lib/vibeNightCache';
 import { RADIUS_WALK } from '@/lib/constants';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -132,7 +133,16 @@ export default function WhereNextFlow() {
       geo.request();
     }
     setSelectedRadius(DEFAULT_RADIUS);
-    setStep({ kind: 'results', seedBar, tags: seedBar.tags });
+    // E2.2 (locked decision 3): the vibe belongs to the NIGHT — a pick
+    // applied earlier tonight pre-fills every re-search until the 6am
+    // rollover. It never locks: the tweak surface always allows changing
+    // it, and a fresh night falls back to the seed bar's own tags.
+    const nightVibe = loadNightVibe();
+    setStep({
+      kind: 'results',
+      seedBar,
+      tags: nightVibe ?? seedBar.tags,
+    });
   };
 
   const handlePickBar = (bar: Bar) => startResultsFrom(bar);
@@ -149,6 +159,9 @@ export default function WhereNextFlow() {
 
   const handleApplyTweak = (nextTags: VibeTag[]) => {
     if (step.kind !== 'tweakVibe') return;
+    // An APPLIED tweak is tonight's vibe pick — cache it for re-searches
+    // (E2.2 night cache). Cancel deliberately does not save.
+    saveNightVibe(nextTags);
     setStep({ kind: 'results', seedBar: step.seedBar, tags: nextTags });
   };
 
@@ -375,7 +388,10 @@ export default function WhereNextFlow() {
         userCoords={userCoordsForView}
         highlightIds={[step.seedBar.id]}
       />
-      <div className="px-6 py-8 text-center">
+      {/* pb-28 clears the fixed bottom nav — without it the escape
+          route is visually present but untappable (R5; caught by e2e
+          pointer-interception on Pixel). */}
+      <div className="px-6 pt-8 pb-28 text-center">
         <button
           type="button"
           onClick={() => setStep({ kind: 'pickBar' })}
