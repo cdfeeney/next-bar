@@ -25,6 +25,19 @@
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * A real day, not merely a well-shaped string.
+ *
+ * Review finding: shape-only validation let `2026-99-99` into a lexicographic deadline comparison,
+ * where it sorts after every real date — so one typo either fires the board years early or postpones
+ * it forever, silently. Round-tripping through Date catches the impossible days that regex cannot.
+ */
+export function isCalendarDate(value) {
+  if (typeof value !== 'string' || !DATE_PATTERN.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/**
  * The four things the board may say. Nothing else — a verdict the operator has to interpret is a
  * verdict the operator gets to interpret favourably.
  */
@@ -42,10 +55,19 @@ export const USERS_METRIC = 'max_neighborhood_wau';
 export const VENUES_METRIC = 'self_maintaining_venues';
 
 function assertAuditDate(at) {
-  if (typeof at !== 'string' || !DATE_PATTERN.test(at)) {
+  if (!isCalendarDate(at)) {
     throw new TypeError(
-      `[ceo-board] audit date must be a YYYY-MM-DD string; got ${JSON.stringify(at ?? null)}. ` +
+      `[ceo-board] audit date must be a real YYYY-MM-DD calendar date; got ${JSON.stringify(at ?? null)}. ` +
         'An audit with no date is an audit whose deadline never arrives.',
+    );
+  }
+}
+
+function assertDeadline(deadline) {
+  if (!isCalendarDate(deadline)) {
+    throw new TypeError(
+      `[ceo-board] kill_criterion.deadline must be a real YYYY-MM-DD calendar date; got ` +
+        `${JSON.stringify(deadline ?? null)}. A deadline that cannot be compared is not a deadline.`,
     );
   }
 }
@@ -81,6 +103,7 @@ export function auditKill(state, { at } = {}) {
   assertAuditDate(at);
 
   const deadline = state?.kill_criterion?.deadline ?? null;
+  assertDeadline(deadline);
   const metrics = state?.metrics ?? {};
 
   const users = judgeSide(
@@ -92,9 +115,10 @@ export function auditKill(state, { at } = {}) {
     state?.kill_criterion?.venue_threshold,
   );
 
-  // ISO dates compare correctly with >= because YYYY-MM-DD sorts lexicographically. The deadline
-  // DAY is due — a criterion that only bites the day after is a criterion with a free extra day.
-  const due = typeof deadline === 'string' && at >= deadline;
+  // ISO dates compare correctly with >= because YYYY-MM-DD sorts lexicographically — and both sides
+  // are now verified real calendar days, so nothing impossible can sort its way past the deadline.
+  // The deadline DAY is due: a criterion that only bites the day after has a free extra day in it.
+  const due = at >= deadline;
   const sides = { users, venues };
 
   if (!due) {

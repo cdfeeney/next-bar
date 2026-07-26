@@ -28,7 +28,7 @@ import {
   HALT_DIRECTIVES,
   runDetectors,
 } from './ceo-detectors.mjs';
-import { VERDICTS, auditKill } from './ceo-board.mjs';
+import { VERDICTS, auditKill, isCalendarDate } from './ceo-board.mjs';
 
 export class CeoCycleAbort extends Error {
   constructor(message) {
@@ -158,8 +158,23 @@ export function measure(state, measurement) {
     }
   }
 
-  if (typeof measurement.at !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(measurement.at)) {
-    abort(`measurement.at must be a YYYY-MM-DD string; got ${JSON.stringify(measurement.at ?? null)}.`);
+  if (!isCalendarDate(measurement.at)) {
+    abort(
+      `measurement.at must be a real YYYY-MM-DD calendar date; got ${JSON.stringify(measurement.at ?? null)}.`,
+    );
+  }
+
+  // Each logged cycle needs a measurement NEWER than the last one's. Review finding (Codex, MEDIUM):
+  // without this the discovery floor is replayable — one stale envelope carrying
+  // `user_interviews_this_week: 1` clears every future cycle forever, and the rail that is supposed to
+  // force a conversation each week instead records the same conversation each week.
+  const lastLogged = [...state.history].reverse().find((entry) => typeof entry?.measured_at === 'string');
+  if (lastLogged !== undefined && measurement.at <= lastLogged.measured_at) {
+    abort(
+      `measurement.at ${measurement.at} is not newer than the last logged cycle's ` +
+        `${lastLogged.measured_at} (cycle ${lastLogged.cycle}). Count this week's numbers; a replayed ` +
+        'envelope is not a measurement.',
+    );
   }
   if (!TRUSTED_MEASUREMENT_SOURCES.includes(measurement.source)) {
     abort(
@@ -212,6 +227,9 @@ export function assess(state, measurement) {
   return {
     cycle: state.cycle,
     at,
+    // Provenance travels into the record. A measurement whose date and source are not written down
+    // cannot be audited later, and cannot be shown to have been reused.
+    source: typeof measurement?.source === 'string' ? measurement.source : null,
     primary_metric: PRIMARY_METRIC,
     primary_value: primaryValue,
     measurable,
@@ -470,7 +488,10 @@ function selfAuditAnswer(state, assessment) {
  */
 export function writeFileAtomic(filePath, contents) {
   const temporary = `${filePath}.tmp-${process.pid}`;
-  writeFileSync(temporary, contents, 'utf8');
+  // `flush: true` fsyncs before close. Without it the rename can land while the temp file's bytes
+  // are still only in the page cache, so a power loss leaves an empty-but-renamed state.json —
+  // atomic against a concurrent reader, not against a crash (review finding, LOW).
+  writeFileSync(temporary, contents, { encoding: 'utf8', flush: true });
   renameSync(temporary, filePath);
 }
 
@@ -639,6 +660,10 @@ export function log(state, decision, extras = {}) {
     report_path: reportPath,
     primary_metric: decision.assessment.primary_metric,
     primary_value: decision.assessment.primary_value,
+    // Written by the runner from the measurement envelope, never supplied by the caller — see
+    // LOG_EXTRA_KEYS. This is what makes a replayed or forged envelope visible after the fact.
+    measured_at: decision.assessment.at,
+    measurement_source: decision.assessment.source,
   };
 
   const next = { ...structuredClone(state), history: [...state.history, entry] };
@@ -817,16 +842,30 @@ function main(argv) {
     console.error(`[ceo-cycle] ${lock.detail}`);
   }
 
+  // Release by NONCE, so a lock this process no longer owns is never deleted out from under its
+  // new holder.
+  const release = () => releaseCycleLock(lockPath, { nonce: lock.holder.nonce });
+
   // `finally` is not enough, and the first behavioural run proved it: every refusal in this file
   // goes through abort(), which calls process.exit — that unwinds nothing, so a cycle that halted
   // for a perfectly good reason left its lock behind and locked the operator out for the full
   // staleness window. An exit hook fires on the abort path too.
-  process.on('exit', () => releaseCycleLock(lockPath));
+  process.on('exit', release);
+
+  // And signals are not `exit`. Ctrl-C or a kill during a cycle used to leave the lock behind until
+  // the staleness window elapsed (review finding). Re-raising after release keeps the exit code
+  // honest about how the process actually died.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+    process.on(signal, () => {
+      release();
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    });
+  }
 
   try {
     runCommitted(options);
   } finally {
-    releaseCycleLock(lockPath);
+    release();
   }
 }
 

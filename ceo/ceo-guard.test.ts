@@ -288,3 +288,58 @@ describe('allowlist shape', () => {
     expect(ALLOWED.SPEND).toHaveLength(0);
   });
 });
+
+describe('history is append-only on the agent path', () => {
+  // Review finding (Codex, HIGH), reproduced against the previous version: history was neither
+  // protected nor item-validated, so both rails that read it could be silenced by editing it —
+  // delete an inconvenient cycle, or insert a fabricated improving primary_value.
+  const entry = (cycle: number, value: number | null = 10) => ({
+    cycle,
+    recommendation_id: 'x',
+    directive: null,
+    drafted: true,
+    shipped: false,
+    evidence: null,
+    report_path: null,
+    primary_metric: 'wau',
+    primary_value: value,
+    measured_at: `2026-07-${String(cycle).padStart(2, '0')}`,
+    measurement_source: 'manual_count',
+  });
+
+  const withHistory = (entries: unknown[]) => ({ ...structuredClone(state), history: entries });
+
+  it('allows appending exactly one cycle', () => {
+    expect(() =>
+      assertStateMutationAllowed(withHistory([entry(1)]), withHistory([entry(1), entry(2)])),
+    ).not.toThrow();
+  });
+
+  it('refuses a shrinking history', () => {
+    expectHardAbort(() =>
+      assertStateMutationAllowed(withHistory([entry(1), entry(2)]), withHistory([entry(1)])),
+    );
+  });
+
+  it('refuses a rewritten past cycle', () => {
+    // The cheap way to silence the flat detector: go back and improve a number nobody re-reads.
+    expectHardAbort(() =>
+      assertStateMutationAllowed(
+        withHistory([entry(1, 10), entry(2, 10)]),
+        withHistory([entry(1, 10), entry(2, 99)]),
+      ),
+    );
+  });
+
+  it('refuses two entries arriving in one write', () => {
+    expectHardAbort(() =>
+      assertStateMutationAllowed(withHistory([entry(1)]), withHistory([entry(1), entry(2), entry(3)])),
+    );
+  });
+
+  it('refuses a wholesale replacement that keeps the length', () => {
+    expectHardAbort(() =>
+      assertStateMutationAllowed(withHistory([entry(1, 10)]), withHistory([entry(1, 40)])),
+    );
+  });
+});

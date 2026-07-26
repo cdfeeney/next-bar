@@ -866,11 +866,15 @@ describe('detectors are wired into decide', () => {
   });
 
   it('reads the theater tax into the report without halting', () => {
+    // The cycle numbers have to line up with the state's own cycle now that the flat detector sees
+    // the FRESH reading too: history 8, 8 then a fresh 12 is real movement, so the only thing
+    // wrong here is that nothing shipped — which is a flag, not a halt.
     const measured = measure(freshState(), measurement());
     const state = {
       ...measured,
-      history: [3, 4].map((cycle) => ({
-        ...flatEntry(cycle, 12),
+      cycle: 3,
+      history: [1, 2].map((cycle) => ({
+        ...flatEntry(cycle, 8),
         shipped: false,
         evidence: null,
       })),

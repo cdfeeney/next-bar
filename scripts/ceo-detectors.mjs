@@ -186,8 +186,16 @@ export function detectTheaterTax(history, { repo } = {}) {
  * GO_MEASURE (the plans may be fine; nobody can tell), while a window containing at least one real
  * reading that failed to improve emits STOP_AND_REASSESS (the plans are the problem). Both halt.
  */
-export function detectFlatMetricHalt(history, { window = FLAT_METRIC_WINDOW } = {}) {
-  const entries = asArray(history);
+/**
+ * @param {Array<object>} history
+ * @param {{ window?: number, current?: { cycle: number, primary_value: number | null } | null }} [options]
+ */
+export function detectFlatMetricHalt(history, { window = FLAT_METRIC_WINDOW, current = null } = {}) {
+  // The cycle being judged is not in `history` yet — log() appends AFTER decide() runs. Judging the
+  // log alone therefore judges the world as of one cycle ago: review found that a history of
+  // 10,10,10 plus a fresh reading of 20 still halted with STOP_AND_REASSESS, telling an operator who
+  // had just moved the metric to stop and reassess. `current` closes that gap.
+  const entries = [...asArray(history), ...(current === null ? [] : [current])];
   const needed = window + 1;
   const recent = entries.slice(-needed);
 
@@ -214,32 +222,41 @@ export function detectFlatMetricHalt(history, { window = FLAT_METRIC_WINDOW } = 
       Number.isInteger(currentEntry?.cycle) &&
       currentEntry.cycle === previousEntry.cycle + 1;
 
-    const previous = previousEntry?.primary_value;
-    const current = currentEntry?.primary_value;
+    const previousValue = previousEntry?.primary_value;
+    const currentValue = currentEntry?.primary_value;
+    const bothReadable = typeof previousValue === 'number' && typeof currentValue === 'number';
 
-    deltas.push(
-      consecutive && typeof previous === 'number' && typeof current === 'number'
-        ? current - previous
-        : null,
-    );
+    if (!consecutive) {
+      // A gap is not evidence of movement, and it is also not a measurement problem. Review found
+      // that fully-measured cycles 1,3,5 reported GO_MEASURE, sending the operator to build
+      // instrumentation that already existed; the real defect is the missing log entries.
+      deltas.push({ delta: null, reason: 'gap' });
+    } else if (!bothReadable) {
+      deltas.push({ delta: null, reason: 'unmeasured' });
+    } else {
+      deltas.push({ delta: currentValue - previousValue, reason: null });
+    }
   }
 
-  const halt = deltas.every((delta) => delta === null || delta <= 0);
-  // Every delta unreadable means the window contains no evidence either way. One real reading is
-  // enough to make the window a judgement about the plans rather than about the instrumentation.
-  const unmeasured = halt && deltas.every((delta) => delta === null);
+  const halt = deltas.every((d) => d.delta === null || d.delta <= 0);
+  // GO_MEASURE only when EVERY non-improving step is non-improving *because nobody measured*. One
+  // real reading, or a log gap, makes this a judgement about the record rather than the instruments.
+  const unmeasured = halt && deltas.every((d) => d.reason === 'unmeasured');
   const directive = halt
     ? (unmeasured ? DIRECTIVE_GO_MEASURE : DIRECTIVE_STOP_AND_REASSESS)
     : null;
 
-  const rendered = deltas.map((d) => (d === null ? 'unmeasurable' : d)).join(', ');
+  const rendered = deltas
+    .map((d) => (d.delta === null ? (d.reason === 'gap' ? 'log gap' : 'unmeasurable') : d.delta))
+    .join(', ');
 
   return {
     id: 'flat_metric_halt',
     halt,
     unmeasured,
     directive,
-    deltas,
+    deltas: deltas.map((d) => d.delta),
+    reasons: deltas.map((d) => d.reason),
     detail: !halt
       ? `Primary metric moved within the last ${window} cycles (deltas ${rendered}).`
       : unmeasured
@@ -294,7 +311,15 @@ export function runDetectors(state, context = {}) {
   // The repo travels from state, not from the caller: a detector that let its caller choose which
   // repository counts as "ours" would let the caller choose to be satisfied.
   const theater = detectTheaterTax(history, { repo: state?.repo });
-  const flat = detectFlatMetricHalt(history);
+
+  // The freshly measured cycle, shaped like a history entry so the flat detector can see the
+  // reading that has not been logged yet. Derived from the assessment the caller computed this
+  // cycle — the agent never supplies it.
+  const fresh =
+    context?.assessment && Number.isInteger(state?.cycle)
+      ? { cycle: state.cycle, primary_value: context.assessment.primary_value ?? null }
+      : null;
+  const flat = detectFlatMetricHalt(history, { current: fresh });
   const bets = detectBetClosure(state?.active_bets, state?.cycle ?? 0);
   // A dormant module reaching its activation condition is news the operator needs and the
   // orchestrator cannot act on — exactly the shape of a preamble line. `context` carries this

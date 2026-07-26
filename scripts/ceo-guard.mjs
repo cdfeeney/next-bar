@@ -175,12 +175,46 @@ function assertBothValid(previousState, nextState) {
   assertValidCeoState(nextState);
 }
 
-/** The AGENT write path: everything operator-owned must be byte-identical. */
+/**
+ * The AGENT write path: everything operator-owned must be byte-identical.
+ *
+ * `history` cannot be on AGENT_PROTECTED_FIELDS — log() appends to it, and that is the agent path.
+ * So it gets the next-strongest thing: APPEND-ONLY. The old record must survive verbatim as a prefix
+ * of the new one, and at most one entry may arrive per write.
+ *
+ * Review finding (Codex, HIGH): without this, `history` was neither protected nor item-validated, so
+ * the two rails that read it could both be defeated by editing it — delete an overdue unjudged bet's
+ * cycle, or insert a fabricated improving `primary_value`, and the flat and theater detectors go
+ * quiet. An append-only log is exactly as rewritable as a git history: not.
+ */
 export function assertStateMutationAllowed(previousState, nextState) {
   assertBothValid(previousState, nextState);
   for (const field of AGENT_PROTECTED_FIELDS) {
     if (!isDeepStrictEqual(previousState[field], nextState[field])) {
       abort(`${field} mutation is not permitted on the agent write path.`);
+    }
+  }
+
+  const before = previousState.history;
+  const after = nextState.history;
+
+  if (after.length < before.length) {
+    abort(
+      `history shrank from ${before.length} to ${after.length} entries. It is append-only — ` +
+        'the record of what happened is not a draft.',
+    );
+  }
+  if (after.length > before.length + 1) {
+    abort(
+      `history grew by ${after.length - before.length} entries in one write; a cycle logs exactly one.`,
+    );
+  }
+  for (let index = 0; index < before.length; index += 1) {
+    if (!isDeepStrictEqual(before[index], after[index])) {
+      abort(
+        `history entry ${index} (cycle ${before[index]?.cycle ?? '?'}) was rewritten. Past cycles ` +
+          'are immutable; a wrong entry is corrected by a later one, not by editing it away.',
+      );
     }
   }
 }

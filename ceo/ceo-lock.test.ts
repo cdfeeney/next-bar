@@ -160,3 +160,48 @@ describe('atomic writes', () => {
     expect(() => readFileSync(`${target}.tmp-${process.pid}`, 'utf8')).toThrow();
   });
 });
+
+describe('staleness is age AND death', () => {
+  // Review finding (Codex, HIGH): age alone declared a live thirty-minute cycle abandoned and handed
+  // its files to a second writer. A running process holding the lock is a running cycle, whatever
+  // the clock says.
+  it('does not break an aged lock whose holder is still alive', () => {
+    acquireCycleLock(lockPath, { now: NOW, pid: process.pid + 0, host: 'a' });
+    // Reacquire under a different pid so we do not take the re-entrant path.
+    const later = acquireCycleLock(lockPath, {
+      now: NOW + STALE_AFTER_MS * 10,
+      pid: process.pid + 1,
+      host: 'b',
+    });
+
+    expect(later.ok).toBe(false);
+    expect(later.result).toBe(LOCK_RESULTS.HELD);
+    expect(later.detail).toMatch(/still alive/i);
+  });
+
+  it('breaks an aged lock whose holder is gone', () => {
+    // A pid that cannot be running: writeExclusive records it, and pidAlive says no.
+    const deadPid = 0x7ffffffe;
+    acquireCycleLock(lockPath, { now: NOW, pid: deadPid, host: 'gone' });
+
+    const later = acquireCycleLock(lockPath, { now: NOW + STALE_AFTER_MS + 1, pid: 222, host: 'b' });
+
+    expect(later.ok).toBe(true);
+    expect(later.result).toBe(LOCK_RESULTS.BROKE_STALE);
+    expect(later.detail).toMatch(/that process is gone/i);
+  });
+
+  it('releases by nonce, so a departing holder cannot delete a successor lock', () => {
+    // Review finding (Codex, HIGH): release verified the pid then removed the file, and a breaker
+    // could install a successor in the gap — the old holder then deleted the newcomer's lock.
+    const first = acquireCycleLock(lockPath, { now: NOW, pid: 111, host: 'a' });
+    releaseCycleLock(lockPath, { nonce: first.holder.nonce });
+
+    const second = acquireCycleLock(lockPath, { now: NOW + 1, pid: 222, host: 'b' });
+    expect(second.ok).toBe(true);
+
+    // The first holder's stale nonce must not remove the second holder's lock.
+    expect(releaseCycleLock(lockPath, { nonce: first.holder.nonce })).toBe(false);
+    expect(JSON.parse(readFileSync(lockPath, 'utf8')).pid).toBe(222);
+  });
+});

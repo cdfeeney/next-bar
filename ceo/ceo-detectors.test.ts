@@ -491,3 +491,57 @@ describe('runDetectors', () => {
     expect(runDetectors({ cycle: 0 }).halt).toBe(false);
   });
 });
+
+describe('the window includes the cycle being judged', () => {
+  // Review finding (Codex, HIGH), reproduced: log() appends AFTER decide() runs, so judging history
+  // alone judges the world as of one cycle ago. History 10,10,10 plus a fresh reading of 20 still
+  // returned STOP_AND_REASSESS — telling an operator who had just moved the metric to stop.
+  it('does not halt when the unlogged current cycle improved', () => {
+    const result = detectFlatMetricHalt(
+      history({ primary_value: 10 }, { primary_value: 10 }, { primary_value: 10 }),
+      { current: { cycle: 4, primary_value: 20 } },
+    );
+
+    expect(result.halt).toBe(false);
+  });
+
+  it('halts one cycle sooner than the log alone would', () => {
+    // Two logged flat readings plus a flat fresh one is a two-cycle stall NOW, not next week.
+    const result = detectFlatMetricHalt(
+      history({ primary_value: 10 }, { primary_value: 10 }),
+      { current: { cycle: 3, primary_value: 10 } },
+    );
+
+    expect(result.halt).toBe(true);
+    expect(result.directive).toBe(DIRECTIVE_STOP_AND_REASSESS);
+  });
+
+  it('reads a fresh unmeasured cycle as unmeasured, not as flat', () => {
+    const result = detectFlatMetricHalt(
+      history({ primary_value: null }, { primary_value: null }),
+      { current: { cycle: 3, primary_value: null } },
+    );
+
+    expect(result.directive).toBe(DIRECTIVE_GO_MEASURE);
+  });
+});
+
+describe('a log gap is not a measurement problem', () => {
+  // Review finding (Codex, MEDIUM): fully-measured cycles 1,3,5 were reported GO_MEASURE, sending
+  // the operator to build instrumentation that already existed. The defect is the missing entries.
+  it('calls out the gap instead of blaming the instruments', () => {
+    const gapped = [
+      { cycle: 1, primary_value: 12 },
+      { cycle: 3, primary_value: 14 },
+      { cycle: 5, primary_value: 16 },
+    ].map((overrides) => cycleEntry(overrides));
+
+    const result = detectFlatMetricHalt(gapped);
+
+    expect(result.halt).toBe(true);
+    expect(result.unmeasured).toBe(false);
+    expect(result.directive).toBe(DIRECTIVE_STOP_AND_REASSESS);
+    expect(result.reasons).toEqual(['gap', 'gap']);
+    expect(result.detail).toMatch(/log gap/);
+  });
+});

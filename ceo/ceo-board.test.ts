@@ -213,3 +213,24 @@ describe('kill audit — inputs', () => {
     expect(result.deadline).toBe('2026-12-31');
   });
 });
+
+describe('dates that are only shaped like dates', () => {
+  // Review finding: shape-only validation let 2026-99-99 into a lexicographic comparison, where it
+  // sorts after every real date. One typo either fires the board years early or postpones it
+  // forever, and nothing says which.
+  it.each(['2026-99-99', '2026-13-01', '2026-02-30', '0000-00-00'])(
+    'refuses the impossible audit date %s',
+    (bad) => {
+      expect(() => auditKill(state(), { at: bad })).toThrow(/calendar date/i);
+    },
+  );
+
+  it('refuses an impossible deadline in the criterion itself', () => {
+    const broken = state({ kill_criterion: { deadline: '2026-99-99', wau_threshold: 50, venue_threshold: 15, tripped: false } });
+    expect(() => auditKill(broken, { at: '2026-07-26' })).toThrow(/deadline/i);
+  });
+
+  it('still accepts a leap day that exists', () => {
+    expect(() => auditKill(state(), { at: '2028-02-29' })).not.toThrow();
+  });
+});

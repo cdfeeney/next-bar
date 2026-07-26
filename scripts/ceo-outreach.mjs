@@ -22,7 +22,26 @@
 //      that was actually measured. "200 weekly users" while wau is null is the failure mode that
 //      burns the audience AND is checkable, so it is checked.
 
+import { readFileSync } from 'node:fs';
+
 const MAX_RECIPIENTS_PER_CYCLE = 5;
+
+/** The one file that decides who may be written to. A human edits it; nothing here writes it. */
+export const DEFAULT_CONTACTS_PATH = 'ceo/contacts/approved.json';
+
+function readContactsFile(contactsPath) {
+  if (typeof contactsPath !== 'string' || contactsPath.trim() === '') {
+    abort('a contacts file path is required.');
+  }
+  try {
+    return JSON.parse(readFileSync(contactsPath, 'utf8'));
+  } catch (error) {
+    abort(
+      `could not read the approved contact list at ${contactsPath}: ${error.message}. ` +
+        'Outreach requires a human-committed list; there is no in-memory substitute.',
+    );
+  }
+}
 
 /** Subjects that lie about the history of the conversation. */
 const DECEPTIVE_SUBJECT_PREFIX = /^\s*(re|fw|fwd)\s*:/i;
@@ -241,8 +260,42 @@ export function assertDraftCompliant(draft, { recipients, state }, index = 0) {
   }
 
   assertClaimsAreMeasured(draft, state, where);
+  assertNoUndeclaredNumbers(draft, where);
 
   return { ...draft, to: recipient.email, venue: recipient.venue };
+}
+
+/**
+ * Every number in the prose must be one the draft declared.
+ *
+ * Review finding (Codex, HIGH), reproduced: `metrics_cited` was checked and then never compared with
+ * the body, so a draft with `metrics_cited: []` and "We have 200 weekly users" in the text passed
+ * every rail while `wau` was null. The declaration was a form nobody read against the letter.
+ *
+ * This is deliberately strict, and strict is right here: the audience is ~265 venues, shared with
+ * every future attempt, and the cost of a false claim is the audience. A number the draft needs is
+ * one line of `metrics_cited` away; a number it does not need should not be in a cold email.
+ *
+ * Numbers inside the footer fields (address, opt-out, disclosure) are exempt — a street number is
+ * not a traction claim.
+ */
+function assertNoUndeclaredNumbers(draft, where) {
+  const footer = [draft.postal_address, draft.opt_out, draft.commercial_disclosure].join('\n');
+  const exempt = new Set(footer.match(/\d+/g) ?? []);
+  const declared = new Set((draft.metrics_cited ?? []).map((claim) => String(claim.value)));
+
+  const undeclared = (draft.body.match(/\d+/g) ?? []).filter(
+    (token) => !exempt.has(token) && !declared.has(token),
+  );
+
+  if (undeclared.length > 0) {
+    abort(
+      `${where}.body quotes ${undeclared.length === 1 ? 'a number' : 'numbers'} nothing vouches for: ` +
+        `${[...new Set(undeclared)].join(', ')}. Every figure in a cold email must appear in ` +
+        'metrics_cited at its measured value, or come out of the draft. A number in prose is a claim ' +
+        'whatever the metadata says.',
+    );
+  }
 }
 
 /**
@@ -250,12 +303,20 @@ export function assertDraftCompliant(draft, { recipients, state }, index = 0) {
  *
  * Returns an envelope; writing it is the caller's business, and sending it is a person's.
  */
-export function buildOutbox({ cycle, contacts, recipientIds, drafts, state }) {
+export function buildOutbox({ contactsPath = DEFAULT_CONTACTS_PATH, recipientIds, drafts, state }) {
+  // The cycle comes from STATE, not the caller. Review finding (Codex, MEDIUM): a caller-supplied
+  // `cycle` made the five-per-cycle cap a five-per-CALL cap — two invocations claiming the same cycle
+  // both passed, and ten emails went out under a limit of five.
+  const cycle = state?.cycle;
   if (!Number.isInteger(cycle) || cycle < 0) {
-    abort(`outbox cycle must be a non-negative integer; got ${JSON.stringify(cycle ?? null)}.`);
+    abort(`state.cycle must be a non-negative integer; got ${JSON.stringify(cycle ?? null)}.`);
   }
 
-  const approved = assertApprovedContacts(contacts);
+  // Contacts are READ FROM THE COMMITTED FILE here, not accepted as an argument. Review finding
+  // (Codex, MEDIUM): while `contacts` was a parameter, "the agent may only select from a
+  // human-committed list" was enforced against whatever object the agent passed in — an invented
+  // address wearing `approved_by: "human-operator"` needed no human at all.
+  const approved = assertApprovedContacts(readContactsFile(contactsPath));
   const recipients = selectRecipients(approved, recipientIds);
 
   if (!Array.isArray(drafts) || drafts.length !== recipients.length) {
@@ -268,6 +329,17 @@ export function buildOutbox({ cycle, contacts, recipientIds, drafts, state }) {
   const prepared = drafts.map((draft, index) =>
     assertDraftCompliant(draft, { recipients, state }, index),
   );
+
+  // One draft per recipient, as a BIJECTION. Equal counts is not the same claim: two drafts both
+  // addressed to A alongside a selection of A and B passed the length check while B was silently
+  // dropped and A was written to twice (review finding).
+  const addressed = new Set(prepared.map((draft) => draft.recipient_id));
+  if (addressed.size !== recipients.length) {
+    abort(
+      `drafts do not map one-to-one onto recipients: ${recipients.length} selected, ` +
+        `${addressed.size} distinct addressees. Someone would be written to twice and someone not at all.`,
+    );
+  }
 
   return {
     cycle,

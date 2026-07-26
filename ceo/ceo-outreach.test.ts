@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   OUTREACH_LIMITS,
@@ -33,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  if (contactsDir) rmSync(contactsDir, { recursive: true, force: true });
 });
 
 const contacts = {
@@ -42,7 +46,18 @@ const contacts = {
   ],
 };
 
+let contactsPath: string;
+let contactsDir: string;
+
+function writeContacts(payload: unknown) {
+  contactsDir = mkdtempSync(path.join(tmpdir(), 'ceo-contacts-'));
+  contactsPath = path.join(contactsDir, 'approved.json');
+  writeFileSync(contactsPath, JSON.stringify(payload), 'utf8');
+  return contactsPath;
+}
+
 const state = {
+  cycle: 3,
   metrics: {
     wau: null,
     max_neighborhood_wau: null,
@@ -238,8 +253,7 @@ describe('draft compliance', () => {
 describe('the outbox', () => {
   it('says in the artifact itself that nothing has been sent', () => {
     const outbox = buildOutbox({
-      cycle: 3,
-      contacts,
+      contactsPath: writeContacts(contacts),
       recipientIds: ['the-dead-poet'],
       drafts: [draft()],
       state,
@@ -253,8 +267,7 @@ describe('the outbox', () => {
   it('refuses a mismatch between recipients selected and drafts written', () => {
     expectHardAbort(() =>
       buildOutbox({
-        cycle: 3,
-        contacts,
+        contactsPath: writeContacts(contacts),
         recipientIds: ['the-dead-poet', 'ottos-shrunken-head'],
         drafts: [draft()],
         state,
@@ -265,10 +278,85 @@ describe('the outbox', () => {
   it('refuses a contact list with an unattributed entry', () => {
     expectHardAbort(() =>
       buildOutbox({
-        cycle: 3,
-        contacts: { approved: [{ id: 'x', venue: 'X', email: 'x@x.example', approved_by: '' }] },
+        contactsPath: writeContacts({
+          approved: [{ id: 'x', venue: 'X', email: 'x@x.example', approved_by: '' }],
+        }),
         recipientIds: ['x'],
         drafts: [draft({ recipient_id: 'x' })],
+        state,
+      }),
+    );
+  });
+});
+
+describe('holes found by independent review', () => {
+  const recipients = contacts.approved;
+
+  it('refuses a number in the prose that metrics_cited never declared', () => {
+    // Reproduced by the reviewer: metrics_cited was checked and then never compared against the
+    // body, so `metrics_cited: []` plus "200 weekly users" in the text passed every rail while wau
+    // was null. The declaration was a form nobody read against the letter.
+    expectHardAbort(() =>
+      assertDraftCompliant(
+        draft({
+          body: `We have 200 weekly users.\n${DISCLOSURE}\n${POSTAL}\n${OPT_OUT}`,
+          metrics_cited: [],
+        }),
+        { recipients, state },
+      ),
+    );
+  });
+
+  it('allows a number in the prose once it is declared at its measured value', () => {
+    expect(() =>
+      assertDraftCompliant(
+        draft({
+          body: `4 venues already keep their hours current here.\n${DISCLOSURE}\n${POSTAL}\n${OPT_OUT}`,
+          metrics_cited: [{ metric: 'claimed_venues', value: 4 }],
+        }),
+        { recipients, state },
+      ),
+    ).not.toThrow();
+  });
+
+  it('does not mistake the footer address digits for a claim', () => {
+    expect(() => assertDraftCompliant(draft(), { recipients, state })).not.toThrow();
+  });
+
+  it('will not read contacts from a caller-supplied object', () => {
+    // While `contacts` was a parameter, "select only from a human-committed list" was enforced
+    // against whatever object the agent passed in — an invented address wearing
+    // approved_by: 'human-operator' needed no human at all.
+    expectHardAbort(() =>
+      buildOutbox({
+        contactsPath: path.join(tmpdir(), 'definitely-not-a-contacts-file-9f3a.json'),
+        recipientIds: ['the-dead-poet'],
+        drafts: [draft()],
+        state,
+      }),
+    );
+  });
+
+  it('takes the cycle from state, not from the caller', () => {
+    const outbox = buildOutbox({
+      contactsPath: writeContacts(contacts),
+      recipientIds: ['the-dead-poet'],
+      drafts: [draft()],
+      state,
+    });
+
+    // A caller-supplied cycle made the five-per-cycle cap a five-per-CALL cap: two invocations
+    // claiming the same cycle both passed, and ten emails went out under a limit of five.
+    expect(outbox.cycle).toBe(state.cycle);
+  });
+
+  it('refuses two drafts addressed to the same recipient alongside two selected', () => {
+    // Equal counts is a weaker claim than one-to-one: B is silently dropped and A written twice.
+    expectHardAbort(() =>
+      buildOutbox({
+        contactsPath: writeContacts(contacts),
+        recipientIds: ['the-dead-poet', 'ottos-shrunken-head'],
+        drafts: [draft(), draft()],
         state,
       }),
     );
