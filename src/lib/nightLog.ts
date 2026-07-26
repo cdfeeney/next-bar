@@ -135,6 +135,20 @@ export function assembleNight(nightKey: string): NightRecord {
   return { nightKey, visits, ratings };
 }
 
+/**
+ * The nightKey of LAST night relative to `now` — pure Date.UTC calendar
+ * math on the current key (nycNightKey is already rollover- and
+ * DST-safe). The morning-after recap (E4.2) reads this night.
+ */
+export function lastNightKey(now: Date = new Date()): string {
+  const [y, m, d] = nycNightKey(now).split('-').map(Number);
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  const py = prev.getUTCFullYear();
+  const pm = String(prev.getUTCMonth() + 1).padStart(2, '0');
+  const pd = String(prev.getUTCDate()).padStart(2, '0');
+  return `${py}-${pm}-${pd}`;
+}
+
 /** Test/maintenance escape hatch. */
 export function clearNightLog(): void {
   if (typeof window === 'undefined') return;

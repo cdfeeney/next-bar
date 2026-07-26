@@ -4,10 +4,15 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import WhereNextFlow from '@/components/WhereNextFlow';
 import PhaseChip from '@/components/PhaseChip';
+import RecapCard from '@/components/RecapCard';
 import { loadProfile } from '@/lib/storedProfile';
 import { deriveNightPhase, type NightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
 import { loadPhaseOverride, savePhaseOverride } from '@/lib/phaseOverride';
+import { assembleNight, lastNightKey, loadNightVisits } from '@/lib/nightLog';
+import { composeRecap, type Recap } from '@/lib/recap';
+import { useBars } from '@/lib/useBars';
+import { useNightRefresh } from '@/hooks/useIntent';
 
 export default function HomePage() {
   // MED-26: `/` never prompted the quiz — profile-less visitors got the
@@ -27,21 +32,46 @@ export default function HomePage() {
   // storage listener keeps the phase honest when intent changes in
   // another tab.
   const [phase, setPhase] = useState<NightPhase | null>(null);
+  // The recap composes for THIS key — state (not read at render) so a
+  // rollover in a long-lived tab re-keys the effect even when the phase
+  // string lands on 'recap' again (review HIGH: same-value deps bail).
+  const [recapNightKey, setRecapNightKey] = useState<string | null>(null);
   const computePhase = useCallback(() => {
+    const now = new Date();
     setPhase(
       deriveNightPhase({
-        now: new Date(),
+        now,
         intent: loadIntent()?.status ?? null,
-        wasOutLastNight: wasOutLastNight(),
-        override: loadPhaseOverride(),
+        // E4.2: the night log is the stronger was-out signal — visits
+        // recorded last night derive recap even when no intent was set
+        // (most solo users never touch intent).
+        wasOutLastNight:
+          wasOutLastNight(now) || loadNightVisits(lastNightKey(now)).length > 0,
+        override: loadPhaseOverride(now),
       }),
     );
+    setRecapNightKey(lastNightKey(now));
   }, []);
+  // Mount + storage events + the shared "clock moved" signal — without
+  // the night refresh an idle tab never re-derives across the 6am
+  // rollover (the same F5 class useNightRefresh exists for).
+  useNightRefresh(computePhase);
   useEffect(() => {
-    computePhase();
     window.addEventListener('storage', computePhase);
     return () => window.removeEventListener('storage', computePhase);
   }, [computePhase]);
+
+  // E4.2/E4.5: last night's recap, composed with zero input. Null → the
+  // plain rank-last-night card keeps the slot.
+  const bars = useBars();
+  const [recap, setRecap] = useState<Recap | null>(null);
+  useEffect(() => {
+    if (phase !== 'recap' || !recapNightKey) {
+      setRecap(null);
+      return;
+    }
+    setRecap(composeRecap(assembleNight(recapNightKey), bars));
+  }, [phase, recapNightKey, bars]);
 
   const selectPhase = (p: NightPhase) => {
     savePhaseOverride(p);
@@ -108,19 +138,25 @@ export default function HomePage() {
       ) : null}
       {phase === 'recap' ? (
         <div className="px-6 pt-4" data-testid="phase-card-recap">
-          <div className="max-w-md mx-auto bg-surface border border-border rounded-2xl px-5 py-4">
-            <p className="font-display text-sm mb-1">Out last night?</p>
-            <p className="text-muted text-xs leading-relaxed mb-3">
-              Rank the bars while you still remember them — full night
-              recaps are coming.
-            </p>
-            <Link
-              href="/rankings"
-              className="inline-flex items-center min-h-[56px] px-6 rounded-full border border-accent text-accent font-display text-sm touch-manipulation hover:bg-accent hover:text-bg transition-colors"
-            >
-              Rank last night →
-            </Link>
-          </div>
+          {recap ? (
+            // E4.2: the real thing — last night's route, auto-composed.
+            <RecapCard recap={recap} />
+          ) : (
+            // No captured night (or catalog can't resolve it): the plain
+            // rank-last-night nudge keeps the slot.
+            <div className="max-w-md mx-auto bg-surface border border-border rounded-2xl px-5 py-4">
+              <p className="font-display text-sm mb-1">Out last night?</p>
+              <p className="text-muted text-xs leading-relaxed mb-3">
+                Rank the bars while you still remember them.
+              </p>
+              <Link
+                href="/rankings"
+                className="inline-flex items-center min-h-[56px] px-6 rounded-full border border-accent text-accent font-display text-sm touch-manipulation hover:bg-accent hover:text-bg transition-colors"
+              >
+                Rank last night →
+              </Link>
+            </div>
+          )}
         </div>
       ) : null}
       <WhereNextFlow />
