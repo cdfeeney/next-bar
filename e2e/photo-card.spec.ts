@@ -1,9 +1,10 @@
 /**
- * photo-card.spec.ts — the COMPACT result card (operator 2026-07-26:
- * drunk users need the next bar in 10 seconds → ~3 cards per screen).
+ * photo-card.spec.ts — the full-bleed HERO result card (QA5-S1, operator
+ * 2026-07-26: the E2.3 photo-first hero returns, with SMALL overlay text).
  *
- * The card leads with a SMALL photo tile (tap → lightbox carousel); the
- * big hero/blurb/review live in the lightbox now. The NEGATIVE half
+ * The card LEADS with a 16/10 photo hero spanning the card's full width;
+ * name + neighborhood + $ sit on a bottom gradient overlay inside the
+ * hero; tapping the hero opens the lightbox carousel. The NEGATIVE half
  * proves the fallback: with every /bar-photos request blocked, cards
  * degrade to the glyph tile — no broken images.
  */
@@ -20,33 +21,41 @@ async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
   return cards;
 }
 
-test.describe('Compact result card', () => {
-  test('small photo tile, compact height (~3 per screen), lightbox on tap', async ({
+test.describe('Hero result card', () => {
+  test('full-bleed 16/10 hero with overlay identity; tap opens lightbox', async ({
     page,
   }) => {
     await denyGeolocation(page.context());
     const cards = await seedResultsFromAttaboy(page);
 
-    // The photo is a compact tile, NOT a full-bleed hero.
-    const thumb = cards.first().locator('img[data-testid="bar-visual"]');
-    await expect(thumb).toBeVisible();
-    await expect(thumb).toHaveAttribute('src', /\/bar-photos\//);
-    const thumbBox = await thumb.boundingBox();
+    // The photo is a FULL-BLEED hero — it spans (approximately) the whole
+    // card width, not a small side tile.
+    const hero = cards.first().locator('img[data-testid="bar-visual"]');
+    await expect(hero).toBeVisible();
+    await expect(hero).toHaveAttribute('src', /\/bar-photos\//);
+    const heroBox = await hero.boundingBox();
     const cardBox = await cards.first().boundingBox();
-    expect(thumbBox).not.toBeNull();
+    expect(heroBox).not.toBeNull();
     expect(cardBox).not.toBeNull();
-    expect(thumbBox!.width).toBeLessThan(cardBox!.width / 3);
+    // ≈ card width (the card's own border is the only chrome around it).
+    expect(heroBox!.width).toBeGreaterThanOrEqual(cardBox!.width - 4);
 
-    // 10-second rule: a card stays SHORT so ~3 fit a phone viewport.
-    // (180 leaves headroom for a wrapped hours badge / OS font scaling —
-    // review MED: a tight bound flakes on long "Open · until…" strings.)
-    expect(cardBox!.height).toBeLessThanOrEqual(180);
+    // The identity heading renders ON the hero: visible, and its box sits
+    // inside the hero's bounds (bottom gradient overlay).
+    const heading = cards.first().getByRole('heading');
+    await expect(heading).toBeVisible();
+    const headingBox = await heading.boundingBox();
+    expect(headingBox).not.toBeNull();
+    expect(headingBox!.y).toBeGreaterThanOrEqual(heroBox!.y);
+    expect(headingBox!.y + headingBox!.height).toBeLessThanOrEqual(
+      heroBox!.y + heroBox!.height + 1,
+    );
+    expect(headingBox!.x).toBeGreaterThanOrEqual(heroBox!.x);
 
-    // The loud data is on the row: name + walk/ride time.
-    await expect(cards.first().getByRole('heading')).toBeVisible();
-    await expect(cards.first().getByText(/min (walk|by Uber)|^In /)).toBeVisible();
+    // The meta line below keeps the loud walk/ride time.
+    await expect(cards.first().getByText(/min (walk|by Uber)|In /)).toBeVisible();
 
-    // Tap the tile → the big version (lightbox carousel + hours).
+    // Tap the hero → lightbox (carousel + hours).
     await cards
       .first()
       .getByRole('button', { name: /See photos and hours/i })

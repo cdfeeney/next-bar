@@ -68,8 +68,8 @@ export default function HomePage() {
     setPhase(p);
   };
 
-  // Planning/recap LEAD with their card but keep the find-a-bar flow on
-  // the screen below it: a misdetected phase (or a planner who changes
+  // Recap LEADS with its card but keeps the find-a-bar flow on the
+  // screen below it: a misdetected phase (or a planner who changes
   // their mind) never loses the app's core surface (R5 — no dead ends;
   // this is the fail-safe half of R10). 'starting' and 'out' ARE the
   // flow — out's re-search entry pre-fills tonight's cached vibe via
@@ -90,23 +90,9 @@ export default function HomePage() {
       {/* Operator 2026-07-26: NO install/get-the-app teasers on home —
           this IS the mobile UI (native wrap incoming). /install still
           exists as the marketing landing for external traffic. */}
-      {phase === 'planning' ? (
-        <div className="px-6 pt-4" data-testid="phase-card-planning">
-          <div className="max-w-md mx-auto bg-surface border border-border rounded-2xl px-5 py-4">
-            <p className="font-display text-sm mb-1">Making a plan tonight?</p>
-            <p className="text-muted text-xs leading-relaxed mb-3">
-              Suggest bars, see what your circle wants, and lock tonight in
-              together.
-            </p>
-            <Link
-              href="/friends/consensus"
-              className="inline-flex items-center min-h-[56px] px-6 rounded-full border border-accent text-accent font-display text-sm touch-manipulation hover:bg-accent hover:text-bg transition-colors"
-            >
-              Plan tonight →
-            </Link>
-          </div>
-        </div>
-      ) : null}
+      {/* QA5-S1 (operator 2026-07-26): NO planning-phase lead card here —
+          the Friends tab owns Plan Night Out. The chip still shows
+          Planning; the find-a-bar flow below is the whole screen. */}
       {phase === 'recap' ? (
         <div className="px-6 pt-4" data-testid="phase-card-recap">
           {recap ? (
