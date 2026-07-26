@@ -18,7 +18,8 @@ import type { IntentStatus } from '@/lib/intent';
 
 export type NightPhase = 'planning' | 'starting' | 'out' | 'recap';
 
-/** Chip cycle order for the phase switcher. */
+/** Display order for the phase switcher's picker (R10: all four are one
+ *  tap away once the chip is open — it's a picker, not a cycler). */
 export const NIGHT_PHASES: readonly NightPhase[] = [
   'planning',
   'starting',
