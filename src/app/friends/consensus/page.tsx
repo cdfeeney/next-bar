@@ -178,6 +178,16 @@ export default function ConsensusPage(): JSX.Element {
         <h1 className="font-display text-3xl md:text-4xl mb-2 text-center">
           Plan Night Out
         </h1>
+        {/* UX-F v1: the nudge — an invite link that works with zero
+            server state; recipients land on /join. */}
+        <div className="flex justify-center mt-1">
+          <ShareButton
+            path="/join"
+            text="Out tonight? Pick the bar with us on Next Bar."
+            label="Invite friends"
+            ariaLabel="Invite friends to plan tonight"
+          />
+        </div>
       </header>
 
       <section className="max-w-md mx-auto px-6">
@@ -230,7 +240,7 @@ export default function ConsensusPage(): JSX.Element {
                 No shared history yet — rate a few bars and this fills in.
               </p>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-2">
                 {groupFavorites.map((entry, i) => (
                   <ConsensusCard
                     key={entry.barId}
@@ -291,6 +301,11 @@ function PersonChip({
   );
 }
 
+/**
+ * Compact tile (operator 2026-07-26: "the tiles need to be smaller") —
+ * name, score, one meta line. Blurb and per-person score chips are gone;
+ * the top pick keeps its glow + the share moment.
+ */
 function ConsensusCard({
   entry,
   rank,
@@ -307,58 +322,45 @@ function ConsensusCard({
   return (
     <article
       className={[
-        'rise rounded-3xl p-5 border',
+        'rise rounded-2xl px-4 py-3 border',
         highlight
           ? 'glow-accent border-accent bg-gradient-to-b from-accent/[0.08] to-surface'
           : 'bg-surface border-border',
       ].join(' ')}
       style={{ ['--rise-delay' as string]: `${Math.min(index, 8) * 70}ms` }}
     >
-      {highlight ? (
-        <p className="text-accent text-[11px] uppercase tracking-[0.2em] font-display mb-2">
-          ★ Top group pick
-        </p>
-      ) : null}
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="font-display text-xl leading-tight">
+        <h3 className="font-display text-base leading-tight truncate">
           {rank ? (
             <span className="text-accent mr-2 tabular-nums">{rank}.</span>
+          ) : null}
+          {highlight ? (
+            <span className="text-accent" aria-hidden="true">★ </span>
           ) : null}
           {bar.name}
         </h3>
         <span
-          className="font-display text-2xl tabular-nums text-accent shrink-0"
+          className="font-display text-lg tabular-nums text-accent shrink-0"
           aria-label={`Group score ${entry.avgScore.toFixed(1)} out of 10`}
         >
           {entry.avgScore.toFixed(1)}
         </span>
       </div>
-      <p className="text-muted text-xs uppercase tracking-wider mt-1">
-        {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
-      </p>
-      <p className="text-sm italic mt-2">{bar.blurb}</p>
-      <div className="flex flex-wrap gap-1.5 mt-3">
-        {entry.votes.map((v) => (
-          <span
-            key={v.id}
-            className="text-[11px] px-2 py-1 rounded-full bg-bg border border-border text-muted"
-          >
-            {v.label} {v.score.toFixed(1)}
-          </span>
-        ))}
-      </div>
-      {/* The winner-share moment lives on the TOP pick (works signed-out
-          too — the demo path is the share-card loop's entry). */}
-      {highlight ? (
-        <div className="mt-4">
+      <div className="flex items-center justify-between gap-3 mt-0.5">
+        <p className="text-muted text-xs uppercase tracking-wider truncate">
+          {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+        </p>
+        {/* The winner-share moment lives on the TOP pick (works
+            signed-out too — the share-card loop's entry). */}
+        {highlight ? (
           <ShareButton
             path={buildPickPath(bar.id)}
             text={sharePickText(bar)}
             label="Share the pick"
             ariaLabel={`Share the pick: ${bar.name}`}
           />
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </article>
   );
 }
