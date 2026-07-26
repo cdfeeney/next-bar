@@ -166,18 +166,16 @@ test.describe('/friends — signed in (real graph)', () => {
     await stubSupabase(page, { following: [] });
     await page.goto('/friends');
 
-    await expect(page.getByText(/no one in your circle yet/i)).toBeVisible();
-    await expect(
-      page.getByText(/search a friend.s @username below/i),
-    ).toBeVisible();
-    // Demo curators must NOT bleed into the signed-in circle.
+    // UX-A: zero-graph account shows 0/0 stats — no wall of empty states.
+    await expect(page.getByRole('link', { name: /0\s+Following/i })).toBeVisible();
+    // Demo curators must NOT bleed into the signed-in surface.
     await expect(page.getByText('@claire')).not.toBeVisible();
     await expect(page.getByText('@john')).not.toBeVisible();
     // The find-friends search is the way forward.
     await expect(page.getByPlaceholder(/search @username/i)).toBeVisible();
   });
 
-  test('search → follow lands the friend in "Your circle" with their @handle', async ({
+  test('search → follow bumps the Following stat; the list page shows the @handle (UX-A)', async ({
     page,
   }) => {
     await stubSupabase(page, {
@@ -200,15 +198,57 @@ test.describe('/friends — signed in (real graph)', () => {
     await expect(resultRow).toBeVisible();
     await resultRow.getByRole('button', { name: /^Follow$/ }).click();
 
-    // Circle grows to 1 and shows the followed @handle.
-    await expect(page.getByText(/Following · 1/)).toBeVisible();
-    await expect(page.getByText('Sam J.').first()).toBeVisible();
-    // Empty state is gone; still on /friends (following must not navigate).
-    await expect(page.getByText(/no one in your circle yet/i)).not.toBeVisible();
+    // The stat ticks to 1; following must not navigate away. (The list
+    // page's row rendering is covered by the unfollow test below — a
+    // navigation here would remount useFollows against the stub's original
+    // empty `following` fixture.)
+    await expect(page.getByRole('link', { name: /1\s+Following/i })).toBeVisible();
     await expect(page).toHaveURL(/\/friends$/);
   });
 
-  test('unfollow removes the friend from the circle and restores the empty state', async ({
+  test('the Tonight strip shows circle RSVPs — who → which bar; hidden without any (UX-A)', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { following: [SAM] });
+    // Later-registered routes take precedence over stubSupabase's.
+    await page.route('**/rest/v1/rpc/get_circle_rsvps', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            user_id: FRIEND_ID,
+            handle: 'sam_j',
+            display_name: 'Sam J.',
+            bar_id: 'attaboy',
+          },
+        ]),
+      }),
+    );
+    await page.goto('/friends');
+
+    const strip = page.getByTestId('friends-tonight');
+    await expect(strip.getByText('Sam J.')).toBeVisible();
+    await expect(strip.getByText(/→ Attaboy/)).toBeVisible();
+  });
+
+  test('the Tonight strip renders no RSVP rows when the circle has none (UX-A)', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { following: [SAM] });
+    await page.route('**/rest/v1/rpc/get_circle_rsvps', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+    );
+    await page.goto('/friends');
+
+    const strip = page.getByTestId('friends-tonight');
+    // The status pills still render (they live in the same block)…
+    await expect(strip.getByRole('button', { name: /^Going out$/ })).toBeVisible();
+    // …but no committed-friend rows.
+    await expect(strip.getByText(/→ /)).toHaveCount(0);
+  });
+
+  test('unfollow on the Following list removes the row (UX-A)', async ({
     page,
   }) => {
     await stubSupabase(page, {
@@ -216,16 +256,15 @@ test.describe('/friends — signed in (real graph)', () => {
       profileByHandle: [SAM],
       unfollowResult: true,
     });
-    await page.goto('/friends');
+    await page.goto('/friends/following');
 
-    await expect(page.getByText(/Following · 1/)).toBeVisible();
     const circleRow = page
       .locator('.bg-surface')
       .filter({ hasText: '@sam_j' })
       .first();
     await circleRow.getByRole('button', { name: /^Following$/ }).click();
 
-    await expect(page.getByText(/no one in your circle yet/i)).toBeVisible();
+    await expect(page.getByText(/not following anyone yet/i)).toBeVisible();
     await expect(page.getByText('@sam_j')).not.toBeVisible();
   });
 });

@@ -1,29 +1,33 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import FindFriends from '@/components/FindFriends';
-import FriendCard from '@/components/FriendCard';
-import TonightSection from '@/components/TonightSection';
+import { RequestRow } from '@/components/FollowRows';
+import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
+import { useIntent, useNightRefresh } from '@/hooks/useIntent';
+import { getBrowserSupabase } from '@/lib/supabase/client';
+import { fetchCircleRsvps, type CircleRsvp } from '@/lib/rsvps.server';
+import { nycNightKey } from '@/lib/nightKey';
+import { getBarById } from '@/lib/catalog';
 import { demoFriends } from '@/lib/demo';
-import type { FollowRequest, PublicProfile } from '@/lib/follows.server';
 
 /**
- * /friends — dual-mode (B3):
- *   signed-out → the seeded demo circle (curator profiles, "demo" chips).
- *   signed-in  → the REAL graph: circle from server follows, find-friends
- *                search over the search_handles RPC. Consensus + Tonight
- *                keep demo data behind their explicit demo labels until
- *                intents/votes tables land (out of beta-critical scope).
+ * /friends — Instagram model (operator 2026-07-26): one action card, one
+ * live "tonight" strip, two tappable stats. The stacked
+ * Friends/Followers/Following lists moved to their own pages
+ * (/friends/followers, /friends/following); requests stay inline because
+ * consent must never hide. Copy is minimal by principle — obvious beats
+ * explained.
  */
 export default function FriendsPage(): JSX.Element {
+  const auth = useAuth();
   const {
     circle,
     requested,
     followers,
-    mutuals,
     mode,
     isFollowing,
     isRequested,
@@ -31,67 +35,116 @@ export default function FriendsPage(): JSX.Element {
     loading,
   } = useFollows();
   const { requests, accept, decline } = useFollowRequests();
-  const [query, setQuery] = useState('');
-
-  const followed = useMemo(
-    () => demoFriends.filter((f) => isFollowing(f.handle)),
-    [isFollowing],
-  );
-  const suggested = useMemo(
-    () => demoFriends.filter((f) => !isFollowing(f.handle)),
-    [isFollowing],
-  );
-
-  const q = query.trim().toLowerCase().replace(/^@/, '');
-  const searchMatches = useMemo(() => {
-    if (q.length === 0) return suggested;
-    return suggested.filter(
-      (f) =>
-        f.handle.includes(q) ||
-        f.displayName.toLowerCase().includes(q) ||
-        f.archetype.toLowerCase().includes(q),
-    );
-  }, [q, suggested]);
-
   const isServer = mode === 'server';
+
+  const demoFollowedCount = useMemo(
+    () => demoFriends.filter((f) => isFollowing(f.handle)).length,
+    [isFollowing],
+  );
+  // Instagram semantics: pending requests are NOT follows — the count is
+  // real edges only. The list page still shows withdrawable Requested rows.
+  const followingCount = isServer ? circle.length : demoFollowedCount;
+  const followerCount = isServer ? followers.length : 0;
+
+  // TONIGHT — real circle commitments (RSVPs), the "which friends are
+  // going out and where" view. Night-scoped; refreshes on the shared
+  // clock signal so the strip empties at rollover.
+  const [rsvps, setRsvps] = useState<CircleRsvp[] | null>(null);
+  const [night, setNight] = useState(() => nycNightKey());
+  useNightRefresh(() => setNight(nycNightKey()));
+  useEffect(() => {
+    if (!isServer || auth.status !== 'signed-in') {
+      setRsvps(null);
+      return;
+    }
+    const supabase = getBrowserSupabase();
+    if (!supabase) return;
+    let cancelled = false;
+    void (async () => {
+      const rows = await fetchCircleRsvps(supabase, night);
+      if (!cancelled) setRsvps(rows);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isServer, auth.status, night]);
 
   return (
     <main className="min-h-screen pb-28">
       <header className="px-6 pt-8 pb-4 text-center">
-        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
-          Your people, ranked
-        </p>
-        <h1 className="font-display text-3xl md:text-4xl mb-2">Friends</h1>
-        <p className="text-muted text-sm max-w-md mx-auto">
-          See what people you actually trust rated highly — no influencers, no
-          noise. Then find the bar your whole group agrees on.
-        </p>
+        <h1 className="font-display text-3xl md:text-4xl">Friends</h1>
       </header>
 
-      <section className="max-w-md mx-auto px-6 space-y-10">
-        {/* Where should we go? — the marquee consensus moment (demo circle). */}
+      <section className="max-w-md mx-auto px-6 space-y-8">
+        {/* The one primary action (R2). */}
         <Link
           href="/friends/consensus"
-          className="block bg-accent text-bg rounded-3xl p-6 touch-manipulation hover:bg-accentDim transition-colors"
+          className="block bg-accent text-bg rounded-3xl p-6 text-center touch-manipulation hover:bg-accentDim transition-colors"
         >
-          <p className="font-display text-2xl leading-snug mb-1">
-            Where should we go? →
-          </p>
-          <p className="text-bg/80 text-sm leading-relaxed">
-            Pick a few friends and Next Bar finds the spots everyone&apos;s
-            rated highly. No more group-chat paralysis.
-          </p>
+          <p className="font-display text-2xl leading-snug">Plan Night Out →</p>
         </Link>
 
-        {/* Tonight — live intent signals (demo circle; B3 keeps this demo). */}
-        <TonightSection friends={followed} />
+        {/* Tonight — your status (one tap; tap again clears) and who's
+            committed where (real RSVPs). Audience control (close friends
+            vs friends) is the next slice. */}
+        <div data-testid="friends-tonight">
+          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+            Tonight
+          </h2>
+          <IntentPills />
+          {isServer && rsvps !== null && rsvps.length > 0 ? (
+            <div className="space-y-2 mt-3">
+              {rsvps.map((r) => {
+                const bar = getBarById(r.barId);
+                if (!bar) return null;
+                const who = r.displayName ?? (r.handle ? `@${r.handle}` : 'Someone');
+                return (
+                  <Link
+                    key={`${r.userId}-${r.barId}`}
+                    href="/friends/consensus"
+                    className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl px-4 py-3 touch-manipulation hover:border-accent transition-colors"
+                  >
+                    <span className="font-display text-sm truncate">{who}</span>
+                    <span className="text-accent font-display text-sm truncate shrink-0">
+                      → {bar.name}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
 
-        {/* Follow requests — consent inbox for private accounts (B3b).
-            Rendered only when non-empty: public users and empty inboxes see
-            nothing. */}
+        {/* Instagram-style stats — each opens its list. */}
+        <div className="grid grid-cols-2 gap-3" data-testid="follow-stats">
+          <Link
+            href="/friends/followers"
+            className="bg-surface border border-border rounded-3xl py-5 text-center touch-manipulation hover:border-accent transition-colors"
+          >
+            <p className="font-display text-3xl tabular-nums leading-none">
+              {loading ? '–' : followerCount}
+            </p>
+            <p className="text-[11px] uppercase tracking-widest text-muted mt-2">
+              Followers
+            </p>
+          </Link>
+          <Link
+            href="/friends/following"
+            className="bg-surface border border-border rounded-3xl py-5 text-center touch-manipulation hover:border-accent transition-colors"
+          >
+            <p className="font-display text-3xl tabular-nums leading-none">
+              {loading ? '–' : followingCount}
+            </p>
+            <p className="text-[11px] uppercase tracking-widest text-muted mt-2">
+              Following
+            </p>
+          </Link>
+        </div>
+
+        {/* Follow requests — consent inbox (B3b). Only when non-empty. */}
         {isServer && requests.length > 0 ? (
           <div>
-            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
+            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
               Requests · {requests.length}
             </h2>
             <div className="space-y-3">
@@ -107,127 +160,9 @@ export default function FriendsPage(): JSX.Element {
           </div>
         ) : null}
 
-        {/* B3c: Friends (mutuals) + Followers, above the Following list. */}
-        {isServer && !loading ? (
-          <>
-            {/* Friends explainer only once there's a graph to explain — a
-                zero-everything account keeps ONE empty state (the Following
-                section's), not a stack (Opus review). */}
-            {mutuals.length > 0 || followers.length > 0 || circle.length > 0 ? (
-            <div>
-              <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
-                Friends{mutuals.length > 0 ? ` · ${mutuals.length}` : ''}
-              </h2>
-              {mutuals.length === 0 ? (
-                <div className="bg-surface border border-border rounded-3xl p-6 text-center">
-                  <p className="text-sm text-muted leading-relaxed">
-                    Friends are people you both follow. Follow back a
-                    follower — or get followed back — and they&apos;ll show
-                    up here.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {mutuals.map((p) => (
-                    <CircleRow
-                      key={p.handle}
-                      profile={p}
-                      onUnfollow={toggleFollow}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-            ) : null}
-
-            {followers.length > 0 ? (
-              <div>
-                <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
-                  Followers · {followers.length}
-                </h2>
-                <div className="space-y-3">
-                  {followers.map((p) =>
-                    isFollowing(p.handle) ? null : (
-                      <FollowerRow
-                        key={p.handle}
-                        profile={p}
-                        requested={isRequested(p.handle)}
-                        onFollowBack={toggleFollow}
-                      />
-                    ),
-                  )}
-                  {followers.every((p) => isFollowing(p.handle)) ? (
-                    <p className="text-muted text-xs px-1">
-                      You follow back everyone who follows you.
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-          </>
-        ) : null}
-
-        {/* Following (was "Your circle") */}
+        {/* Find friends. */}
         <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
-            {isServer ? 'Following' : 'Your circle'}
-            {isServer
-              ? circle.length > 0
-                ? ` · ${circle.length}`
-                : ''
-              : followed.length > 0
-                ? ` · ${followed.length}`
-                : ''}
-          </h2>
-          {loading ? (
-            <p className="text-muted text-sm">Loading…</p>
-          ) : isServer ? (
-            circle.length === 0 && requested.length === 0 ? (
-              <EmptyCircle />
-            ) : (
-              <div className="space-y-3">
-                {circle.map((p) => (
-                  <CircleRow
-                    key={p.handle}
-                    profile={p}
-                    onUnfollow={toggleFollow}
-                  />
-                ))}
-                {/* Outgoing requests awaiting consent — tap withdraws (B3b). */}
-                {requested.map((p) => (
-                  <CircleRow
-                    key={`req-${p.handle}`}
-                    profile={p}
-                    pending
-                    onUnfollow={toggleFollow}
-                  />
-                ))}
-              </div>
-            )
-          ) : followed.length === 0 ? (
-            <div className="bg-surface border border-border rounded-3xl p-6 text-center">
-              <p className="text-sm text-muted leading-relaxed">
-                You&apos;re not following anyone yet. Add a few of the
-                tastemakers below to fill your feed.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {followed.map((f) => (
-                <FriendCard
-                  key={f.handle}
-                  friend={f}
-                  following
-                  onToggleFollow={toggleFollow}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Discover / add by handle */}
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
+          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Find friends
           </h2>
           {isServer ? (
@@ -237,194 +172,112 @@ export default function FriendsPage(): JSX.Element {
               toggleFollow={toggleFollow}
             />
           ) : (
-            <>
-              <label htmlFor="friend-search" className="sr-only">
-                Search by name or handle
-              </label>
-              <input
-                id="friend-search"
-                type="search"
-                inputMode="text"
-                autoComplete="off"
-                placeholder="Search @handle or name…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
-              />
-
-              <div className="mt-4 space-y-3">
-                {searchMatches.length === 0 ? (
-                  <p className="text-muted text-sm px-1">
-                    {q.length > 0
-                      ? `No one matching "${query}" to add.`
-                      : 'You already follow everyone we’ve curated. More tastemakers coming soon.'}
-                  </p>
-                ) : (
-                  searchMatches.map((f) => (
-                    <div
-                      key={f.handle}
-                      className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3"
-                    >
-                      <Link href={`/u/${f.handle}`} className="min-w-0 flex-1">
-                        <p className="font-display text-sm truncate">
-                          {f.displayName}
-                        </p>
-                        <p className="text-muted text-xs truncate">
-                          @{f.handle} · {f.archetype}
-                        </p>
-                      </Link>
-                      <button
-                        type="button"
-                        onClick={() => toggleFollow(f.handle)}
-                        className="shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display bg-accent text-bg"
-                      >
-                        Follow
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
+            <DemoFind isFollowing={isFollowing} toggleFollow={toggleFollow} />
           )}
         </div>
-
-        <p className="text-muted text-xs text-center leading-relaxed pt-2">
-          Private by default — only people you follow back see your full list.
-          Phone-contact sync arrives with the native app.
-        </p>
       </section>
     </main>
   );
 }
 
-/**
- * Empty-state = acceptance criteria (B3): user #1 with zero friends gets an
- * inviting find-friends prompt, never a broken page.
- */
-function EmptyCircle(): JSX.Element {
-  return (
-    <div className="bg-surface border border-border rounded-3xl p-6 text-center">
-      <p className="font-display text-base mb-1">No one in your circle yet.</p>
-      <p className="text-sm text-muted leading-relaxed">
-        Search a friend&apos;s @username below to start building your circle —
-        that&apos;s where the good bar lists live.
-      </p>
-    </div>
-  );
-}
-
-function CircleRow({
-  profile,
-  pending = false,
-  onUnfollow,
-}: {
-  profile: PublicProfile;
-  /** True for an outgoing request awaiting consent — tap withdraws (B3b). */
-  pending?: boolean;
-  onUnfollow: (handle: string) => void;
-}): JSX.Element {
-  return (
-    <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
-      <Link href={`/u/${profile.handle}`} className="min-w-0 flex-1">
-        <p className="font-display text-sm truncate">
-          {profile.displayName ?? `@${profile.handle}`}
-        </p>
-        <p className="text-muted text-xs truncate">@{profile.handle}</p>
-      </Link>
+/** Your going-out status: one tap sets, tapping the lit pill clears. */
+function IntentPills(): JSX.Element {
+  const { intent, toggleIntent } = useIntent();
+  const pill = (status: 'going' | 'maybe', label: string): JSX.Element => {
+    const active = intent?.status === status;
+    return (
       <button
         type="button"
-        aria-pressed
-        onClick={() => onUnfollow(profile.handle)}
-        className="shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display border bg-transparent border-border text-muted hover:text-text transition-colors"
-      >
-        {pending ? 'Requested' : 'Following'}
-      </button>
-    </div>
-  );
-}
-
-/**
- * A follower you don't follow back (B3c): the follow-back button reuses
- * toggleFollow, which honors B3b request semantics for private accounts
- * ("Requested" state via the `requested` prop).
- */
-function FollowerRow({
-  profile,
-  requested,
-  onFollowBack,
-}: {
-  profile: PublicProfile;
-  requested: boolean;
-  onFollowBack: (handle: string) => void;
-}): JSX.Element {
-  return (
-    <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
-      <Link href={`/u/${profile.handle}`} className="min-w-0 flex-1">
-        <p className="font-display text-sm truncate">
-          {profile.displayName ?? `@${profile.handle}`}
-        </p>
-        <p className="text-muted text-xs truncate">
-          @{profile.handle} · follows you
-        </p>
-      </Link>
-      <button
-        type="button"
-        aria-pressed={requested}
-        onClick={() => onFollowBack(profile.handle)}
+        aria-pressed={active}
+        onClick={() => toggleIntent(status)}
         className={[
-          'shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display border transition-colors',
-          requested
-            ? 'bg-transparent border-border text-muted hover:text-text'
-            : 'bg-accent border-accent text-bg',
+          'min-h-[44px] touch-manipulation px-5 rounded-full font-display text-sm border transition-colors',
+          // Active = OUTLINED accent, never filled — the Plan Night Out
+          // card owns the screen's one accent fill (R2, review HIGH).
+          active
+            ? 'bg-transparent border-accent text-accent'
+            : 'bg-transparent border-border text-muted hover:text-text',
         ].join(' ')}
       >
-        {requested ? 'Requested' : 'Follow back'}
+        {label}
       </button>
+    );
+  };
+  return (
+    <div className="flex items-center gap-2" role="group" aria-label="Your status tonight">
+      {pill('going', 'Going out')}
+      {pill('maybe', 'Maybe')}
     </div>
   );
 }
 
-/**
- * One incoming follow request (B3b consent inbox): accept creates the edge
- * on the requester's side, decline discards. Both are optimistic in the
- * hook — a server refusal puts the row back.
- */
-function RequestRow({
-  request,
-  onAccept,
-  onDecline,
+/** Signed-out search over the seeded curators (unchanged demo behavior). */
+function DemoFind({
+  isFollowing,
+  toggleFollow,
 }: {
-  request: FollowRequest;
-  onAccept: (requesterId: string) => void;
-  onDecline: (requesterId: string) => void;
+  isFollowing: (handle: string) => boolean;
+  toggleFollow: (handle: string) => void;
 }): JSX.Element {
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase().replace(/^@/, '');
+  const suggested = useMemo(
+    () => demoFriends.filter((f) => !isFollowing(f.handle)),
+    [isFollowing],
+  );
+  const matches = useMemo(() => {
+    if (q.length === 0) return suggested;
+    return suggested.filter(
+      (f) =>
+        f.handle.includes(q) ||
+        f.displayName.toLowerCase().includes(q) ||
+        f.archetype.toLowerCase().includes(q),
+    );
+  }, [q, suggested]);
+
   return (
-    <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
-      <Link href={`/u/${request.handle}`} className="min-w-0 flex-1">
-        <p className="font-display text-sm truncate">
-          {request.displayName ?? `@${request.handle}`}
-        </p>
-        <p className="text-muted text-xs truncate">
-          @{request.handle} · wants to follow you
-        </p>
-      </Link>
-      <div className="flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          onClick={() => onAccept(request.id)}
-          className="min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display bg-accent text-bg"
-        >
-          Accept
-        </button>
-        <button
-          type="button"
-          onClick={() => onDecline(request.id)}
-          aria-label={`Decline follow request from @${request.handle}`}
-          className="min-h-[36px] touch-manipulation px-3 rounded-full text-sm font-display border border-border text-muted hover:text-text transition-colors"
-        >
-          ✕
-        </button>
+    <>
+      <label htmlFor="friend-search" className="sr-only">
+        Search by name or handle
+      </label>
+      <input
+        id="friend-search"
+        type="search"
+        inputMode="text"
+        autoComplete="off"
+        placeholder="Search @handle or name…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
+      />
+      <div className="mt-4 space-y-3">
+        {matches.length === 0 ? (
+          <p className="text-muted text-sm px-1">
+            {q.length > 0 ? `No one matching "${query}".` : 'You follow everyone here.'}
+          </p>
+        ) : (
+          matches.map((f) => (
+            <div
+              key={f.handle}
+              className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3"
+            >
+              <Link href={`/u/${f.handle}`} className="min-w-0 flex-1">
+                <p className="font-display text-sm truncate">{f.displayName}</p>
+                <p className="text-muted text-xs truncate">
+                  @{f.handle} · {f.archetype}
+                </p>
+              </Link>
+              <button
+                type="button"
+                onClick={() => toggleFollow(f.handle)}
+                className="shrink-0 min-h-[44px] touch-manipulation px-4 rounded-full text-sm font-display bg-accent text-bg"
+              >
+                Follow
+              </button>
+            </div>
+          ))
+        )}
       </div>
-    </div>
+    </>
   );
 }
