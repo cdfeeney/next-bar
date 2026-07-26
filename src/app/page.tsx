@@ -103,18 +103,16 @@ export default function HomePage() {
           </Link>
         </div>
       </header>
+      {/* Operator 2026-07-26: the quiz nudge is gone — this slot teases
+          the APP instead (the quiz still lives at /quiz and /install). */}
       {hasProfile === false ? (
         <div className="px-6 pt-4">
           <Link
-            href="/quiz"
-            className="block max-w-md mx-auto bg-surface border border-accent/40 rounded-2xl px-5 py-4 touch-manipulation hover:border-accent transition-colors"
+            href="/install"
+            className="block max-w-md mx-auto bg-surface border border-accent/40 rounded-2xl px-5 py-3 touch-manipulation hover:border-accent transition-colors"
           >
-            <p className="font-display text-sm mb-1">
-              New here? Take the vibe quiz →
-            </p>
-            <p className="text-muted text-xs leading-relaxed">
-              60 seconds, and every suggestion gets picked for your taste —
-              not just what&apos;s nearby.
+            <p className="font-display text-sm">
+              Next Bar, on your phone →
             </p>
           </Link>
         </div>
