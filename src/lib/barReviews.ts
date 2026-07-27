@@ -19,8 +19,10 @@ const cache = new Map<string, Bar['reviews']>();
 
 export async function fetchBarReviews(id: string): Promise<Bar['reviews']> {
   if (!ID_RE.test(id)) return undefined;
-  const cached = cache.get(id);
-  if (cached !== undefined) return cached;
+  // has(), not get() !== undefined: a bar with NO reviews caches as
+  // `undefined`, and a value-based check would treat that hit as a miss
+  // and re-query it on every single open.
+  if (cache.has(id)) return cache.get(id);
 
   const supabase = getBrowserSupabase();
   if (!supabase) return undefined;
