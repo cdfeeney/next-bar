@@ -14,22 +14,28 @@
 import { test, expect } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
 
+// Fixed clock (Fri 11pm local): the live results surfaces hard-filter
+// KNOWN-closed bars, so exact-count assertions are only deterministic
+// under a mocked clock (a Sunday-morning run sees 4, not 5).
+const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
+
 test.describe('Where-next path (E2.1 collapsed)', () => {
   test('picks Attaboy and lands on results in ONE step; deleted screens never render', async ({
     page,
   }) => {
     // Home is location-first; deny geo so it falls back to the manual pick flow.
     await denyGeolocation(page.context());
+    await page.clock.setFixedTime(FRIDAY_NIGHT);
     await page.goto('/');
 
     await expect(page.getByRole('heading', { name: /Where are you\?/i })).toBeVisible();
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
 
-    // ONE tap → results. No interstitials.
+    // ONE tap → results. No interstitials. QA-6: 5 suggestions everywhere.
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-    await expect(cards).toHaveCount(3);
-    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(3);
+    await expect(cards).toHaveCount(5);
+    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(5);
     await expect(
       page.locator('article').filter({ hasText: /Vibe match/i }).getByRole('heading', { name: /Attaboy/i }),
     ).toHaveCount(0);
@@ -45,7 +51,7 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     const radiusGroup = page.getByRole('group', { name: 'Search radius' });
     await expect(radiusGroup).toBeVisible();
     await radiusGroup.getByRole('button', { name: 'Anywhere' }).click();
-    await expect(cards).toHaveCount(3);
+    await expect(cards).toHaveCount(5);
     await expect(page).toHaveURL('/');
   });
 
@@ -53,6 +59,7 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     page,
   }) => {
     await denyGeolocation(page.context());
+    await page.clock.setFixedTime(FRIDAY_NIGHT);
     await page.goto('/');
 
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');

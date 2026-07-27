@@ -6,6 +6,13 @@ export const JACCARD_STEP = 0.05;
 export const MIN_CANDIDATES = 3;
 export const MAX_RESULTS = 3;
 /**
+ * QA-6 (2026-07-27): the ONE Next Bar results view surfaces 5 suggestions
+ * on BOTH home entry paths (location-first auto results and the manual
+ * seed-bar results). MAX_RESULTS stays 3 as the matcher's default cap for
+ * small companion surfaces (Group Favorites, consensus).
+ */
+export const RESULTS_COUNT = 5;
+/**
  * Exploration slot (B7b, "DeepSeek ε-greedy, simplified"): when a surface
  * requests at least this many results, the LAST slot is reserved for a
  * qualified long-tail pick instead of the Nth-best score. Small default
