@@ -159,6 +159,15 @@ export default function MapPage(): JSX.Element {
               ))}
             </ul>
           ) : null}
+          {/* QA5-S3: idle-time browsing lives on /discover, not here. */}
+          <p className="mt-2 text-center">
+            <Link
+              href="/discover"
+              className="inline-flex items-center min-h-[44px] text-accent font-display text-sm touch-manipulation hover:underline underline-offset-4"
+            >
+              Discover →
+            </Link>
+          </p>
         </div>
 
         <div className="mt-4 flex flex-col items-center gap-2">
