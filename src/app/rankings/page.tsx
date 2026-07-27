@@ -9,6 +9,7 @@ import { sortRatingsByScore, tierMidpoint } from '@/lib/pairwise';
 import { seedSampleNight } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
 import { useBars } from '@/lib/useBars';
+import { displayHood } from '@/lib/hoodDisplay';
 import QuickAddBar from '@/components/QuickAddBar';
 import WantToGoList from '@/components/WantToGoList';
 import type { Bar } from '@/types';
@@ -245,7 +246,7 @@ export default function RankingsPage(): JSX.Element {
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-muted text-xs uppercase tracking-wider">
-                      {bar.neighborhood}
+                      {displayHood(bar.neighborhood)}
                     </span>
                     <span
                       className={[

@@ -1,6 +1,7 @@
 'use client';
 
 import type { ManhattanNeighborhood } from '@/types';
+import { displayHood } from '@/lib/hoodDisplay';
 
 type NeighborhoodPickerProps = {
   selected: ManhattanNeighborhood[];
@@ -87,7 +88,7 @@ export default function NeighborhoodPicker({
                   : 'bg-surface text-text border border-border hover:border-accent',
               ].join(' ')}
             >
-              {neighborhood}
+              {displayHood(neighborhood)}
             </button>
           );
         })}

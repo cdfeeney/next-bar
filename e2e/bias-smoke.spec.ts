@@ -81,7 +81,7 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     // bars are legitimately the nearest strong matches (Bar Centrale 6/6).
     const firstCard = cards.first();
     await expect(firstCard).toContainText(
-      /Midtown|Hell's Kitchen|Chelsea|UWS|East Village/i,
+      /Midtown|Hell's Kitchen|Chelsea|UWS|Upper West Side|East Village/i,
     );
   });
 });

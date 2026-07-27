@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import type { Bar, ManhattanNeighborhood } from '@/types';
 import { useBars } from '@/lib/useBars';
+import { displayHood } from '@/lib/hoodDisplay';
 import RatingBadge from '@/components/RatingBadge';
 import BarVisualTile from '@/components/BarVisualTile';
 
@@ -79,7 +80,7 @@ export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {
           return (
             <div key={neighborhood}>
               <h3 className="font-display text-sm uppercase tracking-wider text-muted px-4 py-2">
-                {neighborhood}
+                {displayHood(neighborhood)}
               </h3>
               <ul>
                 {list.map((bar) => (
