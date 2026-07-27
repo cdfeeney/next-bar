@@ -32,7 +32,8 @@ export type Neighborhood =
   | 'Fort Greene'
   // Queens
   | 'Astoria'
-  | 'LIC';
+  | 'LIC'
+  | 'Ridgewood';
 
 /** @deprecated Use `Neighborhood`. Alias kept for back-compat; spans Manhattan + Brooklyn + Queens. */
 export type ManhattanNeighborhood = Neighborhood;

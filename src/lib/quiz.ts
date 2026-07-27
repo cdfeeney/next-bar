@@ -131,6 +131,7 @@ export const quiz: QuizQuestion[] = [
       'Fort Greene',
       'Astoria',
       'LIC',
+      'Ridgewood',
     ],
   },
 ];

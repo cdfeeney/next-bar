@@ -37,6 +37,7 @@ const ALL: ManhattanNeighborhood[] = [
   // Queens
   'Astoria',
   'LIC',
+  'Ridgewood',
 ];
 
 export default function NeighborhoodPicker({

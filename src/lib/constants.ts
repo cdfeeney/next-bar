@@ -95,6 +95,7 @@ export const NEIGHBORHOOD_CENTROIDS: Record<Neighborhood, Coords> = {
   // Queens
   'Astoria':      { lat: 40.7640, lng: -73.9200 },
   'LIC':          { lat: 40.7450, lng: -73.9490 },
+  'Ridgewood':    { lat: 40.7043, lng: -73.9018 },
 };
 
 // Service area now spans lower/mid Manhattan + north/central Brooklyn.
