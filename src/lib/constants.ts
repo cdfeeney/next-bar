@@ -32,7 +32,6 @@ export const LAST_VERIFIED_FRESH_DAYS = 90;
 
 export const COARSE_ACCURACY_M = 200;
 export const MAX_SNAP_MILES = 2;
-export const GPS_CONFIRM_MILES = 0.124;
 
 // E3.2 distance chips: "Walkable" ~ a determined 25-30min walk;
 // "Worth a cab" ~ a short cross-town ride. Literal types in types/index.ts
@@ -84,6 +83,3 @@ export const SERVICE_AREA_BBOX = {
   minLng: -74.030,
   maxLng: -73.890,
 };
-
-/** @deprecated Use `SERVICE_AREA_BBOX`. */
-export const MANHATTAN_BBOX = SERVICE_AREA_BBOX;
