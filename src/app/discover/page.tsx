@@ -20,73 +20,19 @@ import Link from 'next/link';
 import type { Bar } from '@/types';
 import { barImageUrls } from '@/lib/barVisual';
 import { useBars } from '@/lib/useBars';
+import {
+  WANT_TO_GO_KEY,
+  addWantToGo,
+  loadWantToGo,
+} from '@/lib/wantToGo';
 import { useRatings } from '@/hooks/useRatings';
 import { useSuggestions } from '@/hooks/useSuggestions';
 import BarVisualTile from '@/components/BarVisualTile';
 import OpenNowBadge from '@/components/OpenNowBadge';
 
-// ---------------------------------------------------------------------------
-// Want-to-go storage helper — LOCAL to this module by design.
-//
-// STORAGE CONTRACT (shared with the lists slice, which owns the future
-// shared lib): localStorage `next-bar:list:want-to-go:v1` holds a JSON
-// array of { barId: string, addedAt: string }. Corrupt data degrades to
-// [], writes dedup by barId, and every write dispatches a synthesized
-// `storage` event (src/lib/intent.ts notifyChange pattern) so other
-// mounted consumers refresh. Integration swaps this for the shared lib.
-// ---------------------------------------------------------------------------
-
-type WantToGoEntry = {
-  barId: string;
-  addedAt: string; // ISO timestamp
-};
-
-const WANT_TO_GO_KEY = 'next-bar:list:want-to-go:v1';
-
-function isWantToGoEntry(value: unknown): value is WantToGoEntry {
-  if (value === null || typeof value !== 'object') return false;
-  const obj = value as Record<string, unknown>;
-  return typeof obj.barId === 'string' && typeof obj.addedAt === 'string';
-}
-
-function loadWantToGo(): WantToGoEntry[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(WANT_TO_GO_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed) || !parsed.every(isWantToGoEntry)) return [];
-    return parsed;
-  } catch {
-    return [];
-  }
-}
-
-function notifyWantToGoChange(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.dispatchEvent(new StorageEvent('storage', { key: WANT_TO_GO_KEY }));
-  } catch {
-    // Some environments lack the StorageEvent constructor — non-fatal.
-  }
-}
-
-/** Append (deduped by barId). Idempotent: re-saving an entry is a no-op. */
-function addToWantToGo(barId: string): void {
-  if (typeof window === 'undefined') return;
-  const current = loadWantToGo();
-  if (current.some((e) => e.barId === barId)) return;
-  const updated: WantToGoEntry[] = [
-    ...current,
-    { barId, addedAt: new Date().toISOString() },
-  ];
-  try {
-    window.localStorage.setItem(WANT_TO_GO_KEY, JSON.stringify(updated));
-  } catch {
-    // Quota / private-mode errors — silently drop, matching ratings.ts.
-  }
-  notifyWantToGoChange();
-}
+// Want-to-go storage lives in src/lib/wantToGo.ts (canonical, shared with
+// /rankings): salvaging corrupt-safe reads, dedup by barId, and a
+// synthesized `storage` event on every write.
 
 // ---------------------------------------------------------------------------
 // Swipe card
@@ -255,7 +201,7 @@ export default function DiscoverPage(): JSX.Element {
   const isReady = wantedIds !== null && profileChecked;
 
   const handleSave = useCallback((barId: string) => {
-    addToWantToGo(barId);
+    addWantToGo(barId);
     // The synthesized storage event refreshes state too — this direct set
     // just guarantees advance even if the event constructor threw.
     setWantedIds(loadWantToGo().map((e) => e.barId));
