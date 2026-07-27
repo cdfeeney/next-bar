@@ -7,6 +7,28 @@ APPLY overnight) and (b) sets `NEXT_PUBLIC_ANALYTICS=1` +
 currently have ZERO signal on whether anyone searches, shares, saves,
 or visits.
 
+## Security review outcome (routed security-reviewer, night-5)
+
+- **H1 (unbounded growth) → FIXED by moving to a COUNTER MODEL**: the
+  table is `(name, night, count)` with an atomic upsert-increment
+  (`bump_analytics_event`) — bounded at 4 rows/night forever; no
+  retention job needed. A flood can inflate counters (accepted for an
+  anonymous counter — poisoning, not compromise) but never bloat
+  storage. Independently corroborated by SCALE-PLAN.md Finding F.
+- **M2 → FIXED**: transport-level throws around the Supabase call are
+  caught and returned as the same generic 503 (account/delete
+  precedent).
+- **M4 → MITIGATED**: a PRESENT `Origin` header must match the request
+  host (blocks third-party browser pages poisoning counts). Origin-less
+  clients (curl) are accepted — undetectable anyway; the counter model
+  bounds the damage. Conscious accept.
+- **M3 (enum drift) → NOTE**: adding a 5th event name requires a NEW
+  migration widening the `analytics_events_name_check` CHECK — a code
+  change alone will 503 the new event (safe failure, but silent).
+- **L1 (precision)**: "no IP stored" refers to the DB row and logs; the
+  in-memory rate limiter necessarily holds the client IP for ≤60s per
+  window. Never persisted, never logged.
+
 ## Decision: self-rolled counts, not Vercel Analytics (for product events)
 
 | | Vercel Web Analytics | Self-rolled /api/event |
@@ -24,7 +46,7 @@ package is NOT added — no new deps overnight).
 
 ## Privacy stance (drives the schema)
 
-An event row is `(name, night, created_at)` — **no user id, no session
+A row is a COUNTER `(name, night, count)` — **no user id, no session
 id, no IP, no user agent, no bar id**. Aggregate product signal only
 ("42 searches Friday night"), nothing to disclose in /privacy beyond a
 one-line "we count feature usage anonymously" (queued for the morning:
@@ -46,8 +68,9 @@ if per-user funnels are ever wanted, that's a new consented design.
   route is the only writer, which deletes the whole RLS-abuse-surface
   problem. Per-instance token bucket (60/min) as a cheap flood damper —
   honest limitation: per-serverless-instance, not global.
-- **`supabase/migrations/0018_analytics_events.sql`** — table + index,
-  revoke-everything (service role bypasses grants). AUTHOR-ONLY tonight.
+- **`supabase/migrations/0018_analytics_events.sql`** — counter table +
+  `bump_analytics_event` atomic increment; revoke-everything from client
+  roles, explicit service_role grant. AUTHOR-ONLY tonight.
 
 ## Morning checklist
 
