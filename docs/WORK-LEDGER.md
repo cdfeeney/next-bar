@@ -8,8 +8,7 @@ Last updated: 2026-07-27 (GLM sweep round)
 
 ## State of the world
 
-- **Catalog: 861 verified venues**, 859 Google-enriched (pin + hours +
-  business status), 856 with photos. 35 neighborhoods wired.
+- **Catalog: 1,000 verified venues**, 998 pinned, 949 with hours, 987 with photos. 35 neighborhoods wired.
 - Prod: https://next-bar-two.vercel.app
 - Migrations **0017 (vibe votes)** and **0018 (analytics)** are APPLIED to
   production as of 2026-07-27. Objects verified present: tables
@@ -26,19 +25,37 @@ Last updated: 2026-07-27 (GLM sweep round)
 
 ## Coverage — open
 
-- **Thin neighborhoods** after two GLM rounds: Hudson Square 2, Kips Bay 2,
-  Battery Park City 3, Morningside Heights 3, Chinatown 3, Hamilton
-  Heights 4, NoHo 5, Ridgewood 5, Inwood 6, Gowanus 6, Washington
-  Heights 7, Gramercy 7, Tribeca 7.
-- Round 2 solved the recall problem: for hoods where GLM's knowledge is
-  thin (uptown, the waterfront), pull live results with **Perplexity from
-  the main loop** and hand GLM the venue list to tag rather than to
-  invent. That took Battery Park City 1 -> 3 and Washington Heights 2 -> 7.
-- **Uptown listicles are badly stale.** Of 37 Perplexity-sourced uptown
-  venues, 10 were permanently closed (Coogan's, Buddha Beer Bar, Piper's
-  Kilt, Showman's) and several had become other businesses entirely —
-  "Serie 56" is now a doctor's office, "Epiphany Lounge" a skin-care
-  clinic. Never import a web-sourced venue without the Google check.
+- **Thin neighborhoods**: only three remain under 10 venues — Battery Park
+  City 7, Washington Heights 8, Morningside Heights 9. All three are
+  genuinely low-density, not gaps: an exhaustive Nearby Search of Battery
+  Park City returned **zero** bars we don't already have.
+- Windsor Terrace stays **skipped** (operator: "too far for our mvp launch").
+
+## Coverage method — Nearby Search is the ground truth
+
+`scripts/nearby-sweep.mjs` asks Google what bars *exist* at a coordinate
+instead of asking a model to remember them, and it is the only method
+that can actually answer "have we missed any bars here":
+
+    node scripts/nearby-sweep.mjs "Chinatown" "Tribeca" --radius 400 --out found.json
+
+It tiles nine overlapping circles per neighborhood (one circle caps at 20
+results, so a single call silently truncates dense areas) and reports
+every operational, bar-typed venue not already in the catalog.
+
+Two details that matter:
+- Nearby Search matches a place if **any** of its types match, so a
+  restaurant with a wine list comes back under `bar`. Filtering on
+  **`primaryType`** is what makes the output usable — it cut a raw 136
+  hits down to 34 real bars.
+- Dedup on **`place_id`**, never on name.
+
+This found **137 bars in one afternoon** that every recall-based method
+had missed — ordinary neighborhood places (Puffy's Tavern, Bleecker
+Street Bar, Gottscheer Hall, Tryon Public House) that no listicle covers.
+Recall-based sourcing finds what people *write about*; this finds what
+*exists*. Run it against every neighborhood before declaring coverage
+done.
 
 ## The sweep pipeline (use this — it works)
 
