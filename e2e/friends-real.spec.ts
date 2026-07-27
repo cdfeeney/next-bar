@@ -206,12 +206,12 @@ test.describe('/friends — signed in (real graph)', () => {
     await expect(page).toHaveURL(/\/friends$/);
   });
 
-  test('the Tonight strip shows circle RSVPs — who → which bar; hidden without any (UX-A)', async ({
+  test('the Tonight strip shows circle SUGGESTIONS — who ▲ which bar; hidden without any (QA3)', async ({
     page,
   }) => {
     await stubSupabase(page, { following: [SAM] });
     // Later-registered routes take precedence over stubSupabase's.
-    await page.route('**/rest/v1/rpc/get_circle_rsvps', (route) =>
+    await page.route('**/rest/v1/rpc/get_circle_suggestions', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -229,14 +229,14 @@ test.describe('/friends — signed in (real graph)', () => {
 
     const strip = page.getByTestId('friends-tonight');
     await expect(strip.getByText('Sam J.')).toBeVisible();
-    await expect(strip.getByText(/→ Attaboy/)).toBeVisible();
+    await expect(strip.getByText(/▲ Attaboy/)).toBeVisible();
   });
 
-  test('the Tonight strip renders no RSVP rows when the circle has none (UX-A)', async ({
+  test('the Tonight strip renders no suggestion rows when the circle has none (QA3)', async ({
     page,
   }) => {
     await stubSupabase(page, { following: [SAM] });
-    await page.route('**/rest/v1/rpc/get_circle_rsvps', (route) =>
+    await page.route('**/rest/v1/rpc/get_circle_suggestions', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
     );
     await page.goto('/friends');
@@ -244,8 +244,8 @@ test.describe('/friends — signed in (real graph)', () => {
     const strip = page.getByTestId('friends-tonight');
     // The status pills still render (they live in the same block)…
     await expect(strip.getByRole('button', { name: /^Going out$/ })).toBeVisible();
-    // …but no committed-friend rows.
-    await expect(strip.getByText(/→ /)).toHaveCount(0);
+    // …but no backed-bar rows.
+    await expect(strip.getByText(/▲ /)).toHaveCount(0);
   });
 
   test('unfollow on the Following list removes the row (UX-A)', async ({
@@ -356,9 +356,10 @@ test.describe('/friends/consensus — REAL group pick', () => {
     await expect(page.getByRole('button', { name: /Sam/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Claire/ })).toBeVisible();
 
-    // Unanimous section driven by their REAL (stubbed) ratings.
-    await expect(page.getByText(/You all agree on 1/)).toBeVisible();
-    await expect(page.getByText('Attaboy').first()).toBeVisible();
+    // Group Favorites driven by their REAL (stubbed) ratings (UX-B board
+    // — the "You all agree" section header is gone).
+    await expect(page.getByText(/Group Favorites/i)).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Attaboy/ })).toBeVisible();
   });
 
   test('a circle with no rated friends explains itself instead of ghost-chipping', async ({
