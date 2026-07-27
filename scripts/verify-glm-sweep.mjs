@@ -104,7 +104,13 @@ for (const file of fs.readdirSync(DIR).filter((f) => /^glm-.*\.out$/.test(f))) {
     const [name, address, price, tagStr] = parts;
     if (!name || !address || !/^[1-4]$/.test(price)) continue;
     if (/^name$/i.test(name) || name.includes('example')) continue;
-    const tags = tagStr.split(',').map((t) => t.trim()).filter((t) => TAG_VOCAB.has(t));
+    // GLM is inconsistent about the tag separator between runs (commas
+    // one call, spaces the next) — accept either rather than silently
+    // dropping a whole sweep to zero usable tags.
+    const tags = tagStr
+      .split(/[,\s]+/)
+      .map((t) => t.trim())
+      .filter((t) => TAG_VOCAB.has(t));
     if (tags.length < 2) continue;
     const key = slug(name);
     if (!key || seen.has(key)) continue;

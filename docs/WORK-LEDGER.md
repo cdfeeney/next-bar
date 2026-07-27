@@ -8,8 +8,8 @@ Last updated: 2026-07-27 (GLM sweep round)
 
 ## State of the world
 
-- **Catalog: 846 verified venues**, 844 Google-enriched (pin + hours +
-  business status), 841 with photos. 35 neighborhoods wired.
+- **Catalog: 861 verified venues**, 859 Google-enriched (pin + hours +
+  business status), 856 with photos. 35 neighborhoods wired.
 - Prod: https://next-bar-two.vercel.app
 - Migrations **0017 (vibe votes)** and **0018 (analytics)** are APPLIED to
   production as of 2026-07-27. Objects verified present: tables
@@ -26,22 +26,19 @@ Last updated: 2026-07-27 (GLM sweep round)
 
 ## Coverage — open
 
-- **Thin neighborhoods** after the GLM round: Battery Park City 1,
-  Morningside Heights 2, Washington Heights 2, Hudson Square 2, Kips Bay 2,
-  Chinatown 3, Hamilton Heights 3, Inwood 3, NoHo 5, Ridgewood 5,
-  Gowanus 6, Gramercy 7, Tribeca 7.
-- These are hard cases, not oversights: GLM **declined** Battery Park City
-  outright ("I can't verify which bars are open without risking shipping
-  wrong venues"), and its uptown/outer-borough recall is thin. The next
-  pass for these should feed **live web results** (Perplexity from the main
-  loop) into the GLM packet as context rather than relying on recall.
-- **Windsor Terrace: deliberately SKIPPED** — operator: "too far for our
-  mvp launch".
-- Re-run the social sweep (Reddit / Eater / Infatuation / Time Out /
-  Instagram) after the next import round to measure the remaining gap.
-  **Lesson from the first run: old Reddit threads and listicles surface
-  venues that have since closed** — 15 of the socially-sourced venues came
-  back CLOSED_PERMANENTLY from Google. Always Google-check social finds.
+- **Thin neighborhoods** after two GLM rounds: Hudson Square 2, Kips Bay 2,
+  Battery Park City 3, Morningside Heights 3, Chinatown 3, Hamilton
+  Heights 4, NoHo 5, Ridgewood 5, Inwood 6, Gowanus 6, Washington
+  Heights 7, Gramercy 7, Tribeca 7.
+- Round 2 solved the recall problem: for hoods where GLM's knowledge is
+  thin (uptown, the waterfront), pull live results with **Perplexity from
+  the main loop** and hand GLM the venue list to tag rather than to
+  invent. That took Battery Park City 1 -> 3 and Washington Heights 2 -> 7.
+- **Uptown listicles are badly stale.** Of 37 Perplexity-sourced uptown
+  venues, 10 were permanently closed (Coogan's, Buddha Beer Bar, Piper's
+  Kilt, Showman's) and several had become other businesses entirely —
+  "Serie 56" is now a doctor's office, "Epiphany Lounge" a skin-care
+  clinic. Never import a web-sourced venue without the Google check.
 
 ## The sweep pipeline (use this — it works)
 
