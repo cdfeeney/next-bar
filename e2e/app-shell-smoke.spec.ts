@@ -43,7 +43,7 @@ test.describe('App-shell smoke', () => {
 
   test('/map renders the Leaflet map', async ({ page }) => {
     await page.goto('/map');
-    await expect(page.getByRole('heading', { name: /^Map$/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
     // Leaflet attribution link is a reliable marker that the map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,

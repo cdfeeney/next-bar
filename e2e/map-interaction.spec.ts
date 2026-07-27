@@ -41,7 +41,7 @@ const COARSE_FAR = { latitude: 51.5074, longitude: -0.1278, accuracy: 3000 };
 test.describe('/map interaction', () => {
   test('renders bar markers', async ({ page }) => {
     await page.goto('/map');
-    await expect(page.getByRole('heading', { name: /^Map$/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
     // Leaflet attribution confirms the map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,
@@ -221,5 +221,38 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
     });
     // Picking clears the query so the dropdown leaves the screen.
     await expect(page.getByRole('list', { name: /Matching bars/i })).toHaveCount(0);
+  });
+});
+
+test.describe('/map Find Bar filters (QA2)', () => {
+  test('a neighborhood chip narrows the markers; Clear restores them', async ({
+    page,
+  }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const markers = page.locator('.leaflet-marker-icon');
+    await expect(markers.first()).toBeVisible({ timeout: 15_000 });
+    const allCount = await markers.count();
+    expect(allCount).toBeGreaterThan(0);
+
+    // Pick one neighborhood — the map must drop to that hood's bars only.
+    const filters = page.getByTestId('findbar-filters');
+    await filters.getByRole('button', { name: /^LES$/ }).click();
+
+    await expect
+      .poll(async () => markers.count(), { timeout: 15_000 })
+      .toBeLessThan(allCount);
+    // The badge counts the one active filter.
+    await expect(page.getByTestId('filter-count')).toHaveText('1');
+
+    // One-tap Clear restores the full catalog.
+    await page.getByTestId('filter-clear').click();
+    await expect
+      .poll(async () => markers.count(), { timeout: 15_000 })
+      .toBe(allCount);
+    await expect(page.getByTestId('filter-count')).toHaveCount(0);
   });
 });
