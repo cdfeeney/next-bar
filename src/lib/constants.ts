@@ -44,6 +44,16 @@ export const MAX_SNAP_MILES = 2;
 // "Worth a cab" ~ a short cross-town ride. Literal types in types/index.ts
 // (Radius) must match these values.
 export const RADIUS_WALK = 1.5;
+
+// Late-night ranking bias (operator 2026-07-27: "past a certain time the
+// algorithm biases towards bars and clubs and away from restaurants").
+// Applied on LIVE surfaces only, additive at tie-breaker scale (same
+// order of magnitude as the 0.1 affinity term — it reorders near-ties,
+// never buries a strong match).
+export const LATE_NIGHT_START_HOUR = 22; // 10pm…
+export const LATE_NIGHT_END_HOUR = 4;    // …through 3:59am
+export const LATE_CLUB_BOOST = 0.06;
+export const LATE_RESTAURANT_PENALTY = 0.06;
 export const RADIUS_CAB = 4;
 export const RADIUS_ANYWHERE = null;
 
@@ -72,6 +82,10 @@ export const NEIGHBORHOOD_CENTROIDS: Record<Neighborhood, Coords> = {
   'UWS':          { lat: 40.7870, lng: -73.9750 },
   'UES':          { lat: 40.7740, lng: -73.9610 },
   'Harlem':       { lat: 40.8110, lng: -73.9450 },
+  'Tribeca':      { lat: 40.7163, lng: -74.0086 },
+  'Battery Park City': { lat: 40.7115, lng: -74.0158 },
+  'Hamilton Heights':  { lat: 40.8252, lng: -73.9496 },
+  'Flatiron':     { lat: 40.7411, lng: -73.9897 },
   // Brooklyn
   'Williamsburg': { lat: 40.7140, lng: -73.9570 },
   'Greenpoint':   { lat: 40.7300, lng: -73.9510 },
