@@ -4,12 +4,12 @@ Durable queue for the MVP. Lives in the repo on purpose: a chat session
 can end, a model limit can be hit, a machine can reboot — this file
 survives all of it. Update it when an item lands, don't rewrite history.
 
-Last updated: 2026-07-27
+Last updated: 2026-07-27 (GLM sweep round)
 
 ## State of the world
 
-- **Catalog: 824 verified venues**, 822 Google-enriched (pin + hours +
-  business status), 819 with photos. 35 neighborhoods wired.
+- **Catalog: 846 verified venues**, 844 Google-enriched (pin + hours +
+  business status), 841 with photos. 35 neighborhoods wired.
 - Prod: https://next-bar-two.vercel.app
 - Migrations **0017 (vibe votes)** and **0018 (analytics)** are APPLIED to
   production as of 2026-07-27. Objects verified present: tables
@@ -26,12 +26,15 @@ Last updated: 2026-07-27
 
 ## Coverage — open
 
-- **Thin neighborhoods** (venue counts as of 2026-07-27): Hudson Square 1,
-  Battery Park City 1, Chinatown 2, Morningside Heights 2, Washington
-  Heights 2, Tribeca 2, Hamilton Heights 3, Inwood 3, NoHo 3, Gramercy 5,
-  Ridgewood 5, Gowanus 6. Each needs another propose→verify→import pass.
-  The 2026-07-27 verifier rejected 80% of candidates (345 of 434), which
-  is the right bias but leaves these hoods short.
+- **Thin neighborhoods** after the GLM round: Battery Park City 1,
+  Morningside Heights 2, Washington Heights 2, Hudson Square 2, Kips Bay 2,
+  Chinatown 3, Hamilton Heights 3, Inwood 3, NoHo 5, Ridgewood 5,
+  Gowanus 6, Gramercy 7, Tribeca 7.
+- These are hard cases, not oversights: GLM **declined** Battery Park City
+  outright ("I can't verify which bars are open without risking shipping
+  wrong venues"), and its uptown/outer-borough recall is thin. The next
+  pass for these should feed **live web results** (Perplexity from the main
+  loop) into the GLM packet as context rather than relying on recall.
 - **Windsor Terrace: deliberately SKIPPED** — operator: "too far for our
   mvp launch".
 - Re-run the social sweep (Reddit / Eater / Infatuation / Time Out /
@@ -39,6 +42,39 @@ Last updated: 2026-07-27
   **Lesson from the first run: old Reddit threads and listicles surface
   venues that have since closed** — 15 of the socially-sourced venues came
   back CLOSED_PERMANENTLY from Google. Always Google-check social finds.
+
+## The sweep pipeline (use this — it works)
+
+Operator rule 2026-07-27: **GLM generates, Claude and Codex only review.**
+See `~/.claude/rules/common/data-sweep-routing.md`.
+
+    node ~/.claude/bin/harness-consult.mjs --route glm < prompt.md    # names
+    node scripts/verify-glm-sweep.mjs <scratchpad-dir>                # Google adjudicates
+    npx tsx scripts/import-bars.mts <file> --apply
+    npx tsx scripts/enrich-table-bars.mts --apply --budget N
+    npx tsx scripts/photos-for-table.mts --apply --budget N
+
+Ask GLM for **compact pipe-delimited lines**, not JSON — a full JSON
+request with lat/lng and blurbs blew the launcher's 420 s ceiling, while
+`name | address | price | tags` returns in about 14 s. Let Google supply
+addresses, coordinates, and hours; GLM only needs to supply the *name*.
+
+`verify-glm-sweep.mjs` is where the quality comes from, and it is
+deliberately deterministic rather than model-judged:
+- `businessStatus` drops closed venues (11 in the first round),
+- `primaryType`/`types` decides "is this actually a bar" — this caught a
+  barber shop, a spa, a candy store, an apartment building and a dozen
+  restaurants GLM had listed as bars,
+- coordinates decide the neighborhood, so a mis-filed venue gets
+  reassigned instead of rejected.
+
+Dedup on the Google **place_id**, which catches accent and punctuation
+variants ("Le Chéile" vs "Le Cheile") that name matching misses — and
+dedup the new batch against **itself** as well as against the catalog.
+
+First round: 118 candidates → 51 passed Google → 25 new after catalog
+dedup → 22 after internal dedup → all 22 imported, enriched, photographed,
+and pin-audited (0 mispinned).
 
 ## Features — open
 
