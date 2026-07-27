@@ -77,6 +77,10 @@ const TAG_BIT_INDEX: Record<VibeTag, number> = {
   mid: 30,
   pricey: 31,
   splurge: 32,
+  // venue type, appended 2026-07-27 (operator: clubs + restaurant-bars are
+  // first-class for the mass import) — bit positions are APPEND-ONLY.
+  club: 33,
+  'restaurant-bar': 34,
 };
 
 /** Every known VibeTag, ordered by bit position (bit i = TAG_VOCABULARY[i]). */

@@ -31,7 +31,7 @@ export const VIBE_AXES: Record<VibeAxis, readonly VibeTag[]> = {
   /** How the room feels. */
   Energy: ['chill', 'buzzy', 'loud', 'dance'],
   /** The physical space. */
-  Setting: ['dive', 'lounge', 'speakeasy', 'pub', 'rooftop', 'garden'],
+  Setting: ['dive', 'lounge', 'speakeasy', 'pub', 'rooftop', 'garden', 'club', 'restaurant-bar'],
   /** Who's there and what the night is. */
   Scene: [
     'locals',

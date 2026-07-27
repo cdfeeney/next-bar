@@ -19,21 +19,38 @@ export type Neighborhood =
   | 'UWS'
   | 'UES'
   | 'Harlem'
+  // Manhattan expansion 2026-07-27 (operator: recover boundary-rejected venues)
+  | 'Tribeca'
+  | 'Battery Park City'
+  | 'Hamilton Heights'
+  | 'Flatiron'
+  | 'Greenwich Village'
+  | 'NoHo'
+  | 'Hudson Square'
+  | 'Gramercy'
+  | 'Kips Bay'
+  | 'East Harlem'
+  | 'Morningside Heights'
+  | 'Washington Heights'
+  | 'Inwood'
+  | 'Chinatown'
   // Brooklyn
   | 'Williamsburg'
   | 'Greenpoint'
   | 'Bushwick'
   | 'Park Slope'
   | 'Fort Greene'
+  | 'Gowanus'
   // Queens
   | 'Astoria'
-  | 'LIC';
+  | 'LIC'
+  | 'Ridgewood';
 
 /** @deprecated Use `Neighborhood`. Alias kept for back-compat; spans Manhattan + Brooklyn + Queens. */
 export type ManhattanNeighborhood = Neighborhood;
 
 export type VibeTag =
-  | 'dive' | 'cocktail' | 'wine' | 'beer' | 'dance' | 'lounge' | 'speakeasy' | 'pub' | 'rooftop' | 'garden'
+  | 'dive' | 'cocktail' | 'wine' | 'beer' | 'dance' | 'lounge' | 'speakeasy' | 'pub' | 'rooftop' | 'garden' | 'club' | 'restaurant-bar'
   | 'chill' | 'buzzy' | 'loud'
   | 'locals' | 'post-work' | 'date' | 'tourist' | 'industry'
   | 'rough' | 'polished' | 'romantic' | 'instagrammable' | 'old-nyc' | 'trendy'

@@ -9,6 +9,7 @@ import {
 } from '@/lib/constants';
 import { AXIS_ORDER, VIBE_AXES } from '@/lib/vibeAxes';
 import { displayTag } from '@/lib/tagDisplay';
+import { displayHood } from '@/lib/hoodDisplay';
 import {
   countActiveFilters,
   toggleSelection,
@@ -105,7 +106,7 @@ export default function FindBarFilterChips({
               }
               className={`${CHIP_BASE} ${isOn ? CHIP_ON : CHIP_OFF}`}
             >
-              {hood}
+              {displayHood(hood)}
             </button>
           );
         })}

@@ -7,6 +7,7 @@ import 'leaflet-gesture-handling/dist/leaflet-gesture-handling.css';
 import { GestureHandling } from 'leaflet-gesture-handling';
 import { haversineMiles } from '@/lib/distance';
 import { leadCopy } from '@/lib/travelTime';
+import { displayHood } from '@/lib/hoodDisplay';
 import type { Bar, Coords } from '@/types';
 
 type BarMapProps = {
@@ -177,7 +178,7 @@ function FocusBar({ bar, nonce }: { bar: Bar | null; nonce?: number }) {
     const name = document.createElement('b');
     name.textContent = bar.name;
     const sub = document.createElement('div');
-    sub.textContent = `${bar.neighborhood} · ${'$'.repeat(bar.priceTier)}`;
+    sub.textContent = `${displayHood(bar.neighborhood)} · ${'$'.repeat(bar.priceTier)}`;
     el.append(name, sub);
     map.openPopup(L.popup().setLatLng([bar.lat, bar.lng]).setContent(el));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- barId+nonce stand in for bar
@@ -271,7 +272,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
               const miles = userCoords
                 ? haversineMiles(userCoords, { lat: bar.lat, lng: bar.lng })
                 : null;
-              const travelLabel = miles !== null ? leadCopy(miles, bar.neighborhood).text : null;
+              const travelLabel = miles !== null ? leadCopy(miles, displayHood(bar.neighborhood)).text : null;
               return (
                 <Marker
                   key={bar.id}
@@ -283,8 +284,8 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
                     <div className="font-bold">{bar.name}</div>
                     <div className="text-xs">
                       {travelLabel
-                        ? `${bar.neighborhood} · ${travelLabel}`
-                        : bar.neighborhood}
+                        ? `${displayHood(bar.neighborhood)} · ${travelLabel}`
+                        : displayHood(bar.neighborhood)}
                     </div>
                   </Popup>
                 </Marker>

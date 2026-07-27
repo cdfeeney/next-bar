@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import type { Bar } from '@/types';
 import type { Rating } from '@/types/ratings';
+import { displayHood } from '@/lib/hoodDisplay';
 
 const TIER_LABEL: Record<Rating, string> = {
   loved: 'Loved',
@@ -181,7 +182,7 @@ function PickButton({ bar, onClick, accent, innerRef }: PickButtonProps): JSX.El
     >
       <p className="font-display text-2xl leading-tight">{bar.name}</p>
       <p className="text-muted text-xs uppercase tracking-wider mt-1">
-        {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+        {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
       </p>
       <p className="text-sm italic mt-2 line-clamp-2">{bar.blurb}</p>
     </button>

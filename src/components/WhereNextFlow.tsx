@@ -1,8 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import type { Bar, Coords, Radius, VibeProfile, VibeTag } from '@/types';
+import type {
+  Bar,
+  Coords,
+  Neighborhood,
+  Radius,
+  VibeProfile,
+  VibeTag,
+} from '@/types';
 import { deriveArchetype } from '@/lib/quiz';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
@@ -10,15 +17,25 @@ import { loadProfile } from '@/lib/storedProfile';
 import { loadNightVibe, saveNightVibe } from '@/lib/vibeNightCache';
 import {
   NIGHT_LOG_STORAGE_KEY,
+  lastNightKey,
   loadNightVisits,
   recordVisit,
 } from '@/lib/nightLog';
 import { nycNightKey } from '@/lib/nightKey';
 import { useNightRefresh } from '@/hooks/useIntent';
-import { RADIUS_WALK } from '@/lib/constants';
+import { deriveNightPhase } from '@/lib/nightPhase';
+import { loadIntent, wasOutLastNight } from '@/lib/intent';
+import { loadPhaseOverride } from '@/lib/phaseOverride';
+import {
+  RADIUS_ANYWHERE,
+  RADIUS_WALK,
+  RESULTS_COUNT,
+} from '@/lib/constants';
+import { advanceShownIds, nextWiderRadius } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
 import DistanceChips from '@/components/DistanceChips';
+import ResultsHoodChips from '@/components/ResultsHoodChips';
 import VibeTweak from '@/components/VibeTweak';
 import ResultsView from '@/components/ResultsView';
 
@@ -55,9 +72,16 @@ type Step =
   | { kind: 'tweakVibe'; seedBar: Bar; tags: VibeTag[] }
   | { kind: 'results'; seedBar: Bar; tags: VibeTag[] };
 
+/**
+ * BOTH home surfaces enter on Walkable (operator, 2026-07-27 morning:
+ * "I need to see bars that are close to me" — proximity beats a
+ * guaranteed-full first page). The earlier review concern (a walking
+ * default blanks the page for someone far from any catalog bar) is
+ * answered by the AUTO-WIDEN below: zero results at an untouched radius
+ * widens one visible step (walking → cab → anywhere) instead of ever
+ * stranding an empty list.
+ */
 const DEFAULT_RADIUS: Radius = { kind: 'walking', maxMiles: RADIUS_WALK };
-/** How many bars the location-first auto-suggester surfaces. */
-const SUGGEST_COUNT = 5;
 
 function defaultProfile(): VibeProfile {
   return { tags: [], archetype: deriveArchetype([]), preferredNeighborhoods: [] };
@@ -72,14 +96,24 @@ export default function WhereNextFlow() {
   // back to an empty profile (→ distance-only ranking) when the quiz is unseen.
   const [profile, setProfile] = useState<VibeProfile>(defaultProfile);
   useEffect(() => {
-    const saved = loadProfile();
-    if (saved) {
-      setProfile({
-        tags: saved.tags,
-        archetype: saved.archetype,
-        preferredNeighborhoods: saved.preferredNeighborhoods,
-      });
-    }
+    const syncProfile = (): void => {
+      const saved = loadProfile();
+      // Review MED: a cleared profile (Settings, another tab) must also
+      // clear the Tweak-the-vibe pre-fill — fall back to empty, don't
+      // keep stale tags in memory.
+      setProfile(
+        saved
+          ? {
+              tags: saved.tags,
+              archetype: saved.archetype,
+              preferredNeighborhoods: saved.preferredNeighborhoods,
+            }
+          : defaultProfile(),
+      );
+    };
+    syncProfile();
+    window.addEventListener('storage', syncProfile);
+    return () => window.removeEventListener('storage', syncProfile);
   }, []);
 
   // Tonight's cached vibe pick (E2.2), mount-loaded for the SAME
@@ -93,10 +127,39 @@ export default function WhereNextFlow() {
     setNightVibe(loadNightVibe());
   }, []);
 
-  // The profile the LOCATION results rank by: tweaked night vibe when one
-  // exists, else the stored quiz profile. preferredNeighborhoods mirrors
-  // the manual seedProfile ([]) — ResultsView ignores it for coords
-  // locations anyway (the geo IS the neighborhood signal).
+  // Operator 2026-07-27: while PLANNING, every result card carries a
+  // "Send" share (text the bar to your group — works for recipients with
+  // no account via /share/[barId]). Same phase inputs as the home
+  // header's chip (small acknowledged duplication with app/page.tsx —
+  // extract a useNightPhase hook if a third consumer appears).
+  const [isPlanning, setIsPlanning] = useState(false);
+  const computePlanning = useCallback((): void => {
+    const now = new Date();
+    setIsPlanning(
+      deriveNightPhase({
+        now,
+        intent: loadIntent()?.status ?? null,
+        wasOutLastNight:
+          wasOutLastNight(now) ||
+          loadNightVisits(lastNightKey(now)).length > 0,
+        override: loadPhaseOverride(now),
+      }) === 'planning',
+    );
+  }, []);
+  useNightRefresh(computePlanning);
+  useEffect(() => {
+    window.addEventListener('storage', computePlanning);
+    return () => window.removeEventListener('storage', computePlanning);
+  }, [computePlanning]);
+
+  // The profile the LOCATION results rank by (operator 2026-07-27:
+  // "showing interesting ones, not near ones — move it into tweak the
+  // vibe"): tonight's EXPLICIT vibe pick when one exists, otherwise NO
+  // tags — matching.ts's empty-tags branch ranks by pure proximity, so
+  // the default home answer is simply "the closest open bars". The saved
+  // quiz profile no longer shapes this ranking silently; it lives on as
+  // the PRE-FILL inside the Tweak-the-vibe surface (below), where
+  // applying it makes the influence explicit and night-scoped.
   const autoProfile = useMemo<VibeProfile>(
     () =>
       nightVibe
@@ -105,8 +168,8 @@ export default function WhereNextFlow() {
             archetype: deriveArchetype(nightVibe),
             preferredNeighborhoods: [],
           }
-        : profile,
-    [nightVibe, profile],
+        : { tags: [], archetype: deriveArchetype([]), preferredNeighborhoods: [] },
+    [nightVibe],
   );
 
   // Location-first routing. In 'locating' we NEVER fire the browser
@@ -118,6 +181,10 @@ export default function WhereNextFlow() {
     if (step.kind !== 'locating' && step.kind !== 'askLocation') return;
     const status = geo.state.status;
     if (geo.coords) {
+      // Fresh auto entry: Walkable — closest bars first (auto-widen
+      // covers the zero-results case; see DEFAULT_RADIUS note).
+      radiusTouchedRef.current = false;
+      setSelectedRadius(DEFAULT_RADIUS);
       setStep({ kind: 'autoResults', coords: geo.coords });
       return;
     }
@@ -161,6 +228,64 @@ export default function WhereNextFlow() {
   // re-ranks live. Walking default.
   const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
 
+  // QA-6 one results view: an OPTIONAL neighborhood override (null = rank
+  // around the location anchor) and the run-it-again shown-history. The
+  // history excludes already-shown bars so refresh deals the NEXT batch;
+  // any change of search context (new seed, radius, hood, vibe) starts a
+  // fresh deal.
+  const [resultsHood, setResultsHood] = useState<Neighborhood | null>(null);
+  const [shownIds, setShownIds] = useState<readonly string[]>([]);
+  const lastRankedRef = useRef<string[]>([]);
+  // True once the user taps the distance chips themselves — the
+  // auto-widen below must never fight an explicit choice.
+  const radiusTouchedRef = useRef(false);
+  const [rankedEmpty, setRankedEmpty] = useState(false);
+  const handleRanked = useCallback((ids: string[]): void => {
+    lastRankedRef.current = ids;
+    setRankedEmpty(ids.length === 0);
+  }, []);
+  // Empty-rank recovery, in priority order: (1) wrap backstop (review
+  // HIGH — a refresh cycle that exhausted the pool restarts instead of
+  // stranding "No matches found"); (2) AUTO-WIDEN (operator fix
+  // 2026-07-27: home opens on Walkable; if an UNTOUCHED radius yields
+  // zero, widen one visible chip step walking → cab → anywhere rather
+  // than showing an empty first load).
+  useEffect(() => {
+    if (!rankedEmpty) return;
+    if (shownIds.length > 0) {
+      setShownIds([]);
+      return;
+    }
+    if (!radiusTouchedRef.current) {
+      setSelectedRadius((prev) => nextWiderRadius(prev));
+    }
+  }, [rankedEmpty, shownIds]);
+  const handleRunAgain = useCallback((): void => {
+    setShownIds((prev) =>
+      advanceShownIds(prev, lastRankedRef.current, RESULTS_COUNT),
+    );
+  }, []);
+  const handleRadiusChange = useCallback((next: Radius): void => {
+    radiusTouchedRef.current = true;
+    setSelectedRadius(next);
+    setShownIds([]);
+  }, []);
+  const handleHoodChange = useCallback((next: Neighborhood | null): void => {
+    setResultsHood(next);
+    setShownIds([]);
+    // Review MED: "In Harlem" must mean the WHOLE hood — a walking cap
+    // measured from the hood's centroid silently drops edge bars. Picking
+    // a hood widens the radius chip to Anywhere (visible state change;
+    // the user can still narrow it again afterwards).
+    if (next !== null) {
+      setSelectedRadius({ kind: 'anywhere', maxMiles: RADIUS_ANYWHERE });
+    }
+  }, []);
+  const resetResultsControls = useCallback((): void => {
+    setResultsHood(null);
+    setShownIds([]);
+  }, []);
+
   // E3.1: "not the places I've already been tonight." The night log's
   // visited set hard-excludes on the live surfaces (never the quiz).
   // Mount-gated (SSR has no storage); recordVisit's manual storage-event
@@ -195,8 +320,15 @@ export default function WhereNextFlow() {
   const seedBarId =
     step.kind === 'results' || step.kind === 'tweakVibe' ? step.seedBar.id : null;
   const manualExcludeIds = useMemo(
-    () => (seedBarId ? [seedBarId, ...visitedIds] : visitedIds),
-    [seedBarId, visitedIds],
+    () =>
+      seedBarId
+        ? [seedBarId, ...visitedIds, ...shownIds]
+        : [...visitedIds, ...shownIds],
+    [seedBarId, visitedIds, shownIds],
+  );
+  const autoExcludeIds = useMemo(
+    () => [...visitedIds, ...shownIds],
+    [visitedIds, shownIds],
   );
 
   // E2.1: EVERY seed-bar entry lands on RESULTS immediately through this
@@ -215,7 +347,11 @@ export default function WhereNextFlow() {
     // object records it with zero extra questions. The lib itself
     // refuses synthetic free-text seeds.
     recordVisit(seedBar.id);
+    radiusTouchedRef.current = false;
     setSelectedRadius(DEFAULT_RADIUS);
+    // QA-6: a new seed is a new search — hood override and run-it-again
+    // history reset with the radius.
+    resetResultsControls();
     // E2.2 (locked decision 3): the vibe belongs to the NIGHT — a pick
     // applied earlier tonight pre-fills every re-search until the 6am
     // rollover. It never locks: the tweak surface always allows changing
@@ -248,6 +384,9 @@ export default function WhereNextFlow() {
     // session (pickBar → "use my location") and must see tonight's pick.
     saveNightVibe(nextTags);
     setNightVibe(nextTags);
+    // QA-6: a new vibe is a new ranking — the run-it-again history resets
+    // (the hood override survives; vibe and hood are orthogonal).
+    setShownIds([]);
     setStep({ kind: 'results', seedBar: step.seedBar, tags: nextTags });
   };
 
@@ -265,6 +404,7 @@ export default function WhereNextFlow() {
     if (step.kind !== 'tweakVibeAuto') return;
     saveNightVibe(nextTags);
     setNightVibe(nextTags);
+    setShownIds([]);
     setStep({ kind: 'autoResults', coords: step.coords });
   };
 
@@ -350,22 +490,21 @@ export default function WhereNextFlow() {
     const coords = step.coords;
     const goPickBar = () => {
       geo.reset();
+      resetResultsControls();
       setStep({ kind: 'pickBar' });
     };
     return (
       <main>
-        {/* QA1 (operator 2026-07-26 mobile QA): the two controls the
-            operator couldn't find get a compact, visible row ABOVE the
-            results — the pick-my-bar escape (duplicated from the bottom
-            link, same action) and the vibe tweak entry the location
-            results were missing entirely. Both min-h-44. */}
+        {/* QA1 row, copy tightened 2026-07-27 (operator: "too much
+            text") — the escape keeps its chip but says just "Pick my
+            bar". Both min-h-44. */}
         <div className="px-6 pt-4 flex flex-wrap items-center justify-center gap-2">
           <button
             type="button"
             onClick={goPickBar}
             className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
           >
-            Not at these bars? Pick yours →
+            Pick my bar
           </button>
           <button
             type="button"
@@ -375,31 +514,55 @@ export default function WhereNextFlow() {
             Tweak the vibe
           </button>
         </div>
+        {/* QA-6 one results view: the SAME control set as the manual
+            results — optional hood override + distance chips. */}
+        <div className="px-6 pt-3">
+          <ResultsHoodChips
+            value={resultsHood}
+            onChange={handleHoodChange}
+            anchorLabel="Near me"
+          />
+          <div className="mt-3">
+            <DistanceChips
+              value={selectedRadius}
+              onChange={handleRadiusChange}
+            />
+          </div>
+        </div>
         <ResultsView
           profile={autoProfile}
-          location={{
-            kind: 'coords',
-            coords,
-            band: geo.accuracyBand,
-            snappedTo: geo.snappedNeighborhood,
-          }}
-          maxMiles={null}
-          maxResults={SUGGEST_COUNT}
+          location={
+            resultsHood
+              ? { kind: 'neighborhood', neighborhood: resultsHood }
+              : {
+                  kind: 'coords',
+                  coords,
+                  band: geo.accuracyBand,
+                  snappedTo: geo.snappedNeighborhood,
+                }
+          }
+          maxMiles={selectedRadius.maxMiles}
+          maxResults={RESULTS_COUNT}
           hideClosedNow
-          excludeIds={visitedIds}
+          excludeIds={autoExcludeIds}
+          onRanked={handleRanked}
+          showShare={isPlanning}
         />
-        {/* pb-28 clears the fixed bottom nav (operator: "never able to
-            see the bottom option on mobile" — same R5 class as the
-            manual results' escape). */}
-        <div className="px-6 pt-2 pb-28 text-center">
+        {/* QA-6 refresh: deal the next batch (excluding everything already
+            shown this search); wraps on small pools. */}
+        <div className="px-6 pt-2 text-center">
           <button
             type="button"
-            onClick={goPickBar}
-            className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
+            onClick={handleRunAgain}
+            className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
           >
-            Not at these bars? Pick yours →
+            ↻ Run it again
           </button>
         </div>
+        {/* Operator fix 2026-07-27: the bottom duplicate of "Not at these
+            bars?" is DELETED — the escape lives once, in the top control
+            row. pb-28 spacer still clears the fixed bottom nav (R5). */}
+        <div className="pb-28" />
       </main>
     );
   }
@@ -500,8 +663,16 @@ export default function WhereNextFlow() {
         <p className="font-display text-2xl mb-4">Next bars</p>
         {/* E2.1: the radius fine-tune lives HERE now — one screen, live
             re-rank, walking default. E3.2: distance is two intent chips
-            + the Anywhere escape, not units. */}
-        <DistanceChips value={selectedRadius} onChange={setSelectedRadius} />
+            + the Anywhere escape, not units. QA-6: plus the optional
+            hood override — the same control set as the location results. */}
+        <div className="mb-3">
+          <ResultsHoodChips
+            value={resultsHood}
+            onChange={handleHoodChange}
+            anchorLabel="Near here"
+          />
+        </div>
+        <DistanceChips value={selectedRadius} onChange={handleRadiusChange} />
         <div className="mt-3">
           <button
             type="button"
@@ -520,16 +691,33 @@ export default function WhereNextFlow() {
       </section>
       <ResultsView
         profile={seedProfile}
-        location={{
-          kind: 'coords',
-          coords: userCoordsForView,
-          band: geo.accuracyBand,
-          snappedTo: geo.snappedNeighborhood,
-        }}
+        location={
+          resultsHood
+            ? { kind: 'neighborhood', neighborhood: resultsHood }
+            : {
+                kind: 'coords',
+                coords: userCoordsForView,
+                band: geo.accuracyBand,
+                snappedTo: geo.snappedNeighborhood,
+              }
+        }
         maxMiles={selectedRadius.maxMiles}
+        maxResults={RESULTS_COUNT}
         excludeIds={manualExcludeIds}
         hideClosedNow
+        onRanked={handleRanked}
+        showShare={isPlanning}
       />
+      {/* QA-6 refresh: deal the next batch. */}
+      <div className="px-6 pt-2 text-center">
+        <button
+          type="button"
+          onClick={handleRunAgain}
+          className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
+        >
+          ↻ Run it again
+        </button>
+      </div>
       <BarMap
         bars={[step.seedBar]}
         userCoords={userCoordsForView}
@@ -541,7 +729,10 @@ export default function WhereNextFlow() {
       <div className="px-6 pt-8 pb-28 text-center">
         <button
           type="button"
-          onClick={() => setStep({ kind: 'pickBar' })}
+          onClick={() => {
+            resetResultsControls();
+            setStep({ kind: 'pickBar' });
+          }}
           className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
         >
           Pick a different bar

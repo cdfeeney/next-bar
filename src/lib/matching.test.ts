@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { jaccard, matches, scoreBar, vibeMatchBadge } from '@/lib/matching';
+import { isLateNight, jaccard, matches, scoreBar, vibeMatchBadge } from '@/lib/matching';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
 
 // Fixed "now" used for the 180-day staleness filter.
@@ -559,6 +559,35 @@ describe('matches() — sorting and slicing', () => {
 
     expect(result).toHaveLength(10);
   });
+
+  it('QA-6: keeps relaxing the Jaccard threshold to FILL the requested cap, not just the 3-result minimum', () => {
+    // 3 exact-vibe matchers pass at the strictest threshold; the other 4
+    // only clear the floor. Pre-QA-6 the relax loop stopped at 3
+    // candidates and a 5-result surface got shortchanged.
+    const pool: Bar[] = [
+      makeBar({ id: 's1', tags: ['cocktail', 'speakeasy', 'polished', 'industry'] }),
+      makeBar({ id: 's2', tags: ['cocktail', 'speakeasy', 'polished', 'industry'] }),
+      makeBar({ id: 's3', tags: ['cocktail', 'speakeasy', 'polished', 'industry'] }),
+      makeBar({ id: 'w1', tags: ['cocktail', 'dive', 'beer', 'garden'] }),
+      makeBar({ id: 'w2', tags: ['cocktail', 'dive', 'beer', 'rooftop'] }),
+      makeBar({ id: 'w3', tags: ['cocktail', 'dive', 'jazz', 'garden'] }),
+      makeBar({ id: 'w4', tags: ['cocktail', 'wine', 'beer', 'garden'] }),
+    ];
+
+    const result = matches({
+      profile,
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: pool,
+      maxResults: 5,
+      now: NOW,
+    });
+
+    expect(result).toHaveLength(5);
+    // The strict matchers still lead — relaxed admissions rank below.
+    expect(result.slice(0, 3).map((b) => b.id).sort()).toEqual(['s1', 's2', 's3']);
+  });
 });
 
 describe('matches — empty vibe profile (location-first suggest)', () => {
@@ -604,5 +633,61 @@ describe('permanently-closed hard filter (Places refresh 2026-07-23)', () => {
     });
     expect(ranked.map((b) => b.id)).toContain('open-bar');
     expect(ranked.map((b) => b.id)).not.toContain('dead-bar');
+  });
+});
+
+describe('late-night bias (operator 2026-07-27: clubs up, restaurants down after hours)', () => {
+  // Equal vibe overlap across all three (the bias is TIE-BREAKER scale —
+  // a genuinely stronger vibe match must still win, so the fixture holds
+  // vibe constant and lets the night nudge decide).
+  const profile = baseProfile(['cocktail']);
+  const club = makeBar({ id: 'club', tags: ['cocktail', 'club'] });
+  const resto = makeBar({ id: 'resto', tags: ['cocktail', 'restaurant-bar'] });
+  const plain = makeBar({ id: 'plain', tags: ['cocktail', 'chill'] });
+  const LATE = new Date('2026-07-24T23:30:00');
+  const AFTERNOON = new Date('2026-07-24T15:00:00');
+
+  const rank = (biasNow?: Date) =>
+    matches({
+      profile,
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [resto, plain, club],
+      maxResults: 3,
+      now: NOW,
+      biasNow,
+    }).map((b) => b.id);
+
+  it('at 11:30pm the club leads and the restaurant-bar trails', () => {
+    expect(rank(LATE)).toEqual(['club', 'plain', 'resto']);
+  });
+
+  it('at 3pm identical-vibe venues stay un-biased', () => {
+    const ids = rank(AFTERNOON);
+    expect(new Set(ids)).toEqual(new Set(['club', 'plain', 'resto']));
+    expect(rank(AFTERNOON)).toEqual(rank(undefined));
+  });
+
+  it('a restaurant that is ALSO a club keeps its night credibility', () => {
+    const hybrid = makeBar({ id: 'hybrid', tags: ['cocktail', 'restaurant-bar', 'club'] });
+    const ids = matches({
+      profile,
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [resto, hybrid],
+      maxResults: 2,
+      now: NOW,
+      biasNow: LATE,
+    }).map((b) => b.id);
+    expect(ids).toEqual(['hybrid', 'resto']);
+  });
+
+  it('the window wraps midnight: 3:59am biased, 4:00am not', () => {
+    expect(isLateNight(new Date('2026-07-25T03:59:00'))).toBe(true);
+    expect(isLateNight(new Date('2026-07-25T04:00:00'))).toBe(false);
+    expect(isLateNight(new Date('2026-07-24T22:00:00'))).toBe(true);
+    expect(isLateNight(new Date('2026-07-24T21:59:00'))).toBe(false);
   });
 });
