@@ -26,20 +26,36 @@ import { rowsToCatalog, type BarsTableRow } from '@/lib/catalogServer';
 const CATALOG_COLUMNS =
   'id,name,lat,lng,tags,neighborhood,price_tier,hours,blurb,address,place_id,business_status,photo_count,photo_attributions,last_verified';
 
+/**
+ * PostgREST caps EVERY response at 1,000 rows — silently, with a 200 and
+ * no error field. The catalog crossed 1,000 venues on 2026-07-27, so an
+ * unpaginated select would have quietly dropped every bar past the
+ * thousandth and the app would have looked completely fine while doing
+ * it. Page explicitly and keep going until a short page proves the end.
+ */
+const PAGE = 1000;
+
 export default function CatalogRefresh(): null {
   useEffect(() => {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     let cancelled = false;
     void (async () => {
-      const { data, error } = await supabase
-        .from('bars')
-        .select(CATALOG_COLUMNS);
-      if (cancelled || error || !Array.isArray(data)) return; // fallback: static
-      const next = rowsToCatalog(
-        data as BarsTableRow[],
-        getBarsSnapshot().length,
-      );
+      const all: BarsTableRow[] = [];
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from('bars')
+          .select(CATALOG_COLUMNS)
+          // Stable order is REQUIRED for correct paging — without it
+          // Postgres may return rows in a different order per request and
+          // pages can overlap or skip.
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (cancelled || error || !Array.isArray(data)) return; // fallback: static
+        all.push(...(data as BarsTableRow[]));
+        if (data.length < PAGE) break;
+      }
+      const next = rowsToCatalog(all, getBarsSnapshot().length);
       if (cancelled || next === null) return;
       replaceCatalog(next);
     })();

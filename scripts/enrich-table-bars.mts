@@ -63,6 +63,8 @@ function toWeeklyHours(roh: any): Record<string, Array<{ open: string; close: st
 }
 
 const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
+// NOTE: bounded by the place_id-null filter, which stays far below
+// PostgREST's silent 1,000-row cap; add .range() paging if that changes.
 let query = admin.from('bars').select('id,name,address,neighborhood,lat,lng').is('place_id', null);
 const { data: rows, error } = await query;
 if (error || !rows) {

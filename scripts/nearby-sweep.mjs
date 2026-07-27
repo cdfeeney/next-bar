@@ -73,20 +73,37 @@ const OFFSETS = [
 
 const constants = fs.readFileSync('src/lib/constants.ts', 'utf8');
 const centroids = {};
+// Quote-type ALTERNATION, not a combined ['"] class: a class excludes
+// both quote characters from the CONTENT, so "Hell's Kitchen" silently
+// fails to match and the hood is skipped. Same bug we shipped once in
+// refresh-places.mjs — it costs a whole neighborhood, quietly.
 for (const m of constants
   .slice(constants.indexOf('NEIGHBORHOOD_CENTROIDS'))
-  .matchAll(/'([^']+)':\s*\{\s*lat:\s*(-?[\d.]+),\s*lng:\s*(-?[\d.]+)\s*\}/g)) {
-  centroids[m[1]] ??= { lat: Number(m[2]), lng: Number(m[3]) };
+  .matchAll(/(?:'([^']+)'|"([^"]+)")\s*:\s*\{\s*lat:\s*(-?[\d.]+),\s*lng:\s*(-?[\d.]+)\s*\}/g)) {
+  centroids[m[1] ?? m[2]] ??= { lat: Number(m[3]), lng: Number(m[4]) };
 }
 
 const norm = (s) =>
   s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '').replace(/^the/, '');
 
-const catalog = await (
-  await fetch(`${SUPA}/rest/v1/bars?select=id,name,place_id`, {
-    headers: { apikey: ANON, Authorization: `Bearer ${ANON}` },
-  })
-).json();
+// PAGINATED: PostgREST silently caps at 1,000 rows, so an unpaginated
+// read makes bars past the thousandth look "missing" and re-proposes
+// venues we already have.
+const catalog = [];
+for (let from = 0; ; from += 1000) {
+  const page = await (
+    await fetch(`${SUPA}/rest/v1/bars?select=id,name,place_id&order=id.asc`, {
+      headers: {
+        apikey: ANON,
+        Authorization: `Bearer ${ANON}`,
+        Range: `${from}-${from + 999}`,
+      },
+    })
+  ).json();
+  if (!Array.isArray(page) || page.length === 0) break;
+  catalog.push(...page);
+  if (page.length < 1000) break;
+}
 const havePid = new Set(catalog.filter((b) => b.place_id).map((b) => b.place_id));
 const haveName = new Set(catalog.map((b) => norm(b.name)));
 console.log(`catalog: ${catalog.length} venues (${havePid.size} pinned)\n`);

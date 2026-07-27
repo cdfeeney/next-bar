@@ -8,7 +8,7 @@ Last updated: 2026-07-27 (GLM sweep round)
 
 ## State of the world
 
-- **Catalog: 1,000 verified venues**, 998 pinned, 949 with hours, 987 with photos. 35 neighborhoods wired.
+- **Catalog: 1,265 verified venues**, 1,263 pinned, 1,192 with hours, 1,239 with photos. 35 neighborhoods wired.
 - Prod: https://next-bar-two.vercel.app
 - Migrations **0017 (vibe votes)** and **0018 (analytics)** are APPLIED to
   production as of 2026-07-27. Objects verified present: tables
@@ -25,11 +25,40 @@ Last updated: 2026-07-27 (GLM sweep round)
 
 ## Coverage — open
 
-- **Thin neighborhoods**: only three remain under 10 venues — Battery Park
-  City 7, Washington Heights 8, Morningside Heights 9. All three are
-  genuinely low-density, not gaps: an exhaustive Nearby Search of Battery
-  Park City returned **zero** bars we don't already have.
+- **Thin neighborhoods**: only Washington Heights (8) and Battery Park City (9)
+  remain under 10, and both are true ceilings — exhaustive sweeps of each
+  returned zero or near-zero venues we don't already have.
 - Windsor Terrace stays **skipped** (operator: "too far for our mvp launch").
+
+## ⚠ PostgREST caps every response at 1,000 rows
+
+Silently — HTTP 200, no error field, `data.length === 1000`. The catalog
+crossed 1,000 venues on 2026-07-27 and this immediately bit in three
+places: the app's own `CatalogRefresh` (would have served a truncated
+catalog while looking perfectly healthy), `import-bars.mts` (dedup saw
+only the first 1,000 ids, so the insert died on a duplicate key and took
+**all 247 good rows with it**), and `nearby-sweep.mjs` (bars past the
+thousandth looked "missing").
+
+**Every read of `bars` must page**, with a stable `.order('id')` — without
+an explicit order Postgres may return rows in a different order per
+request and pages can overlap or skip:
+
+    for (let from = 0; ; from += 1000) {
+      const { data } = await supabase.from('bars')
+        .select(COLS).order('id', { ascending: true })
+        .range(from, from + 999);
+      all.push(...data);
+      if (data.length < 1000) break;
+    }
+
+`src/components/CatalogRefresh.test.tsx` pins this. Two related lessons
+from the same incident: **never `grep` a script's output down to the
+lines you expect** — I filtered an import's output to `candidates|REJECT`
+and hid its `INSERT failed` line, then reported success for 248 rows that
+were never written. And a Supabase `.update().eq('id', …)` on a
+non-existent row **succeeds silently**, so "updated N" proves nothing;
+add `.select('id')` and count the returned rows.
 
 ## Coverage method — Nearby Search is the ground truth
 

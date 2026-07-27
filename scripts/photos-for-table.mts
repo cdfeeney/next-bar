@@ -35,14 +35,22 @@ if (!url || !svc || !KEY) {
   process.exit(1);
 }
 const admin = createClient(url, svc, { auth: { persistSession: false, autoRefreshToken: false } });
-const { data: rows, error } = await admin
-  .from('bars')
-  .select('id')
-  .not('place_id', 'is', null)
-  .eq('photo_count', 0);
-if (error || !rows) {
-  console.error(error?.message);
-  process.exit(1);
+// PAGINATED (PostgREST caps at 1,000 rows silently).
+const rows: Array<{ id: string }> = [];
+for (let from = 0; ; from += 1000) {
+  const { data, error } = await admin
+    .from('bars')
+    .select('id')
+    .not('place_id', 'is', null)
+    .eq('photo_count', 0)
+    .order('id', { ascending: true })
+    .range(from, from + 999);
+  if (error || !data) {
+    console.error(error?.message);
+    process.exit(1);
+  }
+  rows.push(...data);
+  if (data.length < 1000) break;
 }
 const targets = rows.slice(0, LIMIT);
 console.log(`${rows.length} photo-less enriched rows; processing ${targets.length} [${APPLY ? '--apply' : 'dry-run'}]`);

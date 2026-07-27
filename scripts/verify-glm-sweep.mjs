@@ -59,10 +59,12 @@ const TAG_VOCAB = new Set([
 const constants = fs.readFileSync('src/lib/constants.ts', 'utf8');
 const block = constants.slice(constants.indexOf('NEIGHBORHOOD_CENTROIDS'));
 const CENTROIDS = [];
+// Quote-type alternation — a combined ['"] class drops apostrophe
+// names like "Hell's Kitchen" entirely.
 for (const m of block.matchAll(
-  /'([^']+)':\s*\{\s*lat:\s*(-?[\d.]+),\s*lng:\s*(-?[\d.]+)\s*\}/g,
+  /(?:'([^']+)'|"([^"]+)")\s*:\s*\{\s*lat:\s*(-?[\d.]+),\s*lng:\s*(-?[\d.]+)\s*\}/g,
 )) {
-  CENTROIDS.push({ hood: m[1], lat: Number(m[2]), lng: Number(m[3]) });
+  CENTROIDS.push({ hood: m[1] ?? m[2], lat: Number(m[3]), lng: Number(m[4]) });
   if (block.slice(0, m.index).includes('};')) break;
 }
 if (CENTROIDS.length < 30) {
