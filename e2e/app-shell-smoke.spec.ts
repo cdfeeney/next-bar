@@ -43,12 +43,22 @@ test.describe('App-shell smoke', () => {
 
   test('/map renders the Leaflet map', async ({ page }) => {
     await page.goto('/map');
-    await expect(page.getByRole('heading', { name: /^Map$/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
     // Leaflet attribution link is a reliable marker that the map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,
     });
     await expectNoConsoleErrors(page, '/map');
+  });
+
+  test('/discover renders the swipe stack', async ({ page }) => {
+    await page.goto('/discover');
+    await expect(page.getByRole('heading', { name: /^Discover$/ })).toBeVisible();
+    // A fresh context has nothing rated/saved, so a card is always up.
+    await expect(page.getByTestId('discover-card-heading')).toBeVisible({
+      timeout: 15_000,
+    });
+    await expectNoConsoleErrors(page, '/discover');
   });
 
   test('/rankings renders empty state when no ratings', async ({ page }) => {

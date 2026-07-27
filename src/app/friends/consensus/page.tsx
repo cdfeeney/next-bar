@@ -158,7 +158,7 @@ export default function ConsensusPage(): JSX.Element {
 
   // UX-B: ONE Group Favorites list — unanimous overlap leads, near-misses
   // fill, capped at 5. (The multi-step vote flow is deleted; People's
-  // Choice carries the human signal via suggest + I'm-in.)
+  // Choice carries the human signal via the suggest/vote poll.)
   const groupFavorites = useMemo(
     () => [...overlap, ...alsoConsider].slice(0, 5),
     [overlap, alsoConsider],
@@ -178,21 +178,11 @@ export default function ConsensusPage(): JSX.Element {
         <h1 className="font-display text-3xl md:text-4xl mb-2 text-center">
           Plan Night Out
         </h1>
-        {/* UX-F v1: the nudge — an invite link that works with zero
-            server state; recipients land on /join. */}
-        <div className="flex justify-center mt-1">
-          <ShareButton
-            path="/join"
-            text="Out tonight? Pick the bar with us on Next Bar."
-            label="Invite friends"
-            ariaLabel="Invite friends to plan tonight"
-          />
-        </div>
       </header>
 
       <section className="max-w-md mx-auto px-6">
         {/* Participant selector */}
-        <div className="flex flex-wrap gap-2 justify-center mb-8" role="group" aria-label="Choose who's going">
+        <div className="flex flex-wrap gap-2 justify-center mb-4" role="group" aria-label="Choose who's going">
           {youHasRatings ? (
             <PersonChip
               label="You"
@@ -214,8 +204,21 @@ export default function ConsensusPage(): JSX.Element {
           ))}
         </div>
 
+        {/* UX-F v1 nudge, moved UNDER the chips (QA3: the operator
+            couldn't find it in the header on mobile) — an invite link
+            that works with zero server state; recipients land on /join. */}
+        <div className="mb-8">
+          <ShareButton
+            path="/join"
+            text="Out tonight? Pick the bar with us on Next Bar."
+            label="Invite friends"
+            ariaLabel="Invite friends to plan tonight"
+            wide
+          />
+        </div>
+
         {isServer && unratedFriendCount > 0 ? (
-          <p className="text-muted text-xs text-center -mt-4 mb-8">
+          <p className="text-muted text-xs text-center mb-8">
             {unratedFriendCount} of your circle{' '}
             {unratedFriendCount === 1 ? "hasn't" : "haven't"} ranked any bars
             yet — they&apos;ll appear here once they do.
@@ -255,9 +258,8 @@ export default function ConsensusPage(): JSX.Element {
           </div>
         )}
 
-        {/* Part 2 — PEOPLE'S CHOICE: the bars people are thinking about
-            (suggest + I'm-in live inside; real circles only — demo
-            curators can't suggest). */}
+        {/* Part 2 — PEOPLE'S CHOICE: the tabular poll (photo + name +
+            vote tally; real circles only — demo curators can't suggest). */}
         {isServer ? <TonightSuggestions /> : null}
       </section>
     </main>
@@ -346,21 +348,24 @@ function ConsensusCard({
           {entry.avgScore.toFixed(1)}
         </span>
       </div>
-      <div className="flex items-center justify-between gap-3 mt-0.5">
-        <p className="text-muted text-xs uppercase tracking-wider truncate">
-          {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
-        </p>
-        {/* The winner-share moment lives on the TOP pick (works
-            signed-out too — the share-card loop's entry). */}
-        {highlight ? (
+      <p className="text-muted text-xs uppercase tracking-wider truncate mt-0.5">
+        {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+      </p>
+      {/* The winner-share moment lives on the TOP pick (works signed-out
+          too — the share-card loop's entry). QA3: a labeled solid-outline
+          button spanning the card so it's findable on mobile. */}
+      {highlight ? (
+        <div className="mt-3">
           <ShareButton
             path={buildPickPath(bar.id)}
             text={sharePickText(bar)}
             label="Share the pick"
             ariaLabel={`Share the pick: ${bar.name}`}
+            variant="outline"
+            wide
           />
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </article>
   );
 }

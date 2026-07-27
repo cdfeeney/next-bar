@@ -80,7 +80,9 @@ export default function PrivacyPage(): JSX.Element {
 
         <Block title="Who else touches data">
           Bar photos, hours, and review snippets come from Google Places and
-          are cached on our side. Our database and sign-in run on Supabase.
+          are cached on our side. Bar photos are sourced from Google (Places);
+          photographer attribution is shown in the photo viewer and is
+          available on request. Our database and sign-in run on Supabase.
           Hosting is on Vercel. Each of these providers processes data under
           their own terms; none of them get your ratings or social graph for
           their own use.

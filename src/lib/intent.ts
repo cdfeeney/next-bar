@@ -12,7 +12,7 @@
  * 10pm and Saturday 1am are the same night, Saturday evening is not.
  */
 
-export type IntentStatus = 'going' | 'maybe' | 'here';
+export type IntentStatus = 'going' | 'maybe' | 'here' | 'not-going';
 
 export type TonightIntent = {
   status: IntentStatus;
@@ -28,6 +28,7 @@ const VALID_STATUSES: ReadonlySet<IntentStatus> = new Set<IntentStatus>([
   'going',
   'maybe',
   'here',
+  'not-going',
 ]);
 
 function isIntentStatus(value: unknown): value is IntentStatus {
@@ -114,7 +115,7 @@ function previousNightDate(night: string): string {
 /**
  * Did LAST night involve going out? True when the stored intent belongs
  * to the previous night and was a commitment ('going' or 'here') —
- * 'maybe' never counts. nightPhase's morning branch uses this to pick
+ * 'maybe' and 'not-going' never count. nightPhase's morning branch uses this to pick
  * recap over planning (E0.3); the E4 Night object will replace it as
  * the source of truth.
  */
@@ -125,7 +126,10 @@ export function wasOutLastNight(now: Date = new Date()): boolean {
     if (!raw) return false;
     const parsed = JSON.parse(raw) as unknown;
     if (!isTonightIntent(parsed)) return false;
-    if (parsed.status === 'maybe') return false;
+    // Positive guard: only the two commitments count as a night out —
+    // an allowlist can't silently admit future statuses ('not-going'
+    // would have slipped through the old "non-maybe" check).
+    if (parsed.status !== 'going' && parsed.status !== 'here') return false;
     return nightOf(parsed.setAt) === previousNightDate(nightOfDate(now));
   } catch {
     return false;

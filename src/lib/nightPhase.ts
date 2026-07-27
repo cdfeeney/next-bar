@@ -6,23 +6,26 @@ import type { IntentStatus } from '@/lib/intent';
  * change by phase; the 5-tab nav never does).
  *
  * Load-bearing requirement is WRONG-PHASE RECOVERY, not clever
- * detection (DESIGN-SYSTEM R10): the manual override always wins, weak
- * signals never flip to a more specific phase, and every ambiguous or
- * broken input degrades to 'starting' — the phase whose home is useful
- * at any hour.
+ * detection (DESIGN-SYSTEM R10): the manual override always wins, and
+ * every ambiguous or broken input degrades to 'out' — its home IS the
+ * find-a-bar flow, which is useful at any hour.
+ *
+ * 2026-07-26 operator cut: the phase set is THREE — 'starting' is
+ * deleted (only Planning / Out now / Last night matter). Everything the
+ * old 'starting' covered (evening, no-signal late night, fail-safes)
+ * now derives 'out'.
  *
  * Pure function; persistence of the override (nightKey-scoped
  * localStorage, resets at the 5am rollover per R11) is the E2.4/E3.4
  * UI's concern.
  */
 
-export type NightPhase = 'planning' | 'starting' | 'out' | 'recap';
+export type NightPhase = 'planning' | 'out' | 'recap';
 
-/** Display order for the phase switcher's picker (R10: all four are one
+/** Display order for the phase switcher's picker (R10: all three are one
  *  tap away once the chip is open — it's a picker, not a cycler). */
 export const NIGHT_PHASES: readonly NightPhase[] = [
   'planning',
-  'starting',
   'out',
   'recap',
 ];
@@ -41,7 +44,6 @@ export type NightPhaseInputs = {
 const MORNING_START = 5; // the rollover hour — mornings begin where nights end
 const MIDDAY_START = 12;
 const EVENING_START = 17;
-const LATE_START = 21;
 
 export function deriveNightPhase(inputs: NightPhaseInputs): NightPhase {
   const { now, intent, wasOutLastNight, override } = inputs;
@@ -49,11 +51,16 @@ export function deriveNightPhase(inputs: NightPhaseInputs): NightPhase {
   // R10: the human is always right.
   if (override) return override;
 
+  // 'not-going' is an explicit "staying in" — for phase derivation it
+  // behaves like no signal at all: it must NEVER derive 'out', so the
+  // 'here'/'going' branches below see null instead.
+  const signal = intent === 'not-going' ? null : intent;
+
   // Physically at a bar tonight — the strongest signal there is.
-  if (intent === 'here') return 'out';
+  if (signal === 'here') return 'out';
 
   const hour = now.getHours();
-  if (Number.isNaN(hour)) return 'starting'; // fail-safe on broken clocks
+  if (Number.isNaN(hour)) return 'out'; // fail-safe on broken clocks
 
   const isMorning = hour >= MORNING_START && hour < MIDDAY_START;
   if (isMorning) return wasOutLastNight ? 'recap' : 'planning';
@@ -61,12 +68,10 @@ export function deriveNightPhase(inputs: NightPhaseInputs): NightPhase {
   const isMidday = hour >= MIDDAY_START && hour < EVENING_START;
   if (isMidday) return 'planning';
 
-  // Evening through the rollover. Committed ("going") users flip to
-  // 'out' once the night is properly on; "maybe" is not commitment and
-  // no-signal stays 'starting' — its home works at any hour, and the
-  // chip fixes a wrong guess in one tap.
-  const isLate = hour >= LATE_START || hour < MORNING_START;
-  if (isLate && intent === 'going') return 'out';
-
-  return 'starting';
+  // Evening through the rollover is 'out' — with 'starting' deleted
+  // (3-phase cut) the find-a-bar home covers the whole night, signal or
+  // not, and the chip fixes a wrong guess in one tap. The ONE exception
+  // (QA-4 invariant): an explicit "Not tonight" never derives 'out' —
+  // staying in reads as planning the next one.
+  return intent === 'not-going' ? 'planning' : 'out';
 }

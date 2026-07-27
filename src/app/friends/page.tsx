@@ -9,7 +9,10 @@ import { useFollows } from '@/hooks/useFollows';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { useIntent, useNightRefresh } from '@/hooks/useIntent';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { fetchCircleRsvps, type CircleRsvp } from '@/lib/rsvps.server';
+import {
+  fetchCircleSuggestions,
+  type CircleSuggestion,
+} from '@/lib/suggestions.server';
 import { nycNightKey } from '@/lib/nightKey';
 import { getBarById } from '@/lib/catalog';
 import { demoFriends } from '@/lib/demo';
@@ -46,23 +49,26 @@ export default function FriendsPage(): JSX.Element {
   const followingCount = isServer ? circle.length : demoFollowedCount;
   const followerCount = isServer ? followers.length : 0;
 
-  // TONIGHT — real circle commitments (RSVPs), the "which friends are
-  // going out and where" view. Night-scoped; refreshes on the shared
-  // clock signal so the strip empties at rollover.
-  const [rsvps, setRsvps] = useState<CircleRsvp[] | null>(null);
+  // TONIGHT — circle SUGGESTIONS (QA3: the poll board is the writer now
+  // that I'm-in is gone), the "which bars friends are backing" view.
+  // Night-scoped; refreshes on the shared clock signal so the strip
+  // empties at rollover.
+  const [suggestions, setSuggestions] = useState<CircleSuggestion[] | null>(
+    null,
+  );
   const [night, setNight] = useState(() => nycNightKey());
   useNightRefresh(() => setNight(nycNightKey()));
   useEffect(() => {
     if (!isServer || auth.status !== 'signed-in') {
-      setRsvps(null);
+      setSuggestions(null);
       return;
     }
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     let cancelled = false;
     void (async () => {
-      const rows = await fetchCircleRsvps(supabase, night);
-      if (!cancelled) setRsvps(rows);
+      const rows = await fetchCircleSuggestions(supabase, night);
+      if (!cancelled) setSuggestions(rows);
     })();
     return () => {
       cancelled = true;
@@ -84,29 +90,29 @@ export default function FriendsPage(): JSX.Element {
           <p className="font-display text-lg leading-snug">Plan Night Out →</p>
         </Link>
 
-        {/* Tonight — your status (one tap; tap again clears) and who's
-            committed where (real RSVPs). Audience control (close friends
-            vs friends) is the next slice. */}
+        {/* Tonight — your status (one tap; tap again clears) and which
+            bars the circle is backing (poll suggestions). Audience control
+            (close friends vs friends) is the next slice. */}
         <div data-testid="friends-tonight">
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Tonight
           </h2>
           <IntentPills />
-          {isServer && rsvps !== null && rsvps.length > 0 ? (
+          {isServer && suggestions !== null && suggestions.length > 0 ? (
             <div className="space-y-2 mt-3">
-              {rsvps.map((r) => {
-                const bar = getBarById(r.barId);
+              {suggestions.map((s) => {
+                const bar = getBarById(s.barId);
                 if (!bar) return null;
-                const who = r.displayName ?? (r.handle ? `@${r.handle}` : 'Someone');
+                const who = s.displayName ?? (s.handle ? `@${s.handle}` : 'Someone');
                 return (
                   <Link
-                    key={`${r.userId}-${r.barId}`}
+                    key={`${s.userId}-${s.barId}`}
                     href="/friends/consensus"
                     className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl px-4 py-3 touch-manipulation hover:border-accent transition-colors"
                   >
                     <span className="font-display text-sm truncate">{who}</span>
                     <span className="text-accent font-display text-sm truncate shrink-0">
-                      → {bar.name}
+                      ▲ {bar.name}
                     </span>
                   </Link>
                 );
@@ -183,7 +189,10 @@ export default function FriendsPage(): JSX.Element {
 /** Your going-out status: one tap sets, tapping the lit pill clears. */
 function IntentPills(): JSX.Element {
   const { intent, toggleIntent } = useIntent();
-  const pill = (status: 'going' | 'maybe', label: string): JSX.Element => {
+  const pill = (
+    status: 'going' | 'maybe' | 'not-going',
+    label: string,
+  ): JSX.Element => {
     const active = intent?.status === status;
     return (
       <button
@@ -207,6 +216,7 @@ function IntentPills(): JSX.Element {
     <div className="flex items-center gap-2" role="group" aria-label="Your status tonight">
       {pill('going', 'Going out')}
       {pill('maybe', 'Maybe')}
+      {pill('not-going', 'Not tonight')}
     </div>
   );
 }

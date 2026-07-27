@@ -41,7 +41,7 @@ const COARSE_FAR = { latitude: 51.5074, longitude: -0.1278, accuracy: 3000 };
 test.describe('/map interaction', () => {
   test('renders bar markers', async ({ page }) => {
     await page.goto('/map');
-    await expect(page.getByRole('heading', { name: /^Map$/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
     // Leaflet attribution confirms the map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,
@@ -76,10 +76,14 @@ test.describe('/map interaction', () => {
     // above still guards the actual regression on every device).
     if (browserName === 'webkit') return;
 
+    // QA2 made the page taller (filter rows) — the container's CENTER can
+    // land under the fixed bottom nav, which swallows the drag. Scroll the
+    // map into view and drag from its visible upper portion instead.
+    await container.scrollIntoViewIfNeeded();
     const box = await container.boundingBox();
     if (!box) throw new Error('no map bounding box');
     const cx = box.x + box.width / 2;
-    const cy = box.y + box.height / 2;
+    const cy = Math.max(box.y + 40, Math.min(box.y + 200, box.y + box.height / 3));
     await page.mouse.move(cx, cy);
     await page.mouse.down();
     await page.mouse.move(cx - 120, cy - 90, { steps: 8 });
@@ -221,5 +225,38 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
     });
     // Picking clears the query so the dropdown leaves the screen.
     await expect(page.getByRole('list', { name: /Matching bars/i })).toHaveCount(0);
+  });
+});
+
+test.describe('/map Find Bar filters (QA2)', () => {
+  test('a neighborhood chip narrows the markers; Clear restores them', async ({
+    page,
+  }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const markers = page.locator('.leaflet-marker-icon');
+    await expect(markers.first()).toBeVisible({ timeout: 15_000 });
+    const allCount = await markers.count();
+    expect(allCount).toBeGreaterThan(0);
+
+    // Pick one neighborhood — the map must drop to that hood's bars only.
+    const filters = page.getByTestId('findbar-filters');
+    await filters.getByRole('button', { name: /^LES$/ }).click();
+
+    await expect
+      .poll(async () => markers.count(), { timeout: 15_000 })
+      .toBeLessThan(allCount);
+    // The badge counts the one active filter.
+    await expect(page.getByTestId('filter-count')).toHaveText('1');
+
+    // One-tap Clear restores the full catalog.
+    await page.getByTestId('filter-clear').click();
+    await expect
+      .poll(async () => markers.count(), { timeout: 15_000 })
+      .toBe(allCount);
+    await expect(page.getByTestId('filter-count')).toHaveCount(0);
   });
 });

@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import Link from 'next/link';
 import type { Bar, VibeTag } from '@/types';
 import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
@@ -19,103 +18,127 @@ type ResultCardProps = {
 };
 
 /**
- * COMPACT card (operator 2026-07-26: "they are drunk — they need the
- * next bar in 10 seconds"). ~3 bars per phone screen: small photo tile,
- * name + walk time as the loud data, one meta line, tiny actions. The
- * full-bleed hero, blurb, and review quote moved into the lightbox —
- * tap the photo for the big version. Broken photos advance through the
- * carousel then fall back to the glyph tile (E2.3 semantics kept).
- * U2-3: cards are for DECIDING — ranking lives on /rankings.
+ * QA5-S1 (operator 2026-07-26): the full-bleed photo HERO card returns
+ * (E2.3 semantics), but with the identity text kept SMALL — readable,
+ * never truncated (wrap allowed). The hero leads 16/10; name +
+ * neighborhood + $ sit on a bottom gradient overlay; tapping the hero
+ * opens the BarLightbox (carousel, hours, review). Broken photos advance
+ * through the carousel then fall back to the glyph tile.
+ *
+ * Below the hero the card stays terse: one meta line (walk time + vibe
+ * match), the open-now/rating badge row, and Maps. Ranking entry moved
+ * off result cards entirely (the per-card "Rank it" link is gone —
+ * /rankings owns that flow), and the per-card photo attribution line is
+ * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
 export default function ResultCard({ bar, rank, miles, userTags }: ResultCardProps) {
   const lead = leadCopy(miles, bar.neighborhood);
   const badge = vibeMatchBadge(userTags, bar.tags);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [thumbIdx, setThumbIdx] = useState(0);
-  const [thumbFailed, setThumbFailed] = useState(false);
+  // A broken photo advances to the NEXT carousel photo before giving up —
+  // a multi-photo bar with one corrupt file keeps its photo-first card.
+  const [heroIdx, setHeroIdx] = useState(0);
+  const [heroFailed, setHeroFailed] = useState(false);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
 
   const photos = barImageUrls(bar);
-  const showThumb = photos.length > 0 && !thumbFailed;
-  // Multi-ingest bars must NOT fall back to the legacy field — it can
-  // hold a stale author from an older single-photo ingest (E2.3 review
-  // rule, re-caught by this rewrite's review).
-  const attribution = bar.photoAttributions
-    ? bar.photoAttributions[thumbIdx] || null
-    : bar.photoAttribution;
+  const showHero = photos.length > 0 && !heroFailed;
 
   return (
-    <article className="bg-surface border border-border rounded-2xl p-3 flex gap-3">
-      <button
-        type="button"
-        onClick={() => setLightboxOpen(true)}
-        aria-label={`See photos and hours for ${bar.name}`}
-        className="shrink-0 touch-manipulation rounded-xl overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-accent self-start"
-      >
-        {showThumb ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={photos[thumbIdx]}
-            alt=""
-            data-testid="bar-visual"
-            loading={rank === 1 ? 'eager' : 'lazy'}
-            className="w-20 h-20 object-cover"
-            onError={() =>
-              thumbIdx + 1 < photos.length
-                ? setThumbIdx(thumbIdx + 1)
-                : setThumbFailed(true)
-            }
-          />
-        ) : (
-          <BarVisualTile bar={bar} size={56} photoDisabled={thumbFailed} />
-        )}
-      </button>
+    <article className="bg-surface border border-border rounded-3xl overflow-hidden flex flex-col">
+      {showHero ? (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            aria-label={`See photos and hours for ${bar.name}`}
+            className="block w-full touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={photos[heroIdx]}
+              alt=""
+              data-testid="bar-visual"
+              // Rank 1's hero is the likely LCP element — eager.
+              loading={rank === 1 ? 'eager' : 'lazy'}
+              className="w-full aspect-[16/10] object-cover"
+              onError={() =>
+                heroIdx + 1 < photos.length
+                  ? setHeroIdx(heroIdx + 1)
+                  : setHeroFailed(true)
+              }
+            />
+            <span
+              aria-hidden="true"
+              className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/85 via-black/40 to-transparent"
+            />
+          </button>
+          {photos.length > 1 ? (
+            <span className="absolute top-3 right-3 pointer-events-none rounded-full bg-black/60 text-white/90 text-[11px] px-2.5 py-1">
+              {photos.length} photos
+            </span>
+          ) : null}
+          <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pointer-events-none flex flex-col gap-0.5">
+            {/* Small-but-readable, and it NEVER truncates — long bar names
+                wrap onto a second line instead (operator: text-lg max). */}
+            <h3 className="font-display text-lg leading-snug text-white drop-shadow-sm">
+              {rank}. {bar.name}
+            </h3>
+            <p className="text-[11px] uppercase tracking-wider text-white/85">
+              {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
-      <div className="flex-1 min-w-0 flex flex-col gap-1">
-        {/* The NAME owns its full line (operator: "I can't see the name
-            of the bars") — it may wrap to two lines; nothing competes
-            with it. Walk time leads the meta line instead. */}
-        <h3 className="font-display text-base leading-tight">
-          {rank}. {bar.name}
-        </h3>
-        <p className="text-xs truncate">
+      <div className="p-4 pt-3 flex flex-col gap-2">
+        {!showHero ? (
+          <div className="flex items-start gap-3">
+            <button
+              type="button"
+              onClick={() => setLightboxOpen(true)}
+              aria-label={`See photos and hours for ${bar.name}`}
+              className="shrink-0 touch-manipulation rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              {/* photoDisabled: the hero already exhausted every photo URL —
+                  don't re-request a known-broken file. */}
+              <BarVisualTile bar={bar} size={56} photoDisabled={heroFailed} />
+            </button>
+            <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+              <h3 className="font-display text-lg leading-snug">
+                {rank}. {bar.name}
+              </h3>
+              <p className="text-[11px] uppercase tracking-wider text-muted">
+                {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        {/* One meta line: the loud walk/ride time + the match count several
+            e2e specs key on ("Vibe match" — keep those words). */}
+        <p className="text-sm">
           <span className="font-display text-accent">{lead.text}</span>
           <span className="text-muted">
-            {' '}· {bar.neighborhood} · {'$'.repeat(bar.priceTier)} · Vibe
-            match {badge.num}/{badge.den}
+            {' '}· Vibe match {badge.num}/{badge.den}
           </span>
         </p>
-        <div className="flex items-center gap-2 flex-wrap">
-          <OpenNowBadge bar={bar} />
-          <RatingBadge barId={bar.id} />
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          {showThumb ? (
-            // Google policy: attribution renders whenever a photo does.
-            <p className="text-[9px] text-muted leading-tight truncate">
-              {attribution ? `Photo: ${attribution} · Google` : 'Photo · Google'}
-            </p>
-          ) : (
-            <span />
-          )}
-          <div className="flex items-center gap-3 shrink-0">
-            <Link
-              href={`/rankings?add=${bar.id}`}
-              className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
-            >
-              Rank it →
-            </Link>
-            <a
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                `${bar.name} ${bar.address}`,
-              )}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
-            >
-              Maps →
-            </a>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <OpenNowBadge bar={bar} />
+            <RatingBadge barId={bar.id} />
           </div>
+          <a
+            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+              `${bar.name} ${bar.address}`,
+            )}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4 shrink-0"
+          >
+            Maps →
+          </a>
         </div>
       </div>
 

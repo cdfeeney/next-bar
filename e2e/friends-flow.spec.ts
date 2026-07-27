@@ -91,6 +91,18 @@ test.describe('Friends + consensus', () => {
     await expect(goingAfter).toHaveAttribute('aria-pressed', 'true');
     await goingAfter.click();
     await expect(goingAfter).toHaveAttribute('aria-pressed', 'false');
+
+    // QA4: third pill "Not tonight" — same toggle semantics, persists.
+    const notTonight = page.getByRole('button', { name: /^Not tonight$/ });
+    await notTonight.click();
+    await expect(notTonight).toHaveAttribute('aria-pressed', 'true');
+    // Statuses are exclusive — setting it never lights the others.
+    await expect(goingAfter).toHaveAttribute('aria-pressed', 'false');
+    await page.reload();
+    const notTonightAfter = page.getByRole('button', { name: /^Not tonight$/ });
+    await expect(notTonightAfter).toHaveAttribute('aria-pressed', 'true');
+    await notTonightAfter.click();
+    await expect(notTonightAfter).toHaveAttribute('aria-pressed', 'false');
   });
 
   // The multi-step Put-it-to-a-vote flow is DELETED (UX-B): Group

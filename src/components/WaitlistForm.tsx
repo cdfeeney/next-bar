@@ -3,9 +3,19 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import type { VibeProfile } from '@/types';
+import { quiz } from '@/lib/quiz';
 
 type WaitlistFormProps = { profile: VibeProfile | null };
 type Status = 'idle' | 'loading' | 'success' | 'error';
+
+// Full service area, sourced from the quiz picker so the two lists can't
+// drift (operator QA5: the waitlist select showed only 3 hoods while the
+// catalog serves 18).
+const SERVICE_AREA_NEIGHBORHOODS: readonly string[] =
+  quiz.find(
+    (q): q is Extract<(typeof quiz)[number], { kind: 'neighborhoodMultiSelect' }> =>
+      q.kind === 'neighborhoodMultiSelect',
+  )?.options ?? [];
 
 export default function WaitlistForm({ profile }: WaitlistFormProps) {
   const [email, setEmail] = useState('');
@@ -82,11 +92,12 @@ export default function WaitlistForm({ profile }: WaitlistFormProps) {
             className="w-full px-4 py-3 bg-surface border border-border rounded-xl focus:border-accent outline-none"
           >
             <option value="">Where do you go out most?</option>
-            <option value="LES">LES</option>
-            <option value="East Village">East Village</option>
-            <option value="Williamsburg">Williamsburg</option>
+            {SERVICE_AREA_NEIGHBORHOODS.map((hood) => (
+              <option key={hood} value={hood}>
+                {hood}
+              </option>
+            ))}
             <option value="Other NYC">Other NYC neighborhood</option>
-            <option value="Outside NYC">Outside NYC</option>
           </select>
           <button
             type="submit"

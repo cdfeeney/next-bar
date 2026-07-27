@@ -9,6 +9,13 @@ import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { useSuggestions, MAP_SUGGESTION_COUNT } from '@/hooks/useSuggestions';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
+import FindBarFilterChips from '@/components/FindBarFilterChips';
+import {
+  EMPTY_FILTERS,
+  countActiveFilters,
+  filterBars,
+  type FindBarFilters,
+} from '@/lib/findBarFilters';
 
 const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
 
@@ -48,17 +55,31 @@ export default function MapPage(): JSX.Element {
   // Nonce per selection (review MED): re-picking the SAME bar after
   // panning away must re-fly — a bare id state bails on same-value sets.
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
+
+  // QA2 "Find Bar": optional chips narrow which bars render on the map.
+  // Pure logic lives in lib/findBarFilters (unit-tested); this page only
+  // holds the selection state.
+  const [filters, setFilters] = useState<FindBarFilters>(EMPTY_FILTERS);
+
   const q = query.trim().toLowerCase();
+
+  // Filters narrow which bars render; search finds among the rendered set
+  // so a picked match always has a marker to fly to.
+  const filteredBars = useMemo(
+    () => filterBars(bars, filters, coords),
+    [bars, filters, coords],
+  );
+
   const searchMatches = useMemo(() => {
     if (q.length < 2) return [];
-    return bars
+    return filteredBars
       .filter(
         (b) =>
           b.name.toLowerCase().includes(q) ||
           b.neighborhood.toLowerCase().includes(q),
       )
       .slice(0, 5);
-  }, [bars, q]);
+  }, [filteredBars, q]);
 
   // Same matching pipeline as home (profile + ratings + user coords when
   // granted), capped at MAP_SUGGESTION_COUNT for the suggested tier.
@@ -88,7 +109,7 @@ export default function MapPage(): JSX.Element {
       {/* UX-C: minimum words — the legend explains the dots, nothing else
           needs prose. */}
       <header className="px-6 pt-8 pb-4 text-center">
-        <h1 className="font-display text-3xl md:text-4xl mb-2">Map</h1>
+        <h1 className="font-display text-3xl md:text-4xl mb-2">Find Bar</h1>
 
         <div
           className="mt-4 flex items-center justify-center gap-4 text-xs text-muted"
@@ -159,6 +180,15 @@ export default function MapPage(): JSX.Element {
               ))}
             </ul>
           ) : null}
+          {/* QA5-S3: idle-time browsing lives on /discover, not here. */}
+          <p className="mt-2 text-center">
+            <Link
+              href="/discover"
+              className="inline-flex items-center min-h-[44px] text-accent font-display text-sm touch-manipulation hover:underline underline-offset-4"
+            >
+              Discover →
+            </Link>
+          </p>
         </div>
 
         <div className="mt-4 flex flex-col items-center gap-2">
@@ -194,11 +224,18 @@ export default function MapPage(): JSX.Element {
               </p>
             ))}
         </div>
+
+        {/* QA2: optional filter chips — narrow which bars render below. */}
+        <FindBarFilterChips
+          filters={filters}
+          onChange={setFilters}
+          hasLocation={coords !== null}
+        />
       </header>
 
       <section className="px-0 md:px-6">
         <BarMap
-          bars={bars}
+          bars={filteredBars}
           userCoords={coords}
           panToUser
           focusBarId={focus?.id ?? null}
@@ -213,7 +250,9 @@ export default function MapPage(): JSX.Element {
       </section>
 
       <p className="text-muted text-xs text-center mt-6 pb-24">
-        {bars.length} bars across {Object.keys(NEIGHBORHOOD_CENTROIDS).length} neighborhoods
+        {countActiveFilters(filters) > 0
+          ? `${filteredBars.length} of ${bars.length} bars match your filters`
+          : `${bars.length} bars across ${Object.keys(NEIGHBORHOOD_CENTROIDS).length} neighborhoods`}
       </p>
     </main>
   );
