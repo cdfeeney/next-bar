@@ -129,9 +129,9 @@ test.describe('QA-6 — the one results view', () => {
       radiusGroup.getByRole('button', { name: 'Walkable' }),
     ).toHaveAttribute('aria-pressed', 'true');
 
-    // The escape appears exactly ONCE (the bottom duplicate is deleted).
+    // The compact escape appears exactly ONCE (operator: minimal text).
     await expect(
-      page.getByRole('button', { name: /Not at these bars/i }),
+      page.getByRole('button', { name: 'Pick my bar' }),
     ).toHaveCount(1);
     await expect(
       page.getByRole('button', { name: /Tweak the vibe/i }),
@@ -151,5 +151,76 @@ test.describe('QA-6 — the one results view', () => {
       .click();
     await expect(page.getByText('In Greenpoint')).toBeVisible();
     await expect(cards).toHaveCount(5);
+  });
+
+  test('PLANNING phase: every card carries a Send share; at night it does not', async ({
+    page,
+    context,
+  }) => {
+    await grantGeolocation(context, { latitude: 40.725, longitude: -73.985 });
+    // Friday 2pm derives 'planning' with no override; daytime open-now
+    // still leaves bars near LES.
+    await page.clock.setFixedTime(new Date('2026-07-24T14:00:00'));
+    await page.goto('/');
+
+    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    await expect.poll(async () => cards.count()).toBeGreaterThan(0);
+    const sends = page.getByRole('button', { name: /^Send .* to friends$/ });
+    expect(await sends.count()).toBe(await cards.count());
+  });
+
+  test('at NIGHT (out phase) the Send share is absent', async ({
+    page,
+    context,
+  }) => {
+    await grantGeolocation(context, { latitude: 40.725, longitude: -73.985 });
+    await page.clock.setFixedTime(FRIDAY_NIGHT);
+    await page.goto('/');
+
+    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    await expect(cards).toHaveCount(5);
+    await expect(
+      page.getByRole('button', { name: /Send .* to friends/ }),
+    ).toHaveCount(0);
+  });
+
+  test('default home ranking is pure proximity — saved quiz vibes only apply via Tweak the vibe', async ({
+    page,
+    context,
+  }) => {
+    await grantGeolocation(context, { latitude: 40.725, longitude: -73.985 });
+    // A saved quiz profile that LOVES jazz — pre-change it silently
+    // re-ordered the default results; now it must not.
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'next-bar:profile:v1',
+        JSON.stringify({
+          tags: ['jazz', 'live'],
+          archetype: 'test',
+          preferredNeighborhoods: [],
+          savedAt: '2026-07-24T12:00:00.000Z',
+        }),
+      );
+    });
+    await page.clock.setFixedTime(FRIDAY_NIGHT);
+    await page.goto('/');
+
+    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    await expect(cards).toHaveCount(5);
+    // Pure proximity: with no vibe tags in play the badge reads 0/1 for
+    // every card (jaccard vs an empty profile) — the saved jazz profile
+    // did NOT leak into the default ranking.
+    await expect(cards.first().getByText(/Vibe match 0\//)).toBeVisible();
+
+    // The saved profile still PRE-FILLS the tweak surface (it moved, it
+    // did not disappear): Sound axis shows Jazz already active.
+    await page.getByRole('button', { name: /Tweak the vibe/i }).click();
+    // Sound holds the seeded picks, so it's the axis that AUTO-opens —
+    // clicking it again would collapse it.
+    await expect(
+      page
+        .getByRole('group', { name: 'Sound vibes' })
+        .getByRole('button', { name: 'Jazz' }),
+    ).toHaveAttribute('aria-pressed', 'true');
   });
 });
