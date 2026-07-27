@@ -34,6 +34,7 @@ const ALL: ManhattanNeighborhood[] = [
   'Bushwick',
   'Park Slope',
   'Fort Greene',
+  'Gowanus',
   // Queens
   'Astoria',
   'LIC',

@@ -129,6 +129,7 @@ export const quiz: QuizQuestion[] = [
       'Bushwick',
       'Park Slope',
       'Fort Greene',
+      'Gowanus',
       'Astoria',
       'LIC',
       'Ridgewood',

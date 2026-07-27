@@ -30,6 +30,7 @@ export type Neighborhood =
   | 'Bushwick'
   | 'Park Slope'
   | 'Fort Greene'
+  | 'Gowanus'
   // Queens
   | 'Astoria'
   | 'LIC'
