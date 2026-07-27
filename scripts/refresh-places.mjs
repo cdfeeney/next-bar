@@ -101,8 +101,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pad = (n) => String(n).padStart(2, '0');
 
 function field(obj, key) {
-  const m = obj.match(new RegExp(key + ":\\s*(['\"])((?:[^'\"\\\\]|\\\\.)*)\\1"));
-  return m ? m[2].replace(/\\(.)/g, '$1') : null;
+  // Quote-type-specific alternation (operator bug 2026-07-27): the old
+  // single character class excluded BOTH quote chars from the content,
+  // so `name: "Jimmy's Corner"` — an apostrophe inside double quotes —
+  // never matched and 14 bars were SILENTLY skipped by every ingest
+  // (no placeId, no hours, no photos).
+  const m = obj.match(
+    new RegExp(
+      key + ':\\s*(?:\'((?:[^\'\\\\]|\\\\.)*)\'|"((?:[^"\\\\]|\\\\.)*)")',
+    ),
+  );
+  const raw = m ? (m[1] !== undefined ? m[1] : m[2]) : null;
+  return raw === null ? null : raw.replace(/\\(.)/g, '$1');
 }
 
 function parseBars() {
