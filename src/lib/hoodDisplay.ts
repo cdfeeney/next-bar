@@ -31,6 +31,7 @@ const HOOD_DISPLAY: Record<Neighborhood, string> = {
   Bushwick: 'Bushwick',
   'Park Slope': 'Park Slope',
   'Fort Greene': 'Fort Greene',
+  Gowanus: 'Gowanus',
   Astoria: 'Astoria',
   LIC: 'Long Island City',
   Ridgewood: 'Ridgewood',

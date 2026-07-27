@@ -92,6 +92,7 @@ export const NEIGHBORHOOD_CENTROIDS: Record<Neighborhood, Coords> = {
   'Bushwick':     { lat: 40.6940, lng: -73.9210 },
   'Park Slope':   { lat: 40.6720, lng: -73.9790 },
   'Fort Greene':  { lat: 40.6860, lng: -73.9740 },
+  'Gowanus':      { lat: 40.6751, lng: -73.9887 },
   // Queens
   'Astoria':      { lat: 40.7640, lng: -73.9200 },
   'LIC':          { lat: 40.7450, lng: -73.9490 },
