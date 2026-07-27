@@ -13,6 +13,7 @@ import { excludeClosedBars } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
+import { displayHood } from '@/lib/hoodDisplay';
 import { useRatings } from '@/hooks/useRatings';
 import ResultCard from '@/components/ResultCard';
 
@@ -243,7 +244,7 @@ export default function ResultsView({
     location.kind === 'coords' && preferredNeighborhoods.length > 0;
   const locationLabel =
     location.kind === 'neighborhood'
-      ? `In ${location.neighborhood}`
+      ? `In ${displayHood(location.neighborhood)}`
       : location.snappedTo
       ? `Approximate — based on ${location.snappedTo}`
       : neighborhoodFiltered

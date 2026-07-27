@@ -6,6 +6,7 @@ import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
 import { barImageUrls } from '@/lib/barVisual';
 import { buildPickPath, sharePickText } from '@/lib/share';
+import { displayHood } from '@/lib/hoodDisplay';
 import ShareButton from '@/components/ShareButton';
 import OpenNowBadge from '@/components/OpenNowBadge';
 import BarVisualTile from '@/components/BarVisualTile';
@@ -37,7 +38,7 @@ type ResultCardProps = {
  * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
 export default function ResultCard({ bar, rank, miles, userTags, showShare }: ResultCardProps) {
-  const lead = leadCopy(miles, bar.neighborhood);
+  const lead = leadCopy(miles, displayHood(bar.neighborhood));
   const badge = vibeMatchBadge(userTags, bar.tags);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   // A broken photo advances to the NEXT carousel photo before giving up —
@@ -93,7 +94,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
               {rank}. {bar.name}
             </h3>
             <p className="text-[11px] uppercase tracking-wider text-white/85">
-              {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+              {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
             </p>
           </div>
         </div>
@@ -117,7 +118,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
                 {rank}. {bar.name}
               </h3>
               <p className="text-[11px] uppercase tracking-wider text-muted">
-                {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+                {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
               </p>
             </div>
           </div>

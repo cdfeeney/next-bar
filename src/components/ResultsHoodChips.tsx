@@ -2,6 +2,7 @@
 
 import type { Neighborhood } from '@/types';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
+import { displayHood } from '@/lib/hoodDisplay';
 
 /** Canonical service area — same source of truth the other pickers serve. */
 const NEIGHBORHOODS = Object.keys(NEIGHBORHOOD_CENTROIDS) as Neighborhood[];
@@ -53,7 +54,7 @@ export default function ResultsHoodChips({
             onClick={() => onChange(isOn ? null : hood)}
             className={`${CHIP_BASE} ${isOn ? CHIP_ON : CHIP_OFF}`}
           >
-            {hood}
+            {displayHood(hood)}
           </button>
         );
       })}
