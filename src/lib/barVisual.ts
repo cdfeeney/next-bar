@@ -7,11 +7,13 @@
  * never "shuffle" identity between renders/builds. No React, no catalog
  * import (safe for server components and cheap to test).
  *
- * PHOTO FORMAT NOTE: scripts/refresh-places.mjs saves GetPhotoMedia bytes
- * as-is to public/bar-photos/<id>.jpg. Google serves JPEG from the media
- * redirect and converting to WebP would require adding `sharp` (not a dep —
- * kept dependency-free per B5). If that ever changes, update BOTH the
- * script's extension and PHOTO_EXT here.
+ * PHOTO FORMAT NOTE: photos are stored as WebP at public/bar-photos/
+ * <id>.webp. The ingest still downloads Google's JPEG bytes, then
+ * re-encodes with `sharp` before writing (operator 2026-07-27, phone
+ * speed: the raw JPEGs averaged 124 KB, so a five-card results screen
+ * pulled ~620 KB of hero imagery; WebP at the same 640px width more than
+ * halves that). If the format ever changes again, update BOTH the ingest
+ * scripts and PHOTO_EXT here — they are the only two coupling points.
  */
 
 import type { Bar, VibeTag } from '@/types';
@@ -137,11 +139,8 @@ export function barVisual(bar: BarVisualInput): BarVisual {
   };
 }
 
-/**
- * Photos are saved as raw JPEG bytes from the Places media redirect —
- * dependency-free (no sharp/WebP re-encode). See header note.
- */
-const PHOTO_EXT = 'jpg';
+/** Photos are re-encoded to WebP at ingest time. See header note. */
+const PHOTO_EXT = 'webp';
 
 /**
  * Local photo URL for a bar, or null when the Places ingest has no photo
@@ -155,7 +154,7 @@ export function barImageUrl(bar: Pick<Bar, 'id' | 'photoRef'>): string | null {
 
 /**
  * Carousel URLs (photos-multi ingest): photo 1 keeps the legacy
- * `<id>.jpg` name, extras are `<id>-2.jpg`, `<id>-3.jpg`… — index-aligned
+ * `<id>.webp` name, extras are `<id>-2.webp`, `<id>-3.webp`… — index-aligned
  * with photoAttributions. Falls back to the single legacy photo (or
  * nothing) for bars the multi ingest hasn't covered.
  */

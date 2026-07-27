@@ -8,14 +8,51 @@ export const alt = "Tonight's pick — Next Bar";
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
+const ID_RE = /^[a-z0-9-]{1,60}$/;
+
+/**
+ * Imported bars aren't in the slim bundle, so their unfurls used to fall
+ * back to the generic card. Direct PostgREST fetch (not the SDK — this is
+ * the edge 1MB bundle) for just the three fields the card renders.
+ */
+async function cardFromTable(
+  id: string,
+): Promise<{ name: string; neighborhood: string; priceTier: number } | null> {
+  if (!ID_RE.test(id)) return null;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  try {
+    const res = await fetch(
+      `${url}/rest/v1/bars?id=eq.${id}&select=name,neighborhood,price_tier&limit=1`,
+      {
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+        next: { revalidate: 300 },
+      },
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    const row = Array.isArray(rows) ? rows[0] : null;
+    if (!row?.name || typeof row.price_tier !== 'number') return null;
+    return {
+      name: row.name,
+      neighborhood: row.neighborhood ?? '',
+      priceTier: row.price_tier,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Per-bar unfurl card for shared picks (blueprint B3) — same brand system
 // as the root opengraph-image.tsx, with the bar as the headline.
-export default function SharePickImage({
+export default async function SharePickImage({
   params,
 }: {
   params: { barId: string };
 }) {
-  const bar = getBarCard(decodeURIComponent(params.barId));
+  const id = decodeURIComponent(params.barId);
+  const bar = getBarCard(id) ?? (await cardFromTable(id));
   const name = bar?.name ?? 'Next Bar';
   const sub = bar
     ? `${bar.neighborhood} · ${'$'.repeat(bar.priceTier)}`

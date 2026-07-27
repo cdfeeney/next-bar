@@ -30,9 +30,10 @@
 // Dry-run by default; pass --apply to write the sidecar.
 //
 // PHOTO FORMAT (dependency-free choice): GetPhotoMedia's media redirect serves
-// JPEG bytes; we save them AS-IS to public/bar-photos/<barId>.jpg. Converting
-// to WebP would require adding `sharp` (not a dep) — so .jpg it is, and
-// src/lib/barVisual.ts's barImageUrl() returns the matching .jpg path. If a
+// JPEG bytes; we re-encode them to WebP and save to
+// public/bar-photos/<barId>.webp (phone speed, 2026-07-27 — raw JPEGs
+// averaged 124 KB, WebP at the same width is less than half), and
+// src/lib/barVisual.ts's barImageUrl() returns the matching .webp path. If a
 // dep is ever added, change BOTH places together.
 //
 // USAGE:
@@ -49,6 +50,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import sharp from 'sharp';
 import { refuseIfUnattended } from './loop-guard.mjs';
 
 // Never spend Google quota during the unattended overnight loop.
@@ -62,7 +64,7 @@ const PHOTOS = process.argv.includes('--photos');
 // ingest. Standalone mode — iterates the EXISTING sidecar (no Text Search,
 // closed bars skipped), re-reads Details with a photos-only field mask for
 // up to PHOTO_MULTI_COUNT photo names, downloads the extras as
-// <barId>-<i>.jpg (photo 1 keeps <barId>.jpg), and MERGES photoRefs +
+// <barId>-<i>.webp (photo 1 keeps <barId>.webp), and MERGES photoRefs +
 // per-photo photoAttributions into the sidecar (never wholesale — hours/
 // reviews are preserved untouched). Budget at 3 photos/bar: ~240
 // GetPlaceRequest + <=~480 GetPhotoMedia — inside the 1500/600 daily caps
@@ -83,6 +85,7 @@ const KEY = process.env.GOOGLE_MAPS_API_KEY;
 const SIDECAR = path.join(REPO, 'src/lib/bars.places.ts');
 const PHOTO_DIR = path.join(REPO, 'public/bar-photos');
 const PHOTO_MAX_WIDTH = 640;
+const WEBP_QUALITY = 78;
 const REVIEW_MAX = 3;
 const REVIEW_EXCERPT_CHARS = 200;
 // Drift fix 2026-07-25: bars.core.ts was MISSING after the bars.ts split
@@ -202,15 +205,16 @@ function toReviews(reviews) {
 
 // Download one bar's photo via GetPhotoMedia. The endpoint 302-redirects to
 // the image bytes; fetch follows the redirect, and we save the (JPEG) bytes
-// as-is — no re-encode, no image dep (see PHOTO FORMAT header note).
+// then re-encoded to WebP before writing (see PHOTO FORMAT header note).
 async function downloadPhoto(photoRef, file) {
   const url = `https://places.googleapis.com/v1/${photoRef}/media?maxWidthPx=${PHOTO_MAX_WIDTH}&key=${KEY}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`photo media HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length === 0) throw new Error('photo media returned 0 bytes');
-  fs.writeFileSync(file, buf);
-  return buf.length;
+  const webp = await sharp(buf).webp({ quality: WEBP_QUALITY, effort: 5 }).toBuffer();
+  fs.writeFileSync(file, webp);
+  return webp.length;
 }
 
 // Google periods -> our WeeklyHours (0=Sun..6=Sat, "HH:MM"; overnight = close<open).
@@ -291,7 +295,7 @@ function toWeeklyHours(regularOpeningHours) {
     let downloaded = 0, skipped = 0;
     for (const [id, patch] of Object.entries(patches)) {
       if (!patch.photoRef) continue;
-      const file = path.join(PHOTO_DIR, `${id}.jpg`);
+      const file = path.join(PHOTO_DIR, `${id}.webp`);
       if (fs.existsSync(file) && !FORCE_PHOTOS) { skipped++; continue; }
       try {
         await downloadPhoto(patch.photoRef, file);
@@ -357,7 +361,7 @@ async function runPhotosMulti() {
         if (!p?.name) continue;
         refs.push(p.name);
         attrs.push(p.authorAttributions?.[0]?.displayName ?? '');
-        const file = path.join(PHOTO_DIR, i === 0 ? `${id}.jpg` : `${id}-${i + 1}.jpg`);
+        const file = path.join(PHOTO_DIR, i === 0 ? `${id}.webp` : `${id}-${i + 1}.webp`);
         if (fs.existsSync(file) && !FORCE_PHOTOS) { skippedFiles++; continue; }
         try {
           await downloadPhoto(p.name, file);

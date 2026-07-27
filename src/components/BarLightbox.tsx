@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
 import { barImageUrls } from '@/lib/barVisual';
+import { fetchBarReviews } from '@/lib/barReviews';
 import { weekHoursRows } from '@/lib/openNow';
 import { displayHood } from '@/lib/hoodDisplay';
 import OpenNowBadge from '@/components/OpenNowBadge';
@@ -35,6 +36,22 @@ export default function BarLightbox({
 }): JSX.Element {
   const photoUrls = barImageUrls(bar);
   const [activePhoto, setActivePhoto] = useState(0);
+  // Reviews are NOT in the catalog payload any more (they were 155 KB of
+  // it) — imported bars fetch theirs when their lightbox opens. Bundle
+  // bars already carry sidecar reviews and skip the query entirely.
+  const [lateReviews, setLateReviews] = useState<Bar['reviews']>(undefined);
+  useEffect(() => {
+    if (bar.reviews?.[0]) return;
+    let cancelled = false;
+    void (async () => {
+      const fetched = await fetchBarReviews(bar.id);
+      if (!cancelled && fetched?.[0]) setLateReviews(fetched);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bar.id, bar.reviews]);
+  const reviews = bar.reviews?.[0] ? bar.reviews : lateReviews;
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Scroll-snap position → active dot (passive listener; index from the
   // nearest slide edge).
@@ -190,10 +207,10 @@ export default function BarLightbox({
 
         <p className="text-sm italic">{bar.blurb}</p>
 
-        {bar.reviews?.[0] ? (
+        {reviews?.[0] ? (
           <p className="text-xs text-muted">
-            &ldquo;{bar.reviews[0].text}&rdquo; &mdash; {bar.reviews[0].author},
-            Google review
+            &ldquo;{reviews[0].text}&rdquo; &mdash; {reviews[0].author}, Google
+            review
           </p>
         ) : null}
 

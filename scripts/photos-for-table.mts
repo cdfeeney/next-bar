@@ -1,7 +1,7 @@
 /**
  * Photo ingest for bars-TABLE rows (imported venues): for rows with a
  * place_id and photo_count=0, fetch up to 3 photo names via Place
- * Details, download to public/bar-photos/<id>[-n].jpg (repo files — a
+ * Details, download to public/bar-photos/<id>[-n].webp (repo files — a
  * PR/deploy ships them), and UPDATE the row's photo_count +
  * photo_attributions. Skips rows whose primary file already exists.
  *
@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import sharp from 'sharp';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import { refuseIfUnattended } from './loop-guard.mjs';
@@ -23,6 +24,7 @@ const lArg = process.argv.indexOf('--limit');
 const LIMIT = lArg !== -1 ? parseInt(process.argv[lArg + 1], 10) : Infinity;
 const MAX_PHOTOS = 3;
 const MAX_WIDTH = 640;
+const WEBP_QUALITY = 78;
 const DIR = path.join(process.cwd(), 'public/bar-photos');
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -51,7 +53,7 @@ for (const { id } of targets) {
     console.log('budget reached, stopping');
     break;
   }
-  if (fs.existsSync(path.join(DIR, `${id}.jpg`))) continue;
+  if (fs.existsSync(path.join(DIR, `${id}.webp`))) continue;
   const { data: row } = await admin.from('bars').select('place_id').eq('id', id).single();
   const det = await fetch(`https://places.googleapis.com/v1/places/${row!.place_id}`, {
     headers: { 'X-Goog-Api-Key': KEY, 'X-Goog-FieldMask': 'photos' },
@@ -73,8 +75,12 @@ for (const { id } of targets) {
     calls++;
     if (!media.ok) continue;
     const buf = Buffer.from(await media.arrayBuffer());
-    const file = i === 0 ? `${id}.jpg` : `${id}-${i + 1}.jpg`;
-    fs.writeFileSync(path.join(DIR, file), buf);
+    // Re-encode to WebP before writing (phone speed, 2026-07-27): Google
+    // returns ~124 KB JPEGs; WebP at the same width is less than half
+    // that. Extension must stay in step with PHOTO_EXT in barVisual.ts.
+    const webp = await sharp(buf).webp({ quality: WEBP_QUALITY, effort: 5 }).toBuffer();
+    const file = i === 0 ? `${id}.webp` : `${id}-${i + 1}.webp`;
+    fs.writeFileSync(path.join(DIR, file), webp);
     attributions.push(photos[i].authorAttributions?.[0]?.displayName ?? 'Google user');
     saved++;
   }
