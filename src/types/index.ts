@@ -33,7 +33,7 @@ export type Neighborhood =
 export type ManhattanNeighborhood = Neighborhood;
 
 export type VibeTag =
-  | 'dive' | 'cocktail' | 'wine' | 'beer' | 'dance' | 'lounge' | 'speakeasy' | 'pub' | 'rooftop' | 'garden'
+  | 'dive' | 'cocktail' | 'wine' | 'beer' | 'dance' | 'lounge' | 'speakeasy' | 'pub' | 'rooftop' | 'garden' | 'club' | 'restaurant-bar'
   | 'chill' | 'buzzy' | 'loud'
   | 'locals' | 'post-work' | 'date' | 'tourist' | 'industry'
   | 'rough' | 'polished' | 'romantic' | 'instagrammable' | 'old-nyc' | 'trendy'

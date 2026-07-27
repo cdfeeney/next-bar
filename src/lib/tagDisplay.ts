@@ -46,6 +46,8 @@ export const TAG_DISPLAY: Record<VibeTag, string> = {
   house: 'House music',
   jazz: 'Jazz',
   live: 'Live music',
+  club: 'Club',
+  'restaurant-bar': 'Restaurant bar',
   ...PRICE_TAG_GLYPHS,
 };
 
