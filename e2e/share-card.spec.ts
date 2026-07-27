@@ -77,6 +77,41 @@ test.describe('Shareable pick cards', () => {
 });
 
 /**
+ * QA5b — branded unfurls + full waitlist neighborhood list.
+ *
+ * The /join invite link and profile links must unfurl with a real branded
+ * OG card (operator hit a bare/broken image), and the waitlist select must
+ * offer the full 18-hood service area, not the historical 3.
+ */
+test.describe('OG unfurls and /join neighborhood coverage', () => {
+  test('/join serves a branded PNG unfurl', async ({ request }) => {
+    const res = await request.get('/join/opengraph-image');
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toContain('image/png');
+  });
+
+  test('profile pages serve a branded PNG unfurl', async ({ request }) => {
+    const res = await request.get('/u/claire/opengraph-image');
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toContain('image/png');
+  });
+
+  test('/join lists the full service area in the neighborhood select', async ({
+    page,
+  }) => {
+    await page.goto('/join');
+    const select = page.locator('select');
+    await expect(select).toBeVisible();
+    // 18 service-area hoods + placeholder + "Other NYC neighborhood".
+    const optionCount = await select.locator('option').count();
+    expect(optionCount).toBeGreaterThanOrEqual(18);
+    await expect(
+      select.locator('option', { hasText: 'Other NYC neighborhood' }),
+    ).toHaveCount(1);
+  });
+});
+
+/**
  * Week-2 recipient landing (goal acceptance 6).
  *
  * The recipient is signed out and always will be at this point in the loop —
