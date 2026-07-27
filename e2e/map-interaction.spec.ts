@@ -76,10 +76,14 @@ test.describe('/map interaction', () => {
     // above still guards the actual regression on every device).
     if (browserName === 'webkit') return;
 
+    // QA2 made the page taller (filter rows) — the container's CENTER can
+    // land under the fixed bottom nav, which swallows the drag. Scroll the
+    // map into view and drag from its visible upper portion instead.
+    await container.scrollIntoViewIfNeeded();
     const box = await container.boundingBox();
     if (!box) throw new Error('no map bounding box');
     const cx = box.x + box.width / 2;
-    const cy = box.y + box.height / 2;
+    const cy = Math.max(box.y + 40, Math.min(box.y + 200, box.y + box.height / 3));
     await page.mouse.move(cx, cy);
     await page.mouse.down();
     await page.mouse.move(cx - 120, cy - 90, { steps: 8 });
