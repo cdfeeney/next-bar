@@ -33,6 +33,7 @@ const HOOD_DISPLAY: Record<Neighborhood, string> = {
   'Fort Greene': 'Fort Greene',
   Astoria: 'Astoria',
   LIC: 'Long Island City',
+  Ridgewood: 'Ridgewood',
 };
 
 /** The one lookup components render a neighborhood through. */
