@@ -59,3 +59,74 @@ must COMPLETE before N1 starts — everything below builds on merged main.
 
 - (queued 2026-07-27; loop starts when the integration pipeline completes
   and the session arms ScheduleWakeup)
+- ~22:30 session 7cb32e1b bound g-e88444ae in wt-night4 (pipeline was
+  already complete: PR #67 merged + smoked, g-42e1b52d closed).
+- ~22:30-23:10 N1 QA-6 → PR #68. Review 3 HIGH + 2 MED fixed forward
+  (relax-to-cap matcher fill — found via e2e; auto surface enters
+  Anywhere; hood pick widens radius; empty-rank wrap backstop;
+  fixed-clock e2e). Gates: 900 vitest, e2e 19/19 ×2 devices.
+- ~23:10-00:05 N2 UX-E → PR #69 (0017 AUTHORED, NOT applied; DeepSeek
+  4-applied/1-refuted; Opus 2 HIGH fixed: sign-out darkens poll,
+  per-partition boost). N3 → PR #70 auto-merged + sha-smoked
+  (b8cc21016ea2). N4 → PR #71 (0018 AUTHORED; security review H1 →
+  COUNTER MODEL rewrite, Origin check, transport catch). N7 agent pass
+  → PR #73 (3 dead exports). N8 SCALE-PLAN.md → PR #72.
+- ~00:05-00:40 N5 sweep on feat/ux-e-vibe-vote-authored (main+vibe):
+  Pixel 146/147 with the 1 fail (rating-and-nav 5-tabs) warm-green in
+  isolation — documented cold-compile family. iPhone ran in FOREGROUND
+  HALVES (env kills long background tasks): half-1 86/86; half-2 below.
+- GOTCHAS re-confirmed: (1) stale :3013 dev server across five branch
+  switches served old modules → mass consensus-page failures; kill PID +
+  rm -rf .next fixed (same class as the :3000 zombie rule). (2) parallel
+  auto-merge PRs strand each other BEHIND — `gh pr update-branch` nudge
+  required (#72/#73). (3) untracked playwright.night4.config.ts got
+  deleted by a cleanup agent — regenerate from playwright.config.ts with
+  :3013 + `npx next dev -p 3013`.
+
+## MORNING SUMMARY (written ~00:45 ET)
+
+**Queue result: N1-N8 ALL COMPLETE. 3 feature PRs OPEN for your
+merge-and-phone-test; 3 auto-merged (docs/tests/chore).**
+
+Merge these one at a time (post-merge /api/health sha smoke each; nudge
+`gh pr update-branch` after each — protect-main strands parallel PRs):
+
+1. **PR #68 — QA-6 the ONE results view.** 5 bars on BOTH home paths
+   (matcher now fills the requested page), optional neighborhood chips
+   (picking one widens radius to Anywhere — "In Harlem" means the whole
+   hood), "↻ Run it again" deals the next batch and wraps, auto surface
+   enters on Anywhere (first load is never blanked by a walking cap).
+   Phone-test: home → 5 bars; hood chip; run-again; pick-a-bar → 5.
+2. **PR #69 — UX-E vibe vote. ⚠ APPLY 0017 FIRST** (checklist in
+   docs/UXE-VIBE-VOTE-DESIGN.md: apply-one-migration ×2 → rpc-smoke-style
+   cast/move/rescind cycle → merge → smoke). Poll on Plan Night Out;
+   winner seeds Group Favorites per-partition; feature is DARK until the
+   migration applies, so merging before applying is safe but pointless.
+3. **PR #71 — analytics skeleton (DARK).** Decision doc
+   docs/ANALYTICS-DESIGN.md. To light up: apply 0018 (counter model —
+   bounded 4 rows/night, no retention job needed) + set ANALYTICS_ENABLED=1
+   and NEXT_PUBLIC_ANALYTICS=1 in Vercel + add the /privacy one-liner.
+   Call sites wired in a follow-up PR after you approve the design.
+
+**Auto-merged:** #70 prod smoke suite (run `npx playwright test --config
+playwright.prod.config.ts` after any deploy — validated 9/9 vs live) ·
+#72 docs/SCALE-PLAN.md · #73 quality pass (3 dead exports).
+
+**READ SCALE-PLAN.md §7 Tier-1 before App Store submission** — headline:
+Vercel Pro + Supabase Pro ($45/mo) are DAY-0 launch prerequisites
+(commercial ToS + backups, not capacity); then 3 index fixes + an EXPLAIN
+session, SWR cache over circle RPCs, bounded get_friend_ratings, photo
+thumbnails. The doc corroborated the analytics H1 independently.
+
+**Gates at close:** per-PR tsc 0 / vitest green (#68: 900, #69: 899,
+#71: 911 in combined tree) / build clean / gates CI on all. Full sweep
+(main+vibe branch): **Pixel 146/147** (the 1 = rating-and-nav 5-tabs,
+warm-green in isolation — documented cold-compile family); **iPhone
+145/147** (half-1 86/86 + half-2 59/61, BOTH fails = the standing
+suggestions picker pair on WebKit — the documented environmental set,
+nothing new).
+
+**⏸ / notes:** 0015 (CEO stream) still unapplied, untouched. Worktrees
+nb-qa1..5* from the fleet round are now mergeable-cleanup candidates
+(attended). @sam_tests follow-back still pending. Operator errands
+unchanged: Apple enrollment, next-bar.app + DNS + hi@, Brevo rotation.
