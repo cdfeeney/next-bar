@@ -4,20 +4,24 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
+import { useWantToGo } from '@/hooks/useWantToGo';
 import { sortRatingsByScore, tierMidpoint } from '@/lib/pairwise';
 import { seedSampleNight } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
 import QuickAddBar from '@/components/QuickAddBar';
+import WantToGoList from '@/components/WantToGoList';
 import type { Bar } from '@/types';
 import type { BarRating, Rating } from '@/types/ratings';
 
-type FilterValue = 'all' | Rating;
+type FilterValue = 'all' | Rating | 'want';
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: FilterValue; label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'loved', label: 'Loved' },
   { value: 'liked', label: 'Liked' },
   { value: 'pass', label: 'Pass' },
+  // QA5-S2: saved-for-later bars — a LIST view, not a rating tier.
+  { value: 'want', label: 'Want to go' },
 ];
 
 const RATING_LABEL: Record<Rating, string> = {
@@ -86,11 +90,25 @@ export default function RankingsPage(): JSX.Element {
   }, [ratings]);
 
   const visibleEntries = useMemo(() => {
-    if (filter === 'all') return sortedEntries;
+    if (filter === 'all' || filter === 'want') return sortedEntries;
     return sortedEntries.filter((e) => e.rating.rating === filter);
   }, [sortedEntries, filter]);
 
   const hasNoRatings = ratings.length === 0;
+
+  // QA5-S2 "Want to go" list. Rated bars leave the list automatically
+  // ("Been — rank it" completes → the bar now lives in the rankings
+  // proper): the guard makes the effect terminate — pruneRated rewrites
+  // entries, the rerun then finds nothing rated and bails.
+  const { entries: wantEntries, remove: removeWant, pruneRated } = useWantToGo();
+  const ratedIds = useMemo(
+    () => new Set(ratings.map((r) => r.barId)),
+    [ratings],
+  );
+  useEffect(() => {
+    if (!wantEntries.some((e) => ratedIds.has(e.barId))) return;
+    pruneRated(ratedIds);
+  }, [wantEntries, ratedIds, pruneRated]);
 
   return (
     <main className="min-h-screen">
@@ -146,7 +164,11 @@ export default function RankingsPage(): JSX.Element {
         })}
       </div>
 
-      {hasNoRatings ? (
+      {filter === 'want' ? (
+        // Want-to-go is a list, not a tier — it renders regardless of
+        // whether any ratings exist yet.
+        <WantToGoList entries={wantEntries} onRemove={removeWant} />
+      ) : hasNoRatings ? (
         <section className="flex flex-col items-center justify-center text-center px-6 py-[120px]">
           <h2 className="font-display text-2xl mb-2">Nothing here yet.</h2>
           <p className="text-muted text-sm mb-6 max-w-sm">
