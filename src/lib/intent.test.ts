@@ -55,6 +55,13 @@ describe('intent storage', () => {
     expect(loadIntent()).toBeNull();
   });
 
+  it("round-trips 'not-going' (QA4 third pill)", () => {
+    setIntent('not-going');
+    expect(loadIntent()?.status).toBe('not-going');
+    clearIntent();
+    expect(loadIntent()).toBeNull();
+  });
+
   it('expires an intent from a previous night', () => {
     window.localStorage.setItem(
       KEY,
@@ -125,6 +132,14 @@ describe('wasOutLastNight (E2.4 nightPhase input)', () => {
     window.localStorage.setItem(
       KEY,
       JSON.stringify({ status: 'maybe', setAt: FRI_10PM }),
+    );
+    expect(wasOutLastNight(SAT_9AM)).toBe(false);
+  });
+
+  it("'not-going' is not a night out (guard allowlists going/here)", () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ status: 'not-going', setAt: FRI_10PM }),
     );
     expect(wasOutLastNight(SAT_9AM)).toBe(false);
   });

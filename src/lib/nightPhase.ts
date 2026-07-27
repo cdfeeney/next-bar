@@ -49,8 +49,13 @@ export function deriveNightPhase(inputs: NightPhaseInputs): NightPhase {
   // R10: the human is always right.
   if (override) return override;
 
+  // 'not-going' is an explicit "staying in" — for phase derivation it
+  // behaves like no signal at all: it must NEVER derive 'out', so the
+  // 'here'/'going' branches below see null instead.
+  const signal = intent === 'not-going' ? null : intent;
+
   // Physically at a bar tonight — the strongest signal there is.
-  if (intent === 'here') return 'out';
+  if (signal === 'here') return 'out';
 
   const hour = now.getHours();
   if (Number.isNaN(hour)) return 'starting'; // fail-safe on broken clocks
@@ -66,7 +71,7 @@ export function deriveNightPhase(inputs: NightPhaseInputs): NightPhase {
   // no-signal stays 'starting' — its home works at any hour, and the
   // chip fixes a wrong guess in one tap.
   const isLate = hour >= LATE_START || hour < MORNING_START;
-  if (isLate && intent === 'going') return 'out';
+  if (isLate && signal === 'going') return 'out';
 
   return 'starting';
 }

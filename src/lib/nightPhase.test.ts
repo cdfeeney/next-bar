@@ -53,6 +53,21 @@ describe('deriveNightPhase (E0.3)', () => {
     expect(deriveNightPhase({ ...base, now: at(23), intent: 'maybe' })).toBe('starting');
   });
 
+  it("'not-going' behaves like no signal — it NEVER derives OUT (QA4)", () => {
+    // Late-night branch that flips 'going' to out must ignore it.
+    expect(deriveNightPhase({ ...base, now: at(21), intent: 'not-going' })).toBe('starting');
+    expect(deriveNightPhase({ ...base, now: at(23), intent: 'not-going' })).toBe('starting');
+    expect(deriveNightPhase({ ...base, now: at(3), intent: 'not-going' })).toBe('starting');
+    // The any-hour 'here' branch must ignore it too.
+    expect(deriveNightPhase({ ...base, now: at(15), intent: 'not-going' })).toBe('planning');
+    expect(deriveNightPhase({ ...base, now: at(17), intent: 'not-going' })).toBe('starting');
+    // Mornings still follow wasOutLastNight, not the stale pill.
+    expect(deriveNightPhase({ ...base, now: at(9), intent: 'not-going' })).toBe('planning');
+    expect(
+      deriveNightPhase({ ...base, now: at(9), intent: 'not-going', wasOutLastNight: true }),
+    ).toBe('recap');
+  });
+
   it('fail-safe: garbage input degrades to STARTING, never throws', () => {
     expect(deriveNightPhase({ ...base, now: new Date('invalid') })).toBe('starting');
   });
