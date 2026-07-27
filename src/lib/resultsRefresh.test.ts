@@ -46,4 +46,20 @@ describe('advanceShownIds (QA-6 run-it-again)', () => {
     advanceShownIds(prev, ['f', 'g', 'h', 'i', 'j'], 5);
     expect(prev).toEqual(['a', 'b', 'c', 'd', 'e']);
   });
+
+  test('idempotent when re-called with an already-appended page (rapid taps)', () => {
+    const once = advanceShownIds([], ['a', 'b', 'c', 'd', 'e'], 5);
+    // Second tap lands before the re-rank commits — the stale page must
+    // not double-append (and the identical return lets React bail out).
+    expect(advanceShownIds(once, ['a', 'b', 'c', 'd', 'e'], 5)).toBe(once);
+  });
+
+  test('exact-multiple pools accumulate the final full page (surface wraps on empty rank)', () => {
+    // A 10-bar pool: the second (last) page is full, indistinguishable
+    // from a mid-pool page here — the component's onRanked empty-rank
+    // backstop performs the wrap one tap later.
+    expect(
+      advanceShownIds(['a', 'b', 'c', 'd', 'e'], ['f', 'g', 'h', 'i', 'j'], 5),
+    ).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']);
+  });
 });

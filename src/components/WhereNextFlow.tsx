@@ -22,7 +22,11 @@ import {
 } from '@/lib/nightLog';
 import { nycNightKey } from '@/lib/nightKey';
 import { useNightRefresh } from '@/hooks/useIntent';
-import { RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
+import {
+  RADIUS_ANYWHERE,
+  RADIUS_WALK,
+  RESULTS_COUNT,
+} from '@/lib/constants';
 import { advanceShownIds } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -65,6 +69,14 @@ type Step =
   | { kind: 'results'; seedBar: Bar; tags: VibeTag[] };
 
 const DEFAULT_RADIUS: Radius = { kind: 'walking', maxMiles: RADIUS_WALK };
+/**
+ * The location-first auto surface enters on Anywhere (review HIGH: it
+ * always guaranteed a full first load pre-QA-6 — maxMiles was null — and
+ * a walking default would blank it for anyone >1.5mi from a catalog bar).
+ * Manual seed-bar entries keep the walking default: "at a bar" implies
+ * the next one is walkable.
+ */
+const AUTO_ENTRY_RADIUS: Radius = { kind: 'anywhere', maxMiles: RADIUS_ANYWHERE };
 
 function defaultProfile(): VibeProfile {
   return { tags: [], archetype: deriveArchetype([]), preferredNeighborhoods: [] };
@@ -125,6 +137,8 @@ export default function WhereNextFlow() {
     if (step.kind !== 'locating' && step.kind !== 'askLocation') return;
     const status = geo.state.status;
     if (geo.coords) {
+      // Fresh auto entry: full-coverage first load (see AUTO_ENTRY_RADIUS).
+      setSelectedRadius(AUTO_ENTRY_RADIUS);
       setStep({ kind: 'autoResults', coords: geo.coords });
       return;
     }
@@ -174,10 +188,17 @@ export default function WhereNextFlow() {
   // any change of search context (new seed, radius, hood, vibe) starts a
   // fresh deal.
   const [resultsHood, setResultsHood] = useState<Neighborhood | null>(null);
-  const [shownIds, setShownIds] = useState<string[]>([]);
+  const [shownIds, setShownIds] = useState<readonly string[]>([]);
   const lastRankedRef = useRef<string[]>([]);
   const handleRanked = useCallback((ids: string[]): void => {
     lastRankedRef.current = ids;
+    // Wrap backstop (review HIGH): a pool that's an EXACT multiple of the
+    // page size accumulates fully without advanceShownIds ever seeing a
+    // short page — when the exclusions empty the rank, restart the cycle
+    // instead of stranding the user on "No matches found".
+    if (ids.length === 0) {
+      setShownIds((prev) => (prev.length > 0 ? [] : prev));
+    }
   }, []);
   const handleRunAgain = useCallback((): void => {
     setShownIds((prev) =>
@@ -191,6 +212,13 @@ export default function WhereNextFlow() {
   const handleHoodChange = useCallback((next: Neighborhood | null): void => {
     setResultsHood(next);
     setShownIds([]);
+    // Review MED: "In Harlem" must mean the WHOLE hood — a walking cap
+    // measured from the hood's centroid silently drops edge bars. Picking
+    // a hood widens the radius chip to Anywhere (visible state change;
+    // the user can still narrow it again afterwards).
+    if (next !== null) {
+      setSelectedRadius({ kind: 'anywhere', maxMiles: RADIUS_ANYWHERE });
+    }
   }, []);
   const resetResultsControls = useCallback((): void => {
     setResultsHood(null);
