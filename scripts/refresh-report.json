@@ -1,39 +1,697 @@
 {
   "patches": {
-    "bootleg-bar": {
-      "googlePlaceId": "ChIJ2YXonRlcwokR_z5cvjB7JMI",
-      "lat": 40.6987447,
-      "lng": -73.91721989999999,
+    "ulysses-folk-house": {
+      "googlePlaceId": "ChIJV_vNLhRawokRt36u5nIPaVw",
+      "lat": 40.7044541,
+      "lng": -74.0100116,
       "businessStatus": "OPERATIONAL",
       "hours": {
         "0": [
           {
-            "open": "14:00",
+            "open": "11:00",
             "close": "04:00"
           }
         ],
         "1": [
           {
-            "open": "17:00",
+            "open": "16:00",
             "close": "04:00"
           }
         ],
         "2": [
           {
-            "open": "17:00",
+            "open": "11:00",
             "close": "04:00"
           }
         ],
         "3": [
           {
-            "open": "17:00",
+            "open": "11:00",
             "close": "04:00"
           }
         ],
         "4": [
           {
+            "open": "11:00",
+            "close": "04:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "11:00",
+            "close": "04:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "11:00",
+            "close": "04:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJV_vNLhRawokRt36u5nIPaVw/photos/AWCwydiPvTq9kpRpCUGF8webosopJyMTfswyFwMvVjRdmiE-M4rg1Mx8ScK1QDCSy3mFZbk9Pwu0Sac1YSuQ_sRsfYKjCVh1v_hS8urYRPaZPXoHcFG3h0jbUCLp-L_1SbMtQk0f_kVpPCzGhkwg1f4FTUKuyySvfg8Y9Mfeqs4iYlS_SOWMxyp-4X7x1zhQ7pWwQFDne0LbLLcBGH4VVO7kPW71yinx1dPvf3tfJpQVVUjJUx9PxxSc6hS1EN0BCOAXm40Pf0gerNN8JBEg-oMH1-O0btyrKUGll6qnpVVZRnJwLzdp_oC4dhZudZO5NEnVUqbhcfaaODoC4F2PS-vBbIm61SzuVIx6g_UeZqfWDofUN39fPggh_OvYSrJiCFeUbc7yv1Mxa4btpk0yBClIiuCLqUPRX4_FUYnYmLX8C53F7w",
+      "photoAttribution": "Ulysses'"
+    },
+    "jimmys-corner": {
+      "googlePlaceId": "ChIJqz-3FVVYwokRo_z9ZJDCM3g",
+      "lat": 40.756729899999996,
+      "lng": -73.9847643,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "16:00",
+            "close": "02:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "11:30",
+            "close": "02:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "11:30",
+            "close": "02:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "11:30",
+            "close": "02:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "11:30",
+            "close": "04:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "11:30",
+            "close": "04:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "12:30",
+            "close": "04:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJqz-3FVVYwokRo_z9ZJDCM3g/photos/AWCwydgqZrn1zbm7GZzEcIof6jtRYHQ6IB3F-AfpiZUfqyKwcdvy3hz-B4LwBkWvrwDSwEa2oJ3uZlKtJyprjp_fPpVMKt_qp83842IvBnBxZzX-tbIZ1Ks2ThNJ1e3fq4blsbkDHzD33_Ew_wTo2ST-KGosd43HkygE8jrCgdoZ5xCpk1COAwMaQKXzKdXf47fZEqZTZMAekke8LxLtyoPJ1XpZF7pB_Fi-abET_ClsTnT3d9-Tfie3_Qr26zb3_alVc1hC2g2InJmq1EJNGEa2Z-rr5xTgmQ8yNzPWtw20hIkxrFte0Bzvw0Vcf7qaFs8roW77E7UJP8A7bPvoTW8K9cMFa-xtkfi0rWz_Y4DyCwTZoJtiyD17-pqkDiS6SaUuBbXIIsBWjV-f6N6D7WaIE09ig8IRb_KSqJAPgWxcOoLeJSpP",
+      "photoAttribution": "Beatriz Silva"
+    },
+    "pj-clarkes": {
+      "googlePlaceId": "ChIJu4DTYeRYwokRHjDHAffrjeY",
+      "lat": 40.7589726,
+      "lng": -73.9681925,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "11:30",
+            "close": "23:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "11:30",
+            "close": "23:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "11:30",
+            "close": "00:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "11:30",
+            "close": "00:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "11:30",
+            "close": "00:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "11:30",
+            "close": "00:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "11:30",
+            "close": "00:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJu4DTYeRYwokRHjDHAffrjeY/photos/AWCwydgO1qZ2YCgIv9Uhk0Ofi9n60trufTsh4k1AEsMQYMZL1akZW4s6cljo1XKgAtUJN_vsXAj7bfP0EKdipQ8mJ_o8ySP3464-6iUWxkc9tnShadhyT1GOPQ0PeWo5WxUep0wC5L0-rYC59iAPhTBsiuNwVVM6jxaMn8CRYbBWTJROHFR461A5MMJK5AcrwYep9xeav4PTV0BI5gdbMpD-77_5wuLPuKvWNq633tgDHonTctrJMHVvmFnEUluI-27ILLyGla8kJIDz00s4R8wzEh1hXi3BxTZAHHV0c3dycwpP3mNsCRlQg1CSd81Hg58ABzxk0OsfKPS479aCqXLKVlrY2eCCSIRkLgk2nIhhBE5GpH2CxT-I8AI5xKH3zPmOks6AyknBHukG1Hs6n9vpt9NbmbcFyw_8y7c-lEH66hCBk-O2JmDl7FjWaUnSXvFo",
+      "photoAttribution": "P.J. Clarke's"
+    },
+    "owls-tail": {
+      "googlePlaceId": "ChIJXWmp8K9ZwokRQaQ6Cua35Cs",
+      "lat": 40.7809794,
+      "lng": -73.98088589999999,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "16:00",
+            "close": "22:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "16:30",
+            "close": "23:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "16:30",
+            "close": "23:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "16:30",
+            "close": "23:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "16:30",
+            "close": "00:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "16:00",
+            "close": "00:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "15:00",
+            "close": "00:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJXWmp8K9ZwokRQaQ6Cua35Cs/photos/AWCwydg0wMbcsRTKI8uiaMOgqwtLRmEbHuz2KwuLM9YMugR3Wuv3uNLJw9LzObc8a6BXJA4mhGzEhgmnIWA7F4ixZfgCBuCABLMc9n2FUaTTrl9y7LhKeqCsKNOCGioplttp7KDFUtbP79n6eGdUYoD1Kz77nLWUGugLTzxY3oqKKzbTHxXjLASj7Q4zyxJT1pSbMkovdzGAygP3mA0TejMycKENBQwdfTnwCEWQ0dFddSGgsa2wYdV_xHiqQ-tK768fAxrqcRPfyVtNMtT9Mhyqq8vN-1BMl40spE4EVtVWmEztEcv2DvDgoJLxsep_YLA-2r90lf9aJVjaOc1BafCg9M9CjSndPORe57HjRNUeLp3n9uaozZ4tmKwKasXXJMpmn4dlGj2FFvrOXYaSh4NzMTrcIZw5g3eBPQLvSE4wkXz27A",
+      "photoAttribution": "The Owl's Tail"
+    },
+    "arlenes-grocery": {
+      "googlePlaceId": "ChIJJU9H_YNZwokRraufOH6MCfM",
+      "lat": 40.721281999999995,
+      "lng": -73.988371,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "16:00",
+            "close": "02:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "5": [
+          {
             "open": "17:00",
             "close": "04:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJJU9H_YNZwokRraufOH6MCfM/photos/AWCwydgvaFUNww8z52Jin1iJmTnzUpph-9MAhNzsjyow32wzvVqnyGO0s8TwMP84k2yacXd25JUfuT9lzRAztIDL3OKkcUZQZ6s7O0fE7F994s45YHaIq1fGbs7w7DVYbhOvpcLKSMATTbDXwqqgp6A8F-6nQebss8GscXF2SYKuZBaqxeVnegRA5A3AM2bTCMGg7k_HRDK1KeQj9bCBB05ERAZS0LkKBwKVp-85eMUO76Ku8CcIh1e3ZoEYjXi9Fb5X9gPKs2jDza_USusyEAjaZqDc4FfMwQnBmnskedGYAuW-mBQbP9OWd54A2xFEOnPVdNBDbqWm5hiCqSrRpLs2ms5vHH3dHhMBW18ZdexEAnq0y9YXU522TytZ-gjFsFvohGXl5nJLZAqeyPID9NDg5dSqe_jMyxDt7SvYO_y0N0VczupSUI5IIyP7--wr9-BU",
+      "photoAttribution": "robin spencer"
+    },
+    "vazacs": {
+      "googlePlaceId": "ChIJ_dHPIXhZwokRjbflLgfCFkM",
+      "lat": 40.7250535,
+      "lng": -73.98141439999999,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "12:00",
+            "close": "04:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "12:00",
+            "close": "04:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "12:00",
+            "close": "04:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "12:00",
+            "close": "04:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "12:00",
+            "close": "04:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "12:00",
+            "close": "04:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "12:00",
+            "close": "04:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJ_dHPIXhZwokRjbflLgfCFkM/photos/AWCwydhvBQFZmsJPw-I6A66ozsSVo1BmntrxnsYO905k5TyAL6xx2ywlbYQxFeFfSyEEku80lMi9nmtQefvLW-iU7lwVnIptb3FQqaVO9uhkpBfFe_iOSeNB2HU13oQMAr7YiTkAPbzUcF89vFBakVK6vErqOOY3il5RwsvqemvxaDqTcQPSnMrnGf7OM8ov01IU9LE3UKwxPkuu2JClxHfWXWrDwI_cui2qwi_Ev7JzmddlFlQQt0cvTlUFbOuGzIZHrpySQFbrWRfbeB19bRA7bIggwvsH0jK1GDd0Tef-IzluALEDoogQUShch5QmutIC1_DmZ84E7-np50GlfoeJ3J0hIyU-CwvmK3m5sxEfvuy1Y7cXxp0cCDe8XmkmFkbd3us2PsZHK9SuIMQaZ52QpbM4VmcDtX06q8Ckv3sLvtXBwalY_-xFbE0JiP4_Y2pw",
+      "photoAttribution": "Jerry H"
+    },
+    "ottos-shrunken-head": {
+      "googlePlaceId": "ChIJR4DCmHZZwokRabhwmFJnhnE",
+      "lat": 40.7294629,
+      "lng": -73.9786985,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "16:00",
+            "close": "01:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "16:00",
+            "close": "01:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "16:00",
+            "close": "01:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "16:00",
+            "close": "01:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "16:00",
+            "close": "02:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "16:00",
+            "close": "02:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJR4DCmHZZwokRabhwmFJnhnE/photos/AWCwydhXb-YrH3ZVwDwr9hVGJwnLhnbEwAqCBCmzMU1-srPDc0Fl4SkTnIchyw_UcswG4CIxEdA-su1zfGTzVXo4CbpzzUn9mMpjvkaXb74DDapU4R5b47y9-R7f9_zV8tzt0GzwwZ7RBgGLom9agPtGEUDJqUcsCEfTTtCmlQa66pNE-lUmK2XVtp94pJ8BQVefjK9b-zwu8XQx1QemDYZ7ICy4ErYkJ9BQFvH9FFZEbDPh9pks5DCA4E-UxCz868bw_su9SA1twON3tgtWOW6BpglwJGkvTzEH0uDuv_qgOde2DhXKEPhC7-EuH3cwhrCio75vWbYzzGT-_0RqDVTDmalAFd3-25NkAHKYhRSEnz39XOdi1PHetytPvS2fUp8t0xgSR-LftgysSkxgihGu_KaeCb6SJWNLJz66zb80agG86R0e",
+      "photoAttribution": "Peter Bakker"
+    },
+    "monas": {
+      "googlePlaceId": "ChIJjZDVonZZwokRoZPvylQfyFY",
+      "lat": 40.729179599999995,
+      "lng": -73.978372,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "15:00",
+            "close": "04:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "15:00",
+            "close": "04:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "15:00",
+            "close": "04:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "15:00",
+            "close": "04:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "15:00",
+            "close": "04:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "15:00",
+            "close": "04:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "15:00",
+            "close": "04:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJjZDVonZZwokRoZPvylQfyFY/photos/AWCwydgQTKoTSTxOmdf5MvgO1kUZCiDWrHmuppowuO0tKqyLpKfml_4HbEyvPJjc2CDFIoI0V7egKETNYD50vjQpmNZpWjTHTuFc4wgC1meO1YF0uAf9F0Z0gWSY25Uy9y6Z7K_HJ4dOP8ZZWKuRsPjrRXJuFLWxesMB_tOETDGWqMsBh6IHTYyo8BkwE4kXo7kS9xvYiVJMMi4QLFgdqmHh3f0qySUvc8oHw_Aq-xl4k3lA8ocGR60Ku4LYQlKle4vaPLyKd5FEYyY_inWUp31UDTXqcLSmiKkt_oQ6-wM0G0GVgtLpjOAdnu02b11uWAt3t0WLFc6J0ZSe4d0yd6SEi4Kcg5xqLU3Uno5HA4V-yuB8fXs3pPhSZE4-MX8yFf9j3FieqDrNxe_y0bk96Xauj5GDIfLJK08UHY_kUdlYfDfkZChWWls4aNOdZ6PqF-EP",
+      "photoAttribution": "Ruwan J."
+    },
+    "julius": {
+      "googlePlaceId": "ChIJJ0KwSzBZwokRZBEwqbaFtjU",
+      "lat": 40.7345416,
+      "lng": -74.0015246,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "12:00",
+            "close": "02:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "16:00",
+            "close": "02:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "16:00",
+            "close": "02:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "16:00",
+            "close": "02:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "16:00",
+            "close": "02:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "12:00",
+            "close": "04:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJJ0KwSzBZwokRZBEwqbaFtjU/photos/AWCwydh8bCSw9HHSPrDJGszpA2hfCpDMQseouRKT9dXflA5XI6F3Ma_HDwL0Yq9KcK7nXcy1DZBAWTJrPn9r7PIAXHPZzhb0wfEVlx7kdp87cLi3hcMZQQAMd0tu2WIfg4bAanwDJFDEq6z3WCPFIg2lHgW4gjrZ1FgjQxelLz1xyQQkdRBEtDYeRuP18vjErpcikIdAiU3PoVSK_doczNpHQL23CC4pUePxuqeLh7gUUwoGlWV027RXX8flsF_7x0eSgzpx3oZ3M_IrpSdE3NWMbfUY3km9VsNlohfuXHv2qcFR5XxI2xmRpjgtuN5bejN9Kwm4nPMMTr7qMp7kWmoLi_QFaHAE3BcyLOlHGQdoCpb50zS0EOj4kLpMMF5Z2DifRukU_ToDxLwl7rm13GHYbKttHolEx4hdhxy5foRWttkGIA",
+      "photoAttribution": "Julius'"
+    },
+    "arthurs-tavern": {
+      "googlePlaceId": "ChIJjZlBgJNZwokRVeIhxDdROqw",
+      "lat": 40.7332013,
+      "lng": -74.0034518,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "14:00",
+            "close": "02:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "17:00",
+            "close": "04:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "17:00",
+            "close": "04:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJjZlBgJNZwokRVeIhxDdROqw/photos/AWCwydhLe5BOAbLkB5gt7UKzAUZJ5tCsZEDU61Wk2gUsYyheYcw95n_JQVfPEvTVFbR-2SjSXAmI0Pf0PoOL6-L2oVgs1Och1FMa-QyTc98S7flFDKfDqDxFoK_DQfK5-3BGDY2ly6CpiQ6e3nY3a8jFWnC3rC0_78j3T4jVGDwlCriaOuqPUZVXLijKpB2_rf2XVVr2wVP9F3X37RxeU2L_T-hiWG3HCGLiizhALVUKPCMnq2p95e72iM9Ttqv2ggp3Ra761P80sNFN47Od5GwtG5UAUz1v3-B8lkTa8eHev3r-mZx55d_61hbRbXteZiCPc1ddq7MhQL_oxUy6dMt52VcqLmHy0tlkc0ixANK0tmpE26i6g9r6k2EXf21Fyl2zJMcqKOBJ06nTxRZGPdouq-oA84vJDJVJvB7_eD7fPEs-tQ",
+      "photoAttribution": "Arthur's Tavern"
+    },
+    "sid-golds": {
+      "googlePlaceId": "ChIJz_NwRKVZwokRGp7XDpwqNnI",
+      "lat": 40.7458643,
+      "lng": -73.9936206,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "2": [
+          {
+            "open": "18:00",
+            "close": "01:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "18:00",
+            "close": "01:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "19:00",
+            "close": "01:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "19:00",
+            "close": "02:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "20:00",
+            "close": "02:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJz_NwRKVZwokRGp7XDpwqNnI/photos/AWCwydhw62zvS-zuoaqzb6SmGngKZrARPs1MoQR_yQ7ICXTED_f-yQWnRptdUhmPkdDOwu0iLy0jx9L6OYKAMo_LPkoZMGKaoW05-TzjTjLApzjA68o5Gkf9dUaMWMVHhQ2sRit5RKg_FeeFbGPAf32JL7xG1auLv2hxLXzTlYyf_nD1-CJzjC3JI2Bs5d5k52DaqbQsn5KbXHuf0HsxJVUQWpuupYHwAi8cNb8XtFcSFXJwrMz0aHii3-rVz37EIfbGjvctnZO3HMBR_3Gw7vjnK1yFDWclKit61qkepTyW_bk5aLMBqOQNairwNXSpNOqejNiUWbaxUzT5da5fgBbHW0-Ql19LIAky8soydeFT_AR_ln9RNqpVj0mER6CJ3iYmEt4nMFRRswRP5AKmp2UDkEpBrqURVmjNb11CtwN5rDIxSRmo2mzfB8TnlAAWmQ",
+      "photoAttribution": "Sid Gold's Request Room"
+    },
+    "jeremys-ale-house": {
+      "googlePlaceId": "ChIJ8fd4uDxawokRcLenrYjJdbg",
+      "lat": 40.707772,
+      "lng": -74.00215,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "12:00",
+            "close": "23:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "12:00",
+            "close": "23:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "12:00",
+            "close": "00:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "12:00",
+            "close": "00:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "12:00",
+            "close": "00:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "12:00",
+            "close": "00:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "12:00",
+            "close": "00:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJ8fd4uDxawokRcLenrYjJdbg/photos/AWCwydgpPKB7WIJq2UdrQ9mLSS4dM-emhmiUdKYK2kxFr1ZUa_1OiOghdxn9zJ5VvpllYrXXdyTz7oNJLneyQTmmCrSLiK87KWE-WeBF4RGmSWo_tWigPL-JZ5xgIJJaNzcvCtpCY93U9fZuR-dZ6UkNmeI85-noD0fXlG0hP5zOIEtAStpESAq5fJbz1QJGHEo7x-8iDm6s_ZTtcttrcRBQZC9fnaaqiyKjtgdVAxh4_K8Tsq6Fu_7NAzV4JlEMPwasMY4YRPuXMp1UxcOsF0F8Hki-df7SRhseKJhyWlm8T0vXhmf7ob5AE2QiSL5T_NdGT_TeHGc1hYo96yTlCwDTevf5X0Gjy_Di0pk0G9UKQisdbYax3k1iUN4PswiMq_rKKLmRgOguWC0j-UrxQvWGkQVxezVXVDNBIIeZ9OU9X14pu-bg",
+      "photoAttribution": "Jeremy's Ale House"
+    },
+    "brandys-piano-bar": {
+      "googlePlaceId": "ChIJ0d55irtYwokRL3L_psDROgY",
+      "lat": 40.777125999999996,
+      "lng": -73.9534479,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ],
+        "5": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ],
+        "6": [
+          {
+            "open": "16:00",
+            "close": "04:00"
+          }
+        ]
+      },
+      "photoRef": "places/ChIJ0d55irtYwokRL3L_psDROgY/photos/AWCwydi_5yVOJWiyl8WvRkXA8SP8isSamXsJt3rqIdQpmU2Ig1bovHmhQ8L4Wo8sTCycWKyE7Ws3r9-MI0TB1ptRw9d5wFhkgHF7zCK8FEY31liuz6Rwtm39o7x3ZjiZf85M8aBcWFYzNFfamueOSkRT-8lhCtsL_HyDP7j5AQ_iD0zKG9zOxO0-Zhdq7APYVJOOuBQUQDSLOptAecfiD7H8XHRkvQNWWZdt-DLVtD_QOAorEKKLfFe7hbh9joEHKfCZMBVOQiGPKcXc8hNSNBo6ysLE5NraNEmUEpDwqJLZUDQsBLBYXbFbr6FJGXYTgcrnogwN3wrNtbF5FpncV4Q8Ul0ERK-1rck4a6ib7JW6DufzgdRhj-uvXwJ0l_7n18ii1RDRUD-s33G3-FzLAcN_kyu0CB_kNISrBnDwdEHbBoQR5bYV",
+      "photoAttribution": "chii maniez"
+    },
+    "gingers-bar": {
+      "googlePlaceId": "ChIJUTo_Cv5awokRBf8P9mpTTmM",
+      "lat": 40.671290899999995,
+      "lng": -73.9842132,
+      "businessStatus": "OPERATIONAL",
+      "hours": {
+        "0": [
+          {
+            "open": "14:00",
+            "close": "02:00"
+          }
+        ],
+        "1": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "2": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "3": [
+          {
+            "open": "17:00",
+            "close": "02:00"
+          }
+        ],
+        "4": [
+          {
+            "open": "17:00",
+            "close": "02:00"
           }
         ],
         "5": [
@@ -49,8 +707,8 @@
           }
         ]
       },
-      "photoRef": "places/ChIJ2YXonRlcwokR_z5cvjB7JMI/photos/AWCwydihuJzl6VLjlNxMqpB-G9RJnRr7UXCW2vPuoi79tDZ-T2EpZJ1KnqugOrNEplp673uk-Nwu636wNyqXNDJECsBKE2xgcSvco8rNVlYZa6OA1szea4P2uQwKQGW7LV5C6lk2k-_t2xbUU58j_DF8aPh3a3wnxXsaJqF6X8J-gwbex9PmH3ubhfIxwb3htB_deKDGLo2c7s1IrCGuF8lRao7FXcqZCWpLIRpuzZFiPgm2_Cd1nj9Eow3B8wwgUiup0qgRun_kz4SSjDi4KWlYxhgrjnBroRrErny0AIpc6HdajB1gnU0qLjrj83loF5diRSpZaMcXNB6NmWucLta47tX-MqvXe6wlhxGMeWOQXAZ1y-dwx11BFTYnC9cmwlhmVqrk5Q4nFn6DjyBFRBkGxwKcdbKySvC6uNdWlMcfr4dNIYNa",
-      "photoAttribution": "Danielle Denman"
+      "photoRef": "places/ChIJUTo_Cv5awokRBf8P9mpTTmM/photos/AWCwydjKAowJjKenH5LzcQaBhMBjqO3ZgLFaHPcVl2N20LTPiIjIRadeFRbFTammRVxnhv_Mf-3EIpRLD04GnjobUQw88LBYe08vojxn_OiMrJ6QLagFVDXNwXB9oeKU-1sR4oQIb4ZCey13hEJ6kspHupydVscmWJ2-C1gRWojD-e7kDR0yhNlIOzLM2qzGRHK44z-owRdqTd1LhaJeImeK2p_ZOKOBl0-Vuc6i3dyWPTcxVTjXAhHS5fY8GBv3yTNx6c3fA8fIgrJftw3ryGSPaOi26vrDqigF7AU-kMuBLj4BDHOharXBffBp8A98Gmyc8ZYchrrq-lHkHsfXZ_XI7FpJmn9Z7G36KwYVCZ7X2Z8sBedY5Nf2sxZ6fXwzM7tqXBeJqpkoM5HgJimJFDF_K8iwIcsJ89PVR-j9Q0tFeIOZ-ENs",
+      "photoAttribution": "Nic Garcia"
     }
   },
   "flags": []
