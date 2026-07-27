@@ -17,7 +17,7 @@ export default function HomePage() {
   // E2.4/E3.4 phase-adaptive home (EPICS-v0.6, locked decision 1: content
   // adapts, the 5-tab nav never does). Derived on mount — SSR has neither
   // storage nor a clock worth trusting; until then the default flow
-  // renders, which IS the fail-safe 'starting' content (R10). The chip's
+  // renders, which IS the fail-safe 'out' content (R10). The chip's
   // choice persists for the night (R11) via phaseOverride, and the
   // storage listener keeps the phase honest when intent changes in
   // another tab.
@@ -71,8 +71,8 @@ export default function HomePage() {
   // Recap LEADS with its card but keeps the find-a-bar flow on the
   // screen below it: a misdetected phase (or a planner who changes
   // their mind) never loses the app's core surface (R5 — no dead ends;
-  // this is the fail-safe half of R10). 'starting' and 'out' ARE the
-  // flow — out's re-search entry pre-fills tonight's cached vibe via
+  // this is the fail-safe half of R10). 'out' IS the flow — its
+  // re-search entry pre-fills tonight's cached vibe via
   // startResultsFrom (E2.2).
   return (
     <main>
