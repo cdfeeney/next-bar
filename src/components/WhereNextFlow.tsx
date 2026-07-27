@@ -27,7 +27,7 @@ import {
   RADIUS_WALK,
   RESULTS_COUNT,
 } from '@/lib/constants';
-import { advanceShownIds } from '@/lib/resultsRefresh';
+import { advanceShownIds, nextWiderRadius } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
 import DistanceChips from '@/components/DistanceChips';
@@ -68,15 +68,16 @@ type Step =
   | { kind: 'tweakVibe'; seedBar: Bar; tags: VibeTag[] }
   | { kind: 'results'; seedBar: Bar; tags: VibeTag[] };
 
-const DEFAULT_RADIUS: Radius = { kind: 'walking', maxMiles: RADIUS_WALK };
 /**
- * The location-first auto surface enters on Anywhere (review HIGH: it
- * always guaranteed a full first load pre-QA-6 — maxMiles was null — and
- * a walking default would blank it for anyone >1.5mi from a catalog bar).
- * Manual seed-bar entries keep the walking default: "at a bar" implies
- * the next one is walkable.
+ * BOTH home surfaces enter on Walkable (operator, 2026-07-27 morning:
+ * "I need to see bars that are close to me" — proximity beats a
+ * guaranteed-full first page). The earlier review concern (a walking
+ * default blanks the page for someone far from any catalog bar) is
+ * answered by the AUTO-WIDEN below: zero results at an untouched radius
+ * widens one visible step (walking → cab → anywhere) instead of ever
+ * stranding an empty list.
  */
-const AUTO_ENTRY_RADIUS: Radius = { kind: 'anywhere', maxMiles: RADIUS_ANYWHERE };
+const DEFAULT_RADIUS: Radius = { kind: 'walking', maxMiles: RADIUS_WALK };
 
 function defaultProfile(): VibeProfile {
   return { tags: [], archetype: deriveArchetype([]), preferredNeighborhoods: [] };
@@ -137,8 +138,10 @@ export default function WhereNextFlow() {
     if (step.kind !== 'locating' && step.kind !== 'askLocation') return;
     const status = geo.state.status;
     if (geo.coords) {
-      // Fresh auto entry: full-coverage first load (see AUTO_ENTRY_RADIUS).
-      setSelectedRadius(AUTO_ENTRY_RADIUS);
+      // Fresh auto entry: Walkable — closest bars first (auto-widen
+      // covers the zero-results case; see DEFAULT_RADIUS note).
+      radiusTouchedRef.current = false;
+      setSelectedRadius(DEFAULT_RADIUS);
       setStep({ kind: 'autoResults', coords: geo.coords });
       return;
     }
@@ -190,22 +193,37 @@ export default function WhereNextFlow() {
   const [resultsHood, setResultsHood] = useState<Neighborhood | null>(null);
   const [shownIds, setShownIds] = useState<readonly string[]>([]);
   const lastRankedRef = useRef<string[]>([]);
+  // True once the user taps the distance chips themselves — the
+  // auto-widen below must never fight an explicit choice.
+  const radiusTouchedRef = useRef(false);
+  const [rankedEmpty, setRankedEmpty] = useState(false);
   const handleRanked = useCallback((ids: string[]): void => {
     lastRankedRef.current = ids;
-    // Wrap backstop (review HIGH): a pool that's an EXACT multiple of the
-    // page size accumulates fully without advanceShownIds ever seeing a
-    // short page — when the exclusions empty the rank, restart the cycle
-    // instead of stranding the user on "No matches found".
-    if (ids.length === 0) {
-      setShownIds((prev) => (prev.length > 0 ? [] : prev));
-    }
+    setRankedEmpty(ids.length === 0);
   }, []);
+  // Empty-rank recovery, in priority order: (1) wrap backstop (review
+  // HIGH — a refresh cycle that exhausted the pool restarts instead of
+  // stranding "No matches found"); (2) AUTO-WIDEN (operator fix
+  // 2026-07-27: home opens on Walkable; if an UNTOUCHED radius yields
+  // zero, widen one visible chip step walking → cab → anywhere rather
+  // than showing an empty first load).
+  useEffect(() => {
+    if (!rankedEmpty) return;
+    if (shownIds.length > 0) {
+      setShownIds([]);
+      return;
+    }
+    if (!radiusTouchedRef.current) {
+      setSelectedRadius((prev) => nextWiderRadius(prev));
+    }
+  }, [rankedEmpty, shownIds]);
   const handleRunAgain = useCallback((): void => {
     setShownIds((prev) =>
       advanceShownIds(prev, lastRankedRef.current, RESULTS_COUNT),
     );
   }, []);
   const handleRadiusChange = useCallback((next: Radius): void => {
+    radiusTouchedRef.current = true;
     setSelectedRadius(next);
     setShownIds([]);
   }, []);
@@ -286,6 +304,7 @@ export default function WhereNextFlow() {
     // object records it with zero extra questions. The lib itself
     // refuses synthetic free-text seeds.
     recordVisit(seedBar.id);
+    radiusTouchedRef.current = false;
     setSelectedRadius(DEFAULT_RADIUS);
     // QA-6: a new seed is a new search — hood override and run-it-again
     // history reset with the radius.
@@ -498,18 +517,10 @@ export default function WhereNextFlow() {
             ↻ Run it again
           </button>
         </div>
-        {/* pb-28 clears the fixed bottom nav (operator: "never able to
-            see the bottom option on mobile" — same R5 class as the
-            manual results' escape). */}
-        <div className="px-6 pt-2 pb-28 text-center">
-          <button
-            type="button"
-            onClick={goPickBar}
-            className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
-          >
-            Not at these bars? Pick yours →
-          </button>
-        </div>
+        {/* Operator fix 2026-07-27: the bottom duplicate of "Not at these
+            bars?" is DELETED — the escape lives once, in the top control
+            row. pb-28 spacer still clears the fixed bottom nav (R5). */}
+        <div className="pb-28" />
       </main>
     );
   }

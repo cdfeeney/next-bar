@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { advanceShownIds } from './resultsRefresh';
+import { advanceShownIds, nextWiderRadius } from './resultsRefresh';
 
 describe('advanceShownIds (QA-6 run-it-again)', () => {
   test('appends a full page to the shown history', () => {
@@ -52,6 +52,15 @@ describe('advanceShownIds (QA-6 run-it-again)', () => {
     // Second tap lands before the re-rank commits — the stale page must
     // not double-append (and the identical return lets React bail out).
     expect(advanceShownIds(once, ['a', 'b', 'c', 'd', 'e'], 5)).toBe(once);
+  });
+
+  test('nextWiderRadius widens one honest step and stops at anywhere', () => {
+    const walking = { kind: 'walking', maxMiles: 1.5 } as const;
+    const cab = nextWiderRadius(walking);
+    expect(cab.kind).toBe('cab');
+    const anywhere = nextWiderRadius(cab);
+    expect(anywhere.kind).toBe('anywhere');
+    expect(nextWiderRadius(anywhere)).toBe(anywhere);
   });
 
   test('exact-multiple pools accumulate the final full page (surface wraps on empty rank)', () => {

@@ -14,12 +14,18 @@
 import { test, expect } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
 
+// Fixed clock (Fri 11pm local): the live results surfaces hard-filter
+// KNOWN-closed bars, so exact-count assertions are only deterministic
+// under a mocked clock (a Sunday-morning run sees 4, not 5).
+const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
+
 test.describe('Where-next path (E2.1 collapsed)', () => {
   test('picks Attaboy and lands on results in ONE step; deleted screens never render', async ({
     page,
   }) => {
     // Home is location-first; deny geo so it falls back to the manual pick flow.
     await denyGeolocation(page.context());
+    await page.clock.setFixedTime(FRIDAY_NIGHT);
     await page.goto('/');
 
     await expect(page.getByRole('heading', { name: /Where are you\?/i })).toBeVisible();
@@ -53,6 +59,7 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     page,
   }) => {
     await denyGeolocation(page.context());
+    await page.clock.setFixedTime(FRIDAY_NIGHT);
     await page.goto('/');
 
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');

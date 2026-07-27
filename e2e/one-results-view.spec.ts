@@ -107,7 +107,7 @@ test.describe('QA-6 — the one results view', () => {
     await expect(cards).toHaveCount(5);
   });
 
-  test('location-first auto results carry the same controls and enter on Anywhere', async ({
+  test('location-first auto results enter on WALKABLE (closest first) with the full control set', async ({
     page,
     context,
   }) => {
@@ -121,13 +121,18 @@ test.describe('QA-6 — the one results view', () => {
     const cards = cardsOf(page);
     await expect(cards).toHaveCount(5);
 
-    // Same control set as the manual surface; the auto surface enters on
-    // Anywhere (its pre-QA-6 guarantee: a full first load wherever you
-    // stand — no silent walking cap).
+    // Operator fix 2026-07-27: home opens on Walkable — closest bars
+    // first (the auto-widen covers a zero-result radius; at this LES
+    // coordinate on a Friday night the walking pool is deep).
     const radiusGroup = page.getByRole('group', { name: 'Search radius' });
     await expect(
-      radiusGroup.getByRole('button', { name: 'Anywhere' }),
+      radiusGroup.getByRole('button', { name: 'Walkable' }),
     ).toHaveAttribute('aria-pressed', 'true');
+
+    // The escape appears exactly ONCE (the bottom duplicate is deleted).
+    await expect(
+      page.getByRole('button', { name: /Not at these bars/i }),
+    ).toHaveCount(1);
     await expect(
       page.getByRole('button', { name: /Tweak the vibe/i }),
     ).toBeVisible();

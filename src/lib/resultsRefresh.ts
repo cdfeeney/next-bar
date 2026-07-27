@@ -1,3 +1,6 @@
+import type { Radius } from '@/types';
+import { RADIUS_ANYWHERE, RADIUS_CAB } from '@/lib/constants';
+
 /**
  * QA-6 "Run it again": the refresh affordance on the one results view.
  *
@@ -12,6 +15,21 @@
  * Idempotent under repeat calls with the same page (review MED: two taps
  * faster than the post-commit onRanked effect must not double-append).
  */
+/**
+ * Operator fix (2026-07-27 morning): the home surfaces open on Walkable —
+ * closest bars first — and only WIDEN one honest step at a time when the
+ * current radius yields zero results (walking → cab → anywhere; the chip
+ * state updates visibly). Never fires once the user has touched the
+ * distance chips themselves.
+ */
+export function nextWiderRadius(prev: Radius): Radius {
+  if (prev.kind === 'walking') return { kind: 'cab', maxMiles: RADIUS_CAB };
+  if (prev.kind === 'cab') {
+    return { kind: 'anywhere', maxMiles: RADIUS_ANYWHERE };
+  }
+  return prev;
+}
+
 export function advanceShownIds(
   prevShown: readonly string[],
   lastRanked: readonly string[],
