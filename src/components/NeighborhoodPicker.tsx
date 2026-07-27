@@ -24,15 +24,31 @@ const ALL: ManhattanNeighborhood[] = [
   'UWS',
   'UES',
   'Harlem',
+  'Tribeca',
+  'Battery Park City',
+  'Hamilton Heights',
+  'Flatiron',
+  'Greenwich Village',
+  'NoHo',
+  'Hudson Square',
+  'Gramercy',
+  'Kips Bay',
+  'East Harlem',
+  'Morningside Heights',
+  'Washington Heights',
+  'Inwood',
+  'Chinatown',
   // Brooklyn
   'Williamsburg',
   'Greenpoint',
   'Bushwick',
   'Park Slope',
   'Fort Greene',
+  'Gowanus',
   // Queens
   'Astoria',
   'LIC',
+  'Ridgewood',
 ];
 
 export default function NeighborhoodPicker({

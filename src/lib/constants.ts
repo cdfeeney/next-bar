@@ -44,6 +44,16 @@ export const MAX_SNAP_MILES = 2;
 // "Worth a cab" ~ a short cross-town ride. Literal types in types/index.ts
 // (Radius) must match these values.
 export const RADIUS_WALK = 1.5;
+
+// Late-night ranking bias (operator 2026-07-27: "past a certain time the
+// algorithm biases towards bars and clubs and away from restaurants").
+// Applied on LIVE surfaces only, additive at tie-breaker scale (same
+// order of magnitude as the 0.1 affinity term — it reorders near-ties,
+// never buries a strong match).
+export const LATE_NIGHT_START_HOUR = 22; // 10pm…
+export const LATE_NIGHT_END_HOUR = 4;    // …through 3:59am
+export const LATE_CLUB_BOOST = 0.06;
+export const LATE_RESTAURANT_PENALTY = 0.06;
 export const RADIUS_CAB = 4;
 export const RADIUS_ANYWHERE = null;
 
@@ -72,15 +82,31 @@ export const NEIGHBORHOOD_CENTROIDS: Record<Neighborhood, Coords> = {
   'UWS':          { lat: 40.7870, lng: -73.9750 },
   'UES':          { lat: 40.7740, lng: -73.9610 },
   'Harlem':       { lat: 40.8110, lng: -73.9450 },
+  'Tribeca':      { lat: 40.7163, lng: -74.0086 },
+  'Battery Park City': { lat: 40.7115, lng: -74.0158 },
+  'Hamilton Heights':  { lat: 40.8252, lng: -73.9496 },
+  'Flatiron':     { lat: 40.7411, lng: -73.9897 },
+  'Greenwich Village': { lat: 40.7336, lng: -73.9989 },
+  'NoHo': { lat: 40.7281, lng: -73.9925 },
+  'Hudson Square': { lat: 40.7263, lng: -74.0075 },
+  'Gramercy': { lat: 40.7376, lng: -73.9836 },
+  'Kips Bay': { lat: 40.7423, lng: -73.9789 },
+  'East Harlem': { lat: 40.7957, lng: -73.9389 },
+  'Morningside Heights': { lat: 40.809, lng: -73.9613 },
+  'Washington Heights': { lat: 40.8417, lng: -73.9394 },
+  'Inwood': { lat: 40.8677, lng: -73.9212 },
+  'Chinatown': { lat: 40.7158, lng: -73.997 },
   // Brooklyn
   'Williamsburg': { lat: 40.7140, lng: -73.9570 },
   'Greenpoint':   { lat: 40.7300, lng: -73.9510 },
   'Bushwick':     { lat: 40.6940, lng: -73.9210 },
   'Park Slope':   { lat: 40.6720, lng: -73.9790 },
   'Fort Greene':  { lat: 40.6860, lng: -73.9740 },
+  'Gowanus':      { lat: 40.6751, lng: -73.9887 },
   // Queens
   'Astoria':      { lat: 40.7640, lng: -73.9200 },
   'LIC':          { lat: 40.7450, lng: -73.9490 },
+  'Ridgewood':    { lat: 40.7043, lng: -73.9018 },
 };
 
 // Service area now spans lower/mid Manhattan + north/central Brooklyn.
