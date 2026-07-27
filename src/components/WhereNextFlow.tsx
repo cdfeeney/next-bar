@@ -17,11 +17,15 @@ import { loadProfile } from '@/lib/storedProfile';
 import { loadNightVibe, saveNightVibe } from '@/lib/vibeNightCache';
 import {
   NIGHT_LOG_STORAGE_KEY,
+  lastNightKey,
   loadNightVisits,
   recordVisit,
 } from '@/lib/nightLog';
 import { nycNightKey } from '@/lib/nightKey';
 import { useNightRefresh } from '@/hooks/useIntent';
+import { deriveNightPhase } from '@/lib/nightPhase';
+import { loadIntent, wasOutLastNight } from '@/lib/intent';
+import { loadPhaseOverride } from '@/lib/phaseOverride';
 import {
   RADIUS_ANYWHERE,
   RADIUS_WALK,
@@ -113,10 +117,39 @@ export default function WhereNextFlow() {
     setNightVibe(loadNightVibe());
   }, []);
 
-  // The profile the LOCATION results rank by: tweaked night vibe when one
-  // exists, else the stored quiz profile. preferredNeighborhoods mirrors
-  // the manual seedProfile ([]) — ResultsView ignores it for coords
-  // locations anyway (the geo IS the neighborhood signal).
+  // Operator 2026-07-27: while PLANNING, every result card carries a
+  // "Send" share (text the bar to your group — works for recipients with
+  // no account via /share/[barId]). Same phase inputs as the home
+  // header's chip (small acknowledged duplication with app/page.tsx —
+  // extract a useNightPhase hook if a third consumer appears).
+  const [isPlanning, setIsPlanning] = useState(false);
+  const computePlanning = useCallback((): void => {
+    const now = new Date();
+    setIsPlanning(
+      deriveNightPhase({
+        now,
+        intent: loadIntent()?.status ?? null,
+        wasOutLastNight:
+          wasOutLastNight(now) ||
+          loadNightVisits(lastNightKey(now)).length > 0,
+        override: loadPhaseOverride(now),
+      }) === 'planning',
+    );
+  }, []);
+  useNightRefresh(computePlanning);
+  useEffect(() => {
+    window.addEventListener('storage', computePlanning);
+    return () => window.removeEventListener('storage', computePlanning);
+  }, [computePlanning]);
+
+  // The profile the LOCATION results rank by (operator 2026-07-27:
+  // "showing interesting ones, not near ones — move it into tweak the
+  // vibe"): tonight's EXPLICIT vibe pick when one exists, otherwise NO
+  // tags — matching.ts's empty-tags branch ranks by pure proximity, so
+  // the default home answer is simply "the closest open bars". The saved
+  // quiz profile no longer shapes this ranking silently; it lives on as
+  // the PRE-FILL inside the Tweak-the-vibe surface (below), where
+  // applying it makes the influence explicit and night-scoped.
   const autoProfile = useMemo<VibeProfile>(
     () =>
       nightVibe
@@ -125,8 +158,8 @@ export default function WhereNextFlow() {
             archetype: deriveArchetype(nightVibe),
             preferredNeighborhoods: [],
           }
-        : profile,
-    [nightVibe, profile],
+        : { tags: [], archetype: deriveArchetype([]), preferredNeighborhoods: [] },
+    [nightVibe],
   );
 
   // Location-first routing. In 'locating' we NEVER fire the browser
@@ -452,18 +485,16 @@ export default function WhereNextFlow() {
     };
     return (
       <main>
-        {/* QA1 (operator 2026-07-26 mobile QA): the two controls the
-            operator couldn't find get a compact, visible row ABOVE the
-            results — the pick-my-bar escape (duplicated from the bottom
-            link, same action) and the vibe tweak entry the location
-            results were missing entirely. Both min-h-44. */}
+        {/* QA1 row, copy tightened 2026-07-27 (operator: "too much
+            text") — the escape keeps its chip but says just "Pick my
+            bar". Both min-h-44. */}
         <div className="px-6 pt-4 flex flex-wrap items-center justify-center gap-2">
           <button
             type="button"
             onClick={goPickBar}
             className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
           >
-            Not at these bars? Pick yours →
+            Pick my bar
           </button>
           <button
             type="button"
@@ -505,6 +536,7 @@ export default function WhereNextFlow() {
           hideClosedNow
           excludeIds={autoExcludeIds}
           onRanked={handleRanked}
+          showShare={isPlanning}
         />
         {/* QA-6 refresh: deal the next batch (excluding everything already
             shown this search); wraps on small pools. */}
@@ -664,6 +696,7 @@ export default function WhereNextFlow() {
         excludeIds={manualExcludeIds}
         hideClosedNow
         onRanked={handleRanked}
+        showShare={isPlanning}
       />
       {/* QA-6 refresh: deal the next batch. */}
       <div className="px-6 pt-2 text-center">

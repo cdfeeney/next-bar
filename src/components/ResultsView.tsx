@@ -38,6 +38,8 @@ type ResultsViewProps = {
    * MED-11: the parent must NOT recompute matches with different inputs).
    */
   onRanked?: (ids: string[]) => void;
+  /** Planning phase (operator 2026-07-27): cards carry a "Send" share. */
+  showShare?: boolean;
 };
 
 export default function ResultsView({
@@ -48,6 +50,7 @@ export default function ResultsView({
   maxResults,
   hideClosedNow,
   onRanked,
+  showShare,
 }: ResultsViewProps) {
   const userCoords: Coords =
     location.kind === 'coords'
@@ -277,6 +280,7 @@ export default function ResultsView({
                   rank={idx + 1}
                   miles={miles}
                   userTags={profile.tags}
+                  showShare={showShare}
                 />
               );
             })}

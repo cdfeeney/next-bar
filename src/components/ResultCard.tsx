@@ -5,6 +5,8 @@ import type { Bar, VibeTag } from '@/types';
 import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
 import { barImageUrls } from '@/lib/barVisual';
+import { buildPickPath, sharePickText } from '@/lib/share';
+import ShareButton from '@/components/ShareButton';
 import OpenNowBadge from '@/components/OpenNowBadge';
 import BarVisualTile from '@/components/BarVisualTile';
 import BarLightbox from '@/components/BarLightbox';
@@ -15,6 +17,9 @@ type ResultCardProps = {
   rank: number;
   miles: number | null;
   userTags: VibeTag[];
+  /** Planning phase (operator 2026-07-27): show the "Send" share — text
+   *  the bar to a group; recipients without the app land on /share/[id]. */
+  showShare?: boolean;
 };
 
 /**
@@ -31,7 +36,7 @@ type ResultCardProps = {
  * /rankings owns that flow), and the per-card photo attribution line is
  * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
-export default function ResultCard({ bar, rank, miles, userTags }: ResultCardProps) {
+export default function ResultCard({ bar, rank, miles, userTags, showShare }: ResultCardProps) {
   const lead = leadCopy(miles, bar.neighborhood);
   const badge = vibeMatchBadge(userTags, bar.tags);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -132,6 +137,14 @@ export default function ResultCard({ bar, rank, miles, userTags }: ResultCardPro
             <OpenNowBadge bar={bar} />
             <RatingBadge barId={bar.id} />
           </div>
+          {showShare ? (
+            <ShareButton
+              path={buildPickPath(bar.id)}
+              text={sharePickText(bar)}
+              label="Send"
+              ariaLabel={`Send ${bar.name} to friends`}
+            />
+          ) : null}
           <a
             href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
               `${bar.name} ${bar.address}`,
