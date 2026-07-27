@@ -20,14 +20,3 @@ export function haversineMiles(a: Coords, b: Coords): number {
   const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
   return EARTH_RADIUS_MILES * c;
 }
-
-export function formatDistance(miles: number): string {
-  if (miles < 0.1) {
-    return 'right here';
-  }
-  if (miles < 1) {
-    const feet = Math.round(miles * 5280);
-    return `${feet} ft`;
-  }
-  return `${miles.toFixed(1)} mi`;
-}
