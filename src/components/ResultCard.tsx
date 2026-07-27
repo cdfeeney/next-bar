@@ -132,7 +132,10 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
           </span>
         </p>
 
-        <div className="flex items-center justify-between gap-3">
+        {/* flex-wrap (review HIGH): open-badge + rating + Send + Maps can
+            exceed a 390px card — wrap instead of clipping under the
+            article's overflow-hidden. */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
             <OpenNowBadge bar={bar} />
             <RatingBadge barId={bar.id} />

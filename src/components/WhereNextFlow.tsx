@@ -96,14 +96,24 @@ export default function WhereNextFlow() {
   // back to an empty profile (→ distance-only ranking) when the quiz is unseen.
   const [profile, setProfile] = useState<VibeProfile>(defaultProfile);
   useEffect(() => {
-    const saved = loadProfile();
-    if (saved) {
-      setProfile({
-        tags: saved.tags,
-        archetype: saved.archetype,
-        preferredNeighborhoods: saved.preferredNeighborhoods,
-      });
-    }
+    const syncProfile = (): void => {
+      const saved = loadProfile();
+      // Review MED: a cleared profile (Settings, another tab) must also
+      // clear the Tweak-the-vibe pre-fill — fall back to empty, don't
+      // keep stale tags in memory.
+      setProfile(
+        saved
+          ? {
+              tags: saved.tags,
+              archetype: saved.archetype,
+              preferredNeighborhoods: saved.preferredNeighborhoods,
+            }
+          : defaultProfile(),
+      );
+    };
+    syncProfile();
+    window.addEventListener('storage', syncProfile);
+    return () => window.removeEventListener('storage', syncProfile);
   }, []);
 
   // Tonight's cached vibe pick (E2.2), mount-loaded for the SAME

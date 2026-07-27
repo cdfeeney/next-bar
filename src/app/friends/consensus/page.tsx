@@ -9,6 +9,7 @@ import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
+import { useBars } from '@/lib/useBars';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
 import {
@@ -44,6 +45,9 @@ function initialsFor(label: string): string {
 }
 
 export default function ConsensusPage(): JSX.Element {
+  // 0019 swap-day rule: barById feeds Group Favorites — subscribe so a
+  // live server-catalog swap re-renders (checklist in catalog.ts).
+  useBars();
   const { circle, mode, isFollowing } = useFollows();
   const { ratings } = useRatings();
   const auth = useAuth();
