@@ -1,5 +1,9 @@
 const ROOT_KEYS = [
   'cycle',
+  // The repository this state is about, as "owner/name". Load-bearing, not decorative: a pr_sha
+  // is only checkable evidence if something says which repo it belongs to, and an orchestrator
+  // that cannot say that accepts any hex string from anywhere as proof it shipped.
+  'repo',
   'objective',
   'bottleneck',
   'metrics',
@@ -15,6 +19,14 @@ const METRIC_KEYS = [
   'max_neighborhood_wau',
   'claimed_venues',
   'self_maintaining_venues',
+  // The leading indicator. `claimed_venues` counts signatures; this counts venues that came back
+  // and touched their own listing, which is the behaviour the whole venue wedge is a bet on.
+  // Without it the orchestrator optimises the number it can see and misses the one that matters.
+  'venue_active_maintainers',
+  // The anti-substitution metric. An agreeable strategy partner is the most comfortable possible
+  // replacement for talking to actual bar-goers and bar owners, so the cycle refuses to run in a
+  // week with zero interviews. See assertDiscoveryFloor.
+  'user_interviews_this_week',
   'revenue',
   'operator_hours_available',
 ];
@@ -98,6 +110,9 @@ export function validateCeoState(state) {
   if (!isNonNegativeInteger(state.cycle)) {
     errors.push('state.cycle must be a non-negative integer');
   }
+  if (typeof state.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(state.repo)) {
+    errors.push('state.repo must be an "owner/name" string');
+  }
   if (typeof state.objective !== 'string' || state.objective.length === 0) {
     errors.push('state.objective must be a non-empty string');
   }
@@ -113,7 +128,12 @@ export function validateCeoState(state) {
       errors,
     );
 
-    for (const key of ['claimed_venues', 'self_maintaining_venues']) {
+    for (const key of [
+      'claimed_venues',
+      'self_maintaining_venues',
+      'venue_active_maintainers',
+      'user_interviews_this_week',
+    ]) {
       if (!isNonNegativeInteger(state.metrics[key])) {
         errors.push('state.metrics.' + key + ' must be a non-negative integer');
       }

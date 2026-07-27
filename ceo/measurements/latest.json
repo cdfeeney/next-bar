@@ -1,5 +1,5 @@
 {
-  "_comment": "OPERATOR-OWNED. The CEO orchestrator reads this file and may never write it. Numbers here are counted by a human or emitted by a trusted pipeline — never authored by the agent, because the kill criterion is evaluated against them. `source` must be on TRUSTED_MEASUREMENT_SOURCES in scripts/ceo-cycle.mjs. Today the only honest value is manual_count: there is no analytics pipeline yet, which is exactly why wau reads null.",
+  "_comment": "OPERATOR-OWNED. The CEO orchestrator reads this file and may never write it. Numbers here are counted by a human or emitted by a trusted pipeline \u2014 never authored by the agent, because the kill criterion is evaluated against them. `source` must be on TRUSTED_MEASUREMENT_SOURCES in scripts/ceo-cycle.mjs. Today the only honest value is manual_count: there is no analytics pipeline yet, which is exactly why wau reads null.",
   "measurement": {
     "at": "2026-07-26",
     "source": "manual_count",
@@ -8,6 +8,8 @@
       "max_neighborhood_wau": null,
       "claimed_venues": 0,
       "self_maintaining_venues": 0,
+      "venue_active_maintainers": 0,
+      "user_interviews_this_week": 0,
       "revenue": 0,
       "operator_hours_available": 8
     }
