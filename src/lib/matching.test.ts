@@ -559,6 +559,35 @@ describe('matches() — sorting and slicing', () => {
 
     expect(result).toHaveLength(10);
   });
+
+  it('QA-6: keeps relaxing the Jaccard threshold to FILL the requested cap, not just the 3-result minimum', () => {
+    // 3 exact-vibe matchers pass at the strictest threshold; the other 4
+    // only clear the floor. Pre-QA-6 the relax loop stopped at 3
+    // candidates and a 5-result surface got shortchanged.
+    const pool: Bar[] = [
+      makeBar({ id: 's1', tags: ['cocktail', 'speakeasy', 'polished', 'industry'] }),
+      makeBar({ id: 's2', tags: ['cocktail', 'speakeasy', 'polished', 'industry'] }),
+      makeBar({ id: 's3', tags: ['cocktail', 'speakeasy', 'polished', 'industry'] }),
+      makeBar({ id: 'w1', tags: ['cocktail', 'dive', 'beer', 'garden'] }),
+      makeBar({ id: 'w2', tags: ['cocktail', 'dive', 'beer', 'rooftop'] }),
+      makeBar({ id: 'w3', tags: ['cocktail', 'dive', 'jazz', 'garden'] }),
+      makeBar({ id: 'w4', tags: ['cocktail', 'wine', 'beer', 'garden'] }),
+    ];
+
+    const result = matches({
+      profile,
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: pool,
+      maxResults: 5,
+      now: NOW,
+    });
+
+    expect(result).toHaveLength(5);
+    // The strict matchers still lead — relaxed admissions rank below.
+    expect(result.slice(0, 3).map((b) => b.id).sort()).toEqual(['s1', 's2', 's3']);
+  });
 });
 
 describe('matches — empty vibe profile (location-first suggest)', () => {

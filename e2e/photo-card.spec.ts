@@ -2,7 +2,7 @@
  * photo-card.spec.ts — the full-bleed HERO result card (QA5-S1, operator
  * 2026-07-26: the E2.3 photo-first hero returns, with SMALL overlay text).
  *
- * The card LEADS with a 16/10 photo hero spanning the card's full width;
+ * The card LEADS with a 21/9 photo hero spanning the card's full width;
  * name + neighborhood + $ sit on a bottom gradient overlay inside the
  * hero; tapping the hero opens the lightbox carousel. The NEGATIVE half
  * proves the fallback: with every /bar-photos request blocked, cards
@@ -12,17 +12,22 @@
 import { test, expect } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
 
+// Fixed clock — same rationale as where-next-path (open-now filter makes
+// live-clock counts nondeterministic).
+const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
+
 async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
+  await page.clock.setFixedTime(FRIDAY_NIGHT);
   await page.goto('/');
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).click();
   const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-  await expect(cards).toHaveCount(3);
+  await expect(cards).toHaveCount(5);
   return cards;
 }
 
 test.describe('Hero result card', () => {
-  test('full-bleed 16/10 hero with overlay identity; tap opens lightbox', async ({
+  test('full-bleed 21/9 hero with overlay identity; tap opens lightbox', async ({
     page,
   }) => {
     await denyGeolocation(page.context());
@@ -70,7 +75,7 @@ test.describe('Hero result card', () => {
     await page.route('**/bar-photos/**', (route) => route.abort());
     const cards = await seedResultsFromAttaboy(page);
 
-    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(3);
+    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(5);
     await expect(cards.locator('img')).toHaveCount(0);
     await expect(cards.first().getByRole('heading')).toBeVisible();
     await cards

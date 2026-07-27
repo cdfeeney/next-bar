@@ -125,6 +125,13 @@ export function matches(args: MatchesArgs): Bar[] {
     pool = pool.filter((b) => haversineMiles(coords, b) <= maxMiles);
   }
 
+  const cap = maxResults ?? MAX_RESULTS;
+  // QA-6: the relax loop fills the REQUESTED page, not the legacy
+  // 3-result minimum — "5 suggestions everywhere" must not stop relaxing
+  // at 4 candidates. The blended score still ranks best-first, so bars
+  // admitted by a relaxed threshold naturally sit at the bottom.
+  const relaxTarget = Math.max(MIN_CANDIDATES, cap);
+
   let candidates: Bar[];
   if (profile.tags.length === 0) {
     // No vibe preference (e.g. location-first "suggest near me" before the quiz
@@ -135,9 +142,9 @@ export function matches(args: MatchesArgs): Bar[] {
   } else {
     let threshold = JACCARD_START;
     candidates = [];
-    while (threshold >= JACCARD_FLOOR - 1e-9 && candidates.length < MIN_CANDIDATES) {
+    while (threshold >= JACCARD_FLOOR - 1e-9 && candidates.length < relaxTarget) {
       candidates = pool.filter((b) => jaccard(profile.tags, b.tags) >= threshold);
-      if (candidates.length >= MIN_CANDIDATES) break;
+      if (candidates.length >= relaxTarget) break;
       threshold = Math.round((threshold - JACCARD_STEP) * 100) / 100;
     }
   }
@@ -148,7 +155,6 @@ export function matches(args: MatchesArgs): Bar[] {
     .map((bar) => ({ bar, score: scoreBar(bar, profile.tags, coords, lovedTags) }))
     .sort((a, b) => b.score - a.score);
 
-  const cap = maxResults ?? MAX_RESULTS;
   const top = ranked.slice(0, cap).map((r) => r.bar);
 
   // Exploration slot (B7b — ε-greedy, simplified): on surfaces showing 10+
