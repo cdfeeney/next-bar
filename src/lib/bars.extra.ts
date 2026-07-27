@@ -664,7 +664,10 @@ export const extraBars: Bar[] = [
     id: 'bootleg-bar',
     name: 'Bootleg Bar',
     neighborhood: 'Bushwick',
-    address: '113 Cooper St',
+    // Address corrected 2026-07-27 (wrong-venue audit): the stale
+    // "113 Cooper St" made the Places ingest match a Long Island
+    // "Bootleggers Bar & Grill" — Long Island photos on a Bushwick card.
+    address: '1438 Myrtle Ave',
     lat: 40.6988,
     lng: -73.9172,
     priceTier: 2,
