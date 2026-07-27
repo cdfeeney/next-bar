@@ -183,7 +183,10 @@ export default function FriendsPage(): JSX.Element {
 /** Your going-out status: one tap sets, tapping the lit pill clears. */
 function IntentPills(): JSX.Element {
   const { intent, toggleIntent } = useIntent();
-  const pill = (status: 'going' | 'maybe', label: string): JSX.Element => {
+  const pill = (
+    status: 'going' | 'maybe' | 'not-going',
+    label: string,
+  ): JSX.Element => {
     const active = intent?.status === status;
     return (
       <button
@@ -207,6 +210,7 @@ function IntentPills(): JSX.Element {
     <div className="flex items-center gap-2" role="group" aria-label="Your status tonight">
       {pill('going', 'Going out')}
       {pill('maybe', 'Maybe')}
+      {pill('not-going', 'Not tonight')}
     </div>
   );
 }
