@@ -64,12 +64,23 @@ const normalize = (s: string): string =>
 const admin = createClient(url, key, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
-const { data: existing, error: exErr } = await admin
-  .from('bars')
-  .select('id,name,neighborhood');
-if (exErr || !existing) {
-  console.error('failed to read existing bars:', exErr?.message);
-  process.exit(1);
+// PAGINATED: PostgREST caps every response at 1,000 rows, silently. An
+// unpaginated read here means the dedup sees only the first thousand
+// bars and the whole insert then dies on a duplicate key — which is
+// exactly what happened once the catalog crossed 1,000 (2026-07-27).
+const existing: Array<{ id: string; name: string; neighborhood: string }> = [];
+for (let from = 0; ; from += 1000) {
+  const { data, error: exErr } = await admin
+    .from('bars')
+    .select('id,name,neighborhood')
+    .order('id', { ascending: true })
+    .range(from, from + 999);
+  if (exErr || !data) {
+    console.error('failed to read existing bars:', exErr?.message);
+    process.exit(1);
+  }
+  existing.push(...data);
+  if (data.length < 1000) break;
 }
 const existingIds = new Set(existing.map((b) => b.id));
 const existingNameHood = new Set(
@@ -128,10 +139,26 @@ if (!APPLY) {
 if (accepted.length === 0) process.exit(0);
 
 const rows = accepted.map((r) => ({ ...r, source: 'import' }));
-const { error } = await admin.from('bars').insert(rows);
-if (error) {
-  console.error('INSERT failed:', error.code, error.message);
-  process.exit(1);
+// CHUNKED: a single insert is all-or-nothing, so one bad row silently
+// costs the entire batch. Chunk it, and on a chunk failure fall back to
+// row-by-row so the offender is NAMED instead of taking 247 good rows
+// down with it.
+let inserted = 0;
+const failures: Array<{ id: string; reason: string }> = [];
+for (let i = 0; i < rows.length; i += 50) {
+  const chunk = rows.slice(i, i + 50);
+  const { error } = await admin.from('bars').insert(chunk);
+  if (!error) {
+    inserted += chunk.length;
+    continue;
+  }
+  for (const row of chunk) {
+    const { error: rowErr } = await admin.from('bars').insert([row]);
+    if (rowErr) failures.push({ id: row.id, reason: rowErr.message });
+    else inserted++;
+  }
 }
-console.log(`INSERTED ${rows.length} rows (source='import').`);
+console.log(`INSERTED ${inserted}/${rows.length} rows (source='import').`);
+for (const f of failures) console.log(`  FAILED ${f.id}: ${f.reason}`);
+if (inserted === 0) process.exit(1);
 console.log('Next: refresh-places --only for hours/status, then audit-places-matches.');
