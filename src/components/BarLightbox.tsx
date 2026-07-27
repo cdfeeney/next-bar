@@ -41,6 +41,11 @@ export default function BarLightbox({
   // bars already carry sidecar reviews and skip the query entirely.
   const [lateReviews, setLateReviews] = useState<Bar['reviews']>(undefined);
   useEffect(() => {
+    // Drop the previous bar's fetched reviews FIRST. Today ResultCard
+    // unmounts the lightbox on close so this can't bite, but any future
+    // caller that keeps it mounted and swaps `bar` would otherwise
+    // attribute one bar's review quote to a different bar.
+    setLateReviews(undefined);
     if (bar.reviews?.[0]) return;
     let cancelled = false;
     void (async () => {
