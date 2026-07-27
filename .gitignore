@@ -18,3 +18,6 @@ scripts/data/
 # CEO cycle single-writer lock — runtime state, never committed
 ceo/.cycle.lock
 ceo/*.tmp-*
+
+# Board audits are a record, not scratch space — but the runtime dir is created on demand
+ceo/audits/*.tmp-*

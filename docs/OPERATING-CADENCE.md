@@ -36,10 +36,35 @@ These are not warnings. They stop.
 | **STOP_AND_REASSESS** | two consecutive cycles with a real reading that did not improve | Stop planning. A third plan is not the fix. |
 | **Theater tax** | two cycles with nothing provable shipped | Ship something a user can see. A merged `chore` does not count. |
 | **Bet closure** | a bet passed its review cycle unjudged | Call it hit or miss. `pending` is not a verdict. |
-| **Board** | quarterly, and at the 2026-12-31 deadline | `KILL` / `RESCOPE` / `CONTINUE` / `UNMEASURABLE`. It only ever returns one of the four. |
+| **Board** | quarterly, and at the 2026-12-31 deadline | `KILL` / `RESCOPE` / `CONTINUE` / `UNMEASURABLE`. It only ever returns one of the four, and any verdict but `CONTINUE` halts the cycle with no plan. |
 
 The board is the part with teeth. It is separate from the cycle on purpose: the function that reports
 progress must not also be the one that judges whether progress was enough.
+
+## The quarterly audit
+
+The cycle asks "what next?"; the audit asks "should this continue at all?". Run it once a quarter,
+and on 2026-12-31 whatever else is happening:
+
+```bash
+node scripts/ceo-board-audit.mjs
+# 0 CONTINUE · 4 RESCOPE · 5 KILL · 6 UNMEASURABLE · 1 refused
+```
+
+It reads state and the measurement, writes the verdict to `ceo/audits/<date>-<VERDICT>.md`, and
+mutates nothing. Three things it refuses to do, all for the same reason — an audit you can steer is
+not an audit:
+
+- **It will not let you choose the date.** There is no `--at` flag. The date comes from the
+  measurement envelope, because an auditor that picks its own "as of" date can always find one where
+  the numbers look better.
+- **It will not judge stale numbers.** A measurement more than 30 days old describes a different
+  company.
+- **It will not re-run.** The record is created exclusively, so a second audit for the same date
+  refuses rather than overwrites. To audit again, count new numbers under a new date.
+
+Put it on a calendar reminder rather than a cron job for now. The point is that a person sees the
+verdict, and a job that mails itself is how a KILL goes unread.
 
 ## Coding throughput — how many terminals
 
