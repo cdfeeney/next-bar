@@ -49,6 +49,7 @@ export const quiz: QuizQuestion[] = [
       { label: 'A backyard or garden', tags: ['garden', 'chill'] },
       { label: 'A rooftop with views', tags: ['rooftop', 'instagrammable'] },
       { label: 'Tucked away inside', tags: ['lounge', 'speakeasy'] },
+      { label: 'On a dance floor', tags: ['club', 'dance'] },
     ],
   },
   {

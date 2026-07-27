@@ -44,6 +44,8 @@ export const TAG_GLYPH: Record<VibeTag, string> = {
   pub: '☘️',
   rooftop: '🌇',
   garden: '🌿',
+  club: '🕺',
+  'restaurant-bar': '🍽️',
   // energy
   chill: '😌',
   buzzy: '⚡',
