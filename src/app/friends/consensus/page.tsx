@@ -13,6 +13,7 @@ import { useVibeVotes } from '@/hooks/useVibeVotes';
 import VibeVotePoll from '@/components/VibeVotePoll';
 import { boostByWinningVibe } from '@/lib/vibeVotes';
 import { displayTag } from '@/lib/tagDisplay';
+import { useBars } from '@/lib/useBars';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
 import {
@@ -48,6 +49,9 @@ function initialsFor(label: string): string {
 }
 
 export default function ConsensusPage(): JSX.Element {
+  // 0019 swap-day rule: barById feeds Group Favorites — subscribe so a
+  // live server-catalog swap re-renders (checklist in catalog.ts).
+  useBars();
   const { circle, mode, isFollowing } = useFollows();
   const { ratings } = useRatings();
   const auth = useAuth();

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { Bar } from '@/types';
 import { barImageUrls } from '@/lib/barVisual';
 import { weekHoursRows } from '@/lib/openNow';
+import { displayHood } from '@/lib/hoodDisplay';
 import OpenNowBadge from '@/components/OpenNowBadge';
 
 /**
@@ -120,7 +121,7 @@ export default function BarLightbox({
       <div className="max-w-lg mx-auto min-h-full px-4 py-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <p className="text-accent uppercase tracking-[0.25em] text-xs">
-            {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
+            {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
           </p>
           <button
             ref={closeRef}

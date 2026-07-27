@@ -1,6 +1,7 @@
 'use client';
 
 import type { ManhattanNeighborhood } from '@/types';
+import { displayHood } from '@/lib/hoodDisplay';
 
 type NeighborhoodPickerProps = {
   selected: ManhattanNeighborhood[];
@@ -23,15 +24,31 @@ const ALL: ManhattanNeighborhood[] = [
   'UWS',
   'UES',
   'Harlem',
+  'Tribeca',
+  'Battery Park City',
+  'Hamilton Heights',
+  'Flatiron',
+  'Greenwich Village',
+  'NoHo',
+  'Hudson Square',
+  'Gramercy',
+  'Kips Bay',
+  'East Harlem',
+  'Morningside Heights',
+  'Washington Heights',
+  'Inwood',
+  'Chinatown',
   // Brooklyn
   'Williamsburg',
   'Greenpoint',
   'Bushwick',
   'Park Slope',
   'Fort Greene',
+  'Gowanus',
   // Queens
   'Astoria',
   'LIC',
+  'Ridgewood',
 ];
 
 export default function NeighborhoodPicker({
@@ -87,7 +104,7 @@ export default function NeighborhoodPicker({
                   : 'bg-surface text-text border border-border hover:border-accent',
               ].join(' ')}
             >
-              {neighborhood}
+              {displayHood(neighborhood)}
             </button>
           );
         })}

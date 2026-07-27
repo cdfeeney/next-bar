@@ -11,6 +11,10 @@ import { effectiveNight } from '@/lib/cadence';
 import {
   DIST_DECAY_MILES,
   DIST_WEIGHT,
+  LATE_CLUB_BOOST,
+  LATE_NIGHT_END_HOUR,
+  LATE_NIGHT_START_HOUR,
+  LATE_RESTAURANT_PENALTY,
   EXPLORATION_MIN_RESULTS,
   JACCARD_FLOOR,
   JACCARD_START,
@@ -59,6 +63,14 @@ export type MatchesArgs = {
   maxResults?: number;
   now?: Date;
   /**
+   * Live-surface clock for the LATE-NIGHT bias (operator 2026-07-27):
+   * between LATE_NIGHT_START_HOUR and LATE_NIGHT_END_HOUR, club/dance
+   * venues get a small additive boost and restaurant-bars a small
+   * penalty — nightlife first when it's nightlife o'clock. Omitted on
+   * quiz/planning surfaces (they browse, not "right now").
+   */
+  biasNow?: Date;
+  /**
    * Flattened vibe tags from the bars the user has Loved, used to nudge
    * bars with a similar taste profile up the rank. Optional — when omitted
    * or empty, the affinity term is 0 and ranking falls back to vibe +
@@ -94,6 +106,24 @@ export function scoreBar(
   return VIBE_WEIGHT * vibe + DIST_WEIGHT * proximity + RATING_WEIGHT * affinity;
 }
 
+/** 10pm–3:59am local — when the night bias applies. */
+export function isLateNight(now: Date): boolean {
+  const h = now.getHours();
+  return h >= LATE_NIGHT_START_HOUR || h < LATE_NIGHT_END_HOUR;
+}
+
+/**
+ * Additive late-night nudge at tie-breaker scale: genuine nightlife
+ * (club/dance) up, restaurant-bars down — unless the venue is BOTH (a
+ * restaurant that becomes a club keeps its night credibility).
+ */
+export function lateNightAdjustment(bar: Pick<Bar, 'tags'>): number {
+  const isClub = bar.tags.includes('club') || bar.tags.includes('dance');
+  if (isClub) return LATE_CLUB_BOOST;
+  if (bar.tags.includes('restaurant-bar')) return -LATE_RESTAURANT_PENALTY;
+  return 0;
+}
+
 export function matches(args: MatchesArgs): Bar[] {
   const {
     profile,
@@ -104,6 +134,7 @@ export function matches(args: MatchesArgs): Bar[] {
     excludeIds,
     maxResults,
     now,
+    biasNow,
     lovedTags = [],
   } = args;
 
@@ -125,6 +156,13 @@ export function matches(args: MatchesArgs): Bar[] {
     pool = pool.filter((b) => haversineMiles(coords, b) <= maxMiles);
   }
 
+  const cap = maxResults ?? MAX_RESULTS;
+  // QA-6: the relax loop fills the REQUESTED page, not the legacy
+  // 3-result minimum — "5 suggestions everywhere" must not stop relaxing
+  // at 4 candidates. The blended score still ranks best-first, so bars
+  // admitted by a relaxed threshold naturally sit at the bottom.
+  const relaxTarget = Math.max(MIN_CANDIDATES, cap);
+
   let candidates: Bar[];
   if (profile.tags.length === 0) {
     // No vibe preference (e.g. location-first "suggest near me" before the quiz
@@ -135,20 +173,25 @@ export function matches(args: MatchesArgs): Bar[] {
   } else {
     let threshold = JACCARD_START;
     candidates = [];
-    while (threshold >= JACCARD_FLOOR - 1e-9 && candidates.length < MIN_CANDIDATES) {
+    while (threshold >= JACCARD_FLOOR - 1e-9 && candidates.length < relaxTarget) {
       candidates = pool.filter((b) => jaccard(profile.tags, b.tags) >= threshold);
-      if (candidates.length >= MIN_CANDIDATES) break;
+      if (candidates.length >= relaxTarget) break;
       threshold = Math.round((threshold - JACCARD_STEP) * 100) / 100;
     }
   }
 
   // Rank by the blended score (vibe + proximity + loved affinity). Compute each
   // bar's score once, then sort, rather than recomputing inside the comparator.
+  const late = biasNow !== undefined && isLateNight(biasNow);
   const ranked = candidates
-    .map((bar) => ({ bar, score: scoreBar(bar, profile.tags, coords, lovedTags) }))
+    .map((bar) => ({
+      bar,
+      score:
+        scoreBar(bar, profile.tags, coords, lovedTags) +
+        (late ? lateNightAdjustment(bar) : 0),
+    }))
     .sort((a, b) => b.score - a.score);
 
-  const cap = maxResults ?? MAX_RESULTS;
   const top = ranked.slice(0, cap).map((r) => r.bar);
 
   // Exploration slot (B7b — ε-greedy, simplified): on surfaces showing 10+

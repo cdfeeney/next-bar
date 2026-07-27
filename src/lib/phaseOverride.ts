@@ -44,6 +44,13 @@ export function savePhaseOverride(phase: NightPhase, now: Date = new Date()): vo
       STORAGE_KEY,
       JSON.stringify({ night: nycNightKey(now), phase } satisfies StoredPhaseOverride),
     );
+    // Same-tab consumers (WhereNextFlow's planning-gated Send share) listen
+    // for storage events, which browsers only fire cross-tab — dispatch a
+    // synthetic one (recordVisit precedent; review HIGH: the header chip
+    // updated instantly while the cards lagged a full refresh tick).
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: STORAGE_KEY }),
+    );
   } catch {
     // Quota/private-mode failures degrade to "not remembered" — the chip
     // still switched this render; only persistence is lost.

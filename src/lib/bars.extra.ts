@@ -58,7 +58,7 @@ export const extraBars: Bar[] = [
     lat: 40.7194872,
     lng: -73.9888931,
     priceTier: 2,
-    tags: ['dance', 'loud', 'buzzy', 'indie', 'trendy'],
+    tags: ['dance', 'club', 'loud', 'buzzy', 'indie'],
     blurb: 'Bulgarian party bar with a vodka ice room and a gypsy-punk dance floor.',
     lastVerified: INGESTED,
   },
@@ -608,7 +608,7 @@ export const extraBars: Bar[] = [
     lat: 40.6977941,
     lng: -73.9269769,
     priceTier: 2,
-    tags: ['cocktail', 'dance', 'trendy', 'buzzy', 'indie'],
+    tags: ['cocktail', 'dance', 'club', 'trendy', 'buzzy', 'indie'],
     blurb: 'Astrology-themed bar with zodiac cocktails and a neon dance floor.',
     lastVerified: INGESTED,
   },
@@ -664,7 +664,10 @@ export const extraBars: Bar[] = [
     id: 'bootleg-bar',
     name: 'Bootleg Bar',
     neighborhood: 'Bushwick',
-    address: '113 Cooper St',
+    // Address corrected 2026-07-27 (wrong-venue audit): the stale
+    // "113 Cooper St" made the Places ingest match a Long Island
+    // "Bootleggers Bar & Grill" — Long Island photos on a Bushwick card.
+    address: '1438 Myrtle Ave',
     lat: 40.6988,
     lng: -73.9172,
     priceTier: 2,

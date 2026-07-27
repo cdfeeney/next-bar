@@ -54,8 +54,10 @@ describe('snapToNeighborhoodCentroid', () => {
   });
 
   it('returns null when inside the BBox but > MAX_SNAP_MILES from every centroid', () => {
-    // Upper Manhattan (~Harlem/Inwood-ish). Inside BBox, > 2mi from every centroid.
-    const farNorth: Coords = { lat: 40.85, lng: -73.94 };
+    // SE Brooklyn (~Brownsville-ish) — the old far-north point sits within
+    // 2mi of the Hamilton Heights centroid since the 2026-07-27 hood
+    // expansion. Inside BBox, > 2mi from every centroid.
+    const farNorth: Coords = { lat: 40.645, lng: -73.895 };
 
     for (const key of Object.keys(NEIGHBORHOOD_CENTROIDS) as Array<
       keyof typeof NEIGHBORHOOD_CENTROIDS

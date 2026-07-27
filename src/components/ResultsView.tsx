@@ -13,6 +13,7 @@ import { excludeClosedBars } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
+import { displayHood } from '@/lib/hoodDisplay';
 import { useRatings } from '@/hooks/useRatings';
 import ResultCard from '@/components/ResultCard';
 
@@ -38,6 +39,8 @@ type ResultsViewProps = {
    * MED-11: the parent must NOT recompute matches with different inputs).
    */
   onRanked?: (ids: string[]) => void;
+  /** Planning phase (operator 2026-07-27): cards carry a "Send" share. */
+  showShare?: boolean;
 };
 
 export default function ResultsView({
@@ -48,6 +51,7 @@ export default function ResultsView({
   maxResults,
   hideClosedNow,
   onRanked,
+  showShare,
 }: ResultsViewProps) {
   const userCoords: Coords =
     location.kind === 'coords'
@@ -131,8 +135,11 @@ export default function ResultsView({
         excludeIds: effectiveExcludeIds,
         maxResults,
         lovedTags,
+        // Late-night bias rides the SAME live clock as the open-now
+        // filter — quiz/planning surfaces (no hideClosedNow) never bias.
+        biasNow: filterNow ?? undefined,
       }),
-    [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags],
+    [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow],
   );
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own
@@ -240,7 +247,7 @@ export default function ResultsView({
     location.kind === 'coords' && preferredNeighborhoods.length > 0;
   const locationLabel =
     location.kind === 'neighborhood'
-      ? `In ${location.neighborhood}`
+      ? `In ${displayHood(location.neighborhood)}`
       : location.snappedTo
       ? `Approximate — based on ${location.snappedTo}`
       : neighborhoodFiltered
@@ -277,6 +284,7 @@ export default function ResultsView({
                   rank={idx + 1}
                   miles={miles}
                   userTags={profile.tags}
+                  showShare={showShare}
                 />
               );
             })}
