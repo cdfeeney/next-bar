@@ -26,10 +26,10 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
 
-    // ONE tap → results. No interstitials.
+    // ONE tap → results. No interstitials. QA-6: 5 suggestions everywhere.
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-    await expect(cards).toHaveCount(3);
-    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(3);
+    await expect(cards).toHaveCount(5);
+    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(5);
     await expect(
       page.locator('article').filter({ hasText: /Vibe match/i }).getByRole('heading', { name: /Attaboy/i }),
     ).toHaveCount(0);
@@ -45,7 +45,7 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     const radiusGroup = page.getByRole('group', { name: 'Search radius' });
     await expect(radiusGroup).toBeVisible();
     await radiusGroup.getByRole('button', { name: 'Anywhere' }).click();
-    await expect(cards).toHaveCount(3);
+    await expect(cards).toHaveCount(5);
     await expect(page).toHaveURL('/');
   });
 

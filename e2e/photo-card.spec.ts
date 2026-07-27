@@ -17,7 +17,7 @@ async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).click();
   const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-  await expect(cards).toHaveCount(3);
+  await expect(cards).toHaveCount(5);
   return cards;
 }
 
@@ -70,7 +70,7 @@ test.describe('Hero result card', () => {
     await page.route('**/bar-photos/**', (route) => route.abort());
     const cards = await seedResultsFromAttaboy(page);
 
-    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(3);
+    await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(5);
     await expect(cards.locator('img')).toHaveCount(0);
     await expect(cards.first().getByRole('heading')).toBeVisible();
     await cards
