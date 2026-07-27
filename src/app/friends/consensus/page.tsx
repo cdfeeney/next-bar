@@ -9,6 +9,10 @@ import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
+import { useVibeVotes } from '@/hooks/useVibeVotes';
+import VibeVotePoll from '@/components/VibeVotePoll';
+import { boostByWinningVibe } from '@/lib/vibeVotes';
+import { displayTag } from '@/lib/tagDisplay';
 import { useBars } from '@/lib/useBars';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
@@ -160,13 +164,26 @@ export default function ConsensusPage(): JSX.Element {
 
   const enoughPeople = participants.length >= 2;
 
+  // UX-E: tonight's vibe poll (dark until migration 0017 is applied —
+  // votes stays null and the poll renders nothing).
+  const vibeVotes = useVibeVotes();
+
   // UX-B: ONE Group Favorites list — unanimous overlap leads, near-misses
   // fill, capped at 5. (The multi-step vote flow is deleted; People's
   // Choice carries the human signal via the suggest/vote poll.)
-  const groupFavorites = useMemo(
-    () => [...overlap, ...alsoConsider].slice(0, 5),
-    [overlap, alsoConsider],
-  );
+  // UX-E: the winning vibe SEEDS the list WITHIN each partition (review
+  // HIGH: a vibe-matching near-miss must never outrank a unanimous pick
+  // — "unanimous overlap leads" is the standing UX-B invariant, and the
+  // top card carries the share moment). Applied before the cap so a
+  // vibe-matching near-miss can still enter the tail of the top 5.
+  const groupFavorites = useMemo(() => {
+    const tagsOf = (entry: ConsensusEntry): readonly string[] =>
+      barById(entry.barId)?.tags ?? [];
+    return [
+      ...boostByWinningVibe(overlap, vibeVotes.winner, tagsOf),
+      ...boostByWinningVibe(alsoConsider, vibeVotes.winner, tagsOf),
+    ].slice(0, 5);
+  }, [overlap, alsoConsider, vibeVotes.winner]);
 
   return (
     <main className="min-h-screen pb-28">
@@ -229,6 +246,12 @@ export default function ConsensusPage(): JSX.Element {
           </p>
         ) : null}
 
+        {/* UX-E — TONIGHT'S VIBE poll (0017; renders nothing while the
+            migration is unapplied). Sits above Group Favorites because
+            the winner seeds them. Real circles only, like People's
+            Choice. */}
+        {isServer ? <VibeVotePoll {...vibeVotes} /> : null}
+
         {/* Part 1 — GROUP FAVORITES: the algorithm's picks for whoever's
             selected (operator structure 2026-07-26). One list; the top
             pick carries the share moment. */}
@@ -241,6 +264,14 @@ export default function ConsensusPage(): JSX.Element {
           <div className="mb-10">
             <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
               Group Favorites
+              {vibeVotes.winner ? (
+                <span
+                  data-testid="winning-vibe-chip"
+                  className="ml-2 normal-case tracking-normal inline-flex items-center rounded-full border border-accent px-2 py-0.5 text-[11px] text-accent"
+                >
+                  Tonight: {displayTag(vibeVotes.winner)}
+                </span>
+              ) : null}
             </h2>
             {groupFavorites.length === 0 ? (
               <p className="text-muted text-sm leading-relaxed">
