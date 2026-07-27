@@ -9,17 +9,21 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import RecipientVote from '@/components/RecipientVote';
-import { getBarById } from '@/lib/catalog';
+import { getBarByIdServer } from '@/lib/barServer';
 import { buildMapsHref } from '@/lib/share';
 
 type ShareParams = { params: { barId: string } };
 
+// Imported bars live in the bars table, not the static bundle — resolving
+// through getBarByIdServer is what stops their share links 404ing.
 function barFor(barId: string) {
-  return getBarById(decodeURIComponent(barId));
+  return getBarByIdServer(decodeURIComponent(barId));
 }
 
-export function generateMetadata({ params }: ShareParams): Metadata {
-  const bar = barFor(params.barId);
+export async function generateMetadata({
+  params,
+}: ShareParams): Promise<Metadata> {
+  const bar = await barFor(params.barId);
   if (!bar) return { title: 'Next Bar' };
   return {
     title: `Tonight's pick: ${bar.name} — Next Bar`,
@@ -27,8 +31,10 @@ export function generateMetadata({ params }: ShareParams): Metadata {
   };
 }
 
-export default function SharePickPage({ params }: ShareParams): JSX.Element {
-  const bar = barFor(params.barId);
+export default async function SharePickPage({
+  params,
+}: ShareParams): Promise<JSX.Element> {
+  const bar = await barFor(params.barId);
   if (!bar) notFound();
 
   return (

@@ -13,14 +13,28 @@ import { rowsToCatalog, type BarsTableRow } from '@/lib/catalogServer';
  * catalog stays the synchronous fallback: fetch failure, validation
  * failure, or an implausibly small row set all leave today's behavior
  * untouched. This is what lets import batches land bars WITHOUT a deploy.
+ *
+ * PHONE SPEED (operator 2026-07-27): `select('*')` pulled 833 KB on every
+ * load. Two of those columns the app never reads at all (created_at,
+ * updated_at, source = 56 KB) and `reviews` (155 KB) is rendered only in
+ * the lightbox, for one bar at a time — it now loads on demand via
+ * lib/barReviews. Naming the columns explicitly also means a future
+ * column (photos blob, embeddings) can't silently re-inflate this fetch.
  */
+
+/** Exactly the columns rowToBar consumes, minus on-demand `reviews`. */
+const CATALOG_COLUMNS =
+  'id,name,lat,lng,tags,neighborhood,price_tier,hours,blurb,address,place_id,business_status,photo_count,photo_attributions,last_verified';
+
 export default function CatalogRefresh(): null {
   useEffect(() => {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     let cancelled = false;
     void (async () => {
-      const { data, error } = await supabase.from('bars').select('*');
+      const { data, error } = await supabase
+        .from('bars')
+        .select(CATALOG_COLUMNS);
       if (cancelled || error || !Array.isArray(data)) return; // fallback: static
       const next = rowsToCatalog(
         data as BarsTableRow[],

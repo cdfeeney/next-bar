@@ -76,7 +76,7 @@ describe('barVisual', () => {
 describe('barImageUrl', () => {
   it('returns the local photo path when photoRef is present', () => {
     expect(barImageUrl({ id: 'attaboy', photoRef: 'places/abc/photos/def' }))
-      .toBe('/bar-photos/attaboy.jpg');
+      .toBe('/bar-photos/attaboy.webp');
   });
 
   it('returns null when photoRef is absent', () => {
@@ -90,16 +90,16 @@ describe('barImageUrls (carousel)', () => {
     expect(
       barImageUrls({ id: 'attaboy', photoRef: 'places/x/photos/a', photoCount: 3 }),
     ).toEqual([
-      '/bar-photos/attaboy.jpg',
-      '/bar-photos/attaboy-2.jpg',
-      '/bar-photos/attaboy-3.jpg',
+      '/bar-photos/attaboy.webp',
+      '/bar-photos/attaboy-2.webp',
+      '/bar-photos/attaboy-3.webp',
     ]);
   });
 
   it('falls back to the single legacy photo pre-ingest, and [] with none', () => {
     expect(
       barImageUrls({ id: 'attaboy', photoRef: 'places/x/photos/a' }),
-    ).toEqual(['/bar-photos/attaboy.jpg']);
+    ).toEqual(['/bar-photos/attaboy.webp']);
     expect(barImageUrls({ id: 'attaboy', photoRef: undefined })).toEqual([]);
   });
 });
