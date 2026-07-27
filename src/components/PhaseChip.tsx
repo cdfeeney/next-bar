@@ -6,7 +6,6 @@ import { NIGHT_PHASES, type NightPhase } from '@/lib/nightPhase';
 /** User-facing phase names (status labels, not commands). */
 export const PHASE_LABEL: Record<NightPhase, string> = {
   planning: 'Planning',
-  starting: 'Starting out',
   out: 'Out now',
   recap: 'Last night',
 };
@@ -18,7 +17,7 @@ type PhaseChipProps = {
 
 /**
  * The home header's phase chip (E2.4/E3.4, DESIGN-SYSTEM R10): always
- * shows the current phase; tapping it opens all four phases so any
+ * shows the current phase; tapping it opens all three phases so any
  * wrong guess is fixed in exactly two taps — a cycle-on-tap chip would
  * need up to three. Selection persists for the night via phaseOverride
  * (the caller's concern).

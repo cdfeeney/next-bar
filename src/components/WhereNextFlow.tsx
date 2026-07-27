@@ -43,6 +43,13 @@ type Step =
   | { kind: 'locating' }
   | { kind: 'askLocation' }
   | { kind: 'autoResults'; coords: Coords }
+  // QA1 (2026-07-26): the vibe tweak exists on the LOCATION results too —
+  // same VibeTweak surface, but it returns to autoResults (still
+  // geo-driven, no seed bar). Tags are not carried in the step: the
+  // surface seeds from tonight's cached vibe (falling back to the quiz
+  // profile), and Apply writes the same night cache the manual flow uses
+  // (E2.2 — one vibe per night, whichever surface picked it).
+  | { kind: 'tweakVibeAuto'; coords: Coords }
   | { kind: 'pickBar' }
   | { kind: 'freeTextSeed' }
   | { kind: 'tweakVibe'; seedBar: Bar; tags: VibeTag[] }
@@ -74,6 +81,33 @@ export default function WhereNextFlow() {
       });
     }
   }, []);
+
+  // Tonight's cached vibe pick (E2.2), mount-loaded for the SAME
+  // SSR-hydration reason as the profile above. When present it overrides
+  // the quiz profile's tags on the LOCATION results (QA1): a vibe tweaked
+  // earlier tonight — on either surface — pre-fills here too. Kept in
+  // state (not re-read per render) and updated on Apply so the surface
+  // re-ranks immediately.
+  const [nightVibe, setNightVibe] = useState<VibeTag[] | null>(null);
+  useEffect(() => {
+    setNightVibe(loadNightVibe());
+  }, []);
+
+  // The profile the LOCATION results rank by: tweaked night vibe when one
+  // exists, else the stored quiz profile. preferredNeighborhoods mirrors
+  // the manual seedProfile ([]) — ResultsView ignores it for coords
+  // locations anyway (the geo IS the neighborhood signal).
+  const autoProfile = useMemo<VibeProfile>(
+    () =>
+      nightVibe
+        ? {
+            tags: nightVibe,
+            archetype: deriveArchetype(nightVibe),
+            preferredNeighborhoods: [],
+          }
+        : profile,
+    [nightVibe, profile],
+  );
 
   // Location-first routing. In 'locating' we NEVER fire the browser
   // request ourselves anymore — the hook auto-fetches when permission is
@@ -209,8 +243,11 @@ export default function WhereNextFlow() {
   const handleApplyTweak = (nextTags: VibeTag[]) => {
     if (step.kind !== 'tweakVibe') return;
     // An APPLIED tweak is tonight's vibe pick — cache it for re-searches
-    // (E2.2 night cache). Cancel deliberately does not save.
+    // (E2.2 night cache). Cancel deliberately does not save. The shared
+    // nightVibe state updates too: autoResults is re-reachable this
+    // session (pickBar → "use my location") and must see tonight's pick.
     saveNightVibe(nextTags);
+    setNightVibe(nextTags);
     setStep({ kind: 'results', seedBar: step.seedBar, tags: nextTags });
   };
 
@@ -219,12 +256,30 @@ export default function WhereNextFlow() {
     setStep({ kind: 'results', seedBar: step.seedBar, tags: step.tags });
   };
 
+  // QA1: the LOCATION-results twins of the pair above. Apply saves the
+  // SAME night cache (one vibe per night) and updates local state so
+  // autoResults re-ranks with the tweaked tags immediately; Cancel
+  // returns unchanged. Both land back on autoResults with the coords the
+  // surface already had — the tweak never disturbs the geo.
+  const handleApplyAutoTweak = (nextTags: VibeTag[]) => {
+    if (step.kind !== 'tweakVibeAuto') return;
+    saveNightVibe(nextTags);
+    setNightVibe(nextTags);
+    setStep({ kind: 'autoResults', coords: step.coords });
+  };
+
+  const handleCancelAutoTweak = () => {
+    if (step.kind !== 'tweakVibeAuto') return;
+    setStep({ kind: 'autoResults', coords: step.coords });
+  };
+
   // Effective coord for ranking: real geolocation if granted, else seed bar's coord.
   const effectiveCoords = useMemo<Coords | null>(() => {
     if (geo.coords) return geo.coords;
     if (step.kind === 'locating') return null;
     if (step.kind === 'askLocation') return null;
     if (step.kind === 'autoResults') return step.coords;
+    if (step.kind === 'tweakVibeAuto') return step.coords;
     if (step.kind === 'pickBar') return null;
     if (step.kind === 'freeTextSeed') return null;
     return { lat: step.seedBar.lat, lng: step.seedBar.lng };
@@ -292,13 +347,39 @@ export default function WhereNextFlow() {
   }
 
   if (step.kind === 'autoResults') {
+    const coords = step.coords;
+    const goPickBar = () => {
+      geo.reset();
+      setStep({ kind: 'pickBar' });
+    };
     return (
       <main>
+        {/* QA1 (operator 2026-07-26 mobile QA): the two controls the
+            operator couldn't find get a compact, visible row ABOVE the
+            results — the pick-my-bar escape (duplicated from the bottom
+            link, same action) and the vibe tweak entry the location
+            results were missing entirely. Both min-h-44. */}
+        <div className="px-6 pt-4 flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={goPickBar}
+            className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
+          >
+            Not at these bars? Pick yours →
+          </button>
+          <button
+            type="button"
+            onClick={() => setStep({ kind: 'tweakVibeAuto', coords })}
+            className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
+          >
+            Tweak the vibe
+          </button>
+        </div>
         <ResultsView
-          profile={profile}
+          profile={autoProfile}
           location={{
             kind: 'coords',
-            coords: step.coords,
+            coords,
             band: geo.accuracyBand,
             snappedTo: geo.snappedNeighborhood,
           }}
@@ -310,13 +391,10 @@ export default function WhereNextFlow() {
         <div className="px-6 pb-10 text-center">
           <button
             type="button"
-            onClick={() => {
-              geo.reset();
-              setStep({ kind: 'pickBar' });
-            }}
+            onClick={goPickBar}
             className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
           >
-            Coming from a specific bar?
+            Not at these bars? Pick yours →
           </button>
         </div>
       </main>
@@ -374,6 +452,20 @@ export default function WhereNextFlow() {
       <FreeTextSeed
         onSubmit={handleFreeTextSubmit}
         onCancel={handleFreeTextCancel}
+      />
+    );
+  }
+
+  if (step.kind === 'tweakVibeAuto') {
+    // Same surface as the manual tweak below — only the seed and the
+    // return destination differ. Seeds from tonight's cached vibe, else
+    // the quiz profile's tags (what the location results are currently
+    // ranked by, so the surface opens showing the truth).
+    return (
+      <VibeTweak
+        initialTags={nightVibe ?? profile.tags}
+        onApply={handleApplyAutoTweak}
+        onCancel={handleCancelAutoTweak}
       />
     );
   }

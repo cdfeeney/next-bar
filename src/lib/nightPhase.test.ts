@@ -32,28 +32,26 @@ describe('deriveNightPhase (E0.3)', () => {
     expect(deriveNightPhase({ ...base, now: at(11, 59), wasOutLastNight: true })).toBe('recap');
   });
 
-  it('midday is PLANNING, early evening is STARTING', () => {
+  it('midday is PLANNING, evening onward is OUT (3-phase cut: starting is gone)', () => {
     expect(deriveNightPhase({ ...base, now: at(12) })).toBe('planning');
     expect(deriveNightPhase({ ...base, now: at(16, 59) })).toBe('planning');
-    expect(deriveNightPhase({ ...base, now: at(17) })).toBe('starting');
-    expect(deriveNightPhase({ ...base, now: at(20, 59) })).toBe('starting');
+    expect(deriveNightPhase({ ...base, now: at(17) })).toBe('out');
+    expect(deriveNightPhase({ ...base, now: at(20, 59) })).toBe('out');
   });
 
-  it('late night with GOING intent is OUT; the rollover keeps 3am in the night', () => {
+  it('late night is OUT with or without intent; the rollover keeps 3am in the night', () => {
     expect(deriveNightPhase({ ...base, now: at(21), intent: 'going' })).toBe('out');
     expect(deriveNightPhase({ ...base, now: at(23, 30), intent: 'going' })).toBe('out');
     expect(deriveNightPhase({ ...base, now: at(3), intent: 'going' })).toBe('out');
     expect(deriveNightPhase({ ...base, now: at(4, 59), intent: 'going' })).toBe('out');
+    // No-signal / "maybe" nights derive OUT too — the find-a-bar home is
+    // the fail-safe surface now that 'starting' is deleted.
+    expect(deriveNightPhase({ ...base, now: at(23) })).toBe('out');
+    expect(deriveNightPhase({ ...base, now: at(2) })).toBe('out');
+    expect(deriveNightPhase({ ...base, now: at(23), intent: 'maybe' })).toBe('out');
   });
 
-  it('fail-safe: no signals late at night stays STARTING (wrong-phase recovery beats clever detection)', () => {
-    expect(deriveNightPhase({ ...base, now: at(23) })).toBe('starting');
-    expect(deriveNightPhase({ ...base, now: at(2) })).toBe('starting');
-    // "maybe" is not commitment — it never flips to out on its own.
-    expect(deriveNightPhase({ ...base, now: at(23), intent: 'maybe' })).toBe('starting');
-  });
-
-  it('fail-safe: garbage input degrades to STARTING, never throws', () => {
-    expect(deriveNightPhase({ ...base, now: new Date('invalid') })).toBe('starting');
+  it('fail-safe: garbage input degrades to OUT, never throws', () => {
+    expect(deriveNightPhase({ ...base, now: new Date('invalid') })).toBe('out');
   });
 });

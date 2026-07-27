@@ -55,7 +55,7 @@ test.describe('Phase-adaptive home (E2.4/E3.4)', () => {
     // Tap 1 opens the switcher with ALL four phases.
     await page.getByRole('button', { name: /Night phase:/i }).click();
     const group = page.getByRole('group', { name: 'Night phase' });
-    for (const label of ['Planning', 'Starting out', 'Out now', 'Last night']) {
+    for (const label of ['Planning', 'Out now', 'Last night']) {
       await expect(group.getByRole('button', { name: label })).toBeVisible();
     }
 
