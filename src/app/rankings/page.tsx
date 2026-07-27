@@ -8,6 +8,7 @@ import { useWantToGo } from '@/hooks/useWantToGo';
 import { sortRatingsByScore, tierMidpoint } from '@/lib/pairwise';
 import { seedSampleNight } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
+import { useBars } from '@/lib/useBars';
 import QuickAddBar from '@/components/QuickAddBar';
 import WantToGoList from '@/components/WantToGoList';
 import type { Bar } from '@/types';
@@ -53,6 +54,8 @@ type RatedEntry = {
 };
 
 export default function RankingsPage(): JSX.Element {
+  // 0019 swap-day rule: getBarById reader — subscribe for live swaps.
+  useBars();
   const { ratings } = useRatings();
   const auth = useAuth();
   const [filter, setFilter] = useState<FilterValue>('all');

@@ -15,6 +15,7 @@ import {
 } from '@/lib/suggestions.server';
 import { nycNightKey } from '@/lib/nightKey';
 import { getBarById } from '@/lib/catalog';
+import { useBars } from '@/lib/useBars';
 import { demoFriends } from '@/lib/demo';
 
 /**
@@ -26,6 +27,9 @@ import { demoFriends } from '@/lib/demo';
  * explained.
  */
 export default function FriendsPage(): JSX.Element {
+  // 0019 swap-day rule: this page renders getBarById lookups — subscribe
+  // so a live server-catalog swap re-renders them (checklist in catalog.ts).
+  useBars();
   const auth = useAuth();
   const {
     circle,
