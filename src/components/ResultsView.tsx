@@ -135,8 +135,11 @@ export default function ResultsView({
         excludeIds: effectiveExcludeIds,
         maxResults,
         lovedTags,
+        // Late-night bias rides the SAME live clock as the open-now
+        // filter — quiz/planning surfaces (no hideClosedNow) never bias.
+        biasNow: filterNow ?? undefined,
       }),
-    [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags],
+    [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow],
   );
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own

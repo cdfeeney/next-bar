@@ -19,6 +19,11 @@ export type Neighborhood =
   | 'UWS'
   | 'UES'
   | 'Harlem'
+  // Manhattan expansion 2026-07-27 (operator: recover boundary-rejected venues)
+  | 'Tribeca'
+  | 'Battery Park City'
+  | 'Hamilton Heights'
+  | 'Flatiron'
   // Brooklyn
   | 'Williamsburg'
   | 'Greenpoint'

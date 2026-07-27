@@ -24,6 +24,10 @@ const ALL: ManhattanNeighborhood[] = [
   'UWS',
   'UES',
   'Harlem',
+  'Tribeca',
+  'Battery Park City',
+  'Hamilton Heights',
+  'Flatiron',
   // Brooklyn
   'Williamsburg',
   'Greenpoint',
