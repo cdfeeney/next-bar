@@ -23,7 +23,9 @@ export type ShareButtonProps = {
   label: string;
   /** Accessible name, when the visible label is too terse on its own. */
   ariaLabel?: string;
-  variant?: 'primary' | 'secondary';
+  variant?: 'primary' | 'secondary' | 'outline';
+  /** Span the full row (QA3: findable share controls on mobile). */
+  wide?: boolean;
   /** Fired only on a real share/copy — never on dismissal. */
   onShared?: (method: 'native' | 'clipboard') => void;
 };
@@ -33,6 +35,8 @@ const BASE =
 const VARIANT = {
   primary: 'bg-accent border-accent text-bg',
   secondary: 'bg-transparent border-border text-muted hover:text-text',
+  /** Solid accent outline — labeled, visible, never the screen's one fill. */
+  outline: 'bg-transparent border-accent text-accent hover:bg-accent/10',
 } as const;
 
 /** How long the "Copied ✓" confirmation stays up. */
@@ -44,6 +48,7 @@ export default function ShareButton({
   label,
   ariaLabel,
   variant = 'secondary',
+  wide = false,
   onShared,
 }: ShareButtonProps): JSX.Element {
   const [copied, setCopied] = useState(false);
@@ -108,7 +113,9 @@ export default function ShareButton({
       onClick={() => void share()}
       // ?? guards a caller that bypasses TS: a bad variant would otherwise
       // splice the string "undefined" into className and silently unstyle.
-      className={[BASE, VARIANT[variant] ?? VARIANT.secondary].join(' ')}
+      className={[BASE, VARIANT[variant] ?? VARIANT.secondary, wide ? 'w-full' : '']
+        .join(' ')
+        .trim()}
     >
       {copied ? 'Copied ✓' : label}
     </button>

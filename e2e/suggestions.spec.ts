@@ -2,9 +2,12 @@
  * suggestions.spec.ts
  *
  * Coverage for "people's choice" on /friends/consensus (migration
- * 0011): the suggest flow (BarPicker sheet → suggest_bar RPC → list),
- * friend suggestions rendering as the identity pair, own-row removal,
- * and the 3-per-night cap message.
+ * 0011) — the QA3 tabular poll: each row is photo tile + bar name +
+ * ▲ vote tally toggle, nothing else. Covers the suggest flow (BarPicker
+ * sheet → suggest_bar RPC → list), friend suggestions rendering
+ * name-free, own-row withdrawal via un-vote, the 3-per-night cap
+ * message, and the stranded-RSVP escape row (the one RSVP affordance
+ * left on this surface).
  *
  * Same stubbed-Supabase pattern as friends-real.spec.ts. The suggestions
  * stub is STATEFUL (suggest_bar appends, DELETE removes) because the
@@ -84,17 +87,13 @@ type StubOptions = {
   friendRatings?: Array<{ user_id: string; bar_id: string; tier: string; rated_at: string }>;
   /** Initial suggestion rows; mutated by suggest/remove. */
   suggestionRows?: SuggestionRow[];
-  /** Initial RSVP rows; mutated by rsvp/unrsvp (move semantics mirrored). */
+  /** Initial RSVP rows (pre-QA3 leftovers); mutated by unrsvp. */
   rsvpRows?: SuggestionRow[];
   /** Force suggest_bar to decline (cap-hit path). */
   suggestDeclines?: boolean;
-  /** Force rsvp_bar to decline (server-said-no path). */
-  rsvpDeclines?: boolean;
   /** Signed-in "you" server ratings (ratings table rows) — enables the
-   * consensus/vote participant path. */
+   * consensus participant path. */
   youRatings?: Array<{ bar_id: string; tier: string; rated_at: string }>;
-  /** get_circle_rsvps succeeds once, then 500s (degradation path). */
-  rsvpsFailAfterFirst?: boolean;
 };
 
 /** YYYY-MM-DD; every night-scoped write must carry it (see NIGHT_GUARD). */
@@ -128,13 +127,7 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/rpc/get_circle_suggestions**', async (route) => {
     await fulfillJson(200, rows)(route);
   });
-  let rsvpFetches = 0;
   await page.route('**/rest/v1/rpc/get_circle_rsvps**', async (route) => {
-    rsvpFetches += 1;
-    if (opts.rsvpsFailAfterFirst && rsvpFetches > 1) {
-      await route.fulfill({ status: 500, body: 'stubbed rsvps outage' });
-      return;
-    }
     await fulfillJson(200, rsvps)(route);
   });
   await page.route('**/rest/v1/rpc/suggest_bar**', async (route) => {
@@ -149,22 +142,6 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     }
     await fulfillJson(200, true)(route);
   });
-  await page.route('**/rest/v1/rpc/rsvp_bar**', async (route) => {
-    const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string; night?: string };
-    if (!(await nightGuard(route, body.night))) return;
-    if (opts.rsvpDeclines) {
-      await fulfillJson(200, false)(route);
-      return;
-    }
-    // Mirror 0012 move semantics: one RSVP per night — drop own others.
-    for (let i = rsvps.length - 1; i >= 0; i--) {
-      if (rsvps[i].user_id === USER_ID) rsvps.splice(i, 1);
-    }
-    if (body.bar) {
-      rsvps.push({ user_id: USER_ID, handle: 'connor_f', display_name: 'Conor F', bar_id: body.bar });
-    }
-    await fulfillJson(200, true)(route);
-  });
   await page.route('**/rest/v1/rpc/unrsvp_bar**', async (route) => {
     const body = JSON.parse(route.request().postData() ?? '{}') as { bar?: string; night?: string };
     if (!(await nightGuard(route, body.night))) return;
@@ -175,7 +152,7 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/bar_rsvps**', async (route) => {
     // 0013 closed the raw-table-delete race path — "I'm out" must go
     // through the serialized unrsvp_bar RPC. A DELETE landing here is a
-    // regression; fail it loudly so the toggle test goes red.
+    // regression; fail it loudly so the escape-row test goes red.
     if (route.request().method() === 'DELETE') {
       await route.fulfill({ status: 500, body: 'unserialized bar_rsvps DELETE (should use unrsvp_bar RPC)' });
       return;
@@ -209,13 +186,21 @@ async function signIn(page: Page): Promise<void> {
 
 const FRIEND = { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', handle: 'claire', display_name: 'Claire' };
 
-test.describe('/friends/consensus — tonight\'s suggestions', () => {
+/** The People's Choice row for a bar — the tabular poll's unit. */
+function choiceRow(page: Page, barName: string) {
+  return page
+    .getByRole('list', { name: /people's choice/i })
+    .getByRole('listitem')
+    .filter({ hasText: barName });
+}
+
+test.describe('/friends/consensus — tonight\'s poll board', () => {
   test.beforeEach(async ({ page }) => {
     test.skip(SUPABASE_URL === null, 'NEXT_PUBLIC_SUPABASE_URL not found in .env.local');
     await signIn(page);
   });
 
-  test('empty state → suggest via the picker sheet → own suggestion listed with Remove', async ({
+  test('empty state → suggest via the picker sheet → your row lands lit at 1', async ({
     page,
   }) => {
     await stubSupabase(page, { following: [FRIEND] });
@@ -223,6 +208,7 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
 
     await expect(page.getByText(/nobody's picked a spot/i)).toBeVisible();
 
+    // "+ Find a bar" is the full-width entry at the BOTTOM of the board.
     await page.getByRole('button', { name: /\+ find a bar/i }).click();
     const sheet = page.getByRole('dialog', { name: /suggest a bar/i });
     await expect(sheet).toBeVisible();
@@ -233,17 +219,16 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await sheet.getByPlaceholder(/search/i).pressSequentially('Ace Bar');
     await sheet.getByRole('button', { name: /^Ace Bar/ }).first().click();
 
-    // Sheet closes; the suggestion lands with "You" backing it — the
-    // VOTE toggle is lit with a tally of 1 (UX-B2: the vote is visible).
+    // Sheet closes; the suggestion lands with the VOTE toggle lit at a
+    // tally of 1 — the row is photo + name + vote, nothing else.
     await expect(sheet).not.toBeVisible();
     await expect(page.getByText('Ace Bar')).toBeVisible();
-    await expect(page.getByText(/suggested by.*You/i)).toBeVisible();
     const vote = page.getByRole('button', { name: 'Vote for Ace Bar' });
     await expect(vote).toHaveAttribute('aria-pressed', 'true');
     await expect(vote).toContainText('1');
   });
 
-  test("a friend's suggestion renders with their name; your vote toggle starts OFF", async ({
+  test("a friend's suggestion renders name-FREE (photo + bar + tally only); your toggle starts OFF", async ({
     page,
   }) => {
     await stubSupabase(page, {
@@ -254,11 +239,14 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     });
     await page.goto('/friends/consensus');
 
-    await expect(page.getByText('Attaboy')).toBeVisible();
-    await expect(page.getByText(/suggested by.*Claire/i)).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: 'Vote for Attaboy' }),
-    ).toHaveAttribute('aria-pressed', 'false');
+    const row = choiceRow(page, 'Attaboy');
+    await expect(row).toBeVisible();
+    // QA3: no "suggested by …" line — the suggester's name must NOT be
+    // in the row; the tally carries the signal.
+    await expect(row.getByText(/Claire/)).toHaveCount(0);
+    const vote = page.getByRole('button', { name: 'Vote for Attaboy' });
+    await expect(vote).toHaveAttribute('aria-pressed', 'false');
+    await expect(vote).toContainText('1');
   });
 
   test('un-voting your own suggestion withdraws it back to the empty state', async ({
@@ -293,112 +281,31 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await vote.click();
     await expect(vote).toHaveAttribute('aria-pressed', 'true');
     await expect(vote).toContainText('2');
-    await expect(page.getByText(/suggested by.*Claire.*You|suggested by.*You.*Claire/i)).toBeVisible();
   });
 
-  test("RSVP: I'm-in toggles on, MOVES between bars, and toggles off", async ({
+  test("a stranded RSVP gets the escape row — I'm out clears it (the one RSVP affordance left)", async ({
     page,
   }) => {
     await stubSupabase(page, {
       following: [FRIEND],
       suggestionRows: [
-        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
         { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'attaboy' },
       ],
-    });
-    await page.goto('/friends/consensus');
-
-    // Accessible names carry the bar (a11y label); aria-pressed carries
-    // the in/out state.
-    const aceButton = page.getByRole('button', { name: "I'm in at Ace Bar" });
-    const attaboyButton = page.getByRole('button', { name: "I'm in at Attaboy" });
-    // Scoped to the named list (PR #14 review LOW): a bare page-wide
-    // locator('li') would match nav items or any future list on the page.
-    const aceRow = page
-      .getByRole('list', { name: /people's choice/i })
-      .getByRole('listitem')
-      .filter({ hasText: 'Ace Bar' });
-
-    // In at Ace Bar.
-    await aceButton.click();
-    await expect(aceButton).toHaveAttribute('aria-pressed', 'true');
-    await expect(aceRow.getByText(/You.*are in/)).toBeVisible();
-
-    // Move to Attaboy — Ace Bar must drop the RSVP (single-RSVP night).
-    await attaboyButton.click();
-    await expect(attaboyButton).toHaveAttribute('aria-pressed', 'true');
-    await expect(aceButton).toHaveAttribute('aria-pressed', 'false');
-    await expect(aceRow.getByText(/are in/)).toHaveCount(0);
-
-    // Tap again — out entirely.
-    await attaboyButton.click();
-    await expect(attaboyButton).toHaveAttribute('aria-pressed', 'false');
-    await expect(page.getByText(/are in|is in/)).toHaveCount(0);
-  });
-
-  test("a friend's RSVP renders in the going-list with their name", async ({
-    page,
-  }) => {
-    await stubSupabase(page, {
-      following: [FRIEND],
-      suggestionRows: [
-        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
-      ],
+      // A pre-QA3 RSVP of YOURS — no I'm-in toggle exists anymore, so the
+      // escape row is the only way out.
       rsvpRows: [
-        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
+        { user_id: USER_ID, handle: 'connor_f', display_name: 'Conor F', bar_id: 'ace-bar' },
       ],
     });
     await page.goto('/friends/consensus');
 
-    await expect(page.getByText(/Claire is in/)).toBeVisible();
-  });
+    await expect(page.getByText(/You're still in at/)).toBeVisible();
+    await expect(page.getByText('Ace Bar')).toBeVisible();
+    await page.getByRole('button', { name: /I'm out/i }).click();
+    await expect(page.getByText(/You're still in at/)).toHaveCount(0);
 
-  test("a declined RSVP surfaces the notice and leaves the toggle out (PR #14 LOW)", async ({
-    page,
-  }) => {
-    await stubSupabase(page, {
-      following: [FRIEND],
-      rsvpDeclines: true,
-      suggestionRows: [
-        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
-      ],
-    });
-    await page.goto('/friends/consensus');
-
-    const aceButton = page.getByRole('button', { name: "I'm in at Ace Bar" });
-    await aceButton.click();
-
-    await expect(page.getByText(/couldn't update your rsvp/i)).toBeVisible();
-    // Negative assertion: the decline must not flip local state.
-    await expect(aceButton).toHaveAttribute('aria-pressed', 'false');
-    await expect(page.getByText(/are in|is in/)).toHaveCount(0);
-  });
-
-  test('an RSVP fetch outage keeps the previous going-list instead of blanking it (PR #14 LOW)', async ({
-    page,
-  }) => {
-    await stubSupabase(page, {
-      following: [FRIEND],
-      rsvpsFailAfterFirst: true,
-      suggestionRows: [
-        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
-        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'attaboy' },
-      ],
-      rsvpRows: [
-        { user_id: FRIEND.id, handle: 'claire', display_name: 'Claire', bar_id: 'ace-bar' },
-      ],
-    });
-    await page.goto('/friends/consensus');
-
-    // First load succeeds: Claire's RSVP renders.
-    await expect(page.getByText(/Claire is in/)).toBeVisible();
-
-    // A write triggers a refetch whose RSVP leg 500s — the going-list
-    // must KEEP the last-known rows (blanking would falsely read as
-    // "nobody's in"; see the setRsvps prev-keep in TonightSuggestions).
-    await page.getByRole('button', { name: "I'm in at Attaboy" }).click();
-    await expect(page.getByText(/Claire is in/)).toBeVisible();
-    await expect(page.getByText(/nobody's picked a spot/i)).toHaveCount(0);
+    // The poll itself is untouched by the RSVP exit.
+    await expect(choiceRow(page, 'Attaboy')).toBeVisible();
   });
 
   test("the board shows BOTH parts: Group Favorites (algo) and the suggested bar in People's Choice (UX-B)", async ({
@@ -429,13 +336,13 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await expect(page.getByRole('button', { name: /Share the pick/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /put it to a vote/i })).toHaveCount(0);
 
-    // Part 2: People's Choice carries the human suggestion.
+    // Part 2: People's Choice carries the human suggestion as a bare
+    // photo+name+tally row.
     const choice = page.getByRole('list', { name: /people's choice/i });
     await expect(choice.getByText('Attaboy')).toBeVisible();
-    await expect(choice.getByText(/suggested by.*Claire/i)).toBeVisible();
   });
 
-  test('a declined suggest (cap) surfaces the inline message', async ({ page }) => {
+  test('a declined suggest (cap) surfaces the un-vote-to-switch message', async ({ page }) => {
     await stubSupabase(page, {
       following: [FRIEND],
       suggestDeclines: true,
@@ -454,7 +361,7 @@ test.describe('/friends/consensus — tonight\'s suggestions', () => {
     await sheet.getByRole('button', { name: /Dead Rabbit/ }).first().click();
 
     await expect(
-      page.getByText(/already suggested 3 bars tonight/i),
+      page.getByText(/You can back 3 bars a night — un-vote one to switch/i),
     ).toBeVisible();
   });
 });
