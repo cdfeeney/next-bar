@@ -147,8 +147,15 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
       await fulfillJson(200, false)(route);
       return;
     }
-    // Upsert MOVE — one row per user (mirrors the 0017 PK).
+    // Upsert MOVE — one row per user (mirrors the 0017 PK). Same-tag
+    // re-cast is a NO-OP that keeps created_at (stub fidelity with the
+    // migration's `where ... is distinct from excluded.tag` — review MED:
+    // the tie-break anchor must not reset on a repeat tap).
     const mine = votes.findIndex((v) => v.user_id === USER_ID);
+    if (mine !== -1 && votes[mine].tag === body.p_tag) {
+      await fulfillJson(200, true)(route);
+      return;
+    }
     const row: VoteRow = {
       user_id: USER_ID,
       handle: 'connor_f',

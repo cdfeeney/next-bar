@@ -20,6 +20,7 @@ export default function VibeVotePoll({
   winner,
   counts,
   busy,
+  failed,
   toggleVote,
 }: UseVibeVotesReturn): JSX.Element | null {
   if (votes === null) return null;
@@ -73,6 +74,13 @@ export default function VibeVotePoll({
           );
         })}
       </div>
+      {/* Review MED: a tap that didn't land must say so — a silently
+          un-pressing button reads as broken. */}
+      {failed ? (
+        <p role="status" className="text-muted text-xs mt-2">
+          That didn&apos;t go through — try again.
+        </p>
+      ) : null}
     </div>
   );
 }

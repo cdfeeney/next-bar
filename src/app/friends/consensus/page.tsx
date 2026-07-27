@@ -13,7 +13,6 @@ import { useVibeVotes } from '@/hooks/useVibeVotes';
 import VibeVotePoll from '@/components/VibeVotePoll';
 import { boostByWinningVibe } from '@/lib/vibeVotes';
 import { displayTag } from '@/lib/tagDisplay';
-import type { VibeTag } from '@/types';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
 import {
@@ -168,18 +167,19 @@ export default function ConsensusPage(): JSX.Element {
   // UX-B: ONE Group Favorites list — unanimous overlap leads, near-misses
   // fill, capped at 5. (The multi-step vote flow is deleted; People's
   // Choice carries the human signal via the suggest/vote poll.)
-  // UX-E: the winning vibe SEEDS the list — matching favorites float
-  // (stable partition, applied before the cap so a vibe match can enter
-  // the top 5), with the chip in the heading explaining why.
-  const groupFavorites = useMemo(
-    () =>
-      boostByWinningVibe(
-        [...overlap, ...alsoConsider],
-        vibeVotes.winner,
-        (entry) => barById(entry.barId)?.tags ?? [],
-      ).slice(0, 5),
-    [overlap, alsoConsider, vibeVotes.winner],
-  );
+  // UX-E: the winning vibe SEEDS the list WITHIN each partition (review
+  // HIGH: a vibe-matching near-miss must never outrank a unanimous pick
+  // — "unanimous overlap leads" is the standing UX-B invariant, and the
+  // top card carries the share moment). Applied before the cap so a
+  // vibe-matching near-miss can still enter the tail of the top 5.
+  const groupFavorites = useMemo(() => {
+    const tagsOf = (entry: ConsensusEntry): readonly string[] =>
+      barById(entry.barId)?.tags ?? [];
+    return [
+      ...boostByWinningVibe(overlap, vibeVotes.winner, tagsOf),
+      ...boostByWinningVibe(alsoConsider, vibeVotes.winner, tagsOf),
+    ].slice(0, 5);
+  }, [overlap, alsoConsider, vibeVotes.winner]);
 
   return (
     <main className="min-h-screen pb-28">
@@ -265,7 +265,7 @@ export default function ConsensusPage(): JSX.Element {
                   data-testid="winning-vibe-chip"
                   className="ml-2 normal-case tracking-normal inline-flex items-center rounded-full border border-accent px-2 py-0.5 text-[11px] text-accent"
                 >
-                  Tonight: {displayTag(vibeVotes.winner as VibeTag)}
+                  Tonight: {displayTag(vibeVotes.winner)}
                 </span>
               ) : null}
             </h2>
