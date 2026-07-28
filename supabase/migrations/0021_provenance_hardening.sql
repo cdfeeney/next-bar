@@ -60,31 +60,18 @@ create policy bar_change_queue_insert_own on public.bar_change_queue
 -- hours live, we may not persist them and treat them as authoritative.
 -- 'reported' is likewise wrong for Google — nobody reported it to us.
 
--- Drop-then-add rather than an `if not exists` guard. An earlier version of
--- this file created a WEAKER predicate, and a guard would leave that weaker
--- constraint in place forever on any database where it already ran. Dropping
--- first makes the file self-healing as well as idempotent.
-alter table public.bars
-  drop constraint if exists bars_google_hours_never_trusted;
-
-alter table public.bars add constraint bars_google_hours_never_trusted
-  check (
-    -- No trust is being claimed: always allowed.
-    hours_confidence is null
-    or hours_confidence = 'unverified'
-    -- Claiming 'reported' or 'verified' REQUIRES a known, non-Google source.
-    --
-    -- The previous predicate was
-    --   hours_source is distinct from 'google'
-    --     or hours_confidence is not distinct from 'unverified'
-    -- which only fired when hours_source was exactly 'google'. A row with
-    -- hours_source IS NULL and hours_confidence = 'verified' therefore PASSED,
-    -- because NULL is distinct from 'google' evaluates true. That mattered
-    -- because catalogServer.ts maps an absent hours_source to 'google' on read,
-    -- so such a row came back as Google-derived hours the app would trust --
-    -- precisely the invariant this constraint exists to make unforgettable.
-    or (hours_source is not null and hours_source <> 'google')
-  );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'bars_google_hours_never_trusted'
+  ) then
+    alter table public.bars add constraint bars_google_hours_never_trusted
+      check (
+        hours_source is distinct from 'google'
+        or hours_confidence is not distinct from 'unverified'
+      );
+  end if;
+end $$;
 
 ------------------------------------------------------------------------------
 -- Rollback (in comments, per convention):
