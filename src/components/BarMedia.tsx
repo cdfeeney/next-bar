@@ -13,18 +13,29 @@ import {
 } from '@/lib/mediaPolicy';
 
 /**
- * The ONE component that puts a bar's picture on screen.
+ * A ready-made media renderer: resolveMedia + glyph fallback + attribution.
  *
- * Every surface renders through here so the media-source rules live in a
- * single place: owned → venue → approved user → live Google → legacy cache
- * → glyph (src/lib/mediaPolicy.ts). Before this existed, ResultCard,
- * BarVisualTile and BarLightbox each built their own `/bar-photos/...`
- * URLs, which is why "stop serving Google photos" had no single lever to
- * pull.
+ * NOT CURRENTLY MOUNTED BY ANY PAGE. Read that literally — an earlier version
+ * of this comment claimed to be "the ONE component that puts a bar's picture
+ * on screen", and that was false. The surfaces that render imagery
+ * (ResultCard, BarLightbox, /discover, RecapCard) call `resolveMedia` from
+ * src/lib/mediaPolicy.ts directly, because each has bespoke chrome — gradient
+ * overlay, photo-count badge, overlaid venue name, swipe transform — that this
+ * component's markup cannot express.
  *
- * When every Google source is switched off, this falls through to the
- * glyph tile at the SAME aspect ratio — the card must not resize, or the
- * kill switch becomes a layout regression instead of a safety control.
+ * So the single boundary is **src/lib/mediaPolicy.ts**, not this file. That
+ * boundary is real and verifiable: `barImageUrls` has exactly one caller, and
+ * mediaPolicy is it. This component is a convenience wrapper for any future
+ * surface that wants the default chrome, kept because it is the only place the
+ * ordered fallback and attribution are composed together and tested end to
+ * end.
+ *
+ * If no surface adopts it, delete it rather than letting it rot — a tested
+ * component nothing renders is a liability that reads like a guarantee.
+ *
+ * When every Google source is switched off, this falls through to the glyph
+ * tile at the SAME aspect ratio — the card must not resize, or the kill switch
+ * becomes a layout regression instead of a safety control.
  */
 export default function BarMedia({
   bar,
@@ -104,13 +115,4 @@ export default function BarMedia({
       ) : null}
     </>
   );
-}
-
-/** Exposed for callers that need to know whether to render attribution. */
-export function mediaNeedsAttribution(
-  bar: Bar,
-  owned: readonly OwnedPhoto[] = [],
-  flags: MediaFlags = defaultMediaFlags(),
-): boolean {
-  return needsGoogleAttribution(resolveMedia(bar, owned, flags));
 }

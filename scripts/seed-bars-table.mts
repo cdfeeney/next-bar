@@ -41,7 +41,12 @@ const rows = bars.map((b) => ({
   business_status: b.businessStatus ?? null,
   photo_count: b.photoCount ?? (b.photoRef ? 1 : 0),
   photo_attributions: b.photoAttributions ?? null,
-  reviews: b.reviews ?? null,
+  // FROZEN 2026-07-28 (Phase 1 compliance, criterion 16): never persist
+  // Google review text or author names to a table. The sidecar may still
+  // carry historical review data, so this must stay a hard `null` rather
+  // than reading b.reviews — otherwise the next seed re-introduces exactly
+  // what the --reviews freeze in refresh-places.mjs stopped collecting.
+  reviews: null,
   last_verified: b.lastVerified,
   updated_at: new Date().toISOString(),
 }));

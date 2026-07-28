@@ -93,6 +93,23 @@ if ((PHOTOS || PHOTOS_MULTI) && process.env.ALLOW_GOOGLE_PHOTO_INGEST !== '1') {
 }
 // ────────────────────────────────────────────────────────────────────────
 const REVIEWS = process.argv.includes('--reviews');
+
+// ─── FROZEN 2026-07-28 (Phase 1 compliance, criterion 16) ───────────────
+// --reviews requested Google review TEXT and author names, wrote them to the
+// sidecar, and from there seed-bars-table.mts persisted them into the
+// bars.reviews column. Places terms do not permit storing review content, and
+// unlike hours it cannot be re-derived from a first-party source — it is
+// someone else's copyrighted text about someone else's venue.
+//
+// Operator decision 2026-07-28: the product does not need review snippets, so
+// the cheapest correct fix is to stop ingesting them entirely rather than
+// build a compliant alternative.
+if (REVIEWS && process.env.ALLOW_GOOGLE_REVIEW_INGEST !== '1') {
+  console.error('FROZEN: --reviews is disabled (Phase 1 compliance, criterion 16).');
+  console.error('Other refresh modes still work. Override: ALLOW_GOOGLE_REVIEW_INGEST=1');
+  process.exit(2);
+}
+// ────────────────────────────────────────────────────────────────────────
 const KEY = process.env.GOOGLE_MAPS_API_KEY;
 const SIDECAR = path.join(REPO, 'src/lib/bars.places.ts');
 const PHOTO_DIR = path.join(REPO, 'public/bar-photos');

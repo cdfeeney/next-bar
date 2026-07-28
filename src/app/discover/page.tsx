@@ -18,8 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
-import { needsGoogleAttribution, resolveMedia } from '@/lib/mediaPolicy';
-import GoogleAttribution from '@/components/GoogleAttribution';
+import { NO_GOOGLE_MEDIA, resolveMedia } from '@/lib/mediaPolicy';
 import { useBars } from '@/lib/useBars';
 import {
   WANT_TO_GO_KEY,
@@ -60,10 +59,14 @@ function DiscoverCard({ bar, onSave, onSkip }: DiscoverCardProps) {
   const startXRef = useRef(0);
   const pointerIdRef = useRef<number | null>(null);
 
-  // A discover swipe card is a visible recommendation card, so Google media
-  // is permitted here — but it resolves through the one policy so the kill
-  // switch reaches it, and it carries visible attribution below.
-  const decision = resolveMedia(bar);
+  // Criterion 12 EXCLUDES this surface. Earlier reasoning called a swipe card
+  // "a visible recommendation card"; that was wrong. /discover has no nav tab
+  // and is reached from the Map tab and the Want-to-go list, then swiped
+  // through a pool of up to DISCOVER_POOL_MAX venues — it behaves like a
+  // picker over the whole catalog, not like the bounded five-card
+  // recommendation list. Google media here would scale exposure with the
+  // catalog rather than with what a user actually asked to see.
+  const decision = resolveMedia(bar, [], NO_GOOGLE_MEDIA);
   const photo =
     decision.source === 'glyph' || decision.source === 'google-live'
       ? null
@@ -126,16 +129,9 @@ function DiscoverCard({ bar, onSave, onSkip }: DiscoverCardProps) {
         </div>
       )}
 
-      {/* Criterion 4: visible attribution. Chipped so the muted text stays
-          legible over an arbitrary photo, and pointer-events stay live so the
-          Google Maps link is actually tappable. */}
-      {showPhoto && needsGoogleAttribution(decision) ? (
-        <GoogleAttribution
-          bar={bar}
-          label="Photo via Google"
-          className="absolute top-2 left-3 z-10 rounded bg-black/60 px-1.5 py-0.5 text-white/90"
-        />
-      ) : null}
+      {/* No Google attribution block here on purpose: with NO_GOOGLE_MEDIA the
+          decision can only ever be an owned photo or the glyph, neither of
+          which is Places-derived, so there is nothing to attribute. */}
 
       {/* Bottom overlay — name never truncates (wraps instead). */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-5 pt-16 pb-5 pointer-events-none">
