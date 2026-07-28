@@ -147,7 +147,12 @@ export type HoursSource =
   | 'venue'
   | 'nextbar'
   | 'user'
-  | 'official_site';
+  | 'official_site'
+  /** OpenStreetMap `opening_hours`, ODbL-licensed. Its own source rather than
+   *  being folded into 'user' or 'official_site': OSM is neither our users nor
+   *  the venue, and provenance that lies is the thing this schema exists to
+   *  prevent. Attribution obligations follow the data. */
+  | 'osm';
 
 export type HoursConfidence = 'unverified' | 'reported' | 'verified';
 

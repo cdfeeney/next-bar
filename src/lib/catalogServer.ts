@@ -32,8 +32,12 @@ export type BarsTableRow = {
   hours_verified_at?: string | null;
 };
 
+// Must stay in step with HoursSource in src/types and with the
+// bars_hours_source_check constraint (migration 0024). A value missing here is
+// silently remapped to 'google'/'unverified' on read, so an omission would make
+// a genuinely first-party row look Google-derived and untrustworthy.
 const HOURS_SOURCES = new Set([
-  'google', 'venue', 'nextbar', 'user', 'official_site',
+  'google', 'venue', 'nextbar', 'user', 'official_site', 'osm',
 ]);
 const HOURS_CONFIDENCE = new Set(['unverified', 'reported', 'verified']);
 
