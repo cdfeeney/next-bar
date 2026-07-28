@@ -56,6 +56,105 @@ export function checksum(sql: string): string {
   return createHash('sha256').update(normalised, 'utf8').digest('hex');
 }
 
+/**
+ * Strip SQL comments before any structural analysis.
+ *
+ * Load-bearing, not hygiene: every migration in this repo ends with its rollback
+ * statements in trailing `--` comments. Counting those as real DDL would invent
+ * expectations that were never meant to execute, and the baseline guard below
+ * would then refuse on a perfectly healthy database.
+ */
+function stripSqlComments(sql: string): string {
+  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
+}
+
+/**
+ * `CREATE TABLE [IF NOT EXISTS] [schema.]name` — the optional schema group is
+ * greedy so `public.bars` yields `bars`, not `public`.
+ *
+ * `CREATE TEMP TABLE` / `CREATE TEMPORARY TABLE` are excluded for free: the
+ * intervening keyword means they never match `create\s+table`. That is
+ * deliberate — a temp table is not evidence a migration ran.
+ */
+const CREATE_TABLE_RE =
+  /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:"?[a-z_][a-z0-9_]*"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?/gi;
+
+/**
+ * Tables this migration set is expected to have created, lowercased, deduplicated,
+ * in first-appearance order.
+ *
+ * Derived from the files rather than hardcoded so the baseline guard cannot go
+ * stale as migrations are added — a hardcoded "does `bars` exist" check would
+ * still pass on a database that stopped at migration 1.
+ *
+ * Known limits, stated rather than hidden: a table created inside a `DO $$`
+ * block built by string concatenation is invisible here, and a table created by
+ * one migration and dropped by a later one would be a false expectation. Neither
+ * shape exists in this repo today; if one is added, this returns a weaker
+ * signal, never a wrong ledger, because the guard only ever refuses.
+ */
+export function expectedTablesFromMigrations(
+  files: readonly MigrationFile[],
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const file of files) {
+    const sql = stripSqlComments(file.sql);
+    for (const m of sql.matchAll(CREATE_TABLE_RE)) {
+      const name = m[1]?.toLowerCase();
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        out.push(name);
+      }
+    }
+  }
+  return out;
+}
+
+export type BaselineCheck = {
+  ok: boolean;
+  /** Tables the migration files say should exist. */
+  expected: string[];
+  /** Expected tables absent from the database. Non-empty ⇒ refuse. */
+  missing: string[];
+  /** Set only when the premise could not be evaluated at all. */
+  reason?: string;
+};
+
+/**
+ * Verify the premise `--baseline` asserts: "every file on disk has already been
+ * applied to this database."
+ *
+ * That cannot be proven in general — SQL is not introspectable to that depth —
+ * but the catastrophic case can be refused outright. Pointed at a fresh database,
+ * baseline would record all migrations as applied without running them, and the
+ * next run would report "up to date" while no schema exists at all. Checking
+ * every expected table also catches the partially-migrated case, not just the
+ * empty one.
+ *
+ * Fails CLOSED when no expectation can be derived: no evidence of a migrated
+ * database is not the same as evidence, and a guard that passes vacuously is not
+ * a guard.
+ */
+export function checkBaselinePremise(
+  files: readonly MigrationFile[],
+  existingTables: readonly string[],
+): BaselineCheck {
+  const expected = expectedTablesFromMigrations(files);
+  if (expected.length === 0) {
+    return {
+      ok: false,
+      expected,
+      missing: [],
+      reason:
+        'no expectation could be derived from the migration files, so the baseline premise cannot be verified',
+    };
+  }
+  const have = new Set(existingTables.map((t) => t.toLowerCase()));
+  const missing = expected.filter((t) => !have.has(t));
+  return { ok: missing.length === 0, expected, missing };
+}
+
 export function planMigrations(
   files: readonly MigrationFile[],
   applied: readonly AppliedMigration[],

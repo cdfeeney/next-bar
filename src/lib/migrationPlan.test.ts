@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import {
+  checkBaselinePremise,
   checksum,
+  expectedTablesFromMigrations,
   planMigrations,
   type AppliedMigration,
   type MigrationFile,
@@ -102,5 +104,102 @@ describe('planMigrations', () => {
 
   test('handles an empty migrations directory', () => {
     expect(planMigrations([], [])).toEqual({ apply: [], skip: [], drift: [] });
+  });
+});
+
+/**
+ * H1: `--baseline` records files as applied WITHOUT running them. Pointed at a
+ * fresh or partially-migrated database it will happily claim the whole schema
+ * exists, then report "up to date" forever. The expectation is derived from the
+ * migration files themselves rather than hardcoded, so it cannot go stale as
+ * new migrations land.
+ */
+describe('expectedTablesFromMigrations', () => {
+  test('extracts plain and IF NOT EXISTS creates, with or without the schema', () => {
+    const files = [
+      f('0001.sql', 'create table public.bars (id text primary key);'),
+      f('0002.sql', 'CREATE TABLE IF NOT EXISTS public.bar_photos (id uuid);'),
+      f('0003.sql', 'create table ratings (id text);'),
+    ];
+    expect(expectedTablesFromMigrations(files)).toEqual(['bars', 'bar_photos', 'ratings']);
+  });
+
+  test('is case-insensitive and tolerates quoted identifiers and odd whitespace', () => {
+    const files = [
+      f('0001.sql', 'CrEaTe   TABLE\n  IF NOT EXISTS\n  public."bar_claims" (id uuid);'),
+    ];
+    expect(expectedTablesFromMigrations(files)).toEqual(['bar_claims']);
+  });
+
+  test('deduplicates a table created idempotently across several files', () => {
+    const files = [
+      f('0001.sql', 'create table if not exists public.bars (id text);'),
+      f('0002.sql', 'create table if not exists public.bars (id text);'),
+    ];
+    expect(expectedTablesFromMigrations(files)).toEqual(['bars']);
+  });
+
+  // The real migrations carry rollback SQL in trailing comments. Counting those
+  // would invent expectations that were never meant to run.
+  test('IGNORES creates inside line comments', () => {
+    const files = [
+      f('0001.sql', 'create table public.real_one (id text);\n-- create table public.rollback_note (id text);'),
+    ];
+    expect(expectedTablesFromMigrations(files)).toEqual(['real_one']);
+  });
+
+  test('IGNORES creates inside block comments', () => {
+    const files = [
+      f('0001.sql', '/* create table public.commented_out (id text); */\ncreate table public.real_two (id text);'),
+    ];
+    expect(expectedTablesFromMigrations(files)).toEqual(['real_two']);
+  });
+
+  test('IGNORES temporary tables, which never persist', () => {
+    const files = [
+      f('0001.sql', 'create temp table scratch (id text);\ncreate temporary table scratch2 (id text);\ncreate table public.keeper (id text);'),
+    ];
+    expect(expectedTablesFromMigrations(files)).toEqual(['keeper']);
+  });
+
+  test('returns nothing for migrations that create no tables', () => {
+    expect(expectedTablesFromMigrations([f('0022.sql', 'alter table public.bars add constraint c check (true);')])).toEqual([]);
+  });
+});
+
+describe('checkBaselinePremise', () => {
+  const files = [
+    f('0001.sql', 'create table public.bars (id text);'),
+    f('0002.sql', 'create table if not exists public.bar_photos (id uuid);'),
+  ];
+
+  test('a fresh database FAILS the premise — this is the catastrophic case', () => {
+    const check = checkBaselinePremise(files, []);
+    expect(check.ok).toBe(false);
+    expect(check.missing).toEqual(['bars', 'bar_photos']);
+  });
+
+  test('a partially-migrated database FAILS and names exactly what is missing', () => {
+    const check = checkBaselinePremise(files, ['bars']);
+    expect(check.ok).toBe(false);
+    expect(check.missing).toEqual(['bar_photos']);
+  });
+
+  test('a fully-migrated database PASSES', () => {
+    const check = checkBaselinePremise(files, ['bars', 'bar_photos', 'unrelated']);
+    expect(check.ok).toBe(true);
+    expect(check.missing).toEqual([]);
+  });
+
+  test('comparison ignores case so pg_catalog casing cannot cause a false refusal', () => {
+    expect(checkBaselinePremise(files, ['BARS', 'Bar_Photos']).ok).toBe(true);
+  });
+
+  // Passing vacuously would defeat the guard: no expectation means no evidence,
+  // which is not the same as evidence of a migrated database.
+  test('a migration set that creates NO tables cannot vacuously pass', () => {
+    const check = checkBaselinePremise([f('0022.sql', 'alter table public.bars add constraint c check (true);')], []);
+    expect(check.ok).toBe(false);
+    expect(check.reason).toMatch(/no expectation|cannot verify/i);
   });
 });

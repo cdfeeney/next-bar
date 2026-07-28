@@ -25,10 +25,20 @@
  *   2. `npm run db:migrate`
  *
  *   `npm run db:migrate -- --baseline` records every current file as applied
- *   WITHOUT executing it. Use this exactly once, when adopting the ledger on a
- *   database you already know matches the files on disk — it avoids re-running
- *   nineteen historical migrations against production. It is a claim about
- *   reality, so it is wrong to use it on a database you have not verified.
+ *   WITHOUT executing it. Use it when adopting the ledger on a database that
+ *   already matches the files on disk — it avoids re-running historical
+ *   migrations against production.
+ *
+ *   Baseline is a CLAIM ABOUT REALITY, so it verifies the claim instead of
+ *   trusting it: the tables the migration files create are extracted from the
+ *   SQL and checked for existence, and baseline REFUSES if any are missing.
+ *   That is what stops it being pointed at a fresh database, recording a schema
+ *   that does not exist, and reporting "up to date" forever after. The whole
+ *   pass is one transaction, so an interruption leaves no partial ledger.
+ *
+ *   `--force-baseline` overrides a failed premise check. Separate flag on
+ *   purpose: routine adoption and overriding a safety check must not share a
+ *   keystroke.
  *
  * Safety: aborts on the first error and names the file that failed.
  */
@@ -38,6 +48,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 import {
+  checkBaselinePremise,
   checksum,
   planMigrations,
   type AppliedMigration,
@@ -59,6 +70,10 @@ loadEnv({ path: '.env.local' });
 loadEnv({ path: '.env' });
 
 const BASELINE = process.argv.includes('--baseline');
+// Escape hatch for the baseline premise check. Separate flag on purpose: --baseline
+// is a routine adoption step, overriding a failed premise check is not, and the two
+// must not share a keystroke.
+const FORCE_BASELINE = process.argv.includes('--force-baseline');
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -137,22 +152,74 @@ async function main() {
     }
 
     if (BASELINE) {
-      for (const file of files) {
-        // DO NOTHING, deliberately, not DO UPDATE. An upsert here would let a
-        // second --baseline silently re-point the ledger at an edited file, so
-        // the sequence "baseline, edit an applied migration, baseline again"
-        // would erase the drift the guard exists to catch. Recording only
-        // files that are not already recorded keeps baseline additive and
-        // makes drift un-clearable except by deliberate manual intervention.
-        // (Found by DeepSeek review, 2026-07-28.)
-        await client.query(
-          `insert into public.schema_migrations (name, checksum) values ($1, $2)
-             on conflict (name) do nothing`,
-          [file.name, checksum(file.sql)],
+      // Verify the premise before recording it. --baseline asserts "every file on
+      // disk already ran here"; against a fresh database it would instead record a
+      // complete schema that does not exist, after which every run reports "up to
+      // date" while nothing was ever created. The expectation is derived from the
+      // migration files themselves, so it cannot go stale as migrations are added.
+      const { rows: tableRows } = await client.query<{ table_name: string }>(
+        `select table_name from information_schema.tables
+          where table_schema = 'public' and table_type = 'BASE TABLE'`,
+      );
+      const premise = checkBaselinePremise(
+        files,
+        tableRows.map((r) => r.table_name),
+      );
+
+      if (!premise.ok) {
+        const detail = premise.reason
+          ? `  ${premise.reason}`
+          : `  expected ${premise.expected.length} table(s) from the migration files\n`
+            + `  MISSING from this database: ${premise.missing.join(', ')}`;
+        if (!FORCE_BASELINE) {
+          console.error(
+            '\nREFUSED to baseline — this database does not look migrated.\n'
+              + `${detail}\n\n`
+              + 'Recording these as applied would mark migrations done without ever\n'
+              + 'running them, and the next run would report "up to date" against a\n'
+              + 'schema that was never created.\n\n'
+              + 'If this is a NEW database: run `npm run db:migrate` with no flags. The\n'
+              + 'migrations are idempotent and will simply apply.\n'
+              + 'If you are certain the schema already matches these files: re-run with\n'
+              + '--force-baseline.',
+          );
+          process.exitCode = 1;
+          return;
+        }
+        console.warn(
+          `\n--force-baseline: proceeding despite a FAILED premise check.\n${detail}\n`
+            + 'You are asserting these migrations already ran here. If that is wrong,\n'
+            + 'the ledger will permanently hide the missing schema work.',
         );
       }
+
+      // ONE transaction. An interrupted baseline must leave no partial ledger,
+      // because the rows it did manage to write would silently skip those files
+      // forever while the rest re-ran — a split-brain ledger is worse than none.
+      try {
+        await client.query('begin');
+        for (const file of files) {
+          // DO NOTHING, deliberately, not DO UPDATE. An upsert would let a second
+          // --baseline silently re-point the ledger at an edited file, erasing the
+          // drift the guard exists to catch. Additive only; clearing drift stays a
+          // deliberate manual act. (DeepSeek review, 2026-07-28.)
+          await client.query(
+            `insert into public.schema_migrations (name, checksum) values ($1, $2)
+               on conflict (name) do nothing`,
+            [file.name, checksum(file.sql)],
+          );
+        }
+        await client.query('commit');
+      } catch (err) {
+        await client.query('rollback').catch(() => {});
+        console.error('\nBaseline FAILED and rolled back; the ledger is unchanged.\n', err);
+        process.exitCode = 1;
+        return;
+      }
+
       console.log(
-        `\nBaselined ${files.length} migration(s) as applied. NOTHING was executed.`,
+        `\nBaselined ${files.length} migration(s) as applied. NOTHING was executed.`
+          + `\nPremise verified: all ${premise.expected.length} expected table(s) present.`,
       );
       return;
     }
