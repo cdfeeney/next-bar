@@ -1,26 +1,48 @@
 /**
  * apply-migrations.ts
  *
- * Reads every *.sql file in supabase/migrations/ in lexical order and applies
- * each one against the Postgres database pointed to by DATABASE_URL.
+ * Applies every *.sql file in supabase/migrations/ in lexical order against the
+ * Postgres database pointed to by DATABASE_URL.
  *
- * Migrations are NOT tracked in a schema_migrations table — they must be
- * idempotent (use CREATE ... IF NOT EXISTS, DROP POLICY IF EXISTS, etc.).
- * That's fine for v0.5.x; a real ledger is on the list when we have more
- * than a handful of files.
+ * LEDGERED (2026-07-28). Migrations used to re-run on EVERY invocation, relying
+ * purely on each file being idempotent. Two problems with that:
+ *
+ *   1. Re-running 0020 re-creates and re-GRANTs the over-permissive
+ *      `pending_change_count(uuid)` definer function that 0021 exists to remove.
+ *   2. Nothing detected an already-applied migration being EDITED afterwards,
+ *      so the file and the database could disagree silently and forever.
+ *
+ * Now: each file is hashed, recorded in public.schema_migrations on success, and
+ * skipped thereafter. If a recorded file's contents change, the run ABORTS and
+ * applies nothing — see src/lib/migrationPlan.ts (unit-tested) for that logic.
+ *
+ * Each migration runs inside an explicit transaction together with its ledger
+ * write, so a failure leaves neither the schema change nor the ledger row.
  *
  * Usage:
- *   1. Set DATABASE_URL in .env.local (Supabase → Project Settings →
- *      Database → Connection string → URI, Transaction pooler, port 6543).
+ *   1. Set DATABASE_URL in .env.local (Supabase -> Project Settings ->
+ *      Database -> Connection string -> URI, Transaction pooler, port 6543).
  *   2. `npm run db:migrate`
  *
- * Safety: aborts on the first SQL error and reports the file that failed.
+ *   `npm run db:migrate -- --baseline` records every current file as applied
+ *   WITHOUT executing it. Use this exactly once, when adopting the ledger on a
+ *   database you already know matches the files on disk — it avoids re-running
+ *   nineteen historical migrations against production. It is a claim about
+ *   reality, so it is wrong to use it on a database you have not verified.
+ *
+ * Safety: aborts on the first error and names the file that failed.
  */
 
 import { config as loadEnv } from 'dotenv';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
+import {
+  checksum,
+  planMigrations,
+  type AppliedMigration,
+  type MigrationFile,
+} from '../src/lib/migrationPlan';
 
 // Hard gate: never write the live DB with the service-role/pooler creds
 // during the unattended overnight loop (DeepSeek security review). This
@@ -36,6 +58,8 @@ if (process.env.LOOP_UNATTENDED === '1') {
 loadEnv({ path: '.env.local' });
 loadEnv({ path: '.env' });
 
+const BASELINE = process.argv.includes('--baseline');
+
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   console.error(
@@ -46,11 +70,15 @@ if (!databaseUrl) {
 
 const migrationsDir = join(process.cwd(), 'supabase', 'migrations');
 
-let files: string[];
+let files: MigrationFile[];
 try {
   files = readdirSync(migrationsDir)
     .filter((f) => f.endsWith('.sql'))
-    .sort();
+    .sort()
+    .map((name) => ({
+      name,
+      sql: readFileSync(join(migrationsDir, name), 'utf-8'),
+    }));
 } catch (err) {
   console.error(`Could not read ${migrationsDir}:`, err);
   process.exit(1);
@@ -61,29 +89,102 @@ if (files.length === 0) {
   process.exit(0);
 }
 
+/**
+ * The ledger is bootstrapped here rather than as a numbered migration —
+ * a migration that records migrations cannot record itself.
+ */
+const LEDGER_DDL = `
+  create table if not exists public.schema_migrations (
+    name       text primary key,
+    checksum   text not null,
+    applied_at timestamptz not null default now()
+  );
+`;
+
 async function main() {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 
-  console.log(`Applying ${files.length} migration${files.length === 1 ? '' : 's'} to ${redactUrl(databaseUrl!)}`);
+  try {
+    console.log(
+      `Migrations: ${files.length} file${files.length === 1 ? '' : 's'} → ${redactUrl(databaseUrl!)}`,
+    );
 
-  for (const file of files) {
-    const path = join(migrationsDir, file);
-    const sql = readFileSync(path, 'utf-8');
-    process.stdout.write(`  • ${file} ... `);
-    try {
-      await client.query(sql);
-      process.stdout.write('ok\n');
-    } catch (err) {
-      process.stdout.write('FAILED\n');
-      console.error(`\nError applying ${file}:\n`, err);
-      await client.end();
-      process.exit(1);
+    await client.query(LEDGER_DDL);
+
+    const { rows } = await client.query<AppliedMigration>(
+      'select name, checksum from public.schema_migrations',
+    );
+    const plan = planMigrations(files, rows);
+
+    if (plan.drift.length > 0) {
+      console.error(
+        '\nABORTED — these migrations were edited after being applied:\n',
+      );
+      for (const d of plan.drift) {
+        console.error(`  ${d.name}`);
+        console.error(`    recorded ${d.recorded}`);
+        console.error(`    current  ${d.current}`);
+      }
+      console.error(
+        '\nThe database and these files now disagree. Nothing was applied.\n' +
+          'Fix by reverting the edit, or by moving the change into a NEW\n' +
+          'numbered migration. Only if you are certain the database already\n' +
+          'matches the edited file should you re-point the ledger by hand.',
+      );
+      process.exitCode = 1;
+      return;
     }
-  }
 
-  await client.end();
-  console.log('\nAll migrations applied.');
+    if (BASELINE) {
+      for (const file of files) {
+        await client.query(
+          `insert into public.schema_migrations (name, checksum) values ($1, $2)
+             on conflict (name) do update set checksum = excluded.checksum`,
+          [file.name, checksum(file.sql)],
+        );
+      }
+      console.log(
+        `\nBaselined ${files.length} migration(s) as applied. NOTHING was executed.`,
+      );
+      return;
+    }
+
+    if (plan.skip.length > 0) {
+      console.log(`  ${plan.skip.length} already applied, skipped.`);
+    }
+
+    if (plan.apply.length === 0) {
+      console.log('\nDatabase is up to date.');
+      return;
+    }
+
+    for (const file of plan.apply) {
+      process.stdout.write(`  • ${file.name} ... `);
+      try {
+        // The migration and its ledger row commit together, so a failure can
+        // never leave a file recorded as applied when it was not.
+        await client.query('begin');
+        await client.query(file.sql);
+        await client.query(
+          'insert into public.schema_migrations (name, checksum) values ($1, $2)',
+          [file.name, checksum(file.sql)],
+        );
+        await client.query('commit');
+        process.stdout.write('ok\n');
+      } catch (err) {
+        process.stdout.write('FAILED\n');
+        await client.query('rollback').catch(() => {});
+        console.error(`\nError applying ${file.name}:\n`, err);
+        process.exitCode = 1;
+        return;
+      }
+    }
+
+    console.log(`\nApplied ${plan.apply.length} migration(s).`);
+  } finally {
+    await client.end();
+  }
 }
 
 function redactUrl(url: string): string {
