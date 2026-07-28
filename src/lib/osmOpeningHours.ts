@@ -40,7 +40,14 @@ type Interval = { open: string; close: string };
 const RULE_RE =
   /^([a-z]{2}(?:-[a-z]{2})?(?:,[a-z]{2}(?:-[a-z]{2})?)*)\s+(.+)$/;
 
-const SPAN_RE = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/;
+/**
+ * A time span. The CLOSING side accepts OSM's extended-time syntax — hours 24–47
+ * mean "this many hours past midnight on the following day", which is how a bar
+ * open until 4am is tagged (`14:00-28:00`, seen on real NYC venues). Those roll
+ * over below; 48:00 and beyond is refused, as are minutes over 59. Extended
+ * hours are a CLOSING concept only, so `24:00-04:00` remains invalid.
+ */
+const SPAN_RE = /^([01]\d|2[0-3]):([0-5]\d)-([0-4]\d):([0-5]\d)$/;
 
 /** Holiday selectors carry no weekday meaning — see parse() for why we skip. */
 const HOLIDAY_RULE_RE = /^(ph|sh)\b/;
@@ -84,14 +91,28 @@ function parseTimeSelector(selector: string): Interval[] | null {
   for (const span of selector.split(',')) {
     const m = SPAN_RE.exec(span.trim());
     if (!m) return null;
-    intervals.push({ open: `${m[1]}:${m[2]}`, close: `${m[3]}:${m[4]}` });
+    let closeHour = Number(m[3]);
+    if (closeHour >= 48) return null;
+    // Roll extended hours back into a real clock reading. isOpenNow already
+    // treats close < open as crossing midnight, so 28:00 -> 04:00 carries the
+    // same meaning without needing a new representation.
+    if (closeHour >= 24) closeHour -= 24;
+    const close = `${String(closeHour).padStart(2, '0')}:${m[4]}`;
+    intervals.push({ open: `${m[1]}:${m[2]}`, close });
   }
   return intervals.length > 0 ? intervals : null;
 }
 
 export function parseOsmOpeningHours(spec: string | undefined | null): WeeklyHours | null {
   if (typeof spec !== 'string') return null;
-  const normalised = spec.trim().toLowerCase().replace(/\s+/g, ' ');
+  const normalised = spec
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    // Collapse whitespace around commas so "Sa, Su 13:00-04:00" parses. Spaced
+    // day lists were the single largest source of refusals in the live NYC
+    // sweep, and the space carries no meaning in the grammar.
+    .replace(/\s*,\s*/g, ',');
   if (normalised === '') return null;
 
   if (normalised === '24/7') {
@@ -111,6 +132,15 @@ export function parseOsmOpeningHours(spec: string | undefined | null): WeeklyHou
     // here — the same asymmetry the open-now badge uses. Rejecting outright would
     // discard otherwise-good weekday hours for a very common tag.
     if (HOLIDAY_RULE_RE.test(rule)) continue;
+
+    // A bare time span with no day selector applies to EVERY day — "11:30-04:00"
+    // is a common and unambiguous way to tag a venue open daily. Tried before the
+    // day-selector shape because it cannot be confused with one.
+    const everyDay = parseTimeSelector(rule);
+    if (everyDay !== null) {
+      for (let d = 0; d < 7; d++) days[d] = everyDay;
+      continue;
+    }
 
     const m = RULE_RE.exec(rule);
     if (!m) return null;

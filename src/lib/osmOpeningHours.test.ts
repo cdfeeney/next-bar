@@ -79,6 +79,74 @@ describe('parseOsmOpeningHours — supported subset', () => {
     const h = parseOsmOpeningHours('Mo-Fr 17:00-02:00; PH off') as Record<string, unknown>;
     expect(Object.keys(h!).sort()).toEqual(['1', '2', '3', '4', '5']);
   });
+
+  // Both of these came straight out of the live NYC sweep, where they accounted
+  // for the large majority of refusals — 7 of the first 8 refused specs.
+
+  test('tolerates a space after the comma in a day list (Sa, Su)', () => {
+    const h = parseOsmOpeningHours('Sa, Su 13:00-04:00') as Record<string, unknown>;
+    expect(Object.keys(h!).sort()).toEqual(['0', '6']);
+    expect(h!['6']).toEqual([{ open: '13:00', close: '04:00' }]);
+  });
+
+  test('tolerates spaced day lists across several rules', () => {
+    const h = parseOsmOpeningHours('Mo, Tu 16:30-01:00; Fr, Sa 16:00-04:00') as Record<string, unknown>;
+    expect(Object.keys(h!).sort()).toEqual(['1', '2', '5', '6']);
+  });
+
+  // OSM writes end-of-day as 24:00. It is not a real clock reading, so it is
+  // normalised to 00:00, which isOpenNow already reads as "closes at midnight"
+  // via its overnight-window handling.
+  test('accepts 24:00 as end-of-day and normalises it to 00:00', () => {
+    const h = parseOsmOpeningHours('Mo-Su 17:00-24:00') as Record<string, unknown>;
+    expect(h!['1']).toEqual([{ open: '17:00', close: '00:00' }]);
+  });
+
+  test('24:00 is only valid as a CLOSING time', () => {
+    expect(parseOsmOpeningHours('Mo-Fr 24:00-04:00')).toBeNull();
+  });
+
+  // REVISED after the live sweep. These two originally asserted null, on my
+  // initial assumption that 24:00 was a lone special case. It is not: OSM's
+  // extended-time syntax runs to 48:00 for venues open past midnight, and real
+  // NYC bars use it (Union Pool tags 14:00-28:00). Refusing it discarded correct
+  // hours, so closing hours 24-47 now roll over to the next day.
+  test('extended closing hours past midnight roll over', () => {
+    const a = parseOsmOpeningHours('Mo-Fr 17:00-25:00') as Record<string, unknown>;
+    expect(a!['1']).toEqual([{ open: '17:00', close: '01:00' }]);
+    const b = parseOsmOpeningHours('Mo-Fr 17:00-24:30') as Record<string, unknown>;
+    expect(b!['1']).toEqual([{ open: '17:00', close: '00:30' }]);
+    const c = parseOsmOpeningHours('Sa,Su 14:00-28:00') as Record<string, unknown>;
+    expect(c!['6']).toEqual([{ open: '14:00', close: '04:00' }]);
+  });
+
+  test('refuses hours beyond the 48:00 extended range, and bad minutes', () => {
+    expect(parseOsmOpeningHours('Mo-Fr 17:00-48:00')).toBeNull();
+    expect(parseOsmOpeningHours('Mo-Fr 17:00-99:00')).toBeNull();
+    expect(parseOsmOpeningHours('Mo-Fr 17:00-26:75')).toBeNull();
+  });
+
+  // "11:30-04:00" with no day selector means every day. Common, unambiguous.
+  test('a bare time span with no day selector applies to every day', () => {
+    const h = parseOsmOpeningHours('11:30-04:00') as Record<string, unknown>;
+    expect(Object.keys(h!).sort()).toEqual(['0', '1', '2', '3', '4', '5', '6']);
+    expect(h!['3']).toEqual([{ open: '11:30', close: '04:00' }]);
+  });
+
+  test('a bare span still combines with later day-specific overrides', () => {
+    const h = parseOsmOpeningHours('11:30-04:00; Su off') as Record<string, unknown>;
+    expect(h!['0']).toBeUndefined();
+    expect(Object.keys(h!)).toHaveLength(6);
+  });
+
+  test('handles a real spec combining both quirks', () => {
+    const h = parseOsmOpeningHours(
+      'Mo-We 17:00-02:00; Th 17:00-04:00; Fr, Sa 16:00-04:00; Su 16:00-24:00',
+    ) as Record<string, unknown>;
+    expect(Object.keys(h!).sort()).toEqual(['0', '1', '2', '3', '4', '5', '6']);
+    expect(h!['0']).toEqual([{ open: '16:00', close: '00:00' }]);
+    expect(h!['6']).toEqual([{ open: '16:00', close: '04:00' }]);
+  });
 });
 
 describe('parseOsmOpeningHours — refuses rather than guesses', () => {
