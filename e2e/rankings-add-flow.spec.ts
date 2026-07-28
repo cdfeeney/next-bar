@@ -37,16 +37,28 @@ async function typeInto(input: Locator, value: string): Promise<void> {
 }
 
 async function clearStorage(page: Page): Promise<void> {
-  // Home is location-first; deny geo so `/` settles instantly to the
-  // manual surface instead of hanging on the async locate spinner.
+  // Home is location-first; deny geo so nothing hangs on the async locate
+  // spinner.
   await denyGeolocation(page.context());
-  await page.goto('/');
+  // Clear on /rankings ITSELF rather than on `/`.
+  //
+  // This used to `goto('/')`, clear, and let the test `goto('/rankings')`.
+  // That raced: `/` finishes hydrating after the second goto is issued, and
+  // its client-side navigation aborts the pending one —
+  //   "Navigation to .../rankings is interrupted by another navigation to /".
+  // Reproduced 3/3 in true isolation (--workers=1) against an already-warm
+  // dev server, so this is NOT the cold-compile flake documented in
+  // CLAUDE.md; that diagnosis was wrong. Never leaving `/rankings` removes
+  // the second navigation entirely.
+  await page.goto('/rankings');
   await page.evaluate(() => {
     window.localStorage.clear();
     // Re-ack the 21+ age gate (H1) — the config storageState seeded it,
     // and clearing storage must not resurface the overlay mid-test.
     window.localStorage.setItem('next-bar:age-ack:v1', '1');
   });
+  // Reload so the app boots against the cleared storage.
+  await page.reload();
 }
 
 /**

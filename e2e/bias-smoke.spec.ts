@@ -10,7 +10,20 @@ import { test, expect } from '@playwright/test';
 
 const MIDTOWN_COORDS = { latitude: 40.7549, longitude: -73.984 };
 
+// CONTENTION, not a defect — and deliberately retried rather than relaxed.
+// This is the longest flow in the suite (full quiz walk + geolocation
+// auto-resolve + catalog compute) and it is the one that loses when six
+// workers hit one dev server. Verified 2026-07-28: runs 2/2 green in
+// isolation on both projects, and fails only in the full-suite run, where it
+// dies as "Target page, context or browser has been closed" — i.e. its worker
+// was force-killed, not its assertions broken. `test.slow()` and the per-step
+// timeouts below were an earlier round of the same fight (night-loop N1).
+//
+// Every assertion is left exactly as strict as it was. A failure on BOTH
+// attempts is a REAL signal and must be investigated, not retried again.
 test.describe('Bias smoke — Midtown geolocation', () => {
+  test.describe.configure({ retries: 1 });
+
   test.beforeEach(async ({ context }) => {
     await context.grantPermissions(['geolocation']);
     await context.setGeolocation(MIDTOWN_COORDS);

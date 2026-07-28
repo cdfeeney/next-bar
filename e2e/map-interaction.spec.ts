@@ -10,10 +10,37 @@
  *     grey), plus the legend chip row and the no-profile quiz hint.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 
 /** How many bars the map's suggested tier may surface (useSuggestions). */
 const MAP_SUGGESTION_COUNT = 10;
+
+/**
+ * Read a locator's count once it has been stable across consecutive polls.
+ * Leaflet mounts the catalog's markers in batches, so a single `.count()`
+ * can land mid-render and return a number that never recurs.
+ */
+async function settledCount(
+  page: Page,
+  locator: Locator,
+  { stableFor = 3, intervalMs = 250, timeoutMs = 20_000 } = {},
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let last = -1;
+  let stable = 0;
+  while (Date.now() < deadline) {
+    const n = await locator.count();
+    if (n > 0 && n === last) {
+      stable += 1;
+      if (stable >= stableFor) return n;
+    } else {
+      stable = 0;
+      last = n;
+    }
+    await page.waitForTimeout(intervalMs);
+  }
+  return last;
+}
 
 /**
  * Seeds a saved vibe-quiz profile before the app boots, so /map computes a
@@ -239,7 +266,12 @@ test.describe('/map Find Bar filters (QA2)', () => {
 
     const markers = page.locator('.leaflet-marker-icon');
     await expect(markers.first()).toBeVisible({ timeout: 15_000 });
-    const allCount = await markers.count();
+    // Sample the baseline only once the count STOPS moving. The catalog's
+    // markers mount progressively, and reading it the instant the first
+    // marker appeared captured a mid-render 403 against a settled 1,256 —
+    // so the post-Clear `.toBe(allCount)` below could never come true. The
+    // assertion was right; the baseline was the bug.
+    const allCount = await settledCount(page, markers);
     expect(allCount).toBeGreaterThan(0);
 
     // Pick one neighborhood — the map must drop to that hood's bars only.
