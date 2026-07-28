@@ -66,6 +66,17 @@ function DiscoverCard({ bar, onSave, onSkip }: DiscoverCardProps) {
   // picker over the whole catalog, not like the bounded five-card
   // recommendation list. Google media here would scale exposure with the
   // catalog rather than with what a user actually asked to see.
+  // UNREACHABLE TODAY, deliberately kept (L1, Codex review 2026-07-28). With
+  // owned=[] and both Google tiers off, resolveMedia can only return 'glyph',
+  // so `photo` is always null, `showPhoto` always false, and the <img> branch
+  // below never renders.
+  //
+  // The reason is `owned=[]`, NOT the flags: resolveMedia checks the
+  // nextbar/venue/user tiers BEFORE consulting flags, so first-party media WILL
+  // render here the moment a caller has any to pass. That is scheduled rather
+  // than speculative — migration 0020 already created bar_photos — so the branch
+  // stays instead of being deleted and re-added. If owned media is ever cut,
+  // collapse this to the glyph render.
   const decision = resolveMedia(bar, [], NO_GOOGLE_MEDIA);
   const photo =
     decision.source === 'glyph' || decision.source === 'google-live'
