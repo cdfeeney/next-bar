@@ -9,14 +9,24 @@ export type OpenStatus = 'unknown' | 'open' | 'closed' | 'permanently-closed';
 /** Pure status decision for a bar at `now` — exported for testing. */
 export function barStatus(bar: Bar, now: Date): OpenStatus {
   if (bar.businessStatus === 'CLOSED_PERMANENTLY') return 'permanently-closed';
-  // Consistency with the filter (2026-07-27): if unverified hours are not
-  // good enough to EXCLUDE a bar from results, they are not good enough to
-  // badge it "Closed" either. Asserting a closed state we cannot stand
-  // behind is worse than saying nothing — it talks users out of a bar that
-  // is probably open. 'unknown' renders no badge at all.
-  if (!hasTrustworthyHours(bar)) return 'unknown';
+
   const open = isOpenNow(bar.hours, now);
-  return open === null ? 'unknown' : open ? 'open' : 'closed';
+  if (open === null) return 'unknown'; // no hours at all — nothing to say
+
+  // ASYMMETRIC on purpose, mirroring excludeClosedBars (operator decision
+  // 2026-07-28). An earlier version gated the whole badge on
+  // hasTrustworthyHours, which removed the open/closed signal from EVERY card,
+  // since all 1,265 venues are Google-sourced — an unapproved UX regression,
+  // and incoherent with the lightbox showing a full weekly table from the same
+  // data.
+  //
+  // "Open" is safe to say on unverified hours: it is useful, and the worst case
+  // is a user arriving somewhere that just shut. "Closed" is not, because
+  // talking someone out of a bar that is probably open is the error we cannot
+  // take back — the same reason unverified hours never CLOSE a bar in the
+  // filter. So a closed-looking unverified bar renders no badge instead.
+  if (open) return 'open';
+  return hasTrustworthyHours(bar) ? 'closed' : 'unknown';
 }
 
 /**
