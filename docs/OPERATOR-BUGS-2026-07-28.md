@@ -14,8 +14,11 @@ Operator's read: widening the distance should pull in genuinely new, farther
 venues. A blend of already-shown and newly-reached bars is acceptable; the
 silent no-op is not.
 
-Open question for triage: is the distance control re-running the pick at all,
-or only re-filtering the set already in hand? Those are different fixes.
+**Answered by Connor (2026-07-28): it must RE-RUN the pick against a wider
+radius**, not re-filter the set already in hand. So widening is a fresh
+selection over a larger candidate pool, and genuinely new venues are expected
+to appear. The fix therefore belongs in the pick/query path, not in a display
+filter.
 
 ## B2 — move the vibe-tweak entry to where "Run anywhere" sits (UX)
 
