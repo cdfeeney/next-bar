@@ -43,6 +43,66 @@ const KEY = 'next-bar:ratings:v1';
 const MERGED_KEY = 'next-bar:ratings:merged-for:v1';
 
 /**
+ * Single-flight guard for server-mode hydration.
+ *
+ * Every mounted instance runs the hydration effect, and one instance exists
+ * per `RatingBadge` — 975 of them the moment `BarPicker` opens. Each ran its
+ * own merge + `fetchServerRatings`, and every authenticated PostgREST call
+ * resolves the access token under the exclusive `lock:sb-<ref>-auth-token`
+ * Web Lock. On WebKit that queue never drains (see the comment in
+ * `useAuth.ts`), so the reads deadlocked the whole page.
+ *
+ * Keyed by (userId, cache epoch): a sign-out bumps the epoch, so a run
+ * started for the previous account can never be reused by the next one.
+ * In-flight only — once it settles the entry is dropped, so a later mount
+ * still gets fresh data rather than a stale cached array.
+ */
+type HydrationRun = { key: string; promise: Promise<BarRating[] | null> };
+let hydrationRun: HydrationRun | null = null;
+
+/**
+ * The account the hook is currently mounted for, tracked outside React so a
+ * shared hydration run can consult it at write time. Maintained by the
+ * auth-driven effect below, which re-runs on every auth change.
+ */
+let liveUserId: string | null = null;
+
+/**
+ * May a hydration run started for `userId` still write to the shared cache?
+ *
+ * The per-instance effect cleanup used to answer this: switching accounts
+ * tore the effect down, `cancelled` flipped, and the guarded block — which
+ * contained the writes — was skipped. The run is now SHARED, so no single
+ * instance's cleanup can cancel it, and the epoch alone is not enough: it
+ * only moves on a cache wipe, so an A→B switch with no sign-out left A's
+ * in-flight run free to call writeRatings()/writeMergedFlag(A) over B's
+ * session. That is cross-account cache poisoning, so the check is against
+ * the LIVE account at write time, not the captured one.
+ */
+function stillCurrent(userId: string, epoch: number): boolean {
+  return getCacheEpoch() === epoch && liveUserId === userId;
+}
+
+function hydrateOnce(
+  key: string,
+  run: () => Promise<BarRating[] | null>,
+): Promise<BarRating[] | null> {
+  if (hydrationRun?.key === key) return hydrationRun.promise;
+  const entry = { key } as HydrationRun;
+  entry.promise = run().finally(() => {
+    if (hydrationRun === entry) hydrationRun = null;
+  });
+  hydrationRun = entry;
+  return entry.promise;
+}
+
+/** Test-only reset — module state would otherwise leak between tests. */
+export function __resetRatingsHydrationForTests(): void {
+  hydrationRun = null;
+  liveUserId = null;
+}
+
+/**
  * Custom DOM event used to broadcast server-mode rating writes to every
  * mounted `useRatings` consumer on the same page. localStorage's `storage`
  * event would do the job in local mode, but in server mode we don't touch
@@ -157,6 +217,7 @@ export function useRatings(): UseRatingsReturn {
     if (auth.status === 'loading') return;
 
     if (auth.status !== 'signed-in') {
+      liveUserId = null;
       modeRef.current = 'local';
       setRatings(loadRatings());
       return;
@@ -164,6 +225,7 @@ export function useRatings(): UseRatingsReturn {
 
     const supabase = getBrowserSupabase();
     if (!supabase) {
+      liveUserId = null;
       modeRef.current = 'local';
       setRatings(loadRatings());
       return;
@@ -172,6 +234,9 @@ export function useRatings(): UseRatingsReturn {
     modeRef.current = 'server';
 
     const userId = auth.user.id;
+    // Publish the live account BEFORE any async work — stillCurrent() reads
+    // this to decide whether an in-flight run may still touch the cache.
+    liveUserId = userId;
     // Cross-account guard: if the cache's merged-for flags name a DIFFERENT
     // user, this is another account's residue (e.g. session expired without
     // our sign-out) — wipe it BEFORE any merge can read it.
@@ -191,22 +256,26 @@ export function useRatings(): UseRatingsReturn {
     // just-wiped cache (routed review finding).
     const epoch = getCacheEpoch();
     void (async () => {
-      // First-sign-in merge: only re-runs if this browser hasn't merged
-      // for this user yet. Idempotent on the server side via insert-only.
-      if (mergeableRatings.length > 0 && alreadyMergedFor !== userId) {
-        const merged = await mergeLocalRatingsToServer(
-          supabase,
-          userId,
-          mergeableRatings,
-        );
-        // Only latch the flag on a run that actually completed — a failed
-        // merge (null) must retry next sign-in, not be marked done.
-        if (merged !== null && getCacheEpoch() === epoch) writeMergedFlag(userId);
-      }
-      const server = await fetchServerRatings(supabase);
-      // null = fetch FAILED (not "no ratings") — keep whatever we have
-      // rather than blanking state / wiping the localStorage cache (B0.3).
-      if (!cancelled && server !== null && getCacheEpoch() === epoch) {
+      // Shared across every mounted instance — see hydrateOnce. The network
+      // work and the cache writes happen once; only setRatings is per
+      // instance, because each has its own React state.
+      const hydrated = await hydrateOnce(`${userId}:${epoch}`, async () => {
+        // First-sign-in merge: only re-runs if this browser hasn't merged
+        // for this user yet. Idempotent on the server side via insert-only.
+        if (mergeableRatings.length > 0 && alreadyMergedFor !== userId) {
+          const merged = await mergeLocalRatingsToServer(
+            supabase,
+            userId,
+            mergeableRatings,
+          );
+          // Only latch the flag on a run that actually completed — a failed
+          // merge (null) must retry next sign-in, not be marked done.
+          if (merged !== null && stillCurrent(userId, epoch)) writeMergedFlag(userId);
+        }
+        const server = await fetchServerRatings(supabase);
+        // null = fetch FAILED (not "no ratings") — keep whatever we have
+        // rather than blanking state / wiping the localStorage cache (B0.3).
+        if (server === null || !stillCurrent(userId, epoch)) return null;
         // Keep any rating tapped while this fetch was in flight (it sits in
         // the write-through cache with a newer ratedAt than the snapshot).
         // Seeded demo entries are EXCLUDED from the local side (Codex
@@ -217,7 +286,6 @@ export function useRatings(): UseRatingsReturn {
           server,
           loadRatings().filter((r) => !isSeededDemoRating(r)),
         );
-        setRatings(merged);
         // Hydrate the localStorage cache with the authoritative rows
         // (including rows written on other devices) so usePairwise and the
         // sign-out fallback read current data.
@@ -228,7 +296,11 @@ export function useRatings(): UseRatingsReturn {
         // is indistinguishable from anonymous data and the foreign/residual
         // guards would let a later account merge it as its own.
         writeMergedFlag(userId);
-      }
+        return merged;
+      });
+      // `cancelled` is per-instance: an unmounted consumer must not setState,
+      // but the shared run above still completes for everyone else.
+      if (!cancelled && hydrated !== null) setRatings(hydrated);
     })();
 
     return () => {
