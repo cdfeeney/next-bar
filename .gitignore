@@ -17,3 +17,4 @@ scripts/data/
 
 # OSM Overpass response cache (dev reconnaissance, not source)
 .osm-cache/
+.site-cache/
