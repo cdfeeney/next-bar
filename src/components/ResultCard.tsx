@@ -4,7 +4,11 @@ import { useCallback, useState } from 'react';
 import type { Bar, VibeTag } from '@/types';
 import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
-import { barImageUrls } from '@/lib/barVisual';
+import {
+  needsGoogleAttribution,
+  resolveMedia,
+} from '@/lib/mediaPolicy';
+import GoogleAttribution from '@/components/GoogleAttribution';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { displayHood } from '@/lib/hoodDisplay';
 import ShareButton from '@/components/ShareButton';
@@ -47,7 +51,17 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
   const [heroFailed, setHeroFailed] = useState(false);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
 
-  const photos = barImageUrls(bar);
+  // Criterion 12/13: the hero is an ALLOWED Google surface (a visible
+  // recommendation card), but it must resolve through the one media policy
+  // rather than building /bar-photos/... URLs itself — otherwise the kill
+  // switch cannot reach it. The bespoke overlay below (gradient, photo
+  // count, name) is why this uses resolveMedia directly instead of the
+  // <BarMedia> wrapper: same boundary, different chrome.
+  const decision = resolveMedia(bar);
+  const photos =
+    decision.source === 'glyph' || decision.source === 'google-live'
+      ? []
+      : decision.urls;
   const showHero = photos.length > 0 && !heroFailed;
 
   return (
@@ -100,6 +114,12 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
         </div>
       ) : null}
 
+      {/* Criterion 4: visible attribution wherever Google-derived imagery is
+          shown. Sits directly under the hero it refers to. */}
+      {showHero && needsGoogleAttribution(decision) ? (
+        <GoogleAttribution bar={bar} label="Photo via Google" className="px-4 pt-2" />
+      ) : null}
+
       <div className="p-4 pt-3 flex flex-col gap-2">
         {!showHero ? (
           <div className="flex items-start gap-3">
@@ -109,9 +129,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
               aria-label={`See photos and hours for ${bar.name}`}
               className="shrink-0 touch-manipulation rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              {/* photoDisabled: the hero already exhausted every photo URL —
-                  don't re-request a known-broken file. */}
-              <BarVisualTile bar={bar} size={56} photoDisabled={heroFailed} />
+              <BarVisualTile bar={bar} size={56} />
             </button>
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
               <h3 className="font-display text-lg leading-snug">

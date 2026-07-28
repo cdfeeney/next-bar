@@ -2,12 +2,17 @@ import type { Bar, WeeklyHours } from '@/types';
 
 /**
  * Compute whether a bar is open at `now`, entirely client-side, from its stored
- * weekly hours + the current time in America/New_York. This is what keeps the
- * Places API bill at $0: hours are fetched once per weekly refresh and stored;
- * "open now" is derived here on every render — never a live API call.
+ * weekly hours + the current time in America/New_York. "Open now" is derived
+ * here on every render — never a live API call.
  *
  * Returns `null` when hours are unknown (the UI should show nothing rather than
  * a misleading "closed").
+ *
+ * PROVENANCE (2026-07-27): hours whose source is Google are marked
+ * `hoursConfidence: 'unverified'`. Google's Places policy permits storing the
+ * place_id indefinitely and nothing else beyond narrow exceptions; opening
+ * hours are not covered. So unverified hours must not DRIVE a hard filter —
+ * see hasTrustworthyHours / excludeClosedBars below.
  */
 export function isOpenNow(hours: WeeklyHours | undefined, now: Date): boolean | null {
   if (!hours) return null;
@@ -83,9 +88,50 @@ export function excludeClosedBars(
 ): Bar[] {
   return bars.filter((bar) => {
     if (bar.businessStatus === 'CLOSED_PERMANENTLY') return false;
+    // Unverified hours never CLOSE a bar. Dropping a venue on the strength
+    // of data we are not entitled to rely on is the wrong error to make:
+    // it hides a real, probably-open bar from the user.
+    if (!hasTrustworthyHours(bar)) return true;
     if (isOpenNow(bar.hours, now) !== false) return true;
     return opensSoonWithinMin > 0 && opensSoon(bar.hours, now, opensSoonWithinMin);
   });
+}
+
+/**
+ * Hours we are entitled to act on: first-party verified, or venue/user
+ * reported. Google-derived hours ('unverified') are NOT trustworthy for
+ * filtering — we may display them live, we may not persist and rely on them.
+ *
+ * Absent provenance on a bar that HAS hours is treated as unverified (the
+ * legacy Google rows), while a bar with no hours at all is simply unknown.
+ */
+export function hasTrustworthyHours(
+  bar: Pick<Bar, 'hours' | 'hoursConfidence'>,
+): boolean {
+  if (!bar.hours) return false;
+  return bar.hoursConfidence === 'verified' || bar.hoursConfidence === 'reported';
+}
+
+/**
+ * STRICT "Open now" (the explicit user toggle): only bars we can actually
+ * vouch for. A venue with unverified hours is excluded rather than guessed
+ * at — the user asked a precise question and deserves a precise answer.
+ */
+export function openNowStrict(
+  bars: Bar[],
+  now: Date,
+  opensSoonWithinMin = 0,
+): Bar[] {
+  // Composed rather than reimplemented: this replaces excludeClosedBars at
+  // the same call site, so it must inherit that filter's opens-soon grace
+  // window. Dropping unverified venues FIRST is what makes it strict; the
+  // untrustworthy-hours early return inside excludeClosedBars is then
+  // unreachable, which is intended.
+  return excludeClosedBars(
+    bars.filter((bar) => hasTrustworthyHours(bar)),
+    now,
+    opensSoonWithinMin,
+  );
 }
 
 function toMinutes(hhmm: string): number {

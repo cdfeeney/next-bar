@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import {
   excludeClosedBars,
+  hasTrustworthyHours,
+  openNowStrict,
   isOpenNow,
   opensSoon,
   todayHoursLine,
@@ -153,6 +155,92 @@ describe('todayHoursLine — DeepSeek review fixes', () => {
   });
 });
 
+describe('hours provenance gating (2026-07-27 compliance)', () => {
+  const bar = (overrides: Partial<Bar> & { id: string }): Bar =>
+    ({
+      name: overrides.id,
+      neighborhood: 'LES',
+      address: '1 Test St',
+      lat: 40.72,
+      lng: -73.99,
+      tags: ['dive'],
+      priceTier: 1,
+      blurb: 'test',
+      lastVerified: '2026-04-01',
+      ...overrides,
+    }) as Bar;
+
+  const THU: WeeklyHours = {
+    4: [{ open: '17:00', close: '02:00' }],
+  } as unknown as WeeklyHours;
+  const THU_3PM = new Date('2026-01-15T20:00:00Z'); // NYC Thu 3pm — shut
+  const THU_7PM = new Date('2026-01-16T00:00:00Z'); // NYC Thu 7pm — open
+
+  test('hasTrustworthyHours: only verified/reported count', () => {
+    expect(hasTrustworthyHours(bar({ id: 'a', hours: THU, hoursConfidence: 'verified' }))).toBe(true);
+    expect(hasTrustworthyHours(bar({ id: 'b', hours: THU, hoursConfidence: 'reported' }))).toBe(true);
+    expect(hasTrustworthyHours(bar({ id: 'c', hours: THU, hoursConfidence: 'unverified' }))).toBe(false);
+    // Hours present but provenance absent = legacy Google row = untrusted.
+    expect(hasTrustworthyHours(bar({ id: 'd', hours: THU }))).toBe(false);
+    expect(hasTrustworthyHours(bar({ id: 'e' }))).toBe(false);
+  });
+
+  // The point of the whole change: we may DISPLAY Google hours live, we may
+  // not persist them and act on them. So unverified hours must never be the
+  // reason a real bar disappears from normal results.
+  test('normal results KEEP a bar whose unverified hours say closed', () => {
+    const bars = [bar({ id: 'legacy', hours: THU, hoursConfidence: 'unverified' })];
+    expect(excludeClosedBars(bars, THU_3PM).map((b) => b.id)).toEqual(['legacy']);
+  });
+
+  test('normal results still drop a VERIFIED-closed bar', () => {
+    const bars = [bar({ id: 'verified', hours: THU, hoursConfidence: 'verified' })];
+    expect(excludeClosedBars(bars, THU_3PM)).toEqual([]);
+  });
+
+  test('strict Open now EXCLUDES unverified hours entirely', () => {
+    const bars = [
+      bar({ id: 'legacy-open', hours: THU, hoursConfidence: 'unverified' }),
+      bar({ id: 'verified-open', hours: THU, hoursConfidence: 'verified' }),
+      bar({ id: 'no-hours' }),
+    ];
+    // Even at a time its unverified hours call OPEN, the legacy bar is out:
+    // the user asked a precise question and gets only vouched-for answers.
+    expect(openNowStrict(bars, THU_7PM).map((b) => b.id)).toEqual(['verified-open']);
+  });
+
+  // The strict toggle replaces the old non-provenance filter at the SAME
+  // call site, so it must keep that filter's opens-soon grace window —
+  // otherwise turning on "Open now" silently drops soon-openers that used
+  // to appear, which is a UX regression disguised as a compliance fix.
+  test('strict Open now keeps a VERIFIED bar opening inside the grace window', () => {
+    const soon = [bar({ id: 'verified-soon', hours: THU, hoursConfidence: 'verified' })];
+    // NYC Thu 4:15pm — shut, opens 17:00, i.e. 45 min out.
+    const THU_415PM = new Date('2026-01-15T21:15:00Z');
+    expect(openNowStrict(soon, THU_415PM, 60).map((b) => b.id)).toEqual(['verified-soon']);
+    // Without a window it is simply closed.
+    expect(openNowStrict(soon, THU_415PM)).toEqual([]);
+  });
+
+  test('strict Open now drops an UNVERIFIED bar opening inside the grace window', () => {
+    const soon = [bar({ id: 'legacy-soon', hours: THU, hoursConfidence: 'unverified' })];
+    const THU_415PM = new Date('2026-01-15T21:15:00Z');
+    expect(openNowStrict(soon, THU_415PM, 60)).toEqual([]);
+  });
+
+  test('strict Open now drops permanently-closed regardless of provenance', () => {
+    const bars = [
+      bar({
+        id: 'gone',
+        hours: THU,
+        hoursConfidence: 'verified',
+        businessStatus: 'CLOSED_PERMANENTLY',
+      }),
+    ];
+    expect(openNowStrict(bars, THU_7PM)).toEqual([]);
+  });
+});
+
 describe('excludeClosedBars (E3.3 hard filter)', () => {
   const makeBar = (overrides: Partial<Bar> & { id: string }): Bar =>
     ({
@@ -165,6 +253,11 @@ describe('excludeClosedBars (E3.3 hard filter)', () => {
       priceTier: 1,
       blurb: 'test',
       lastVerified: '2026-04-01',
+      // These fixtures exercise the TIME maths, so they carry hours we are
+      // entitled to act on. Unverified (Google-derived) hours are covered
+      // by their own describe block below.
+      hoursSource: 'venue',
+      hoursConfidence: 'verified',
       ...overrides,
     }) as Bar;
 

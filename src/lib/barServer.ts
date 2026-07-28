@@ -24,7 +24,7 @@ const ID_RE = /^[a-z0-9-]{1,60}$/;
 
 /** Columns the share surfaces actually render (keep in sync with rowToBar). */
 const SHARE_COLUMNS =
-  'id,name,lat,lng,tags,neighborhood,price_tier,hours,blurb,address,place_id,business_status,photo_count,photo_attributions,last_verified';
+  'id,name,lat,lng,tags,neighborhood,price_tier,hours,blurb,address,place_id,business_status,photo_count,photo_attributions,last_verified,hours_source,hours_confidence,hours_verified_at';
 
 export async function getBarByIdServer(id: string): Promise<Bar | undefined> {
   const local = getBarById(id);

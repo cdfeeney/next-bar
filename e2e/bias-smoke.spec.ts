@@ -74,8 +74,14 @@ test.describe('Bias smoke — Midtown geolocation', () => {
 
     await expect(resultsHeading).toBeVisible({ timeout: 15_000 });
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-    const count = await cards.count();
-    expect(count).toBeGreaterThanOrEqual(3);
+    // RETRYING assertion, not a one-shot count(). The results heading can
+    // paint before the server-catalog swap finishes, and CatalogRefresh now
+    // PAGES that fetch (PostgREST caps responses at 1,000 rows and the
+    // catalog passed 1,000), so the swap lands a round trip later than it
+    // used to. A single count() snapshot reads the pre-swap DOM and flakes.
+    await expect
+      .poll(async () => cards.count(), { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(3);
 
     // Hell's Kitchen joined the catalog 2026-07-24 — from Midtown coords its
     // bars are legitimately the nearest strong matches (Bar Centrale 6/6).

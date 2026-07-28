@@ -2,13 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import type { Bar } from '@/types';
-import { isOpenNow, todayHoursLine } from '@/lib/openNow';
+import { hasTrustworthyHours, isOpenNow, todayHoursLine } from '@/lib/openNow';
 
 export type OpenStatus = 'unknown' | 'open' | 'closed' | 'permanently-closed';
 
 /** Pure status decision for a bar at `now` — exported for testing. */
 export function barStatus(bar: Bar, now: Date): OpenStatus {
   if (bar.businessStatus === 'CLOSED_PERMANENTLY') return 'permanently-closed';
+  // Consistency with the filter (2026-07-27): if unverified hours are not
+  // good enough to EXCLUDE a bar from results, they are not good enough to
+  // badge it "Closed" either. Asserting a closed state we cannot stand
+  // behind is worse than saying nothing — it talks users out of a bar that
+  // is probably open. 'unknown' renders no badge at all.
+  if (!hasTrustworthyHours(bar)) return 'unknown';
   const open = isOpenNow(bar.hours, now);
   return open === null ? 'unknown' : open ? 'open' : 'closed';
 }

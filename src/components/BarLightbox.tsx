@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
-import { barImageUrls } from '@/lib/barVisual';
+import { resolveMedia } from '@/lib/mediaPolicy';
 import { fetchBarReviews } from '@/lib/barReviews';
-import { weekHoursRows } from '@/lib/openNow';
+import { hasTrustworthyHours, weekHoursRows } from '@/lib/openNow';
+import GoogleAttribution from '@/components/GoogleAttribution';
 import { displayHood } from '@/lib/hoodDisplay';
 import OpenNowBadge from '@/components/OpenNowBadge';
 
@@ -34,7 +35,15 @@ export default function BarLightbox({
   bar: Bar;
   onClose: () => void;
 }): JSX.Element {
-  const photoUrls = barImageUrls(bar);
+  // Criterion 12 permits Google media in the OPEN lightbox, but criterion 13
+  // requires the kill switch to reach every Google surface — so this resolves
+  // through the one policy rather than building /bar-photos/... URLs itself.
+  // Visible attribution is already rendered below via <GoogleAttribution>.
+  const decision = resolveMedia(bar);
+  const photoUrls =
+    decision.source === 'glyph' || decision.source === 'google-live'
+      ? []
+      : decision.urls;
   const [activePhoto, setActivePhoto] = useState(0);
   // Reviews are NOT in the catalog payload any more (they were 155 KB of
   // it) — imported bars fetch theirs when their lightbox opens. Bundle
@@ -237,11 +246,20 @@ export default function BarLightbox({
                 ))}
               </tbody>
             </table>
+            {/* Unverified = Google-derived. We may DISPLAY these; we are
+                not entitled to persist and rely on them, so the user is
+                told plainly rather than shown a false precision. */}
             <p className="text-[10px] text-muted mt-2">
-              Hours are best-effort — confirm before a special trip.
+              {hasTrustworthyHours(bar)
+                ? 'Hours confirmed with the venue.'
+                : 'Hours not verified — confirm before a special trip.'}
             </p>
           </div>
         ) : null}
+
+        {/* Required whenever Places-derived content is on screen without a
+            Google map — this is the permission that lets us keep Leaflet. */}
+        <GoogleAttribution bar={bar} />
 
         <div className="flex items-center gap-3 pb-4">
           <Link

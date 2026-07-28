@@ -133,7 +133,23 @@ export type Bar = {
   /** Per-photo author attributions, index-aligned by photo order ('' = unknown). */
   photoAttributions?: string[];
   reviews?: BarReview[];
+  /** Where `hours` came from. Google's Places policy permits storing the
+   * place_id indefinitely and nothing else beyond narrow exceptions —
+   * opening hours are NOT covered — so Google-derived hours are marked
+   * 'unverified' and must not drive the strict Open-now filter. */
+  hoursSource?: HoursSource;
+  hoursConfidence?: HoursConfidence;
+  hoursVerifiedAt?: string;
 };
+
+export type HoursSource =
+  | 'google'
+  | 'venue'
+  | 'nextbar'
+  | 'user'
+  | 'official_site';
+
+export type HoursConfidence = 'unverified' | 'reported' | 'verified';
 
 // E3.2: distance as intent, not units — "Walkable" / "Worth a cab" chips
 // (values live in constants.ts: RADIUS_WALK / RADIUS_CAB) plus the

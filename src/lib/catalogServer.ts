@@ -27,7 +27,15 @@ export type BarsTableRow = {
   photo_attributions: string[] | null;
   reviews: Bar['reviews'] | null;
   last_verified: string;
+  hours_source?: string | null;
+  hours_confidence?: string | null;
+  hours_verified_at?: string | null;
 };
+
+const HOURS_SOURCES = new Set([
+  'google', 'venue', 'nextbar', 'user', 'official_site',
+]);
+const HOURS_CONFIDENCE = new Set(['unverified', 'reported', 'verified']);
 
 const KNOWN_TAGS: ReadonlySet<string> = new Set(TAG_VOCABULARY);
 const KNOWN_HOODS: ReadonlySet<string> = new Set(
@@ -89,6 +97,20 @@ export function rowToBar(row: BarsTableRow): Bar | null {
       ? { photoAttributions: row.photo_attributions }
       : {}),
     ...(row.reviews ? { reviews: row.reviews } : {}),
+    // Unknown/absent provenance is treated as UNVERIFIED, not as missing:
+    // a row with hours but no source is legacy Google data, and defaulting
+    // it to trusted is the failure mode this whole column exists to stop.
+    ...(row.hours
+      ? {
+          hoursSource: (HOURS_SOURCES.has(row.hours_source ?? '')
+            ? row.hours_source
+            : 'google') as Bar['hoursSource'],
+          hoursConfidence: (HOURS_CONFIDENCE.has(row.hours_confidence ?? '')
+            ? row.hours_confidence
+            : 'unverified') as Bar['hoursConfidence'],
+        }
+      : {}),
+    ...(row.hours_verified_at ? { hoursVerifiedAt: row.hours_verified_at } : {}),
   };
 }
 

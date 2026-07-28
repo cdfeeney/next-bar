@@ -52,6 +52,18 @@ export const RADIUS_WALK = 1.5;
 // never buries a strong match).
 export const LATE_NIGHT_START_HOUR = 22; // 10pm…
 export const LATE_NIGHT_END_HOUR = 4;    // …through 3:59am
+/**
+ * Criterion 9 de-prioritisation: venues whose opening hours we are not
+ * entitled to rely on (Google-derived, or provenance absent) rank slightly
+ * below ones we can vouch for.
+ *
+ * Deliberately HALF the late-night nudge, and deliberately not a partition:
+ * 1,192 of 1,265 catalog venues (94%) carry Google-derived hours, so a hard
+ * sink would bury the catalog and serve every user the same ~73 venues.
+ * This decides near-ties and nothing else.
+ */
+export const UNVERIFIED_HOURS_PENALTY = 0.03;
+
 export const LATE_CLUB_BOOST = 0.06;
 export const LATE_RESTAURANT_PENALTY = 0.06;
 export const RADIUS_CAB = 4;

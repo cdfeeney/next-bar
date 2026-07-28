@@ -24,7 +24,7 @@ import { rowsToCatalog, type BarsTableRow } from '@/lib/catalogServer';
 
 /** Exactly the columns rowToBar consumes, minus on-demand `reviews`. */
 const CATALOG_COLUMNS =
-  'id,name,lat,lng,tags,neighborhood,price_tier,hours,blurb,address,place_id,business_status,photo_count,photo_attributions,last_verified';
+  'id,name,lat,lng,tags,neighborhood,price_tier,hours,blurb,address,place_id,business_status,photo_count,photo_attributions,last_verified,hours_source,hours_confidence,hours_verified_at';
 
 /**
  * PostgREST caps EVERY response at 1,000 rows — silently, with a 200 and

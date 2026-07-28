@@ -80,6 +80,18 @@ const LIMIT_ARG = process.argv.indexOf('--limit');
 const LIMIT = LIMIT_ARG !== -1 ? parseInt(process.argv[LIMIT_ARG + 1], 10) : Infinity;
 const PHOTO_MULTI_COUNT = 3;
 const FORCE_PHOTOS = process.argv.includes('--force-photos');
+
+// ─── FROZEN 2026-07-27 (Phase 1 compliance) ─────────────────────────────
+// Only the PHOTO-DOWNLOAD paths are frozen; hours/status refresh still
+// runs, because that data is fetched live rather than re-hosted. Writing
+// Google photo bytes to our own storage is redistribution of their
+// licensed Content — see src/lib/mediaPolicy.ts.
+if ((PHOTOS || PHOTOS_MULTI) && process.env.ALLOW_GOOGLE_PHOTO_INGEST !== '1') {
+  console.error('FROZEN: --photos / --photos-multi are disabled (Phase 1 compliance).');
+  console.error('Other refresh modes still work. Override: ALLOW_GOOGLE_PHOTO_INGEST=1');
+  process.exit(2);
+}
+// ────────────────────────────────────────────────────────────────────────
 const REVIEWS = process.argv.includes('--reviews');
 const KEY = process.env.GOOGLE_MAPS_API_KEY;
 const SIDECAR = path.join(REPO, 'src/lib/bars.places.ts');

@@ -1,7 +1,17 @@
 # Next Bar — agent operating notes
 
-Project context lives in `docs/PRD.md`, `docs/PRD-v0.3.1.md`, `docs/PRD-v0.5.md`,
-and `docs/ARCHITECTURE-v0.2.md`. Read those before making non-trivial changes.
+Current project context lives in `docs/PRD-v0.5.md` and
+`docs/ARCHITECTURE-v0.2.md`. Read only the sections relevant to the active
+task. Consult `docs/PRD.md` or `docs/PRD-v0.3.1.md` only when tracing an older
+decision; do not load all four documents by default.
+
+## Token discipline
+
+- Work in one agent unless Connor explicitly starts a deep-profile session.
+- Search exact symbols and paths first; read the smallest relevant ranges.
+- Filter logs and test output to failures plus useful surrounding context.
+- Do not perform broad web or repository sweeps when a focused check can prove
+  the acceptance criterion.
 
 ## Testing principle: every interactive feature gets an e2e test
 

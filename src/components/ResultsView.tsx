@@ -9,7 +9,7 @@ import type {
   VibeTag,
 } from '@/types';
 import { useBars } from '@/lib/useBars';
-import { excludeClosedBars } from '@/lib/openNow';
+import { openNowStrict } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
@@ -94,8 +94,13 @@ export default function ResultsView({
 
   const pool = useMemo(
     () =>
+      // Criterion 9: the explicit "Open now" toggle is the STRICT path — it
+      // answers a precise question, so it may only use hours we are entitled
+      // to rely on. Unverified (Google-derived) venues are excluded here.
+      // Toggle OFF is the normal path: those venues are RETAINED and merely
+      // de-prioritised by unverifiedHoursAdjustment in the ranker.
       hideClosedNow && filterNow
-        ? excludeClosedBars(bars, filterNow, OPENS_SOON_WINDOW_MIN)
+        ? openNowStrict(bars, filterNow, OPENS_SOON_WINDOW_MIN)
         : bars,
     [bars, hideClosedNow, filterNow],
   );

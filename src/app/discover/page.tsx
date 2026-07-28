@@ -18,7 +18,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
-import { barImageUrls } from '@/lib/barVisual';
+import { needsGoogleAttribution, resolveMedia } from '@/lib/mediaPolicy';
+import GoogleAttribution from '@/components/GoogleAttribution';
 import { useBars } from '@/lib/useBars';
 import {
   WANT_TO_GO_KEY,
@@ -59,7 +60,14 @@ function DiscoverCard({ bar, onSave, onSkip }: DiscoverCardProps) {
   const startXRef = useRef(0);
   const pointerIdRef = useRef<number | null>(null);
 
-  const photo = barImageUrls(bar)[0] ?? null;
+  // A discover swipe card is a visible recommendation card, so Google media
+  // is permitted here — but it resolves through the one policy so the kill
+  // switch reaches it, and it carries visible attribution below.
+  const decision = resolveMedia(bar);
+  const photo =
+    decision.source === 'glyph' || decision.source === 'google-live'
+      ? null
+      : (decision.urls[0] ?? null);
   const [photoFailed, setPhotoFailed] = useState(false);
   const showPhoto = photo !== null && !photoFailed;
 
@@ -114,9 +122,20 @@ function DiscoverCard({ bar, onSave, onSkip }: DiscoverCardProps) {
       ) : (
         // Glyph fallback: BarVisualTile centered on the card surface.
         <div className="absolute inset-0 flex items-center justify-center">
-          <BarVisualTile bar={bar} size={56} photoDisabled={photoFailed} />
+          <BarVisualTile bar={bar} size={56} />
         </div>
       )}
+
+      {/* Criterion 4: visible attribution. Chipped so the muted text stays
+          legible over an arbitrary photo, and pointer-events stay live so the
+          Google Maps link is actually tappable. */}
+      {showPhoto && needsGoogleAttribution(decision) ? (
+        <GoogleAttribution
+          bar={bar}
+          label="Photo via Google"
+          className="absolute top-2 left-3 z-10 rounded bg-black/60 px-1.5 py-0.5 text-white/90"
+        />
+      ) : null}
 
       {/* Bottom overlay — name never truncates (wraps instead). */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-5 pt-16 pb-5 pointer-events-none">

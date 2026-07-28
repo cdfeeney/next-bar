@@ -8,6 +8,7 @@ import type {
 import { haversineMiles } from '@/lib/distance';
 import { daysAgo } from '@/lib/freshness';
 import { effectiveNight } from '@/lib/cadence';
+import { hasTrustworthyHours } from '@/lib/openNow';
 import {
   DIST_DECAY_MILES,
   DIST_WEIGHT,
@@ -23,6 +24,7 @@ import {
   MAX_RESULTS,
   MIN_CANDIDATES,
   RATING_WEIGHT,
+  UNVERIFIED_HOURS_PENALTY,
   VIBE_WEIGHT,
 } from '@/lib/constants';
 
@@ -124,6 +126,22 @@ export function lateNightAdjustment(bar: Pick<Bar, 'tags'>): number {
   return 0;
 }
 
+/**
+ * Criterion 9: de-prioritise venues whose hours we may not rely on, rather
+ * than excluding them. Same additive tie-breaker scale as
+ * `lateNightAdjustment`, at half its magnitude — see
+ * UNVERIFIED_HOURS_PENALTY for why this is a nudge and not a partition.
+ *
+ * A venue with NO hours at all is penalised too: the user-visible outcome is
+ * identical ("we can't vouch for when this is open"), so treating it as a
+ * third case would be a distinction without a difference.
+ */
+export function unverifiedHoursAdjustment(
+  bar: Pick<Bar, 'hours' | 'hoursConfidence'>,
+): number {
+  return hasTrustworthyHours(bar) ? 0 : -UNVERIFIED_HOURS_PENALTY;
+}
+
 export function matches(args: MatchesArgs): Bar[] {
   const {
     profile,
@@ -188,7 +206,8 @@ export function matches(args: MatchesArgs): Bar[] {
       bar,
       score:
         scoreBar(bar, profile.tags, coords, lovedTags) +
-        (late ? lateNightAdjustment(bar) : 0),
+        (late ? lateNightAdjustment(bar) : 0) +
+        unverifiedHoursAdjustment(bar),
     }))
     .sort((a, b) => b.score - a.score);
 

@@ -1,34 +1,30 @@
-'use client';
-
-import { useState } from 'react';
 import type { Bar } from '@/types';
-import { barImageUrl, barVisual } from '@/lib/barVisual';
+import { barVisual } from '@/lib/barVisual';
 
 type BarVisualTileProps = {
   bar: Bar;
-  /** Tile edge in px — 56 on ResultCard, 32 on BarPicker rows. */
+  /** Tile edge in px — 56 on cards, 32 on BarPicker rows. */
   size: 32 | 56;
-  /** Skip the photo entirely (caller already knows the URL is broken —
-   *  E2.3 hero fallback) and render the glyph directly. */
-  photoDisabled?: boolean;
 };
 
 /**
- * B5 visual identity tile: the bar's ingested photo when one exists, else
- * the deterministic vibe-tag glyph on its tag-hued background. Photo-first
- * with a live fallback — if the local image 404s (e.g. sidecar has a
- * photoRef but the --photos download hasn't run), onError flips the tile
- * back to the glyph instead of showing a broken image.
+ * The bar's deterministic vibe-tag glyph on its tag-hued background.
+ *
+ * GLYPH ONLY, deliberately. This tile used to render the bar's ingested
+ * photo photo-first with a glyph fallback, which put re-hosted Google Place
+ * photos into BarPicker rows, the Want-to-go list, Tonight suggestions,
+ * shared night pages and recap rows. Criterion 12 excludes exactly those
+ * surfaces: Google media may appear only on a visible recommendation card
+ * and in the open lightbox, both of which now go through BarMedia.
+ *
+ * So this component no longer decides anything about photos — there is one
+ * media boundary (src/lib/mediaPolicy.ts) and this is not it. Surfaces that
+ * ARE allowed imagery render <BarMedia>, which falls back to this tile.
  *
  * Decorative (the bar name is always adjacent text), so aria-hidden.
- * Plain <img>, not next/image: the assets are small local static files and
- * the glyph fallback needs a synchronous onError.
  */
-export default function BarVisualTile({ bar, size, photoDisabled }: BarVisualTileProps) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const url = barImageUrl(bar);
+export default function BarVisualTile({ bar, size }: BarVisualTileProps) {
   const visual = barVisual(bar);
-  const showPhoto = !photoDisabled && url !== null && !imgFailed;
 
   return (
     <span
@@ -45,20 +41,7 @@ export default function BarVisualTile({ bar, size, photoDisabled }: BarVisualTil
         fontSize: size === 56 ? 26 : 15,
       }}
     >
-      {showPhoto ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={url}
-          alt=""
-          width={size}
-          height={size}
-          loading="lazy"
-          className="w-full h-full object-cover"
-          onError={() => setImgFailed(true)}
-        />
-      ) : (
-        <span className="font-display leading-none">{visual.glyph}</span>
-      )}
+      <span className="font-display leading-none">{visual.glyph}</span>
     </span>
   );
 }

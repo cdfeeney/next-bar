@@ -4,7 +4,7 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { useState } from 'react';
 import type { Recap } from '@/lib/recap';
-import { barImageUrls } from '@/lib/barVisual';
+import { NO_GOOGLE_MEDIA, resolveMedia } from '@/lib/mediaPolicy';
 import BarVisualTile from '@/components/BarVisualTile';
 import RatingBadge from '@/components/RatingBadge';
 import ShareNightButton from '@/components/ShareNightButton';
@@ -27,7 +27,16 @@ export default function RecapCard({ recap }: RecapCardProps) {
   // A broken photo degrades to the text header (ResultCard's heroFailed
   // pattern) — never a broken-image glyph under the headline.
   const [heroFailed, setHeroFailed] = useState(false);
-  const heroPhoto = heroFailed ? null : (barImageUrls(heroBar)[0] ?? null);
+  // Criterion 12 EXCLUDES recaps from Google media, so this surface resolves
+  // with the Google tiers switched off: an owned/venue/user photo still shows,
+  // a re-hosted Google Place photo never does. Falls through to the text
+  // header below, which is the same degradation heroFailed already produced.
+  const decision = resolveMedia(heroBar, [], NO_GOOGLE_MEDIA);
+  const ownedHero =
+    decision.source === 'glyph' || decision.source === 'google-live'
+      ? null
+      : (decision.urls[0] ?? null);
+  const heroPhoto = heroFailed ? null : ownedHero;
   const stops = recap.bars.length;
 
   return (
