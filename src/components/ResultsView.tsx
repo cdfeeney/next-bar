@@ -9,7 +9,7 @@ import type {
   VibeTag,
 } from '@/types';
 import { useBars } from '@/lib/useBars';
-import { openNowStrict } from '@/lib/openNow';
+import { excludeClosedBars } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
@@ -94,13 +94,26 @@ export default function ResultsView({
 
   const pool = useMemo(
     () =>
-      // Criterion 9: the explicit "Open now" toggle is the STRICT path — it
-      // answers a precise question, so it may only use hours we are entitled
-      // to rely on. Unverified (Google-derived) venues are excluded here.
-      // Toggle OFF is the normal path: those venues are RETAINED and merely
-      // de-prioritised by unverifiedHoursAdjustment in the ranker.
+      // `hideClosedNow` is NOT a strict-provenance filter — it is the
+      // "don't show me closed bars" behaviour, and WhereNextFlow passes it
+      // hardcoded true, so this is the DEFAULT path for the main surface.
+      //
+      // It must therefore use excludeClosedBars, which is already the correct
+      // half of criterion 9: unverified hours never CLOSE a bar (dropping a
+      // real, probably-open venue on data we may not rely on is the wrong
+      // error), while the ranker de-prioritises those venues via
+      // unverifiedHoursAdjustment.
+      //
+      // DO NOT put openNowStrict here. It excludes every venue without
+      // trustworthy hours, and today that is ALL 1,265 of them — 1,192
+      // google/unverified plus 73 with no provenance — so the main surface
+      // returns zero recommendations. That regression shipped in eb643b3 and
+      // is what e2e/where-next-path + e2e/one-results-view catch.
+      // openNowStrict is for an EXPLICIT strict "Open now" control, which does
+      // not exist yet and must not be built until trustworthy hours do (goal
+      // g-3eedd7a1 H3/M3).
       hideClosedNow && filterNow
-        ? openNowStrict(bars, filterNow, OPENS_SOON_WINDOW_MIN)
+        ? excludeClosedBars(bars, filterNow, OPENS_SOON_WINDOW_MIN)
         : bars,
     [bars, hideClosedNow, filterNow],
   );
