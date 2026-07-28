@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
 import { resolveMedia } from '@/lib/mediaPolicy';
-import { hasTrustworthyHours, weekHoursRows } from '@/lib/openNow';
+import { hoursProvenanceNote, weekHoursRows } from '@/lib/openNow';
 import GoogleAttribution from '@/components/GoogleAttribution';
 import { displayHood } from '@/lib/hoodDisplay';
 import OpenNowBadge from '@/components/OpenNowBadge';
@@ -225,14 +225,11 @@ export default function BarLightbox({
                 ))}
               </tbody>
             </table>
-            {/* Unverified = Google-derived. We may DISPLAY these; we are
-                not entitled to persist and rely on them, so the user is
-                told plainly rather than shown a false precision. */}
-            <p className="text-[10px] text-muted mt-2">
-              {hasTrustworthyHours(bar)
-                ? 'Hours confirmed with the venue.'
-                : 'Hours not verified — confirm before a special trip.'}
-            </p>
+            {/* Names the actual source rather than asserting a generic
+                "confirmed with the venue", which stopped being true once
+                OpenStreetMap rows existed. Also carries the ODbL credit for
+                OSM-derived hours, at the point of display. */}
+            <p className="text-[10px] text-muted mt-2">{hoursProvenanceNote(bar)}</p>
           </div>
         ) : null}
 

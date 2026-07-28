@@ -113,6 +113,40 @@ export function hasTrustworthyHours(
 }
 
 /**
+ * The line shown beneath a venue's hours, naming where they came from.
+ *
+ * Provenance-accurate on purpose. "Hours confirmed with the venue" was true when
+ * the only trustworthy source was a venue report, and became a LIE the moment
+ * OpenStreetMap rows existed — OSM contributors are not the venue.
+ *
+ * This also discharges the ODbL attribution obligation for OSM-derived hours, in
+ * the place the data is actually rendered, which is where attribution belongs.
+ */
+export function hoursProvenanceNote(
+  bar: Pick<Bar, 'hours' | 'hoursSource' | 'hoursConfidence'>,
+): string {
+  if (!hasTrustworthyHours(bar)) {
+    return 'Hours not verified — confirm before a special trip.';
+  }
+  switch (bar.hoursSource) {
+    case 'osm':
+      return 'Hours via OpenStreetMap contributors (ODbL).';
+    case 'official_site':
+      return 'Hours from the venue’s own website.';
+    case 'user':
+      return 'Hours reported by a Next Bar user.';
+    case 'venue':
+    case 'nextbar':
+      return 'Hours confirmed with the venue.';
+    default:
+      // Trustworthy confidence with an unrecognised source should never happen
+      // (the DB constraint forbids google here), but claiming provenance we
+      // cannot name is worse than admitting we cannot.
+      return 'Hours not verified — confirm before a special trip.';
+  }
+}
+
+/**
  * STRICT "Open now" (the explicit user toggle): only bars we can actually
  * vouch for. A venue with unverified hours is excluded rather than guessed
  * at — the user asked a precise question and deserves a precise answer.

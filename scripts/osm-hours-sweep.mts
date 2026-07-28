@@ -25,10 +25,23 @@ import { join } from 'node:path';
 import { Client } from 'pg';
 import { matchOsmVenue, type CatalogVenue, type OsmVenue } from '../src/lib/osmMatch';
 import { parseOsmOpeningHours } from '../src/lib/osmOpeningHours';
+import { resolveHours } from '../src/lib/hoursResolution';
 
 loadEnv({ path: '.env.local' });
 
 const REFRESH = process.argv.includes('--refresh');
+/** Writes are OPT-IN. The default is a dry run that reports what it would do. */
+const APPLY = process.argv.includes('--apply');
+
+// Same hard gate as the migration runner: never mutate the live catalog from an
+// unattended loop. Applying hours is an attended step.
+if (APPLY && process.env.LOOP_UNATTENDED === '1') {
+  console.error(
+    '[loop-guard] --apply is forbidden during the unattended loop ' +
+      '(LOOP_UNATTENDED=1). Writing hours is an attended step. Aborting.',
+  );
+  process.exit(1);
+}
 const SAMPLES = (() => {
   const i = process.argv.indexOf('--samples');
   return i === -1 ? 8 : Number(process.argv[i + 1]) || 8;
@@ -144,6 +157,13 @@ async function main() {
   };
   const refusedSpecs: string[] = [];
   const matchedSamples: string[] = [];
+  /** Rows the ladder cleared for writing. Collected, then written in one txn. */
+  const writes: {
+    id: string;
+    hours: unknown;
+    source: string;
+    confidence: string;
+  }[] = [];
 
   for (const venue of catalog) {
     const r = matchOsmVenue(venue, osmVenues);
@@ -168,6 +188,20 @@ async function main() {
       const parsed = parseOsmOpeningHours(r.osm.openingHours);
       if (parsed) {
         tally.hoursParsed++;
+        // The ladder decides, not this script. OSM alone is one source, so this
+        // resolves to `reported`; it becomes `verified` only once a second,
+        // independent source agrees. A conflict or a rejection writes NOTHING.
+        const resolved = resolveHours([
+          { source: 'osm', hours: parsed, observedAt: new Date().toISOString() },
+        ]);
+        if (resolved.outcome === 'reported' || resolved.outcome === 'verified') {
+          writes.push({
+            id: venue.id,
+            hours: resolved.hours,
+            source: resolved.source,
+            confidence: resolved.confidence,
+          });
+        }
         if (matchedSamples.length < SAMPLES) {
           matchedSamples.push(
             `  ${venue.name}  ->  ${r.osm.name} (${Math.round(r.meters)}m, ${r.reason})\n` +
@@ -214,7 +248,42 @@ async function main() {
     for (const s of refusedSpecs) console.log(s);
   }
 
-  console.log('\nNothing was written. This sweep is read-only.');
+  console.log('\n=== WRITE PLAN ===');
+  console.log(`  rows the trust ladder cleared for writing: ${writes.length}`);
+  console.log('  each becomes hours_source=osm, hours_confidence=reported,');
+  console.log('  hours_verified_at=now(), REPLACING the Google-derived hours.');
+  console.log('  That replacement is the point: it swaps a source we may not rely');
+  console.log('  on for one we may, and retires those rows from H4 in passing.');
+
+  if (!APPLY) {
+    console.log('\nDRY RUN — nothing written. Re-run with --apply to write.');
+    return;
+  }
+
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query('begin');
+    for (const w of writes) {
+      await client.query(
+        `update public.bars
+            set hours = $1::jsonb,
+                hours_source = $2,
+                hours_confidence = $3,
+                hours_verified_at = now()
+          where id = $4`,
+        [JSON.stringify(w.hours), w.source, w.confidence, w.id],
+      );
+    }
+    await client.query('commit');
+    console.log(`\nAPPLIED ${writes.length} row(s) in one transaction.`);
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    console.error('\nWrite FAILED and rolled back; the catalog is unchanged.\n', err);
+    process.exitCode = 1;
+  } finally {
+    await client.end();
+  }
 }
 
 main().catch((err) => {

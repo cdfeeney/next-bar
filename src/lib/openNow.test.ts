@@ -2,6 +2,7 @@ import { describe, expect, it, test } from 'vitest';
 import {
   excludeClosedBars,
   hasTrustworthyHours,
+  hoursProvenanceNote,
   openNowStrict,
   isOpenNow,
   opensSoon,
@@ -226,6 +227,48 @@ describe('hours provenance gating (2026-07-27 compliance)', () => {
     const soon = [bar({ id: 'legacy-soon', hours: THU, hoursConfidence: 'unverified' })];
     const THU_415PM = new Date('2026-01-15T21:15:00Z');
     expect(openNowStrict(soon, THU_415PM, 60)).toEqual([]);
+  });
+
+  // The caption must name the real source. "Confirmed with the venue" was true
+  // when a venue report was the only trustworthy source; it became a lie the
+  // moment OSM rows existed. It also carries the ODbL credit.
+  describe('hoursProvenanceNote', () => {
+    const withSource = (
+      hoursSource: Bar['hoursSource'],
+      hoursConfidence: Bar['hoursConfidence'],
+    ) => bar({ id: 'p', hours: THU, hoursSource, hoursConfidence });
+
+    test('credits OpenStreetMap, satisfying ODbL at the point of display', () => {
+      expect(hoursProvenanceNote(withSource('osm', 'reported'))).toMatch(/OpenStreetMap/);
+      expect(hoursProvenanceNote(withSource('osm', 'reported'))).toMatch(/ODbL/);
+    });
+
+    test('names the venue website, a user report, and the venue itself distinctly', () => {
+      expect(hoursProvenanceNote(withSource('official_site', 'reported'))).toMatch(/website/i);
+      expect(hoursProvenanceNote(withSource('user', 'reported'))).toMatch(/user/i);
+      expect(hoursProvenanceNote(withSource('venue', 'verified'))).toMatch(/venue/i);
+      expect(hoursProvenanceNote(withSource('nextbar', 'verified'))).toMatch(/venue/i);
+    });
+
+    test('untrustworthy hours say so regardless of source', () => {
+      expect(hoursProvenanceNote(withSource('google', 'unverified'))).toMatch(/not verified/i);
+      expect(hoursProvenanceNote(withSource('osm', 'unverified'))).toMatch(/not verified/i);
+    });
+
+    test('a bar with no hours at all is not claimed as verified', () => {
+      expect(hoursProvenanceNote(bar({ id: 'nohours' }))).toMatch(/not verified/i);
+    });
+
+    // Never invent provenance we cannot name.
+    test('a trustworthy claim with an unrecognised source falls back to not-verified', () => {
+      const odd = bar({
+        id: 'odd',
+        hours: THU,
+        hoursConfidence: 'verified',
+        hoursSource: 'mystery' as unknown as Bar['hoursSource'],
+      });
+      expect(hoursProvenanceNote(odd)).toMatch(/not verified/i);
+    });
   });
 
   test('strict Open now drops permanently-closed regardless of provenance', () => {
