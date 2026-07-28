@@ -138,9 +138,16 @@ async function main() {
 
     if (BASELINE) {
       for (const file of files) {
+        // DO NOTHING, deliberately, not DO UPDATE. An upsert here would let a
+        // second --baseline silently re-point the ledger at an edited file, so
+        // the sequence "baseline, edit an applied migration, baseline again"
+        // would erase the drift the guard exists to catch. Recording only
+        // files that are not already recorded keeps baseline additive and
+        // makes drift un-clearable except by deliberate manual intervention.
+        // (Found by DeepSeek review, 2026-07-28.)
         await client.query(
           `insert into public.schema_migrations (name, checksum) values ($1, $2)
-             on conflict (name) do update set checksum = excluded.checksum`,
+             on conflict (name) do nothing`,
           [file.name, checksum(file.sql)],
         );
       }
