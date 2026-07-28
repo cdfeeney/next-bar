@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
 import { resolveMedia } from '@/lib/mediaPolicy';
-import { fetchBarReviews } from '@/lib/barReviews';
 import { hasTrustworthyHours, weekHoursRows } from '@/lib/openNow';
 import GoogleAttribution from '@/components/GoogleAttribution';
 import { displayHood } from '@/lib/hoodDisplay';
@@ -45,27 +44,13 @@ export default function BarLightbox({
       ? []
       : decision.urls;
   const [activePhoto, setActivePhoto] = useState(0);
-  // Reviews are NOT in the catalog payload any more (they were 155 KB of
-  // it) — imported bars fetch theirs when their lightbox opens. Bundle
-  // bars already carry sidecar reviews and skip the query entirely.
-  const [lateReviews, setLateReviews] = useState<Bar['reviews']>(undefined);
-  useEffect(() => {
-    // Drop the previous bar's fetched reviews FIRST. Today ResultCard
-    // unmounts the lightbox on close so this can't bite, but any future
-    // caller that keeps it mounted and swaps `bar` would otherwise
-    // attribute one bar's review quote to a different bar.
-    setLateReviews(undefined);
-    if (bar.reviews?.[0]) return;
-    let cancelled = false;
-    void (async () => {
-      const fetched = await fetchBarReviews(bar.id);
-      if (!cancelled && fetched?.[0]) setLateReviews(fetched);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [bar.id, bar.reviews]);
-  const reviews = bar.reviews?.[0] ? bar.reviews : lateReviews;
+  // Google review text and author names are no longer rendered anywhere, and no
+  // longer exist to render: migration 0023 nulled bars.reviews (220 rows / 660
+  // items) and the 2026-07-28 sidecar strip removed 750 more items from 250
+  // entries in bars.places.ts. Places terms do not permit storing review
+  // content, and unlike hours it has no compliant first-party equivalent — the
+  // fix is not to keep it. The fetch path (lib/barReviews.ts) and the merge in
+  // lib/bars.ts went with it, so there is no route back for this data.
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Scroll-snap position → active dot (passive listener; index from the
   // nearest slide edge).
@@ -221,12 +206,6 @@ export default function BarLightbox({
 
         <p className="text-sm italic">{bar.blurb}</p>
 
-        {reviews?.[0] ? (
-          <p className="text-xs text-muted">
-            &ldquo;{reviews[0].text}&rdquo; &mdash; {reviews[0].author}, Google
-            review
-          </p>
-        ) : null}
 
         {rows ? (
           <div className="bg-surface border border-border rounded-2xl p-4">

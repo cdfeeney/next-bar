@@ -70,14 +70,25 @@ describe('applyPlaces wrong-venue guard', () => {
     reviews: [{ text: 'Great spot', author: 'Reviewer', rating: 5 }],
   };
 
-  it('passes photo + review fields through for an in-area patch', () => {
+  it('passes photo fields through for an in-area patch', () => {
     const [out] = applyPlaces([curated], {
       'test-bar': { lat: 40.72, lng: -73.99, ...photoFields },
     });
     expect(out.lat).toBe(40.72);
     expect(out.photoRef).toBe(photoFields.photoRef);
     expect(out.photoAttribution).toBe(photoFields.photoAttribution);
-    expect(out.reviews).toEqual(photoFields.reviews);
+  });
+
+  // INVERTED 2026-07-28. This previously asserted that `reviews` were merged
+  // through, which is exactly the route by which Google review text reached
+  // BarLightbox even after migration 0023 nulled the database column. The merge
+  // is gone and the data with it (750 items across 250 sidecar entries), so the
+  // test now guards the removal instead of the behaviour.
+  it('NEVER merges Google review text, even when a patch supplies it', () => {
+    const [out] = applyPlaces([curated], {
+      'test-bar': { lat: 40.72, lng: -73.99, ...photoFields },
+    });
+    expect(out.reviews).toBeUndefined();
   });
 
   it('drops photo + review fields together with rejected out-of-area coords', () => {

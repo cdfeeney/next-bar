@@ -61,7 +61,10 @@ export function applyPlaces(
       photoAttribution: p.photoAttribution ?? b.photoAttribution,
       photoCount: p.photoCount ?? b.photoCount,
       photoAttributions: p.photoAttributions ?? b.photoAttributions,
-      reviews: p.reviews ?? b.reviews,
+      // `reviews` is deliberately NOT merged. Google review text and author
+      // names are not ours to store, and this merge was the route by which
+      // sidecar reviews reached BarLightbox even after the DB column was
+      // purged. Removed 2026-07-28 along with the data itself.
     };
   });
 }
