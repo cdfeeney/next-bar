@@ -118,10 +118,19 @@ for (const bar of targets) {
     business_status: dj.businessStatus ?? null,
     hours: toWeeklyHours(dj.regularOpeningHours),
   };
-  if (move !== null && move <= MAX_MOVE_MILES) {
-    patch.lat = gLat;
-    patch.lng = gLng;
-  }
+  // COORDINATES ARE NEVER WRITTEN FROM GOOGLE.
+  //
+  // This block used to do `patch.lat = gLat; patch.lng = gLng`, which would undo
+  // migrations 0029-0032: those moved every venue coordinate onto OpenStreetMap
+  // because Google's terms permit caching lat/lng for at most 30 consecutive days
+  // and only place_id indefinitely. One `--apply` run here reintroduced the very
+  // data four migrations removed. Found by /review-routed 2026-07-29.
+  //
+  // The distance is still computed above and still gates the write — a match more
+  // than MAX_MOVE_MILES away is treated as the wrong venue and nothing is written
+  // for it. Google's position remains a transient SIGNAL; it is simply no longer
+  // persisted. To correct a coordinate, use OSM:
+  //   npx tsx scripts/audit-osm-witness.mts --db
   if (APPLY) {
     const { error: upErr } = await admin.from('bars').update(patch).eq('id', bar.id);
     if (upErr) {

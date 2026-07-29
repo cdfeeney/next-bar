@@ -15,7 +15,16 @@ export default defineConfig({
     // the ONE gate rather than a second config, because a suite you have to
     // remember a --config flag to run is not a gate. (Replaces the separate
     // ceo/vitest.config.mjs, deleted.)
-    include: ['src/**/*.test.{ts,tsx}', 'ceo/**/*.test.{ts,tsx}'],
+    // scripts/** added 2026-07-29 for scripts/lib/sidecar.test.ts. The sidecar
+    // invariants were previously "tested" by grepping refresh-places.mjs for
+    // substrings, which passed while three real bypasses were live. Extracting
+    // them to an importable module only helps if the gate actually runs the
+    // tests, so the include pattern is part of the fix, not incidental to it.
+    include: [
+      'src/**/*.test.{ts,tsx}',
+      'ceo/**/*.test.{ts,tsx}',
+      'scripts/**/*.test.{ts,tsx}',
+    ],
   },
   resolve: {
     alias: {

@@ -114,6 +114,38 @@ function attributionMatchesName(patch, name) {
 
 const bars = parseBars();
 const patches = loadPatches();
+
+// RETIRED 2026-07-29 — this audit's input no longer exists.
+//
+// It compared our hand-authored coordinates against the ones Google returned,
+// both read from the sidecar. Google's coordinates were removed from the sidecar
+// because their terms permit caching lat/lng for at most 30 consecutive days
+// (migrations 0029-0032 moved every coordinate onto OpenStreetMap).
+//
+// So `patch.lat` is now always undefined, every entry hit the `continue` below,
+// and this script printed "Audited 0 sidecar matches … No coordinate-divergence
+// suspects" — a CLEAN REPORT while checking nothing. That is worse than being
+// broken: a green result nobody can distinguish from a real pass. Found by
+// /review-routed.
+//
+// It fails loudly instead. The replacement is scripts/audit-osm-witness.mts,
+// which asks the same question without Google: is our stored position
+// corroborated by a same-name OpenStreetMap node?
+{
+  const withCoords = Object.values(patches).filter(
+    (p) => p.lat !== undefined && p.lng !== undefined,
+  ).length;
+  if (withCoords === 0) {
+    console.error(
+      'audit-places-matches: RETIRED — the sidecar no longer stores Google coordinates,\n' +
+        `so there is nothing to compare (${Object.keys(patches).length} entries, 0 with coords).\n` +
+        'This script used to report "0 suspects" here, which read as a pass.\n\n' +
+        'Use instead:  npx tsx scripts/audit-osm-witness.mts --db',
+    );
+    process.exit(2);
+  }
+}
+
 const suspects = [];
 let audited = 0;
 

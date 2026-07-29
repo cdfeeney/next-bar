@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import type { Bar, PlacePatch } from '@/types';
 import { applyPlaces, bars } from '@/lib/bars';
 import { rawBarCount } from '@/lib/catalog.slim';
-import { SERVICE_AREA_BBOX } from '@/lib/constants';
+import { DB_ONLY_SIDECAR_IDS } from '../../scripts/lib/sidecar.mjs';
 
 // Normalize a bar name for duplicate detection: fold case, punctuation, and the
 // filler words that let the same venue slip in twice under slightly different
@@ -119,19 +119,30 @@ describe('applyPlaces wrong-venue guard', () => {
 describe('wrong-venue guard, now enforced at generation time', () => {
   const GENERATOR = readFileSync(join(process.cwd(), 'scripts/refresh-places.mjs'), 'utf8');
 
-  it('the generator still rejects out-of-area matches', () => {
-    expect(GENERATOR).toMatch(/insideServiceArea\(lat,\s*lng\)/);
-    expect(GENERATOR).toMatch(/outside-service-area/);
-  });
-
-  it("the generator's bbox copy has not drifted from SERVICE_AREA_BBOX", () => {
-    // It cannot import the TypeScript constant, so it holds a copy. This is the
-    // only thing standing between that copy and silent divergence.
-    for (const [key, value] of Object.entries(SERVICE_AREA_BBOX)) {
-      const found = new RegExp(`${key}:\\s*(-?\\d+\\.?\\d*)`).exec(GENERATOR);
-      expect(found, `generator is missing ${key}`).not.toBeNull();
-      expect(Number(found![1]), `generator ${key} disagrees with constants.ts`).toBe(value);
-    }
+  // The BEHAVIOURAL coverage now lives in scripts/lib/sidecar.test.ts, which
+  // imports the real functions and exercises them. Two greps used to sit here —
+  // "does the file contain insideServiceArea" and "do its bbox literals match
+  // constants.ts" — and both passed while three actual bypasses were live
+  // (--only preserving a rejected entry, --photos-multi skipping the check,
+  // absent `location` writing unchecked). Grepping for a guard is not exercising
+  // one.
+  //
+  // The bbox-drift grep is now obsolete by construction: the generator imports
+  // SERVICE_AREA from scripts/lib/sidecar.mjs instead of keeping its own copy, so
+  // there is no second literal left to drift. sidecar.test.ts asserts that single
+  // copy equals SERVICE_AREA_BBOX.
+  //
+  // What remains here is the one property a unit test on the extracted module
+  // cannot see: that the generator routes EVERY write through the chokepoint.
+  it('every sidecar write goes through the single writeSidecar chokepoint', () => {
+    const rawWrites = [...GENERATOR.matchAll(/fs\.writeFileSync\(SIDECAR/g)].length;
+    const viaHelper = [...GENERATOR.matchAll(/^\s*writeSidecar\(/gm)].length;
+    // Exactly one raw write — the one inside writeSidecar itself.
+    expect(rawWrites, 'a write path bypasses writeSidecar').toBe(1);
+    // …and at least the main + photos-multi paths call it.
+    expect(viaHelper).toBeGreaterThanOrEqual(2);
+    expect(GENERATOR).toMatch(/function writeSidecar\(/);
+    expect(GENERATOR).toMatch(/assertSidecarWritable\(/);
   });
 
   it('the generator no longer writes coordinates into the sidecar', () => {
@@ -154,7 +165,9 @@ describe('wrong-venue guard, now enforced at generation time', () => {
    * the point.
    */
   it('the sidecar has no orphan entries', () => {
-    const DB_ONLY_ALLOWLIST = new Set(['pencil-factory']);
+    // Allowlist imported, not duplicated — one list, shared with the generator's
+    // own assertion so the two cannot disagree about what is legitimately DB-only.
+    const DB_ONLY_ALLOWLIST = DB_ONLY_SIDECAR_IDS;
 
     const sidecar = readFileSync(join(process.cwd(), 'src/lib/bars.places.ts'), 'utf8');
     const sidecarIds = [...sidecar.matchAll(/^ {2}'([^']+)':\s*\{/gm)].map((m) => m[1]);

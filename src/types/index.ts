@@ -87,9 +87,11 @@ export type BarReview = {
 /** A per-bar patch produced by the Google Places refresh job (keyed by bar id).
  * Overlaid onto the curated catalog at load time so the hand-authored bar files
  * stay clean and the machine-generated data can be regenerated wholesale.
- * NOTE: photo/review fields ride the SAME patch object as coords/hours on
- * purpose — bars.ts's wrong-venue bbox guard rejects the patch wholesale, so a
- * mis-resolved venue's photo and reviews are dropped along with its coords. */
+ * NOTE: the wrong-venue guard this comment used to describe no longer runs in
+ * bars.ts. It moved into scripts/refresh-places.mjs (enforced at the single point
+ * where the sidecar is serialised) when coordinates stopped being persisted — a
+ * patch resolving outside the service area is now discarded before it is written,
+ * rather than shipped and filtered on read. */
 export type PlacePatch = {
   /**
    * NO COORDINATES HERE, deliberately.
