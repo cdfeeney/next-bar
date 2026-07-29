@@ -31,10 +31,20 @@
  *   npx tsx scripts/audit-osm-witness.mts              # the 13 priority suspects
  *   npx tsx scripts/audit-osm-witness.mts --all        # every sidecar entry
  *   npx tsx scripts/audit-osm-witness.mts --ids a,b,c  # specific venue ids
+ *   npx tsx scripts/audit-osm-witness.mts --all --db   # also cover DB-only venues
+ *
+ * --db adds venues that have a sidecar entry but NO row in src/lib/bars.*.ts.
+ * They are real rows in the `bars` table (the mass import added venues the
+ * hand-authored files never carried), so without it they are simply skipped and
+ * their coordinates go unchecked. The query is a read-only SELECT.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { config as loadEnv } from 'dotenv';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Client } from 'pg';
 import { matchOsmVenue, type CatalogVenue, type OsmVenue } from '../src/lib/osmMatch';
+
+loadEnv({ path: '.env.local' });
 
 const REPO = process.cwd();
 const CACHE_FILE = join(REPO, '.osm-cache', 'nyc-drinking-venues.json');
@@ -78,6 +88,8 @@ type OverpassElement = {
   type?: string;
 };
 
+const osmAddress = new Map<string, string>();
+
 function loadOsmVenues(): OsmVenue[] {
   if (!existsSync(CACHE_FILE)) {
     throw new Error(
@@ -93,26 +105,54 @@ function loadOsmVenues(): OsmVenue[] {
     const lat = el.lat ?? el.center?.lat;
     const lng = el.lon ?? el.center?.lon;
     if (typeof lat !== 'number' || typeof lng !== 'number' || !tags.name) continue;
-    out.push({ osmId: `${el.type ?? 'node'}/${el.id ?? 0}`, name: tags.name, lat, lng });
+    const osmId = `${el.type ?? 'node'}/${el.id ?? 0}`;
+    const addr = [
+      [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' '),
+      tags['addr:city'],
+      tags['addr:postcode'],
+    ]
+      .filter(Boolean)
+      .join(', ');
+    if (addr) osmAddress.set(osmId, addr);
+    out.push({ osmId, name: tags.name, lat, lng });
   }
   return out;
 }
 
-/** Hand-authored catalog rows: id, name, lat, lng straight out of the bar files. */
-function loadCatalog(): Map<string, CatalogVenue> {
-  const map = new Map<string, CatalogVenue>();
+type CatalogRow = CatalogVenue & { address: string };
+
+/**
+ * Hand-authored catalog rows straight out of the bar files.
+ *
+ * Names are matched in BOTH quote styles. The first version of this parser
+ * required `name: '...'`, which silently skipped every venue whose name contains
+ * an apostrophe — and those are written `name: "Julius'"` with double quotes.
+ * That is most of an NYC bar list (Jimmy's Corner, Arthur's Tavern, PJ Clarke's,
+ * McAleer's…), and it made 44 perfectly ordinary venues look like they existed
+ * only in the database. Same failure as grepping one encoding of a field and
+ * concluding the data isn't there.
+ */
+function loadCatalog(): Map<string, CatalogRow> {
+  const map = new Map<string, CatalogRow>();
+  const str = String.raw`(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")`;
   for (const file of BAR_FILES) {
     const path = join(REPO, 'src/lib', file);
     if (!existsSync(path)) continue;
     const src = readFileSync(path, 'utf-8');
-    const re =
-      /\{\s*id:\s*'([^']+)'\s*,\s*name:\s*'((?:[^'\\]|\\.)*)'[\s\S]*?lat:\s*(-?\d+\.?\d*)\s*,\s*lng:\s*(-?\d+\.?\d*)/g;
+    const re = new RegExp(
+      String.raw`id:\s*${str}\s*,\s*name:\s*${str}[\s\S]{0,400}?address:\s*${str}[\s\S]{0,200}?lat:\s*(-?\d+\.?\d*)\s*,\s*lng:\s*(-?\d+\.?\d*)`,
+      'g',
+    );
     for (const m of src.matchAll(re)) {
-      map.set(m[1], {
-        id: m[1],
-        name: m[2].replace(/\\'/g, "'"),
-        lat: Number(m[3]),
-        lng: Number(m[4]),
+      const unq = (a?: string, b?: string) => (a ?? b ?? '').replace(/\\(['"])/g, '$1');
+      const id = unq(m[1], m[2]);
+      if (!id) continue;
+      map.set(id, {
+        id,
+        name: unq(m[3], m[4]),
+        address: unq(m[5], m[6]),
+        lat: Number(m[7]),
+        lng: Number(m[8]),
       });
     }
   }
@@ -145,7 +185,41 @@ function loadSidecar(): Map<string, { lat: number; lng: number; placeId: string 
   return map;
 }
 
-function main() {
+/** Fill catalog gaps from the bars table. Read-only. */
+async function loadFromDb(missing: string[]): Promise<Map<string, CatalogRow>> {
+  const map = new Map<string, CatalogRow>();
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    console.log('--db requested but DATABASE_URL is not set in .env.local — skipping DB pass.');
+    return map;
+  }
+  const client = new Client({ connectionString: url });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{
+      id: string;
+      name: string;
+      address: string | null;
+      lat: number;
+      lng: number;
+    }>('select id, name, address, lat, lng from public.bars where id = any($1)', [missing]);
+    for (const r of rows) {
+      map.set(r.id, {
+        id: r.id,
+        name: r.name,
+        address: r.address ?? '',
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+      });
+    }
+    console.log(`DB pass: recovered ${rows.length} of ${missing.length} venue(s) absent from the catalog files.`);
+  } finally {
+    await client.end();
+  }
+  return map;
+}
+
+async function main() {
   const argv = process.argv.slice(2);
   const osm = loadOsmVenues();
   const catalog = loadCatalog();
@@ -159,11 +233,24 @@ function main() {
         ? [...sidecar.keys()]
         : PRIORITY;
 
+  // Venues with a sidecar entry but no row in the hand-authored files exist only
+  // in the `bars` table (the mass import added venues the catalog never carried).
+  // Without this pass their coordinates are never checked at all.
+  if (argv.includes('--db')) {
+    const missing = ids.filter((id) => !catalog.has(id));
+    if (missing.length > 0) {
+      for (const [id, row] of await loadFromDb(missing)) catalog.set(id, row);
+    }
+  }
+
   console.log(
     `OSM witness: ${osm.length} named venues from cache; checking ${ids.length} venue(s). No Google calls.\n`,
   );
 
   const rows: Record<string, string>[] = [];
+  const lookup: string[] = [
+    ['id','name','verdict','our_address','google_maps_link','osm_name','osm_address','osm_link','osm_metres_from_google'].join('	'),
+  ];
   for (const id of ids) {
     const cat = catalog.get(id);
     const goo = sidecar.get(id);
@@ -194,6 +281,27 @@ function main() {
       detail = `no same-name OSM node near either (${atCatalog.reason ?? ''})`;
     }
     rows.push({ id, name: cat.name, verdict, detail });
+
+    const osmHit =
+      atGoogle.outcome === 'matched'
+        ? atGoogle.osm
+        : atCatalog.outcome === 'matched'
+          ? atCatalog.osm
+          : null;
+    const metres = g !== null ? String(g) : c !== null ? `${c} (from ours)` : '';
+    lookup.push(
+      [
+        id,
+        cat.name,
+        verdict,
+        cat.address,
+        goo.placeId ? `https://www.google.com/maps/place/?q=place_id:${goo.placeId}` : '',
+        osmHit?.name ?? '',
+        osmHit ? (osmAddress.get(osmHit.osmId) ?? '') : '',
+        osmHit ? `https://www.openstreetmap.org/${osmHit.osmId}` : '',
+        metres,
+      ].join('	'),
+    );
   }
 
   const order = ['GOOGLE WRONG', 'CATALOG COORDS OFF', 'INCONCLUSIVE', 'AGREE', 'SKIP'];
@@ -207,6 +315,13 @@ function main() {
     return acc;
   }, {});
   console.log(`\nSummary: ${JSON.stringify(counts)}`);
+
+  // A spreadsheet-friendly export so a human can eyeball each case: our address,
+  // a Google Maps link built from the place_id (shows exactly which venue Google
+  // is pointing at — a plain URL, no API call), and the OSM name/address/link.
+  const out = join(REPO, '.osm-cache', 'witness-lookup.tsv');
+  writeFileSync(out, lookup.join('\n'), 'utf-8');
+  console.log(`Lookup table (open in a spreadsheet): ${out}`);
 }
 
-main();
+await main();
