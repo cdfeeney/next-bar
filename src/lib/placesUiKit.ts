@@ -229,10 +229,20 @@ function buildLoad(): Promise<boolean> {
       if (!g?.maps?.importLibrary) return false;
 
       importTimer = window.setTimeout(() => finish(false), IMPORT_TIMEOUT_MS);
-      g.maps
-        .importLibrary('places')
-        .then(() => finish(true))
-        .catch(() => finish(false));
+
+      // try/catch as well as .catch(): `.catch` only handles a REJECTED promise.
+      // If importLibrary throws synchronously the exception escapes this
+      // function entirely — and from the poll timer that is an uncaught error in
+      // a callback, so the promise never settles and importTimer stays armed. A
+      // narrower version of the round-3 hang. (Codex, /review-routed.)
+      try {
+        g.maps
+          .importLibrary('places')
+          .then(() => finish(true))
+          .catch(() => finish(false));
+      } catch {
+        finish(false);
+      }
       return true;
     };
 
@@ -246,13 +256,17 @@ function buildLoad(): Promise<boolean> {
         finish(false);
         return;
       }
+      // Self-heal: if the tag was removed while we were waiting (an older
+      // attempt's late onerror), re-inject rather than polling out the deadline
+      // for a script that is no longer loading.
+      ensureScript();
       timer = window.setTimeout(poll, POLL_MS);
     };
-    timer = window.setTimeout(poll, POLL_MS);
 
-    // Exactly one script tag for the lifetime of the page. A retry after a
-    // failed attempt reuses the in-flight tag and simply keeps polling.
-    if (document.querySelector(`script[${SCRIPT_MARKER}]`) === null) {
+    // Exactly one script tag at a time. A retry after a failed attempt reuses an
+    // in-flight tag and simply keeps polling.
+    function ensureScript() {
+      if (document.querySelector(`script[${SCRIPT_MARKER}]`) !== null) return;
       const script = document.createElement('script');
       script.async = true;
       script.setAttribute(SCRIPT_MARKER, '');
@@ -262,13 +276,24 @@ function buildLoad(): Promise<boolean> {
 
       // A hard network error is definitive — fail now rather than polling out
       // the full deadline. The tag is removed so a later retry may try again.
+      // Only clean up if THIS attempt is still the live one.
+      //
+      // A timed-out attempt deliberately leaves its tag in the DOM so a later
+      // attempt can reuse a still-loading script. But its onerror could fire
+      // afterwards and delete that shared tag out from under the newer attempt,
+      // which would then poll for a script that no longer exists and burn its
+      // whole timeout for nothing. (Codex, /review-routed.)
       script.onerror = () => {
+        if (settled) return;
         script.remove();
         finish(false);
       };
 
       document.head.appendChild(script);
     }
+
+    ensureScript();
+    timer = window.setTimeout(poll, POLL_MS);
   });
 }
 

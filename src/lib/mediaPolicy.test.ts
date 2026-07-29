@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
   defaultMediaFlags,
   needsGoogleAttribution,
+  resolveFallbackMedia,
   resolveMedia,
   type MediaFlags,
   type OwnedPhoto,
@@ -83,6 +84,52 @@ describe('defaultMediaFlags is fail-closed', () => {
     const d = resolveMedia(bar(), [], defaultMediaFlags());
     expect(d).toEqual({ source: 'glyph' });
     expect(JSON.stringify(d)).not.toContain('bar-photos');
+  });
+});
+
+/**
+ * The failure path must not reopen the non-compliant one.
+ *
+ * GooglePlacePhoto shows a caller-supplied fallback when a live Google photo
+ * can't render. If a caller chose "the copy already on our server", every widget
+ * failure would serve a re-hosted Google file and the migration would only look
+ * finished. resolveFallbackMedia removes the choice.
+ */
+describe('resolveFallbackMedia never reopens the legacy path', () => {
+  test('a bar with ONLY legacy photos falls back to the glyph, not the cache', () => {
+    const d = resolveFallbackMedia(bar());
+    expect(d).toEqual({ source: 'glyph' });
+  });
+
+  test('never returns a Google-derived source, whatever the bar has', () => {
+    for (const b of [bar(), bar({ photoCount: 0 }), bar({ googlePlaceId: 'ChIJx' })]) {
+      const d = resolveFallbackMedia(b);
+      expect(d.source).not.toBe('legacy-google-cached');
+      expect(d.source).not.toBe('google-live');
+      expect(needsGoogleAttribution(d)).toBe(false);
+    }
+  });
+
+  test('produces no /bar-photos URL at all', () => {
+    expect(JSON.stringify(resolveFallbackMedia(bar()))).not.toContain('bar-photos');
+  });
+
+  test('still prefers media we actually own', () => {
+    const d = resolveFallbackMedia(bar(), owned('venue', 2));
+    expect(d).toEqual({ source: 'venue', urls: ['/media/venue-0.webp', '/media/venue-1.webp'] });
+  });
+
+  // Even with the legacy flag explicitly enabled elsewhere in the app, the
+  // fallback path must be unaffected — it takes no flags by design.
+  test('ignores ambient flag state entirely', () => {
+    const saved = process.env.NEXT_PUBLIC_LEGACY_PHOTOS;
+    process.env.NEXT_PUBLIC_LEGACY_PHOTOS = '1';
+    try {
+      expect(resolveFallbackMedia(bar())).toEqual({ source: 'glyph' });
+    } finally {
+      if (saved === undefined) delete process.env.NEXT_PUBLIC_LEGACY_PHOTOS;
+      else process.env.NEXT_PUBLIC_LEGACY_PHOTOS = saved;
+    }
   });
 });
 

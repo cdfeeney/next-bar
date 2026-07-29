@@ -52,7 +52,17 @@ type GooglePlacePhotoProps = {
    */
   allowed?: boolean;
   className?: string;
-  /** Rendered whenever a photo cannot be shown. Never a broken tile. */
+  /**
+   * Rendered whenever a photo cannot be shown. Never a broken tile.
+   *
+   * ⚠️ MUST NOT be a legacy Google photo. The natural-looking choice — "fall
+   * back to the copy already on our server" — would serve a re-hosted Google
+   * file on every widget failure, so the compliance migration would only LOOK
+   * complete: the non-compliant path would have moved into the failure branch.
+   * Derive this from `resolveFallbackMedia()` in mediaPolicy.ts, which forces
+   * both Google tiers off and can only return owned media or the glyph.
+   * (Flagged by GLM during /review-routed.)
+   */
   fallback: ReactNode;
   /** Fires once when a billable request is actually issued. For the meter. */
   onBillableRequest?: (placeId: string) => void;

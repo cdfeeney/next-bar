@@ -132,6 +132,28 @@ export function resolveMedia(
   return { source: 'glyph' };
 }
 
+/**
+ * What to show when a live Google photo cannot be rendered.
+ *
+ * THE POINT: never the legacy cache. `GooglePlacePhoto` takes a caller-supplied
+ * fallback, and the natural-looking choice — "fall back to the photo we already
+ * have on our server" — would serve a re-hosted Google file on every widget
+ * failure. The surface-by-surface migration would then only LOOK complete: the
+ * non-compliant path would have moved into the failure branch, where nobody
+ * looks. Flagged by GLM during /review-routed as the seam that quietly undoes
+ * the whole exercise.
+ *
+ * So callers derive their fallback from here rather than choosing one. Both
+ * Google tiers are forced off, which leaves owned media or the glyph — the only
+ * two things we may always show.
+ */
+export function resolveFallbackMedia(
+  bar: Pick<Bar, 'id' | 'photoRef' | 'photoCount' | 'googlePlaceId'>,
+  owned: readonly OwnedPhoto[] = [],
+): MediaDecision {
+  return resolveMedia(bar, owned, NO_GOOGLE_MEDIA);
+}
+
 /** True when the decision requires a visible Google attribution. */
 export function needsGoogleAttribution(decision: MediaDecision): boolean {
   return (
