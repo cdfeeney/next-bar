@@ -27,9 +27,12 @@ export const SDK_LOAD_TIMEOUT_MS = 5_000;
 /**
  * How long we wait for a mounted widget to fire `gmp-load`.
  *
- * Deliberately its own constant: this bounds a different wait from the script
- * load above, and reusing one value stacked them into a ~10s worst case before
- * the user saw a fallback.
+ * Its own constant because it bounds a different wait from the script load
+ * above. Note the two are still SEQUENTIAL — SDK load, then widget load — so the
+ * worst case remains additive (~10s including the grace window), not 4s. An
+ * earlier comment here claimed this split "fixed" the stacked worst case; it
+ * does not, it only trims it, and santa-loop review rightly called that out.
+ * Making the waits concurrent would be a real fix and is not attempted here.
  */
 export const WIDGET_LOAD_TIMEOUT_MS = 4_000;
 
@@ -146,6 +149,37 @@ export function loadPlacesUiKit(): Promise<boolean> {
   return pending;
 }
 
+/** Marks the one script tag we ever inject, so a retry can find it. */
+const SCRIPT_MARKER = 'data-nextbar-maps';
+
+/** How long past the load deadline we keep watching for a late arrival. */
+export const SDK_LOAD_GRACE_MS = 1_000;
+
+/** Poll interval while waiting for `window.google.maps` to appear. */
+const POLL_MS = 100;
+
+/**
+ * Attempt a load. Never injects more than one script tag, ever.
+ *
+ * Rewritten after santa-loop round 2, where both reviewers independently found
+ * the same three defects in the callback-based version:
+ *
+ *   - **Duplicate script injection.** Retry only checked
+ *     `window.google.maps.importLibrary`, never whether a script was already
+ *     in flight, so a retry during a merely-slow (not failed) load appended a
+ *     second tag. Under a blocked domain these accumulated with every card.
+ *   - **Cross-attempt callback coupling.** `window.__nextBarMapsReady` was
+ *     overwritten on every attempt, so a late script from attempt N invoked
+ *     attempt N+1's callback and cleared its timer — shared mutable state
+ *     spanning independent attempts.
+ *   - **Post-timeout arrival discarded.** The deadline sampled `window.google`
+ *     at exactly one instant; a script landing a millisecond later was thrown
+ *     away.
+ *
+ * Polling for the SDK removes all three: readiness is observed rather than
+ * signalled, so there is no global callback to collide, and a grace window
+ * catches a late arrival instead of discarding it.
+ */
 function buildLoad(): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     if (typeof window === 'undefined' || !isPlacesUiKitConfigured()) {
@@ -153,55 +187,60 @@ function buildLoad(): Promise<boolean> {
       return;
     }
 
-    const existing = (window as unknown as { google?: MapsGlobal }).google;
-    if (existing?.maps?.importLibrary) {
-      existing.maps
-        .importLibrary('places')
-        .then(() => resolve(true))
-        .catch(() => resolve(false));
-      return;
-    }
+    let settled = false;
+    let timer: number | undefined;
 
-    // On timeout, look before giving up: the script may have landed without the
-    // callback having run yet. Combined with the failure not being memoized,
-    // this means a slow network degrades one card rather than the session.
-    const timer = window.setTimeout(() => {
-      const late = (window as unknown as { google?: MapsGlobal }).google;
-      if (late?.maps?.importLibrary) {
-        late.maps
-          .importLibrary('places')
-          .then(() => resolve(true))
-          .catch(() => resolve(false));
-        return;
-      }
-      resolve(false);
-    }, SDK_LOAD_TIMEOUT_MS);
-
-    const script = document.createElement('script');
-    script.async = true;
-    script.src =
-      `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(API_KEY!)}` +
-      `&libraries=places&loading=async&callback=__nextBarMapsReady`;
-
-    (window as unknown as Record<string, unknown>).__nextBarMapsReady = () => {
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
       window.clearTimeout(timer);
+      resolve(ok);
+    };
+
+    /** True once the SDK is present and `places` has been imported. */
+    const useSdkIfReady = (): boolean => {
       const g = (window as unknown as { google?: MapsGlobal }).google;
-      if (!g?.maps?.importLibrary) {
-        resolve(false);
-        return;
-      }
+      if (!g?.maps?.importLibrary) return false;
       g.maps
         .importLibrary('places')
-        .then(() => resolve(true))
-        .catch(() => resolve(false));
+        .then(() => finish(true))
+        .catch(() => finish(false));
+      return true;
     };
 
-    script.onerror = () => {
-      window.clearTimeout(timer);
-      resolve(false);
-    };
+    if (useSdkIfReady()) return;
 
-    document.head.appendChild(script);
+    const deadline = Date.now() + SDK_LOAD_TIMEOUT_MS + SDK_LOAD_GRACE_MS;
+    const poll = () => {
+      if (settled) return;
+      if (useSdkIfReady()) return;
+      if (Date.now() >= deadline) {
+        finish(false);
+        return;
+      }
+      timer = window.setTimeout(poll, POLL_MS);
+    };
+    timer = window.setTimeout(poll, POLL_MS);
+
+    // Exactly one script tag for the lifetime of the page. A retry after a
+    // failed attempt reuses the in-flight tag and simply keeps polling.
+    if (document.querySelector(`script[${SCRIPT_MARKER}]`) === null) {
+      const script = document.createElement('script');
+      script.async = true;
+      script.setAttribute(SCRIPT_MARKER, '');
+      script.src =
+        `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(API_KEY!)}` +
+        `&libraries=places&loading=async`;
+
+      // A hard network error is definitive — fail now rather than polling out
+      // the full deadline. The tag is removed so a later retry may try again.
+      script.onerror = () => {
+        script.remove();
+        finish(false);
+      };
+
+      document.head.appendChild(script);
+    }
   });
 }
 

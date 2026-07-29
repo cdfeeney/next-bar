@@ -29,6 +29,13 @@ import {
  *     rebills — re-mount amplification is what turns a ~$140/month bill into
  *     ~$590 at the same traffic.
  *
+ * ⚠️ CONSTRAINT ON THE CALLER, and this component cannot enforce it (santa-loop
+ * round 2): "keep mounted" only holds if the PARENT keeps it mounted. A
+ * virtualized or windowed list that unmounts off-screen cards defeats it
+ * entirely and re-bills on every scroll pass. Before wiring this into a list
+ * surface, confirm that surface does not recycle rows — and if it must, hide
+ * with CSS (`content-visibility`) rather than unmounting.
+ *
  * The elements are built imperatively rather than in JSX. They are custom
  * elements with no React typings, and more importantly this keeps the moment of
  * creation — the billable moment — explicit and in one place.

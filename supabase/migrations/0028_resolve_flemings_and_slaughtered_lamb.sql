@@ -22,8 +22,13 @@
 --   user — the bar simply stops being recommended. It stays in the operator
 --   queue until there is permissible positive evidence.
 --
--- Idempotent: safe to re-run (project convention — there is no migrations
--- ledger).
+-- Idempotent: safe to re-run. Note a checksum ledger DOES now exist
+-- (public.schema_migrations, added by scripts/apply-migrations.ts on
+-- 2026-07-28), so an already-applied file is skipped rather than replayed.
+-- Self-idempotency is therefore belt-and-braces rather than the only guard —
+-- but it still matters, because the ledger is per-database and a fresh
+-- environment replays everything. An earlier draft of this header claimed
+-- there was no ledger; that was stale, and santa-loop review caught it.
 
 ------------------------------------------------------------------------------
 -- Preconditions — fail LOUDLY rather than silently no-op.

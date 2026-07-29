@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import GooglePlacePhoto from './GooglePlacePhoto';
 import {
-  SDK_LOAD_TIMEOUT_MS,
+  WIDGET_LOAD_TIMEOUT_MS,
   __resetLoader,
   __resetRequested,
   requestedCount,
@@ -153,8 +153,10 @@ describe('re-render churn does not strand the widget (regression, Codex 0f614b8)
 
       render(<Fresh placeId="ChIJtest" fallback={FALLBACK} onBillableRequest={() => {}} />);
 
-      // gmp-load never fires in jsdom, so the timeout must rescue the user.
-      await vi.advanceTimersByTimeAsync(SDK_LOAD_TIMEOUT_MS + 100);
+      // gmp-load never fires in jsdom, so the WIDGET timeout must rescue the
+      // user. (This referenced SDK_LOAD_TIMEOUT_MS until santa-loop round 2 —
+      // it passed only because 5100 > 4000, i.e. for the wrong reason.)
+      await vi.advanceTimersByTimeAsync(WIDGET_LOAD_TIMEOUT_MS + 100);
       expect(screen.queryByTestId('glyph-fallback')).toBeTruthy();
     } finally {
       vi.useRealTimers();

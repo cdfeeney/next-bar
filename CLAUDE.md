@@ -46,9 +46,16 @@ once before debugging.
 
 SQL migrations live in `supabase/migrations/` as numbered `.sql` files. Apply
 them with `npm run db:migrate` — the runner reads `DATABASE_URL` from
-`.env.local` and applies every file in lexical order. Migrations must be
-idempotent (`CREATE ... IF NOT EXISTS`, `DROP POLICY IF EXISTS`, etc.) —
-there's no schema_migrations ledger yet.
+`.env.local` and applies every file in lexical order.
+
+There **is** a ledger: `scripts/apply-migrations.ts` hashes each file and records
+it in `public.schema_migrations`, so an already-applied migration is skipped by
+checksum rather than replayed, and an edited-after-apply file is reported as
+drift. (This note previously said no ledger existed — stale since 2026-07-28.)
+
+Still write migrations idempotently (`CREATE ... IF NOT EXISTS`,
+`DROP POLICY IF EXISTS`, etc.): the ledger is per-database, so a fresh
+environment replays every file from scratch.
 
 ## Other ground rules
 
