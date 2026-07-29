@@ -122,12 +122,44 @@ comment on index public.bars_place_id_unique is
 -- here would abort rather than land.
 ------------------------------------------------------------------------------
 
-update public.bars
-   set lat        = 40.7323542,
-       lng        = -74.0018245,
-       address    = '182 W 4th St, New York, NY 10014',
-       updated_at = now()
- where id = 'the-slaughtered-lamb-pub';
+-- Assert-before-write, matching the discipline D5b applies to dominies-astoria.
+-- (Flagged in santa-loop review as an inconsistency with this migration's own
+-- stated philosophy.) If the row has already been corrected — by this migration
+-- running twice, or by a hand fix — this is a no-op rather than a silent
+-- re-write, and if it sits somewhere unexpected we abort instead of clobbering.
+do $$
+declare
+  cur_lat double precision;
+  cur_lng double precision;
+begin
+  select lat, lng into cur_lat, cur_lng
+    from public.bars where id = 'the-slaughtered-lamb-pub';
+
+  -- Already at the corrected location (idempotent re-run): nothing to do.
+  if round(cur_lat::numeric, 5) = round(40.7323542::numeric, 5)
+     and round(cur_lng::numeric, 5) = round(-74.0018245::numeric, 5) then
+    raise notice '0028: the-slaughtered-lamb-pub already corrected — skipping';
+    return;
+  end if;
+
+  -- Sanity: the row we are about to move must still be inside NYC. A value
+  -- outside this means the catalog changed shape and the correction should be
+  -- re-derived, not applied blindly.
+  if cur_lat is null or cur_lng is null
+     or cur_lat not between 40.45 and 41.0
+     or cur_lng not between -74.30 and -73.60 then
+    raise exception
+      '0028: the-slaughtered-lamb-pub is at an unexpected location (%, %) — re-verify before applying',
+      cur_lat, cur_lng;
+  end if;
+
+  update public.bars
+     set lat        = 40.7323542,
+         lng        = -74.0018245,
+         address    = '182 W 4th St, New York, NY 10014',
+         updated_at = now()
+   where id = 'the-slaughtered-lamb-pub';
+end $$;
 
 ------------------------------------------------------------------------------
 -- Rollback (in comments, per convention):

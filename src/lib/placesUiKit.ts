@@ -21,8 +21,17 @@
 
 const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
-/** How long we wait for the SDK before giving up and degrading to the glyph. */
+/** How long we wait for the SDK SCRIPT before giving up and degrading to the glyph. */
 export const SDK_LOAD_TIMEOUT_MS = 5_000;
+
+/**
+ * How long we wait for a mounted widget to fire `gmp-load`.
+ *
+ * Deliberately its own constant: this bounds a different wait from the script
+ * load above, and reusing one value stacked them into a ~10s worst case before
+ * the user saw a fallback.
+ */
+export const WIDGET_LOAD_TIMEOUT_MS = 4_000;
 
 /**
  * True only when a key is actually configured.
@@ -51,22 +60,48 @@ export function isPlacesUiKitConfigured(): boolean {
  */
 const requested = new Set<string>();
 
+/**
+ * Total widget creations — the number that actually maps to the invoice.
+ *
+ * Kept separate from the distinct-id count because Google bills per widget
+ * creation, not per distinct place. Two cards sharing one googlePlaceId (exactly
+ * the Fleming's/Dominie's collision migration 0028 resolves) bill TWICE while
+ * `requested.size` counts one, so reporting only the set size would silently
+ * undercount real spend.
+ */
+let billableEvents = 0;
+
 export function markRequested(placeId: string): void {
   requested.add(placeId);
+  billableEvents += 1;
 }
 
 export function hasRequested(placeId: string): boolean {
   return requested.has(placeId);
 }
 
-/** Distinct billable place_ids this session — the number a cost meter reports. */
+/** Distinct place_ids this session. Diagnostic — NOT the billing number. */
 export function requestedCount(): number {
   return requested.size;
+}
+
+/** Widget creations this session. THIS is what the invoice will reflect. */
+export function billableEventCount(): number {
+  return billableEvents;
+}
+
+/**
+ * Test seam only: the real retained state, so a test can assert we hold nothing
+ * but place_id strings rather than inspecting a locally-built array.
+ */
+export function __retainedForTests(): readonly unknown[] {
+  return [...requested];
 }
 
 /** Test seam only. */
 export function __resetRequested(): void {
   requested.clear();
+  billableEvents = 0;
 }
 
 type MapsGlobal = {
@@ -85,7 +120,34 @@ let loadPromise: Promise<boolean> | null = null;
 export function loadPlacesUiKit(): Promise<boolean> {
   if (loadPromise) return loadPromise;
 
-  loadPromise = new Promise<boolean>((resolve) => {
+  // A FAILED load must not be memoized.
+  //
+  // Found by santa-loop review: the 5s timeout and the script's success
+  // callback race to settle the SAME module-level promise. If the timer won on a
+  // transient slow network, `loadPromise` was permanently `false` — the script's
+  // later `resolve(true)` is a silent no-op on a settled promise — so every
+  // GooglePlacePhoto for the rest of the session got the stale `false` and
+  // rendered a glyph forever, even though `window.google.maps` was in fact
+  // available. One network blip killed Google photos for the whole session with
+  // no retry path.
+  //
+  // Clearing the memo on failure happens in a `.then`, i.e. after the assignment
+  // below, so the synchronous unconfigured path cannot null it out before it is
+  // set. Two synchronous callers still share one promise (single-flight holds);
+  // only a LATER call retries.
+  const pending = buildLoad().then((ok) => {
+    if (!ok) loadPromise = null;
+    return ok;
+  });
+  loadPromise = pending;
+
+  // Return the local, not the field: the `.then` above may null the field before
+  // this returns, and TypeScript is right to widen it to `| null`.
+  return pending;
+}
+
+function buildLoad(): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
     if (typeof window === 'undefined' || !isPlacesUiKitConfigured()) {
       resolve(false);
       return;
@@ -100,7 +162,20 @@ export function loadPlacesUiKit(): Promise<boolean> {
       return;
     }
 
-    const timer = window.setTimeout(() => resolve(false), SDK_LOAD_TIMEOUT_MS);
+    // On timeout, look before giving up: the script may have landed without the
+    // callback having run yet. Combined with the failure not being memoized,
+    // this means a slow network degrades one card rather than the session.
+    const timer = window.setTimeout(() => {
+      const late = (window as unknown as { google?: MapsGlobal }).google;
+      if (late?.maps?.importLibrary) {
+        late.maps
+          .importLibrary('places')
+          .then(() => resolve(true))
+          .catch(() => resolve(false));
+        return;
+      }
+      resolve(false);
+    }, SDK_LOAD_TIMEOUT_MS);
 
     const script = document.createElement('script');
     script.async = true;
@@ -128,8 +203,6 @@ export function loadPlacesUiKit(): Promise<boolean> {
 
     document.head.appendChild(script);
   });
-
-  return loadPromise;
 }
 
 /** Test seam only — lets a spec re-exercise the load path. */

@@ -24,10 +24,26 @@ describe('migration 0028', () => {
     // Order is load-bearing. bars_place_id_unique without the carve-out cannot
     // be created while two rows still share ChIJUzyXVUdfwokRYzS5v4AZpYw, so a
     // reordering makes the migration abort halfway on the live catalog.
-    const clearsPlaceId = SQL.indexOf("where id = 'flemings-pub'");
+    //
+    // This test was VACUOUS until santa-loop review: it matched
+    // `where id = 'flemings-pub'`, whose FIRST occurrence is the precondition
+    // raise-exception block near the top of the file — not the UPDATE. It would
+    // have passed even if the real UPDATE were moved after the index creation,
+    // i.e. it did not guard the thing it claimed to guard. Anchor on the actual
+    // statement instead.
+    const updateStmt = SQL.split(';').find(
+      (s) =>
+        /update\s+public\.bars/i.test(s) &&
+        s.includes("where id = 'flemings-pub'") &&
+        s.includes('place_id'),
+    );
+    expect(updateStmt, 'no UPDATE clearing flemings-pub place_id found').toBeTruthy();
+    // It must actually null the column, not merely mention it.
+    expect(updateStmt).toMatch(/place_id\s*=\s*null/i);
+
+    const clearsPlaceId = SQL.indexOf(updateStmt!);
     const createsIndex = SQL.indexOf('create unique index bars_place_id_unique');
 
-    expect(clearsPlaceId).toBeGreaterThan(-1);
     expect(createsIndex).toBeGreaterThan(-1);
     expect(clearsPlaceId).toBeLessThan(createsIndex);
   });
@@ -62,8 +78,21 @@ describe('migration 0028', () => {
   test('Slaughtered Lamb coordinates satisfy the 0019 bbox constraint', () => {
     // bars_coord_bbox_check: lat 40.45..41.0, lng -74.30..-73.60. Asserting it
     // here means a bad edit fails in CI rather than aborting mid-migration.
-    const lat = 40.7323542;
-    const lng = -74.0018245;
+    //
+    // This test was VACUOUS until santa-loop review: it asserted bounds on
+    // locally hardcoded literals that were never read from the SQL, so it passed
+    // regardless of what the migration actually wrote. Parse the real values.
+    const updateStmt = SQL.split(';').find(
+      (s) =>
+        /update\s+public\.bars/i.test(s) && s.includes("where id = 'the-slaughtered-lamb-pub'"),
+    );
+    expect(updateStmt, 'no UPDATE for the-slaughtered-lamb-pub found').toBeTruthy();
+
+    const lat = Number(/\blat\s*=\s*(-?\d+\.?\d*)/i.exec(updateStmt!)?.[1]);
+    const lng = Number(/\blng\s*=\s*(-?\d+\.?\d*)/i.exec(updateStmt!)?.[1]);
+
+    expect(Number.isFinite(lat), 'lat not parseable from the migration').toBe(true);
+    expect(Number.isFinite(lng), 'lng not parseable from the migration').toBe(true);
     expect(lat).toBeGreaterThan(40.45);
     expect(lat).toBeLessThan(41.0);
     expect(lng).toBeGreaterThan(-74.3);

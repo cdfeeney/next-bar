@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  SDK_LOAD_TIMEOUT_MS,
-  hasRequested,
+  WIDGET_LOAD_TIMEOUT_MS,
   isPlacesUiKitConfigured,
   loadPlacesUiKit,
   markRequested,
@@ -138,16 +137,22 @@ export default function GooglePlacePhoto({
         setStatus('ready');
       });
 
-      // A widget that never loads must not sit as an empty box forever.
+      // A widget that never loads must not sit as an empty box forever. Its own
+      // constant, not the SDK one — two different waits, and sharing a value
+      // stacked them into a ~10s worst case.
       timer = window.setTimeout(() => {
         if (!cancelled) setStatus('unavailable');
-      }, SDK_LOAD_TIMEOUT_MS);
+      }, WIDGET_LOAD_TIMEOUT_MS);
 
       // Appending is the billable moment — record it here and nowhere else.
-      const alreadyCounted = hasRequested(placeId);
+      //
+      // Fires on EVERY creation, not only the first sighting of a place_id.
+      // Google bills per widget created, so two cards sharing one googlePlaceId
+      // (the Fleming's/Dominie's collision 0028 resolves) bill twice;
+      // de-duplicating the callback would silently undercount real spend.
       host.appendChild(details);
       markRequested(placeId);
-      if (!alreadyCounted) onBillableRequestRef.current?.(placeId);
+      onBillableRequestRef.current?.(placeId);
     };
 
     // Lazy mount. IntersectionObserver is absent in some test environments;

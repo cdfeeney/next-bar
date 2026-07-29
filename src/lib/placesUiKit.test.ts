@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
   __resetLoader,
   __resetRequested,
+  __retainedForTests,
+  billableEventCount,
   hasRequested,
   isPlacesUiKitConfigured,
   loadPlacesUiKit,
@@ -40,6 +42,25 @@ describe('loadPlacesUiKit', () => {
     await expect(a).resolves.toBe(false);
   });
 
+  /**
+   * Regression, santa-loop round 1.
+   *
+   * A FAILED load must not be memoized. The 5s timeout and the script callback
+   * race to settle one module-level promise; when the timer won on a transient
+   * slow network the promise was permanently `false`, the script's later
+   * resolve(true) was a silent no-op, and every card for the rest of the session
+   * rendered a glyph even though window.google.maps was available. One blip
+   * killed Google photos session-wide with no retry path.
+   */
+  test('a failed load is NOT memoized, so a later call can retry', async () => {
+    const first = loadPlacesUiKit();
+    await expect(first).resolves.toBe(false);
+
+    const second = loadPlacesUiKit();
+    expect(second).not.toBe(first);
+    await expect(second).resolves.toBe(false);
+  });
+
   test('never injects a script tag while unconfigured', async () => {
     const before = document.querySelectorAll('script[src*="maps.googleapis.com"]').length;
     await loadPlacesUiKit();
@@ -69,9 +90,32 @@ describe('the request meter', () => {
    * the one value Google exempts — and nothing else.
    */
   test('retains only place_id, never any Google content', () => {
+    // This test was VACUOUS until santa-loop review: it filtered a
+    // locally-constructed array rather than the module's real state, so it could
+    // not have detected markRequested() being changed to retain Google content.
+    // __retainedForTests() exposes the actual Set.
     markRequested('ChIJa');
-    const retained = JSON.stringify([...['ChIJa'].filter(hasRequested)]);
-    expect(retained).toBe('["ChIJa"]');
-    expect(retained).not.toMatch(/photo|url|http|jpe?g|webp/i);
+    markRequested('ChIJb');
+
+    const retained = __retainedForTests();
+    expect(retained).toHaveLength(2);
+    for (const value of retained) {
+      expect(typeof value).toBe('string');
+      // A place_id is an opaque token. Anything URL-ish or media-ish means
+      // Google-returned CONTENT got retained, which is the violation.
+      expect(String(value)).not.toMatch(/photo|https?:|\/|\.jpe?g|\.webp|places\//i);
+    }
+    expect(JSON.stringify(retained)).toBe('["ChIJa","ChIJb"]');
+  });
+
+  test('counts widget creations separately from distinct places', () => {
+    // Google bills per widget created. Two cards sharing one googlePlaceId bill
+    // twice while the distinct-id count says one, so reporting only the set size
+    // would undercount real spend.
+    markRequested('ChIJshared');
+    markRequested('ChIJshared');
+    markRequested('ChIJother');
+    expect(requestedCount()).toBe(2);
+    expect(billableEventCount()).toBe(3);
   });
 });
