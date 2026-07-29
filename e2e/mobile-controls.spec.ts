@@ -35,13 +35,42 @@ type BadControl = {
  * Every visible, enabled control inside <main> that fails a reachability rule.
  * Returns [] when the surface is clean.
  */
-async function unreachableControls(page: Page): Promise<BadControl[]> {
-  return page.evaluate((minTap) => {
+async function unreachableControls(
+  page: Page,
+  mode: 'full' | 'coverage-only' = 'full',
+): Promise<BadControl[]> {
+  return page.evaluate(([minTap, evalMode]: [number, string]) => {
+    const coverageOnly = evalMode === 'coverage-only';
     const bad: BadControl[] = [];
     const main = document.querySelector('main') ?? document.body;
     const controls = Array.from(
       main.querySelectorAll<HTMLElement>('button, a[href], [role="button"], input, select'),
     );
+
+    /**
+     * The nearest ancestor that scrolls HORIZONTALLY, or null.
+     *
+     * A neighborhood filter rail is *supposed* to run past the right edge of
+     * the phone — that is what makes it a rail. Measuring its children against
+     * the viewport reported 88 "overflows viewport width" failures on /map
+     * alone, every one of them a control the user reaches by swiping. So a
+     * control inside a rail is judged against the RAIL's box: it must be
+     * reachable within its own scroll container, not visible all at once.
+     */
+    function horizontalScroller(el: HTMLElement): HTMLElement | null {
+      let node: HTMLElement | null = el.parentElement;
+      while (node && node !== document.body) {
+        const overflowX = window.getComputedStyle(node).overflowX;
+        if (
+          (overflowX === 'auto' || overflowX === 'scroll') &&
+          node.scrollWidth > node.clientWidth + 1
+        ) {
+          return node;
+        }
+        node = node.parentElement;
+      }
+      return null;
+    }
 
     for (const el of controls) {
       const style = window.getComputedStyle(el);
@@ -49,11 +78,34 @@ async function unreachableControls(page: Page): Promise<BadControl[]> {
         continue;
       }
       if (el instanceof HTMLButtonElement && el.disabled) continue;
+      if (el.getBoundingClientRect().width === 0) continue;
+
+      // Leaflet's internal DOM is not app chrome. Markers, cluster badges and
+      // attribution links are `div[role=button]`s the map library owns and
+      // positions; they are data points on a pannable canvas with their own
+      // interaction model, not controls we lay out. Auditing them produced 408
+      // "8px tall" findings on /map — all of them Leaflet marker internals.
+      // The map's OWN controls (zoom, locate) live outside this container and
+      // are still audited.
+      if (el.closest('.leaflet-container') !== null) continue;
+
+      // Bring the control to the middle of the viewport before judging it.
+      // Measuring only at scroll-top and scroll-bottom never looked at the
+      // middle band, and a control straddling the fold got its centre point
+      // sampled OUTSIDE the viewport, where elementFromPoint always returns
+      // null — reported as "centre point hits nothing" when nothing was wrong.
+      //
+      // In coverage-only mode the page is deliberately left at rest, because
+      // moving the control is precisely what would hide the bug being looked
+      // for.
+      if (!coverageOnly) {
+        el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      }
+
       const box = el.getBoundingClientRect();
       if (box.width === 0 || box.height === 0) continue;
-      // Off-screen vertically is fine — the page scrolls. Only judge what is
-      // currently in the viewport band.
-      if (box.bottom < 0 || box.top > window.innerHeight) continue;
+      // At rest, judge only what is actually in the viewport band.
+      if (coverageOnly && (box.bottom < 0 || box.top > window.innerHeight)) continue;
 
       const label =
         (el.getAttribute('aria-label') || el.textContent || el.tagName)
@@ -61,17 +113,60 @@ async function unreachableControls(page: Page): Promise<BadControl[]> {
           .slice(0, 60) || el.tagName;
       const record = { x: box.x, y: box.y, w: box.width, h: box.height };
 
-      if (box.left < 0 || box.right > window.innerWidth + 0.5) {
-        bad.push({ label, reason: `overflows viewport width (${window.innerWidth}px)`, box: record });
-        continue;
+      // --- horizontal containment, rail-aware ---
+      const rail = horizontalScroller(el);
+      if (coverageOnly) {
+        // skip geometry rules; pass 1 already judged them fairly
+      } else if (rail === null) {
+        if (box.left < -0.5 || box.right > window.innerWidth + 0.5) {
+          bad.push({
+            label,
+            reason: `overflows viewport width (${window.innerWidth}px)`,
+            box: record,
+          });
+          continue;
+        }
+      } else {
+        // Inside a rail: the rail itself must fit the viewport, and the
+        // control must be reachable by scrolling that rail.
+        const railBox = rail.getBoundingClientRect();
+        if (railBox.left < -0.5 || railBox.right > window.innerWidth + 0.5) {
+          bad.push({
+            label: rail.getAttribute('aria-label') || 'horizontal rail',
+            reason: `scroll container itself overflows viewport width (${window.innerWidth}px)`,
+            box: { x: railBox.x, y: railBox.y, w: railBox.width, h: railBox.height },
+          });
+          continue;
+        }
       }
-      if (box.height < minTap) {
+
+      // --- tap target, BOTH dimensions ---
+      if (!coverageOnly && box.height < minTap) {
         bad.push({ label, reason: `tap target only ${Math.round(box.height)}px tall`, box: record });
         continue;
       }
-      // The real test: is this point actually the control?
+      if (!coverageOnly && box.width < minTap) {
+        bad.push({ label, reason: `tap target only ${Math.round(box.width)}px wide`, box: record });
+        continue;
+      }
+
+      // --- the real test: does the centre point actually hit the control? ---
+      // Clamp into the rail's visible band so a control parked off the rail's
+      // current scroll offset is not sampled at a coordinate the rail does not
+      // currently show.
       const cx = box.x + box.width / 2;
       const cy = box.y + box.height / 2;
+      if (cx < 0 || cx > window.innerWidth || cy < 0 || cy > window.innerHeight) {
+        // After scrollIntoView this means the control genuinely cannot be
+        // brought on screen — a real defect, and a different one from "covered".
+        // At rest it just means the centre is off the current band, which is
+        // not a finding.
+        if (!coverageOnly) {
+          bad.push({ label, reason: 'cannot be scrolled into the viewport', box: record });
+        }
+        continue;
+      }
+
       const hit = document.elementFromPoint(cx, cy);
       if (hit === null) {
         bad.push({ label, reason: 'centre point hits nothing', box: record });
@@ -90,7 +185,7 @@ async function unreachableControls(page: Page): Promise<BadControl[]> {
       }
     }
     return bad;
-  }, MIN_TAP_PX);
+  }, [MIN_TAP_PX, mode] as [number, string]);
 }
 
 function describeFailures(route: string, bad: BadControl[]): string {
@@ -120,17 +215,46 @@ test.describe('mobile controls are reachable', () => {
       await expect(page.locator('main')).toBeVisible({ timeout: 15_000 });
       await page.waitForTimeout(1_000);
 
-      const top = await unreachableControls(page);
-      expect(top, describeFailures(route, top)).toEqual([]);
+      // Pass 1 — geometry. Each control is scrolled to the middle of the
+      // viewport first, so the middle band is measured too (the old
+      // top-then-bottom sampling never looked at it).
+      const bad = await unreachableControls(page);
+      expect(bad, describeFailures(route, bad)).toEqual([]);
 
-      // Scroll to the bottom and re-measure: the fixed bottom nav is the most
-      // likely thing to sit on top of a page's last control, and that only
-      // shows up once you are actually at the end of the page.
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      // Pass 2 — coverage AT REST, which pass 1 cannot see.
+      //
+      // Centring a control necessarily moves it out from under the fixed
+      // bottom nav, so pass 1 reports every page whose last control is
+      // scrollable as clean. But "reachable only if you first scroll it away
+      // from the nav" is exactly the bug we care about: at the page's natural
+      // resting position the control is covered. Rankings' "+ Add a bar" is
+      // the known real instance, and pass 1 alone silently lost it.
+      //
+      // Only the coverage rule runs here — size and overflow were already
+      // judged fairly in pass 1, and re-running them at rest would resurrect
+      // the straddling-the-fold artifact.
+      // `window.scrollTo` is a NO-OP on these routes — the app scrolls an inner
+      // container, not the document. Probed on /rankings: maxScroll reported
+      // 420px while scrollY stayed 0 after scrollTo(0, scrollHeight). The
+      // original spec's "scrolled to bottom" pass therefore never scrolled at
+      // all and silently re-measured the top of the page. Find the real
+      // vertical scroller and drive that instead.
+      await page.evaluate(() => {
+        const scrollables = Array.from(document.querySelectorAll<HTMLElement>('*')).filter((el) => {
+          const oy = window.getComputedStyle(el).overflowY;
+          return (oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1;
+        });
+        for (const el of scrollables) el.scrollTop = el.scrollHeight;
+        window.scrollTo(0, document.body.scrollHeight);
+      });
       await page.waitForTimeout(500);
 
-      const bottom = await unreachableControls(page);
-      expect(bottom, describeFailures(`${route} (scrolled to bottom)`, bottom)).toEqual([]);
+      const covered = (await unreachableControls(page, 'coverage-only')).filter((b) =>
+        b.reason.startsWith('covered by'),
+      );
+      expect(covered, describeFailures(`${route} (at rest, scrolled to bottom)`, covered)).toEqual(
+        [],
+      );
     });
   }
 
