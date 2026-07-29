@@ -135,14 +135,31 @@ describe('wrong-venue guard, now enforced at generation time', () => {
   // What remains here is the one property a unit test on the extracted module
   // cannot see: that the generator routes EVERY write through the chokepoint.
   it('every sidecar write goes through the single writeSidecar chokepoint', () => {
-    const rawWrites = [...GENERATOR.matchAll(/fs\.writeFileSync\(SIDECAR/g)].length;
-    const viaHelper = [...GENERATOR.matchAll(/^\s*writeSidecar\(/gm)].length;
-    // Exactly one raw write — the one inside writeSidecar itself.
-    expect(rawWrites, 'a write path bypasses writeSidecar').toBe(1);
-    // …and at least the main + photos-multi paths call it.
-    expect(viaHelper).toBeGreaterThanOrEqual(2);
+    // Enumerate EVERY reference to the sidecar path rather than grepping for one
+    // write function. Codex's point on the first version: matching only
+    // `fs.writeFileSync(SIDECAR` would miss a bypass via fs.promises.writeFile,
+    // an aliased fs, or a different path expression. Whitelisting the known
+    // references catches any new use however it is spelled.
+    const refs = [...GENERATOR.matchAll(/^.*\bSIDECAR\b.*$/gm)].map((m) => m[0].trim());
+
+    const declaration = refs.filter((l) => l.startsWith('const SIDECAR'));
+    const reads = refs.filter((l) => l.includes('readFileSync(SIDECAR'));
+    const writes = refs.filter((l) => /write/i.test(l));
+    const other = refs.filter(
+      (l) => !declaration.includes(l) && !reads.includes(l) && !writes.includes(l),
+    );
+
+    expect(declaration).toHaveLength(1);
+    // Exactly one write, and it is the one inside writeSidecar.
+    expect(writes, `unexpected sidecar write(s): ${writes.join(' | ')}`).toHaveLength(1);
+    // Any reference that is neither the declaration, a read, nor the single write
+    // is something new touching the artifact — fail so it gets looked at.
+    expect(other, `unrecognised SIDECAR reference(s): ${other.join(' | ')}`).toEqual([]);
+
     expect(GENERATOR).toMatch(/function writeSidecar\(/);
     expect(GENERATOR).toMatch(/assertSidecarWritable\(/);
+    // …and both real paths route through it.
+    expect([...GENERATOR.matchAll(/^\s*writeSidecar\(/gm)].length).toBeGreaterThanOrEqual(2);
   });
 
   it('the generator no longer writes coordinates into the sidecar', () => {

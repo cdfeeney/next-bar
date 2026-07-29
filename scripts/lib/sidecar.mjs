@@ -67,6 +67,35 @@ export function locationAcceptable(location) {
 }
 
 /**
+ * Classify a Place Details response into the three outcomes that matter.
+ *
+ * WHY THREE AND NOT TWO. The first version of this fix collapsed everything that
+ * was not acceptable into "reject", and rejection DELETES the venue's existing
+ * sidecar entry. Codex review caught the consequence: `placeDetailsPhotosOnly`
+ * had no `res.ok` check, so an HTTP 429/500 returns an error body with no
+ * `location`, which looked identical to "resolved outside the service area" — and
+ * a transient API blip would delete good data.
+ *
+ * So the two failure modes are separated, and they fail in OPPOSITE directions:
+ *
+ *   'accept'        in-area location. Safe to write.
+ *   'reject'        a definite, in-hand location that is out of area. This venue's
+ *                   place_id points somewhere else, so its stale entry should GO.
+ *   'indeterminate' we could not tell — transport error, non-OK status, or a 200
+ *                   with no usable location. Never write a new patch (fail closed
+ *                   on WRITING), and never delete an existing one (fail safe on
+ *                   DELETING). Deleting on ambiguity is destructive; declining to
+ *                   write on ambiguity costs nothing.
+ */
+export function classifyDetailsLocation({ ok, json }) {
+  if (!ok) return 'indeterminate';
+  const lat = json?.location?.latitude;
+  const lng = json?.location?.longitude;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return 'indeterminate';
+  return insideServiceArea(lat, lng) ? 'accept' : 'reject';
+}
+
+/**
  * Throw unless every entry satisfies the sidecar's invariants.
  *
  * Enforced at serialisation so all three write paths — and any fourth added

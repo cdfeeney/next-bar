@@ -63,7 +63,7 @@ import sharp from 'sharp';
 import { refuseIfUnattended } from './loop-guard.mjs';
 import {
   assertSidecarWritable,
-  locationAcceptable,
+  classifyDetailsLocation,
   mergeOnlyPatches,
 } from './lib/sidecar.mjs';
 
@@ -241,7 +241,10 @@ async function placeDetails(placeId) {
       'X-Goog-FieldMask': fields,
     },
   });
-  return res.json();
+  // `ok` is returned alongside the body: an error response is JSON too, and a
+  // 429/500 body has no `location`, which is indistinguishable from a genuine
+  // out-of-area venue unless the caller can see the status.
+  return { ok: res.ok, status: res.status, json: await res.json() };
 }
 
 // Trim a review to a ≤N-char excerpt on a word boundary with an ellipsis.
@@ -342,24 +345,27 @@ function toWeeklyHours(regularOpeningHours) {
       // that protection too, so the check runs here instead: a wrong-venue match
       // is now discarded at generation and never reaches the file at all, which
       // is strictly better than shipping it and filtering on read.
-      // FAILS CLOSED, including when Google omits `location` entirely: an
-      // unchecked write is indistinguishable from a checked one once it is in the
-      // file. Rejected ids are tracked so --only DELETES their stale entry rather
-      // than carrying it forward.
-      if (!locationAcceptable(d.location)) {
-        const where = d.location
-          ? `${d.location.latitude},${d.location.longitude}`
-          : 'no location in response';
-        flags.push({ id: bar.id, reason: 'rejected-location', q: where });
-        rejectedIds.add(bar.id);
+      // Three outcomes, failing in opposite directions (see classifyDetailsLocation):
+      //   reject        — a definite out-of-area location. Not this venue, so its
+      //                   stale entry is deleted under --only.
+      //   indeterminate — non-OK status, or 200 with no usable location. Write
+      //                   nothing (fail closed), delete nothing (fail safe): a
+      //                   transient 429 must not wipe good data.
+      const verdict = classifyDetailsLocation(d);
+      if (verdict !== 'accept') {
+        const where = d.json?.location
+          ? `${d.json.location.latitude},${d.json.location.longitude}`
+          : `no location (http ${d.status})`;
+        flags.push({ id: bar.id, reason: `location-${verdict}`, q: where });
+        if (verdict === 'reject') rejectedIds.add(bar.id);
         continue;
       }
-      if (d.businessStatus) patch.businessStatus = d.businessStatus;
-      const hours = toWeeklyHours(d.regularOpeningHours);
+      if (d.json.businessStatus) patch.businessStatus = d.json.businessStatus;
+      const hours = toWeeklyHours(d.json.regularOpeningHours);
       if (hours) { patch.hours = hours; withHours++; }
 
       // First photo: resource name + author attribution (required on render).
-      const photo = d.photos?.[0];
+      const photo = d.json.photos?.[0];
       if (photo?.name) {
         patch.photoRef = photo.name;
         const attr = photo.authorAttributions?.[0]?.displayName;
@@ -369,10 +375,10 @@ function toWeeklyHours(regularOpeningHours) {
 
       // Reviews: fresh on a --reviews run; otherwise carry the sidecar's
       // stored snippets forward so the weekly wholesale regen can't wipe them.
-      const reviews = REVIEWS ? toReviews(d.reviews) : existing[bar.id]?.reviews;
+      const reviews = REVIEWS ? toReviews(d.json.reviews) : existing[bar.id]?.reviews;
       if (reviews) { patch.reviews = reviews; withReviews++; }
 
-      if (d.businessStatus && d.businessStatus !== 'OPERATIONAL') { closed++; flags.push({ id: bar.id, reason: d.businessStatus, name: bar.name }); }
+      if (d.json.businessStatus && d.json.businessStatus !== 'OPERATIONAL') { closed++; flags.push({ id: bar.id, reason: d.json.businessStatus, name: bar.name }); }
       patches[bar.id] = patch;
     } catch (e) {
       flags.push({ id: bar.id, reason: 'error', detail: String(e.message || e) });
@@ -444,20 +450,22 @@ async function runPhotosMulti() {
       details++;
       await sleep(120);
 
-      // Same wrong-venue check as the main path, and it fails closed. A patch
-      // whose place_id resolves outside the service area is not this venue's, so
-      // its photos are not either — delete the entry rather than re-photographing
-      // somebody else's bar.
-      if (!locationAcceptable(d.location)) {
-        const where = d.location
-          ? `${d.location.latitude},${d.location.longitude}`
-          : 'no location in response';
-        flags.push({ id, reason: 'rejected-location', detail: where });
+      // Same three-way check as the main path. Only a DEFINITE out-of-area
+      // location deletes the entry — an API error must not, or a 429 mid-run
+      // would silently strip venues that were never validated as wrong.
+      const verdict = classifyDetailsLocation(d);
+      if (verdict === 'reject') {
+        const loc = d.json.location;
+        flags.push({ id, reason: 'location-reject', detail: `${loc.latitude},${loc.longitude}` });
         delete existing[id];
         continue;
       }
+      if (verdict === 'indeterminate') {
+        flags.push({ id, reason: 'location-indeterminate', detail: `http ${d.status}` });
+        continue;
+      }
 
-      const photos = Array.isArray(d.photos) ? d.photos.slice(0, PHOTO_MULTI_COUNT) : [];
+      const photos = Array.isArray(d.json.photos) ? d.json.photos.slice(0, PHOTO_MULTI_COUNT) : [];
       if (photos.length === 0) { flags.push({ id, reason: 'no-photos' }); continue; }
 
       const refs = [];
@@ -507,11 +515,15 @@ async function placeDetailsPhotosOnly(placeId) {
   const res = await fetch(`https://places.googleapis.com/v1/places/${placeId}`, {
     headers: {
       'X-Goog-Api-Key': KEY,
-      // `location` is included so the wrong-venue check can run on this path too.
-      // Same Details call, same SKU — omitting it is what made --photos-multi the
-      // one write path that could not validate anything.
+      // `location` is included so the wrong-venue check can run on this path too;
+      // without it --photos-multi was the one write path that could validate
+      // nothing. NOTE this is NOT free: `id,photos` sits in Place Details
+      // (IDs Only), and adding `location` escalates the request to Place Details
+      // Essentials. Essentials carries a 10,000/month free allowance and this
+      // path runs manually over ~400 venues, so the practical cost is nil — but
+      // an earlier comment here claimed "same SKU", which was wrong.
       'X-Goog-FieldMask': 'id,location,photos',
     },
   });
-  return res.json();
+  return { ok: res.ok, status: res.status, json: await res.json() };
 }

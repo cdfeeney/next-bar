@@ -88,10 +88,14 @@ export type BarReview = {
  * Overlaid onto the curated catalog at load time so the hand-authored bar files
  * stay clean and the machine-generated data can be regenerated wholesale.
  * NOTE: the wrong-venue guard this comment used to describe no longer runs in
- * bars.ts. It moved into scripts/refresh-places.mjs (enforced at the single point
- * where the sidecar is serialised) when coordinates stopped being persisted — a
- * patch resolving outside the service area is now discarded before it is written,
- * rather than shipped and filtered on read. */
+ * bars.ts. It moved into scripts/refresh-places.mjs when coordinates stopped
+ * being persisted — an out-of-area match is discarded before it is written rather
+ * than shipped and filtered on read.
+ *
+ * Precisely where, because "enforced at serialisation" would overstate it: the
+ * bbox check runs at FETCH time, the only point where a coordinate exists. What
+ * serialisation enforces is what is observable in the artifact — no persisted
+ * lat/lng, and no entry for a venue the app does not have. */
 export type PlacePatch = {
   /**
    * NO COORDINATES HERE, deliberately.

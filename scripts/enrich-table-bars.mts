@@ -2,9 +2,14 @@
  * Google-enrich `bars` TABLE rows that have no place_id yet (imported
  * batches — refresh-places.mjs only patches the STATIC sidecar and never
  * sees table-only rows). For each un-enriched row: Text Search → Place
- * Details → UPDATE the row with place_id, business_status, hours, and
- * Google-corrected coords (guarded: a big move flags the row instead of
- * silently relocating it — the wrong-venue class from 2026-07-27).
+ * Details → UPDATE the row with place_id, business_status and hours.
+ *
+ * COORDINATES ARE NOT WRITTEN (2026-07-29). This used to also write
+ * Google-corrected coords, which would undo migrations 0029-0032 — those moved
+ * every coordinate onto OpenStreetMap because Google permits caching lat/lng for
+ * at most 30 consecutive days. The distance check survives and still GATES the
+ * write (a big move flags the row as the wrong venue and writes nothing), so
+ * Google's position remains a transient signal rather than stored data.
  * CLOSED_PERMANENTLY rows are flagged for removal, not deleted.
  *
  * Photos deliberately NOT ingested here (repo-file pipeline, phase 2).

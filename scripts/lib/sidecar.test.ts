@@ -4,6 +4,7 @@ import {
   DB_ONLY_SIDECAR_IDS,
   SERVICE_AREA,
   assertSidecarWritable,
+  classifyDetailsLocation,
   insideServiceArea,
   locationAcceptable,
   mergeOnlyPatches,
@@ -68,6 +69,53 @@ describe('locationAcceptable fails CLOSED', () => {
 
   test('rejects an in-range-looking but out-of-area location', () => {
     expect(locationAcceptable({ latitude: 40.7, longitude: -73.6 })).toBe(false);
+  });
+});
+
+describe('classifyDetailsLocation — the two failure modes must not be conflated', () => {
+  /**
+   * Codex review of 3c805f4 caught this: `placeDetailsPhotosOnly` had no `res.ok`
+   * check, and rejection DELETES a venue's sidecar entry. An HTTP 429/500 returns
+   * an error body with no `location`, which looked identical to "resolved outside
+   * the service area" — so a transient API blip would have deleted good data.
+   *
+   * Write and delete therefore fail in OPPOSITE directions: closed on writing,
+   * safe on deleting.
+   */
+  test('an in-area location is accepted', () => {
+    expect(
+      classifyDetailsLocation({ ok: true, json: { location: { latitude: 40.7188, longitude: -73.9913 } } }),
+    ).toBe('accept');
+  });
+
+  test('a DEFINITE out-of-area location is rejected — safe to delete', () => {
+    expect(
+      classifyDetailsLocation({ ok: true, json: { location: { latitude: 40.7, longitude: -73.6 } } }),
+    ).toBe('reject');
+  });
+
+  test.each([
+    ['HTTP 429', { ok: false, status: 429, json: { error: { message: 'RESOURCE_EXHAUSTED' } } }],
+    ['HTTP 500', { ok: false, status: 500, json: {} }],
+    ['non-OK that still carries a valid in-area location', {
+      ok: false,
+      status: 403,
+      json: { location: { latitude: 40.7188, longitude: -73.9913 } },
+    }],
+    ['200 with no location at all', { ok: true, status: 200, json: { id: 'x' } }],
+    ['200 with a partial location', { ok: true, status: 200, json: { location: { latitude: 40.7 } } }],
+  ])('%s is INDETERMINATE — never delete on this', (_label, response) => {
+    expect(classifyDetailsLocation(response as never)).toBe('indeterminate');
+  });
+
+  test('indeterminate is distinct from reject, which is the whole point', () => {
+    const apiError = classifyDetailsLocation({ ok: false, status: 500, json: {} } as never);
+    const wrongVenue = classifyDetailsLocation({
+      ok: true,
+      json: { location: { latitude: 40.7, longitude: -73.6 } },
+    } as never);
+    expect(apiError).not.toBe(wrongVenue);
+    expect(apiError).toBe('indeterminate');
   });
 });
 
