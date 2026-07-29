@@ -27,16 +27,46 @@ expansion (275 → 343 parseable, refusals 83 → 15).
 
 ---
 
-## 2. Blocked on Connor — do NOT guess these
+## 2. Operator decisions — MOSTLY ANSWERED 2026-07-28 evening
 
-| # | Decision | What it blocks |
+**Only D1 is still open.** D3–D6 were answered late in the session; D3 and D4
+are already implemented, D5 and D6 are answered but NOT yet built.
+
+| # | Status | Detail |
 |---|---|---|
-| D1 | **H2 transport**: Vercel Edge Config vs Supabase `/api/flags`. Edge Config avoids the LCP first-paint penalty but needs dashboard setup only Connor can do. | The kill switch — last unmet half of criterion 13 |
-| D2 | **Run `osm-hours-sweep --apply`?** Writes 343 rows, takes `google` from 910 → ~842. Same operation already approved for the first 275. Overwrites those venues' Google hours **irreversibly**. | H3 coverage 21.9% → 27.3% |
-| D3 | **`verified` corroboration rule.** The correlation gate currently treats site==OSM as correlated, so an OSM+site pair caps at `reported` and `verified` is unreachable without a third source type. | Whether `verified` is ever attainable |
-| D4 | **Staleness window** — keep 30 days? | `demoteIfStale` behaviour |
-| D5 | **Pair 3 `place_id` owner** — `dominies-astoria` vs `flemings-pub` share `ChIJUzyXVUdfwokRYzS5v4AZpYw`. | Removing the carve-out from `bars_place_id_unique` |
-| D6 | **Coordinates** for `the-slaughtered-lamb-pub` and `bar-coastal`. No source exists for where they actually are. | They render at another venue's location on the map and in distance ranking, right now |
+| D1 | **STILL OPEN — the only thing blocked on Connor** | **H2 transport**: Vercel Edge Config vs Supabase `/api/flags`. Edge Config avoids the LCP first-paint penalty but needs dashboard setup only Connor can do. Blocks the kill switch, the last unmet half of criterion 13. |
+| D2 | **REVISED — do not blanket-apply** | See §2a. Apply the 13 agreeing rows only; 33 need hand verification first. |
+| D3 | **ANSWERED + BUILT** | Don't trust OSM blind — diff it against the Google hours still on the row, and flag (a) any difference and (b) any venue we're unsure of, for hand verification. Implemented in `osm-hours-sweep.mts`; Google is READ for comparison only, never persisted. |
+| D4 | **ANSWERED + BUILT** | Refresh every **60 days**. `HOURS_STALE_AFTER_DAYS` is now 60. |
+| D5 | **ANSWERED — not yet built** | **Fleming's is closed down; only Dominie's is there.** So `dominies-astoria` owns `ChIJUzyXVUdfwokRYzS5v4AZpYw`, `flemings-pub` should be marked closed, and the carve-out can come out of `bars_place_id_unique`. Needs a migration. |
+| D6 | **ANSWERED — not yet built** | `the-slaughtered-lamb-pub` is at **182 West 4th Street, Greenwich Village**. Geocode via **Nominatim, not Google** (OSM-derived is what we may persist). `bar-coastal` **"seems closed"** — Connor's word was "seems", so VERIFY before deleting; the work ledger says Google's CLOSED_PERMANENTLY verdict has been right 42+ times, but this one is unconfirmed. Needs a migration. |
+
+### 2a. The Google cross-check result — read this before applying any hours
+
+Run `npx tsx scripts/osm-hours-sweep.mts` for the full list.
+
+| Bucket | Count | Meaning |
+|---|---|---|
+| OSM **agrees** with Google | **13** | Two independent sources concur — safe to apply |
+| OSM **DIFFERS** from Google | **33** | Hand-verify. Listed by name+id in the script output. |
+| No Google baseline | 297 | Already swapped to OSM; rewriting is a no-op |
+
+**The differences lean one way, and it is the dangerous way.** OSM tends to
+claim later, rounder closing times than Google:
+
+| Venue | Google | OSM |
+|---|---|---|
+| The Ten Bells | Mo–We 17:00–**00:00**, Su 15:00–**23:00** | every day to **02:00** |
+| Sunshine Laundromat | Mon 08:00–**02:00** | Mon 08:00–**19:00** |
+| Bathtub Gin | Fr/Sa 17:00–**03:00** | Fr 17:00–**04:00**, Sa 16:00–04:00 |
+
+The parser was checked against the raw OSM strings and is reading them
+correctly — these are genuine data disagreements, not parse bugs. But "The Ten
+Bells closes at 2am every day" looks like a mapper's approximation, and an
+over-late close makes the open-now badge say OPEN after the venue shut. That is
+the one direction the badge is designed never to be wrong in.
+
+**Recommendation: apply the 13 agreeing rows, hold the 33.**
 
 ---
 
@@ -57,6 +87,17 @@ expansion (275 → 343 parseable, refusals 83 → 15).
    must **re-run the pick against a wider radius** (Connor confirmed: not a
    re-filter of bars already in hand). Today you must press Run again manually.
    See `docs/OPERATOR-BUGS-2026-07-28.md`.
+
+3a. **The three data fixes Connor answered (D5/D6).** All are live-catalog
+   writes, so they are ATTENDED work — prepare the migration and the evidence,
+   but do not apply unattended.
+   - `flemings-pub` → mark closed; `dominies-astoria` keeps the shared
+     `place_id`; drop the carve-out from `bars_place_id_unique`.
+   - `the-slaughtered-lamb-pub` → geocode **182 West 4th Street, Greenwich
+     Village** via Nominatim (never Google) and write lat/lng. It is currently
+     rendering at another venue's location.
+   - `bar-coastal` → **verify** the closure before acting. Connor said "seems
+     closed", which is not the same as confirmed.
 
 ### Tier 2 — real value, well-scoped
 
@@ -164,6 +205,10 @@ Work the queue in docs/CONTINUATION-NIGHT7.md §3 in order:
    widening does not silently leave the result set unchanged.
 4. Then take item 4 (OSM matcher) — 659 unmatched OSM venues is now the hours
    ceiling, worth far more than any further parser or crawl work.
+
+Do NOT run any --apply, and do NOT write to the catalog, including the three
+data fixes in §3 item 3a — those are attended work. You may PREPARE a migration
+for them and leave it uncommitted-to-production for review.
 
 Commit locally after each item with a [T0/T1/T2] tier in the message. Append a
 MORNING SUMMARY to docs/NIGHTLOG-2026-07-29.md when the queue is exhausted or
