@@ -65,10 +65,9 @@ export type HoursResolution =
  *
  * Staleness must demote automatically, or the strict filter slowly fills with
  * hours nobody has looked at in a year — which is the same failure as trusting
- * Google's, just slower. 30 days is a starting value; the operator decision on
- * the exact window is still open (goal g-3eedd7a1 H3).
+ * Google's, just slower. SETTLED by the operator on 2026-07-28: 60 days.
  */
-export const HOURS_STALE_AFTER_DAYS = 30;
+export const HOURS_STALE_AFTER_DAYS = 60;
 
 const CLOCK_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 

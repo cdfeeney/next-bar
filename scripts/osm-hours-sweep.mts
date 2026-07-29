@@ -25,7 +25,8 @@ import { join } from 'node:path';
 import { Client } from 'pg';
 import { matchOsmVenue, type CatalogVenue, type OsmVenue } from '../src/lib/osmMatch';
 import { parseOsmOpeningHours } from '../src/lib/osmOpeningHours';
-import { resolveHours } from '../src/lib/hoursResolution';
+import { isValidWeeklyHours, resolveHours, sameHours } from '../src/lib/hoursResolution';
+import type { WeeklyHours } from '../src/types';
 
 loadEnv({ path: '.env.local' });
 
@@ -119,12 +120,18 @@ function toOsmVenue(el: OverpassElement): OsmVenue | null {
   };
 }
 
-async function loadCatalog(): Promise<CatalogVenue[]> {
+/** Catalog row plus the CURRENT hours, so a write can be diffed before it lands. */
+type CatalogRow = CatalogVenue & {
+  hours: WeeklyHours | null;
+  hours_source: string | null;
+};
+
+async function loadCatalog(): Promise<CatalogRow[]> {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   try {
-    const { rows } = await client.query<CatalogVenue>(
-      'select id, name, lat, lng from public.bars',
+    const { rows } = await client.query<CatalogRow>(
+      'select id, name, lat, lng, hours, hours_source from public.bars',
     );
     console.log(`catalog: ${rows.length} venues`);
     return rows;
@@ -158,6 +165,16 @@ async function main() {
   const refusedSpecs: string[] = [];
   const matchedSamples: string[] = [];
   /** Rows the ladder cleared for writing. Collected, then written in one txn. */
+  // Google cross-check (operator decision, 2026-07-28): before replacing a
+  // Google-derived row, compare what OSM says with what Google said. Agreement
+  // is a free second opinion on the parser; a DIFFERENCE is the interesting
+  // case and gets surfaced for hand verification rather than silently applied.
+  // Google's value is only ever READ here for comparison — it is never carried
+  // forward or persisted, so this stays inside the display-vs-persist line.
+  const agreesWithGoogle: string[] = [];
+  const differsFromGoogle: Array<{ name: string; id: string }> = [];
+  const noGoogleBaseline: string[] = [];
+
   const writes: {
     id: string;
     hours: unknown;
@@ -201,6 +218,16 @@ async function main() {
             source: resolved.source,
             confidence: resolved.confidence,
           });
+          if (
+            venue.hours_source === 'google' &&
+            venue.hours &&
+            isValidWeeklyHours(venue.hours)
+          ) {
+            if (sameHours(resolved.hours, venue.hours)) agreesWithGoogle.push(venue.name);
+            else differsFromGoogle.push({ name: venue.name, id: venue.id });
+          } else {
+            noGoogleBaseline.push(venue.name);
+          }
         }
         if (matchedSamples.length < SAMPLES) {
           matchedSamples.push(
@@ -246,6 +273,15 @@ async function main() {
   if (refusedSpecs.length > 0) {
     console.log('\n=== SAMPLE SPECS THE PARSER REFUSED (candidates for subset expansion) ===');
     for (const s of refusedSpecs) console.log(s);
+  }
+
+  console.log('\n=== GOOGLE CROSS-CHECK (before replacing anything) ===');
+  console.log(`  OSM agrees with Google        ${agreesWithGoogle.length}  (safe to apply)`);
+  console.log(`  OSM DIFFERS from Google       ${differsFromGoogle.length}  <- hand-verify these`);
+  console.log(`  no Google baseline to compare ${noGoogleBaseline.length}`);
+  if (differsFromGoogle.length > 0) {
+    console.log('\n  VENUES WHERE OSM AND GOOGLE DISAGREE - verify before trusting OSM:');
+    for (const d of differsFromGoogle) console.log(`    ${d.name}  (${d.id})`);
   }
 
   console.log('\n=== WRITE PLAN ===');
