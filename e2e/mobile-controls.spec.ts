@@ -60,13 +60,20 @@ async function unreachableControls(
     function horizontalScroller(el: HTMLElement): HTMLElement | null {
       let node: HTMLElement | null = el.parentElement;
       while (node && node !== document.body) {
-        const overflowX = window.getComputedStyle(node).overflowX;
-        if (
-          (overflowX === 'auto' || overflowX === 'scroll') &&
-          node.scrollWidth > node.clientWidth + 1
-        ) {
-          return node;
-        }
+        const cs = window.getComputedStyle(node);
+        const scrollsX = cs.overflowX === 'auto' || cs.overflowX === 'scroll';
+        const overflowsX = node.scrollWidth > node.clientWidth + 1;
+        // CSS computes overflow-x to `auto` whenever overflow-y is auto/scroll,
+        // even when the author wrote `visible`. Without the extra guard below,
+        // ANY vertical scroller containing a too-wide child would be mistaken
+        // for a rail — which would silently suppress exactly the real
+        // horizontal-overflow bug this spec exists to catch. (a11y-mobile.spec
+        // proves one such overflow exists on / at 402px.)
+        //
+        // A genuine rail scrolls sideways and NOT down. A page-level scroller
+        // scrolls down. That separates them without needing the specified value.
+        const scrollsY = node.scrollHeight > node.clientHeight + 1;
+        if (scrollsX && overflowsX && !scrollsY) return node;
         node = node.parentElement;
       }
       return null;
