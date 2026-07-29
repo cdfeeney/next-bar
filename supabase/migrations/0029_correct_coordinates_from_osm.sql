@@ -159,6 +159,37 @@ begin
   raise notice '0029: all 32 venues now sit on their OpenStreetMap coordinates';
 end $$;
 
+------------------------------------------------------------------------------
+-- Addresses.
+--
+-- Five of the 32 were not merely imprecise — they name the WRONG STREET or the
+-- wrong ZIP, so correcting coordinates alone would leave the card reading one
+-- address while its pin sits on another.
+--
+-- Sources, in order of authority used:
+--   * street + house number: the venue's own OpenStreetMap node (ODbL), the
+--     same node whose coordinates this migration adopts above.
+--   * postcode: OSM where the node carried one, otherwise Nominatim reverse
+--     geocode of that node.
+--
+-- the-ditty is the exception and is worth stating plainly. Nominatim returned
+-- postcode 11370 (East Elmhurst) for its node, which is wrong: those
+-- coordinates are Ditmars Blvd around 35th St, and three catalog neighbours on
+-- the same street bracket it — the-last-word 31-30 (11105), rivercrest 33-15
+-- (11105), tootles-and-french 36-15 (11105). 35-03 falls between them, so 11105
+-- is corroborated by three independent rows rather than assumed. Reverse
+-- geocoding picked up a nearby boundary.
+--
+-- Formatting follows the catalog's house style ("{number} {St abbrev},
+-- {area}, NY {zip}") rather than OSM's raw tags, which are inconsistent.
+------------------------------------------------------------------------------
+
+update public.bars set address = '35-03 Ditmars Blvd, Astoria, NY 11105',  updated_at = now() where id = 'the-ditty'   and address is distinct from '35-03 Ditmars Blvd, Astoria, NY 11105';
+update public.bars set address = '212 Berry St, Brooklyn, NY 11211',       updated_at = now() where id = 'the-levee'   and address is distinct from '212 Berry St, Brooklyn, NY 11211';
+update public.bars set address = '234 Starr St, Brooklyn, NY 11237',       updated_at = now() where id = 'the-sampler' and address is distinct from '234 Starr St, Brooklyn, NY 11237';
+update public.bars set address = '25-19 24th Ave, Astoria, NY 11105',      updated_at = now() where id = 'mosaic'      and address is distinct from '25-19 24th Ave, Astoria, NY 11105';
+update public.bars set address = '455 W 48th St, New York, NY 10019',      updated_at = now() where id = 'pocket-bar'  and address is distinct from '455 W 48th St, New York, NY 10019';
+
 commit;
 
 ------------------------------------------------------------------------------

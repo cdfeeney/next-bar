@@ -97,6 +97,79 @@ describe('migration 0029', () => {
     expect(SQL).toMatch(/AUTHORED, NOT APPLIED/);
   });
 
+  describe('the five address corrections', () => {
+    const EXPECTED: Record<string, string> = {
+      'the-ditty': '35-03 Ditmars Blvd, Astoria, NY 11105',
+      'the-levee': '212 Berry St, Brooklyn, NY 11211',
+      'the-sampler': '234 Starr St, Brooklyn, NY 11237',
+      mosaic: '25-19 24th Ave, Astoria, NY 11105',
+      'pocket-bar': '455 W 48th St, New York, NY 10019',
+    };
+
+    test('each sets exactly the expected address and is guarded', () => {
+      for (const [id, addr] of Object.entries(EXPECTED)) {
+        const stmt = SQL.split(';').find(
+          (s) => /update\s+public\.bars/i.test(s) && s.includes(`id = '${id}'`),
+        );
+        expect(stmt, `no address UPDATE for ${id}`).toBeTruthy();
+        expect(stmt).toContain(`address = '${addr}'`);
+        // `is distinct from` makes a re-run a no-op instead of churning updated_at.
+        expect(stmt).toContain('is distinct from');
+      }
+    });
+
+    test('the catalog source files carry the same addresses', () => {
+      // The migration corrects the table; the bar files ship in the bundle. If
+      // these drift, a fresh build silently reverts the fix.
+      const files = [
+        'bars.core.ts',
+        'bars.extra.ts',
+        'bars.expansion.ts',
+        'bars.expansion2.ts',
+        'bars.expansion3.ts',
+        'bars.expansion4.ts',
+        'bars.expansion5.ts',
+        'bars.expansion6.ts',
+      ]
+        .map((f) => {
+          try {
+            return readFileSync(join(process.cwd(), 'src/lib', f), 'utf8');
+          } catch {
+            return '';
+          }
+        })
+        .join('\n');
+
+      for (const [id, addr] of Object.entries(EXPECTED)) {
+        const idx = files.indexOf(`id: '${id}'`);
+        expect(idx, `${id} not found in catalog files`).toBeGreaterThan(-1);
+        expect(files.slice(idx, idx + 400), `${id} address`).toContain(addr);
+      }
+    });
+
+    test("the-ditty's postcode is the corroborated one, not Nominatim's", () => {
+      // Nominatim reverse-geocoded its node to 11370 (East Elmhurst), which is
+      // wrong — three catalog neighbours on Ditmars Blvd bracket it at 11105.
+      // Pinned because 11370 is exactly the value a future re-derivation would
+      // reintroduce.
+      // Strip `--` comments first: splitting on ';' leaves the preceding comment
+      // block attached to the statement, and that block legitimately mentions
+      // 11370 while explaining why it was rejected.
+      const code = SQL.split('\n')
+        .filter((l) => !l.trimStart().startsWith('--'))
+        .join('\n');
+      const stmt = code
+        .split(';')
+        .find((s) => /update\s+public\.bars/i.test(s) && s.includes("id = 'the-ditty'"));
+
+      expect(stmt, 'no address UPDATE for the-ditty').toBeTruthy();
+      expect(stmt).toContain('35-03 Ditmars Blvd, Astoria, NY 11105');
+      expect(stmt).not.toContain('11370');
+      // …and the rejected value stays documented in the comments.
+      expect(SQL).toMatch(/11370/);
+    });
+  });
+
   test('records what it does NOT fix', () => {
     // The catalog source files and the wrong addresses are still outstanding;
     // an apply log that implies otherwise would be misleading.
