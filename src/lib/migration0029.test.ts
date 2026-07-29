@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 /**
- * Guards for migration 0029 (32 venue coordinates corrected from OpenStreetMap).
+ * Guards for migration 0029 (34 venue coordinates + 6 addresses, from OpenStreetMap).
  *
  * Like 0028 this is attended, authored-but-unapplied, so nothing exercises it
  * until someone runs it against production. These assertions are static — there
@@ -28,9 +28,9 @@ const ROWS = [...SQL.matchAll(/\('([a-z0-9-]+)',\s*(-?\d+\.\d+),\s*(-?\d+\.\d+),
 );
 
 describe('migration 0029', () => {
-  test('carries exactly 32 corrections, all distinct', () => {
-    expect(ROWS).toHaveLength(32);
-    expect(new Set(ROWS.map((r) => r.id)).size).toBe(32);
+  test('carries exactly 34 corrections, all distinct', () => {
+    expect(ROWS).toHaveLength(34);
+    expect(new Set(ROWS.map((r) => r.id)).size).toBe(34);
   });
 
   test('every replacement satisfies the 0019 bbox constraint', () => {
@@ -62,17 +62,17 @@ describe('migration 0029', () => {
     expect(SQL).toMatch(/OpenStreetMap contributors/);
   });
 
-  test('the two multi-location brands are EXCLUDED', () => {
-    // A same-name OSM node near Google's coords does not prove our row is
-    // misplaced when the brand has several branches — it may be a different one.
-    // Applying these blind could move a correct venue.
+  test('the two multi-location brands are now INCLUDED, with the reasoning kept', () => {
+    // Held back initially: a same-name OSM node near Google's coords does not
+    // prove our row is misplaced when the brand has branches. The operator
+    // confirmed both addresses, and geocoding them landed 9m and 14m from the
+    // OSM nodes — so the nodes are these venues. Included, and the history of
+    // why they were held is preserved rather than deleted.
     const ids = ROWS.map((r) => r.id);
-    expect(ids).not.toContain('tir-na-nog');
-    expect(ids).not.toContain('boxers-chelsea');
-    // …and the reason is recorded rather than silently dropped.
-    expect(SQL).toContain('tir-na-nog');
-    expect(SQL).toContain('boxers-chelsea');
-    expect(SQL).toMatch(/DELIBERATELY EXCLUDED/);
+    expect(ids).toContain('tir-na-nog');
+    expect(ids).toContain('boxers-chelsea');
+    expect(SQL).toMatch(/RESOLVED BY THE OPERATOR/);
+    expect(SQL).toMatch(/multi-location/);
   });
 
   test('the update is guarded so a re-run is a no-op', () => {
@@ -97,13 +97,15 @@ describe('migration 0029', () => {
     expect(SQL).toMatch(/AUTHORED, NOT APPLIED/);
   });
 
-  describe('the five address corrections', () => {
+  describe('the six address corrections', () => {
     const EXPECTED: Record<string, string> = {
       'the-ditty': '35-03 Ditmars Blvd, Astoria, NY 11105',
       'the-levee': '212 Berry St, Brooklyn, NY 11211',
       'the-sampler': '234 Starr St, Brooklyn, NY 11237',
       mosaic: '25-19 24th Ave, Astoria, NY 11105',
-      'pocket-bar': '455 W 48th St, New York, NY 10019',
+      // Operator-confirmed 2026-07-29.
+      'boxers-chelsea': '37 W 20th St, New York, NY 10011',
+      'tir-na-nog': '254 W 31st St, New York, NY 10001',
     };
 
     test('each sets exactly the expected address and is guarded', () => {
@@ -170,10 +172,24 @@ describe('migration 0029', () => {
     });
   });
 
-  test('records what it does NOT fix', () => {
-    // The catalog source files and the wrong addresses are still outstanding;
-    // an apply log that implies otherwise would be misleading.
-    expect(SQL).toMatch(/bars\.\*\.ts are still wrong/);
-    expect(SQL).toMatch(/wrong ADDRESS/);
+  test('states honestly what remains undone', () => {
+    // The file previously claimed the catalog files and addresses were still
+    // outstanding; both were fixed in the same pass, which made its own notes
+    // false. A migration whose notes lie is worse than one with none.
+    expect(SQL).toMatch(/STILL OWED/);
+    expect(SQL).toMatch(/140 INCONCLUSIVE/);
+    expect(SQL).toMatch(/29 UNRESOLVABLE/);
+    expect(SQL).not.toMatch(/bars\.\*\.ts are still wrong/);
+  });
+
+  test("records that pocket-bar's ZIP did NOT need changing", () => {
+    // Changed to 10019 on a Nominatim lookup, reverted after the operator
+    // confirmed 10036. Kept in the file because it is the second geocoder
+    // disagreement in this work and the lesson generalises.
+    expect(SQL).toMatch(/pocket-bar's ZIP was changed to 10019/);
+    const code = SQL.split('\n')
+      .filter((l) => !l.trimStart().startsWith('--'))
+      .join('\n');
+    expect(code).not.toContain('10019');
   });
 });

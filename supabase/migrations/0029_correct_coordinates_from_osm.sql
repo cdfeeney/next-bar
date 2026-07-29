@@ -1,4 +1,4 @@
--- Next Bar — 0029: correct 32 venue coordinates from OpenStreetMap.
+-- Next Bar — 0029: correct 34 venue coordinates from OpenStreetMap.
 --
 -- AUTHORED, NOT APPLIED. Live-catalog writes are attended work; this is
 -- committed for review, not run by an unattended loop.
@@ -43,17 +43,28 @@
 -- Source: OpenStreetMap via Overpass, extract cached 2026-07-28.
 -- Data (c) OpenStreetMap contributors, ODbL 1.0. https://osm.org/copyright
 --
--- ─── DELIBERATELY EXCLUDED ────────────────────────────────────────────────
+-- ─── THE TWO CHAINS, RESOLVED BY THE OPERATOR ─────────────────────────────
 --
--- Two of the 34 are multi-location brands, where a same-name OSM node near
--- Google's coordinates does NOT prove our row is misplaced — it may simply be a
--- different branch. Applying these blind could move a correct venue:
+-- boxers-chelsea and tir-na-nog were initially held back: both are
+-- multi-location brands, where a same-name OSM node near Google's coordinates
+-- does NOT prove our row is misplaced — it may simply be a different branch.
+--
+-- Connor confirmed the real addresses, and geocoding them lands within metres of
+-- the OSM nodes the witness had found, so the nodes are these venues after all:
+--   boxers-chelsea  37 W 20th St  -> 40.7408150,-73.9930983, 9m from the node
+--   tir-na-nog      254 W 31st St -> 40.7498584,-73.9944422, 14m from the node
+--
+-- Tír na nÓg is the notable one: our catalog said 315 W 39th St, which was
+-- simply WRONG — not a different branch. Google had matched the right venue all
+-- along. Both are now included above. Their prior held-back reasoning:
 --
 --   boxers-chelsea: multi-location chain (Chelsea / Hell’s Kitchen / Washington Heights); the OSM node carries no address, so the branch cannot be confirmed.
 --   tir-na-nog: multi-location chain; ours says W 39th St, OSM node is W 31st St 695m away. Applying OSM would MOVE our venue to a different branch.
 --
--- They stay in the operator queue, on the same principle that left bar-coastal
--- alone in 0028: a venue moved to the wrong place is an error no user reports.
+-- Holding them back was the right call on the evidence available — the same
+-- principle that left bar-coastal alone in 0028: a venue moved to the wrong
+-- place is an error no user reports. The operator's confirmation is what
+-- resolved them, not a re-reading of the same data.
 --
 -- Idempotent: re-running is a no-op once the coordinates match (see the guard).
 
@@ -99,7 +110,9 @@ insert into _osm_fix (id, lat, lng, osm_ref, was_off_m) values
   ('the-levee', 40.7163751, -73.9615756, 'node/2465889352', 912),
   ('the-narrows', 40.7040364, -73.9307858, 'node/5490145121', 383),
   ('the-sampler', 40.7055984, -73.9224758, 'node/5624790243', 956),
-  ('the-wolfhound', 40.7639277, -73.9154228, 'node/5136306087', 403);
+  ('the-wolfhound', 40.7639277, -73.9154228, 'node/5136306087', 403),
+  ('boxers-chelsea', 40.7407461, -73.9931415, 'node/5607967821', 467),
+  ('tir-na-nog', 40.7499443, -73.9943348, 'node/663102624', 695);
 
 ------------------------------------------------------------------------------
 -- Preconditions — fail LOUDLY rather than silently correcting nothing.
@@ -156,7 +169,7 @@ begin
   if remaining > 0 then
     raise exception '0029: % row(s) did not take the correction', remaining;
   end if;
-  raise notice '0029: all 32 venues now sit on their OpenStreetMap coordinates';
+  raise notice '0029: all 34 venues now sit on their OpenStreetMap coordinates';
 end $$;
 
 ------------------------------------------------------------------------------
@@ -188,23 +201,43 @@ update public.bars set address = '35-03 Ditmars Blvd, Astoria, NY 11105',  updat
 update public.bars set address = '212 Berry St, Brooklyn, NY 11211',       updated_at = now() where id = 'the-levee'   and address is distinct from '212 Berry St, Brooklyn, NY 11211';
 update public.bars set address = '234 Starr St, Brooklyn, NY 11237',       updated_at = now() where id = 'the-sampler' and address is distinct from '234 Starr St, Brooklyn, NY 11237';
 update public.bars set address = '25-19 24th Ave, Astoria, NY 11105',      updated_at = now() where id = 'mosaic'      and address is distinct from '25-19 24th Ave, Astoria, NY 11105';
-update public.bars set address = '455 W 48th St, New York, NY 10019',      updated_at = now() where id = 'pocket-bar'  and address is distinct from '455 W 48th St, New York, NY 10019';
+-- Operator-confirmed (Connor, 2026-07-29). Note Nominatim reverse-geocodes
+-- 37 W 20th St to 10010 (Flatiron) rather than 10011; the operator's value is
+-- used, and the disagreement is recorded here rather than silently resolved.
+update public.bars set address = '37 W 20th St, New York, NY 10011',       updated_at = now() where id = 'boxers-chelsea' and address is distinct from '37 W 20th St, New York, NY 10011';
+update public.bars set address = '254 W 31st St, New York, NY 10001',      updated_at = now() where id = 'tir-na-nog'  and address is distinct from '254 W 31st St, New York, NY 10001';
 
 commit;
 
 ------------------------------------------------------------------------------
--- NOT DONE HERE, and owed:
+-- ALSO DONE, outside this file:
 --
--- 1. The hand-authored coordinates in src/lib/bars.*.ts are still wrong. This
---    migration corrects the `bars` TABLE only. Until the source files are fixed
---    too, a fresh bundle still carries the bad values.
--- 2. Several rows also have a wrong ADDRESS, not merely imprecise coordinates —
---    the-ditty (21st St vs Ditmars Blvd), the-levee (N 14th St vs Berry St),
---    the-sampler (Central Ave vs Starr St), plus wrong ZIPs on mosaic and
---    pocket-bar. Addresses are curated, user-visible copy and OSM's are
---    inconsistently formatted, so overwriting them in bulk would trade one
---    quality problem for another. Operator queue.
--- 3. The 140 inconclusive and 29 unresolvable venues remain unchecked.
+-- The matching hand-authored values in src/lib/bars.*.ts were corrected in the
+-- same pass, so the table and the bundle agree. Without that a fresh build would
+-- silently reship the bad coordinates; migration0029.test.ts asserts the two
+-- carry identical address strings.
+--
+-- STILL OWED:
+--
+-- 1. The 140 INCONCLUSIVE venues — no same-name OSM node near either point, so
+--    the witness cannot rule on them. ~32% of the sidecar, consistent with the
+--    known OSM match-miss rate.
+-- 2. The 29 UNRESOLVABLE ones — present in the generated Google sidecar but in
+--    neither the catalog files nor the bars table. Stale rows still shipping
+--    place_ids, coordinates, hours and photo refs for venues the app no longer
+--    has. A separate cleanup.
+-- 3. The wider question this surfaced: the sidecar persists GOOGLE-derived
+--    coordinates for ~403 venues. Hours were migrated to OSM for exactly that
+--    reason; coordinates were not. If the same reading of the policy holds, the
+--    sidecar needs the same treatment as the photos, and this migration is the
+--    first step of it rather than the whole job.
+--
+-- A NOTE ON ONE CORRECTION THAT WAS NOT NEEDED:
+--   pocket-bar's ZIP was changed to 10019 in an earlier draft on the strength of
+--   a Nominatim lookup. The operator confirmed 10036 was right all along, and it
+--   has been reverted. Recorded because it is the second time in this work that
+--   a geocoder disagreed with reality (see the-ditty above) — treat reverse
+--   geocoding as a hint, not an authority.
 --
 -- Rollback (in comments, per convention):
 --   The previous coordinates were WRONG and are deliberately not preserved here.
