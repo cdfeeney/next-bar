@@ -1,5 +1,4 @@
 import type { Bar, PlacePatch } from '@/types';
-import { SERVICE_AREA_BBOX } from './constants';
 import { coreBars } from './bars.core';
 import { extraBars } from './bars.extra';
 import { expansionBars } from './bars.expansion';
@@ -22,23 +21,29 @@ import { placesData } from './bars.places';
 // Overlay the Google Places refresh data (coords / hours / status) onto the
 // curated catalog by id.
 //
-// WRONG-VENUE GUARD: the 2026-07-23 refresh matched a same-named bar in
-// Nassau County and dragged its coords in (caught by bars.test.ts's bbox
-// integrity check). A patch whose coords land OUTSIDE the service area was
-// resolved against the wrong venue, so NOTHING in it can be trusted —
-// hours and status belong to that other place too. Skip the whole patch
-// and keep the curated data; the B5c identity pass re-resolves these.
-function isInsideServiceArea(lat: number, lng: number): boolean {
-  const box = SERVICE_AREA_BBOX;
-  return (
-    lat >= box.minLat && lat <= box.maxLat &&
-    lng >= box.minLng && lng <= box.maxLng
-  );
-}
+// WRONG-VENUE GUARD — MOVED TO GENERATION TIME, 2026-07-29.
+//
+// The 2026-07-23 refresh matched a same-named bar in Nassau County and dragged
+// its coords in. The guard here rejected any patch whose coordinates landed
+// outside the service area, on the reasoning that a wrong-venue match poisons
+// everything in the patch — hours and photos belong to that other place too.
+//
+// The patch no longer carries coordinates, so the check cannot run here. Google
+// permits caching lat/lng for at most 30 consecutive days, and this sidecar is a
+// generated file committed to git and shipped to every client, so storing them
+// was non-compliant by construction; coordinates now come from OpenStreetMap
+// (migrations 0029-0032) via the curated catalog below.
+//
+// The check moved to scripts/refresh-places.mjs, where an out-of-area match is
+// discarded BEFORE being written. That is strictly stronger than filtering on
+// read: the bad data never ships at all. Verified safe to remove — at the time
+// of the change 0 of 433 sidecar entries were outside the service area, so the
+// runtime guard was rejecting nothing and no patch newly applies as a result.
+//
+// SERVICE_AREA_BBOX is mirrored into that script (it is plain .mjs and cannot
+// import TypeScript); bars.test.ts asserts the two copies agree.
 
-// Exported for bars.test.ts — the guard's all-or-nothing contract (photo +
-// review fields must be dropped together with rejected coords) is unit-tested
-// with injected patches; production always uses the placesData default.
+// Exported for bars.test.ts.
 export function applyPlaces(
   list: Bar[],
   patches: Record<string, PlacePatch> = placesData,
@@ -46,17 +51,14 @@ export function applyPlaces(
   return list.map((b) => {
     const p = patches[b.id];
     if (!p) return b;
-    if (p.lat != null && p.lng != null && !isInsideServiceArea(p.lat, p.lng)) {
-      return b; // wrong-venue match — reject the entire patch
-    }
     return {
       ...b,
-      ...(p.lat != null && p.lng != null ? { lat: p.lat, lng: p.lng } : {}),
       googlePlaceId: p.googlePlaceId ?? b.googlePlaceId,
       businessStatus: p.businessStatus ?? b.businessStatus,
       hours: p.hours ?? b.hours,
-      // Photo + review data rides the same patch so the wrong-venue guard
-      // above drops it together with the untrusted coords/hours.
+      // Photo data rides the same patch. It used to be dropped together with
+      // out-of-area coordinates by the runtime guard; that rejection now happens
+      // at generation time, so a patch reaching here is already trusted.
       photoRef: p.photoRef ?? b.photoRef,
       photoAttribution: p.photoAttribution ?? b.photoAttribution,
       photoCount: p.photoCount ?? b.photoCount,

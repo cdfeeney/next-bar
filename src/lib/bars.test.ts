@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { Bar, PlacePatch } from '@/types';
 import { applyPlaces, bars } from '@/lib/bars';
 import { rawBarCount } from '@/lib/catalog.slim';
+import { SERVICE_AREA_BBOX } from '@/lib/constants';
 
 // Normalize a bar name for duplicate detection: fold case, punctuation, and the
 // filler words that let the same venue slip in twice under slightly different
@@ -70,13 +73,25 @@ describe('applyPlaces wrong-venue guard', () => {
     reviews: [{ text: 'Great spot', author: 'Reviewer', rating: 5 }],
   };
 
-  it('passes photo fields through for an in-area patch', () => {
-    const [out] = applyPlaces([curated], {
-      'test-bar': { lat: 40.72, lng: -73.99, ...photoFields },
-    });
-    expect(out.lat).toBe(40.72);
+  it('passes photo fields through', () => {
+    const [out] = applyPlaces([curated], { 'test-bar': { ...photoFields } });
     expect(out.photoRef).toBe(photoFields.photoRef);
     expect(out.photoAttribution).toBe(photoFields.photoAttribution);
+  });
+
+  // 2026-07-29: the patch no longer carries coordinates at all. Google permits
+  // caching lat/lng for 30 consecutive days and this sidecar is committed to git
+  // and shipped to every client, so storing them was non-compliant by
+  // construction. Coordinates come from OpenStreetMap via the curated catalog.
+  it('NEVER changes a curated coordinate', () => {
+    const [out] = applyPlaces([curated], {
+      // Cast: lat/lng are gone from PlacePatch. A stale generated sidecar, or a
+      // regression in refresh-places.mjs, could still supply them — this proves
+      // they would be ignored rather than silently overriding curated data.
+      'test-bar': { ...photoFields, lat: 40.99, lng: -73.7 } as PlacePatch,
+    });
+    expect(out.lat).toBe(curated.lat);
+    expect(out.lng).toBe(curated.lng);
   });
 
   // INVERTED 2026-07-28. This previously asserted that `reviews` were merged
@@ -85,20 +100,52 @@ describe('applyPlaces wrong-venue guard', () => {
   // is gone and the data with it (750 items across 250 sidecar entries), so the
   // test now guards the removal instead of the behaviour.
   it('NEVER merges Google review text, even when a patch supplies it', () => {
-    const [out] = applyPlaces([curated], {
-      'test-bar': { lat: 40.72, lng: -73.99, ...photoFields },
-    });
+    const [out] = applyPlaces([curated], { 'test-bar': { ...photoFields } });
     expect(out.reviews).toBeUndefined();
   });
+});
 
-  it('drops photo + review fields together with rejected out-of-area coords', () => {
-    // Nassau County coords → wrong venue → NOTHING in the patch is trusted:
-    // the photo and reviews belong to that other place too.
-    const [out] = applyPlaces([curated], {
-      'test-bar': { lat: 40.7, lng: -73.6, ...photoFields },
-    });
-    expect(out).toEqual(curated);
-    expect(out.photoRef).toBeUndefined();
-    expect(out.reviews).toBeUndefined();
+/**
+ * The wrong-venue guard MOVED to generation time on 2026-07-29 rather than being
+ * deleted. It used to reject any patch whose Google coordinates fell outside the
+ * service area, dropping hours and photos with them. Removing the coordinates
+ * removed its input, so scripts/refresh-places.mjs now discards an out-of-area
+ * match before writing it — the bad data never ships at all.
+ *
+ * These tests exist because that protection is now enforced in a plain .mjs
+ * script with no type checking and no unit tests of its own. Without them the
+ * guard could be silently dropped in a future edit and nothing would notice.
+ */
+describe('wrong-venue guard, now enforced at generation time', () => {
+  const GENERATOR = readFileSync(join(process.cwd(), 'scripts/refresh-places.mjs'), 'utf8');
+
+  it('the generator still rejects out-of-area matches', () => {
+    expect(GENERATOR).toMatch(/insideServiceArea\(lat,\s*lng\)/);
+    expect(GENERATOR).toMatch(/outside-service-area/);
+  });
+
+  it("the generator's bbox copy has not drifted from SERVICE_AREA_BBOX", () => {
+    // It cannot import the TypeScript constant, so it holds a copy. This is the
+    // only thing standing between that copy and silent divergence.
+    for (const [key, value] of Object.entries(SERVICE_AREA_BBOX)) {
+      const found = new RegExp(`${key}:\\s*(-?\\d+\\.?\\d*)`).exec(GENERATOR);
+      expect(found, `generator is missing ${key}`).not.toBeNull();
+      expect(Number(found![1]), `generator ${key} disagrees with constants.ts`).toBe(value);
+    }
+  });
+
+  it('the generator no longer writes coordinates into the sidecar', () => {
+    expect(GENERATOR).not.toMatch(/patch\.lat\s*=/);
+    expect(GENERATOR).not.toMatch(/patch\.lng\s*=/);
+  });
+
+  it('the generated sidecar contains no coordinates', () => {
+    // The compliance assertion, checked against the real artifact rather than
+    // the code that produces it.
+    const sidecar = readFileSync(join(process.cwd(), 'src/lib/bars.places.ts'), 'utf8');
+    expect(sidecar).not.toContain('"lat":');
+    expect(sidecar).not.toContain('"lng":');
+    // …while place_id, the one field Google exempts from caching, is still there.
+    expect(sidecar).toContain('"googlePlaceId":');
   });
 });

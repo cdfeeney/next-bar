@@ -23,11 +23,20 @@
 //   computed client-side (src/lib/openNow.ts) from the hours this job stores.
 //
 // FLOW: for each bar, resolve a googlePlaceId (cached after first run via Text
-// Search), then Place Details for coords + business status + opening hours +
-// primary photo name. Writes the result to src/lib/bars.places.ts (a generated
-// sidecar overlaid in bars.ts — its wrong-venue bbox guard drops a whole patch,
-// photos/reviews included, when coords resolve outside the service area).
-// Dry-run by default; pass --apply to write the sidecar.
+// Search), then Place Details for business status + opening hours + primary photo
+// name. Writes the result to src/lib/bars.places.ts, a generated sidecar overlaid
+// in bars.ts. Dry-run by default; pass --apply to write the sidecar.
+//
+// COORDINATES ARE NOT WRITTEN (2026-07-29). Google permits caching lat/lng for at
+// most 30 consecutive days; this sidecar is committed to git and shipped to every
+// client, so storing them was non-compliant by construction. Coordinates come
+// from OpenStreetMap instead (migrations 0029-0032). place_id is the one
+// Google-derived field exempt from those caching restrictions, so it stays.
+//
+// The wrong-venue bbox guard MOVED HERE from bars.ts as a result: a Details
+// response whose coordinates fall outside the service area is discarded before
+// anything is written, rather than being shipped and filtered on read. Strictly
+// stronger — the bad data never reaches a client.
 //
 // PHOTO FORMAT (dependency-free choice): GetPhotoMedia's media redirect serves
 // JPEG bytes; we re-encode them to WebP and save to
@@ -181,6 +190,22 @@ function loadExistingPatches() {
   return patches;
 }
 
+/**
+ * The app's service area, mirrored from src/lib/constants.ts SERVICE_AREA_BBOX.
+ *
+ * Duplicated rather than imported because this is a plain .mjs script and the
+ * constant lives in TypeScript. A test (bars.test.ts) asserts the two agree, so
+ * the copy cannot drift silently.
+ */
+const SERVICE_AREA = { minLat: 40.640, maxLat: 40.885, minLng: -74.030, maxLng: -73.890 };
+
+function insideServiceArea(lat, lng) {
+  return (
+    lat >= SERVICE_AREA.minLat && lat <= SERVICE_AREA.maxLat &&
+    lng >= SERVICE_AREA.minLng && lng <= SERVICE_AREA.maxLng
+  );
+}
+
 async function resolvePlaceId(bar) {
   const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
     method: 'POST',
@@ -289,7 +314,28 @@ function toWeeklyHours(regularOpeningHours) {
       const d = await placeDetails(placeId);
       await sleep(120);
       const patch = { googlePlaceId: placeId };
-      if (d.location?.latitude != null) { patch.lat = d.location.latitude; patch.lng = d.location.longitude; }
+
+      // COORDINATES ARE NOT PERSISTED, and the wrong-venue guard moved HERE.
+      //
+      // Google's terms permit caching lat/lng for at most 30 consecutive days;
+      // only place_id may be kept indefinitely. This sidecar is a generated file
+      // committed to git and shipped to every client, so anything written here
+      // outlives that window by design. Coordinates now come from OpenStreetMap
+      // (migrations 0029-0032) and are held in the catalog files and the bars
+      // table, where they have no expiry.
+      //
+      // bars.ts used to run the bbox check at RUNTIME on these coordinates and
+      // drop the entire patch — hours, photos, everything — when Google had
+      // resolved the wrong venue. Removing the coordinates would have removed
+      // that protection too, so the check runs here instead: a wrong-venue match
+      // is now discarded at generation and never reaches the file at all, which
+      // is strictly better than shipping it and filtering on read.
+      const lat = d.location?.latitude;
+      const lng = d.location?.longitude;
+      if (lat != null && lng != null && !insideServiceArea(lat, lng)) {
+        flags.push({ id: bar.id, reason: 'outside-service-area', q: `${lat},${lng}` });
+        continue;
+      }
       if (d.businessStatus) patch.businessStatus = d.businessStatus;
       const hours = toWeeklyHours(d.regularOpeningHours);
       if (hours) { patch.hours = hours; withHours++; }

@@ -91,8 +91,21 @@ export type BarReview = {
  * purpose — bars.ts's wrong-venue bbox guard rejects the patch wholesale, so a
  * mis-resolved venue's photo and reviews are dropped along with its coords. */
 export type PlacePatch = {
-  lat?: number;
-  lng?: number;
+  /**
+   * NO COORDINATES HERE, deliberately.
+   *
+   * `lat`/`lng` were removed 2026-07-29. Google's terms permit caching them for
+   * at most 30 consecutive days and this sidecar is a generated file committed to
+   * git and shipped to every client, so anything stored here outlives that window
+   * by construction. Coordinates now come from OpenStreetMap (migrations
+   * 0029-0032) and live in the catalog files and the bars table, where no expiry
+   * applies. Only place_id is exempt from Google's caching restrictions, which is
+   * why it is the one Google-derived field that remains.
+   *
+   * The wrong-venue bbox guard that used to run on these coordinates at runtime
+   * now runs at GENERATION time in scripts/refresh-places.mjs — an out-of-area
+   * match is discarded before it is ever written.
+   */
   googlePlaceId?: string;
   businessStatus?: BusinessStatus;
   hours?: WeeklyHours;
