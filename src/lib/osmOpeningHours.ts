@@ -20,6 +20,9 @@ import type { WeeklyHours } from '@/types';
  *   Mo-Su 17:00-02:00           (ranges wrap the week)
  *   Mo 12:00-15:00,17:00-23:00  (several windows in a day)
  *   Mo-Sa 17:00-02:00; Su off   (multiple rules; later rules override earlier)
+ *   Mo-We 17:00-02:00, Th 17:00-03:00
+ *                               (comma as a RULE separator — see splitRules for
+ *                                how that is told apart from a day list)
  *
  * Day numbering matches WeeklyHours and JS getDay(): 0 = Sunday … 6 = Saturday.
  */
@@ -103,6 +106,66 @@ function parseTimeSelector(selector: string): Interval[] | null {
   return intervals.length > 0 ? intervals : null;
 }
 
+/**
+ * Is this text ALREADY a complete rule — a day selector plus times, or an off
+ * marker? Used to decide whether a following comma opens a new rule.
+ */
+function isCompleteRule(text: string): boolean {
+  const m = RULE_RE.exec(text);
+  if (!m) return false;
+  if (parseDaySelector(m[1]) === null) return false;
+  const timePart = m[2].trim();
+  if (timePart === 'off' || timePart === 'closed') return true;
+  return parseTimeSelector(timePart) !== null;
+}
+
+/** A day token followed by whitespace — `Th 17:00-03:00` opening a new rule. */
+const RULE_START_RE = /^[a-z]{2}(?:-[a-z]{2})?\s/;
+
+/**
+ * A day token and NOTHING else. After a completed rule this can only be the
+ * start of the next rule's day list — `Mo-Fr 12:00-02:00, Sa,Su 11:00-02:00`,
+ * where the new rule opens with `Sa` rather than with `Sa 11:00…`.
+ */
+const BARE_DAY_RE = /^[a-z]{2}(?:-[a-z]{2})?$/;
+
+/**
+ * Split a normalised spec into rules.
+ *
+ * OSM's canonical rule separator is `;`, but a large minority of real NYC
+ * venues use a comma instead (`Mo-We 17:00-02:00, Th 17:00-03:00`) — 83 of the
+ * matched venues in the live sweep, the single largest remaining refusal.
+ *
+ * A comma is ambiguous: it also separates days inside a list (`Sa,Su 12:00-04:00`)
+ * and time spans inside one rule (`Su 12:00-16:00,17:00-02:00`). Splitting on
+ * every comma would invent hours for days nobody tagged, which is worse than
+ * refusing. So a comma opens a new rule only when BOTH hold:
+ *   - what precedes it already parses as a complete rule, and
+ *   - what follows begins with a day token followed by whitespace.
+ * `Sa,Su …` fails the first test (`Sa` alone is not a rule) and stays a day
+ * list; `17:00-02:00` fails the second and stays a span.
+ */
+function splitRules(normalised: string): string[] {
+  const rules: string[] = [];
+  for (const segment of normalised.split(';')) {
+    let current: string[] = [];
+    for (const part of segment.split(',')) {
+      if (
+        current.length > 0 &&
+        (RULE_START_RE.test(part) || BARE_DAY_RE.test(part)) &&
+        isCompleteRule(current.join(','))
+      ) {
+        rules.push(current.join(','));
+        current = [part];
+      } else {
+        current.push(part);
+      }
+    }
+    if (current.length > 0) rules.push(current.join(','));
+  }
+  return rules;
+}
+
 export function parseOsmOpeningHours(spec: string | undefined | null): WeeklyHours | null {
   if (typeof spec !== 'string') return null;
   const normalised = spec
@@ -123,7 +186,7 @@ export function parseOsmOpeningHours(spec: string | undefined | null): WeeklyHou
 
   const days: Record<number, Interval[]> = {};
 
-  for (const raw of normalised.split(';')) {
+  for (const raw of splitRules(normalised)) {
     const rule = raw.trim();
     if (rule === '') continue;
 

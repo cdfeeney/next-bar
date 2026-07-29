@@ -220,3 +220,139 @@ describe('composes with the hours trust ladder', () => {
     if (r.outcome === 'verified') expect(r.corroboratedBy).toEqual(['osm', 'official_site']);
   });
 });
+
+/**
+ * Comma as a RULE separator — the largest remaining source of refusals in the
+ * live NYC sweep (83 matched venues). Every spec here is real, taken verbatim
+ * from `scripts/osm-hours-sweep.mts`'s refusal sample.
+ *
+ * The whole difficulty is that a comma means two different things:
+ *   `Sa,Su 12:00-04:00`              — comma inside a DAY LIST
+ *   `Mo-We 17:00-02:00, Th 17:00-03:00` — comma between two RULES
+ *   `Su 12:00-16:00,17:00-02:00`     — comma between two SPANS of one rule
+ * Getting this wrong silently invents hours, so the day-list case is asserted
+ * right alongside the new one.
+ */
+describe('comma-separated rules (subset expansion)', () => {
+  test('Bathtub Gin — rule commas, plus a two-window Sunday', () => {
+    const hours = parseOsmOpeningHours(
+      'Mo-We 17:00-02:00, Th 17:00-03:00, Fr 17:00-04:00, Sa 16:00-04:00, Su 12:00-16:00,17:00-02:00',
+    );
+    expect(hours).not.toBeNull();
+    expect(hours![1]).toEqual([{ open: '17:00', close: '02:00' }]);
+    expect(hours![3]).toEqual([{ open: '17:00', close: '02:00' }]);
+    expect(hours![4]).toEqual([{ open: '17:00', close: '03:00' }]);
+    expect(hours![5]).toEqual([{ open: '17:00', close: '04:00' }]);
+    expect(hours![6]).toEqual([{ open: '16:00', close: '04:00' }]);
+    // The trailing comma here separates SPANS, not rules.
+    expect(hours![0]).toEqual([
+      { open: '12:00', close: '16:00' },
+      { open: '17:00', close: '02:00' },
+    ]);
+  });
+
+  test('Magic Hour Rooftop', () => {
+    const hours = parseOsmOpeningHours(
+      'Mo-Th 16:00-02:00, Fr 16:00-04:00, Sa 11:30-04:00, Su 11:30-23:00',
+    );
+    expect(hours).not.toBeNull();
+    expect(hours![1]).toEqual([{ open: '16:00', close: '02:00' }]);
+    expect(hours![5]).toEqual([{ open: '16:00', close: '04:00' }]);
+    expect(hours![6]).toEqual([{ open: '11:30', close: '04:00' }]);
+    expect(hours![0]).toEqual([{ open: '11:30', close: '23:00' }]);
+  });
+
+  test('Tørst — a LATER rule overrides an earlier one for the same day', () => {
+    // Fr appears in both `Mo-Fr` and `Fr-Sa`. OSM semantics: last wins.
+    const hours = parseOsmOpeningHours(
+      'Mo-Fr 15:00-24:00, Fr-Sa 12:00-01:00, Su 12:00-24:00',
+    );
+    expect(hours).not.toBeNull();
+    expect(hours![1]).toEqual([{ open: '15:00', close: '00:00' }]);
+    expect(hours![5]).toEqual([{ open: '12:00', close: '01:00' }]);
+    expect(hours![6]).toEqual([{ open: '12:00', close: '01:00' }]);
+  });
+
+  test('Sunshine Laundromat and The Ten Bells', () => {
+    const laundromat = parseOsmOpeningHours(
+      'Mo 08:00-19:00, Tu-Fr 08:00-02:00, Sa-Su 07:00-02:00',
+    );
+    expect(laundromat).not.toBeNull();
+    expect(laundromat![1]).toEqual([{ open: '08:00', close: '19:00' }]);
+    expect(laundromat![2]).toEqual([{ open: '08:00', close: '02:00' }]);
+    expect(laundromat![0]).toEqual([{ open: '07:00', close: '02:00' }]);
+
+    const bells = parseOsmOpeningHours('Mo-Fr 17:00-02:00, Sa-Su 15:00-02:00');
+    expect(bells).not.toBeNull();
+    expect(bells![1]).toEqual([{ open: '17:00', close: '02:00' }]);
+    expect(bells![6]).toEqual([{ open: '15:00', close: '02:00' }]);
+  });
+
+  test('a comma inside a DAY LIST is still a day list, not a new rule', () => {
+    const hours = parseOsmOpeningHours('Sa,Su 12:00-04:00');
+    expect(hours).not.toBeNull();
+    expect(hours![6]).toEqual([{ open: '12:00', close: '04:00' }]);
+    expect(hours![0]).toEqual([{ open: '12:00', close: '04:00' }]);
+    // Monday must NOT have been invented.
+    expect(hours![1]).toBeUndefined();
+
+    const spaced = parseOsmOpeningHours('Sa, Su 13:00-04:00');
+    expect(spaced).not.toBeNull();
+    expect(spaced![6]).toEqual([{ open: '13:00', close: '04:00' }]);
+    expect(spaced![0]).toEqual([{ open: '13:00', close: '04:00' }]);
+    expect(spaced![1]).toBeUndefined();
+  });
+
+  test('a three-token day list followed by a rule comma', () => {
+    const hours = parseOsmOpeningHours('Mo,Tu,We 17:00-23:00, Th-Sa 17:00-02:00');
+    expect(hours).not.toBeNull();
+    expect(hours![1]).toEqual([{ open: '17:00', close: '23:00' }]);
+    expect(hours![3]).toEqual([{ open: '17:00', close: '23:00' }]);
+    expect(hours![4]).toEqual([{ open: '17:00', close: '02:00' }]);
+    expect(hours![6]).toEqual([{ open: '17:00', close: '02:00' }]);
+    expect(hours![5]).toEqual([{ open: '17:00', close: '02:00' }]);
+  });
+
+  test('comma rules mixed with semicolon rules and an off marker', () => {
+    const hours = parseOsmOpeningHours('Mo-We 17:00-02:00, Th-Sa 17:00-04:00; Su off');
+    expect(hours).not.toBeNull();
+    expect(hours![1]).toEqual([{ open: '17:00', close: '02:00' }]);
+    expect(hours![4]).toEqual([{ open: '17:00', close: '04:00' }]);
+    expect(hours![0]).toBeUndefined();
+  });
+
+  test('STILL REFUSES the open-ended `+` suffix rather than guessing', () => {
+    // The Back Room. `02:00+` means "and possibly later" — reading it as a hard
+    // 02:00 close would let the badge say CLOSED while the bar is open, which is
+    // the one direction the open-now gate refuses to be wrong in.
+    expect(
+      parseOsmOpeningHours('Mo-We 18:00-02:00+;Th-Fr 18:00-03:00+;Su 18:00-02:00+'),
+    ).toBeNull();
+  });
+
+  test('a malformed segment still fails the WHOLE spec closed', () => {
+    expect(parseOsmOpeningHours('Mo-We 17:00-02:00, Th sometimes')).toBeNull();
+    expect(parseOsmOpeningHours('Mo-We 17:00-02:00, Th 99:00-02:00')).toBeNull();
+  });
+});
+
+describe('comma rules followed by a day LIST', () => {
+  test('Lions Head Tavern — new rule opens with a bare day token', () => {
+    // `Sa` alone cannot continue the completed `Mo-Fr 12:00-02:00`, so it must
+    // begin the next rule's day list.
+    const hours = parseOsmOpeningHours('Mo-Fr 12:00-02:00, Sa,Su 11:00-02:00');
+    expect(hours).not.toBeNull();
+    expect(hours![1]).toEqual([{ open: '12:00', close: '02:00' }]);
+    expect(hours![5]).toEqual([{ open: '12:00', close: '02:00' }]);
+    expect(hours![6]).toEqual([{ open: '11:00', close: '02:00' }]);
+    expect(hours![0]).toEqual([{ open: '11:00', close: '02:00' }]);
+  });
+
+  test('a leading day list is still NOT split (regression guard)', () => {
+    // Nothing precedes `Sa`, so there is no completed rule and no new rule.
+    const hours = parseOsmOpeningHours('Sa,Su 12:00-04:00');
+    expect(hours![6]).toEqual([{ open: '12:00', close: '04:00' }]);
+    expect(hours![0]).toEqual([{ open: '12:00', close: '04:00' }]);
+    expect(hours![1]).toBeUndefined();
+  });
+});
