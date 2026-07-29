@@ -1,7 +1,12 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import GooglePlacePhoto from './GooglePlacePhoto';
-import { __resetLoader, __resetRequested, requestedCount } from '@/lib/placesUiKit';
+import {
+  SDK_LOAD_TIMEOUT_MS,
+  __resetLoader,
+  __resetRequested,
+  requestedCount,
+} from '@/lib/placesUiKit';
 
 /**
  * The default path must cost nothing and break nothing.
@@ -72,5 +77,87 @@ describe('surface exclusion', () => {
     render(<GooglePlacePhoto placeId="" fallback={FALLBACK} />);
     await waitFor(() => expect(screen.getByTestId('glyph-fallback')).toBeTruthy());
     expect(requestedCount()).toBe(0);
+  });
+});
+
+/**
+ * Regression for the stuck-'pending' bug Codex found in 0f614b8.
+ *
+ * With the SDK configured, `onBillableRequest` used to sit in the effect's
+ * dependency array. Callers pass an inline arrow, so its identity changed every
+ * render, the effect re-ran, cleanup cancelled the in-flight build, and the
+ * re-run bailed on builtRef — leaving status on 'pending' forever: an empty
+ * reserved box showing neither a photo nor the fallback.
+ *
+ * These tests need the CONFIGURED path, which the suite above cannot reach
+ * (no key in this repo), so the seam module is mocked.
+ */
+describe('re-render churn does not strand the widget (regression, Codex 0f614b8)', () => {
+  let observerCount = 0;
+
+  beforeEach(() => {
+    observerCount = 0;
+    class FakeObserver {
+      constructor(private cb: IntersectionObserverCallback) {
+        observerCount += 1;
+        // Fire immediately so the build path runs without real scrolling.
+        queueMicrotask(() =>
+          this.cb([{ isIntersecting: true } as IntersectionObserverEntry], this as never),
+        );
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal('IntersectionObserver', FakeObserver as unknown as typeof IntersectionObserver);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.doUnmock('@/lib/placesUiKit');
+  });
+
+  test('a new onBillableRequest identity does not re-run the effect', async () => {
+    vi.doMock('@/lib/placesUiKit', async (orig) => ({
+      ...(await orig<typeof import('@/lib/placesUiKit')>()),
+      isPlacesUiKitConfigured: () => true,
+      loadPlacesUiKit: async () => true,
+    }));
+    vi.resetModules();
+    const { default: Fresh } = await import('./GooglePlacePhoto');
+
+    const { rerender } = render(
+      <Fresh placeId="ChIJtest" fallback={FALLBACK} onBillableRequest={() => {}} />,
+    );
+    await waitFor(() => expect(observerCount).toBe(1));
+
+    // A parent re-render with a brand-new inline arrow — the exact trigger.
+    rerender(<Fresh placeId="ChIJtest" fallback={FALLBACK} onBillableRequest={() => {}} />);
+    rerender(<Fresh placeId="ChIJtest" fallback={FALLBACK} onBillableRequest={() => {}} />);
+
+    // One observer means one effect run means one billable widget. Before the
+    // fix this climbed with every render.
+    await waitFor(() => expect(observerCount).toBe(1));
+  });
+
+  test('never strands the user on an empty box: it resolves to the fallback', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.doMock('@/lib/placesUiKit', async (orig) => ({
+        ...(await orig<typeof import('@/lib/placesUiKit')>()),
+        isPlacesUiKitConfigured: () => true,
+        loadPlacesUiKit: async () => true,
+      }));
+      vi.resetModules();
+      const { default: Fresh } = await import('./GooglePlacePhoto');
+
+      render(<Fresh placeId="ChIJtest" fallback={FALLBACK} onBillableRequest={() => {}} />);
+
+      // gmp-load never fires in jsdom, so the timeout must rescue the user.
+      await vi.advanceTimersByTimeAsync(SDK_LOAD_TIMEOUT_MS + 100);
+      expect(screen.queryByTestId('glyph-fallback')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

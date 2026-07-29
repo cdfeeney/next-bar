@@ -64,7 +64,30 @@ export default function GooglePlacePhoto({
   const builtRef = useRef(false);
   const [status, setStatus] = useState<Status>('pending');
 
+  /**
+   * The billing callback is held in a ref and deliberately NOT an effect
+   * dependency.
+   *
+   * It was a dependency until Codex review of 0f614b8 found this: callers pass
+   * an inline arrow, so its identity changes every render, which re-ran the
+   * effect. Cleanup set `cancelled` and cleared the timeout, the re-run bailed
+   * immediately on `builtRef`, and every in-flight async path then no-opped — so
+   * nothing ever moved `status` off 'pending' and the user was left staring at
+   * an empty reserved box with neither a photo nor the fallback. Stabilising the
+   * dependency list removes the trigger entirely.
+   */
+  const onBillableRequestRef = useRef(onBillableRequest);
   useEffect(() => {
+    onBillableRequestRef.current = onBillableRequest;
+  });
+
+  useEffect(() => {
+    // A genuine placeId/allowed change must be able to rebuild, so the guard is
+    // reset here rather than latched for the component's whole lifetime.
+    builtRef.current = false;
+    setStatus('pending');
+    hostRef.current?.replaceChildren();
+
     if (!allowed || !placeId || !isPlacesUiKitConfigured()) {
       setStatus('unavailable');
       return;
@@ -124,7 +147,7 @@ export default function GooglePlacePhoto({
       const alreadyCounted = hasRequested(placeId);
       host.appendChild(details);
       markRequested(placeId);
-      if (!alreadyCounted) onBillableRequest?.(placeId);
+      if (!alreadyCounted) onBillableRequestRef.current?.(placeId);
     };
 
     // Lazy mount. IntersectionObserver is absent in some test environments;
@@ -155,9 +178,10 @@ export default function GooglePlacePhoto({
       observer.disconnect();
       window.clearTimeout(timer);
     };
-    // placeId is intentionally the only dependency: re-running this effect is a
-    // billable event, so it must not be triggered by unrelated prop churn.
-  }, [placeId, allowed, onBillableRequest]);
+    // Only placeId and allowed. Re-running this effect can issue a billable
+    // request, so it must never be triggered by unrelated prop churn — see the
+    // stuck-'pending' bug documented on onBillableRequestRef above.
+  }, [placeId, allowed]);
 
   if (status === 'unavailable') return <>{fallback}</>;
 
