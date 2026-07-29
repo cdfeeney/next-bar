@@ -36,6 +36,24 @@ export default defineConfig({
       name: 'Pixel 7',
       use: { ...devices['Pixel 7'] },
     },
+    // Playwright 1.60's device registry stops at iPhone 15 Pro Max, so the
+    // current hardware is pinned by hand. iPhone 17 is 402x874 logical; the
+    // web area is that minus Safari's ~193px of chrome. Wider AND taller than
+    // iPhone 13, so it is not a "smaller viewport" guard — it exists because
+    // it is what people actually hold, and because the safe-area insets differ.
+    //
+    // Scoped with testMatch on purpose: running all 155 specs on a third
+    // device would add ~7 minutes to every night-loop tick for very little
+    // extra signal. These three are the ones where a control that renders off
+    // screen, under the bottom nav, or too small to tap would actually hide.
+    {
+      name: 'iPhone 17',
+      use: {
+        ...devices['iPhone 15 Pro'],
+        viewport: { width: 402, height: 681 },
+      },
+      testMatch: /(mobile-controls|a11y-mobile|app-shell-smoke)\.spec\.ts/,
+    },
   ],
   webServer: {
     command: 'npm run dev',
