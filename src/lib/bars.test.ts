@@ -139,6 +139,34 @@ describe('wrong-venue guard, now enforced at generation time', () => {
     expect(GENERATOR).not.toMatch(/patch\.lng\s*=/);
   });
 
+  /**
+   * Orphan entries are Google data for venues the app does not have.
+   *
+   * 29 were removed on 2026-07-29: they matched no row in the catalog files and
+   * none in the bars table either, yet each shipped a place_id and 25 of them
+   * shipped a photoRef and attribution — 4% of the sidecar, describing venues
+   * that do not exist here. applyPlaces looks patches up BY catalog id, so they
+   * were unreachable dead weight rather than a rendering bug, which is exactly
+   * why nothing surfaced them.
+   *
+   * This guard is against re-accumulation. It can only see the catalog files, so
+   * genuinely DB-only venues are allowlisted by id; keeping that list short is
+   * the point.
+   */
+  it('the sidecar has no orphan entries', () => {
+    const DB_ONLY_ALLOWLIST = new Set(['pencil-factory']);
+
+    const sidecar = readFileSync(join(process.cwd(), 'src/lib/bars.places.ts'), 'utf8');
+    const sidecarIds = [...sidecar.matchAll(/^ {2}'([^']+)':\s*\{/gm)].map((m) => m[1]);
+    expect(sidecarIds.length).toBeGreaterThan(300); // the check must not pass vacuously
+
+    const catalogIds = new Set(bars.map((b) => b.id));
+    const orphans = sidecarIds.filter(
+      (id) => !catalogIds.has(id) && !DB_ONLY_ALLOWLIST.has(id),
+    );
+    expect(orphans).toEqual([]);
+  });
+
   it('the generated sidecar contains no coordinates', () => {
     // The compliance assertion, checked against the real artifact rather than
     // the code that produces it.
