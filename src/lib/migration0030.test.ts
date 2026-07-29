@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 /**
- * Guards for migration 0030 (259 coordinates re-sourced from OpenStreetMap).
+ * Guards for migration 0030 (258 coordinates re-sourced from OpenStreetMap).
  *
  * Unlike 0029 this is NOT an accuracy fix — every venue here was classed AGREE,
  * meaning OSM already sat near both our position and Google's. It is a
@@ -48,9 +48,19 @@ const CATALOG = [
   .join('\n');
 
 describe('migration 0030', () => {
-  test('carries 259 re-sourced coordinates, all distinct', () => {
-    expect(ROWS).toHaveLength(259);
-    expect(new Set(ROWS.map((r) => r.id)).size).toBe(259);
+  test('carries 258 re-sourced coordinates, all distinct', () => {
+    expect(ROWS).toHaveLength(258);
+    expect(new Set(ROWS.map((r) => r.id)).size).toBe(258);
+  });
+
+  test('vazacs is excluded — it has no row in public.bars', () => {
+    // The first apply aborted on this. Keeping it out preserves the strict
+    // precondition rather than softening it to "ignore missing ids".
+    expect(ROWS.map((r) => r.id)).not.toContain('vazacs');
+    expect(SQL).toContain('EXCLUDED — vazacs');
+    expect(SQL).toContain('ABSENT from');
+    // The sibling case is recorded too, so the divergence is not forgotten.
+    expect(SQL).toContain('chelsea-music-hall');
   });
 
   test('every replacement satisfies the 0019 bbox constraint', () => {

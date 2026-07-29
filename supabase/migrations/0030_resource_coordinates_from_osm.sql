@@ -1,4 +1,4 @@
--- Next Bar — 0030: re-source 259 venue coordinates from OpenStreetMap.
+-- Next Bar — 0030: re-source 258 venue coordinates from OpenStreetMap.
 --
 -- AUTHORED, NOT APPLIED.
 --
@@ -299,7 +299,6 @@ insert into _osm_resource (id, lat, lng, osm_ref, moves_m) values
   ('union-hall', 40.6760065, -73.980132, 'way/248158548', 5),
   ('union-pool', 40.7150021, -73.9516171, 'node/2465884892', 0),
   ('valhalla', 40.765979, -73.9873999, 'node/4030939257', 122),
-  ('vazacs', 40.7250128, -73.9813915, 'node/2454126844', 0),
   ('vers', 40.7626147, -73.9893366, 'node/10212457222', 118),
   ('vig-bar', 40.7211586, -73.9946239, 'node/12365512172', 52),
   ('warsaw', 40.7223925, -73.9484695, 'way/280077713', 21),
@@ -355,11 +354,25 @@ begin
   if remaining > 0 then
     raise exception '0030: % row(s) did not take the new coordinates', remaining;
   end if;
-  raise notice '0030: 259 venues re-sourced to OpenStreetMap coordinates';
+  raise notice '0030: 258 venues re-sourced to OpenStreetMap coordinates';
 end $$;
 
 commit;
 
+------------------------------------------------------------------------------
+-- EXCLUDED — vazacs
+--
+-- Present in the catalog files and the generated sidecar, but ABSENT from
+-- public.bars, so there is no row to update. The first apply attempt aborted on
+-- exactly this, which is the precondition working as intended: it refused to
+-- silently correct 258 rows and skip one.
+--
+-- It is not alone — `vazacs` and `chelsea-music-hall` are the only two catalog
+-- venues missing from the database (403 catalog ids vs 1,256 db ids, the latter
+-- a superset from the mass import). Both ship in the client bundle while not
+-- existing server-side. Recorded here; the fix is an insert, not a coordinate
+-- update, so it does not belong in this migration.
+--
 ------------------------------------------------------------------------------
 -- HELD BACK — five venues, each needing a human
 --
