@@ -53,14 +53,32 @@ export type MediaFlags = {
  * concurrent request. One request flipping the kill switch would silently
  * change what another request renders. (Caught in review, 2026-07-27.)
  *
- * Defaults are deliberately asymmetric: live Google media is OFF until the
- * UI Kit integration is reviewed and its spend caps are in place, because
- * an accidental enable is a billable event on every card render.
+ * BOTH defaults are now fail-closed: absence of configuration can never
+ * serve Google-derived media.
+ *
+ * googleLive is OFF until the UI Kit integration is reviewed and its spend
+ * caps are in place, because an accidental enable is a billable event on
+ * every card render.
+ *
+ * legacyCache WAS `!== '0'` — opt-OUT — which meant the ~3,435 re-hosted
+ * Google photo files served whenever the variable was absent, empty,
+ * misspelled, or set to something reasonable-looking like 'false'. Google's
+ * Places policy permits storing place_id indefinitely and explicitly does
+ * NOT permit re-hosting photo content, so "absent config" was defaulting to
+ * the non-compliant state. The dangerous case is an emergency ROLLBACK: a
+ * redeploy of a build that predates the variable has it compiled in as
+ * undefined, and nobody audits env vars during a rollback.
+ *
+ * Note the guarantee is weaker than it looks, and deliberately so: these are
+ * NEXT_PUBLIC_*, inlined at BUILD time. A build shipped without the variable
+ * keeps its value for that build's entire life. Making the flip runtime-
+ * controllable is the unresolved kill-switch-transport decision (D1) — see
+ * docs/UI-KIT-BUILD-PLAN.md. This change fixes the DEFAULT, not the latency.
  */
 export function defaultMediaFlags(): MediaFlags {
   return {
     googleLive: process.env.NEXT_PUBLIC_GOOGLE_MEDIA === '1',
-    legacyCache: process.env.NEXT_PUBLIC_LEGACY_PHOTOS !== '0',
+    legacyCache: process.env.NEXT_PUBLIC_LEGACY_PHOTOS === '1',
   };
 }
 

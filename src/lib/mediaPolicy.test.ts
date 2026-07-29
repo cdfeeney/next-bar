@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
   defaultMediaFlags,
   needsGoogleAttribution,
@@ -29,6 +29,63 @@ const FLAGS = (over: Partial<MediaFlags> = {}): MediaFlags => ({
   ...over,
 });
 
+/**
+ * Both flags must be FAIL-CLOSED: absent or malformed configuration can never
+ * serve Google-derived media.
+ *
+ * legacyCache was `!== '0'` until 2026-07-29, i.e. opt-OUT — the ~3,435
+ * re-hosted Google photo files served whenever the variable was missing. The
+ * variable was in fact set NOWHERE in the repo, so the non-compliant path was
+ * the live default. These tests set process.env explicitly rather than relying
+ * on ambient state, because .env.local now sets the opt-in for dev and a test
+ * that merely observed the ambient value would pass for the wrong reason.
+ */
+describe('defaultMediaFlags is fail-closed', () => {
+  const KEYS = ['NEXT_PUBLIC_LEGACY_PHOTOS', 'NEXT_PUBLIC_GOOGLE_MEDIA'] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const k of KEYS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  test('absent config serves NO Google media of either kind', () => {
+    expect(defaultMediaFlags()).toEqual({ googleLive: false, legacyCache: false });
+  });
+
+  // The rollback case: a build predating the variable compiles it in as
+  // undefined and serves legacy photos for that build's entire life.
+  test.each(['', 'false', 'FALSE', 'off', 'no', '0', 'true', 'yes'])(
+    'legacy photos stay OFF for a reasonable-looking value %o',
+    (value) => {
+      process.env.NEXT_PUBLIC_LEGACY_PHOTOS = value;
+      expect(defaultMediaFlags().legacyCache).toBe(false);
+    },
+  );
+
+  test("exactly '1' is the only opt-in", () => {
+    process.env.NEXT_PUBLIC_LEGACY_PHOTOS = '1';
+    process.env.NEXT_PUBLIC_GOOGLE_MEDIA = '1';
+    expect(defaultMediaFlags()).toEqual({ googleLive: true, legacyCache: true });
+  });
+
+  test('a bar with legacy photos resolves to glyph under absent config', () => {
+    // The end-to-end consequence: no /bar-photos/ URL is ever produced, so the
+    // default path issues zero requests for the non-compliant files.
+    const d = resolveMedia(bar(), [], defaultMediaFlags());
+    expect(d).toEqual({ source: 'glyph' });
+    expect(JSON.stringify(d)).not.toContain('bar-photos');
+  });
+});
+
 describe('resolveMedia priority', () => {
   test('owned Next Bar media beats everything', () => {
     const d = resolveMedia(bar(), [...owned('user'), ...owned('nextbar')]);
@@ -49,11 +106,16 @@ describe('resolveMedia priority', () => {
     expect(d).toEqual({ source: 'venue', urls: ['/a.webp', '/b.webp'] });
   });
 
-  // The compliance-critical default: without owned media and with Google
-  // live OFF, we fall back to the legacy cache — and it is LABELLED as
-  // Google-derived rather than passed off as ours.
+  // When the legacy cache IS opted into, it is LABELLED as Google-derived
+  // rather than passed off as ours, and it demands attribution.
+  //
+  // Flags are explicit here on purpose. This used to call resolveMedia(bar(), [])
+  // and lean on the ambient default, which silently encoded "legacy photos are
+  // on unless told otherwise" — the fail-open behaviour removed on 2026-07-29.
+  // The labelling/attribution guarantee is what this test is for; the default is
+  // pinned separately in the fail-closed suite above.
   test('falls back to legacy cache, labelled honestly', () => {
-    const d = resolveMedia(bar(), []);
+    const d = resolveMedia(bar(), [], FLAGS({ legacyCache: true }));
     expect(d.source).toBe('legacy-google-cached');
     expect(needsGoogleAttribution(d)).toBe(true);
   });
