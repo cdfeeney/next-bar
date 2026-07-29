@@ -90,6 +90,21 @@ type OverpassElement = {
 
 const osmAddress = new Map<string, string>();
 
+/** Great-circle metres between two points. */
+function metresBetween(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const R = 6_371_000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
 function loadOsmVenues(): OsmVenue[] {
   if (!existsSync(CACHE_FILE)) {
     throw new Error(
@@ -249,7 +264,7 @@ async function main() {
 
   const rows: Record<string, string>[] = [];
   const lookup: string[] = [
-    ['id','name','verdict','our_address','google_maps_link','osm_name','osm_address','osm_link','osm_metres_from_google'].join('	'),
+    ['id','name','verdict','our_address','google_maps_link','osm_name','osm_address','osm_link','osm_metres_from_google','osm_lat','osm_lng','our_metres_from_osm'].join('	'),
   ];
   for (const id of ids) {
     const cat = catalog.get(id);
@@ -300,6 +315,9 @@ async function main() {
         osmHit ? (osmAddress.get(osmHit.osmId) ?? '') : '',
         osmHit ? `https://www.openstreetmap.org/${osmHit.osmId}` : '',
         metres,
+        osmHit ? String(osmHit.lat) : '',
+        osmHit ? String(osmHit.lng) : '',
+        osmHit ? String(Math.round(metresBetween(cat, osmHit))) : '',
       ].join('	'),
     );
   }
