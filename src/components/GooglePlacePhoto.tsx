@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  MAX_LOAD_MS,
   WIDGET_LOAD_TIMEOUT_MS,
   isPlacesUiKitConfigured,
   loadPlacesUiKit,
@@ -111,9 +112,22 @@ export default function GooglePlacePhoto({
       if (builtRef.current || cancelled) return;
       builtRef.current = true;
 
+      // Arm the safety timer BEFORE awaiting the loader.
+      //
+      // It used to be armed only after the await, so if loadPlacesUiKit() never
+      // settled nothing downstream ran and the card sat on 'pending' forever —
+      // an empty box with neither photo nor fallback. The loader is bounded now
+      // too, but a component must not depend on a collaborator's internal
+      // timing for its own liveness: whatever happens below, this guarantees the
+      // user sees something. (santa-loop round 3.)
+      timer = window.setTimeout(() => {
+        if (!cancelled) setStatus('unavailable');
+      }, MAX_LOAD_MS);
+
       const ok = await loadPlacesUiKit();
       if (cancelled) return;
       if (!ok) {
+        window.clearTimeout(timer);
         setStatus('unavailable');
         return;
       }
@@ -144,9 +158,9 @@ export default function GooglePlacePhoto({
         setStatus('ready');
       });
 
-      // A widget that never loads must not sit as an empty box forever. Its own
-      // constant, not the SDK one — two different waits, and sharing a value
-      // stacked them into a ~10s worst case.
+      // Hand the budget over from the load phase to the widget phase: the
+      // pre-await timer above has done its job once we get here.
+      window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         if (!cancelled) setStatus('unavailable');
       }, WIDGET_LOAD_TIMEOUT_MS);

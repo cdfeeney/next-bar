@@ -159,6 +159,19 @@ export const SDK_LOAD_GRACE_MS = 1_000;
 const POLL_MS = 100;
 
 /**
+ * Bound on `importLibrary('places')` itself, separate from waiting for the SDK
+ * to appear. Without it that call can hang indefinitely (santa-loop round 3).
+ */
+export const IMPORT_TIMEOUT_MS = 5_000;
+
+/**
+ * The worst case for a single load attempt: wait for the SDK, plus the grace
+ * window, plus the bounded library import. Exported so callers can arm their own
+ * safety timer against a real number instead of guessing.
+ */
+export const MAX_LOAD_MS = SDK_LOAD_TIMEOUT_MS + SDK_LOAD_GRACE_MS + IMPORT_TIMEOUT_MS;
+
+/**
  * Attempt a load. Never injects more than one script tag, ever.
  *
  * Rewritten after santa-loop round 2, where both reviewers independently found
@@ -189,18 +202,33 @@ function buildLoad(): Promise<boolean> {
 
     let settled = false;
     let timer: number | undefined;
+    let importTimer: number | undefined;
 
     const finish = (ok: boolean) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
+      window.clearTimeout(importTimer);
       resolve(ok);
     };
 
-    /** True once the SDK is present and `places` has been imported. */
+    /**
+     * True once the SDK is present and the `places` import has been STARTED.
+     *
+     * The import is bounded. Polling only ever waited for `importLibrary` to
+     * EXIST; once it did, this handed off to a promise with no timeout of its
+     * own, and the poll loop returned without re-arming anything. A partial CDN
+     * failure — main script served, library fetch stalls — therefore left this
+     * promise permanently unsettled, and because GooglePlacePhoto arms its own
+     * safety timer only AFTER awaiting us, the card sat on 'pending' forever
+     * with neither photo nor fallback. Found in santa-loop round 3 and
+     * reproduced with a probe that advanced 60s without the promise settling.
+     */
     const useSdkIfReady = (): boolean => {
       const g = (window as unknown as { google?: MapsGlobal }).google;
       if (!g?.maps?.importLibrary) return false;
+
+      importTimer = window.setTimeout(() => finish(false), IMPORT_TIMEOUT_MS);
       g.maps
         .importLibrary('places')
         .then(() => finish(true))

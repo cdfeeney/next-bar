@@ -140,6 +140,36 @@ describe('re-render churn does not strand the widget (regression, Codex 0f614b8)
     await waitFor(() => expect(observerCount).toBe(1));
   });
 
+  /**
+   * Regression, santa-loop round 3.
+   *
+   * The safety timer used to be armed only AFTER `await loadPlacesUiKit()`, so a
+   * loader that never settled meant nothing downstream ever ran and the card sat
+   * on 'pending' forever. The loader is bounded now too, but the component must
+   * not depend on a collaborator's internal timing for its own liveness.
+   */
+  test('a loader that NEVER settles still falls back', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.doMock('@/lib/placesUiKit', async (orig) => ({
+        ...(await orig<typeof import('@/lib/placesUiKit')>()),
+        isPlacesUiKitConfigured: () => true,
+        // Never settles — the exact round-3 hang.
+        loadPlacesUiKit: () => new Promise<boolean>(() => {}),
+      }));
+      vi.resetModules();
+      const { default: Fresh } = await import('./GooglePlacePhoto');
+      const { MAX_LOAD_MS: MAX } = await import('@/lib/placesUiKit');
+
+      render(<Fresh placeId="ChIJtest" fallback={FALLBACK} onBillableRequest={() => {}} />);
+
+      await vi.advanceTimersByTimeAsync(MAX + 100);
+      expect(screen.queryByTestId('glyph-fallback')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('never strands the user on an empty box: it resolves to the fallback', async () => {
     vi.useFakeTimers();
     try {

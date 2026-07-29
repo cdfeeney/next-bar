@@ -159,6 +159,43 @@ describe('loadPlacesUiKit when configured', () => {
     await expect(pending).resolves.toBe(true);
   });
 
+  /**
+   * Regression, santa-loop round 3.
+   *
+   * Polling only ever waited for `importLibrary` to EXIST. Once it did, the code
+   * handed off to a promise with no timeout of its own and stopped re-arming the
+   * poll, so a partial CDN failure — main script served, library fetch stalls —
+   * left this permanently unsettled. A probe advanced 60 simulated seconds with
+   * the promise still pending.
+   */
+  test('a hanging importLibrary resolves false instead of hanging forever', async () => {
+    vi.useFakeTimers();
+    // Present, but its import never settles.
+    (window as unknown as Record<string, unknown>).google = {
+      maps: { importLibrary: () => new Promise(() => {}) },
+    };
+
+    const pending = mod.loadPlacesUiKit();
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(mod.IMPORT_TIMEOUT_MS - 100);
+    expect(settled, 'settled too early').toBe(false);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(pending).resolves.toBe(false);
+  });
+
+  test('MAX_LOAD_MS actually bounds the worst case', () => {
+    // Callers arm their own safety timer against this, so it must equal the sum
+    // of the phases rather than being an independently drifting guess.
+    expect(mod.MAX_LOAD_MS).toBe(
+      mod.SDK_LOAD_TIMEOUT_MS + mod.SDK_LOAD_GRACE_MS + mod.IMPORT_TIMEOUT_MS,
+    );
+  });
+
   test('a script network error fails fast and removes the tag so a retry can try again', async () => {
     vi.useFakeTimers();
     const pending = mod.loadPlacesUiKit();
