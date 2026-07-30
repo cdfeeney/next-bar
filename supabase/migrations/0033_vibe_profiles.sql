@@ -82,6 +82,32 @@ create policy "vibe_profiles: owner can delete own"
   using (auth.uid() = user_id);
 
 ------------------------------------------------------------------------------
+-- 2b. Grants — revoke-first, the house pattern stated at 0019:80
+------------------------------------------------------------------------------
+-- Added by the C3 RLS audit (F3), which caught this table matching 0001's
+-- POLICY style but not 0019's GRANT style — it relied entirely on the blanket
+-- default privileges Supabase hands the anon and authenticated roles.
+-- (Phrased rather than quoted on purpose: this file's own guard test rejects
+-- the literal grant-to-anon text anywhere in it, comments included.)
+--
+-- This changes nothing about who can read what TODAY: the policies above
+-- already deny `anon`, which has no auth.uid() and therefore matches no row.
+-- What it buys is surviving a mistake. A revoke-first table still has to
+-- pass a grant check if RLS is ever accidentally disabled; a
+-- defaults-reliant table is wide open the instant that happens.
+--
+-- Amended in place rather than added as 0034 because 0033 has never been
+-- applied — schema_migrations ends at 0032, so there is no deployed
+-- database whose grants would diverge from this file.
+revoke all on table public.vibe_profiles from public, anon, authenticated;
+
+-- Exactly the four verbs the owner policies above allow, and no more:
+-- select/insert/update back the sync in src/lib/vibeProfile.server.ts,
+-- delete backs Settings' "Clear your saved vibe profile".
+grant select, insert, update, delete
+  on table public.vibe_profiles to authenticated;
+
+------------------------------------------------------------------------------
 -- 3. Last-write-wins guard (BEFORE UPDATE) — same rule as ratings_lww (0005)
 ------------------------------------------------------------------------------
 
