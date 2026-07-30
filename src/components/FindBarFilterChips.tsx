@@ -31,8 +31,15 @@ const DISTANCE_CHIPS: ReadonlyArray<{ label: string; toRadius: () => Radius }> =
   { label: 'Anywhere', toRadius: () => ({ kind: 'anywhere', maxMiles: RADIUS_ANYWHERE }) },
 ];
 
+// min-w matters as much as min-h: the price row renders a single "$" glyph, and
+// with px-4 alone that chip measured 43px wide — one pixel under the Apple
+// minimum, which mobile-controls.spec.ts checks in BOTH dimensions. Every other
+// chip is already wider than 44px, so the floor only ever affects the narrow
+// ones. inline-flex/justify-center is explicit rather than relying on the
+// default button text centring (these are flex children, so the display value
+// is blockified by the parent anyway).
 const CHIP_BASE =
-  'shrink-0 min-h-[44px] px-4 rounded-full border font-display text-sm touch-manipulation transition-colors';
+  'shrink-0 inline-flex items-center justify-center min-h-[44px] min-w-[44px] px-4 rounded-full border font-display text-sm touch-manipulation transition-colors';
 const CHIP_ON = 'bg-accent text-bg border-accent';
 const CHIP_OFF = 'bg-surface text-text border-border hover:border-accent';
 

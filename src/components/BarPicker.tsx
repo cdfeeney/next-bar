@@ -61,6 +61,16 @@ export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {
   }, [query, bars]);
 
   return (
+    /*
+      Deliberately NO bottom-nav clearance here. This component has four call
+      sites and only ONE of them sits in normal flow under the fixed nav
+      (WhereNextFlow, the / page) — which is where the clearance now lives. The
+      other three are two `fixed inset-0 z-[1100]` dialogs that render ABOVE the
+      z-[1000] nav and already have their own pb-8, plus an inline expand-in-place
+      panel on /lists where extra padding shows as dead space inside a card.
+      A page-shell artifact like a fixed nav is the consumer's concern, not this
+      component's.
+    */
     <section className="max-w-2xl mx-auto">
       <input
         type="text"

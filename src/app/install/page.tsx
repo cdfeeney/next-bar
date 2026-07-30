@@ -22,7 +22,9 @@ export default function InstallPage() {
           </Link>
           <Link
             href="/quiz"
-            className="text-muted hover:text-text underline-offset-4 hover:underline text-sm min-h-[44px] inline-flex items-center touch-manipulation"
+            // min-w floor: "Quiz" is a 4-character label and measured 30px
+            // wide. Height was already fine; width was the failure.
+            className="text-muted hover:text-text underline-offset-4 hover:underline text-sm min-h-[44px] min-w-[44px] inline-flex items-center justify-center touch-manipulation"
           >
             Quiz
           </Link>

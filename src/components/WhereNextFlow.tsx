@@ -569,7 +569,21 @@ export default function WhereNextFlow() {
 
   if (step.kind === 'pickBar') {
     return (
-      <section className="min-h-screen px-4 py-8 md:px-6">
+      /*
+        pb-24 (on top of py-8) reserves scroll clearance for the fixed BottomNav,
+        whose raised centre tab otherwise covered the LAST row of the bar list —
+        its centre point resolved to the nav tab, so the bottom row was
+        untappable. This lives HERE rather than inside BarPicker because this is
+        the only one of BarPicker's four call sites that sits in normal flow under
+        the nav; the others are z-[1100] dialogs and an inline card panel.
+        Padding not margin: a last-child bottom margin collapses out and adds
+        nothing to scrollHeight (measured — see the same fix on /settings).
+        `pt-8 pb-24` rather than `py-8 pb-24`: both reviewers noted the latter
+        relies on utility ordering to resolve the bottom edge and reads as though
+        the padding were symmetric. Measured identical output (top 32px, bottom
+        96px) with no ordering dependence.
+      */
+      <section className="min-h-screen px-4 pt-8 pb-24 md:px-6">
         <div className="max-w-2xl mx-auto">
           <h1 className="font-display text-3xl md:text-4xl text-center mb-2">
             Where are you?

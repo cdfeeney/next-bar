@@ -264,7 +264,17 @@ export default function SettingsPage(): JSX.Element {
         <h1 className="font-display text-3xl md:text-4xl mb-2">Settings</h1>
       </header>
 
-      <section className="max-w-md mx-auto px-6 mt-8 mb-24 space-y-8">
+      {/*
+        pb, not mb. `mb-24` here created NO clearance above the fixed BottomNav:
+        measured at rest on iPhone 13, document scrollHeight (1500) equalled the
+        section's own bottom edge, so neither the 96px bottom margin (it collapses
+        out of a parent with no bottom border/padding) nor the body's
+        pb-[calc(64px+...)] contributed any scrollable space. The footer's last
+        line therefore rested at y 620-664 with the nav occupying 603-664, i.e.
+        its centre point was inside the nav.
+        Padding cannot collapse, so it genuinely extends the scroll area.
+      */}
+      <section className="max-w-md mx-auto px-6 mt-8 pb-24 space-y-8">
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Account
@@ -667,26 +677,44 @@ export default function SettingsPage(): JSX.Element {
               Coverage: Manhattan and parts of Brooklyn. More neighborhoods
               rolling out.
             </p>
+            {/*
+              Split into two <p>s for the same reason as /map's quiz link: a
+              44px inline-flex box must not share a line box with 12px prose, or
+              that line inflates ~3.7x against its neighbours.
+              Measured on iPhone 13 the link happened to wrap onto its own line
+              anyway — but that depends on the prose filling the first line, and
+              Pixel 7 (412px) and iPhone 17 (402px) are WIDER, so the wrap is not
+              guaranteed. Two reviewers flagged relying on that. Splitting makes
+              the treatment identical to /map and removes the viewport
+              dependence entirely. `space-y-2` on the parent handles the gap.
+            */}
+            <p>Hours and specials are best-effort.</p>
             <p>
-              Hours and specials are best-effort.{' '}
               <Link
                 href="mailto:hi@next-bar.app?subject=Bar+correction"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline inline-flex items-center min-h-[44px] touch-manipulation"
               >
                 Tell us if something&apos;s wrong.
               </Link>
             </p>
-            <p>
+            {/*
+              Laid out as a flex row rather than inline text. Both links need a
+              real 44px box (they were 17px tall), and with two inline-flex
+              links inside a plain <p> the " · " separator would sit on the
+              line-box baseline — visually low against two 44px-tall
+              neighbours. A flex row centres all three together.
+            */}
+            <p className="flex items-center gap-2">
               <Link
                 href="/privacy"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline inline-flex items-center min-h-[44px] touch-manipulation"
               >
                 Privacy Policy
               </Link>
-              {' · '}
+              <span aria-hidden="true">·</span>
               <Link
                 href="/terms"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline inline-flex items-center min-h-[44px] touch-manipulation"
               >
                 Terms of Use
               </Link>

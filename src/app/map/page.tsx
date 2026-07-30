@@ -129,16 +129,30 @@ export default function MapPage(): JSX.Element {
           </span>
         </div>
 
+        {/*
+          The quiz link needs a real 44px box (an inline <a> here was 17px tall,
+          and a ::after hit-area trick would not satisfy mobile-controls.spec.ts,
+          which measures getBoundingClientRect). But a 44px inline-flex box must
+          NOT share a line with 12px prose: the line box grows to 44px and the
+          trailing words then float with a large gap against neighbouring lines —
+          roughly 3.7x the surrounding line height. So the prose and the link are
+          separate blocks and the link is the SOLE content of its own <p>,
+          matching the "Discover →" treatment further down this page. The testid
+          stays on the wrapper; map-interaction.spec.ts only requires it to
+          contain the quiz link.
+        */}
         {profileChecked && !hasProfile && (
-          <p className="mt-3 text-xs text-muted" data-testid="map-quiz-hint">
-            <Link
-              href="/quiz"
-              className="text-accent underline-offset-4 hover:underline"
-            >
-              Take the quiz →
-            </Link>{' '}
-            sharper picks.
-          </p>
+          <div className="mt-3 text-xs text-muted" data-testid="map-quiz-hint">
+            <p>Want sharper picks?</p>
+            <p>
+              <Link
+                href="/quiz"
+                className="text-accent underline-offset-4 hover:underline inline-flex items-center min-h-[44px] touch-manipulation"
+              >
+                Take the quiz →
+              </Link>
+            </p>
+          </div>
         )}
 
         {/* Search — pick a match and the map flies there. */}
