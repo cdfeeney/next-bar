@@ -15,6 +15,13 @@ downgrade, and this window is treated as T0 regardless.
 |---|---|---|
 | `0033_vibe_profiles.sql` | Creates `public.vibe_profiles` + owner-only RLS + revoke-first grants + LWW trigger | nothing |
 | `0034_revoke_first_grants.sql` | Revoke-first grants on `profiles`, `ratings`, `pairwise_comparisons`; extends the `profiles` column grant to `shares_list_publicly` | nothing |
+| `0035_share_night_date_bound.sql` | Adds the `current_date ± 2` bound to `share_night` (C4 F1) | nothing |
+
+**`0035` was authored after this runbook's first draft** and joins the same window. The
+sequence to rehearse and apply is therefore **`0033` → `0034` → `0035`**, and the staging
+rehearsal must cover all three, not just the first two. `0035` is a `create or replace` of one
+function with no data effect, so it is the least risky of the three — but it still gets its own
+verification step (step 5b) rather than being assumed.
 
 They are independent in content but **must be applied 0033 first**, because that is
 lexical order and `scripts/apply-migrations.ts` applies files in lexical order in a
@@ -132,6 +139,28 @@ select column_name, privilege_type
 -- `handle` MUST NOT appear — 0006 removed it deliberately so handles cannot be
 -- PATCHed around claim_handle's rate cap and no-renames rule.
 ```
+
+## Step 5b — Verify 0035 (`share_night` date bound)
+
+```sql
+-- The guard must be present in the installed function body.
+select pg_get_functiondef('public.share_night(date, text[], text)'::regprocedure)
+       like '%current_date - 2%' as has_lower_bound,
+       pg_get_functiondef('public.share_night(date, text[], text)'::regprocedure)
+       like '%current_date + 2%' as has_upper_bound;
+-- expect: t | t
+
+-- Execute privilege unchanged: authenticated only, never anon.
+select grantee, privilege_type
+  from information_schema.role_routine_grants
+ where routine_schema = 'public' and routine_name = 'share_night'
+   and grantee in ('anon','authenticated','PUBLIC');
+-- expect: authenticated / EXECUTE only
+```
+
+Behavioural check with a synthetic account (staging only): calling `share_night` with a night
+more than two days away must raise `night must be within 2 days of today`, and a night within
+the window must still return a token.
 
 ## Step 6 — Two-browser vibe-profile smoke (authoritative)
 

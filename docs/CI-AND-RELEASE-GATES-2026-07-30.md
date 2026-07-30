@@ -50,6 +50,10 @@ Verified both ways: **clean over 484 tracked files**, and a planted key is still
 
 It reports **locations only** — never the matching text — so it is safe in a public CI log.
 
+**Scope, stated so "clean" is not over-read:** four narrow patterns over *tracked* files. It does not
+scan git history, does not detect novel credential formats, and is not a comprehensive secret audit.
+A history-wide scan (gitleaks/trufflehog) is still outstanding and is NOT covered by this gate.
+
 ## Deliberately NOT added to CI
 
 | Check | Why not |

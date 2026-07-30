@@ -61,7 +61,7 @@ everything outside the repository, and there is a lot of it.
 | C2 rate-limit findings remediated and tested | **PASS** | F1+F3 `4472f23`, F6+F7 `f9ac038`, F1b `9bd3a29`, F5 instrumented; F2 blocked on Q7; F4 accepted with reasoning |
 | C3 grants/RLS findings remediated, applied only attended | **PASS (authored)** | `926f498`, unapplied as required |
 | Public API keys restricted; secrets never in the bundle | **UNVERIFIED (restrictions)** / **PASS (bundle)** | secret scan clean over 484 tracked files |
-| Secret scanning passes before public release | **PASS** | `scripts/secret-scan.mjs` in CI; verified it catches a planted key |
+| Secret scanning passes before public release | **PARTIAL** | `scripts/secret-scan.mjs` runs in CI and provably catches a planted key. **Scope, stated precisely:** it matches four deliberately narrow patterns (JWT shapes, credentialed Postgres URLs, Google API keys, and a secret assigned under a `NEXT_PUBLIC_` name) over tracked files. "Clean" means *those patterns found nothing* — it is **not** a comprehensive secret audit, does not cover history, and does not detect a novel credential format. A full audit (e.g. gitleaks/trufflehog over history) remains outstanding. |
 | Dependency/runtime production security review | **PARTIAL → UNVERIFIED** | 9 deps inventoried; no CVE scan run |
 | Media kill switch works without redeploy | **UNVERIFIED** | never exercised |
 | Cost-bearing APIs have quotas, alerts, breakers, an owner | **UNVERIFIED** | Google Cloud console |
@@ -90,7 +90,7 @@ everything outside the repository, and there is a lot of it.
 
 | Gate | Verdict | Evidence |
 |---|---|---|
-| Accurate privacy/terms/support URLs on `next-bar.app` | **UNVERIFIED** | `/privacy` still holds `[PLACEHOLDER]`s per `APP-STORE-PLAN` |
+| Accurate privacy/terms/support URLs on `next-bar.app` | **UNVERIFIED (hosting only)** | **Correction:** an earlier draft of this report said `/privacy` still holds `[PLACEHOLDER]`s. That was repeated from `APP-STORE-PLAN:32` without checking the source. `src/app/privacy/page.tsx` contains **no placeholders** — the stale claim lives only in the plan document. What remains unverified is whether the pages are *hosted* on `next-bar.app`, not whether the copy is finished. |
 | App Privacy answers match shipped behaviour | **BLOCKED-OPERATOR** | Q1 and Q3 |
 | Analytics status, retention, region, CARTO terms confirmed | **BLOCKED-OPERATOR** | Q3 + retention decisions |
 | Apple enrolment / App Store Connect | **UNVERIFIED** | — |
@@ -107,8 +107,8 @@ everything outside the repository, and there is a lot of it.
 
 | Verdict | Count |
 |---|---|
-| PASS | 19 |
-| FAIL | 8 |
+| PASS | 18 |
+| FAIL | 8 (+1 PARTIAL) |
 | BLOCKED-OPERATOR | 7 |
 | UNVERIFIED | 25 |
 

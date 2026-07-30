@@ -13,7 +13,6 @@
   "non_runtime_paths": [
     "docs/**",
     "**/*.md",
-    ".github/**",
     "**/fixtures/**",
     "**/*.txt"
   ],
@@ -65,8 +64,8 @@
     },
     {
       "glob": ".github/**",
-      "tier": "T2",
-      "note": "CI config"
+      "tier": "T1",
+      "note": "Workflow files are NOT skippable config. A workflow edit can delete the secret-scan step, widen permissions, or add a step that reads deployment secrets — i.e. it can disable the very gates protecting everything else. T1 so it is always reviewed. (Raised in operator review 2026-07-30; it was inherited as T2 from the generic defaults.)"
     },
     {
       "glob": "**/fixtures/**",
