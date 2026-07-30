@@ -89,7 +89,7 @@ Two observations that matter more than the feature itself:
 
 | # | Ask | Status |
 |---|---|---|
-| S1 | Rename the **"Hood Hopper"** award — racially loaded | Confirmed at `src/lib/badges.ts:123`: `badge('hood-hopper', 'Hood Hopper', 'Hit 3 neighborhoods', …)`. Suggested: **"Borough Crawler"**, "Neighborhood Hopper", or "Three-Hood Night". Also update the `id` and `badges.test.ts:50,67`. |
+| S1 **DONE (f7550db)** | ~~Rename the **"Hood Hopper"** award~~ — shipped as **"Borough Crawler"** | Confirmed at `src/lib/badges.ts:123`: `badge('hood-hopper', 'Hood Hopper', 'Hit 3 neighborhoods', …)`. Suggested: **"Borough Crawler"**, "Neighborhood Hopper", or "Three-Hood Night". Also update the `id` and `badges.test.ts:50,67`. |
 | S2 | Personas friendlier and livelier; "Industry Crowd Insider" is verbose | Confirmed at `src/lib/quiz.ts:160`: `'Industry-crowd insider'`. All archetype strings live in `quiz.ts` — one file. |
 | S3 | ⚠️ "After the quiz the vibe quiz doesn't save" | **DIAGNOSED — and it is not the save call.** See below. |
 
@@ -151,7 +151,7 @@ Apple review will need. Needs Connor's yes.
 
 1. **S3** — reproduce the quiz-save failure, then fix. A user losing their quiz
    result is the worst item on this list; everything else is polish or addition.
-2. **S1** — rename Hood Hopper. Trivial, and it should not ship as-is.
+2. ~~**S1** — rename Hood Hopper.~~ **DONE (f7550db)** — shipped as "Borough Crawler".
 3. **R7** — delete the rankings filter buttons. Pure removal.
 4. **U1 (from the overnight brief)** — the 7 sub-44px tap targets, which include
    `/settings` Privacy/Terms at 17px.

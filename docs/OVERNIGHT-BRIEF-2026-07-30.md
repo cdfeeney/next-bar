@@ -45,7 +45,7 @@ defects rather than viewport artifacts.
 
 | # | Item | Overnight? | Notes |
 |---|---|---|---|
-| T1 | **Playwright full-suite teardown hang** | ✅ | Highest-value. 3 hypotheses already refuted: not WebKit-wide, not failure-payload size, not spec-specific. Only reproduces in the multi-project run; worker index varies. Next: bisect `--project` singly, then `--workers=2` vs default. |
+| T1 | **Playwright full-suite teardown hang** | ✅ | Highest-value. 3 hypotheses already refuted: not WebKit-wide, not failure-payload size, not spec-specific. **RESOLVED (e812cf3)** by upgrading @playwright/test 1.60.0 → 1.62.0. The "only reproduces in the multi-project run" claim recorded here is **REFUTED** — it reproduced on single-project runs as well. Regression check: `npm run test:e2e:teardown-guard`. |
 | T2 | Vacuous subdirectory test in `photoFiles.test.ts` | ✅ | santa round 3 PROVED it: deleting `entry.isFile()` leaves all 17 tests green. Needs a fixture named `ghost-bar.webp` that is a directory. |
 | T3 | 5 witness SUSPECT venues + `the-vault` | ✅ | `the-vault` appears in two independent suspect lists |
 | T4 | No script-level test for the full-run indeterminate path | ⚠️ | Helper is tested; its use is a source grep. Real coverage needs executing the generator (API key + network). |

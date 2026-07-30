@@ -33,7 +33,7 @@ approval argument.
 | Terms | `/terms` draft, same | Same |
 | Support URL + marketing URL | none | next-bar.app (purchase in progress) + `mailto` or a /support page |
 | Age rating | 21+ gate SHIPPED (`next-bar:age-ack:v1`) | Declare 17+/frequent-alcohol in the rating questionnaire |
-| App Privacy "nutrition labels" | not started | Inventory: email (auth), display name/handle, bar ratings, RSVPs/suggestions, coarse+fine location (while-using, for matching), no tracking/ads. Generate from codebase before submission. |
+| App Privacy "nutrition labels" | inventory DONE | **`docs/APP-PRIVACY-LABELS-2026-07-30.md` is authoritative** — a code-evidenced inventory that supersedes the summary that used to sit in this cell. Do not restate it here; a second copy is how the two drift. Two operator answers still block submission: `public.waitlist` has no deletion path, and production analytics status is unconfirmed. |
 | Sign in with Apple | NOT required | Only mandated alongside third-party social logins; email/password + magic link is exempt |
 
 ## Assets checklist

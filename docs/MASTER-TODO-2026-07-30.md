@@ -32,7 +32,7 @@ Branch `feat/phase1-compliance-media` · HEAD `b05f42c` · 1,302 unit tests · `
 | G1 | **Vibe profile never persists server-side.** Ratings and pairwise both sync on sign-in; the profile has no merged-for flag, no push, and no DB column. Dies on device switch, storage clear, Safari↔PWA, or account switch. | 🤖 | M — schema change, migration authored-not-applied |
 | G2 | **7 controls below Apple's 44px minimum** (see §2) | 🤖 | S |
 | G3 | **B1 — distance widening does not re-run the pick.** Walkable→Cab→Anywhere must re-run against a wider radius, not re-filter what is already in hand. Verify still broken first. | 🤖 | M |
-| G4 | **Playwright full suite hangs indefinitely at teardown.** Worker force-kill, 8h observed. Makes any gate on the full suite untrustworthy. 3 hypotheses already refuted (not WebKit-wide, not payload size, not spec-specific). | 🤖 | M |
+| G4 | ~~**Playwright full suite hangs indefinitely at teardown.**~~ **DONE (e812cf3)** — fixed by upgrading @playwright/test 1.60.0 → 1.62.0. The recorded claim that it "only reproduces in the multi-project run" is **REFUTED**: it reproduced on single-project runs too. `npm run test:e2e:teardown-guard` is the regression check. | 🤖 | M |
 | G5 | iPhone install sheet z-index suspected below `BottomNav` | 🤖 | S — reproduce first |
 | G6 | Vacuous subdirectory test in `photoFiles.test.ts` — santa round 3 proved deleting `entry.isFile()` leaves all 17 green | 🤖 | XS |
 
@@ -117,7 +117,7 @@ which changes the privacy labels (A7) and needs B8 answered first.
 
 | # | Item | Owner | Size |
 |---|---|---|---|
-| S1 | **Rename "Hood Hopper"** — racially loaded. `badges.ts:123`. Suggest "Borough Crawler". Update the `id` and `badges.test.ts:50,67`. | 🤖 | XS |
+| S1 | ~~**Rename "Hood Hopper"**~~ **DONE (f7550db)** — shipped as **"Borough Crawler"**; `id` and `badges.test.ts` updated with it. | 🤖 | XS |
 | S2 | Personas friendlier/livelier — "Industry-crowd insider" is verbose. All archetypes in `quiz.ts:160`. | 🤖 | S — copy only |
 | S3 | Quiz answer sets should not always be 4 options | 🤖 | M |
 | S4 | Quiz questions **more pointed and MECE** — distinct options per question | 🤖 | L — content design + `quiz.coverage.test.ts` rebaseline |
@@ -143,8 +143,8 @@ which changes the privacy labels (A7) and needs B8 answered first.
 | # | Item | Owner |
 |---|---|---|
 | C1 | B1 — service-role key → deletion go-live | 🧑 |
-| C2 | **Rate-limit audit** — only `account/delete` and `waitlist` have it today. Produce a per-route matrix. | 🤖 |
-| C3 | **RLS audit** — 24 policies exist; confirm every user-data table is covered. Per-table matrix. | 🤖 |
+| C2 | ~~**Rate-limit audit**~~ **DONE** — `docs/C2-RATE-LIMIT-AUDIT-2026-07-30.md`. The claim that only `account/delete` and `waitlist` are limited was **WRONG**: `api/event` has a 60/minute limiter (`route.ts:30-34`). F1+F3 fixed in `4472f23`, F6+F7 in `f9ac038`, F1b/F5 in `9bd3a29`. | 🤖 |
+| C3 | ~~**RLS audit**~~ **DONE** — `docs/C3-RLS-AUDIT-2026-07-30.md`. Not 24 policies: the final schema has **25 across 12 tables**. F3+F5 fixed in `926f498`; F2 became the C4 definer audit (`c02baf9`). | 🤖 |
 | C4 | B4 — public API key needs referrer restriction + budget alert | 🧑 |
 | C5 | B5 — D1 kill-switch transport | 🧑 |
 | C6 | **L3** — Google review text still in git history. `filter-repo` is irreversible and invalidates every clone/PR/CI cache. | 🧑 |
@@ -252,7 +252,7 @@ content saves nothing; one request bills the same regardless of what it returns.
 **Now — Tier 1, overnight-safe, no operator, no prod write, no API spend**
 
 1. **G1** vibe-profile persistence (worst bug: users lose data)
-2. **S1** Hood Hopper rename
+2. ~~**S1** Hood Hopper rename~~ — **DONE (f7550db)**, shipped as "Borough Crawler"
 3. **R7** delete the rankings filter row
 4. **G2** the 7 tap targets
 5. **G6** the vacuous subdirectory test
