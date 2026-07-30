@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -11,6 +13,7 @@ import { join } from 'node:path';
 import {
   IMAGE_EXTENSIONS,
   assertDbIdsUsable,
+  backupAndDeleteOrphans,
   MAX_PHOTO_INDEX,
   isImageFilename,
   isReachable,
@@ -58,6 +61,21 @@ describe('isReachable — exact id must beat the carousel-suffix rule', () => {
     // itself a known id. A prefix match alone must not rescue an absurd index.
     expect(isReachable('bar-99', KNOWN)).toBe(false);
     expect(isReachable(`attaboy-${MAX_PHOTO_INDEX + 1}`, KNOWN)).toBe(false);
+  });
+
+  test('the cap itself is INCLUSIVE — n === maxIndex is still reachable', () => {
+    // The recorded gap was "nothing pins that an index above the cap is
+    // rejected", but that was already covered above. The genuinely unpinned
+    // edge is the other side of the same boundary: with only the
+    // MAX_PHOTO_INDEX + 1 case asserted, narrowing `n <= maxIndex` to
+    // `n < maxIndex` passes every existing test while silently making the
+    // last carousel photo of every venue an orphan — i.e. deletable.
+    expect(isReachable(`attaboy-${MAX_PHOTO_INDEX}`, KNOWN)).toBe(true);
+  });
+
+  test('an explicit maxIndex overrides the default on both sides', () => {
+    expect(isReachable('attaboy-3', KNOWN, 3)).toBe(true);
+    expect(isReachable('attaboy-4', KNOWN, 3)).toBe(false);
   });
 
   test('index 1 is not a valid suffix — photo one has no suffix', () => {
@@ -316,5 +334,108 @@ describe('assertDbIdsUsable — fail closed on a reachable-but-wrong database', 
     // If DB_ONLY_SIDECAR_IDS is ever emptied, the zero-row floor remains.
     const ok = new Set(['attaboy']);
     expect(assertDbIdsUsable(ok, new Set())).toBe(ok);
+  });
+});
+
+describe('backupAndDeleteOrphans', () => {
+  /**
+   * The pruner's DELETE step, against a REAL temp directory. Until now the
+   * classification logic was well covered while the code that actually removes
+   * a user's files had none at all (GLM, G6 review). These assertions are
+   * mostly NEGATIVE on purpose: what matters is not that orphans go, but that
+   * nothing else does.
+   */
+  function makeDir(): { photoDir: string; backupDir: string; cleanup: () => void } {
+    const root = mkdtempSync(join(tmpdir(), 'prune-delete-'));
+    const photoDir = join(root, 'bar-photos');
+    const backupDir = join(root, 'backup');
+    mkdirSync(photoDir, { recursive: true });
+    return { photoDir, backupDir, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  test('deletes exactly the orphans and leaves everything else untouched', () => {
+    const { photoDir, backupDir, cleanup } = makeDir();
+    try {
+      writeFileSync(join(photoDir, 'ghost.webp'), 'orphan-a');
+      writeFileSync(join(photoDir, 'ghost-2.webp'), 'orphan-b');
+      writeFileSync(join(photoDir, 'live-bar.webp'), 'reachable');
+      writeFileSync(join(photoDir, 'notes.txt'), 'not an image');
+      mkdirSync(join(photoDir, 'subdir'));
+
+      const result = backupAndDeleteOrphans(photoDir, backupDir, ['ghost.webp', 'ghost-2.webp']);
+
+      expect(result.deleted).toBe(2);
+      const remaining = readdirSync(photoDir).sort();
+      // The reachable image, the non-image and the DIRECTORY all survive.
+      expect(remaining).toEqual(['live-bar.webp', 'notes.txt', 'subdir']);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('every orphan is backed up, with its content intact, before deletion', () => {
+    const { photoDir, backupDir, cleanup } = makeDir();
+    try {
+      writeFileSync(join(photoDir, 'a.webp'), 'content-a');
+      writeFileSync(join(photoDir, 'b.png'), 'content-b');
+
+      backupAndDeleteOrphans(photoDir, backupDir, ['a.webp', 'b.png']);
+
+      expect(readdirSync(backupDir).sort()).toEqual(['a.webp', 'b.png']);
+      // A backup that does not round-trip is not a backup.
+      expect(readFileSync(join(backupDir, 'a.webp'), 'utf8')).toBe('content-a');
+      expect(readFileSync(join(backupDir, 'b.png'), 'utf8')).toBe('content-b');
+      expect(readdirSync(photoDir)).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('reports the byte total it moved', () => {
+    const { photoDir, backupDir, cleanup } = makeDir();
+    try {
+      writeFileSync(join(photoDir, 'a.webp'), '12345');
+      writeFileSync(join(photoDir, 'b.webp'), '678');
+      const result = backupAndDeleteOrphans(photoDir, backupDir, ['a.webp', 'b.webp']);
+      expect(result.bytes).toBe(8);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('an empty orphan list deletes nothing and creates no backup directory', () => {
+    const { photoDir, backupDir, cleanup } = makeDir();
+    try {
+      writeFileSync(join(photoDir, 'live.webp'), 'keep me');
+
+      const result = backupAndDeleteOrphans(photoDir, backupDir, []);
+
+      expect(result).toEqual({ deleted: 0, bytes: 0 });
+      expect(readdirSync(photoDir)).toEqual(['live.webp']);
+      // No empty backup dir left behind on a clean run.
+      expect(existsSync(backupDir)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('a missing orphan aborts BEFORE any file is deleted (backup-first ordering)', () => {
+    // The ordering is the whole safety property: if anything goes wrong while
+    // backing up, nothing may have been unlinked yet. A stale entry in the
+    // orphan list is the cheapest way to force that failure.
+    const { photoDir, backupDir, cleanup } = makeDir();
+    try {
+      writeFileSync(join(photoDir, 'real.webp'), 'still here');
+
+      expect(() =>
+        backupAndDeleteOrphans(photoDir, backupDir, ['real.webp', 'vanished.webp']),
+      ).toThrow();
+
+      // real.webp was backed up but must NOT have been deleted, because the
+      // unlink phase never started.
+      expect(readdirSync(photoDir)).toEqual(['real.webp']);
+    } finally {
+      cleanup();
+    }
   });
 });

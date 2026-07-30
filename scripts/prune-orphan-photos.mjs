@@ -37,7 +37,12 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { refuseIfUnattended } from './loop-guard.mjs';
 import { DB_ONLY_SIDECAR_IDS } from './lib/sidecar.mjs';
-import { MAX_PHOTO_INDEX, assertDbIdsUsable, partitionPhotoFiles } from './lib/photoFiles.mjs';
+import {
+  MAX_PHOTO_INDEX,
+  assertDbIdsUsable,
+  backupAndDeleteOrphans,
+  partitionPhotoFiles,
+} from './lib/photoFiles.mjs';
 
 loadEnv({ path: '.env.local' });
 
@@ -117,16 +122,11 @@ async function main() {
   }
   if (orphans.length === 0) return;
 
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  let bytes = 0;
-  for (const f of orphans) {
-    const src = path.join(PHOTO_DIR, f);
-    bytes += fs.statSync(src).size;
-    fs.copyFileSync(src, path.join(BACKUP_DIR, f));
-  }
-  console.log(`\nbacked up ${orphans.length} files (${(bytes / 1024).toFixed(0)} KB) to ${BACKUP_DIR}`);
-  for (const f of orphans) fs.unlinkSync(path.join(PHOTO_DIR, f));
-  console.log(`deleted ${orphans.length} files; ${fs.readdirSync(PHOTO_DIR).length} remain`);
+  // Backup + delete live in lib/photoFiles so the destructive step is
+  // testable; this script only supplies the paths and reports the result.
+  const { deleted, bytes } = backupAndDeleteOrphans(PHOTO_DIR, BACKUP_DIR, orphans);
+  console.log(`\nbacked up ${deleted} files (${(bytes / 1024).toFixed(0)} KB) to ${BACKUP_DIR}`);
+  console.log(`deleted ${deleted} files; ${fs.readdirSync(PHOTO_DIR).length} remain`);
 }
 
 await main();

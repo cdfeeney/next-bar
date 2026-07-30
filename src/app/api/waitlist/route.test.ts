@@ -67,15 +67,15 @@ describe('POST /api/waitlist', () => {
     });
   });
 
-  it('CURRENT BEHAVIOUR: a padded email is rejected, not trimmed-then-accepted', async () => {
-    // Documented, not endorsed. isValidWaitlistEmail tests the RAW string
-    // and the shape regex forbids whitespace, while normalizeEmail trims —
-    // so the two disagree, and a mobile keyboard's trailing space reads as
-    // "invalid_email". Left as-is here on purpose: this is a signup-funnel
-    // change, not a security remediation. Flip the assertion when it is
-    // fixed deliberately.
+  it('INTENDED: a padded email is rejected, not trimmed into validity', async () => {
+    // Now a deliberate rule rather than a side effect of the shape regex —
+    // isValidWaitlistEmail rejects `email !== email.trim()` explicitly, and
+    // says why. The address stored is the address given; repairing input at
+    // the boundary would hide malformed callers. If a trailing space ever
+    // costs real signups, the fix is a client-side trim before submit.
     const res = await POST(makeRequest({ email: ' user@example.com ' }));
     expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ ok: false, error: 'invalid_email' });
     expect(insertMock).not.toHaveBeenCalled();
   });
 

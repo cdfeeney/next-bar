@@ -22,12 +22,28 @@ const NEIGHBORHOOD_MAX_LENGTH = 40;
 /** Cap the serialized vibe_profile so the column can't be used as a dump. */
 const VIBE_PROFILE_MAX_JSON_LENGTH = 2_000;
 
+/**
+ * Rejection of a PADDED address is deliberate, not an accident of the regex.
+ *
+ * EMAIL_RE forbids whitespace, so ' user@example.com ' has always been
+ * rejected — while normalizeEmail() trims. Those two disagreed, and the
+ * disagreement was undocumented, so it was impossible to tell whether the
+ * rejection was intended or a latent bug. It is intended: the address stored
+ * is the address given, and silently repairing input at the boundary hides
+ * malformed callers. The explicit check below states that, so a future reader
+ * changing normalizeEmail cannot conclude the trim was meant to apply here.
+ *
+ * Tradeoff, recorded rather than hidden: a mobile keyboard that appends a
+ * trailing space produces `invalid_email` on the signup form. If that ever
+ * shows up in funnel data, the fix is a client-side trim BEFORE submit, not a
+ * looser validator.
+ */
 export function isValidWaitlistEmail(email: unknown): email is string {
-  return (
-    typeof email === 'string' &&
-    email.length <= EMAIL_MAX_LENGTH &&
-    EMAIL_RE.test(email)
-  );
+  if (typeof email !== 'string') return false;
+  if (email.length > EMAIL_MAX_LENGTH) return false;
+  // Explicit: padded input is rejected, it is not trimmed into validity.
+  if (email !== email.trim()) return false;
+  return EMAIL_RE.test(email);
 }
 
 /**

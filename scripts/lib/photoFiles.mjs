@@ -9,6 +9,9 @@
  * replaced and not to the code that actually deletes files.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 /** Extensions the photo pipeline produces. PHOTO_EXT is 'webp' since 2026-07-27. */
 export const IMAGE_EXTENSIONS = ['webp', 'jpg', 'jpeg', 'png'];
 
@@ -110,4 +113,44 @@ export function assertDbIdsUsable(ids, requiredIds) {
     );
   }
   return ids;
+}
+
+/**
+ * Back up, then delete, the orphan files — the destructive half of
+ * scripts/prune-orphan-photos.mjs.
+ *
+ * Extracted so it can be tested against a real directory. It previously lived
+ * inline in main(), which meant the ONE step that actually removes a user's
+ * files was the one step with no coverage: partitionPhotoFiles decided WHAT to
+ * delete and was well tested, while the deleting itself was not exercised at
+ * all. Raised by GLM during the G6 review.
+ *
+ * TWO PHASES, and the order is load-bearing: every backup is written BEFORE
+ * any unlink. A subdirectory once crashed the old combined loop at
+ * copyFileSync (EISDIR) after part of the backup had been written, which is
+ * how you end up with files deleted whose backups never landed. Callers must
+ * pass an already-classified `orphans` list (see partitionPhotoFiles) — this
+ * function does no classification of its own and deletes exactly what it is
+ * given, nothing more.
+ *
+ * @param {string} photoDir  directory holding the photos
+ * @param {string} backupDir directory to copy orphans into (created if needed)
+ * @param {string[]} orphans basenames to back up and delete
+ * @returns {{ deleted: number, bytes: number }}
+ */
+export function backupAndDeleteOrphans(photoDir, backupDir, orphans) {
+  if (orphans.length === 0) return { deleted: 0, bytes: 0 };
+
+  fs.mkdirSync(backupDir, { recursive: true });
+  let bytes = 0;
+  for (const f of orphans) {
+    const src = path.join(photoDir, f);
+    bytes += fs.statSync(src).size;
+    fs.copyFileSync(src, path.join(backupDir, f));
+  }
+
+  // Phase 2 — only now that every backup exists.
+  for (const f of orphans) fs.unlinkSync(path.join(photoDir, f));
+
+  return { deleted: orphans.length, bytes };
 }
