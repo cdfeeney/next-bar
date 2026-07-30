@@ -26,6 +26,14 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Cheapest gate first and it needs no install state: a committed
+      # credential should fail the PR before anything else spends minutes.
+      # Deliberately narrow (see scripts/secret-scan.mjs) — a scanner that
+      # cries wolf gets disabled, and a disabled scanner is worse than none.
+      # Verified against this repository: clean over 484 tracked files, and
+      # it still catches a planted key.
+      - name: Secret scan
+        run: node scripts/secret-scan.mjs
       - name: Type-check
         run: npx tsc --noEmit
       - name: Unit tests

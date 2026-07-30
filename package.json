@@ -12,7 +12,10 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "db:migrate": "tsx scripts/apply-migrations.ts",
-    "test:e2e:teardown-guard": "node scripts/g4-hang-loop.mjs --runs 3"
+    "test:e2e:teardown-guard": "node scripts/g4-hang-loop.mjs --runs 3",
+    "secret-scan": "node scripts/secret-scan.mjs",
+    "check-env": "node scripts/check-env.mjs",
+    "tier-validate": "git ls-files | node ~/.claude/bin/tier-classify.mjs --validate"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.3",

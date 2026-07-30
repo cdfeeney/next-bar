@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "default_tier": "T1",
+  "escalate_min_t0_files": 5,
+  "_comment": [
+    "Next Bar T0 surface. Until this file existed, tier-classify.mjs fell back to",
+    "the generic defaults, which declare NO T0 globs at all — so migrations and the",
+    "account-deletion path both classified T1 and the T0 gate could never fire.",
+    "Every T0 rule below must match at least one real file; run",
+    "`git ls-files | node ~/.claude/bin/tier-classify.mjs --validate` after editing,",
+    "because a dead T0 glob silently leaves a path unprotected."
+  ],
+  "non_runtime_paths": [
+    "docs/**",
+    "**/*.md",
+    ".github/**",
+    "**/fixtures/**",
+    "**/*.txt"
+  ],
+  "rules": [
+    {
+      "glob": "supabase/migrations/**",
+      "tier": "T0",
+      "note": "Schema and grants against live user data. Applying one is irreversible without a restore, and 0034-style grant changes can lock every user out of their own rows. Attended window only."
+    },
+    {
+      "glob": "supabase/schema.sql",
+      "tier": "T0",
+      "note": "Fresh-project bootstrap schema — same blast radius as a migration."
+    },
+    {
+      "glob": "src/app/api/account/delete/**",
+      "tier": "T0",
+      "note": "Destructive and irreversible: deletes an auth user and cascades through every table they own. Also the one route holding the service-role key."
+    },
+    {
+      "glob": "src/middleware.ts",
+      "tier": "T0",
+      "note": "Runs BEFORE every matched route handler, so no per-route control can gate it. A wrong matcher is an un-gateable amplification lever (C2 F1b)."
+    },
+    {
+      "glob": "scripts/apply-migrations.ts",
+      "tier": "T0",
+      "note": "The runner that applies schema changes to a live database, including the drift check that refuses an edited-after-apply file."
+    },
+    {
+      "glob": "scripts/prune-orphan-photos.mjs",
+      "tier": "T0",
+      "note": "DELETES FILES. Backed by a backup step, but an over-broad orphan set destroys live venue media."
+    },
+    {
+      "glob": "src/lib/waitlistGuard.ts",
+      "tier": "T1",
+      "note": "Rate limiting for every public route. Not T0 — it cannot destroy data — but a regression here removes the only abuse control the public surface has."
+    },
+    {
+      "glob": "docs/**",
+      "tier": "T2",
+      "note": "documentation"
+    },
+    {
+      "glob": "**/*.md",
+      "tier": "T2",
+      "note": "markdown"
+    },
+    {
+      "glob": ".github/**",
+      "tier": "T2",
+      "note": "CI config"
+    },
+    {
+      "glob": "**/fixtures/**",
+      "tier": "T2",
+      "note": "test fixtures"
+    },
+    {
+      "glob": "e2e/**",
+      "tier": "T1",
+      "note": "end-to-end specs"
+    }
+  ]
+}
