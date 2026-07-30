@@ -36,8 +36,10 @@ export default defineConfig({
       name: 'Pixel 7',
       use: { ...devices['Pixel 7'] },
     },
-    // Playwright 1.60's device registry stops at iPhone 15 Pro Max, so the
-    // current hardware is pinned by hand. iPhone 17 is 402x874 logical; the
+    // Playwright's device registry stops at iPhone 15 Pro Max (checked again on
+    // the 1.62 upgrade), so the current hardware is pinned by hand. The manual
+    // viewport below is what makes this project correct regardless of what the
+    // registry gains later. iPhone 17 is 402x874 logical; the
     // web area is that minus Safari's ~193px of chrome. Wider AND taller than
     // iPhone 13, so it is not a "smaller viewport" guard — it exists because
     // it is what people actually hold, and because the safe-area insets differ.
