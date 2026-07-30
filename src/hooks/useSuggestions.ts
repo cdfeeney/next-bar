@@ -111,15 +111,28 @@ export function useSuggestions(
   const [profile, setProfile] = useState<VibeProfile | null>(null);
   const [profileChecked, setProfileChecked] = useState(false);
   useEffect(() => {
-    const saved = loadProfile();
-    if (saved) {
-      setProfile({
-        tags: saved.tags,
-        archetype: saved.archetype,
-        preferredNeighborhoods: saved.preferredNeighborhoods,
-      });
-    }
-    setProfileChecked(true);
+    const syncProfile = (): void => {
+      const saved = loadProfile();
+      // G1: fall back to null when the profile is gone, don't keep stale tags.
+      // This hook feeds the "Suggested for you" ranking on /map and /discover,
+      // so without the listener an account switch (or a Settings clear) would
+      // keep RANKING against the previous profile's tags until remount — the
+      // same class of leak the profile-change notification exists to close,
+      // just expressed as ranking rather than displayed tags.
+      setProfile(
+        saved
+          ? {
+              tags: saved.tags,
+              archetype: saved.archetype,
+              preferredNeighborhoods: saved.preferredNeighborhoods,
+            }
+          : null,
+      );
+      setProfileChecked(true);
+    };
+    syncProfile();
+    window.addEventListener('storage', syncProfile);
+    return () => window.removeEventListener('storage', syncProfile);
   }, []);
 
   // UX-C (operator: "no suggested bars for me now"): a missing quiz

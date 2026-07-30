@@ -11,6 +11,8 @@ const RATINGS_MERGED_KEY = 'next-bar:ratings:merged-for:v1';
 const PAIRWISE_KEY = 'next-bar:pairwise:v1';
 const PAIRWISE_MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
 const FOLLOWS_KEY = 'next-bar:follows:v1';
+const PROFILE_KEY = 'next-bar:profile:v1';
+const PROFILE_MERGED_KEY = 'next-bar:profile:merged-for:v1';
 
 function seedFullCache(owner: string): void {
   window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
@@ -41,9 +43,29 @@ describe('clearAccountCache', () => {
   });
 
   it('leaves unrelated keys alone', () => {
-    window.localStorage.setItem('next-bar:profile:v1', '{"tags":[]}');
+    // Exemplar changed from the vibe profile to the age acknowledgement (G1).
+    // This test's PURPOSE — clearAccountCache is scoped to ALL_KEYS and does
+    // not nuke arbitrary storage — is unchanged and asserted at equal
+    // strength. Only the exemplar moved, because the vibe profile stopped
+    // being "unrelated" the moment it became a server-synced surface. The
+    // age-ack is a genuinely unrelated compliance flag: it belongs to the
+    // DEVICE, not the account, and must survive a sign-out.
+    window.localStorage.setItem('next-bar:age-ack:v1', '1');
     clearAccountCache();
-    expect(window.localStorage.getItem('next-bar:profile:v1')).not.toBeNull();
+    expect(window.localStorage.getItem('next-bar:age-ack:v1')).not.toBeNull();
+  });
+
+  it('removes the vibe profile and its ownership marker — G1 registered them', () => {
+    // Same blueprint rule as the follows key above: a surface that becomes
+    // server-synced joins ALL_KEYS or the cross-account guard silently skips
+    // it. Registering the profile means sign-out DELETES it locally, which is
+    // deliberate: an anonymous browser must not keep showing the previous
+    // account's taste profile on a shared phone.
+    window.localStorage.setItem(PROFILE_KEY, '{"tags":[],"savedAt":"x"}');
+    window.localStorage.setItem(PROFILE_MERGED_KEY, 'user-a');
+    clearAccountCache();
+    expect(window.localStorage.getItem(PROFILE_KEY)).toBeNull();
+    expect(window.localStorage.getItem(PROFILE_MERGED_KEY)).toBeNull();
   });
 
   it('bumps the cache epoch so in-flight hydrates abandon their writes', () => {
@@ -100,5 +122,41 @@ describe('guardAgainstForeignCache', () => {
     window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
     expect(guardAgainstForeignCache('user-b')).toBe(true);
     expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+  });
+
+  it('wipes everything when only the PROFILE flag is foreign (G1)', () => {
+    // The cross-account isolation criterion. Account A synced a profile and
+    // left; account B signs in on the same browser. B must never see or
+    // upload A's profile — and the wipe stays GLOBAL, because a proven
+    // foreign marker means this whole cache is someone else's residue.
+    window.localStorage.setItem(PROFILE_MERGED_KEY, 'user-a');
+    window.localStorage.setItem(PROFILE_KEY, '{"tags":["dive"],"savedAt":"x"}');
+    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    expect(guardAgainstForeignCache('user-b')).toBe(true);
+    expect(window.localStorage.getItem(PROFILE_KEY)).toBeNull();
+    expect(window.localStorage.getItem(PROFILE_MERGED_KEY)).toBeNull();
+    expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+  });
+
+  it('preserves an anonymous profile — first sign-in upload is intended', () => {
+    // No marker anywhere = genuine pre-first-sign-in data. Wiping it here
+    // would destroy the quiz result of someone who just made an account.
+    window.localStorage.setItem(PROFILE_KEY, '{"tags":["dive"],"savedAt":"x"}');
+    expect(guardAgainstForeignCache('user-b')).toBe(false);
+    expect(window.localStorage.getItem(PROFILE_KEY)).not.toBeNull();
+  });
+});
+
+describe('clearResidualAccountCache — profile marker (G1)', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('treats a lone profile marker as account residue', () => {
+    // A user who took the quiz and rated nothing still left account residue.
+    // Before G1 the profile marker was the one ownership signal the residual
+    // guard could not see, so this session's data looked anonymous.
+    window.localStorage.setItem(PROFILE_MERGED_KEY, 'user-a');
+    window.localStorage.setItem(PROFILE_KEY, '{"tags":[],"savedAt":"x"}');
+    expect(clearResidualAccountCache()).toBe(true);
+    expect(window.localStorage.getItem(PROFILE_KEY)).toBeNull();
   });
 });

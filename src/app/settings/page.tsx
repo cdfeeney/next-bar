@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
 import { loadProfile, clearProfile } from '@/lib/storedProfile';
+import { deleteServerVibeProfile } from '@/lib/vibeProfile.server';
 import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import SetPassword from '@/components/SetPassword';
@@ -58,9 +59,20 @@ export default function SettingsPage(): JSX.Element {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   useEffect(() => {
-    setHasProfile(loadProfile() !== null);
-    setSeeded(isDemoSeeded());
-  }, [ratings.length]);
+    const refresh = (): void => {
+      setHasProfile(loadProfile() !== null);
+      setSeeded(isDemoSeeded());
+    };
+    refresh();
+    // auth.status is a dependency because signing out now DELETES the local
+    // vibe profile (it joined accountCache.ALL_KEYS). Keying only on
+    // ratings.length missed it entirely for a user with zero ratings — 0 before
+    // and 0 after — leaving this page showing "Your quiz answers are saved"
+    // and an active Clear button for data that had just been wiped.
+    // The 'storage' listener covers the same-document wipe and other tabs.
+    window.addEventListener('storage', refresh);
+    return () => window.removeEventListener('storage', refresh);
+  }, [ratings.length, auth.status]);
 
   useEffect(() => {
     if (auth.status !== 'signed-in') return;
@@ -128,9 +140,30 @@ export default function SettingsPage(): JSX.Element {
   const taste = deriveTasteProfile(ratings, bars);
   const badgeReport = deriveBadges(ratings, bars, new Date());
 
-  const handleClearProfile = () => {
+  const handleClearProfile = async () => {
     if (typeof window === 'undefined') return;
     if (!window.confirm('Clear your saved vibe profile? You can retake the quiz anytime.')) return;
+    // Signed-in: the server row is the source of truth — delete it BEFORE the
+    // local clear, or VibeProfileSync re-hydrates it on the next mount and the
+    // profile the user just cleared silently reappears. Same rule, and the same
+    // failure surfacing, as handleClearRatings below.
+    if (auth.status === 'signed-in') {
+      const supabase = getBrowserSupabase();
+      if (supabase) {
+        let ok = false;
+        try {
+          ok = await deleteServerVibeProfile(supabase, auth.user.id);
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          window.alert(
+            "Couldn't reach the server, so your vibe profile was NOT cleared. Try again in a moment.",
+          );
+          return;
+        }
+      }
+    }
     clearProfile();
     setHasProfile(false);
   };

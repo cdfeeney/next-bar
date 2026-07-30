@@ -8,6 +8,7 @@ import BottomNav from '@/components/BottomNav';
 import OnboardingGate from '@/components/OnboardingGate';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import CatalogRefresh from '@/components/CatalogRefresh';
+import VibeProfileSync from '@/components/VibeProfileSync';
 
 // Brand font (2026-07-23 kit): Poppins — Bold 700 wordmark/headlines,
 // Medium 500 secondary headlines, Regular 400 body/captions. Self-hosted by
@@ -76,6 +77,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <OnboardingGate />
         <ServiceWorkerRegister />
         <CatalogRefresh />
+        <VibeProfileSync />
       </body>
     </html>
   );

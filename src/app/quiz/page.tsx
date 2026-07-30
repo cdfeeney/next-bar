@@ -15,7 +15,11 @@ import ResultsView from '@/components/ResultsView';
 import InstallNudge from '@/components/InstallNudge';
 import { useBars } from '@/lib/useBars';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
-import { saveProfile } from '@/lib/storedProfile';
+import { saveProfile, writeProfileOwner } from '@/lib/storedProfile';
+import { useAuth } from '@/hooks/useAuth';
+import { getBrowserSupabase } from '@/lib/supabase/client';
+import { pushVibeProfile } from '@/lib/vibeProfileSync';
+import { getCacheEpoch } from '@/lib/accountCache';
 
 const QUIZ_TOP_N = 10;
 
@@ -28,6 +32,7 @@ type ResolvedLocation =
   | { kind: 'neighborhood'; neighborhood: ManhattanNeighborhood };
 
 export default function QuizPage() {
+  const auth = useAuth();
   const [phase, setPhase] = useState<Phase>('quiz');
   const [profile, setProfile] = useState<VibeProfile | null>(null);
   const [location, setLocation] = useState<ResolvedLocation | null>(null);
@@ -52,7 +57,31 @@ export default function QuizPage() {
       {phase === 'quiz' && (
         <VibeQuiz
           onComplete={(p) => {
-            saveProfile(p);
+            // Local save is authoritative for the UI and happens first, so an
+            // offline or signed-out user is completely unaffected. The server
+            // push is best-effort: on failure the ownership marker stays
+            // unlatched and the next sign-in sync retries the upload (G1).
+            const stored = saveProfile(p);
+            const supabase = getBrowserSupabase();
+            if (auth.status === 'signed-in' && supabase) {
+              // Latch OWNERSHIP immediately, before the network call. If both
+              // this push and the next mount's fetch fail, an unmarked profile
+              // would be treated as "genuine anonymous data" by
+              // clearResidualAccountCache and could then be adopted by a
+              // DIFFERENT account signing in on this browser. Ownership is not
+              // a sync receipt: retry is still driven by the conflict rule.
+              writeProfileOwner(auth.user.id);
+              // Epoch captured BEFORE the await: if an account switch lands
+              // while the upsert is in flight, the ownership marker must not
+              // be stamped with the account that just signed out.
+              const epoch = getCacheEpoch();
+              void pushVibeProfile(
+                supabase,
+                auth.user.id,
+                stored,
+                () => getCacheEpoch() === epoch,
+              );
+            }
             setProfile(p);
             setPhase('locate');
           }}
