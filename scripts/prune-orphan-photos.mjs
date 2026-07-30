@@ -36,6 +36,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { refuseIfUnattended } from './loop-guard.mjs';
+import { DB_ONLY_SIDECAR_IDS } from './lib/sidecar.mjs';
+import { MAX_PHOTO_INDEX, assertDbIdsUsable, partitionPhotoFiles } from './lib/photoFiles.mjs';
 
 loadEnv({ path: '.env.local' });
 
@@ -49,8 +51,6 @@ const BACKUP_ARG = process.argv.indexOf('--backup-dir');
 const BACKUP_DIR =
   BACKUP_ARG !== -1 ? process.argv[BACKUP_ARG + 1] : path.join(REPO, '.orphan-photo-backup');
 
-/** Highest carousel index the ingest ever writes. photo_count maxes at 3 today. */
-const MAX_PHOTO_INDEX = 8;
 const CATALOG_FILES = [
   'bars.core.ts',
   'bars.extra.ts',
@@ -86,30 +86,29 @@ async function dbIds() {
   await client.connect();
   try {
     const { rows } = await client.query('select id from public.bars');
-    return new Set(rows.map((r) => r.id));
+    // Fail closed on a reachable-but-wrong database, not just a missing URL.
+    const ids = assertDbIdsUsable(new Set(rows.map((r) => r.id)), DB_ONLY_SIDECAR_IDS);
+    return ids;
   } finally {
     await client.end();
   }
 }
 
-/** Reachable iff the basename is a known id, or a carousel photo of a known id. */
-export function isReachable(basename, known, maxIndex = MAX_PHOTO_INDEX) {
-  if (known.has(basename)) return true;
-  const m = /^(.*)-(\d+)$/.exec(basename);
-  if (!m) return false;
-  const n = Number(m[2]);
-  return known.has(m[1]) && n >= 2 && n <= maxIndex;
-}
-
 async function main() {
   const known = new Set([...catalogIds(), ...(await dbIds())]);
-  const files = fs.readdirSync(PHOTO_DIR);
-  const orphans = files.filter(
-    (f) => !isReachable(f.replace(/\.(webp|jpe?g|png)$/i, ''), known),
-  );
+  // withFileTypes so a subdirectory or non-image is SKIPPED rather than
+  // classified by filename. Previously a stray non-image would have been deleted
+  // purely because its name did not look like a venue id, and a subdirectory
+  // crashed the delete loop at copyFileSync (EISDIR) after part of the backup had
+  // already been written. Both flagged in santa-loop round 2.
+  const entries = fs.readdirSync(PHOTO_DIR, { withFileTypes: true });
+  const { reachable, orphans, skipped } = partitionPhotoFiles(entries, known, MAX_PHOTO_INDEX);
 
   console.log(`known venue ids: ${known.size}`);
-  console.log(`photo files: ${files.length} | reachable: ${files.length - orphans.length} | ORPHAN: ${orphans.length}`);
+  console.log(
+    `entries: ${entries.length} | reachable: ${reachable.length} | ORPHAN: ${orphans.length} | skipped: ${skipped.length}`,
+  );
+  if (skipped.length > 0) console.log(`skipped (not a plain image), never deleted: ${skipped.join(', ')}`);
   if (orphans.length > 0) console.log('\n' + orphans.sort().join('\n'));
 
   if (!APPLY) {
