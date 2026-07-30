@@ -42,10 +42,25 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // For v0.5.0 we only need session refresh on routes that read the session.
-  // Auth callback writes the session cookie; /settings reads it; /api routes
-  // may act on behalf of the user. Anonymous-friendly content routes (/,
-  // /quiz, /map, /rankings, /friends) skip middleware entirely to keep
+  // Only routes that actually read a COOKIE session. The auth callback writes
+  // the session cookie; /settings reads it. Anonymous-friendly content routes
+  // (/, /quiz, /map, /rankings, /friends) skip middleware entirely to keep
   // navigations fast and avoid Next.js dev cold-compile races.
-  matcher: ['/auth/:path*', '/settings/:path*', '/api/:path*'],
+  //
+  // `/api/:path*` was REMOVED (C2 audit F1b). The comment used to justify it
+  // with "api routes may act on behalf of the user", but none of them do it
+  // through a cookie:
+  //   - api/account/delete authenticates a BEARER token and builds its own
+  //     service-role client; it never reads request cookies.
+  //   - api/waitlist, api/event and api/health are anonymous.
+  // So the middleware refreshed a session no API route consumed, while giving
+  // an attacker a free amplification lever: middleware runs BEFORE route
+  // handlers, so no per-route limiter can gate it, and one forged
+  // `sb-<ref>-auth-token` cookie turned every /api/* request into an outbound
+  // Supabase call to /auth/v1/user. Measured during the audit: 0 outbound
+  // calls with no cookie, 1 with a fabricated one.
+  //
+  // If a future API route ever needs a cookie session, add that exact path —
+  // not the `/api/:path*` wildcard.
+  matcher: ['/auth/:path*', '/settings/:path*'],
 };

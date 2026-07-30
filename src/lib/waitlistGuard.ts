@@ -92,13 +92,54 @@ export function sanitizeVibeProfile<T>(value: T | null | undefined): T | null {
  * client). 'unknown' lumps un-attributable traffic into one shared bucket —
  * strict for abusers behind stripped headers, harmless for the normal path.
  */
+/** Bucket every request lands in, for the C2 F5 attribution counters. */
+const attribution = { attributed: 0, unknown: 0 };
+/** One summary line per hour at most — instrumentation must not become spam. */
+const ATTRIBUTION_LOG_INTERVAL_MS = 60 * 60 * 1000;
+let attributionLoggedAt = 0;
+
+/**
+ * Non-resetting counts of how traffic was attributed since this instance
+ * started. C2 audit F5: all traffic with no `x-forwarded-for` and no
+ * `x-real-ip` collapses into ONE shared `'unknown'` bucket, which is strict
+ * for abusers and harmless for the normal path — but nobody had ever measured
+ * how much traffic actually lands there. The audit's own remediation order
+ * says "measure before fixing", so this is the measurement, not the fix.
+ *
+ * Exported for a future observability sink; the hourly log line below is what
+ * makes it visible today without needing one.
+ */
+export function ipAttributionStats(): { attributed: number; unknown: number } {
+  return { ...attribution };
+}
+
 export function clientIpFromHeaders(headers: Headers): string {
   const forwarded = headers.get('x-forwarded-for');
   if (forwarded) {
     const first = forwarded.split(',')[0]?.trim();
-    if (first) return first;
+    if (first) {
+      attribution.attributed += 1;
+      return first;
+    }
   }
-  return headers.get('x-real-ip')?.trim() || 'unknown';
+  const realIp = headers.get('x-real-ip')?.trim();
+  if (realIp) {
+    attribution.attributed += 1;
+    return realIp;
+  }
+
+  attribution.unknown += 1;
+  // Counts only — never the header values, which would put client IPs in the
+  // logs and turn an instrumentation line into a privacy problem.
+  const now = Date.now();
+  if (now - attributionLoggedAt >= ATTRIBUTION_LOG_INTERVAL_MS) {
+    attributionLoggedAt = now;
+    console.warn(
+      `[rate-limit] unattributable-IP bucket in use: ${attribution.unknown} unknown / ` +
+        `${attribution.attributed} attributed since instance start (C2 F5 measurement)`,
+    );
+  }
+  return 'unknown';
 }
 
 export type RateLimiter = {

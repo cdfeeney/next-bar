@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clientIpFromHeaders,
+  ipAttributionStats,
   createRateLimiter,
   isValidWaitlistEmail,
   normalizeEmail,
@@ -187,5 +188,33 @@ describe('createRateLimiter.peek', () => {
     limiter.allow('ip-a', 0);
     expect(limiter.peek('ip-a', 1)).toBe(false);
     expect(limiter.peek('ip-b', 1)).toBe(true);
+  });
+});
+
+describe('ipAttributionStats (C2 F5 instrumentation)', () => {
+  it('counts attributed vs unattributable requests', () => {
+    const before = ipAttributionStats();
+
+    clientIpFromHeaders(new Headers({ 'x-forwarded-for': '203.0.113.1' }));
+    clientIpFromHeaders(new Headers({ 'x-real-ip': '203.0.113.2' }));
+    clientIpFromHeaders(new Headers());
+
+    const after = ipAttributionStats();
+    expect(after.attributed - before.attributed).toBe(2);
+    expect(after.unknown - before.unknown).toBe(1);
+  });
+
+  it('returns a COPY, so a caller cannot mutate the counters', () => {
+    const snapshot = ipAttributionStats();
+    snapshot.unknown = 999_999;
+    expect(ipAttributionStats().unknown).not.toBe(999_999);
+  });
+
+  it('still returns the same bucket keys it always did', () => {
+    // Instrumentation must not change behaviour — these are the values the
+    // limiter keys on, and altering them would silently repartition traffic.
+    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': '1.2.3.4, 5.6.7.8' }))).toBe('1.2.3.4');
+    expect(clientIpFromHeaders(new Headers({ 'x-real-ip': ' 9.9.9.9 ' }))).toBe('9.9.9.9');
+    expect(clientIpFromHeaders(new Headers())).toBe('unknown');
   });
 });
