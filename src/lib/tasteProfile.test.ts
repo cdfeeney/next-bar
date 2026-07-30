@@ -111,6 +111,6 @@ describe('deriveTasteProfile', () => {
       [rating('a', 'loved'), rating('b', 'loved')],
       bars,
     );
-    expect(profile.archetype).toBe('Dive devotee');
+    expect(profile.archetype).toBe('Dive regular');
   });
 });
