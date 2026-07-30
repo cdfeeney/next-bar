@@ -103,7 +103,18 @@ describe('filename helpers', () => {
 });
 
 describe('partitionPhotoFiles never offers a non-file for deletion', () => {
-  const dirent = (name: string, isFile = true) => ({ name, isFile: () => isFile });
+  /**
+   * Faithful Dirent stub: a real entry is a file XOR a directory, so the stub
+   * reports both. Without isDirectory these stubs THROW under any production
+   * change that consults it, which reads as "the test caught the bug" when it
+   * actually only crashed. The one entry that is neither (a symlink) is stubbed
+   * explicitly in its own test below.
+   */
+  const dirent = (name: string, isFile = true) => ({
+    name,
+    isFile: () => isFile,
+    isDirectory: () => !isFile,
+  });
 
   test('classifies reachable, orphan, and skipped correctly', () => {
     const { reachable, orphans, skipped } = partitionPhotoFiles(
@@ -205,6 +216,50 @@ describe('partitionPhotoFiles against REAL fs.Dirent objects (G6)', () => {
     expect(reachable.sort()).toEqual(['attaboy.webp', 'bar-54.webp']);
     expect(orphans).toEqual(['wiped-out.webp']);
     expect(skipped.sort()).toEqual(['README.md', 'ghost-bar.webp']);
+  });
+
+  test('an entry that is NEITHER a file nor a directory is also skipped', () => {
+    /**
+     * Closes a gap a routed reviewer (GLM) found and two other lanes missed:
+     * every other fixture here is either a real file or a real directory, so
+     * rewriting the production guard from `!isFile` to `isDirectory` would keep
+     * ALL of those assertions green while changing behaviour.
+     *
+     * The entry that separates the two is a symlink: for an fs.Dirent from
+     * readdirSync(withFileTypes) a symlink reports isFile() === false AND
+     * isDirectory() === false. Under the real guard it is skipped; under an
+     * `isDirectory` guard it passes the image check, fails isReachable, and is
+     * DELETED. So the guard means "only regular files are deletable", and that
+     * is what this pins.
+     *
+     * Asserted through a stub rather than a real symlink on purpose: creating
+     * one on Windows needs elevation or Developer Mode, and this repo's
+     * operator is on Windows — a test that silently skips on the primary dev
+     * platform would be worse than no test. The real-Dirent path is already
+     * covered by the directory fixture above.
+     */
+    const notFileNotDir = {
+      name: 'stray.webp', // image-looking name, unknown venue id
+      isFile: () => false,
+      isDirectory: () => false,
+    };
+    const realFileStub = (name: string) => ({
+      name,
+      isFile: () => true,
+      isDirectory: () => false,
+    });
+    const { orphans, skipped } = partitionPhotoFiles(
+      [notFileNotDir, realFileStub('attaboy.webp')],
+      KNOWN,
+    );
+    // Must NOT be offered for deletion despite looking exactly like an orphan.
+    expect(orphans).toEqual([]);
+    expect(skipped).toEqual(['stray.webp']);
+    // And a real file alongside it is still classified normally, so the guard
+    // is narrow rather than a blanket "skip anything unusual".
+    expect(
+      partitionPhotoFiles([notFileNotDir, realFileStub('attaboy.webp')], KNOWN).reachable,
+    ).toEqual(['attaboy.webp']);
   });
 
   test('the fixture really is a directory, so the guard is what excludes it', () => {
