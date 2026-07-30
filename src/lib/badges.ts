@@ -120,7 +120,7 @@ export function deriveBadges(
     badge('first-night', 'First Night Out', 'Rate your first bar', visits, 1),
     badge('regular', 'Regular', 'Rate 10 bars', visits, 10),
     badge('fixture', 'Fixture', 'Rate 25 bars', visits, 25),
-    badge('hood-hopper', 'Hood Hopper', 'Hit 3 neighborhoods', neighborhoods.size, 3),
+    badge('borough-crawler', 'Borough Crawler', 'Hit 3 neighborhoods', neighborhoods.size, 3),
     badge('city-wide', 'City-Wide', 'Hit 8 neighborhoods', neighborhoods.size, 8),
     badge('hidden-doors', 'Hidden Doors', '5 speakeasies', countTag(ratings, barById, 'speakeasy'), 5),
     badge('rooftop-rookie', 'Rooftop Rookie', '3 rooftops', countTag(ratings, barById, 'rooftop'), 3),
