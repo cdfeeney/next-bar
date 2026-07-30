@@ -61,6 +61,24 @@ export const config = {
   // calls with no cookie, 1 with a fabricated one.
   //
   // If a future API route ever needs a cookie session, add that exact path —
-  // not the `/api/:path*` wildcard.
+  // not the `/api/:path*` wildcard. `src/middleware.test.ts` additionally
+  // asserts that no file under src/app/api imports a cookie-backed client, so
+  // that invariant cannot rot silently.
+  //
+  // SCOPE OF THIS FIX, stated honestly (GLM review corrected an overclaim):
+  // this REDUCES the amplification surface, it does not remove the lever. A
+  // forged cookie aimed at `/settings/*` or `/auth/*` still costs one outbound
+  // `getUser()` call, because the body below calls it unconditionally. What
+  // changed is that the highest-volume, most-automatable paths (`/api/*`,
+  // including the beacon endpoint) no longer carry that cost.
+  //
+  // The root fix is to stop making an unconditional network call: verify the
+  // JWT's signature and expiry LOCALLY first and return early on a forged or
+  // long-expired cookie, so a fabricated token costs zero outbound calls on
+  // every path. That is an architecture change beyond this remediation and is
+  // recorded as follow-up work, not silently skipped.
+  //
+  // Note also what the matcher is NOT: it is the cookie-REFRESH scope, not an
+  // authorization boundary. Nothing here grants or denies access.
   matcher: ['/auth/:path*', '/settings/:path*'],
 };

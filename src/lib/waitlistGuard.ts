@@ -94,7 +94,13 @@ export function sanitizeVibeProfile<T>(value: T | null | undefined): T | null {
  */
 /** Bucket every request lands in, for the C2 F5 attribution counters. */
 const attribution = { attributed: 0, unknown: 0 };
-/** One summary line per hour at most — instrumentation must not become spam. */
+/**
+ * At most one summary line per hour PER WARM INSTANCE — not fleet-wide, and
+ * the first unattributable request an instance sees logs immediately, because
+ * the timestamp starts at 0 (Codex + Kimi review; the earlier wording implied
+ * a global once-per-hour and was imprecise). Instrumentation must not become
+ * spam, but with N instances expect up to N lines per hour.
+ */
 const ATTRIBUTION_LOG_INTERVAL_MS = 60 * 60 * 1000;
 let attributionLoggedAt = 0;
 
@@ -108,6 +114,14 @@ let attributionLoggedAt = 0;
  *
  * Exported for a future observability sink; the hourly log line below is what
  * makes it visible today without needing one.
+ *
+ * READ THE RATIO WITH CARE (DeepSeek review): `attributed` is incremented from
+ * a client-supplied header, so anyone can inflate it by sending an arbitrary
+ * `x-forwarded-for`. A small `unknown / large attributed` ratio therefore does
+ * NOT prove unattributable traffic is negligible. The `unknown` count is the
+ * trustworthy half; treat the denominator as attacker-influenceable. (The log
+ * itself still fires on elapsed time, not on the ratio, so a flood cannot
+ * suppress the signal — only make the ratio look reassuring.)
  */
 export function ipAttributionStats(): { attributed: number; unknown: number } {
   return { ...attribution };

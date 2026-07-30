@@ -6,7 +6,7 @@ is blocked on an operator answer.
 
 | Finding | Severity | Outcome |
 |---|---|---|
-| C2 F1b — middleware amplification | MEDIUM | **FIXED** — `/api/:path*` removed from the matcher |
+| C2 F1b — middleware amplification | MEDIUM | **SURFACE REDUCED** — `/api/:path*` removed from the matcher; the lever survives on the matched paths (see correction below) |
 | C2 F5 — the shared `unknown` bucket | MEDIUM | **INSTRUMENTED** — measurement added, fix deferred until there is data |
 | C2 F2 — X-Forwarded-For trust boundary | MEDIUM (HIGH if the origin is exposed) | **BLOCKED** on operator question 7 |
 | C2 F4 — per-instance counters | MEDIUM | **ACCEPTED for now**, with the migration path recorded |
@@ -15,7 +15,7 @@ is blocked on an operator answer.
 
 ---
 
-## C2 F1b — FIXED
+## C2 F1b — SURFACE REDUCED (not eliminated)
 
 `src/middleware.ts` matched `/api/:path*`, so `await supabase.auth.getUser()` ran on every
 API request. Middleware runs **before** route handlers, so no per-route limiter could gate
@@ -40,6 +40,23 @@ regression to fear is someone re-adding a wildcard for convenience.
 
 Side benefit: every `/api/*` request loses a middleware hop it never needed.
 
+**Correction from the multi-model review (GLM).** The first version of this section, and the
+commit message, said this "closed" the amplification lever. That over-claimed. The middleware
+body still calls `getUser()` unconditionally, so a forged cookie aimed at `/settings/*` or
+`/auth/*` still costs one outbound call. What changed is that the highest-volume and most
+automatable paths no longer do. The root fix — verify the JWT locally before making any
+network call, so a fabricated token costs zero — is recorded as follow-up work below.
+
+### Follow-up work this review surfaced
+
+| # | Item | Raised by | Why not now |
+|---|---|---|---|
+| 1 | Verify the session JWT locally in middleware before any network call | GLM | Architecture change to a T0 file; removes the amplification on *every* path rather than shrinking it |
+| 2 | Wrap service-role client construction so it REQUIRES a verified user id | Kimi | `api/account/delete` is now a copy-paste template; a copy that drops the Bearer check would be a service-role endpoint keyed on a body-supplied id |
+| 3 | Move `account/delete`'s 20/hour failed-verification bucket to shared state | Kimi | The one limiter where per-instance is a real hole rather than a rounding error — it is credential-stuffing defence on a destructive endpoint, so C2 F4's blanket "accepted" is too coarse for this specific bucket |
+| 4 | Alert on unattributable-count spikes | Kimi | A log nobody alerts on is observability theatre; belongs with the observability goal |
+| 5 | ADR recording the two auth paths (cookie vs Bearer) and the conflation failure modes | Kimi | Cheap, and the distinction currently exists only in commit messages |
+
 ## C2 F5 — INSTRUMENTED, not fixed
 
 The finding is that all traffic with neither `x-forwarded-for` nor `x-real-ip` collapses into
@@ -47,8 +64,8 @@ one shared `'unknown'` bucket. The audit's own remediation order says **"measure
 fixing"**, and nobody had ever measured how much traffic lands there.
 
 `clientIpFromHeaders` now counts attributed vs unattributable requests and exposes
-`ipAttributionStats()`. Once per hour at most, an instance that has used the unknown bucket
-emits a single summary line. **Counts only — never header values**, since logging client IPs
+`ipAttributionStats()`. At most once per hour **per warm instance** (not fleet-wide, and the
+first unattributable request an instance sees logs immediately), it emits a single summary line. **Counts only — never header values**, since logging client IPs
 would turn instrumentation into a privacy problem.
 
 No behaviour changed: the returned bucket keys are identical, and a test pins that, because
