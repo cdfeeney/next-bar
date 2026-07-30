@@ -92,6 +92,41 @@ describe('deriveArchetype — branch ORDER is preserved', () => {
   it('rooftop still wins when no earlier branch matches', () => {
     expect(deriveArchetype(['rooftop', 'loud'])).toBe('Up where the view is');
   });
+
+  /**
+   * The five hand-picked cases above are NOT sufficient, which a routed GLM
+   * reviewer proved: they only ever show that a branch LOSES to an earlier one
+   * and that rooftop is reachable. Nothing pinned that a branch must BEAT the
+   * branches after it. Moving `rooftop` to just before the fallback passed every
+   * assertion in this file while silently reclassifying anyone with
+   * rooftop+garden+chill from "Up where the view is" to "Garden seat, no rush".
+   *
+   * This closes it exhaustively. BRANCHES is written in source order, so for
+   * every pair i<j the union of both tag sets must never resolve to the LATER
+   * branch's label — the first match is at some index <= i < j, so the later
+   * label is unreachable by construction. Any reordering breaks that, in either
+   * direction, without duplicating the production if-chain in the test.
+   */
+  it('no branch can be beaten by a LATER branch (all 55 pairs)', () => {
+    for (let i = 0; i < BRANCHES.length; i += 1) {
+      for (let j = i + 1; j < BRANCHES.length; j += 1) {
+        const union = [...new Set([...BRANCHES[i].tags, ...BRANCHES[j].tags])];
+        const got = deriveArchetype(union);
+        expect(
+          got,
+          `[${union.join('+')}] resolved to the LATER branch "${BRANCHES[j].label}"; ` +
+            `"${BRANCHES[i].label}" is earlier in the chain and must win`,
+        ).not.toBe(BRANCHES[j].label);
+      }
+    }
+  });
+
+  it('the all-pairs invariant actually has teeth (self-check)', () => {
+    // Guards the guard: if BRANCHES ever collapsed to fewer than two rows the
+    // loop above would silently assert nothing at all.
+    expect(BRANCHES.length).toBe(11);
+    expect((BRANCHES.length * (BRANCHES.length - 1)) / 2).toBe(55);
+  });
 });
 
 describe('deriveArchetype — labels stay short enough for mobile', () => {
