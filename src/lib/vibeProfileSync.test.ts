@@ -49,13 +49,18 @@ function stubSupabase(opts: {
     data: opts.selectError ? null : (opts.row ?? null),
     error: opts.selectError ? { message: 'network' } : null,
   }));
+  // `delete` is part of the stub because a corrupt server row is now cleared
+  // before re-uploading (an UPDATE cannot fix it — the LWW trigger would skip
+  // any write older than the corrupt row's timestamp).
+  const del = vi.fn(async () => ({ error: null }));
   const client = {
     from: vi.fn(() => ({
       select: vi.fn(() => ({ maybeSingle })),
       upsert,
+      delete: vi.fn(() => ({ eq: del })),
     })),
   } as unknown as SupabaseClient;
-  return { client, upsert, maybeSingle };
+  return { client, upsert, maybeSingle, del };
 }
 
 const always = () => true;
@@ -149,8 +154,8 @@ describe('second device hydration', () => {
     expect(readProfileOwner()).toBe('user-a');
   });
 
-  it('treats a corrupt server row as absent rather than hydrating garbage', async () => {
-    const { client } = stubSupabase({
+  it('never hydrates a corrupt server row, and clears it', async () => {
+    const { client, del } = stubSupabase({
       row: { profile: { tags: 'not-an-array' }, saved_at: NEWER },
     });
     const outcome = await syncVibeProfile({
@@ -158,8 +163,125 @@ describe('second device hydration', () => {
       userId: 'user-a',
       stillCurrent: always,
     });
+    // Nothing local to upload, so nothing is synced — but the corrupt row is
+    // still removed rather than left to poison every future sync.
     expect(outcome).toBe('nothing-to-sync');
+    expect(del).toHaveBeenCalledTimes(1);
     expect(loadProfile()).toBeNull();
+  });
+});
+
+describe('corrupt server row does not deadlock the upload', () => {
+  it('DELETES an invalid row so the upload lands as a fresh INSERT', async () => {
+    // The deadlock this fixes: a malformed row at a NEWER saved_at than the
+    // local profile. Collapsing invalid into 'absent' made the client upsert,
+    // the LWW trigger silently skip the UPDATE (local is older), the
+    // confirmation read report 'absent' again, and the sync return 'uploaded' —
+    // forever, with the good local profile never reaching another device.
+    writeProfile(profileAt(OLDER, 'good local'));
+
+    const del = vi.fn(async () => ({ error: null }));
+    let call = 0;
+    const maybeSingle = vi.fn(async () => {
+      call += 1;
+      // First read: the corrupt row. After the delete: genuinely absent.
+      return call === 1
+        ? { data: { profile: { tags: 'not-an-array' }, saved_at: NEWER }, error: null }
+        : { data: null, error: null };
+    });
+    const upsert = vi.fn(async (_p: { saved_at: string }) => ({ error: null }));
+    const client = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({ maybeSingle })),
+        upsert,
+        delete: vi.fn(() => ({ eq: del })),
+      })),
+    } as unknown as SupabaseClient;
+
+    const outcome = await syncVibeProfile({
+      supabase: client,
+      userId: 'user-a',
+      stillCurrent: always,
+    });
+
+    expect(del).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0][0].saved_at).toBe(OLDER);
+    expect(outcome).toBe('uploaded');
+    // The good local profile survives and is what got uploaded.
+    expect(loadProfile()?.archetype).toBe('good local');
+  });
+
+  it('does not clear local data when the corrupt-row delete fails', async () => {
+    writeProfile(profileAt(OLDER, 'good local'));
+    const del = vi.fn(async () => ({ error: { code: '08006', message: 'network' } }));
+    const maybeSingle = vi.fn(async () => ({
+      data: { profile: { tags: 'not-an-array' }, saved_at: NEWER },
+      error: null,
+    }));
+    const upsert = vi.fn(async (_p: { saved_at: string }) => ({ error: null }));
+    const client = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({ maybeSingle })),
+        upsert,
+        delete: vi.fn(() => ({ eq: del })),
+      })),
+    } as unknown as SupabaseClient;
+
+    const outcome = await syncVibeProfile({
+      supabase: client,
+      userId: 'user-a',
+      stillCurrent: always,
+    });
+
+    expect(outcome).toBe('upload-failed');
+    expect(upsert).not.toHaveBeenCalled();
+    expect(loadProfile()?.archetype).toBe('good local');
+  });
+});
+
+describe('a quiz finishing mid-upload is never clobbered', () => {
+  it('keeps a profile saved DURING the upsert/confirm awaits', async () => {
+    // uploadAndReconcile captured `local` before TWO awaits. A quiz completed
+    // during them wrote a newer profile, and if the confirmed server row was
+    // newer than the STALE snapshot the fresh quiz result was overwritten — and
+    // if its own best-effort push had failed, it existed nowhere.
+    const T1 = '2026-07-01T00:00:00.000Z'; // server, initially
+    const T2 = '2026-07-10T00:00:00.000Z'; // our local at sync start
+    const T3 = '2026-07-15T00:00:00.000Z'; // another device, mid-flight
+    const T4 = '2026-07-20T00:00:00.000Z'; // the quiz that lands mid-flight
+
+    writeProfile(profileAt(T2, 'our local'));
+
+    let call = 0;
+    const maybeSingle = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return { data: { profile: profileAt(T1, 'old server'), saved_at: T1 }, error: null };
+      }
+      // The confirmation read: another device's row, newer than our T2 snapshot
+      // but OLDER than the quiz that just landed.
+      return { data: { profile: profileAt(T3, 'other device'), saved_at: T3 }, error: null };
+    });
+    const upsert = vi.fn(async (_p: { saved_at: string }) => {
+      // The quiz completes while the upsert is in flight.
+      writeProfile(profileAt(T4, 'just finished quiz'));
+      return { error: null };
+    });
+    const client = {
+      from: vi.fn(() => ({ select: vi.fn(() => ({ maybeSingle })), upsert })),
+    } as unknown as SupabaseClient;
+
+    const outcome = await syncVibeProfile({
+      supabase: client,
+      userId: 'user-a',
+      stillCurrent: always,
+    });
+
+    // The newest profile wins and survives locally.
+    expect(loadProfile()?.archetype).toBe('just finished quiz');
+    expect(loadProfile()?.savedAt).toBe(T4);
+    expect(outcome).toBe('uploaded');
   });
 });
 

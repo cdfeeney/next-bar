@@ -30,14 +30,23 @@ type Row = {
  *
  * Returns:
  *   StoredProfile — a valid stored row
- *   'absent'      — the query succeeded and there is no row (or the stored
- *                   row failed validation, which is treated as absent so a
- *                   corrupt row can be overwritten rather than deadlocking)
+ *   'absent'      — the query succeeded and there is genuinely NO row
+ *   'invalid'     — a row EXISTS but failed validation
  *   null          — the fetch FAILED (transport/RLS). Keep local data.
+ *
+ * 'invalid' is distinct from 'absent' on purpose. Collapsing the two created a
+ * permanent deadlock: a malformed row (the CHECK constraint only enforces
+ * `jsonb_typeof(profile) = 'object'`, so `{"tags":"oops"}` is storable) at a
+ * NEWER saved_at than the local profile would report 'absent', the client would
+ * upsert, the LWW trigger would silently skip the UPDATE because the local
+ * timestamp is older, the confirmation read would report 'absent' again, and the
+ * sync would return 'uploaded' — forever, with the good local profile never
+ * reaching any other device. The caller must clear an invalid row before
+ * uploading, so the write lands as a fresh INSERT that the trigger cannot skip.
  */
 export async function fetchServerVibeProfile(
   supabase: SupabaseClient,
-): Promise<StoredProfile | 'absent' | null> {
+): Promise<StoredProfile | 'absent' | 'invalid' | null> {
   const { data, error } = await supabase
     .from('vibe_profiles')
     .select('profile,saved_at')
@@ -57,7 +66,7 @@ export async function fetchServerVibeProfile(
       : {}),
     savedAt: row.saved_at,
   });
-  return parsed ?? 'absent';
+  return parsed ?? 'invalid';
 }
 
 /**

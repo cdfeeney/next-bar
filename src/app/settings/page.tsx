@@ -157,8 +157,21 @@ export default function SettingsPage(): JSX.Element {
           ok = false;
         }
         if (!ok) {
+          // KNOWN PRE-0033 LIMITATION, accepted deliberately. A MISSING table is
+          // forgiven (42P01/PGRST205), but an OFFLINE request fails as a
+          // transport error, and the client cannot tell "no table, so no row can
+          // exist" from "table exists and I couldn't reach it". So while offline,
+          // a signed-in user cannot clear. Once 0033 is applied this is the
+          // CORRECT behavior: a surviving server row would otherwise re-hydrate
+          // the profile the user just cleared.
+          //
+          // A reviewer proposed feature-gating the remote delete until 0033 is
+          // live. Rejected: that flag has to be manually retired, and forgetting
+          // it silently re-opens the data-resurrection bug this whole path
+          // exists to prevent. A refusal with an honest, retryable message is
+          // the safer failure.
           window.alert(
-            "Couldn't reach the server, so your vibe profile was NOT cleared. Try again in a moment.",
+            "Couldn't reach the server, so your vibe profile was NOT cleared. It's still saved on this device — try again in a moment.",
           );
           return;
         }

@@ -1,12 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   loadProfile,
-  readProfileOwner,
   writeProfile,
   writeProfileOwner,
   type StoredProfile,
 } from '@/lib/storedProfile';
 import {
+  deleteServerVibeProfile,
   fetchServerVibeProfile,
   upsertServerVibeProfile,
 } from '@/lib/vibeProfile.server';
@@ -133,6 +133,19 @@ export async function syncVibeProfile({
   // is still retried on the next sign-in.
   writeProfileOwner(userId);
 
+  // --- server row exists but is CORRUPT ------------------------------------
+  // Clear it before uploading. An UPDATE cannot fix it: the LWW trigger skips
+  // any write whose saved_at is not strictly newer, and a corrupt row can carry
+  // a newer timestamp than our valid local one — which would deadlock the
+  // upload forever. Deleting first means the upload lands as a fresh INSERT,
+  // which the trigger does not guard.
+  if (server === 'invalid') {
+    if (!(await deleteServerVibeProfile(supabase, userId))) return 'upload-failed';
+    if (!stillCurrent()) return 'aborted';
+    if (!local) return 'nothing-to-sync';
+    return uploadAndReconcile(supabase, userId, local, stillCurrent);
+  }
+
   // --- server absent -------------------------------------------------------
   if (server === 'absent') {
     if (!local) return 'nothing-to-sync';
@@ -188,10 +201,30 @@ async function uploadAndReconcile(
   if (!stillCurrent()) return 'aborted';
   // A failed confirmation read does not invalidate the write; keep local as-is
   // and let the next sync reconcile rather than guessing.
-  if (confirmed === null || confirmed === 'absent') return 'uploaded';
+  //
+  // 'invalid' lands here too: the row exists but is corrupt, so there is nothing
+  // trustworthy to reconcile against. Local data is kept untouched and the NEXT
+  // sync's invalid branch clears the row and re-uploads. Deleting from inside
+  // the confirmation path would race the write we just made.
+  if (confirmed === null || confirmed === 'absent' || confirmed === 'invalid') {
+    return 'uploaded';
+  }
+
+  // Re-read local: `uploaded` was captured BEFORE two awaits (the upsert and
+  // this confirmation read), and a quiz completed during them has already
+  // written a NEWER profile to the cache. Comparing the server row against the
+  // stale snapshot would overwrite that fresh result — and if its own
+  // best-effort push also failed, the quiz answer would exist nowhere.
+  // syncVibeProfile re-reads after its await for exactly this reason; this
+  // function has two awaits and originally did not, which is the gap.
+  const current = loadProfile() ?? local;
+
+  // Local is newer than what the server holds (typically a quiz that landed
+  // mid-flight). Keep it and let the next sync upload it — do NOT clobber.
+  if (isStrictlyNewer(current, confirmed)) return 'uploaded';
 
   // Our write lost to a strictly newer concurrent row — adopt the winner.
-  if (isStrictlyNewer(confirmed, local)) {
+  if (isStrictlyNewer(confirmed, current)) {
     writeProfile(confirmed);
     return 'hydrated';
   }
@@ -208,8 +241,8 @@ async function uploadAndReconcile(
   // that returns an OLDER row (replica lag) must never overwrite newer local
   // data. Two tests in this file pin exactly that.
   if (
-    Date.parse(confirmed.savedAt) === Date.parse(local.savedAt) &&
-    !isSameProfile(confirmed, local)
+    Date.parse(confirmed.savedAt) === Date.parse(current.savedAt) &&
+    !isSameProfile(confirmed, current)
   ) {
     writeProfile(confirmed);
     return 'in-sync';
