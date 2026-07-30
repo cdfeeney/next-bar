@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clientIpFromHeaders,
-  createIpRateLimiter,
+  createRateLimiter,
   isValidWaitlistEmail,
   normalizeEmail,
   sanitizeNeighborhood,
@@ -99,9 +99,9 @@ describe('clientIpFromHeaders', () => {
   });
 });
 
-describe('createIpRateLimiter', () => {
+describe('createRateLimiter', () => {
   it('allows up to the limit inside a window, then throttles', () => {
-    const limiter = createIpRateLimiter({ limit: 3, windowMs: 1000 });
+    const limiter = createRateLimiter({ limit: 3, windowMs: 1000 });
     const t = 1_000_000;
     expect(limiter.allow('ip-a', t)).toBe(true);
     expect(limiter.allow('ip-a', t + 1)).toBe(true);
@@ -111,7 +111,7 @@ describe('createIpRateLimiter', () => {
   });
 
   it('tracks IPs independently', () => {
-    const limiter = createIpRateLimiter({ limit: 1, windowMs: 1000 });
+    const limiter = createRateLimiter({ limit: 1, windowMs: 1000 });
     const t = 0;
     expect(limiter.allow('ip-a', t)).toBe(true);
     expect(limiter.allow('ip-b', t)).toBe(true);
@@ -120,7 +120,7 @@ describe('createIpRateLimiter', () => {
   });
 
   it('resets the budget when the window elapses', () => {
-    const limiter = createIpRateLimiter({ limit: 1, windowMs: 1000 });
+    const limiter = createRateLimiter({ limit: 1, windowMs: 1000 });
     expect(limiter.allow('ip-a', 0)).toBe(true);
     expect(limiter.allow('ip-a', 500)).toBe(false);
     expect(limiter.allow('ip-a', 1000)).toBe(true); // fresh window
@@ -128,7 +128,7 @@ describe('createIpRateLimiter', () => {
   });
 
   it('prunes expired buckets to admit new IPs (spray across windows)', () => {
-    const limiter = createIpRateLimiter({ limit: 1, windowMs: 10 });
+    const limiter = createRateLimiter({ limit: 1, windowMs: 10 });
     // Buckets expire every 10ms; spacing hits 20ms apart keeps the live
     // set tiny no matter how many distinct IPs spray over time.
     for (let i = 0; i < 10_050; i++) {
@@ -139,7 +139,7 @@ describe('createIpRateLimiter', () => {
   });
 
   it('fails CLOSED when 10k+ distinct IPs are all inside the live window (hard memory cap)', () => {
-    const limiter = createIpRateLimiter({ limit: 5, windowMs: 60_000 });
+    const limiter = createRateLimiter({ limit: 5, windowMs: 60_000 });
     const t = 0;
     for (let i = 0; i < 10_000; i++) {
       expect(limiter.allow(`live-${i}`, t + i)).toBe(true);
@@ -151,5 +151,41 @@ describe('createIpRateLimiter', () => {
     expect(limiter.allow('live-0', t + 10_001)).toBe(true);
     // Once the window expires, pruning makes room again.
     expect(limiter.allow('overflow-ip', t + 61_000)).toBe(true);
+  });
+});
+
+describe('createRateLimiter.peek', () => {
+  it('does NOT consume budget — peeking forever never throttles', () => {
+    const limiter = createRateLimiter({ limit: 2, windowMs: 1000 });
+    for (let i = 0; i < 50; i++) {
+      expect(limiter.peek('ip-a', i)).toBe(true);
+    }
+    // All 50 peeks cost nothing: the full budget is still there.
+    expect(limiter.allow('ip-a', 100)).toBe(true);
+    expect(limiter.allow('ip-a', 101)).toBe(true);
+    expect(limiter.allow('ip-a', 102)).toBe(false);
+  });
+
+  it('reports exhaustion once allow() has spent the budget', () => {
+    const limiter = createRateLimiter({ limit: 2, windowMs: 1000 });
+    expect(limiter.peek('ip-a', 0)).toBe(true);
+    limiter.allow('ip-a', 0);
+    expect(limiter.peek('ip-a', 1)).toBe(true); // 1 of 2 spent
+    limiter.allow('ip-a', 1);
+    expect(limiter.peek('ip-a', 2)).toBe(false); // exhausted
+  });
+
+  it('goes true again on a fresh window', () => {
+    const limiter = createRateLimiter({ limit: 1, windowMs: 1000 });
+    limiter.allow('ip-a', 0);
+    expect(limiter.peek('ip-a', 999)).toBe(false);
+    expect(limiter.peek('ip-a', 1000)).toBe(true);
+  });
+
+  it('tracks keys independently', () => {
+    const limiter = createRateLimiter({ limit: 1, windowMs: 1000 });
+    limiter.allow('ip-a', 0);
+    expect(limiter.peek('ip-a', 1)).toBe(false);
+    expect(limiter.peek('ip-b', 1)).toBe(true);
   });
 });

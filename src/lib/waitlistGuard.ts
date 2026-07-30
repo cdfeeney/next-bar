@@ -86,19 +86,38 @@ export function clientIpFromHeaders(headers: Headers): string {
 }
 
 export type RateLimiter = {
-  /** True when this hit is within the per-IP budget; false = throttled. */
-  allow: (ip: string, now?: number) => boolean;
+  /**
+   * True when this hit is within the key's budget; false = throttled.
+   * CONSUMES one unit of the budget.
+   */
+  allow: (key: string, now?: number) => boolean;
+  /**
+   * Non-consuming read of the same predicate: true when the next `allow`
+   * would be within budget. Lets a caller reject an already-exhausted key
+   * before doing expensive work WITHOUT charging the key for that
+   * rejection — see the two-stage guard in `api/account/delete`.
+   *
+   * Optimistic by design: it does not model the MAX_BUCKETS fail-closed
+   * path below, so a brand-new key can peek true and still be denied by
+   * `allow`. `allow` is the authoritative decision; `peek` is only ever a
+   * cheap early-out.
+   */
+  peek: (key: string, now?: number) => boolean;
 };
 
 /**
  * Fixed-window in-memory limiter. Windows reset `windowMs` after a
  * bucket's first hit. Memory is HARD-capped at MAX_BUCKETS (dual review):
- * when a prune of expired buckets can't make room — 10k+ distinct IPs all
- * inside the live window — new IPs are REJECTED rather than tracked. Under
+ * when a prune of expired buckets can't make room — 10k+ distinct keys all
+ * inside the live window — new keys are REJECTED rather than tracked. Under
  * that kind of spray the traffic is an attack by definition, so failing
  * closed both bounds memory and keeps limiting.
+ *
+ * The key is an arbitrary string. Client IP is the common case, but
+ * `api/account/delete` keys its real quota on the VERIFIED user id — an
+ * identity the caller cannot rotate or spoof (C2 audit F3).
  */
-export function createIpRateLimiter({
+export function createRateLimiter({
   limit,
   windowMs,
 }: {
@@ -115,23 +134,29 @@ export function createIpRateLimiter({
   }
 
   return {
-    allow(ip: string, now: number = Date.now()): boolean {
-      const bucket = buckets.get(ip);
+    allow(key: string, now: number = Date.now()): boolean {
+      const bucket = buckets.get(key);
       if (!bucket || now - bucket.windowStart >= windowMs) {
         // Opportunistic prune on new-window creation keeps the hot path
         // (existing bucket increment) allocation-free.
         if (buckets.size >= MAX_BUCKETS) {
           prune(now);
           // Still full after pruning: every tracked bucket is live. Fail
-          // closed — an untracked new IP must not become an untracked
-          // unlimited IP, and the map must not grow unbounded.
-          if (buckets.size >= MAX_BUCKETS && !buckets.has(ip)) return false;
+          // closed — an untracked new key must not become an untracked
+          // unlimited key, and the map must not grow unbounded.
+          if (buckets.size >= MAX_BUCKETS && !buckets.has(key)) return false;
         }
-        buckets.set(ip, { count: 1, windowStart: now });
+        buckets.set(key, { count: 1, windowStart: now });
         return true;
       }
       bucket.count += 1;
       return bucket.count <= limit;
+    },
+
+    peek(key: string, now: number = Date.now()): boolean {
+      const bucket = buckets.get(key);
+      if (!bucket || now - bucket.windowStart >= windowMs) return true;
+      return bucket.count < limit;
     },
   };
 }

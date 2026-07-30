@@ -22,7 +22,14 @@ vi.mock('@supabase/supabase-js', () => ({
 
 import { POST } from './route';
 
-const USER_ID = 'uuid-caller';
+/**
+ * The route's limiters are module-scoped, so state leaks between tests in
+ * this file by design. Every test therefore gets its OWN verified user id
+ * (and, by default, its own IP) — otherwise a successful delete in one test
+ * silently spends another test's 5/hour quota.
+ */
+let USER_ID = '';
+let userIdCounter = 0;
 
 function makeRequest(opts: { token?: string; ip?: string } = {}): Request {
   const headers = new Headers();
@@ -46,6 +53,7 @@ describe('POST /api/account/delete', () => {
     vi.stubEnv('LOOP_UNATTENDED', '');
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://example.supabase.co');
     vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-test-key');
+    USER_ID = `uuid-caller-${++userIdCounter}`;
     getUserMock.mockResolvedValue({
       data: { user: { id: USER_ID } },
       error: null,
@@ -139,14 +147,93 @@ describe('POST /api/account/delete', () => {
     expect(await res.json()).toEqual({ ok: false, error: 'server_error' });
   });
 
-  it('rate-limits per IP: 6th attempt inside the hour is 429', async () => {
-    const ip = '203.0.113.99';
+  it('rate-limits the VERIFIED USER, not the IP: 6th delete inside the hour is 429', async () => {
+    // Every request comes from a DIFFERENT address. Under the old IP-keyed
+    // limiter all six would have passed (C2 F3: one user rotating IPs was
+    // unlimited); the quota now follows the identity.
     for (let i = 0; i < 5; i++) {
-      const res = await POST(makeRequest({ token: 'valid', ip }));
+      const res = await POST(makeRequest({ token: 'valid', ip: `198.51.100.${i}` }));
       expect(res.status).toBe(200);
     }
-    const throttled = await POST(makeRequest({ token: 'valid', ip }));
+    const throttled = await POST(
+      makeRequest({ token: 'valid', ip: '198.51.100.200' }),
+    );
     expect(throttled.status).toBe(429);
     expect(await throttled.json()).toEqual({ ok: false, error: 'rate_limited' });
+    expect(deleteUserMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('C2 F1: unauthenticated POSTs never spend a real user’s delete budget', async () => {
+    // The exact attack: someone POSTs from the victim's egress address,
+    // hoping to burn the quota that stands between the victim and deleting
+    // their own account. Before the two-stage fix, five of these locked the
+    // address out for an hour.
+    const sharedIp = '203.0.113.7';
+    for (let i = 0; i < 12; i++) {
+      const res = await POST(makeRequest({ ip: sharedIp }));
+      expect(res.status).toBe(401);
+    }
+    expect(getUserMock).not.toHaveBeenCalled();
+
+    // The real user, behind that same NAT, is unaffected.
+    for (let i = 0; i < 5; i++) {
+      const res = await POST(makeRequest({ token: 'valid', ip: sharedIp }));
+      expect(res.status).toBe(200);
+    }
+    expect(deleteUserMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('a successful delete does NOT charge the shared IP bucket', async () => {
+    // Legitimate traffic must never walk the address toward the coarse
+    // pre-auth bound — that is what keeps stage 1 from becoming F1 again.
+    const sharedIp = '203.0.113.21';
+    for (let i = 0; i < 5; i++) {
+      expect((await POST(makeRequest({ token: 'valid', ip: sharedIp }))).status).toBe(200);
+    }
+    // A DIFFERENT user on the same address still gets a full budget.
+    USER_ID = 'uuid-housemate';
+    getUserMock.mockResolvedValue({
+      data: { user: { id: USER_ID } },
+      error: null,
+    });
+    const housemate = await POST(makeRequest({ token: 'valid', ip: sharedIp }));
+    expect(housemate.status).toBe(200);
+    expect(deleteUserMock).toHaveBeenLastCalledWith('uuid-housemate');
+  });
+
+  it('still bounds forged-token floods per IP (stage 1 coarse cap)', async () => {
+    // Rejected tokens DO cost an outbound verification call, so they are
+    // charged. Past the cap the route stops calling Supabase at all.
+    const floodIp = '203.0.113.44';
+    getUserMock.mockResolvedValue({
+      data: { user: null },
+      error: { message: 'invalid JWT' },
+    });
+    for (let i = 0; i < 20; i++) {
+      expect((await POST(makeRequest({ token: 'forged', ip: floodIp }))).status).toBe(401);
+    }
+    expect(getUserMock).toHaveBeenCalledTimes(20);
+
+    const throttled = await POST(makeRequest({ token: 'forged', ip: floodIp }));
+    expect(throttled.status).toBe(429);
+    // The point of the cap: no further amplification into Supabase.
+    expect(getUserMock).toHaveBeenCalledTimes(20);
+  });
+
+  it('does not charge the IP bucket for OUR OWN transport failures', async () => {
+    // An outage is not the caller's fault; billing their address for it
+    // would re-create the lockout after every backend wobble.
+    const ip = '203.0.113.90';
+    getUserMock.mockRejectedValue(new Error('getaddrinfo ENOTFOUND'));
+    for (let i = 0; i < 25; i++) {
+      expect((await POST(makeRequest({ token: 'valid', ip }))).status).toBe(500);
+    }
+
+    getUserMock.mockResolvedValue({
+      data: { user: { id: USER_ID } },
+      error: null,
+    });
+    const recovered = await POST(makeRequest({ token: 'valid', ip }));
+    expect(recovered.status).toBe(200);
   });
 });

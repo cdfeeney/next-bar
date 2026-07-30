@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { clientIpFromHeaders, createIpRateLimiter } from '@/lib/waitlistGuard';
+import { clientIpFromHeaders, createRateLimiter } from '@/lib/waitlistGuard';
 
 /**
  * POST /api/account/delete — H2 (N3): delete the CALLER's auth user.
@@ -16,7 +16,27 @@ import { clientIpFromHeaders, createIpRateLimiter } from '@/lib/waitlistGuard';
  *     auth, and the verified user id is the ONLY id that can be deleted —
  *     you can delete yourself, nobody else.
  *   - Generic error responses; details stay in server logs (MED-23 rule).
- *   - Rate-limited per IP: deletion is destructive and needs no retries.
+ *   - TWO-STAGE rate limit (C2 audit F1 + F3). Deletion is destructive and
+ *     needs no retries, but the quota must bound the ACCOUNT, not the wire:
+ *       stage 1 — a coarse per-IP bound charged ONLY to attempts that fail
+ *         verification, checked with a NON-consuming peek so a legitimate
+ *         delete never spends the shared bucket. Previously the 5/hour IP
+ *         limiter ran before auth, so five anonymous POSTs (no preflight
+ *         needed, reachable cross-origin) burned an address's whole budget
+ *         and locked the real user behind that NAT out of deleting their
+ *         own account for the rest of the hour.
+ *       stage 2 — the real 5/hour quota, keyed on the VERIFIED user id.
+ *         That identity cannot be rotated or spoofed, so it neither leaks
+ *         across users sharing an egress IP nor evaporates when one user
+ *         changes address.
+ *     RESIDUAL, stated honestly: stage 1 must decide before the token can
+ *     be verified, so an attacker willing to send 20 forged-token POSTs an
+ *     hour can still 429 one address. That is the price of bounding
+ *     outbound amplification, and it is strictly narrower than the old
+ *     behaviour (five token-less POSTs, and every legitimate delete also
+ *     spending the shared bucket). The durable fix is C2 F4 — move these
+ *     counters to a shared store; the repo already has the pattern in
+ *     handle_claim_attempts / follow_attempts.
  *
  * UNATTENDED SAFETY GATE (nightlog rule 10, DeepSeek/Codex review): under
  * LOOP_UNATTENDED=1 this route refuses outright — the overnight loop (and
@@ -25,11 +45,34 @@ import { clientIpFromHeaders, createIpRateLimiter } from '@/lib/waitlistGuard';
  * The morning operator runs without the flag and the route goes live.
  */
 
-const RATE_LIMIT_PER_HOUR = 5;
-const limiter = createIpRateLimiter({
-  limit: RATE_LIMIT_PER_HOUR,
-  windowMs: 60 * 60 * 1000,
+const HOUR_MS = 60 * 60 * 1000;
+
+/** Stage 2 — the real quota. One account, five deletions an hour. */
+const DELETES_PER_USER_PER_HOUR = 5;
+const userLimiter = createRateLimiter({
+  limit: DELETES_PER_USER_PER_HOUR,
+  windowMs: HOUR_MS,
 });
+
+/**
+ * Stage 1 — coarse bound on attempts that never proved an identity. Set
+ * well above the real quota because it is a flood damper for the
+ * token-verification path, not a user-facing limit: no legitimate client
+ * ever charges it.
+ */
+const UNVERIFIED_ATTEMPTS_PER_IP_PER_HOUR = 20;
+const unverifiedIpLimiter = createRateLimiter({
+  limit: UNVERIFIED_ATTEMPTS_PER_IP_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+
+function rateLimited(): NextResponse {
+  return NextResponse.json({ ok: false, error: 'rate_limited' }, { status: 429 });
+}
+
+function unauthorized(): NextResponse {
+  return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+}
 
 export async function POST(request: Request): Promise<NextResponse> {
   if (process.env.LOOP_UNATTENDED === '1') {
@@ -47,13 +90,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  if (!limiter.allow(clientIpFromHeaders(request.headers))) {
-    return NextResponse.json(
-      { ok: false, error: 'rate_limited' },
-      { status: 429 },
-    );
-  }
-
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceKey) {
@@ -64,13 +100,20 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
+  // Stage 1, gate: PEEK, never consume. A caller holding a valid token must
+  // be able to delete their account even from an address someone else has
+  // already flooded, so only the failure paths below charge this bucket.
+  const ip = clientIpFromHeaders(request.headers);
+  if (!unverifiedIpLimiter.peek(ip)) return rateLimited();
+
   const authHeader = request.headers.get('authorization') ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) {
-    return NextResponse.json(
-      { ok: false, error: 'unauthorized' },
-      { status: 401 },
-    );
+    // NOT charged: a token-less POST costs us no outbound call, and stage 1
+    // exists to bound that cost. Charging free requests would mean twenty
+    // empty POSTs could 429 an address — the cheapest possible version of
+    // the very lockout being fixed.
+    return unauthorized();
   }
 
   // Service client: server-only, no session persistence, no token refresh.
@@ -95,11 +138,17 @@ export async function POST(request: Request): Promise<NextResponse> {
       await admin.auth.getUser(token);
     const userId = userData?.user?.id;
     if (userError || !userId) {
-      return NextResponse.json(
-        { ok: false, error: 'unauthorized' },
-        { status: 401 },
-      );
+      // A rejected token IS an unverified attempt — charge stage 1 here so
+      // forged-token floods stay bounded. Deliberately NOT charged in the
+      // catch below: a transport throw means OUR backend is failing, and
+      // billing the caller's IP for our outage would re-create the very
+      // lockout this two-stage design removes.
+      unverifiedIpLimiter.allow(ip);
+      return unauthorized();
     }
+
+    // Stage 2: the real quota, on an identity the caller cannot rotate.
+    if (!userLimiter.allow(userId)) return rateLimited();
 
     const { error: deleteError } = await admin.auth.admin.deleteUser(userId);
     if (deleteError) {

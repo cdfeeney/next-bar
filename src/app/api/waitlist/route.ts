@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import {
   clientIpFromHeaders,
-  createIpRateLimiter,
+  createRateLimiter,
   isValidWaitlistEmail,
   normalizeEmail,
   sanitizeNeighborhood,
@@ -27,7 +27,7 @@ type WaitlistPayload = {
 };
 
 const RATE_LIMIT_PER_HOUR = 10;
-const limiter = createIpRateLimiter({
+const limiter = createRateLimiter({
   limit: RATE_LIMIT_PER_HOUR,
   windowMs: 60 * 60 * 1000,
 });
