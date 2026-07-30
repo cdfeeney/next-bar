@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "profile": {
+    "name": "Connor",
+    "goal": "Operate Next Bar as a technically informed CTO who can approve, detect, and recover consequential software changes",
+    "currency": "USD"
+  },
+  "nodes": [
+    {
+      "id": "systems-map",
+      "name": "Systems and environments",
+      "branch": "cto",
+      "prerequisites": [],
+      "status": "active",
+      "mastery_test": "Unaided, trace an iPhone request through Vercel and Supabase and correctly classify Production, Staging, Preview, public keys, and secrets after a delayed review",
+      "proof": "Next Bar architecture and environment diagram"
+    },
+    {
+      "id": "safe-delivery",
+      "name": "Safe software delivery",
+      "branch": "cto",
+      "prerequisites": [
+        "systems-map"
+      ],
+      "status": "locked",
+      "mastery_test": "Given a database-changing release, produce a correct staged deployment, compatibility, verification, and rollback plan without notes",
+      "proof": "Rehearsed Next Bar release and rollback runbook"
+    },
+    {
+      "id": "data-security",
+      "name": "Data, security, and privacy",
+      "branch": "cto",
+      "prerequisites": [
+        "systems-map"
+      ],
+      "status": "locked",
+      "mastery_test": "Threat-model a feature and identify its authorization, secret, privacy, retention, and deletion controls",
+      "proof": "Reviewed Next Bar data map and security risk register"
+    },
+    {
+      "id": "reliability",
+      "name": "Reliability and incidents",
+      "branch": "cto",
+      "prerequisites": [
+        "safe-delivery",
+        "data-security"
+      ],
+      "status": "locked",
+      "mastery_test": "Lead a simulated Production incident from detection through mitigation, recovery, communication, and postmortem",
+      "proof": "Completed incident simulation and postmortem"
+    },
+    {
+      "id": "scale-economics",
+      "name": "Scale and economics",
+      "branch": "cto",
+      "prerequisites": [
+        "systems-map"
+      ],
+      "status": "locked",
+      "mastery_test": "Estimate 10x usage impact, identify the first bottleneck, and set a justified quota or budget control",
+      "proof": "Next Bar capacity and unit-cost model"
+    },
+    {
+      "id": "technical-leadership",
+      "name": "Technical leadership",
+      "branch": "cto",
+      "prerequisites": [
+        "safe-delivery",
+        "data-security",
+        "reliability",
+        "scale-economics"
+      ],
+      "status": "locked",
+      "mastery_test": "Make and document a go, defer, delegate, or stop decision for a consequential feature using evidence and explicit tradeoffs",
+      "proof": "Three reviewed architecture or product decision records"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "cto-session-001",
+      "date": "2026-07-30",
+      "node_id": "systems-map",
+      "minutes": 10,
+      "cold_recall_pct": 65,
+      "practice_pct": 90,
+      "delayed": false,
+      "transfer_pass": false,
+      "artifact": "docs/CTO-LEARNING-PATH.html",
+      "errors": [
+        "Initially omitted the Vercel API route as the trusted middle layer",
+        "Confused local secret storage with the system allowed to use the Production key",
+        "Initially reversed the rollback compatibility direction",
+        "Verification plan did not explicitly test the old application against the migrated schema"
+      ],
+      "next_review": "2026-07-31",
+      "notes": "Passed additive-versus-destructive migration practice. Credential-boundary transfer, delayed review, and architecture artifact remain."
+    }
+  ],
+  "value_events": []
+}
