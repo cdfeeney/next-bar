@@ -24,12 +24,15 @@ const PROBE_CACHE_TTL_MS = 30_000;
 type SupabaseHealth = 'ok' | 'unreachable' | 'unconfigured';
 
 let cachedProbe: { value: SupabaseHealth; until: number } | null = null;
+// Single-flight (C2 audit F7): the cache above is only written AFTER the
+// await, so N requests arriving inside one probe's flight all missed the
+// cache and each fired their own outbound fetch — exactly the 1:1
+// amplification the cache was added to stop, and worst precisely when
+// traffic spikes. Parking the in-flight PROMISE here collapses that burst
+// into one call; everyone awaits the same result.
+let inFlightProbe: Promise<SupabaseHealth> | null = null;
 
-async function probeSupabase(): Promise<SupabaseHealth> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) return 'unconfigured';
-  if (cachedProbe && Date.now() < cachedProbe.until) return cachedProbe.value;
+async function runProbe(url: string, anonKey: string): Promise<SupabaseHealth> {
   let value: SupabaseHealth;
   try {
     // apikey header is REQUIRED: the Supabase gateway 401s /auth/v1/health
@@ -48,6 +51,21 @@ async function probeSupabase(): Promise<SupabaseHealth> {
   return value;
 }
 
+async function probeSupabase(): Promise<SupabaseHealth> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) return 'unconfigured';
+  if (cachedProbe && Date.now() < cachedProbe.until) return cachedProbe.value;
+  if (inFlightProbe) return inFlightProbe;
+
+  // finally, not .then: the slot must clear even if runProbe throws, or one
+  // unexpected failure would pin a rejected promise as the answer forever.
+  inFlightProbe = runProbe(url, anonKey).finally(() => {
+    inFlightProbe = null;
+  });
+  return inFlightProbe;
+}
+
 export async function GET(): Promise<NextResponse> {
   const supabase = await probeSupabase();
   // 'unconfigured' is a legal local/preview state, not an outage — only an
@@ -61,9 +79,12 @@ export async function GET(): Promise<NextResponse> {
       // 12-char prefix (DeepSeek N2 review): plenty to match a deploy
       // against git for the smoke check, without handing out the exact
       // full revision for version-targeted reconnaissance.
+      // `||`, not `??`: a build system that sets the var to an EMPTY string
+      // has told us nothing, and reporting sha:"" would defeat the whole
+      // point of this field — matching a deploy against git.
       sha: (
-        process.env.VERCEL_GIT_COMMIT_SHA ??
-        process.env.NEXT_PUBLIC_BUILD_SHA ??
+        process.env.VERCEL_GIT_COMMIT_SHA ||
+        process.env.NEXT_PUBLIC_BUILD_SHA ||
         'dev'
       ).slice(0, 12),
       at: new Date().toISOString(),
