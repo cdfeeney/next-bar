@@ -116,7 +116,7 @@ export type PlacePatch = {
   businessStatus?: BusinessStatus;
   hours?: WeeklyHours;
   /** Places photo resource name (places/{id}/photos/{ref}); presence means a
-   * local photo was ingested to public/bar-photos/<barId>.jpg. */
+   * local photo was ingested to public/bar-photos/<barId>.webp. */
   photoRef?: string;
   photoCount?: number;
   photoAttributions?: string[];
@@ -144,8 +144,9 @@ export type Bar = {
   hours?: WeeklyHours;
   photoRef?: string;
   photoAttribution?: string;
-  /** Carousel photo count (photos-multi ingest) — files are <id>.jpg,
-   * <id>-2.jpg … <id>-N.jpg. Photo resource names live in
+  /** Carousel photo count (photos-multi ingest) — files are <id>.webp,
+   * <id>-2.webp … <id>-N.webp (PHOTO_EXT in barVisual.ts; the .jpg this comment
+   * used to claim predates the 2026-07-27 WebP re-encode). Photo resource names live in
    * scripts/data/photo-refs.json (ingest bookkeeping, NOT bundled — they
    * pushed the edge OG function past Vercel's 1MB limit). */
   photoCount?: number;

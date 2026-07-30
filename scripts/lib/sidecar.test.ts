@@ -4,6 +4,7 @@ import {
   DB_ONLY_SIDECAR_IDS,
   SERVICE_AREA,
   assertSidecarWritable,
+  carryForwardExisting,
   classifyDetailsLocation,
   insideServiceArea,
   locationAcceptable,
@@ -159,6 +160,55 @@ describe('assertSidecarWritable', () => {
 
   test('rejects a non-object entry rather than writing garbage', () => {
     expect(() => assertSidecarWritable({ attaboy: null }, KNOWN)).toThrow(/not an object/);
+  });
+});
+
+describe('carryForwardExisting — the full-refresh regression', () => {
+  /**
+   * Both santa-loop reviewers found this independently. The 'indeterminate'
+   * verdict exists to avoid destroying data on ambiguity, and it delivered that
+   * on --only and --photos-multi — but the DEFAULT wholesale path builds `patches`
+   * from scratch and writes it directly, so a bar that hit `continue` on a
+   * transient 429 was simply absent from the rewritten sidecar. The guarantee was
+   * written in a comment before it was true everywhere.
+   */
+  test('preserves a prior entry when this run could not resolve the bar', () => {
+    const patches: Record<string, unknown> = {};
+    const existing = { attaboy: { googlePlaceId: 'ChIJprior', hours: {} } };
+
+    expect(carryForwardExisting(patches, existing, 'attaboy')).toBe(true);
+    expect(patches.attaboy).toEqual({ googlePlaceId: 'ChIJprior', hours: {} });
+  });
+
+  test('never overwrites a fresh patch produced this run', () => {
+    const patches: Record<string, unknown> = { attaboy: { googlePlaceId: 'ChIJfresh' } };
+    expect(carryForwardExisting(patches, { attaboy: { googlePlaceId: 'ChIJstale' } }, 'attaboy')).toBe(false);
+    expect(patches.attaboy).toEqual({ googlePlaceId: 'ChIJfresh' });
+  });
+
+  test('is a no-op when there is nothing prior to preserve', () => {
+    const patches: Record<string, unknown> = {};
+    expect(carryForwardExisting(patches, {}, 'brand-new')).toBe(false);
+    expect(carryForwardExisting(patches, undefined, 'brand-new')).toBe(false);
+    expect(Object.keys(patches)).toEqual([]);
+  });
+
+  /**
+   * The property that keeps wholesale semantics intact: preserving PER BAR, only
+   * for bars this run actually attempted, still drops a venue that has left the
+   * catalog — because such a venue is never iterated and so never passed here.
+   * Merging all of `existing` instead would have resurrected the 29 orphans.
+   */
+  test('a venue absent from this run is NOT resurrected', () => {
+    const patches: Record<string, unknown> = { 'still-here': { googlePlaceId: 'ChIJx' } };
+    const existing = {
+      'still-here': { googlePlaceId: 'ChIJx' },
+      'left-the-catalog': { googlePlaceId: 'ChIJorphan' },
+    };
+    // Only ids the loop reaches are offered to carryForwardExisting.
+    carryForwardExisting(patches, existing, 'still-here');
+    expect(patches['left-the-catalog']).toBeUndefined();
+    expect(Object.keys(patches)).toEqual(['still-here']);
   });
 });
 

@@ -162,6 +162,25 @@ describe('wrong-venue guard, now enforced at generation time', () => {
     expect([...GENERATOR.matchAll(/^\s*writeSidecar\(/gm)].length).toBeGreaterThanOrEqual(2);
   });
 
+  /**
+   * santa-loop round 1, both reviewers: the 'indeterminate' verdict is only
+   * non-destructive if every ambiguous exit actually preserves the prior entry.
+   * The helper is unit-tested in scripts/lib/sidecar.test.ts; what THAT cannot see
+   * is whether the generator calls it at each ambiguous exit. Structural, and
+   * acknowledged as such — the alternative is executing the generator, which needs
+   * an API key and network.
+   */
+  it('every ambiguous exit in the generator preserves the prior entry', () => {
+    // no-place-id, location-indeterminate, and the caught exception.
+    const preserves = [...GENERATOR.matchAll(/carryForwardExisting\(patches, existing, bar\.id\)/g)];
+    expect(preserves.length, 'an ambiguous exit path does not preserve prior data').toBe(3);
+
+    // …and rejection is the ONLY thing that deletes. If rejectedIds gains an entry
+    // anywhere other than the confirmed-out-of-area branch, deletion has widened.
+    const rejects = [...GENERATOR.matchAll(/rejectedIds\.add\(/g)];
+    expect(rejects.length, 'rejectedIds is populated from more than one place').toBe(1);
+  });
+
   it('the generator no longer writes coordinates into the sidecar', () => {
     expect(GENERATOR).not.toMatch(/patch\.lat\s*=/);
     expect(GENERATOR).not.toMatch(/patch\.lng\s*=/);

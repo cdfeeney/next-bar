@@ -138,6 +138,35 @@ export function assertSidecarWritable(patches, knownIds) {
 }
 
 /**
+ * Preserve a bar's existing entry when this run could not determine its status.
+ *
+ * WHY THIS IS NEEDED ON THE FULL PATH TOO. The wholesale refresh builds `patches`
+ * from scratch and writes it directly — no merge with `existing`, because dropping
+ * bars that have left the catalog is the point. But a bar that hit `continue` on a
+ * transient 429, a missing place_id, or a caught exception also never reached
+ * `patches[bar.id] = patch`, so a single API blip silently stripped that venue's
+ * place_id, hours and photo fields from the rewritten sidecar.
+ *
+ * Both santa-loop reviewers found this independently: the 'indeterminate' verdict
+ * existed precisely to avoid destroying data on ambiguity, and it delivered that
+ * on --only and --photos-multi while the DEFAULT path still dropped the entry.
+ * The guarantee was asserted in a comment before it was true everywhere.
+ *
+ * Preserving per-bar rather than merging all of `existing` keeps wholesale
+ * semantics intact: a venue removed from the catalog is never iterated, so it is
+ * still correctly dropped. Only a bar we tried and could not resolve is kept.
+ *
+ * Returns true if something was preserved (for reporting).
+ */
+export function carryForwardExisting(patches, existing, id) {
+  if (patches[id] !== undefined) return false;
+  const prior = existing?.[id];
+  if (prior === undefined) return false;
+  patches[id] = prior;
+  return true;
+}
+
+/**
  * Merge for --only, where existing entries must be carried forward so a targeted
  * run cannot wipe every other bar.
  *

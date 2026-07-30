@@ -63,6 +63,7 @@ import sharp from 'sharp';
 import { refuseIfUnattended } from './loop-guard.mjs';
 import {
   assertSidecarWritable,
+  carryForwardExisting,
   classifyDetailsLocation,
   mergeOnlyPatches,
 } from './lib/sidecar.mjs';
@@ -324,7 +325,11 @@ function toWeeklyHours(regularOpeningHours) {
     try {
       let placeId = existing[bar.id]?.googlePlaceId;
       if (!placeId) { placeId = await resolvePlaceId(bar); await sleep(120); }
-      if (!placeId) { flags.push({ id: bar.id, reason: 'no-place-id', q: bar.name }); continue; }
+      if (!placeId) {
+        flags.push({ id: bar.id, reason: 'no-place-id', q: bar.name });
+        carryForwardExisting(patches, existing, bar.id); // could not resolve — keep what we had
+        continue;
+      }
 
       const d = await placeDetails(placeId);
       await sleep(120);
@@ -357,7 +362,13 @@ function toWeeklyHours(regularOpeningHours) {
           ? `${d.json.location.latitude},${d.json.location.longitude}`
           : `no location (http ${d.status})`;
         flags.push({ id: bar.id, reason: `location-${verdict}`, q: where });
-        if (verdict === 'reject') rejectedIds.add(bar.id);
+        if (verdict === 'reject') {
+          // Confirmed wrong venue: the entry must GO on every path.
+          rejectedIds.add(bar.id);
+        } else {
+          // Could not tell. Never destroy on ambiguity — see carryForwardExisting.
+          carryForwardExisting(patches, existing, bar.id);
+        }
         continue;
       }
       if (d.json.businessStatus) patch.businessStatus = d.json.businessStatus;
@@ -382,6 +393,8 @@ function toWeeklyHours(regularOpeningHours) {
       patches[bar.id] = patch;
     } catch (e) {
       flags.push({ id: bar.id, reason: 'error', detail: String(e.message || e) });
+      // A thrown error is indeterminate, not a rejection: preserve prior data.
+      carryForwardExisting(patches, existing, bar.id);
     }
     if (++done % 25 === 0) console.log(`  ${done}/${bars.length}`);
   }
