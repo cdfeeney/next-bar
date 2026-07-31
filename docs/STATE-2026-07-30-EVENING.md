@@ -11,8 +11,21 @@ document, **this one is right** and the older one has been corrected in place.
 | Overnight worktree | `C:\Users\cdfee\projects\nb-overnight` on `feat/overnight-2026-07-30`, branched from `c02baf9` |
 | Pushed? | **No.** Neither branch has an upstream. Every commit exists only on this machine. |
 | Migration ledger | ends at **0032**. `0033`, `0034`, `0035` are authored and **NOT applied**. |
-| Unit baseline | **1,489 passing / 98 files**, typecheck clean |
-| Playwright | 338 passing; **3 genuine failures** (`mobile-controls` on `/`, all three viewports); `bias-smoke` contention-sensitive with `retries: 1` and passing on retry |
+| Unit baseline @ `c02baf9` | **1,459 passing / 96 files**, typecheck clean — tool-result recorded at mission time |
+| Unit baseline @ `46aded6` (overnight HEAD) | **1,514 passing / 99 files** — measured 2026-07-31T01:2xZ, `npx vitest run` |
+| Playwright @ `c02baf9` | 338 passing; **3 genuine failures** (`mobile-controls` on `/`, all three viewports); `bias-smoke` contention-sensitive with `retries: 1` and passing on retry |
+
+<!-- Counts are point-in-time and MUST name the SHA they were measured at.
+     Two ways this has already gone wrong here:
+       1. MASTER-TODO / OVERNIGHT-BRIEF advertised "1,302 unit tests" at a HEAD
+          that no longer existed.
+       2. An earlier draft of THIS table claimed "1,489 / 98 measured at c02baf9".
+          That pairing was false: be43821, 96386c8 and 9bd3a29 all add tests
+          AFTER c02baf9, so the count at c02baf9 cannot be the later figure.
+          Caught by the Codex review lane, 2026-07-31.
+     If you cannot name the SHA a number came from, re-measure instead of
+     guessing. -->
+
 
 ## Commits
 
@@ -56,17 +69,22 @@ Two further corrections were made *during* this run and are recorded where they 
 
 ## The seven operator questions
 
-Carried forward verbatim. None is answered.
+**This table is the single live checklist.** It absorbed the fuller wording that used
+to live in `docs/CONTINUATION-2026-07-30.md`; that section is now a pointer here, so
+there is exactly one place to record an answer. Do not re-create a second copy — that
+is precisely how `APP-STORE-PLAN.md` and `APP-PRIVACY-LABELS-2026-07-30.md` drifted.
+
+None is answered.
 
 | # | Question | Blocks |
 |---|---|---|
-| 1 | Does `public.waitlist` get a deletion path, or what retention policy applies? | **App Privacy submission** |
-| 2 | Should anonymized `photo_permissions.granted_by_user_id = null` records survive account deletion as an audit trail? | privacy answer completeness |
-| 3 | Are the analytics flags actually enabled in production? | **App Privacy submission** — if off, "Usage Data collected" is the wrong answer |
-| 4 | What storage/retention policy applies to night-out photos? | B8, photo retention |
-| 5 | Keep `@playwright/test` at 1.62? | nothing — it works; confirmation only |
-| 6 | Ship without a device-to-device deletion tombstone for vibe profiles? | G1 residual risk |
-| 7 | Can the origin be reached directly, bypassing the Vercel edge? | **C2 F2** — returns to HIGH if yes |
+| 1 | `public.waitlist` has **no deletion path** — add one, or state a retention policy? | **App Privacy submission** (A7 §3.0) |
+| 2 | `photo_permissions.granted_by_user_id` is `on delete set null`, so the row survives account deletion. Intentional licence audit trail? | privacy answer completeness (A7 §2) |
+| 3 | Are `NEXT_PUBLIC_ANALYTICS` / `ANALYTICS_ENABLED` actually on in production? | **App Privacy submission** (A7 §6) — if off, "Usage Data collected" is the wrong answer |
+| 4 | **B8** — still unanswered; gates geo-tagged night-out photos. What storage/retention policy applies? | B8, photo retention (A7 §5) |
+| 5 | Keep `@playwright/test` at 1.62? | nothing — it works; confirmation only (G4 / `e812cf3`) |
+| 6 | G1 deletion does not propagate device-to-device (needs a tombstone). Ship without it? | G1 residual risk |
+| 7 | Is the origin reachable directly, bypassing the Vercel edge? | **C2 F2** (C2 §6) — returns to HIGH if yes |
 
 **Q1 and Q3 are the App Privacy blockers.** Q7 gates the durable fix for the XFF trust
 boundary.

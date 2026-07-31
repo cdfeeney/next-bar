@@ -217,15 +217,14 @@ Docs only. No code changes.
 
 ## Open questions that block nothing but need your answer
 
-| # | Question | Where it matters |
-|---|---|---|
-| 1 | `public.waitlist` has **no deletion path** — add one, or state a retention policy? | A7 §3.0; blocks submitting App Privacy answers |
-| 2 | `photo_permissions.granted_by_user_id` is `on delete set null`, so the row survives account deletion. Intentional licence audit trail? | A7 §2 |
-| 3 | Are `NEXT_PUBLIC_ANALYTICS` / `ANALYTICS_ENABLED` actually on in production? If off, Usage Data is **not** collected and the label must say so. | A7 §6 |
-| 4 | **B8** — still unanswered; gates geo-tagged night-out photos. | A7 §5 |
-| 5 | Keep `@playwright/test` at 1.62? | G4 / `e812cf3` |
-| 6 | G1 deletion does not propagate device-to-device (needs a tombstone). Ship without it? | G1 residual risk |
-| 7 | Is the origin reachable directly, bypassing the Vercel edge? If yes, C2 F2 returns to HIGH. | C2 §6 |
+**Moved.** The seven questions now live in one place:
+**`docs/STATE-2026-07-30-EVENING.md` §"The seven operator questions"**, which carries
+the full wording (env-var names and A7/C2 section refs included) plus the App Privacy
+blocker marking.
+
+The table that used to be duplicated here has been removed rather than left behind as
+an editable second copy — a fillable duplicate under a "don't edit me" note is still a
+fillable duplicate, and that is how two documents drift apart. Record answers there.
 
 ## Deliberately excluded (your earlier calls, unchanged)
 

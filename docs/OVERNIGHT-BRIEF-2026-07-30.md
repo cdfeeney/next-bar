@@ -1,15 +1,26 @@
 # Overnight brief — 2026-07-30
 
-Branch `feat/phase1-compliance-media` · HEAD `87b05b0` · 1,302 unit tests, `tsc` clean.
+Branch `feat/phase1-compliance-media` · HEAD `c02baf9` · 1,459 unit tests / 96 files, `tsc` clean.
+<!-- Snapshot fields, valid ONLY at the SHA named on this line. This banner still
+     read `87b05b0` / "1,302 unit tests" long after the branch moved on.
+     Re-measure rather than guess. Source of truth:
+     docs/STATE-2026-07-30-EVENING.md. -->
+
 
 Two constraints shape what "overnight" can mean, both learned the hard way:
 
 - **`/loop-start` does not schedule anything.** It writes a runbook and returns.
   Real recurrence needs `/loop`; otherwise overnight is one continuous session
   that must never yield. See [[background-wait-is-not-a-loop-tick]].
-- **The full Playwright suite hangs indefinitely at teardown** (worker force-kill,
+- ~~**The full Playwright suite hangs indefinitely at teardown** (worker force-kill,
   8h observed). Focused per-spec runs exit correctly and are the only safe gate.
-  Never let a tick wait on the full suite until item T1 is fixed.
+  Never let a tick wait on the full suite until item T1 is fixed.~~
+  **RESOLVED (e812cf3)** — @playwright/test 1.60.0 → 1.62.0. The recorded claim
+  that it "only reproduces in the multi-project run" is **REFUTED**: it
+  reproduced on single-project runs too. Regression check:
+  `npm run test:e2e:teardown-guard`. Full-suite runs are no longer *hang-prone* —
+  **but the gate itself is still ACTIVE for a separate reason.** Read
+  "Hard rules for the night" below before treating the full suite as gate-eligible.
 
 ---
 
@@ -144,8 +155,9 @@ than the rate:
 
 Everything here is doable with **no operator, no production write, no API spend**.
 
-1. **T1 — the Playwright teardown hang.** Highest leverage: it is what makes an
-   automated gate untrustworthy. Bisect by project, then by worker count.
+1. ~~**T1 — the Playwright teardown hang.** Highest leverage: it is what makes an
+   automated gate untrustworthy. Bisect by project, then by worker count.~~
+   **DONE (e812cf3).** No bisect was needed — the 1.60→1.62 upgrade fixed it.
 2. **U1 — the 7 tap targets.** Pure layout, immediately verifiable, and clears an
    App Store/a11y class in one pass. Fix the layout, never the assertion.
 3. **T2 — the vacuous subdirectory test.** One fixture. Then re-prove by mutation.
@@ -173,7 +185,18 @@ Everything here is doable with **no operator, no production write, no API spend*
 - No `--apply`, no `db:migrate`, no production write, no push, no PR, no branch
   switch, no photo deletion, no contacting venues.
 - Never run `next build` while the dev server is live; they share `.next`.
-- **Never gate a tick on the full Playwright suite** until T1 lands.
+- **Never gate a tick on the full Playwright suite. STATUS: ACTIVE.**
+  The original cause (the teardown hang) **is fixed** in `e812cf3` — but this rule
+  remains in force for a **different** reason: `npm run test:e2e:teardown-guard` is
+  available on demand and is **not wired into the overnight lane**, so nothing obliges
+  the regression to be detected. A check nothing must run is a tripwire lying on the
+  ground. Do not read the `DONE (e812cf3)` annotations elsewhere in this file as
+  retiring this rule — the rule outlived its first rationale on purpose.
+  **Agents MUST NOT self-assess the retirement conditions; only a human may retire
+  this rule.** Those conditions are: the guard runs as part of the lane; the full
+  suite has completed cleanly on the lane several consecutive times; and full-suite
+  invocations carry a hard timeout + kill-switch so the failure *class* (a
+  loop-blocking hang) cannot cost 8 unattended hours again. Until then: focused runs.
 - Focused behavioural verification before claiming any surface works. A green
   unit suite is not evidence a surface renders.
 - Fix layout defects; never weaken an assertion to get green.

@@ -4,7 +4,12 @@ Single consolidated list. Supersedes the split between
 `OVERNIGHT-BRIEF-2026-07-30.md` (engineering) and `UX-BACKLOG-2026-07-30.md`
 (product), both of which remain as the detailed backing.
 
-Branch `feat/phase1-compliance-media` · HEAD `b05f42c` · 1,302 unit tests · `tsc` clean.
+Branch `feat/phase1-compliance-media` · HEAD `c02baf9` · 1,459 unit tests / 96 files · `tsc` clean.
+<!-- Snapshot fields, valid ONLY at the SHA named on this line. A bare count with
+     no SHA is how this banner reached `b05f42c` / "1,302 unit tests" while the
+     branch had moved on. Re-measure rather than guess.
+     Source of truth: docs/STATE-2026-07-30-EVENING.md. -->
+
 
 **Owner key:** 🧑 operator only · 🤖 I can do it · ⚙️ mixed (I build, you decide/approve)
 
@@ -129,7 +134,7 @@ which changes the privacy labels (A7) and needs B8 answered first.
 
 | # | Item | Owner |
 |---|---|---|
-| T1 | G4 — the teardown hang. Next: bisect `--project` singly, then `--workers=2` vs default | 🤖 |
+| T1 | ~~G4 — the teardown hang. Next: bisect `--project` singly, then `--workers=2` vs default~~ **DONE (e812cf3)** — see the G4 row above. No bisect needed; it was the Playwright 1.60→1.62 upgrade. | 🤖 |
 | T2 | mobile-controls still owed: compact-iPhone viewport, landscape, modal/sheet states, failure screenshots | 🤖 |
 | T3 | Confirm all 34 e2e specs run on both viewports (CLAUDE.md's own rule) | 🤖 |
 | T4 | `CLAUDE.md` is **wrong** about the `/rankings` flake — it says cold-compile race; it was `clearStorage()` aborting the next `goto`. Re-test the `/quiz` claim too rather than trusting it. | 🤖 |
@@ -259,7 +264,7 @@ content saves nothing; one request bills the same regardless of what it returns.
 6. **S2** persona copy rewrite
 7. **N5/T6** close-friends coverage
 8. **A7** privacy-label inventory from the codebase
-9. **G4/T1** the Playwright teardown hang
+9. ~~**G4/T1** the Playwright teardown hang~~ **DONE (e812cf3)**
 10. **C2 + C3** rate-limit and RLS audit matrices
 
 **Next — Tier 2, one coherent change**
@@ -282,6 +287,12 @@ content saves nothing; one request bills the same regardless of what it returns.
 - No `--apply`, `db:migrate`, production write, push, PR, branch switch, photo
   deletion, or contacting venues without explicit approval.
 - Never run `next build` while the dev server is live — shared `.next`.
-- **Never gate on the full Playwright suite** until G4 lands. Focused runs only.
+- **Never gate on the full Playwright suite. Focused runs only. STATUS: ACTIVE.**
+  G4 itself is fixed (`e812cf3`), so the *original* reason is gone — but this rule
+  stands for a different one: `npm run test:e2e:teardown-guard` is not wired into any
+  lane, so nothing forces the regression to be detected. Do not read the
+  `DONE (e812cf3)` annotations elsewhere in this file as retiring it.
+  **Agents MUST NOT self-assess the retirement conditions; only a human may retire
+  this rule.** Conditions are listed in `OVERNIGHT-BRIEF-2026-07-30.md`.
 - Fix layout defects; never weaken an assertion to reach green.
 - Do not claim operator-only or physical-device criteria complete.
