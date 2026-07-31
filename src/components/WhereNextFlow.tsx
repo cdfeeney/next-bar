@@ -35,7 +35,6 @@ import { advanceShownIds, nextWiderRadius } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
 import DistanceChips from '@/components/DistanceChips';
-import ResultsHoodChips from '@/components/ResultsHoodChips';
 import VibeTweak from '@/components/VibeTweak';
 import ResultsView from '@/components/ResultsView';
 
@@ -696,21 +695,6 @@ export default function WhereNextFlow() {
             two surfaces inconsistent, which is exactly what "land M1+H1+H2+H3
             as one piece" exists to prevent. */}
         <DistanceChips value={selectedRadius} onChange={handleRadiusChange} />
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() =>
-              setStep({
-                kind: 'tweakVibe',
-                seedBar: step.seedBar,
-                tags: step.tags,
-              })
-            }
-            className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
-          >
-            Tweak the vibe
-          </button>
-        </div>
       </section>
       <ResultsView
         profile={seedProfile}
@@ -739,6 +723,28 @@ export default function WhereNextFlow() {
           className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
         >
           ↻ Run it again
+        </button>
+      </div>
+      {/*
+        H1 on THIS surface too. The first pass moved the control on the auto
+        results only and left this one as a small underlined link ABOVE the
+        results — which reproduced exactly the cross-surface inconsistency that
+        "land M1+H1+H2+H3 as one piece" exists to prevent. Same position, same
+        affordance, both surfaces.
+      */}
+      <div className="px-6 pt-6 flex justify-center">
+        <button
+          type="button"
+          onClick={() =>
+            setStep({
+              kind: 'tweakVibe',
+              seedBar: step.seedBar,
+              tags: step.tags,
+            })
+          }
+          className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
+        >
+          Tweak the vibe
         </button>
       </div>
       <BarMap

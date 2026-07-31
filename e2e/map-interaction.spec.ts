@@ -293,6 +293,16 @@ test.describe('/map Find Bar filters (QA2)', () => {
     // The badge counts the one active filter.
     await expect(page.getByTestId('filter-count')).toHaveText('1');
 
+    // …and the COLLAPSED row must carry the count too. A review found the
+    // count was computed but only ever used as a boolean, so closing the panel
+    // hid how many filters were on — the one thing you need to know before
+    // deciding whether to reopen it. The open-panel badge above cannot catch
+    // that, because it only exists while the panel is open.
+    await disclosure.click();
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByTestId('collapsed-filter-count')).toHaveText('1');
+    await disclosure.click();
+
     // One-tap Clear restores the full catalog.
     await page.getByTestId('filter-clear').click();
     await expect

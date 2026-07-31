@@ -65,6 +65,14 @@ test.describe('QA-6 — the one results view', () => {
 
     await openTweak();
     const hoodGroup = page.getByRole('group', { name: 'Neighborhood' });
+    // The default-no-override state must still be the pressed one. This
+    // replaces the old top-level "Near here" anchor assertion — the anchor
+    // moved and was renamed, but the property it protected (we do not open with
+    // a stale neighborhood already applied) has to keep being checked.
+    await expect(
+      hoodGroup.getByRole('button', { name: 'Anywhere', exact: true }),
+    ).toHaveAttribute('aria-pressed', 'true');
+
     await hoodGroup.getByRole('button', { name: 'Williamsburg', exact: true }).click();
     await page.getByRole('button', { name: /^Apply$/ }).click();
 
@@ -75,12 +83,15 @@ test.describe('QA-6 — the one results view', () => {
     await expect(cards).toHaveCount(5);
     await expect(page).toHaveURL('/');
 
-    // Still optional, still never traps: "Anywhere" clears it.
+    // Still optional, still never traps. TAP THE SELECTED CHIP AGAIN — that is
+    // the toggle-off path the old test protected, and clearing via the separate
+    // "Anywhere" button instead would let a broken toggle pass unnoticed.
     await openTweak();
-    await page
-      .getByRole('group', { name: 'Neighborhood' })
-      .getByRole('button', { name: 'Anywhere', exact: true })
-      .click();
+    const hoodGroup2 = page.getByRole('group', { name: 'Neighborhood' });
+    await expect(
+      hoodGroup2.getByRole('button', { name: 'Williamsburg', exact: true }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await hoodGroup2.getByRole('button', { name: 'Williamsburg', exact: true }).click();
     await page.getByRole('button', { name: /^Apply$/ }).click();
     await expect(page.getByText('In Williamsburg')).toHaveCount(0);
   });
@@ -157,10 +168,13 @@ test.describe('QA-6 — the one results view', () => {
     // Hood override still wins over the geo anchor and still says so.
     await page.getByRole('button', { name: /Tweak the vibe/i }).click();
     await page.getByRole('button', { name: /Neighborhood/ }).click();
-    await page
-      .getByRole('group', { name: 'Neighborhood' })
-      .getByRole('button', { name: 'Greenpoint', exact: true })
-      .click();
+    const hoodGroup = page.getByRole('group', { name: 'Neighborhood' });
+    // Replaces the old "Near me" anchor assertion: geolocation granted must not
+    // pre-apply a neighborhood override.
+    await expect(
+      hoodGroup.getByRole('button', { name: 'Anywhere', exact: true }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await hoodGroup.getByRole('button', { name: 'Greenpoint', exact: true }).click();
     await page.getByRole('button', { name: /^Apply$/ }).click();
 
     await expect(page.getByText('In Greenpoint')).toBeVisible();

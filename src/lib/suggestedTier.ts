@@ -38,3 +38,55 @@ export function suggestedCount(cohortSize: number): number {
   if (!Number.isFinite(cohortSize) || cohortSize < MIN_COHORT_FOR_TIERS) return 0;
   return Math.min(SUGGESTED_CAP, Math.max(1, Math.floor(cohortSize * SHARE)));
 }
+
+/**
+ * Keep the highlighted set STABLE as the user narrows.
+ *
+ * Ranking inside the filtered cohort fixed relevance but broke something the
+ * old whole-catalog ranking got right for free, and two independent reviewers
+ * found it: because the ranker re-solves against whatever the filter left, two
+ * adjacent filter states can swap most of the highlighted pins. Concretely —
+ * "Wine" leaves 32 bars and lights 10; adding one more axis drops the cohort to
+ * 9 and the budget to 2, so ten glowing pins collapse to two that need not even
+ * be among the previous ten. The user was tracking a pin; it goes dark and two
+ * unrelated ones light up, for an action that should only ever REMOVE bars.
+ *
+ * So: prefer the bars that were already highlighted and still qualify, in their
+ * existing order, then top up from the freshly-ranked cohort. Highlights then
+ * only ever go dark as you narrow — monotone and legible — while a shortfall is
+ * still filled so you are not stuck at two when ten would fit.
+ *
+ * @param previous ids highlighted before this filter change, in rank order
+ * @param ranked   ids ranked within the CURRENT cohort, best first
+ * @param budget   how many to highlight now (from `suggestedCount`)
+ */
+export function stableSuggestions(
+  previous: readonly string[],
+  ranked: readonly string[],
+  budget: number,
+): string[] {
+  if (budget <= 0) return [];
+  const eligible = new Set(ranked);
+  // Survivors keep their previous relative order — that ordering is what the
+  // user's eye has already learned. Dedupe as we go: `previous` is caller-
+  // supplied and a repeated id would otherwise consume two slots and render the
+  // same marker twice.
+  const have = new Set<string>();
+  const kept: string[] = [];
+  for (const id of previous) {
+    if (kept.length === budget) break;
+    if (eligible.has(id) && !have.has(id)) {
+      kept.push(id);
+      have.add(id);
+    }
+  }
+  if (kept.length === budget) return kept;
+  for (const id of ranked) {
+    if (kept.length === budget) break;
+    if (!have.has(id)) {
+      kept.push(id);
+      have.add(id);
+    }
+  }
+  return kept;
+}

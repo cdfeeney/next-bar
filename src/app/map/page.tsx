@@ -2,13 +2,13 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { useSuggestions } from '@/hooks/useSuggestions';
-import { suggestedCount } from '@/lib/suggestedTier';
+import { stableSuggestions, suggestedCount } from '@/lib/suggestedTier';
 import { displayHood } from '@/lib/hoodDisplay';
 import { displayTag } from '@/lib/tagDisplay';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
@@ -113,11 +113,25 @@ export default function MapPage(): JSX.Element {
   //    nothing exactly when the user had narrowed hardest.
   const suggestedBudget = suggestedCount(filteredBars.length);
   const hasIntent = filters.vibes.length > 0;
-  const { suggestedIds, hasProfile, profileChecked } = useSuggestions(
+  const { suggestedIds: rankedIds, hasProfile, profileChecked } = useSuggestions(
     coords,
     suggestedBudget,
     hasIntent ? { tags: filters.vibes, bars: filteredBars } : { bars: filteredBars },
   );
+
+  // STABILITY. Ranking inside the filtered cohort fixed relevance but broke
+  // something the old whole-catalog ranking got right for free: because the
+  // ranker re-solves against whatever the filter left, two adjacent filter
+  // states could swap most of the glowing pins. Narrowing by one axis could
+  // take ten highlights down to two that were not even among the previous ten —
+  // the map appeared to jump for an action that should only remove bars.
+  // Prefer survivors, top up from the new ranking. See lib/suggestedTier.
+  const previousRef = useRef<string[]>([]);
+  const suggestedIds = useMemo(() => {
+    const next = stableSuggestions(previousRef.current, rankedIds, suggestedBudget);
+    previousRef.current = next;
+    return next;
+  }, [rankedIds, suggestedBudget]);
 
   const highlightIds = useMemo(
     () =>
@@ -294,8 +308,22 @@ export default function MapPage(): JSX.Element {
             onClick={() => setFiltersOpen((open) => !open)}
             className="w-full min-h-[44px] touch-manipulation flex items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-surface border border-border"
           >
-            <span className="font-display text-base">Tweak the vibe</span>
-            <span className="text-muted text-xs truncate max-w-[55%] text-right">
+            <span className="font-display text-base inline-flex items-center gap-2">
+              Tweak the vibe
+              {/* The COUNT, not just the summary. The summary truncates on a
+                  narrow screen, so without a numeral the collapsed row cannot
+                  tell you how many filters are on — which is the one thing you
+                  need to know before deciding whether to open it. */}
+              {activeFilterCount > 0 ? (
+                <span
+                  data-testid="collapsed-filter-count"
+                  className="min-w-[20px] h-5 px-1.5 rounded-full bg-accent text-bg text-[11px] leading-5 font-display text-center"
+                >
+                  {activeFilterCount}
+                </span>
+              ) : null}
+            </span>
+            <span className="text-muted text-xs truncate max-w-[50%] text-right">
               {activeFilterCount > 0 ? filterSummary : 'Anything'}
             </span>
           </button>

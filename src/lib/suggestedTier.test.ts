@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MIN_COHORT_FOR_TIERS, SUGGESTED_CAP, suggestedCount } from './suggestedTier';
+import {
+  MIN_COHORT_FOR_TIERS,
+  SUGGESTED_CAP,
+  stableSuggestions,
+  suggestedCount,
+} from './suggestedTier';
 
 /**
  * Goal g-44007df6, acceptance criterion 3: map prominence must recompute from
@@ -52,4 +57,60 @@ describe('suggestedCount', () => {
       prev = cur;
     }
   });
+});
+
+/**
+ * Highlight stability. Found independently by two reviewers: ranking inside the
+ * filtered cohort meant narrowing could swap most of the glowing pins, so the
+ * map "jumped" for an action that should only remove bars.
+ */
+describe('stableSuggestions', () => {
+  it('keeps previously-highlighted survivors instead of re-picking from scratch', () => {
+    const previous = ['a', 'b', 'c'];
+    // The ranker would rather have x and y, but a and b are still eligible.
+    const ranked = ['x', 'y', 'a', 'b'];
+    expect(stableSuggestions(previous, ranked, 2)).toEqual(['a', 'b']);
+  });
+
+  it('drops only the survivors that no longer qualify', () => {
+    // `b` filtered out; `a` and `c` survive.
+    expect(stableSuggestions(['a', 'b', 'c'], ['a', 'c', 'z'], 3)).toEqual(['a', 'c', 'z']);
+  });
+
+  it('tops up from the current ranking when survivors fall short of budget', () => {
+    expect(stableSuggestions(['a'], ['a', 'p', 'q'], 3)).toEqual(['a', 'p', 'q']);
+  });
+
+  it('never exceeds the budget, even with many survivors', () => {
+    expect(stableSuggestions(['a', 'b', 'c', 'd'], ['a', 'b', 'c', 'd'], 2)).toEqual(['a', 'b']);
+  });
+
+  it('never emits a duplicate', () => {
+    const out = stableSuggestions(['a', 'a'], ['a', 'b'], 2);
+    expect(new Set(out).size).toBe(out.length);
+  });
+
+  it('is a no-op at zero budget — a cohort too small for a tier stays untiered', () => {
+    expect(stableSuggestions(['a', 'b'], ['a', 'b'], 0)).toEqual([]);
+  });
+
+  it('narrowing only ever REMOVES highlights, never swaps them for strangers', () => {
+    const wide = ['w1', 'w2', 'w3', 'w4'];
+    // Cohort narrows: w2 and w4 survive, plus a newly-eligible bar.
+    const narrowRanked = ['n1', 'w4', 'w2'];
+    const out = stableSuggestions(wide, narrowRanked, 2);
+    // Both slots go to survivors — the stranger n1 does NOT displace them.
+    expect(out).toEqual(['w2', 'w4']);
+  });
+});
+
+it('is idempotent — safe to re-run on its own output (React StrictMode double-invoke)', () => {
+  // The map feeds the previous result back in via a ref that is updated inside
+  // a useMemo. StrictMode calls that factory twice with the same inputs, so the
+  // second call receives the FIRST call's output as `previous`. If that were
+  // not a fixed point, the highlighted set would differ between renders.
+  const ranked = ['a', 'b', 'c', 'd'];
+  const once = stableSuggestions(['b', 'z'], ranked, 3);
+  const twice = stableSuggestions(once, ranked, 3);
+  expect(twice).toEqual(once);
 });
