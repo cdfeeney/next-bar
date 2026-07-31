@@ -25,7 +25,9 @@ cannot begin until `ENVIRONMENT-DESIGN-2026-07-30.md` step 1 is done.
 
 ## Trust boundaries to attack (in priority order)
 
-Derived from `SYSTEM-INVENTORY-2026-07-30.md` and the C3/C4 audits.
+Derived from `SYSTEM-INVENTORY-2026-07-30.md` and the **C2, C3 and C4** audits.
+(C2 was missing from this line until 2026-07-31, which is how boundary 7 below came to be
+omitted — the plan under-sourced the one audit with a still-open finding.)
 
 | # | Boundary | Why it ranks here |
 |---|---|---|
@@ -35,6 +37,7 @@ Derived from `SYSTEM-INVENTORY-2026-07-30.md` and the C3/C4 audits.
 | 4 | **Rate limits** | Per-instance and IP-keyed; F2's trust assumption is unresolved. |
 | 5 | **Share tokens** | 122-bit capability URLs — check they are unguessable *and* not leaking via referrer. |
 | 6 | **Auth callback / redirect allowlist** | Classic open-redirect and token-leak surface. |
+| 7 | **Middleware session verification** (`/auth/*`, `/settings/*`) | **Added 2026-07-31 — the only boundary here with a currently-OPEN finding.** C2 F1b: `src/middleware.ts:39` calls `supabase.auth.getUser()` unconditionally for any request matching the `:83` matcher, so one *fabricated* `sb-<ref>-auth-token` cookie forces an uncached outbound Supabase call with no valid credential. The disposition is "SURFACE REDUCED, not eliminated", and the code says so itself at `:68-79`. Testing the other six boundaries and declaring the auth surface done would miss the one live issue on it. |
 
 ## Synthetic accounts required
 
@@ -54,20 +57,33 @@ Each stops at minimum proof. None may run before authorization.
 
 | # | Case | Pass = |
 |---|---|---|
-| S1 | Call each of the 28 RPCs as A with B's uuid as an argument | no function returns or mutates B's rows |
+| S1a | **The 6 functions that actually take a user-identifying parameter** — `follow_user(target)`, `unfollow_user(target)`, `accept_follow_request(requester)`, `decline_follow_request(requester)`, `cancel_follow_request(target)`, `get_follower_count(profile_id)`. Call each as A, passing **B's** uuid. | no function returns or mutates B's rows |
+| S1b | **The handle-targeted functions** — `get_profile_by_handle(h)` and `get_public_ratings(handle)`. Call each as A, passing **B's handle**. | Identity can be named by **handle**, not only by uuid — so these belong with S1a, not with the "no way to name B" group. Pass = only data B has actually made public is returned: `get_public_ratings` must still honour `is_private` and the opt-in (it is `anon`-callable, so also try it **signed out**), and neither may leak a private profile's existence. |
+| S1c | **The remaining ~20 RPCs**, which take no parameter naming another user by uuid *or* handle. Call each as A and inspect what comes back. | every returned or mutated row is scoped to A's own `auth.uid()`-derived data, **and there is no parameter through which B could be named at all**. That absence is what confirms C4's "no parameter-driven identity" headline for these functions. |
+
 | S2 | `get_follower_count(B)` as D (not following, B private) | returns `null`, and the *same* null as for a non-existent uuid — no existence oracle |
 | S3 | `get_public_ratings` for B (opted out) | empty |
 | S4 | Direct PostgREST `select` on `ratings`, `profiles`, `vibe_profiles` as A | only A's rows |
-| S5 | `accept_follow_request` naming a request addressed to someone else | refused |
+| S5 | **As C**, call `accept_follow_request(A)` where the pending request is A→B, i.e. addressed to **B**, not to the caller | refused. The guard is `target_id = uid`, so naming someone else's pending request must not manufacture a follow edge. *(Caller and request made explicit 2026-07-31 — "someone else" left the tester to guess which account ran it.)* |
 | S6 | `api/account/delete` with A's token but B's id in the body | A is deleted, B untouched |
 | S7 | 20 forged-token deletes from one IP, then a valid one from the same IP | stage-1 cap holds; the valid caller is not locked out |
 | S8 | **C4 F1** — `share_night` over many distinct dates | with `0035` applied, rejected outside ±2 days. **Bounded: stop at 10 dates.** Never run against production. |
 | S9 | `get_shared_night` with a random uuid | nothing |
 | S10 | Auth callback with an off-allowlist redirect | rejected |
+| S11 | **C2 F1b, boundary 7 — the only still-open finding.** `GET /settings` carrying a **fabricated** `sb-<ref>-auth-token` cookie and no valid session. Count outbound Supabase calls. **Ceiling: 5 requests.** | Matches the documented residual of **1** outbound `getUser()` per request — confirming the surface is reduced but live. If the JWT-local-verify follow-up in `C2-C3-REMAINING-DISPOSITION-2026-07-30.md` has since landed, expect **0** and update that disposition. Staging only: this is an amplification lever, so **never** against production, and the 5-request ceiling exists because volume here is the harm. |
 
-S7 and S8 are the two that touch rate limits and storage, so both carry explicit ceilings.
-S8 in particular must never run against production: the whole finding is that it writes
-unbounded rows.
+S7, S8 and S11 touch rate limits, storage and load amplification respectively, so all three
+carry explicit ceilings. S8 in particular must never run against production: the whole finding
+is that it writes unbounded rows.
+
+> **Why S1 is three rows.** It began as one: *"call each of the 28 RPCs as A with B's uuid as
+> an argument."* Only 6 of the 28 have a slot to put a uuid in, so for the rest the instruction
+> was unexecutable — a tester would have skipped them, or improvised with no stated pass
+> criterion, on the boundary this plan ranks **#1**. A second pass then found the split itself
+> was still wrong: identity can be named by **handle** as well as by uuid, so
+> `get_profile_by_handle` and `get_public_ratings` had been left in the "no way to name B"
+> group. Both corrections are worth keeping visible — "no parameter-driven identity" is only a
+> meaningful result if the test actually reaches every parameter that names a person.
 
 ## Production confirmation candidates
 
@@ -77,7 +93,8 @@ Only if a staging finding is real, and only with separate attended approval:
 - one read-only check that a confirmed staging authorization bug is or is not present, using a
   synthetic account, stopping the instant it is answered.
 
-**Never** in production: S7, S8, anything enumerating, anything writing.
+**Never** in production: S7, S8, **S11**, anything enumerating, anything writing, and anything
+that amplifies load.
 
 ## Request ceilings
 
@@ -86,6 +103,7 @@ Only if a staging finding is real, and only with separate attended approval:
 | RPC probes | 200 total across the assessment |
 | Rate-limit tests | one bucket per test, per the cap under test |
 | `share_night` (S8) | **10 rows**, staging only |
+| Forged-cookie middleware probe (S11) | **5 requests**, staging only. This one is an amplification lever, so the ceiling *is* the safety property — each request costs an outbound Supabase call. |
 | Production confirmation | 10 requests total |
 
 ## Stop conditions
