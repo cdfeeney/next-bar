@@ -13,6 +13,8 @@ import { displayHood } from '@/lib/hoodDisplay';
 import { displayTag } from '@/lib/tagDisplay';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 import FindBarFilterChips from '@/components/FindBarFilterChips';
+import BarLightbox from '@/components/BarLightbox';
+import type { Bar } from '@/types';
 import {
   EMPTY_FILTERS,
   countActiveFilters,
@@ -58,6 +60,8 @@ export default function MapPage(): JSX.Element {
   // Nonce per selection (review MED): re-picking the SAME bar after
   // panning away must re-fly — a bare id state bails on same-value sets.
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
+  // The bar whose detail overlay is open. Null = closed.
+  const [selectedBar, setSelectedBar] = useState<Bar | null>(null);
 
   // QA2 "Find Bar": optional chips narrow which bars render on the map.
   // Pure logic lives in lib/findBarFilters (unit-tested); this page only
@@ -367,9 +371,23 @@ export default function MapPage(): JSX.Element {
           // Always defined on /map → tiered rendering. Empty (no quiz
           // profile) means no suggested tier: grey dots + rated rings only.
           suggestedIds={suggestedIds}
+          // Tapping a marker opens the full venue detail (goal g-5ead112c).
+          onSelectBar={setSelectedBar}
           fitToBars
           oneFingerPan
         />
+        {/*
+          Reuse of the EXISTING BarLightbox, deliberately not a second detail
+          surface. It already renders approved cached/local photos through the
+          one media policy, open status, the full weekly hours table with its
+          provenance note, address, description, and both the Maps and Rank-it
+          actions — plus dialog semantics, Escape/backdrop close, a focus trap
+          and focus return. Building a map-specific variant would have forked
+          all of that, and the Google-media kill switch with it.
+        */}
+        {selectedBar ? (
+          <BarLightbox bar={selectedBar} onClose={() => setSelectedBar(null)} />
+        ) : null}
       </section>
 
       <p className="text-muted text-xs text-center mt-6 pb-24">
