@@ -7,7 +7,10 @@ import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
-import { useSuggestions, MAP_SUGGESTION_COUNT } from '@/hooks/useSuggestions';
+import { useSuggestions } from '@/hooks/useSuggestions';
+import { suggestedCount } from '@/lib/suggestedTier';
+import { displayHood } from '@/lib/hoodDisplay';
+import { displayTag } from '@/lib/tagDisplay';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 import FindBarFilterChips from '@/components/FindBarFilterChips';
 import {
@@ -60,6 +63,20 @@ export default function MapPage(): JSX.Element {
   // Pure logic lives in lib/findBarFilters (unit-tested); this page only
   // holds the selection state.
   const [filters, setFilters] = useState<FindBarFilters>(EMPTY_FILTERS);
+  // M1: collapsed by DEFAULT. The point of the change is that the rails are not
+  // the first thing you see.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const activeFilterCount = countActiveFilters(filters);
+  // What the collapsed row says, so closing the panel never hides what it does.
+  const filterSummary = useMemo(() => {
+    const parts = [
+      ...filters.neighborhoods.map(displayHood),
+      ...filters.vibes.map(displayTag),
+    ];
+    if (filters.radius && filters.radius.maxMiles !== null) parts.push('nearby');
+    return parts.join(' · ');
+  }, [filters]);
 
   const q = query.trim().toLowerCase();
 
@@ -81,11 +98,25 @@ export default function MapPage(): JSX.Element {
       .slice(0, 5);
   }, [filteredBars, q]);
 
-  // Same matching pipeline as home (profile + ratings + user coords when
-  // granted), capped at MAP_SUGGESTION_COUNT for the suggested tier.
+  // PROMINENCE FROM THE ACTIVE MAP INTENT (goal g-44007df6, criterion 3).
+  //
+  // This used to rank the WHOLE catalog against the saved quiz profile, so the
+  // glowing markers answered "what you said in a quiz once" while the user was
+  // looking at filters they had just set. The two disagreed, and the map looked
+  // broken. Now it ranks the FILTERED cohort by what is currently selected.
+  //
+  // Two things follow from ranking a filtered set, and both matter:
+  //  - pass `filteredBars`, not the catalog — otherwise we score bars the user
+  //    cannot see and the cohort-relative cut below uses the wrong denominator;
+  //  - ask for `suggestedCount(cohort)` rather than a fixed 10, or a filter that
+  //    leaves 8 bars would mark all 8 "suggested" and the tier would convey
+  //    nothing exactly when the user had narrowed hardest.
+  const suggestedBudget = suggestedCount(filteredBars.length);
+  const hasIntent = filters.vibes.length > 0;
   const { suggestedIds, hasProfile, profileChecked } = useSuggestions(
     coords,
-    MAP_SUGGESTION_COUNT,
+    suggestedBudget,
+    hasIntent ? { tags: filters.vibes, bars: filteredBars } : { bars: filteredBars },
   );
 
   const highlightIds = useMemo(
@@ -239,12 +270,45 @@ export default function MapPage(): JSX.Element {
             ))}
         </div>
 
-        {/* QA2: optional filter chips — narrow which bars render below. */}
-        <FindBarFilterChips
-          filters={filters}
-          onChange={setFilters}
-          hasLocation={coords !== null}
-        />
+        {/*
+          M1 (goal g-44007df6): the filters were always-on horizontal rails.
+          They are now collapsed behind ONE control, per the operator: "header
+          becomes Tweak the vibe; the normal filters sit underneath it and are
+          collapsed by default — you click into them rather than seeing
+          always-on rails."
+
+          Two side effects worth naming: the rails were also what generated 88
+          false positives in mobile-controls.spec.ts (a wall of chips is a wall
+          of tap targets), and collapsing them gives the map back the vertical
+          space the rails were eating on a short viewport.
+
+          Collapsed state still SUMMARISES the active selection, so hiding the
+          controls never hides what they are doing — the count and the picks
+          both stay visible without opening anything.
+        */}
+        <div className="mt-4 max-w-sm mx-auto text-left">
+          <button
+            type="button"
+            aria-expanded={filtersOpen}
+            aria-controls="map-filters"
+            onClick={() => setFiltersOpen((open) => !open)}
+            className="w-full min-h-[44px] touch-manipulation flex items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-surface border border-border"
+          >
+            <span className="font-display text-base">Tweak the vibe</span>
+            <span className="text-muted text-xs truncate max-w-[55%] text-right">
+              {activeFilterCount > 0 ? filterSummary : 'Anything'}
+            </span>
+          </button>
+          {filtersOpen ? (
+            <div id="map-filters">
+              <FindBarFilterChips
+                filters={filters}
+                onChange={setFilters}
+                hasLocation={coords !== null}
+              />
+            </div>
+          ) : null}
+        </div>
       </header>
 
       <section className="px-0 md:px-6">

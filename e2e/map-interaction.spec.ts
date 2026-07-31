@@ -274,6 +274,15 @@ test.describe('/map Find Bar filters (QA2)', () => {
     const allCount = await settledCount(page, markers);
     expect(allCount).toBeGreaterThan(0);
 
+    // M1 (goal g-44007df6): the filter rails are COLLAPSED by default now —
+    // you click into them rather than seeing always-on chips. Open the
+    // disclosure first. This is a re-point, not a relaxation: every assertion
+    // below is unchanged.
+    const disclosure = page.getByRole('button', { name: /Tweak the vibe/i });
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await disclosure.click();
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+
     // Pick one neighborhood — the map must drop to that hood's bars only.
     const filters = page.getByTestId('findbar-filters');
     await filters.getByRole('button', { name: /^Lower East Side$/ }).click();

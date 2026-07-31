@@ -41,25 +41,33 @@ test.describe('QA-6 — the one results view', () => {
     await expect(
       page.getByRole('button', { name: /Tweak the vibe/i }),
     ).toBeVisible();
-    const hoodGroup = page.getByRole('group', { name: 'Neighborhood' });
-    await expect(hoodGroup).toBeVisible();
+    // H2/H3 (goal g-44007df6): the neighborhood rail is GONE from this
+    // surface — distance is the only top-level rail now, and hood moved inside
+    // Tweak-the-vibe. Assert the absence explicitly rather than just deleting
+    // the old check, so a regression that re-adds the rail is caught.
+    await expect(page.getByRole('group', { name: 'Neighborhood' })).toHaveCount(0);
 
     // Manual entry defaults to Walkable ("at a bar" implies the next one
-    // is walkable); the anchor chip is the default hood state.
+    // is walkable).
     await expect(
       radiusGroup.getByRole('button', { name: 'Walkable' }),
     ).toHaveAttribute('aria-pressed', 'true');
-    await expect(
-      hoodGroup.getByRole('button', { name: 'Near here' }),
-    ).toHaveAttribute('aria-pressed', 'true');
 
-    // Picking a hood re-ranks IN PLACE (the URL and screen never change),
-    // says so in the location label, and WIDENS the radius to Anywhere —
-    // "In Williamsburg" means the whole hood, not a 1.5mi disc around its
-    // centroid.
-    await hoodGroup
-      .getByRole('button', { name: 'Williamsburg', exact: true })
-      .click();
+    // Picking a hood still re-ranks IN PLACE (the URL and screen never
+    // change), says so in the location label, and WIDENS the radius to
+    // Anywhere — "In Williamsburg" means the whole hood, not a 1.5mi disc
+    // around its centroid. Only WHERE you pick it has moved (H3): it is now
+    // inside Tweak-the-vibe rather than a rail of its own.
+    const openTweak = async () => {
+      await page.getByRole('button', { name: /Tweak the vibe/i }).click();
+      await page.getByRole('button', { name: /Neighborhood/ }).click();
+    };
+
+    await openTweak();
+    const hoodGroup = page.getByRole('group', { name: 'Neighborhood' });
+    await hoodGroup.getByRole('button', { name: 'Williamsburg', exact: true }).click();
+    await page.getByRole('button', { name: /^Apply$/ }).click();
+
     await expect(page.getByText('In Williamsburg')).toBeVisible();
     await expect(
       radiusGroup.getByRole('button', { name: 'Anywhere' }),
@@ -67,11 +75,13 @@ test.describe('QA-6 — the one results view', () => {
     await expect(cards).toHaveCount(5);
     await expect(page).toHaveURL('/');
 
-    // Tapping the selected hood again returns to the anchor (optional,
-    // never traps).
-    await hoodGroup
-      .getByRole('button', { name: 'Williamsburg', exact: true })
+    // Still optional, still never traps: "Anywhere" clears it.
+    await openTweak();
+    await page
+      .getByRole('group', { name: 'Neighborhood' })
+      .getByRole('button', { name: 'Anywhere', exact: true })
       .click();
+    await page.getByRole('button', { name: /^Apply$/ }).click();
     await expect(page.getByText('In Williamsburg')).toHaveCount(0);
   });
 
@@ -140,15 +150,19 @@ test.describe('QA-6 — the one results view', () => {
       page.getByRole('button', { name: /Run it again/i }),
     ).toBeVisible();
 
-    const hoodGroup = page.getByRole('group', { name: 'Neighborhood' });
-    await expect(
-      hoodGroup.getByRole('button', { name: 'Near me' }),
-    ).toHaveAttribute('aria-pressed', 'true');
+    // H2/H3: no hood rail on this surface either — it lives inside
+    // Tweak-the-vibe now. Assert the absence so a regression is caught.
+    await expect(page.getByRole('group', { name: 'Neighborhood' })).toHaveCount(0);
 
-    // Hood override wins over the geo anchor and says so.
-    await hoodGroup
+    // Hood override still wins over the geo anchor and still says so.
+    await page.getByRole('button', { name: /Tweak the vibe/i }).click();
+    await page.getByRole('button', { name: /Neighborhood/ }).click();
+    await page
+      .getByRole('group', { name: 'Neighborhood' })
       .getByRole('button', { name: 'Greenpoint', exact: true })
       .click();
+    await page.getByRole('button', { name: /^Apply$/ }).click();
+
     await expect(page.getByText('In Greenpoint')).toBeVisible();
     await expect(cards).toHaveCount(5);
   });

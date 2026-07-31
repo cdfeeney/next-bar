@@ -54,7 +54,12 @@ export default defineConfig({
         ...devices['iPhone 15 Pro'],
         viewport: { width: 402, height: 681 },
       },
-      testMatch: /(mobile-controls|a11y-mobile|app-shell-smoke)\.spec\.ts/,
+      // vibe-tweak-reachable added 2026-07-31 (goal g-44007df6): its whole
+      // subject is a control row sitting under the fixed bottom nav on a SHORT
+      // viewport, and 402x681 is the shortest configured — running it only on
+      // the taller two would test everywhere except where the bug lives. One
+      // extra spec, consistent with the scoping rationale above.
+      testMatch: /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable)\.spec\.ts/,
     },
   ],
   webServer: {

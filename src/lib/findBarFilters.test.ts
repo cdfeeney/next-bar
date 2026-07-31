@@ -67,13 +67,21 @@ describe('filterBars', () => {
     expect(result.map((b) => b.id)).toEqual(['harlem-jazz', 'wburg-rooftop']);
   });
 
-  test('vibe multi-select matches bars with ANY selected tag', () => {
-    const result = filterBars(
-      ALL,
-      { ...EMPTY_FILTERS, vibes: ['jazz', 'rooftop'] },
-      null,
-    );
-    expect(result.map((b) => b.id)).toEqual(['harlem-jazz', 'wburg-rooftop']);
+  // Was: "vibe multi-select matches bars with ANY selected tag", asserting
+  // jazz + rooftop returned BOTH bars. That encoded cross-axis OR, which the
+  // operator explicitly asked to change (goal g-44007df6) because it made
+  // adding a filter widen the results. `jazz` is Sound and `rooftop` is
+  // Setting, so they now AND. Replaced with two assertions rather than one, so
+  // both halves of the rule are pinned here as well as in the dedicated block.
+  test('vibes on DIFFERENT axes intersect — no bar is both jazz and a rooftop', () => {
+    const result = filterBars(ALL, { ...EMPTY_FILTERS, vibes: ['jazz', 'rooftop'] }, null);
+    expect(result).toEqual([]);
+  });
+
+  test('vibes on the SAME axis still match either', () => {
+    // Both Setting.
+    const result = filterBars(ALL, { ...EMPTY_FILTERS, vibes: ['dive', 'rooftop'] }, null);
+    expect(result.map((b) => b.id).sort()).toEqual(['les-dive', 'wburg-rooftop']);
   });
 
   test('categories combine with AND', () => {
@@ -140,5 +148,59 @@ describe('toggleSelection', () => {
 
   test('removes a present value', () => {
     expect(toggleSelection(['LES', 'Harlem'], 'LES')).toEqual(['Harlem']);
+  });
+});
+
+/**
+ * Acceptance criterion 1 (goal g-44007df6): OR within one axis, AND across axes.
+ * The operator's words: "Club must reliably restrict results to clubs; Club +
+ * Dancing + House must require those selected dimensions."
+ *
+ * Before this, every vibe was one flat OR — so asking for a club ALSO returned
+ * anything merely tagged `dance` or `house`, which is the opposite of narrowing.
+ */
+describe('filterBars — OR within an axis, AND across axes', () => {
+  const club = makeBar({ id: 'club', tags: ['club', 'dance', 'house', 'loud'] });
+  const danceBar = makeBar({ id: 'dance-bar', tags: ['dive', 'dance'] });
+  const houseLounge = makeBar({ id: 'house-lounge', tags: ['lounge', 'house'] });
+  const quietClub = makeBar({ id: 'quiet-club', tags: ['club', 'chill'] });
+  const SET = [club, danceBar, houseLounge, quietClub];
+
+  const withVibes = (vibes: FindBarFilters['vibes']): string[] =>
+    filterBars(SET, { ...EMPTY_FILTERS, vibes }, null).map((b) => b.id);
+
+  test('"club" restricts to clubs — not to anything dance-adjacent', () => {
+    expect(withVibes(['club']).sort()).toEqual(['club', 'quiet-club']);
+  });
+
+  test('club + dance + house requires ALL THREE dimensions', () => {
+    // Three different axes (Setting, Energy, Sound) → AND.
+    expect(withVibes(['club', 'dance', 'house'])).toEqual(['club']);
+  });
+
+  test('two tags from the SAME axis still mean either', () => {
+    // Both Setting → OR. quiet-club and club are clubs; house-lounge is a lounge.
+    expect(withVibes(['club', 'lounge']).sort()).toEqual(['club', 'house-lounge', 'quiet-club']);
+  });
+
+  test('no vibes selected returns everything', () => {
+    expect(withVibes([])).toHaveLength(SET.length);
+  });
+
+  test('an unmatchable combination returns nothing rather than falling back', () => {
+    // Setting + Sound, so these AND. No bar here is a club playing jazz.
+    // (Deliberately NOT club + garden: both are Setting, so that pair ORs and
+    // correctly returns the clubs — a mistake worth recording, since picking
+    // two same-axis tags to test AND proves nothing.)
+    expect(withVibes(['club', 'jazz'])).toEqual([]);
+  });
+
+  test('still ANDs against neighborhood and radius', () => {
+    const out = filterBars(
+      [...SET, makeBar({ id: 'harlem-club', neighborhood: 'Harlem', tags: ['club'] })],
+      { ...EMPTY_FILTERS, vibes: ['club'], neighborhoods: ['Harlem'] },
+      null,
+    );
+    expect(out.map((b) => b.id)).toEqual(['harlem-club']);
   });
 });

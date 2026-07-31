@@ -65,3 +65,33 @@ export function axisOf(tag: VibeTag): VibeAxis {
   if (!axis) throw new Error(`vibeAxes: unhomed tag ${tag}`);
   return axis;
 }
+
+/**
+ * Bucket a flat tag selection by axis. This is what turns the wire format
+ * (a flat `VibeTag[]`) into the filter semantics the product wants:
+ * **OR within one axis, AND across axes.**
+ *
+ * Why that falls out of the existing taxonomy rather than needing a new one:
+ * `club` is a Setting, `dance` is an Energy, `house` is a Sound. So
+ * "Club + Dancing + House" is already three separate axes, and requiring every
+ * non-empty axis to match gives exactly "must be a club AND dance-y AND playing
+ * house" — while "wine + beer" stays a single Drink axis and keeps meaning
+ * "either".
+ *
+ * An axis nobody picked is **absent from the map**, never present-but-empty.
+ * That distinction is load-bearing: absent is the only unambiguous way to say
+ * "no constraint on this axis", and it is why the selection stays a flat array
+ * rather than becoming a record keyed by axis (where `{Drink: []}` and a missing
+ * `Drink` key would both need a meaning, and every consumer would have to agree
+ * on which).
+ */
+export function groupByAxis(tags: readonly VibeTag[]): Map<VibeAxis, VibeTag[]> {
+  const out = new Map<VibeAxis, VibeTag[]>();
+  for (const tag of tags) {
+    const axis = axisOf(tag);
+    const bucket = out.get(axis);
+    if (bucket) bucket.push(tag);
+    else out.set(axis, [tag]);
+  }
+  return out;
+}

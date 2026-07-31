@@ -376,8 +376,12 @@ export default function WhereNextFlow() {
     setStep({ kind: 'pickBar' });
   };
 
-  const handleApplyTweak = (nextTags: VibeTag[]) => {
+  const handleApplyTweak = (nextTags: VibeTag[], nextHood?: Neighborhood | null) => {
     if (step.kind !== 'tweakVibe') return;
+    // H3: neighborhood now arrives from inside the tweak surface rather than
+    // from its own rail. `undefined` means the surface had no hood dimension;
+    // `null` is a deliberate "Anywhere". Only the latter should clear it.
+    if (nextHood !== undefined) handleHoodChange(nextHood);
     // An APPLIED tweak is tonight's vibe pick — cache it for re-searches
     // (E2.2 night cache). Cancel deliberately does not save. The shared
     // nightVibe state updates too: autoResults is re-reachable this
@@ -400,8 +404,9 @@ export default function WhereNextFlow() {
   // autoResults re-ranks with the tweaked tags immediately; Cancel
   // returns unchanged. Both land back on autoResults with the coords the
   // surface already had — the tweak never disturbs the geo.
-  const handleApplyAutoTweak = (nextTags: VibeTag[]) => {
+  const handleApplyAutoTweak = (nextTags: VibeTag[], nextHood?: Neighborhood | null) => {
     if (step.kind !== 'tweakVibeAuto') return;
+    if (nextHood !== undefined) handleHoodChange(nextHood);
     saveNightVibe(nextTags);
     setNightVibe(nextTags);
     setShownIds([]);
@@ -506,28 +511,17 @@ export default function WhereNextFlow() {
           >
             Pick my bar
           </button>
-          <button
-            type="button"
-            onClick={() => setStep({ kind: 'tweakVibeAuto', coords })}
-            className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
-          >
-            Tweak the vibe
-          </button>
         </div>
-        {/* QA-6 one results view: the SAME control set as the manual
-            results — optional hood override + distance chips. */}
+        {/*
+          H2 (goal g-44007df6): distance is the ONLY top-level rail. The
+          neighborhood picker moved INSIDE Tweak-the-vibe (H3) — the operator
+          asked for "just Walkable / Worth a cab / Anywhere, nothing else at
+          that level". DistanceChips already had exactly those three, so H2 was
+          never about adding chips; it was about removing everything beside
+          them.
+        */}
         <div className="px-6 pt-3">
-          <ResultsHoodChips
-            value={resultsHood}
-            onChange={handleHoodChange}
-            anchorLabel="Near me"
-          />
-          <div className="mt-3">
-            <DistanceChips
-              value={selectedRadius}
-              onChange={handleRadiusChange}
-            />
-          </div>
+          <DistanceChips value={selectedRadius} onChange={handleRadiusChange} />
         </div>
         <ResultsView
           profile={autoProfile}
@@ -557,6 +551,22 @@ export default function WhereNextFlow() {
             className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
           >
             ↻ Run it again
+          </button>
+        </div>
+        {/*
+          H1 (goal g-44007df6): "Tweak the vibe" moved from the top control row
+          to CENTRED AT THE BOTTOM, beneath the results. It is the deeper
+          control — you look at what you got, then reach for it — so it sits
+          after the thing it modifies rather than competing with "Pick my bar"
+          above the fold.
+        */}
+        <div className="px-6 pt-6 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setStep({ kind: 'tweakVibeAuto', coords })}
+            className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
+          >
+            Tweak the vibe
           </button>
         </div>
         {/* Operator fix 2026-07-27: the bottom duplicate of "Not at these
@@ -644,6 +654,7 @@ export default function WhereNextFlow() {
     return (
       <VibeTweak
         initialTags={nightVibe ?? profile.tags}
+        initialNeighborhood={resultsHood}
         onApply={handleApplyAutoTweak}
         onCancel={handleCancelAutoTweak}
       />
@@ -654,6 +665,7 @@ export default function WhereNextFlow() {
     return (
       <VibeTweak
         initialTags={step.tags}
+        initialNeighborhood={resultsHood}
         onApply={handleApplyTweak}
         onCancel={handleCancelTweak}
       />
@@ -675,17 +687,14 @@ export default function WhereNextFlow() {
       <section className="px-6 py-6 text-center">
         <p className="text-muted text-sm mb-1">From {step.seedBar.name}</p>
         <p className="font-display text-2xl mb-4">Next bars</p>
-        {/* E2.1: the radius fine-tune lives HERE now — one screen, live
-            re-rank, walking default. E3.2: distance is two intent chips
-            + the Anywhere escape, not units. QA-6: plus the optional
-            hood override — the same control set as the location results. */}
-        <div className="mb-3">
-          <ResultsHoodChips
-            value={resultsHood}
-            onChange={handleHoodChange}
-            anchorLabel="Near here"
-          />
-        </div>
+        {/* E2.1: the radius fine-tune lives HERE — one screen, live re-rank,
+            walking default. E3.2: distance is two intent chips + the Anywhere
+            escape, not units.
+            H2/H3 (goal g-44007df6): the hood rail that used to sit above this
+            has MOVED INSIDE Tweak-the-vibe, so distance is the only top-level
+            rail on both results surfaces. Keeping it here would have left the
+            two surfaces inconsistent, which is exactly what "land M1+H1+H2+H3
+            as one piece" exists to prevent. */}
         <DistanceChips value={selectedRadius} onChange={handleRadiusChange} />
         <div className="mt-3">
           <button

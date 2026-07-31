@@ -99,11 +99,30 @@ export type UseSuggestionsReturn = {
  * flow, this hook composes the same primitives (storedProfile + useRatings
  * + useBars + matches) with identical semantics via computeSuggestions().
  */
+export type SuggestionIntent = {
+  /**
+   * The ACTIVE intent to rank by, replacing the saved quiz profile's tags.
+   * `/map` passes what the user has currently filtered for, so the prominent
+   * markers answer "what I asked for just now" rather than "what I said in a
+   * quiz once". Omit to keep the saved-profile behaviour (`/discover`).
+   */
+  tags?: readonly VibeTag[];
+  /**
+   * Rank within THIS set rather than the whole catalog. `/map` passes the
+   * filtered bars: ranking the full catalog and then hiding most of it would
+   * score bars the user cannot see, and the cohort-relative tier cut in
+   * `suggestedTier` would be computed against the wrong denominator.
+   */
+  bars?: readonly Bar[];
+};
+
 export function useSuggestions(
   coords: Coords | null,
   maxResults: number = MAP_SUGGESTION_COUNT,
+  intent?: SuggestionIntent,
 ): UseSuggestionsReturn {
-  const bars = useBars();
+  const allBars = useBars();
+  const bars = intent?.bars ? (intent.bars as Bar[]) : allBars;
   const { ratings } = useRatings();
 
   // The saved vibe profile is read client-side after mount (same pattern as
@@ -139,14 +158,26 @@ export function useSuggestions(
   // profile must not blank the suggested tier — fall back to the EMPTY
   // profile (the home flow's defaultProfile pattern: distance/affinity-
   // ranked). hasProfile still reports the truth for the personalize hint.
+  const intentTags = intent?.tags;
   const suggestedIds = useMemo(() => {
     if (!profileChecked) return [];
-    const effective: VibeProfile =
-      profile ?? {
-        tags: [],
-        archetype: deriveArchetype([]),
-        preferredNeighborhoods: [],
-      };
+    // An ACTIVE intent wins over the saved quiz profile. Without this the map's
+    // prominent markers reflected a quiz answered once, while the user was
+    // staring at filters they had just set — the two disagreed and the map
+    // looked broken. preferredNeighborhoods is deliberately dropped in intent
+    // mode: the neighborhood filter already narrowed `bars`, and re-applying it
+    // as a ranking preference would double-count it.
+    const effective: VibeProfile = intentTags
+      ? {
+          tags: [...intentTags],
+          archetype: deriveArchetype([...intentTags]),
+          preferredNeighborhoods: [],
+        }
+      : profile ?? {
+          tags: [],
+          archetype: deriveArchetype([]),
+          preferredNeighborhoods: [],
+        };
     return computeSuggestions({
       profile: effective,
       coords,
@@ -154,7 +185,7 @@ export function useSuggestions(
       ratings,
       maxResults,
     }).map((b) => b.id);
-  }, [profile, profileChecked, coords, bars, ratings, maxResults]);
+  }, [profile, intentTags, profileChecked, coords, bars, ratings, maxResults]);
 
   return { suggestedIds, hasProfile: profile !== null, profileChecked };
 }
