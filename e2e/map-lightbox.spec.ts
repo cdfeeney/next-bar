@@ -168,14 +168,46 @@ test.describe('/map marker opens the venue detail', () => {
 
     // A `rated` marker must actually exist — otherwise this test would silently
     // prove nothing about that tier.
-    const ratedMarker = page.locator('.leaflet-marker-icon:has([data-tier="rated"])').first();
-    await expect(ratedMarker).toBeAttached({ timeout: 15_000 });
+    const ratedMarkers = page.locator('.leaflet-marker-icon:has([data-tier="rated"])');
+    await expect(ratedMarkers.first()).toBeAttached({ timeout: 15_000 });
+
+    // Pick the rated marker nearest the viewport CENTRE, not `.first()`. DOM
+    // order has nothing to do with screen position in a Leaflet pane, so the
+    // first rated marker is usually off-screen — the same trap that made an
+    // earlier version of this spec click into empty space.
+    const idx = await page.evaluate(() => {
+      const cx = window.innerWidth / 2;
+      const cy = window.innerHeight / 2;
+      const all = Array.from(document.querySelectorAll('.leaflet-marker-icon'));
+      let best = -1;
+      let bestD = Infinity;
+      all.forEach((el, i) => {
+        if (!el.querySelector('[data-tier="rated"]')) return;
+        const b = el.getBoundingClientRect();
+        if (b.bottom < 0 || b.top > window.innerHeight) return;
+        if (b.right < 0 || b.left > window.innerWidth) return;
+        const d = Math.hypot(b.x + b.width / 2 - cx, b.y + b.height / 2 - cy);
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      });
+      return best;
+    });
+    expect(idx, 'expected at least one rated marker on screen').toBeGreaterThanOrEqual(0);
+    const ratedMarker = page.locator('.leaflet-marker-icon').nth(idx);
 
     // Tap it and confirm the SAME lightbox opens. The tiers share one
     // <Marker>/eventHandlers path (icon and z-index are the only difference),
     // so this pins that shared path rather than expecting per-tier behaviour.
-    await ratedMarker.scrollIntoViewIfNeeded().catch(() => {});
-    await ratedMarker.click({ force: true });
+    // NOT `{ force: true }`. Forcing skips Playwright's hit-target check, so if
+    // the rated marker were covered by a higher-z marker the click would land on
+    // the coverer, open the same dialog, and the test would pass while proving
+    // nothing about the rated tier. Require it to be genuinely visible and
+    // tappable — that is the property under test.
+    await expect(ratedMarker).toBeVisible({ timeout: 15_000 });
+    await expect(ratedMarker).toBeInViewport();
+    await ratedMarker.click();
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10_000 });
   });
 
@@ -190,6 +222,12 @@ test.describe('/map marker opens the venue detail', () => {
     await openMap(page);
     await tapBarMarker(page, 'Attaboy');
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10_000 });
+
+    // Prove focus actually ENTERED the dialog first. Without this the test is
+    // trivially satisfiable: if the dialog never took focus, focus would still
+    // be sitting on the marker, Escape would still close via the window
+    // listener, and the final assertion would pass having restored nothing.
+    await expect(page.getByRole('dialog').getByRole('button', { name: 'Close' })).toBeFocused();
 
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog')).toHaveCount(0);
