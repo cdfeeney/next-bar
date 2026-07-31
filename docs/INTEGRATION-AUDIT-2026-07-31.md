@@ -3,7 +3,8 @@
 **Goal:** `g-e7b46925-c10a-4e18-8cd8-2dab2f486dc5` · **Date:** 2026-07-31 · **Read-only.**
 Nothing was merged, pushed, deployed, or applied. `git fetch origin --prune` only.
 
-> **Measured at `960c52f`** (which is this report's own commit). Counts below are as-of that SHA.
+> **Measured at `960c52f`** (this report's first commit; later revision commits do not change the
+> figures below, which were taken there). Counts below are as-of that SHA.
 > An audit committed into the branch it audits shifts its own numbers by one; that is stated rather
 > than left for a reader to trip over.
 
@@ -25,10 +26,13 @@ mistake.
 
 The PR gate and the deployment gate are different gates. **Merging this PR applies no migration and
 touches no database**; the schema changes are a separate, later, attended step with their own gates.
-Blocking the PR would also leave 129 commits sitting on one laptop with no upstream — the single
+Blocking the PR would also leave 130 commits sitting on one laptop with no upstream — the single
 largest risk this audit found. Pushing is *risk-reducing*.
 
-Every re-run gate passes. **No commit or file was identified as unshippable.**
+**Five of the six re-run gates pass; the sixth could not fully run** — the Supabase-dependent e2e
+half is unexecutable in this worktree (§3, and gate **G2**). Saying "every gate passes" would be
+false: an environment-explained failure is still not a pass.
+**No commit or file was identified as unshippable.**
 
 ### Gates on production promotion (NOT on the PR)
 
@@ -36,7 +40,7 @@ Every re-run gate passes. **No commit or file was identified as unshippable.**
 |---|---|---|---|
 | **G1** | **Exercise a restore.** Never once done. | Migrations have no down-path. Without a proven undo, every other failure escalates from incident to unrecoverable. This is the one gate that makes the others survivable. | operator + goal 4 |
 | **G2** | **Run the Supabase e2e half against a real database.** | It is currently *entirely* dark (see §3) — and the dark part is exactly the RLS / migration-ordering / column-contract surface. Untested is not the same as safe. | operator + goal 4 |
-| **G3** | **Inventory the 24 RLS statements** in `0020`/`0021`/`0033` with per-statement justification. | An uninventoried policy is an unreviewed permission, and silent over-exposure is the hardest failure to notice after the fact. `0033`'s 9 statements are **unapplied**, so they are still reviewable before they are real. | goal 4 |
+| **G3** | **Inventory the 20 executable RLS statements** in `0020`/`0021`/`0033` with per-statement justification. | An uninventoried policy is an unreviewed permission, and silent over-exposure is the hardest failure to notice after the fact. `0033`'s 9 statements are **unapplied**, so they are still reviewable before they are real. | goal 4 |
 | **G4** | **Verify Vercel's actual Production branch** from the dashboard. | Believed `main`. Never confirmed. Everything downstream assumes it. | operator |
 
 ### Operator decisions (not blockers, but they ship either way)
@@ -107,13 +111,19 @@ imply routine T1 work.
 The runner is checksum-ledgered, so already-applied files are skipped rather than replayed —
 *provided contents still match what was applied*; otherwise it reports drift. Goal 4 owns that check.
 
-### RLS — 24 statements, and the first draft missed them entirely
+### RLS — 20 executable statements, and the first draft missed them entirely
 
-| Migration | `create/alter/drop policy` + `enable row level security` | Applied? |
+| Migration | Executable `create/alter/drop policy` + `enable row level security` | Applied? |
 |---|---|---|
-| `0020_provenance_and_media.sql` | **12** | believed yes |
-| `0021_provenance_hardening.sql` | **3** | believed yes |
+| `0020_provenance_and_media.sql` | **9** | believed yes |
+| `0021_provenance_hardening.sql` | **2** | believed yes |
 | `0033_vibe_profiles.sql` | **9** | **no** |
+| **Total** | **20** | |
+
+> A revision of this section said 24. That count came from a `grep` that also matched **commented-out
+> rollback examples** — three in `0020`, one in `0021`. Only executable statements are counted above
+> (`grep -v '^\s*--'` before matching). Caught by the Codex lane on the second round; recounted
+> directly rather than taken on trust.
 
 RLS is a *different surface* from the grants in `0034`, and the first draft covered only grants.
 `0033`'s 9 statements are still unapplied and therefore still cheap to review — hence **G3**.
@@ -249,7 +259,7 @@ hits, so nothing in the application ever writes that table. It is a landmine, no
 **5. Access — IMPROVED, with an unreviewed corner.** Middleware amplification lever narrowed;
 revoke-first grants authored; waitlist rate limiting expanded. Residual: `POST /api/event` is
 unauthenticated with an allowlist as its only control, `0034` is unapplied so its hardening is not yet
-real, and **24 RLS statements have not been inventoried** (G3).
+real, and **20 executable RLS statements have not been inventoried** (G3).
 
 **6. Cost — CONTAINED, with one default and one known defect.** `NEXT_PUBLIC_GOOGLE_MEDIA` and the
 Maps key are both commented out ⇒ all cost-bearing media disabled. `NEXT_PUBLIC_LEGACY_PHOTOS=1` is
@@ -284,7 +294,7 @@ compliance value specifically is only realised once `0034` is live.
 
 **No commit or file was identified as unshippable.**
 
-Checked: every added file over 20 KB; all 16 migrations *including their 24 RLS statements*;
+Checked: every added file over 20 KB; all 16 migrations *including their 20 executable RLS statements*;
 `package.json` + lockfile; `.env.example` and every new `process.env` reference; the CI workflow;
 `public/sw.js`; all 23 T0 paths; the added-file type census (49 `.ts`, 33 `.md`, 16 `.sql`, 9 `.tsx`,
 8 `.mjs`, 7 `.png`, 5 `.mts`, 2 `.json`, 1 `.html`); and `git diff --check`. Secret scan clean over
@@ -322,6 +332,14 @@ Four lanes reviewed the first draft: Claude/Sonnet, Codex `gpt-5.6-sol`, GLM, De
 | **Claude** | "Ledger ends at 0032" stated as fact in a session with no DB access. | Hedged, with provenance, and made a goal-4 reconfirmation item. |
 | **Codex** | Counts stale by one (self-inclusion); "no logs added" false — `morning.md` *is* an added log. | Both corrected; an "as-of SHA" header added. |
 | **Codex** | The `/discover` user-facing surface removal was never inventoried. | Added to §2. |
-| **GLM** | RLS policies never audited as a category distinct from grants; dependency/lockfile never audited; service worker never inventoried. | All three added. RLS found **24 statements** — the most valuable catch. Dependencies came back clean; the SW came back correctly versioned. |
+| **GLM** | RLS policies never audited as a category distinct from grants; dependency/lockfile never audited; service worker never inventoried. | All three added. RLS found **20 executable statements** — the most valuable catch. Dependencies came back clean; the SW came back correctly versioned. |
 | **GLM** | "GREEN with four blockers" is self-contradictory; argued for AMBER. | **Partly adopted.** The label was ambiguous, not merely worded badly — split into two scoped verdicts (§0). |
 | **DeepSeek** | Adjudicated GREEN: the PR gate and the deployment gate are different, merging applies no migration, and blocking the push would strand 130 commits on one laptop. Ranked restore-never-exercised as the single hard gate. | Adopted; drove the §0 split and the G1–G4 ordering. |
+
+### Round 2 (Claude/Sonnet + Codex — the tier-derived panel for a T2 docs diff)
+
+| Lane | Finding | Resolution |
+|---|---|---|
+| **Codex** | The RLS count of 24 was wrong: the `grep` matched **commented-out rollback examples** (3 in `0020`, 1 in `0021`). Executable totals are 9 / 2 / 9 = **20**. | Recounted directly with comments stripped, and corrected everywhere the figure appears. |
+| **Codex** | §0 claimed "every re-run gate passes" while §3 reports gate 6 as environment-limited with 7 failures. An environment-explained failure is still not a pass. | Corrected to "five of six pass; the sixth could not fully run." |
+| **Codex** | Confirmed the `0034` atomicity correction and the transaction wrapping in `scripts/apply-migrations.ts`. | No change needed. |
