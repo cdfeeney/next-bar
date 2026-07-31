@@ -703,3 +703,66 @@ no API spend, and `g-91db2f50` was never touched.
 
 ## Item log
 
+
+### 1. `g-12d33864` — Map six-axis tweak surface + archive Discover → **BLOCKED (operator)**
+
+**T1** (tier-classify on the real diff: `t0FileCount 0`, `escalated false`, project map).
+Commits `373dba9`, `82743a3`, `2d0dbc0`, `14e9c0e`. Checkpoint `4e6bb7b`.
+
+Blocked on **two operator decisions**, not on engineering. Implementation is complete and reviewed.
+
+**What shipped.** `/map`'s three horizontal chip rails (`FindBarFilterChips`) are deleted, not
+re-hidden. "Tweak the vibe" now opens `MapFilterSheet`: the shared six-axis accordion
+(`VibeAxisAccordion`, extracted from `VibeTweak` so both surfaces render the identical control) plus
+Neighborhood (multi-select) and Distance rows inside the same surface. Draft until Apply; Cancel
+discards. `VibeTweak`'s contract and the Next Bar? night-cache round-trip are unchanged. Filter
+semantics were already correct and are untouched — `findBarFilters.test.ts` and `vibeAxes.test.ts`
+pass **unmodified**. `/discover` archived: entry points gone, route redirects, implementation deleted.
+
+**Gates.** `tsc` 0 · vitest **1566 passed / 102 files** · `npm run build` 0 · secret-scan clean (499)
+· `git diff --check` clean · e2e **120 passed / 3 failed** across iPhone 13 + Pixel 7 + iPhone 17
+(402×681). The 3 are `/settings` failing because **this worktree has no `.env.local`** (worktrees
+don't share untracked files), so the page renders "Sign-in is unavailable on this build". `/settings`
+is untouched by the diff.
+
+**Pre-existing failures proven by comparison, not assumed.** `map-lightbox` RATED-marker fails
+**5/9 at baseline `9dfe8f2`** vs 7/9 with the change — I checked out the baseline, rebuilt, and
+re-ran it. The `mobile-controls` `/` failure matches the already-recorded blocked goal `g-90f908bc`.
+
+**Santa: 3 rounds, intensity `full`, quorum MET in round 3** (Claude/Sonnet, Codex `gpt-5.6-sol`
+proof `558041cb`, DeepSeek, GLM, Kimi-deep). Codex hit **exit 124 twice** in rounds 2–3; a repo-read
+capability probe proved the lane healthy (counted 36 `.sql` files correctly) and it completed on a
+single-question packet. Timeout was packet weight, not an outage — silence was never read as approval.
+
+**Findings unique to one lane** (this is where model diversity paid):
+
+| Lane | Found alone |
+|---|---|
+| **GLM** | Archiving `/discover` removed the app's **only** `addWantToGo` call site. The other four lanes missed it. |
+| **Codex** | Demanded an un-followed-redirect assertion — which exposed that the redirect answered **307 with no `Location` header**. Browsers followed it; curl and crawlers would not. |
+| **DeepSeek** | Traced the radius-survives-location-loss path: the UI said "Anywhere" while Apply silently re-persisted a hidden 1.5-mile radius. |
+| **Claude** | A sixth stale "/discover also writes this key" comment, and duplicated count arithmetic. |
+| **Kimi** | Argued the sheet should be a fixed bottom sheet with a pinned action bar (held for visual approval). |
+
+**Two bugs I caught in my own work.** Copying `VibeTweak`'s safe-area padding onto the sheet was
+wrong — measured Apply at `top=-212` on 402×681, off the *top*, because the sheet sits in the header
+with the map after it. And the e2e written for the radius fix **passed against the bug deliberately
+reintroduced**, because `page.reload()` resets React state so the scenario was unreachable; it was
+deleted and replaced with `MapFilterSheet.test.tsx`, proven to fail with
+`expected { kind: 'walking', maxMiles: 1.5 } to be null`.
+
+**Operator decisions required:**
+1. **Visual approval** — 7 screenshots at 402×681 in `docs/screenshots/g-12d33864/`. (`1-map-default`
+   and `2-tweak-closed` are byte-identical: at this viewport the collapsed row is already on screen,
+   so the default state *is* the closed state.)
+2. **Want-to-go has no writer.** `useWantToGo().add` is called by nothing; the tab can only show its
+   empty state, whose CTA now points at a `/map` with no add affordance. Adding one is product, so it
+   was not invented here. Natural home: the existing `BarLightbox`, beside "Rank it".
+3. **FYI — `club` is on 3 of ~1000 venues** (`house` 7, `hiphop` 4, `dance` 34), so "Club" filters to
+   3 of 403 and those render as grey dots (promoted budget is 0 below a cohort of 4). Control correct,
+   tagging thin.
+
+**Follow-up filed:** extract a shared `AccordionRow` (4 hand-copies of the disclosure/aria primitive),
+pure move, per-instance `useId`. Deferred deliberately — Kimi concurred that an unreviewed refactor of
+an a11y primitive landing after the final review round is the worse risk.
+
