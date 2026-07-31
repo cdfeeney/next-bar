@@ -78,12 +78,47 @@ async function tapBarMarker(page: import('@playwright/test').Page, name: string)
   await tapCentreMarker(page);
 }
 
-/** The map pane's transform — changes whenever the view moves. */
-const paneTransform = (page: import('@playwright/test').Page) =>
-  page.evaluate(() => {
-    const pane = document.querySelector<HTMLElement>('.leaflet-map-pane');
-    return pane ? pane.style.transform : '';
+/**
+ * Start watching for ANY map view change, and return a probe that reports
+ * whether one happened.
+ *
+ * Two weaker approaches were tried and rejected:
+ *  - comparing `.leaflet-map-pane`'s transform before/after catches only
+ *    SETTLED pans. A zoom-only reset transforms the zoom-animated child layers
+ *    instead, and an animated reset may not have moved the pane yet when the
+ *    assertion runs — so it can read the old value and pass while the map was
+ *    in fact reset.
+ *  - fingerprinting "the marker nearest the centre" is not a stable identity:
+ *    when two markers are near-equidistant, ordinary re-layout picks a
+ *    different one and the test fails for a reason that has nothing to do with
+ *    the map moving. (Observed exactly that: same 403 markers, different
+ *    nearest marker.)
+ *
+ * Watching the pane's `style` attribute for mutations catches the movement
+ * itself, whenever it lands, without depending on which marker is where.
+ */
+async function watchMapMovement(page: import('@playwright/test').Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __mapMoved?: boolean; __mapObs?: MutationObserver };
+    const pane = document.querySelector('.leaflet-map-pane');
+    w.__mapMoved = false;
+    if (!pane) return;
+    w.__mapObs = new MutationObserver(() => {
+      w.__mapMoved = true;
+    });
+    // `style` covers pan; `class` covers Leaflet's zoom-animation markers.
+    w.__mapObs.observe(pane, { attributes: true, attributeFilter: ['style', 'class'] });
   });
+  return async () => {
+    // Give any animation a chance to start and land before concluding.
+    await page.waitForTimeout(800);
+    return page.evaluate(() => {
+      const w = window as unknown as { __mapMoved?: boolean; __mapObs?: MutationObserver };
+      w.__mapObs?.disconnect();
+      return w.__mapMoved === true;
+    });
+  };
+}
 
 test.describe('/map marker opens the venue detail', () => {
   test('tapping a marker opens the lightbox with real venue detail', async ({ page }) => {
@@ -115,21 +150,21 @@ test.describe('/map marker opens the venue detail', () => {
     // capturing the transform before it would compare two different views and
     // the assertion would be meaningless.
     await flyToBar(page, 'Attaboy');
-    const viewBefore = await paneTransform(page);
-    expect(viewBefore).not.toBe('');
-
     await tapCentreMarker(page);
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10_000 });
 
     // NEGATIVE: a detail overlay is not a route.
     expect(page.url()).toBe(before);
 
+    // Start watching only now, so the fly's own movement is not counted.
+    const mapMoved = await watchMapMovement(page);
+
     await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 
     // NEGATIVE: closing returns you to the map you had, not a re-fitted one.
     expect(page.url()).toBe(before);
-    expect(await paneTransform(page)).toBe(viewBefore);
+    expect(await mapMoved(), 'closing the lightbox must not move or re-fit the map').toBe(false);
   });
 
   test('works on a RATED marker too — all three tiers share the tap path', async ({ page }) => {
@@ -196,6 +231,13 @@ test.describe('/map marker opens the venue detail', () => {
     });
     expect(idx, 'expected at least one rated marker on screen').toBeGreaterThanOrEqual(0);
     const ratedMarker = page.locator('.leaflet-marker-icon').nth(idx);
+
+    // Confirm the index really did land on a rated marker. The evaluate() above
+    // walks `document.querySelectorAll` while this locator uses `.nth()`; both
+    // use the same selector and DOM order so they should agree, but asserting it
+    // removes any off-by-one doubt — without this the test could tap a
+    // neighbouring marker of a different tier and still see a dialog open.
+    await expect(ratedMarker.locator('[data-tier]')).toHaveAttribute('data-tier', 'rated');
 
     // Tap it and confirm the SAME lightbox opens. The tiers share one
     // <Marker>/eventHandlers path (icon and z-index are the only difference),
