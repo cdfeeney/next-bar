@@ -75,7 +75,15 @@ export function stableSuggestions(
   budget: number,
   window: number = STABILITY_WINDOW,
 ): string[] {
-  if (budget <= 0) return [];
+  if (!Number.isFinite(budget) || budget <= 0) return [];
+  // Normalise the budget to a whole number of slots and compare with `>=`.
+  // Both loops previously stopped on `kept.length === budget`, which a
+  // non-integer budget can never satisfy — so `stableSuggestions([], ranked, 2.5)`
+  // ran to exhaustion and returned the ENTIRE ranked list, ignoring the cap.
+  // Not reachable from `suggestedCount` (it always returns an integer), but a
+  // caller-supplied budget is a latent trap and this costs nothing to close.
+  const cap = Math.floor(budget);
+  if (cap <= 0) return [];
   // Eligibility is a WINDOW near the top of the current ranking, not simple
   // cohort membership.
   //
@@ -92,7 +100,7 @@ export function stableSuggestions(
   // A window fixes both failure modes at once: a survivor is preserved while it
   // remains plausibly good, and drops out once it falls far enough down the new
   // ranking — no hard filter required.
-  const eligible = new Set(ranked.slice(0, Math.max(budget, budget * window)));
+  const eligible = new Set(ranked.slice(0, Math.max(cap, cap * window)));
   // Survivors keep their previous relative order — that ordering is what the
   // user's eye has already learned. Dedupe as we go: `previous` is caller-
   // supplied and a repeated id would otherwise consume two slots and render the
@@ -100,15 +108,15 @@ export function stableSuggestions(
   const have = new Set<string>();
   const kept: string[] = [];
   for (const id of previous) {
-    if (kept.length === budget) break;
+    if (kept.length >= cap) break;
     if (eligible.has(id) && !have.has(id)) {
       kept.push(id);
       have.add(id);
     }
   }
-  if (kept.length === budget) return kept;
+  if (kept.length >= cap) return kept;
   for (const id of ranked) {
-    if (kept.length === budget) break;
+    if (kept.length >= cap) break;
     if (!have.has(id)) {
       kept.push(id);
       have.add(id);

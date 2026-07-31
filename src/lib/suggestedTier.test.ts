@@ -150,3 +150,13 @@ describe('stableSuggestions — the stability window', () => {
     expect(stableSuggestions(once, ranked, 2)).toEqual(once);
   });
 });
+
+it('respects the budget even when handed a non-integer', () => {
+  // Both loops used to stop on `kept.length === budget`, which 2.5 can never
+  // satisfy — so this returned the ENTIRE ranked list. Not reachable via
+  // suggestedCount (always an integer), but a latent trap for any other caller.
+  const ranked = Array.from({ length: 40 }, (_, i) => `r${i}`);
+  expect(stableSuggestions([], ranked, 2.5)).toHaveLength(2);
+  expect(stableSuggestions([], ranked, 0.5)).toEqual([]);
+  expect(stableSuggestions([], ranked, Number.NaN)).toEqual([]);
+});
