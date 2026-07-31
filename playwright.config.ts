@@ -63,8 +63,14 @@ export default defineConfig({
       // full-screen overlay whose action row sits at the bottom, so the
       // shortest configured viewport is exactly where it would fail first —
       // the same class of defect vibe-tweak-reachable was added for.
+      // map-interaction added 2026-07-31 (goal g-12d33864): /map's filter
+      // control became MapFilterSheet, a sheet whose Apply/Cancel row is its
+      // LAST child — the identical shape as vibe-tweak-reachable above, and
+      // therefore the identical way to fail on the shortest viewport. Its
+      // acceptance criteria are stated at 402x681, so running it only on the
+      // taller two would have tested everywhere except where it can break.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction)\.spec\.ts/,
     },
   ],
   webServer: {

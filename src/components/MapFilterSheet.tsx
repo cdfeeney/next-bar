@@ -126,15 +126,22 @@ export default function MapFilterSheet({
   };
 
   return (
-    // BOTTOM CLEARANCE — the same fix VibeTweak carries (goal g-44007df6), and
-    // it has to exist HERE too because this is a second surface whose action row
-    // is its last child. BottomNav is `fixed bottom-0 z-[1000]` with
-    // `pb-[max(0.5rem,env(safe-area-inset-bottom))]`; without this padding Apply
-    // and Cancel sit underneath it on a 402x681 viewport and cannot be tapped.
-    <section
-      data-testid="findbar-filters"
-      className="mt-4 text-left pb-[calc(6rem+env(safe-area-inset-bottom))]"
-    >
+    // NO bottom-clearance padding here, deliberately — and that is a difference
+    // from VibeTweak worth stating, because copying its fix across looked
+    // obviously right and was wrong.
+    //
+    // VibeTweak IS the whole screen: its action row is the last thing on the
+    // page, so with nothing reserved it sits under the fixed BottomNav and
+    // cannot be tapped (goal g-44007df6). This sheet is not the whole screen —
+    // it renders inside /map's <header>, with the Leaflet section and the
+    // count line after it. The nav can therefore never overlap Apply/Cancel;
+    // the page simply scrolls past them. A copied `pb-[calc(6rem+...)]` bought
+    // no reachability at all and inserted ~96px of dead space between Cancel
+    // and the map. Measured, not assumed: with it, Apply at page-bottom scroll
+    // sat at top=-212 on a 402x681 viewport — off the TOP, the opposite of the
+    // defect the padding exists to prevent. See the MapFilterSheet block in
+    // e2e/vibe-tweak-reachable.spec.ts for the assertion that holds here.
+    <section data-testid="findbar-filters" className="mt-4 text-left pb-2">
       <div className="flex items-center justify-between px-1 mb-2">
         <span className="text-xs text-muted">
           Filters

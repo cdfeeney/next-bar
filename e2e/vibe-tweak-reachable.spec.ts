@@ -118,3 +118,67 @@ test.describe('VibeTweak actions clear the fixed bottom nav', () => {
     expect(page.url()).toBe(before);
   });
 });
+
+/**
+ * Goal g-12d33864: the same QUESTION on /map's sheet — "can the user actually
+ * tap Apply on a 402x681 phone?" — but deliberately NOT the same assertion, and
+ * the difference is the finding.
+ *
+ * VibeTweak is the whole screen, so its action row is the last thing on the
+ * page and "scroll to the bottom, then tap" is exactly the user's situation.
+ * MapFilterSheet renders inside /map's <header>, with the Leaflet section and
+ * the count line after it. Scrolling to the page bottom therefore scrolls PAST
+ * the sheet — measured at top=-212 on 402x681, off the top of the viewport, not
+ * hidden under the nav. Reusing the bottom-scroll premise here asserted
+ * something that was never true of this surface.
+ *
+ * What matters here instead: bring the action row into view the way a user
+ * would, then prove a real tap at its centre reaches it rather than landing on
+ * the nav, the map, or any overlay.
+ */
+test.describe('MapFilterSheet actions are reachable on a compact phone', () => {
+  test('Apply and Cancel are fully visible and actually tappable once scrolled to', async ({
+    page,
+  }) => {
+    await denyGeolocation(page.context());
+    await page.goto('/map');
+    await page.getByRole('button', { name: /Tweak the vibe/i }).click();
+    await expect(page.getByTestId('findbar-filters')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Apply$/i })).toBeVisible();
+
+    // The user's scroll, not a synthetic jump to the document end.
+    await page.getByRole('button', { name: /^Cancel$/i }).scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+
+    for (const label of [/^Apply$/, /^Cancel$/]) {
+      const r = await tapReaches(page, label);
+      expect(r.found, `${label} button not found`).toBe(true);
+      if (!r.found) continue;
+
+      expect(
+        r.insideViewport,
+        `${label} is not fully inside the viewport: top=${r.box.top} bottom=${r.box.bottom} viewportH=${r.viewportH}`,
+      ).toBe(true);
+
+      expect(
+        r.reached,
+        `${label} is covered by "${r.blocker}" — a tap at its centre hits that instead. ` +
+          `The sheet is usable only if this passes.`,
+      ).toBe(true);
+    }
+  });
+
+  test('Cancel dismisses the sheet and does NOT change the URL', async ({ page }) => {
+    await denyGeolocation(page.context());
+    await page.goto('/map');
+    const before = page.url();
+    await page.getByRole('button', { name: /Tweak the vibe/i }).click();
+    await expect(page.getByRole('button', { name: /^Cancel$/i })).toBeVisible();
+
+    await page.getByRole('button', { name: /^Cancel$/i }).click();
+
+    // Negative assertions — the class of bug unit tests miss (CLAUDE.md).
+    await expect(page.getByTestId('findbar-filters')).toHaveCount(0);
+    expect(page.url()).toBe(before);
+  });
+});
