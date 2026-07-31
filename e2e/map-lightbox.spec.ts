@@ -132,6 +132,76 @@ test.describe('/map marker opens the venue detail', () => {
     expect(await paneTransform(page)).toBe(viewBefore);
   });
 
+  test('works on a RATED marker too — all three tiers share the tap path', async ({ page }) => {
+    // Criterion 1 says all three tiers. A fresh context has no ratings, so the
+    // `rated` tier never renders and the other two tests can only ever exercise
+    // `suggested` or `other`. Seed a rating so Attaboy renders as `rated`.
+    //
+    // Inspection says the tiers share one <Marker>/eventHandlers path and differ
+    // only by icon and z-index — so this is not expected to find a bug today.
+    // It exists so that a future change which DOES differentiate per tier (say,
+    // dropping onSelectBar from the quiet tier to declutter dense clusters)
+    // cannot land silently.
+    // Seed MANY Loved bars, not one. Tier precedence is `suggested` > `rated`
+    // (BarMap.tsx: "a Loved bar can also be suggested"), and only ~10 bars are
+    // suggested — so rating a single well-known bar produces a `suggested`
+    // marker, not a `rated` one. Verified: seeding just Attaboy yields
+    // data-tier="suggested". Seeding two dozen guarantees some fall outside the
+    // suggested set and genuinely render `rated`.
+    await page.addInitScript(() => {
+      const ids = [
+        'attaboy', 'mr-purple', '169-bar', 'welcome-johnsons', 'pianos',
+        'death-and-co', 'pdt', 'amor-y-amargo', 'holiday-cocktail-lounge',
+        'ace-bar', 'employees-only', 'little-branch', 'white-horse-tavern',
+        'smalls-jazz-club', 'buvette', 'bathtub-gin', 'the-tippler', 'le-bain',
+        'tia-pol', 'the-frying-pan', 'dead-rabbit', 'fraunces-tavern',
+      ];
+      window.localStorage.setItem(
+        'next-bar:ratings:v1',
+        JSON.stringify(
+          ids.map((barId) => ({ barId, rating: 'loved', ratedAt: new Date().toISOString() })),
+        ),
+      );
+    });
+
+    await openMap(page);
+
+    // A `rated` marker must actually exist — otherwise this test would silently
+    // prove nothing about that tier.
+    const ratedMarker = page.locator('.leaflet-marker-icon:has([data-tier="rated"])').first();
+    await expect(ratedMarker).toBeAttached({ timeout: 15_000 });
+
+    // Tap it and confirm the SAME lightbox opens. The tiers share one
+    // <Marker>/eventHandlers path (icon and z-index are the only difference),
+    // so this pins that shared path rather than expecting per-tier behaviour.
+    await ratedMarker.scrollIntoViewIfNeeded().catch(() => {});
+    await ratedMarker.click({ force: true });
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('closing returns focus to the marker, not to the body', async ({ page }) => {
+    // Criterion 4 names focus return explicitly, and it is not obvious that it
+    // works: the opener is a Leaflet divIcon in a transformed pane, not a normal
+    // button. It works because Leaflet's default `keyboard: true` sets
+    // tabIndex=0 on the marker container, so the browser focuses it on
+    // mousedown and BarLightbox's opener capture has something real to restore.
+    // Asserting it means a future `keyboard: false` cannot silently strand
+    // keyboard users at the top of the page.
+    await openMap(page);
+    await tapBarMarker(page, 'Attaboy');
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10_000 });
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    const focused = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return 'body';
+      return el.classList.contains('leaflet-marker-icon') ? 'marker' : el.tagName;
+    });
+    expect(focused, 'focus must return to the marker that opened the dialog').toBe('marker');
+  });
+
   test('Escape closes it, and the page underneath scrolls again', async ({ page }) => {
     await openMap(page);
     await tapBarMarker(page, 'Attaboy');

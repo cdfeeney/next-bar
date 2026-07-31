@@ -59,7 +59,12 @@ export default defineConfig({
       // viewport, and 402x681 is the shortest configured — running it only on
       // the taller two would test everywhere except where the bug lives. One
       // extra spec, consistent with the scoping rationale above.
-      testMatch: /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable)\.spec\.ts/,
+      // map-lightbox added 2026-07-31 (goal g-5ead112c): the lightbox is a
+      // full-screen overlay whose action row sits at the bottom, so the
+      // shortest configured viewport is exactly where it would fail first —
+      // the same class of defect vibe-tweak-reachable was added for.
+      testMatch:
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox)\.spec\.ts/,
     },
   ],
   webServer: {
