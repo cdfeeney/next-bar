@@ -184,6 +184,51 @@ an app".
 
 ---
 
+## 5A. Operator product acceptance and release environments
+
+At the current company size, **QA is an activity, not a separate permanent
+environment**. Use this release path:
+
+`Local → PR Preview → operator product approval → Staging/QA → TestFlight → Production canary → 100% Production`
+
+Production must never be the first place the operator sees a change. Deploying
+code and releasing a feature are separate decisions.
+
+| # | Operator item | Owner | Required proof |
+|---|---|---|---|
+| O1 | Configure a unique **Vercel Preview deployment for every PR** | ⚙️ | Preview URL and exact commit SHA recorded on the PR |
+| O2 | Ensure Preview uses **synthetic, non-production data and credentials** | ⚙️ | Environment inventory proves no Production service-role key or `DATABASE_URL` is present |
+| O3 | Maintain a seeded product-review account and deterministic review data | ⚙️ | Login instructions and reset/reseed procedure work in Preview and Staging |
+| O4 | Generate the operator screenshot packet for every material UI change | 🤖 | Target-device screenshots labelled with route, state, viewport and SHA; include 402×681 and required App Store sizes |
+| O5 | Perform the product walkthrough on a **physical iPhone** before QA promotion | 🧑 | Golden-path checklist completed, including safe areas, keyboard, scrolling, back navigation and installed-app behavior |
+| O6 | Give explicit product approval for the reviewed build | 🧑 | `OPERATOR UX APPROVED for commit <SHA>` recorded; no UI goal is product-complete without it |
+| O7 | Stand up separate Vercel and Supabase **Staging** environments | ⚙️ | Staging deployment ID, backend project identity and environment checks recorded |
+| O8 | Run QA, migrations, smoke tests, backup/restore and rollback rehearsal in Staging | ⚙️ | Saved test results plus the source and target deployment IDs from an actual rollback |
+| O9 | Enrol internal testers and distribute the native release candidate through **Apple TestFlight** | 🧑 | The exact build installs and completes the physical-device matrix against Staging |
+| O10 | Define the Production rollout mechanism: runtime feature flag or staged canary | ⚙️ | Internal/operator cohort first, then bounded traffic stages with abort criteria; never use a build-time `NEXT_PUBLIC_*` variable as a runtime switch |
+| O11 | Name the release/incident owner and connect error, uptime and cost alerts before rollout | 🧑 | Alerts reach a real person; previous Production deployment ID and rollback action are recorded |
+| O12 | Promote to 100% only after monitored canary evidence | 🧑 | Error rate, latency, critical-flow health and API cost remain inside the written thresholds |
+
+### Operator product-review script — required for material UI changes
+
+1. Open the PR Preview URL on the physical target iPhone.
+2. Confirm the page matches the requested product behavior, not merely the test assertions.
+3. Exercise the changed golden path with the seeded account and synthetic data.
+4. Check compact viewport, safe areas, keyboard-open, scrolling and bottom-navigation interception.
+5. Compare the running build with the SHA-labelled screenshot packet.
+6. Record approval or exact corrections on the PR. Re-review a new SHA after corrections.
+
+For the current Map release, the golden path is: open Map → confirm old filter
+rails and Discover entry points are absent → open Tweak the vibe → select Club,
+Dancing and House music → apply → inspect the resulting markers → tap a marker
+and inspect photos/hours → verify Next Bar Apply/Cancel at the bottom.
+
+Official operating references: [Vercel Preview deployments](https://vercel.com/docs/deployments/overview),
+[Supabase environments](https://supabase.com/docs/guides/deployment/managing-environments),
+and [Apple TestFlight](https://developer.apple.com/testflight/).
+
+---
+
 ## 6. Data quality
 
 | # | Item | Owner |

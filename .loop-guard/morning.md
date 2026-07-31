@@ -656,3 +656,50 @@ was tick 14. `--max-iters` must be queue length **+ margin**.
 **Nothing pushed, deployed, or applied.** No migration run, no production access,
 no API spend, and `g-91db2f50` was never touched.
 
+
+---
+---
+
+# RUN 2 — integration & release queue (2026-07-31, daytime)
+
+## Run header
+
+| Field | Value |
+|---|---|
+| Started | 2026-07-31 ~12:14 UTC |
+| Stop time | none stated by operator |
+| Item cap | 8 (queue length), loop-guard `--max-iters 8 --lax` |
+| Worktree | `C:\Users\cdfee\projects\nb-overnight` |
+| Branch | `feat/overnight-2026-07-30` |
+| Starting SHA | `9dfe8f2` (loop-guard revert point) |
+| Preflight | `TIER_MAP_READY` — project map, 10 live T0 rules, 0 dead rules |
+| worktree-guard | SAFE |
+
+### Queue (operator order)
+
+| # | Goal ID | Title | Entry status |
+|---|---|---|---|
+| 1 | `g-12d33864` | Map six-axis tweak surface + archive Discover | planned |
+| 2 | `g-e7b46925` | Integration audit against origin/main | planned |
+| 3 | `g-dc0588b0` | Push overnight branch + open integration PR | planned |
+| 4 | `g-1cae785c` | Staging environment + migration rehearsal (0036 fix) | planned |
+| 5 | `g-a020ae84` | Deploy candidate to Staging and validate | planned |
+| 6 | `g-87cf2100` | Production go/no-go packet | planned |
+| 7 | `g-52470455` | Attended production release | **blocked at entry** |
+| 8 | `g-e6067aab` | Worktree inventory + removal recommendations | planned |
+
+### Preflight notes
+
+- `/mission` created the eight goals against the PRIMARY worktree
+  (`C:\Users\cdfee\projects\next-bar`, workspace `42230bc6`). That worktree's preflight is
+  `TIER_MAP_BLOCKED`: `.claude/tier-map.json` exists only on `feat/overnight-2026-07-30`, not on
+  `feat/phase1-compliance-media`. All eight were relocated via `harness-state move` into
+  `nb-overnight` (workspace `9c928dac`). **Goal IDs unchanged.**
+- Goal 7 set `blocked` BEFORE the run: it requires the operator to type `GO FOR PRODUCTION`
+  in-session, and unattended boundaries independently forbid push / merge / deploy / migration-apply.
+- Three goals from RUN 1 remain blocked in this workspace and are NOT in this queue:
+  `g-91db2f50` (no local Postgres engine), `g-90f908bc` (operator decision), `g-7c12a62f`
+  (round-3 fixes unreviewed).
+
+## Item log
+
