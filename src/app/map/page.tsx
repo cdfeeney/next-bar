@@ -12,7 +12,7 @@ import { stableSuggestions, suggestedCount } from '@/lib/suggestedTier';
 import { displayHood } from '@/lib/hoodDisplay';
 import { displayTag } from '@/lib/tagDisplay';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
-import FindBarFilterChips from '@/components/FindBarFilterChips';
+import MapFilterSheet from '@/components/MapFilterSheet';
 import BarLightbox from '@/components/BarLightbox';
 import type { Bar } from '@/types';
 import {
@@ -260,15 +260,12 @@ export default function MapPage(): JSX.Element {
               ))}
             </ul>
           ) : null}
-          {/* QA5-S3: idle-time browsing lives on /discover, not here. */}
-          <p className="mt-2 text-center">
-            <Link
-              href="/discover"
-              className="inline-flex items-center min-h-[44px] text-accent font-display text-sm touch-manipulation hover:underline underline-offset-4"
-            >
-              Discover →
-            </Link>
-          </p>
+          {/*
+            The "Discover →" link stood here until goal g-12d33864. /discover is
+            archived for the current product and now redirects to /map, so a link
+            pointing at it would be a round trip back to the page you are on.
+            Git history is the archive; see src/app/discover/page.tsx.
+          */}
         </div>
 
         <div className="mt-4 flex flex-col items-center gap-2">
@@ -306,20 +303,20 @@ export default function MapPage(): JSX.Element {
         </div>
 
         {/*
-          M1 (goal g-44007df6): the filters were always-on horizontal rails.
-          They are now collapsed behind ONE control, per the operator: "header
-          becomes Tweak the vibe; the normal filters sit underneath it and are
-          collapsed by default — you click into them rather than seeing
-          always-on rails."
+          "Tweak the vibe" opens MapFilterSheet — the SHARED six-axis accordion
+          (goal g-12d33864), not the old FindBarFilterChips rails.
 
-          Two side effects worth naming: the rails were also what generated 88
-          false positives in mobile-controls.spec.ts (a wall of chips is a wall
-          of tap targets), and collapsing them gives the map back the vertical
-          space the rails were eating on a short viewport.
+          History worth keeping, because it is the mistake this replaces: M1
+          (goal g-44007df6) collapsed the always-on rails behind this same
+          button. The operator rejected that — "do not merely hide the same
+          rails behind a button" — because a wall of 33 flat chips is still a
+          wall of chips once you open the lid, and Club / Dancing / House were
+          buried in a horizontal scroll rather than being obvious, independently
+          selectable picks in their own axes. The control itself had to change.
 
-          Collapsed state still SUMMARISES the active selection, so hiding the
-          controls never hides what they are doing — the count and the picks
-          both stay visible without opening anything.
+          Collapsed state still SUMMARISES the applied selection, so closing the
+          panel never hides what it is doing — the count and the picks both stay
+          visible without opening anything.
         */}
         <div className="mt-4 max-w-sm mx-auto text-left">
           <button
@@ -350,10 +347,19 @@ export default function MapPage(): JSX.Element {
           </button>
           {filtersOpen ? (
             <div id="map-filters">
-              <FindBarFilterChips
+              {/*
+                Unmounted on close, which is what makes the draft seeding in
+                MapFilterSheet correct: every reopen re-seeds from the applied
+                filters, so a cancelled edit cannot leak into the next opening.
+              */}
+              <MapFilterSheet
                 filters={filters}
-                onChange={setFilters}
                 hasLocation={coords !== null}
+                onApply={(next) => {
+                  setFilters(next);
+                  setFiltersOpen(false);
+                }}
+                onCancel={() => setFiltersOpen(false)}
               />
             </div>
           ) : null}

@@ -1,8 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { displayTag } from '@/lib/tagDisplay';
-import { AXIS_ORDER, VIBE_AXES, type VibeAxis } from '@/lib/vibeAxes';
+import { useState } from 'react';
+import VibeAxisAccordion, {
+  initialOpenAxis,
+} from '@/components/VibeAxisAccordion';
+import type { VibeAxis } from '@/lib/vibeAxes';
 import { displayHood } from '@/lib/hoodDisplay';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
 import type { Neighborhood, VibeTag } from '@/types';
@@ -34,13 +36,13 @@ const CHIP_ACTIVE = 'bg-accent text-bg border-accent';
 const CHIP_INACTIVE = 'bg-surface border-border text-muted';
 
 /**
- * VibeTweak — the vibe surface, rebuilt on the six axes (E2.2).
+ * VibeTweak — the Next Bar? flow's vibe surface (E2.2).
  *
- * Progressive disclosure per DESIGN-SYSTEM R1: ONE axis open at a time
- * (accordion). Collapsed rows summarize their active picks as human
- * labels, so the whole vibe is scannable without opening anything —
- * 33 tags of expressiveness behind six rows instead of a chip wall.
- * All labels render through displayTag (E0.1 — price shows as $–$$$$).
+ * The six axis rows now come from the shared VibeAxisAccordion (goal
+ * g-12d33864) so that /map renders the identical control instead of the flat
+ * chip rails it used to have. This component's props, apply/cancel contract and
+ * single-neighborhood behavior are UNCHANGED — WhereNextFlow's night-cached
+ * vibe pick round-trips exactly as before. Only the axis markup moved.
  */
 export default function VibeTweak({
   initialTags,
@@ -53,21 +55,9 @@ export default function VibeTweak({
   );
   const [hood, setHood] = useState<Neighborhood | null>(initialNeighborhood);
   const [hoodOpen, setHoodOpen] = useState(false);
-  // The first axis carrying an active pick opens initially — the likeliest
-  // one the user came to change. Nothing active → start closed.
-  const [openAxis, setOpenAxis] = useState<VibeAxis | null>(() => {
-    const seeded = new Set(initialTags);
-    return AXIS_ORDER.find((a) => VIBE_AXES[a].some((t) => seeded.has(t))) ?? null;
-  });
-
-  const summaries = useMemo(() => {
-    const out = new Map<VibeAxis, string>();
-    for (const axis of AXIS_ORDER) {
-      const picked = VIBE_AXES[axis].filter((t) => active.has(t));
-      out.set(axis, picked.map(displayTag).join(' · '));
-    }
-    return out;
-  }, [active]);
+  const [openAxis, setOpenAxis] = useState<VibeAxis | null>(() =>
+    initialOpenAxis(initialTags),
+  );
 
   const toggle = (tag: VibeTag) => {
     setActive((prev) => {
@@ -94,55 +84,13 @@ export default function VibeTweak({
         Remove what you don&rsquo;t want. Add what you do.
       </p>
 
-      <div className="space-y-2 mb-8">
-        {AXIS_ORDER.map((axis) => {
-          const isOpen = openAxis === axis;
-          const summary = summaries.get(axis) ?? '';
-          return (
-            <div
-              key={axis}
-              className="bg-surface border border-border rounded-3xl overflow-hidden"
-            >
-              <button
-                type="button"
-                aria-expanded={isOpen}
-                onClick={() => setOpenAxis(isOpen ? null : axis)}
-                className="w-full min-h-[56px] touch-manipulation flex items-center justify-between gap-3 px-5 py-3 text-left"
-              >
-                <span className="font-display text-base">{axis}</span>
-                <span className="text-muted text-xs truncate max-w-[60%]">
-                  {summary || 'Anything'}
-                </span>
-              </button>
-              {isOpen ? (
-                <div
-                  role="group"
-                  aria-label={`${axis} vibes`}
-                  className="flex flex-wrap gap-2 px-5 pb-5"
-                >
-                  {VIBE_AXES[axis].map((tag) => {
-                    const isActive = active.has(tag);
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        aria-pressed={isActive}
-                        onClick={() => toggle(tag)}
-                        className={[
-                          CHIP_BASE,
-                          isActive ? CHIP_ACTIVE : CHIP_INACTIVE,
-                        ].join(' ')}
-                      >
-                        {displayTag(tag)}
-                        {isActive ? ' ×' : ''}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
+      <div className="mb-8">
+        <VibeAxisAccordion
+          active={active}
+          onToggle={toggle}
+          openAxis={openAxis}
+          onOpenAxisChange={setOpenAxis}
+        />
       </div>
 
       {/*

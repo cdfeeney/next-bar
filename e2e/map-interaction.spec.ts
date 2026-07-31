@@ -16,6 +16,18 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
 const MAP_SUGGESTION_COUNT = 10;
 
 /**
+ * Mirror of lib/suggestedTier.suggestedCount — the promoted-marker budget as a
+ * function of the cohort currently on screen. Duplicated here on purpose: an
+ * e2e that imported the implementation would agree with it by construction and
+ * could not catch prominence drifting back to a whole-catalog ranking.
+ * Keep in sync with SUGGESTED_CAP / MIN_COHORT_FOR_TIERS / SHARE.
+ */
+function suggestedBudget(cohortSize: number): number {
+  if (cohortSize < 4) return 0;
+  return Math.min(MAP_SUGGESTION_COUNT, Math.max(1, Math.floor(cohortSize * 0.3)));
+}
+
+/**
  * Read a locator's count once it has been stable across consecutive polls.
  * Leaflet mounts the catalog's markers in batches, so a single `.count()`
  * can land mid-render and return a number that never recurs.
@@ -255,8 +267,79 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
   });
 });
 
-test.describe('/map Find Bar filters (QA2)', () => {
-  test('a neighborhood chip narrows the markers; Clear restores them', async ({
+/**
+ * The /map filter surface (goal g-12d33864).
+ *
+ * These tests were re-pointed from the old FindBarFilterChips rails onto
+ * MapFilterSheet — the SHARED six-axis accordion. Two behavioral differences
+ * are deliberate and are themselves asserted below, not worked around:
+ *
+ *  1. Picks are a DRAFT until Apply. The rails applied live; a sheet covering
+ *     the map you are filtering must not. The "nothing changes before Apply"
+ *     and "Cancel discards" assertions are the negative coverage CLAUDE.md
+ *     asks for — they are what catch a regression back to live-apply.
+ *  2. Neighborhood and Distance are accordion rows inside the sheet, so their
+ *     chips need their row opened first.
+ */
+test.describe('/map filter sheet (six axes + location, goal g-12d33864)', () => {
+  /** Open "Tweak the vibe" and return the disclosure + sheet locators. */
+  async function openSheet(page: Page) {
+    const disclosure = page.getByRole('button', { name: /Tweak the vibe/i });
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await disclosure.click();
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    const sheet = page.getByTestId('findbar-filters');
+    await expect(sheet).toBeVisible();
+    return { disclosure, sheet };
+  }
+
+  /**
+   * Expand one accordion row inside the sheet by its visible label.
+   *
+   * NOT anchored at the end: every row's accessible name is its label plus its
+   * collapsed summary ("Drink Anything", "Neighborhood Lower East Side"), which
+   * is deliberate — the summary is what makes the closed accordion scannable.
+   * Anchoring `$` matched nothing at all.
+   */
+  function rowTrigger(sheet: Locator, label: string) {
+    return sheet.getByRole('button', { name: new RegExp(`^${label}\\b`) });
+  }
+
+  async function openRow(sheet: Locator, label: string) {
+    const row = rowTrigger(sheet, label);
+    await row.click();
+    await expect(row).toHaveAttribute('aria-expanded', 'true');
+  }
+
+  test('the old horizontal rails are gone from the map entirely', async ({
+    page,
+  }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Closed by default: no filter control renders until you ask for one.
+    await expect(page.getByTestId('findbar-filters')).toHaveCount(0);
+
+    const { sheet } = await openSheet(page);
+
+    // The six axes are the control. This is the assertion that fails if anyone
+    // reinstates a flat chip wall behind the button: the axis rows must exist
+    // as their own labelled disclosures.
+    for (const axis of ['Drink', 'Energy', 'Setting', 'Scene', 'Sound', 'Spend']) {
+      await expect(rowTrigger(sheet, axis)).toBeVisible();
+    }
+    // Location dimensions live INSIDE the same surface, not as separate rails.
+    await expect(rowTrigger(sheet, 'Neighborhood')).toBeVisible();
+    await expect(rowTrigger(sheet, 'Distance')).toBeVisible();
+
+    // NEGATIVE: the 33 vibe chips must NOT all be present at once — that was
+    // the rail. Only the opened axis exposes its tags.
+    await expect(sheet.getByRole('button', { name: /^Dive$/i })).toHaveCount(0);
+  });
+
+  test('Club is independently selectable and restricts the markers', async ({
     page,
   }) => {
     await page.goto('/map');
@@ -268,46 +351,154 @@ test.describe('/map Find Bar filters (QA2)', () => {
     await expect(markers.first()).toBeVisible({ timeout: 15_000 });
     // Sample the baseline only once the count STOPS moving. The catalog's
     // markers mount progressively, and reading it the instant the first
-    // marker appeared captured a mid-render 403 against a settled 1,256 —
-    // so the post-Clear `.toBe(allCount)` below could never come true. The
-    // assertion was right; the baseline was the bug.
+    // marker appeared captured a mid-render 403 against a settled 1,256.
     const allCount = await settledCount(page, markers);
     expect(allCount).toBeGreaterThan(0);
 
-    // M1 (goal g-44007df6): the filter rails are COLLAPSED by default now —
-    // you click into them rather than seeing always-on chips. Open the
-    // disclosure first. This is a re-point, not a relaxation: every assertion
-    // below is unchanged.
-    const disclosure = page.getByRole('button', { name: /Tweak the vibe/i });
+    const { disclosure, sheet } = await openSheet(page);
+
+    // Club lives in the Setting axis, Dancing in Energy, House in Sound — three
+    // separate axes, which is what makes them independently selectable and what
+    // makes combining them AND rather than OR (lib/findBarFilters.passesVibe).
+    await openRow(sheet, 'Setting');
+    await sheet.getByRole('button', { name: /^Club/ }).click();
+    await expect(page.getByTestId('filter-count')).toHaveText('1');
+
+    // NEGATIVE — the draft has NOT been applied yet. A live-apply regression
+    // fails right here.
+    expect(await markers.count()).toBe(allCount);
+
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+
+    // Applying closes the sheet and narrows the rendered markers.
     await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
-    await disclosure.click();
-    await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
-
-    // Pick one neighborhood — the map must drop to that hood's bars only.
-    const filters = page.getByTestId('findbar-filters');
-    await filters.getByRole('button', { name: /^Lower East Side$/ }).click();
-
     await expect
       .poll(async () => markers.count(), { timeout: 15_000 })
       .toBeLessThan(allCount);
-    // The badge counts the one active filter.
-    await expect(page.getByTestId('filter-count')).toHaveText('1');
-
-    // …and the COLLAPSED row must carry the count too. A review found the
-    // count was computed but only ever used as a boolean, so closing the panel
-    // hid how many filters were on — the one thing you need to know before
-    // deciding whether to reopen it. The open-panel badge above cannot catch
-    // that, because it only exists while the panel is open.
-    await disclosure.click();
-    await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    // The collapsed row keeps carrying the count, so closing never hides what
+    // the filter is doing.
     await expect(page.getByTestId('collapsed-filter-count')).toHaveText('1');
-    await disclosure.click();
+  });
 
-    // One-tap Clear restores the full catalog.
+  test('adding Dancing and House narrows further (AND across axes)', async ({
+    page,
+  }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+    const markers = page.locator('.leaflet-marker-icon');
+    await expect(markers.first()).toBeVisible({ timeout: 15_000 });
+    await settledCount(page, markers);
+
+    // Club alone.
+    let sheet = (await openSheet(page)).sheet;
+    await openRow(sheet, 'Setting');
+    await sheet.getByRole('button', { name: /^Club/ }).click();
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+    const clubOnly = await settledCount(page, markers);
+    expect(clubOnly).toBeGreaterThan(0);
+
+    // Club + Dancing + House. Adding filters must make the set SMALLER OR
+    // EQUAL — never larger. The flat `.some()` this taxonomy replaced made it
+    // larger, which is the exact defect the operator reported.
+    // The labels are exactly the three the operator named: displayTag maps
+    // dance -> "Dancing" and house -> "House music" (src/lib/tagDisplay.ts).
+    sheet = (await openSheet(page)).sheet;
+    await openRow(sheet, 'Energy');
+    await sheet.getByRole('button', { name: /^Dancing/ }).click();
+    await openRow(sheet, 'Sound');
+    await sheet.getByRole('button', { name: /^House music/ }).click();
+    await expect(page.getByTestId('filter-count')).toHaveText('3');
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+
+    await expect
+      .poll(async () => markers.count(), { timeout: 15_000 })
+      .toBeLessThanOrEqual(clubOnly);
+  });
+
+  test('Cancel discards the draft; a neighborhood pick then Apply narrows and Clear restores', async ({
+    page,
+  }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+    const markers = page.locator('.leaflet-marker-icon');
+    await expect(markers.first()).toBeVisible({ timeout: 15_000 });
+    const allCount = await settledCount(page, markers);
+
+    // Draft a pick, then Cancel. NEGATIVE: nothing may survive.
+    let sheet = (await openSheet(page)).sheet;
+    await openRow(sheet, 'Neighborhood');
+    await sheet.getByRole('button', { name: /^Lower East Side$/ }).click();
+    await expect(page.getByTestId('filter-count')).toHaveText('1');
+    await sheet.getByRole('button', { name: /^Cancel$/ }).click();
+
+    expect(await markers.count()).toBe(allCount);
+    await expect(page.getByTestId('collapsed-filter-count')).toHaveCount(0);
+
+    // Reopening must re-seed from the APPLIED state, not the cancelled draft.
+    sheet = (await openSheet(page)).sheet;
+    await expect(page.getByTestId('filter-count')).toHaveCount(0);
+
+    // Now really apply it.
+    await openRow(sheet, 'Neighborhood');
+    await sheet.getByRole('button', { name: /^Lower East Side$/ }).click();
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+    await expect
+      .poll(async () => markers.count(), { timeout: 15_000 })
+      .toBeLessThan(allCount);
+    await expect(page.getByTestId('collapsed-filter-count')).toHaveText('1');
+
+    // One-tap Clear (then Apply) restores the full catalog.
+    sheet = (await openSheet(page)).sheet;
     await page.getByTestId('filter-clear').click();
+    await expect(page.getByTestId('filter-count')).toHaveCount(0);
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
     await expect
       .poll(async () => markers.count(), { timeout: 15_000 })
       .toBe(allCount);
-    await expect(page.getByTestId('filter-count')).toHaveCount(0);
+    await expect(page.getByTestId('collapsed-filter-count')).toHaveCount(0);
+  });
+
+  test('applying updates Suggested prominence, not just the marker set', async ({
+    page,
+  }) => {
+    await page.addInitScript(SEED_PROFILE_SCRIPT);
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const markers = page.locator('.leaflet-marker-icon');
+    const suggested = page.locator('.leaflet-marker-icon [data-tier="suggested"]');
+    await expect(suggested.first()).toBeVisible({ timeout: 15_000 });
+
+    const allCount = await settledCount(page, markers);
+    // Unfiltered, the cohort is the whole catalog, so the budget is at its cap.
+    expect(await suggested.count()).toBe(suggestedBudget(allCount));
+
+    // Narrow hard to a single neighborhood. Suggested is ranked WITHIN the
+    // filtered cohort, so the glowing pins must follow the filter — the bug
+    // this asserts against is a map whose markers move while "Suggested" keeps
+    // answering a quiz the user took once.
+    const { sheet } = await openSheet(page);
+    await openRow(sheet, 'Neighborhood');
+    await sheet.getByRole('button', { name: /^Lower East Side$/ }).click();
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+
+    const afterCount = await settledCount(page, markers);
+    expect(afterCount).toBeLessThan(allCount);
+
+    // The load-bearing assertion: the suggested budget is a function of the
+    // COHORT ON SCREEN (lib/suggestedTier.suggestedCount), so a filter that
+    // changes the cohort must change how many bars are promoted. If prominence
+    // ever goes back to ranking the whole catalog, this number stays at the cap
+    // while the markers shrink, and the test fails.
+    expect(suggestedBudget(afterCount)).toBeLessThan(suggestedBudget(allCount));
+    await expect
+      .poll(async () => suggested.count(), { timeout: 15_000 })
+      .toBe(suggestedBudget(afterCount));
   });
 });

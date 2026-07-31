@@ -43,8 +43,10 @@ export default function WantToGoList({
         className="flex flex-col items-center justify-center text-center px-6 py-[120px]"
       >
         <h2 className="font-display text-2xl mb-2">Nothing saved yet.</h2>
+        {/* Was /discover until goal g-12d33864 archived that route; the map is
+            now where you go to find bars to add. */}
         <a
-          href="/discover"
+          href="/map"
           className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display text-lg inline-flex items-center justify-center"
         >
           Find bars to add →

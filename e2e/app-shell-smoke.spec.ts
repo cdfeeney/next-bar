@@ -51,13 +51,13 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/map');
   });
 
-  test('/discover renders the swipe stack', async ({ page }) => {
+  // /discover was archived (goal g-12d33864). The smoke entry stays, re-pointed
+  // at the redirect: the URL is still public, so "does it still resolve without
+  // erroring" is exactly what a smoke test should keep asserting.
+  test('/discover redirects to /map', async ({ page }) => {
     await page.goto('/discover');
-    await expect(page.getByRole('heading', { name: /^Discover$/ })).toBeVisible();
-    // A fresh context has nothing rated/saved, so a card is always up.
-    await expect(page.getByTestId('discover-card-heading')).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(page).toHaveURL(/\/map$/);
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
     await expectNoConsoleErrors(page, '/discover');
   });
 

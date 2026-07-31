@@ -203,7 +203,10 @@ function describeFailures(route: string, bad: BadControl[]): string {
 }
 
 /** Routes with no auth requirement, reachable straight from a cold start. */
-const PUBLIC_ROUTES = ['/', '/map', '/rankings', '/discover', '/settings', '/install'];
+// '/discover' was removed from this list when the route was archived (goal
+// g-12d33864): it now redirects to /map, so scanning it would only measure /map
+// a second time while reporting failures against a URL that renders nothing.
+const PUBLIC_ROUTES = ['/', '/map', '/rankings', '/settings', '/install'];
 
 test.describe('mobile controls are reachable', () => {
   test.beforeEach(async ({ context }) => {
