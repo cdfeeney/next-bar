@@ -82,3 +82,42 @@ All of them unblock together the moment a staging Supabase project exists — wh
 - Destructive cleanup ships in a **later** release, once old clients are gone.
 - Every schema change states whether old app versions work with the new schema, and whether
   new code works during rollout. `MIGRATION-0033-0034-RUNBOOK.md` does this in both directions.
+
+**These are a compatibility CONVENTION, not a gate.** Nothing in CI enforces expand-only or
+diffs a migration for destructive statements — a migration that violates the rule above will
+pass every automated check. Treat the rule as a review checklist item until something enforces
+it. Labelling it a "gate" would be the same false-confidence problem this document exists to
+remove.
+
+## Release and revert
+
+Added 2026-07-31: the review panel found this document's title promised release and recovery
+content that its body never delivered. "Revert" appeared zero times.
+
+**Current reality, verified:** `origin` exists
+(`github.com/cdfeeney/next-bar`), but the working branch
+`feat/overnight-2026-07-30` has **no upstream** — nothing from this program has been pushed.
+So there is no deployed artifact to roll back yet, and the revert path below is the one that
+applies today.
+
+### Reverting code (available now)
+
+1. `git log --oneline` and pick the last known-good SHA. Every goal commit is tagged with its
+   goal id (`[g-xxxxxxxx]`), so the unit of revert is one mission item.
+2. `git revert <sha>` — **not** `reset --hard`. Revert is additive and safe on a branch that
+   may already have been shared; reset destroys history that another worktree may hold.
+3. Re-run the gates: `npm run secret-scan`, `npx tsc --noEmit`, `npx vitest run`.
+
+### Reverting a deploy (NOT yet possible — do not record as passing)
+
+Requires a deployment to exist first. When it does, the revert path is Vercel's
+"Promote to Production" on the previous deployment, which is why the **deployment SHA must be
+recorded before every deploy** (the T0 gate's revert-point rule). Untested — no deploy has
+ever been performed from this program.
+
+### Reverting a migration (the dangerous one)
+
+There is **no** revert path for an applied migration. `git revert` on a migration file removes
+it from the repo; it does not undo what it did to the database. The only recovery is a restore
+from backup, and **backup/restore capability is UNVERIFIED** (see above). This asymmetry is the
+entire reason `supabase/migrations/**` is T0 and attended-only.

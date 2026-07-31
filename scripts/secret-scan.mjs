@@ -29,6 +29,12 @@ const PATTERNS = [
     name: 'service-role/database secret ASSIGNED under a NEXT_PUBLIC_ name',
     re: /NEXT_PUBLIC_[A-Z_]*(?:SERVICE_ROLE|DATABASE_URL)[A-Z_]*\s*[=:]\s*['"`]?[A-Za-z0-9_\-./]{12,}/,
   },
+  // Private-key blocks: RSA/EC/OpenSSH keys, and the `"private_key"` field of a
+  // leaked GCP/Firebase service-account JSON. An entire credential class that
+  // had zero coverage — the four patterns above are all token-shaped, and a PEM
+  // block looks nothing like a token. This header string is never legitimately
+  // committed, so it carries no false-positive risk.
+  { name: 'PEM private key block', re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/ },
 ];
 
 /** Obvious placeholders — matched on the VALUE, never by skipping a path. */
@@ -50,10 +56,20 @@ for (const file of files) {
   const lines = text.split(/\r?\n/);
   lines.forEach((line, i) => {
     for (const p of PATTERNS) {
-      if (p.re.test(line) && !PLACEHOLDER.test(line)) {
-        // Report the LOCATION, never the matching text.
-        hits.push(`${file}:${i + 1}  ${p.name}`);
-      }
+      const m = p.re.exec(line);
+      if (!m) continue;
+      // Scope the placeholder test to the MATCHED VALUE, not the whole line.
+      // Line-wide suppression was a live false negative: a real credential
+      // sharing a line with an unrelated comment containing "fake", "dummy",
+      // "placeholder", "YOUR_" etc. was silently exempted. Reproduced with a
+      // real-shaped Postgres connection string trailed by the comment
+      // "// not fake": it matched the Postgres pattern, then the whole-line
+      // placeholder test saw "fake" and discarded the finding.
+      // The reproduction is DESCRIBED, not written out — spelling the URL
+      // inline made this very file trip the scanner, which is its own proof.
+      if (PLACEHOLDER.test(m[0])) continue;
+      // Report the LOCATION, never the matching text.
+      hits.push(`${file}:${i + 1}  ${p.name}`);
     }
   });
 }

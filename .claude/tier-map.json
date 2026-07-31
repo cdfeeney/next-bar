@@ -1,14 +1,25 @@
 {
   "version": 1,
   "default_tier": "T1",
-  "escalate_min_t0_files": 5,
+  "escalate_min_t0_files": 1,
   "_comment": [
     "Next Bar T0 surface. Until this file existed, tier-classify.mjs fell back to",
     "the generic defaults, which declare NO T0 globs at all — so migrations and the",
     "account-deletion path both classified T1 and the T0 gate could never fire.",
     "Every T0 rule below must match at least one real file; run",
     "`git ls-files | node ~/.claude/bin/tier-classify.mjs --validate` after editing,",
-    "because a dead T0 glob silently leaves a path unprotected."
+    "because a dead T0 glob silently leaves a path unprotected.",
+    "",
+    "escalate_min_t0_files was 5 until 2026-07-31. That was indefensible here: ONE",
+    "migration file is already irreversible without a restore, and restore capability",
+    "is UNVERIFIED. A change touching four T0 files would not have escalated. Now 1.",
+    "",
+    "Rules resolve to the HIGHEST matching tier, not first- or last-match, so a",
+    "stricter rule always wins and rule order does not matter.",
+    "",
+    "Glob the code that PERFORMS a destructive act, not just its entry point:",
+    "prune-orphan-photos.mjs was T0 while scripts/lib/photoFiles.mjs — which holds",
+    "the actual unlink loop — was T1, a gate you escape by refactoring."
   ],
   "non_runtime_paths": [
     "docs/**",
@@ -30,7 +41,37 @@
     {
       "glob": "src/app/api/account/delete/**",
       "tier": "T0",
-      "note": "Destructive and irreversible: deletes an auth user and cascades through every table they own. Also the one route holding the service-role key."
+      "note": "Destructive and irreversible: deletes an auth user and cascades through every table they own. NOTE: this used to claim it was 'the one route holding the service-role key'. That was FALSE — src/app/api/event/route.ts also constructs a service-role client. Corrected 2026-07-31 after a review panel caught it."
+    },
+    {
+      "glob": "src/app/api/event/route.ts",
+      "tier": "T0",
+      "note": "The SECOND service-role route. Bypasses RLS, and is triggerable by an unauthenticated POST — the allowlist on the event name is the only control. Missed on the first pass because the map's own note asserted account/delete was the only service-role holder."
+    },
+    {
+      "glob": "scripts/apply-one-migration.mts",
+      "tier": "T0",
+      "note": "Executes a chosen migration as raw SQL against DATABASE_URL. Same blast radius as apply-migrations.ts, which was already T0 — this sibling was simply not globbed."
+    },
+    {
+      "glob": "scripts/set-password.mjs",
+      "tier": "T0",
+      "note": "Sets ANY user's password via the Supabase admin API and confirms their email, bypassing the email flow entirely. That is account takeover as a supported operator tool."
+    },
+    {
+      "glob": "scripts/lib/photoFiles.mjs",
+      "tier": "T0",
+      "note": "Holds the actual unlink loop behind prune-orphan-photos. The wrapper was T0 while the code that does the deleting was T1 — a gate you escape by refactoring. Glob the code that performs the destructive act, not only its entry point."
+    },
+    {
+      "glob": "scripts/refresh-places.mjs",
+      "tier": "T1",
+      "note": "Calls billable Google Places APIs across the catalog. Proposed as T0 and DEMOTED to T1 on adjudication: T0 in this map means irreversible destruction or takeover with no undo. A runaway bill is bounded, self-limiting (quotas, budget alerts) and recoverable; a dropped table with an unverified restore is not. Putting cost in the same tier devalues the label for the changes that can actually end the project. FOLLOW-UP, not fixed here: the script issues API requests BEFORE the --apply guard, so a dry run still spends. That is a one-line correctness bug and wants a MAX_CALLS cap — fixing it is the right control, not tier weight."
+    },
+    {
+      "glob": "CLAUDE.md",
+      "tier": "T1",
+      "note": "NOT documentation, despite the .md extension: these are the operating instructions the coding agent follows for this repository. A change here can tell the agent to skip a gate, so it must never inherit the blanket **/*.md T2. Rules resolve to the HIGHEST matching tier, so this overrides that glob."
     },
     {
       "glob": "src/middleware.ts",
