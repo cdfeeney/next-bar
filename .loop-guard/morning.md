@@ -600,3 +600,59 @@ Not a success result, and deliberately not reported as one.
   subcommands and it burns its whole budget retrying them. Packets that say
   "read files directly, do not use git" succeed; packets that don't, time out.
 
+
+---
+
+# Segment 2 — item 13, after the cap correction
+
+Segment 1 stopped at its 13/13 item cap with `g-5ead112c` unprocessed, while the
+clock read 05:55 UTC against a 12:00 UTC stop. The operator's stop conditions
+(08:00 ET, **or** no safe runnable item) were both unmet and a safe runnable item
+existed, so segment 1 was closed honestly — **not** as "queue exhausted" — and a
+second bounded segment (`--max-iters 4`) opened for the remaining goal.
+
+**The cap was set one short.** A 13-item queue needs a tick per item, so item 13
+was tick 14. `--max-iters` must be queue length **+ margin**.
+
+### 13. g-5ead112c — Map markers open BarLightbox — **COMPLETE**
+
+- Commits `4485a44` → `7f5e7df` → `3cc8a04` → `39fad9f`. T1.
+- **Rounds:** 3. **Panel:** Claude/Sonnet + Codex. quorumMet true.
+- **Codex round 1: ZERO findings** — media policy still governs the new surface
+  (so the Google kill switch reaches it), the embedded `WhereNextFlow` maps keep
+  their popups, the imperative search fly-to popup is independent, no
+  scroll-lock leak.
+- **Claude r1 HIGH:** the new spec was missing from the `iPhone 17` (402×681)
+  `testMatch`, so criterion 6's "every configured project" was unmet. The
+  reviewer confirmed it empirically ("No tests found") — and my own commit
+  message had said "both projects", which was the tell.
+- **Claude r1 MEDIUM:** the `rated` tier had zero coverage. My first fix asserted
+  a seeded Loved bar renders `rated`; **it failed and the code was right** —
+  `suggested` wins over `rated`, so rating one well-known bar yields
+  `data-tier="suggested"`. Seeding two dozen makes some genuinely rated.
+- **Codex r2, two tests proving less than they claimed:** the rated test used
+  `force: true`, which skips the hit-target check — a covering marker could open
+  the same dialog and it would pass. And the focus test never proved focus
+  **entered** the dialog: if focusing broke, Escape still closes via the window
+  listener and the assertion passes having restored nothing.
+- **Codex r3:** the map-reset assertion compared the pane transform, which
+  catches only *settled pans* and misses a zoom-only reset. My replacement
+  (fingerprinting the nearest marker) was too sensitive and **false-alarmed** —
+  same 403 markers, different nearest marker. Now a `MutationObserver` on the
+  pane, started after the dialog opens so the fly is not counted.
+- **Proved the assertion can fail:** injected a 1px pane transform, watched it
+  fail, removed it. An assertion nobody has seen fail is not evidence.
+
+## Final close-out
+
+**Status: QUEUE_TERMINAL** — `overnight-guard finish` → 11 complete, 2 blocked,
+0 unprocessed. 21 local commits.
+
+| Outcome | Count | Goals |
+|---|---|---|
+| **complete** | 11 | g-91e2573d, g-574ef5eb, g-a0fb864b, g-a2941340 (T0), g-3e3083c5, g-375d4ce0, g-90dccd13, g-ac3bad15, g-9105aaf0, g-44007df6, g-5ead112c |
+| **blocked** | 2 | g-7c12a62f (Santa round cap — one fresh panel, no operator input), g-90f908bc (operator decision) |
+
+**Nothing pushed, deployed, or applied.** No migration run, no production access,
+no API spend, and `g-91db2f50` was never touched.
+
