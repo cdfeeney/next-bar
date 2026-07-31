@@ -897,3 +897,35 @@ healthy, and it completed each time on a smaller packet. Silence was never read 
 **Nothing was merged, deployed, migrated, or applied. No database was contacted. No worktree or
 branch was removed.**
 
+
+### Addendum — narrowing the push, after the run closed
+
+`git reflog refs/remotes/origin/feat/overnight-2026-07-30` gives the exact moment:
+
+```
+31abc4d @{2026-07-31 11:00:17 -0400}: update by push
+```
+
+That is **51 seconds after** the loop-guard checkpoint commit (10:59:26) and outside any command I
+issued. Ruled out, each by direct check:
+
+| Candidate | Result |
+|---|---|
+| Git hooks (worktree + shared `.git/hooks`) | none exist |
+| `push.default`, `remote.origin.push`, `push.autoSetupRemote`, global/system aliases | all unset |
+| Claude Code hooks (`settings.json`, `settings.local.json`) | `hooks: {}` in both |
+| Push logic in `loop-guard.mjs` / `overnight-guard.mjs` / `harness-state.mjs` / `harness-heartbeat.mjs` | none |
+| One of this session's background tasks | **no task output file was written in the 10:55–11:05 window at all** |
+
+**What remains — and it is a documented gap, not a mystery.** The `/code` skill warns in its own
+words that a green write lease "says nothing about a peer session running ordinary git (merges,
+branch switches, pulls) in the same checkout." `worktree-guard check` returned SAFE every time,
+because that is precisely the case it cannot see. This project's temp directory holds **47** task
+output files — considerably more than this session created — which is consistent with other sessions
+having operated against this repository.
+
+**So the most probable explanation is a peer session or process pushing the branch**, invisible to
+the lease by design. I cannot prove it from inside this session, and I am not going to assert it as
+fact. **It is worth the operator checking**, because if a peer session is live against
+`nb-overnight`, that has implications well beyond one push.
+
