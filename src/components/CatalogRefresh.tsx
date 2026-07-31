@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getBarsSnapshot, replaceCatalog } from '@/lib/catalog';
 import { rowsToCatalog, type BarsTableRow } from '@/lib/catalogServer';
+import { deferUntilSafe } from '@/lib/deferredCatalogSwap';
 
 /**
  * Server-backed catalog refresh (0019 swap — mass-import prerequisite).
@@ -40,6 +41,8 @@ export default function CatalogRefresh(): null {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     let cancelled = false;
+    // Cancels a swap that is waiting for a safe scroll point (option C).
+    let cancelPending: (() => void) | null = null;
     void (async () => {
       const all: BarsTableRow[] = [];
       for (let from = 0; ; from += PAGE) {
@@ -57,10 +60,21 @@ export default function CatalogRefresh(): null {
       }
       const next = rowsToCatalog(all, getBarsSnapshot().length);
       if (cancelled || next === null) return;
-      replaceCatalog(next);
+      // OPTION C (operator, 2026-07-30): do not swap while the user is
+      // scrolled. BarPicker inserts new bars THROUGHOUT the list (fixed
+      // neighborhood order, alphabetical within each), and browsers do not
+      // adjust scroll for content inserted above the viewport — so a swap
+      // mid-scroll changes the row under someone's finger. Hold it and commit
+      // at a point where nothing can move. See lib/deferredCatalogSwap.
+      cancelPending = deferUntilSafe(() => {
+        if (!cancelled) replaceCatalog(next);
+      });
     })();
     return () => {
       cancelled = true;
+      // An unmount must not leave a listener that later swaps the catalog for
+      // a page that no longer exists.
+      cancelPending?.();
     };
   }, []);
   return null;
