@@ -24,10 +24,22 @@ mistake.
 | **Is this branch safe to push to `origin` and open as a PR?** (what goal 3 does) | ✅ **GREEN** |
 | **Is it safe to promote to production?** (goal 7) | ⛔ **NOT GO** — four gates below |
 
-The PR gate and the deployment gate are different gates. **Merging this PR applies no migration and
-touches no database**; the schema changes are a separate, later, attended step with their own gates.
-Blocking the PR would also leave 130 commits sitting on one laptop with no upstream — the single
-largest risk this audit found. Pushing is *risk-reducing*.
+**GREEN covers pushing to `origin` and OPENING a PR. It does not cover merging.**
+
+Pushing is unambiguously risk-reducing: 130 commits currently exist on one laptop with no upstream,
+which is the single largest risk this audit found.
+
+Merging is a different question, and the honest answer is *not yet* — for a reason the first two
+drafts of this report blurred. The GREEN/NOT-GO split rests on "merging applies no migration and
+touches no database," which is true of the **database**. It is **not established for the application
+code**: if Vercel's Production branch really is `main` — G4 says that is *believed but never
+confirmed* — then **merging this PR is itself a production code deploy**, with no separate promotion
+step required. A reader could otherwise take the GREEN row and merge.
+
+⚠️ **So: do not merge to `main` until G4 is answered.** If `main` *is* the Production branch, merging
+is a deploy and belongs behind the promotion gates, not the PR gate. (Blast radius if it happened
+anyway is limited — `src/lib/vibeProfile.server.ts` fails soft, returning `null` rather than throwing
+when `vibe_profiles` is absent — but a small blast radius is not the same as an intended action.)
 
 **Five of the six re-run gates pass; the sixth could not fully run** — the Supabase-dependent e2e
 half is unexecutable in this worktree (§3, and gate **G2**). Saying "every gate passes" would be
@@ -270,7 +282,8 @@ this branch, unfixed.
 **7. Compatibility — better than the first draft claimed.** *Corrected:* an earlier version of this
 section asserted that `0034`'s revoke→grant could leave live users without access mid-window. **That
 was wrong.** `scripts/apply-migrations.ts` wraps each migration file in `begin` / `commit` /
-`rollback` (lines 200–214), so the revoke and grant commit atomically; under MVCC a concurrent reader
+`rollback` — specifically the `for (const file of plan.apply)` loop, where `client.query(file.sql)`
+sits between `begin` and `commit` — so the revoke and grant commit atomically; under MVCC a concurrent reader
 sees the pre- or post-commit state, never a partial one. `docs/MIGRATION-0033-0034-RUNBOOK.md` — in
 this same branch — had already established this, and the first draft failed to cross-check it. The
 real residual risks are narrower: lock contention during traffic (a latency/availability concern, not
@@ -327,7 +340,7 @@ Four lanes reviewed the first draft: Claude/Sonnet, Codex `gpt-5.6-sol`, GLM, De
 
 | Lane | Finding | Resolution |
 |---|---|---|
-| **Claude** | Factor 7 asserted a `0034` mid-window access risk that `scripts/apply-migrations.ts` disproves, and that a runbook in the same branch had already closed. | **Corrected.** Verified the `begin`/`commit` wrapping myself. This was the material error. |
+| **Claude** | Factor 7 asserted a `0034` mid-window access risk that `scripts/apply-migrations.ts` disproves, and that a runbook in the same branch had already closed. | **Corrected** — then corrected again. Round 2 caught that my line citation pointed at the `--baseline` branch, which never executes `file.sql` at all; re-verified against the real `plan.apply` loop. The conclusion held throughout; the evidence behind it did not, until now. |
 | **Claude** | The `photo_permissions` defect was stated without its dormancy caveat and omitted from the summary surfaces. | Caveat added (zero writers, verified); surfaced in §5. |
 | **Claude** | "Ledger ends at 0032" stated as fact in a session with no DB access. | Hedged, with provenance, and made a goal-4 reconfirmation item. |
 | **Codex** | Counts stale by one (self-inclusion); "no logs added" false — `morning.md` *is* an added log. | Both corrected; an "as-of SHA" header added. |
@@ -343,3 +356,13 @@ Four lanes reviewed the first draft: Claude/Sonnet, Codex `gpt-5.6-sol`, GLM, De
 | **Codex** | The RLS count of 24 was wrong: the `grep` matched **commented-out rollback examples** (3 in `0020`, 1 in `0021`). Executable totals are 9 / 2 / 9 = **20**. | Recounted directly with comments stripped, and corrected everywhere the figure appears. |
 | **Codex** | §0 claimed "every re-run gate passes" while §3 reports gate 6 as environment-limited with 7 failures. An environment-explained failure is still not a pass. | Corrected to "five of six pass; the sixth could not fully run." |
 | **Codex** | Confirmed the `0034` atomicity correction and the transaction wrapping in `scripts/apply-migrations.ts`. | No change needed. |
+
+### Round 2, Claude lane
+
+| Finding | Resolution |
+|---|---|
+| Factor 7's citation pointed at `scripts/apply-migrations.ts` lines 200–214 — the **`--baseline` ledger-recording branch, which never executes `file.sql`**. The real per-migration transaction is the `for (const file of plan.apply)` loop. The atomicity conclusion was right; the evidence cited for it was the wrong function. | Re-verified and re-cited by naming the loop rather than drifting line numbers. §7's "verified myself" softened to say what was actually checked, and when. |
+| **The split verdict had a logical hole.** §0 asserted "the PR gate and the deployment gate are different gates… merging applies no migration", while G4 admits Vercel's Production branch is *believed but never confirmed* to be `main`. If it is, **merging IS a production code deploy** — so the prose blurred "push + open PR" into "merge" and never reconciled that with its own uncertainty. | §0 rewritten: GREEN now explicitly covers *push and open*, **not merge**, with a stated stop — do not merge until G4 is answered. |
+| Confirmed clean against the repo: RLS/dependency/service-worker subsections, the "as-of SHA" header, the `photo_permissions` trigger claim and its zero-writer grep, the T0 count (23), the untagged-commit count (69 of 130, zero `[T0]`), and §1's merge-base / fast-forward / containment claims. | No change needed. |
+
+> One reviewer disagreement worth recording: this lane counted the RLS statements as 12+3+9=24, matching the first draft. Codex counted 9+2+9=20. I recounted directly with comment lines stripped (`grep -v '^\s*--'`) and **20 is correct** — the extra four are commented-out rollback examples. Direct repository evidence beat the majority.
