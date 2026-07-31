@@ -766,3 +766,47 @@ deleted and replaced with `MapFilterSheet.test.tsx`, proven to fail with
 pure move, per-instance `useId`. Deferred deliberately — Kimi concurred that an unreviewed refactor of
 an a11y primitive landing after the final review round is the worse risk.
 
+
+### 2. `g-e7b46925` — Integration audit against origin/main → **ready_for_review → see below**
+
+Commits `960c52f`, `815c5f9`, `859c235`. Report: `docs/INTEGRATION-AUDIT-2026-07-31.md`.
+**Read-only throughout**: `git fetch origin --prune` was the only write; `git status --porcelain`
+identical either side; `git reflog` shows no merge/rebase/reset/push; no database contacted.
+
+**Divergence recomputed.** merge-base **is** `origin/main` HEAD (`8ac648c`) ⇒ zero divergence, the
+merge is a fast-forward. Overnight **0 behind / 130 ahead**; phase1 **0 behind / 83 ahead** (matches
+the operator's figure exactly); overnight **contains all of phase1** (`git log phase1 ^overnight`
+empty). The aggregate diff classifies **T0, 23 T0 files, escalated** — while **none of the 130
+commits is tagged `[T0]`**.
+
+**Verdict, split into the two questions it was conflating:**
+**GREEN to push and open the PR** · **NOT GO to promote**, with four named gates (G1 exercise a
+restore; G2 run the Supabase e2e half against a real DB; G3 inventory the 20 executable RLS
+statements; G4 verify Vercel's real Production branch).
+
+**Gates:** secret-scan clean (501 files) · tier-map validates, 0 dead rules · `tsc` 0 ·
+vitest **1566/102** · production build clean · **Playwright environment-limited**: 7 failures across
+3 specs, all one root cause — **this worktree has no `.env.local`**, verified per failure
+(`/settings` renders "Supabase env vars are missing"; the catalog-cap test sees zero paged requests;
+the shared-night page has no data). I did not copy production credentials across worktrees to make
+them pass.
+
+**The panel found real defects in my own audit.** Round 1 ran four lanes; round 2 ran the
+tier-derived Claude + Codex (the audit doc itself is T2).
+
+| Lane | Caught |
+|---|---|
+| **Claude** | Factor 7 asserted a `0034` mid-window access risk that **this repo's own code disproves** — `scripts/apply-migrations.ts` wraps each file in `begin`/`commit`, so revoke+grant is atomic, and a runbook in the same branch had already said so. Also: the `photo_permissions` defect stated without its dormancy caveat, and "ledger ends at 0032" stated as fact in a session with no DB access. |
+| **Codex** | Counts stale by one (the report commits itself into the branch it measures); "no logs added" false while calling `morning.md` "this run's own log"; the `/discover` surface removal never inventoried. Then in round 2: **my RLS count of 24 included commented-out rollback blocks** — executable total is **20** (9/2/9); and §0's "every gate passes" contradicted §3's environment-limited gate 6. |
+| **GLM** | Three categories never audited at all: **RLS as a surface distinct from grants** (the most valuable catch), dependency/lockfile changes (came back clean — no new runtime deps, only a Playwright devDep bump), and the PWA service worker (came back correctly versioned, `next-bar-shell-v2`). Argued the verdict should be AMBER. |
+| **DeepSeek** | Adjudicated **GREEN** against GLM's AMBER: the PR gate and the deployment gate are different, merging applies no migration, and blocking the push would strand 130 commits on one laptop — the largest risk the audit found. Ranked an unexercised restore as the one gate that makes every other failure survivable. |
+
+Every correction was verified by me against the repository before acceptance, not taken on trust.
+
+**Environment facts established for later goals:**
+- **No Postgres engine of any kind is available locally** — `docker`, `psql`, `pg_ctl`, `initdb`,
+  `supabase` CLI all absent; `pglite` / `pg-mem` not installed. Goal 4's clean-rebuild proof is
+  therefore **impossible in this environment** (matches RUN 1's recorded finding for `g-91db2f50`).
+- `/api/health` returns `{ok, supabase, sha, at}` — locally `supabase:"unconfigured"`, `sha:"dev"`.
+  Goal 7's "expected SHA + supabase:ok" gate is implementable against this shape.
+
