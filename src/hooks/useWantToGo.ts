@@ -23,8 +23,14 @@ export type UseWantToGoReturn = {
  * Local want-to-go state over src/lib/wantToGo.ts. Mirrors useLists:
  * hydrate from localStorage after mount, then stay in sync via `storage`
  * events (both real cross-tab ones and the lib's synthesized same-tab
- * ones) so every mounted consumer sees writes from any other — including
- * the parallel /discover slice writing the same contract key.
+ * ones) so every mounted consumer sees writes from any other.
+ *
+ * That justification used to name "the parallel /discover slice writing the
+ * same contract key" as the reason the listener is needed. It is no longer
+ * true: /discover was archived (goal g-12d33864) and it held the only
+ * `addWantToGo` call site, so nothing in the app writes this key today and
+ * `add` below has no caller. The listener still earns its place for the real
+ * cross-TAB case, but do not treat it as evidence of a second writer.
  */
 export function useWantToGo(): UseWantToGoReturn {
   const [entries, setEntries] = useState<WantToGoEntry[]>([]);

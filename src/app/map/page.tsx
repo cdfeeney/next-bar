@@ -17,7 +17,6 @@ import BarLightbox from '@/components/BarLightbox';
 import type { Bar } from '@/types';
 import {
   EMPTY_FILTERS,
-  countActiveFilters,
   filterBars,
   type FindBarFilters,
 } from '@/lib/findBarFilters';
@@ -71,16 +70,24 @@ export default function MapPage(): JSX.Element {
   // the first thing you see.
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const activeFilterCount = countActiveFilters(filters);
+  // Count and summarize only what is actually filtering. A radius applied while
+  // located survives in `filters` after location is lost, but `filterBars`
+  // no-ops it without coords — so counting it here would tell the user a filter
+  // is on while the map shows every bar, and the collapsed row is exactly where
+  // that lie is hardest to notice. Same rule as MapFilterSheet's badge; see the
+  // comment there for why the stored value is kept rather than cleared.
+  const radiusActive = coords !== null && filters.radius?.maxMiles != null;
+  const activeFilterCount =
+    filters.neighborhoods.length + filters.vibes.length + (radiusActive ? 1 : 0);
   // What the collapsed row says, so closing the panel never hides what it does.
   const filterSummary = useMemo(() => {
     const parts = [
       ...filters.neighborhoods.map(displayHood),
       ...filters.vibes.map(displayTag),
     ];
-    if (filters.radius && filters.radius.maxMiles !== null) parts.push('nearby');
+    if (radiusActive) parts.push('nearby');
     return parts.join(' · ');
-  }, [filters]);
+  }, [filters, radiusActive]);
 
   const q = query.trim().toLowerCase();
 
@@ -397,7 +404,7 @@ export default function MapPage(): JSX.Element {
       </section>
 
       <p className="text-muted text-xs text-center mt-6 pb-24">
-        {countActiveFilters(filters) > 0
+        {activeFilterCount > 0
           ? `${filteredBars.length} of ${bars.length} bars match your filters`
           : `${bars.length} bars across ${Object.keys(NEIGHBORHOOD_CENTROIDS).length} neighborhoods`}
       </p>

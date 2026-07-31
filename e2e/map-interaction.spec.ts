@@ -366,7 +366,19 @@ test.describe('/map filter sheet (six axes + location, goal g-12d33864)', () => 
 
     // NEGATIVE — the draft has NOT been applied yet. A live-apply regression
     // fails right here.
-    expect(await markers.count()).toBe(allCount);
+    //
+    // Sampled over a WINDOW, not once. A single reading taken immediately after
+    // the tap would also pass against a debounced or effect-driven live-apply
+    // that reaches Leaflet a moment later, and the post-Apply assertion below
+    // would then still succeed — so the pair would go green while the draft was
+    // visibly moving the map. Watching for ~1.5s makes that regression fail.
+    for (let i = 0; i < 6; i += 1) {
+      expect(
+        await markers.count(),
+        'markers changed BEFORE Apply — the draft is leaking to the map',
+      ).toBe(allCount);
+      await page.waitForTimeout(250);
+    }
 
     await sheet.getByRole('button', { name: /^Apply$/ }).click();
 
@@ -460,6 +472,94 @@ test.describe('/map filter sheet (six axes + location, goal g-12d33864)', () => 
       .poll(async () => markers.count(), { timeout: 15_000 })
       .toBe(allCount);
     await expect(page.getByTestId('collapsed-filter-count')).toHaveCount(0);
+  });
+
+  /**
+   * The two capabilities MapFilterSheet added over the old rails, neither of
+   * which any other test exercises: neighborhood is MULTI-select (OR within the
+   * axis), and Distance is a real filter rather than a decorative row.
+   *
+   * Without this, replacing the neighborhood handler with a single-select
+   * assignment, or wiring Walkable to the cab radius, would ship green.
+   */
+  test('neighborhoods are multi-select and OR together', async ({ page }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+    const markers = page.locator('.leaflet-marker-icon');
+    await expect(markers.first()).toBeVisible({ timeout: 15_000 });
+    await settledCount(page, markers);
+
+    // One neighborhood.
+    let sheet = (await openSheet(page)).sheet;
+    await openRow(sheet, 'Neighborhood');
+    await sheet.getByRole('button', { name: /^Lower East Side$/ }).click();
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+    const oneHood = await settledCount(page, markers);
+    expect(oneHood).toBeGreaterThan(0);
+
+    // Add a second. OR within the axis ⇒ the set must GROW, and the badge must
+    // show 2 (a single-select regression would leave it at 1 and the count flat).
+    sheet = (await openSheet(page)).sheet;
+    await openRow(sheet, 'Neighborhood');
+    await sheet.getByRole('button', { name: /^East Village$/ }).click();
+    await expect(page.getByTestId('filter-count')).toHaveText('2');
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+
+    await expect
+      .poll(async () => markers.count(), { timeout: 15_000 })
+      .toBeGreaterThan(oneHood);
+  });
+
+  test('Distance needs a location: disabled without one, filtering with one', async ({
+    page,
+    context,
+  }) => {
+    // Without a location the chips must be disabled rather than silently
+    // no-op — filterBars ignores radius when coords are null, so an enabled
+    // chip would look applied and do nothing.
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+    let sheet = (await openSheet(page)).sheet;
+    await openRow(sheet, 'Distance');
+    await expect(sheet.getByRole('button', { name: /^Walkable$/ })).toBeDisabled();
+    await expect(sheet.getByText(/Turn on location to filter by distance/i)).toBeVisible();
+    await sheet.getByRole('button', { name: /^Cancel$/ }).click();
+
+    // With a precise fix, Walkable must actually narrow the set.
+    await context.grantPermissions(['geolocation']);
+    await context.setGeolocation({ latitude: 40.7215, longitude: -73.9875, accuracy: 20 });
+    await page.reload();
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+    // No tap needed and none is asserted: /map auto-locates on open when the
+    // permission is already granted (U2-4), so the button has already relabelled
+    // itself to "Update my location" by now. Waiting on the status line is the
+    // viewport- and timing-agnostic signal that coords actually landed.
+    await expect(page.getByText(/Showing your location on the map/i)).toBeVisible({
+      timeout: 15_000,
+    });
+    const markers = page.locator('.leaflet-marker-icon');
+    const allCount = await settledCount(page, markers);
+
+    sheet = (await openSheet(page)).sheet;
+    await openRow(sheet, 'Distance');
+    const walkable = sheet.getByRole('button', { name: /^Walkable$/ });
+    await expect(walkable).toBeEnabled();
+    await walkable.click();
+    await expect(page.getByTestId('filter-count')).toHaveText('1');
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+
+    // Walkable is 1.5 miles; the catalog spans the whole city, so this must
+    // strictly shrink. A Walkable-wired-to-cab regression would still shrink,
+    // so also assert it is a small fraction of the catalog.
+    const walkCount = await settledCount(page, markers);
+    expect(walkCount).toBeLessThan(allCount);
+    expect(walkCount).toBeLessThan(allCount * 0.75);
   });
 
   test('applying updates Suggested prominence, not just the marker set', async ({

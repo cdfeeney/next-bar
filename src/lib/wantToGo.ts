@@ -3,9 +3,17 @@
  * as a tab on /rankings.
  *
  * Distinct from src/lib/lists.ts (user-NAMED lists, `next-bar:lists:v1`):
- * this is ONE fixed list with a FIXED cross-slice storage contract —
- * another slice (/discover) writes the same key, so the shape below must
- * not change without coordinating both slices:
+ * this is ONE fixed list with a FIXED storage contract:
+ *
+ * WRITER COUNT, 2026-07-31 (goal g-12d33864): there is now exactly ZERO
+ * production writer. This comment used to say "another slice (/discover)
+ * writes the same key, so the shape below must not change without coordinating
+ * both slices" — that coordination invariant is gone, because /discover was
+ * archived and its swipe surface held the ONLY `addWantToGo` call site in the
+ * app (`9dfe8f2:src/app/discover/page.tsx:230`). `useWantToGo().add` is
+ * exported but currently invoked by nothing, so the list can only shrink.
+ * Do not read the surviving machinery as evidence that a second writer exists.
+ * See the operator question recorded on goal g-12d33864.
  *
  *   key:   next-bar:list:want-to-go:v1
  *   value: JSON array of { barId: string, addedAt: string (ISO) }

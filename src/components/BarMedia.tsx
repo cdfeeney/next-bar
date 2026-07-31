@@ -18,7 +18,8 @@ import {
  * NOT CURRENTLY MOUNTED BY ANY PAGE. Read that literally — an earlier version
  * of this comment claimed to be "the ONE component that puts a bar's picture
  * on screen", and that was false. The surfaces that render imagery
- * (ResultCard, BarLightbox, /discover, RecapCard) call `resolveMedia` from
+ * (ResultCard, BarLightbox, RecapCard — and /discover until it was archived in
+ * goal g-12d33864) call `resolveMedia` from
  * src/lib/mediaPolicy.ts directly, because each has bespoke chrome — gradient
  * overlay, photo-count badge, overlaid venue name, swipe transform — that this
  * component's markup cannot express.

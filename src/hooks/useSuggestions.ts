@@ -104,7 +104,10 @@ export type SuggestionIntent = {
    * The ACTIVE intent to rank by, replacing the saved quiz profile's tags.
    * `/map` passes what the user has currently filtered for, so the prominent
    * markers answer "what I asked for just now" rather than "what I said in a
-   * quiz once". Omit to keep the saved-profile behaviour (`/discover`).
+   * quiz once". Omit to keep the saved-profile behaviour. (That branch used to
+   * be what `/discover` used; /discover was archived in goal g-12d33864, so
+   * /map is the only caller now and reaches the omit-tags path itself whenever
+   * no vibe filter is active.)
    */
   tags?: readonly VibeTag[];
   /**
@@ -133,7 +136,8 @@ export function useSuggestions(
     const syncProfile = (): void => {
       const saved = loadProfile();
       // G1: fall back to null when the profile is gone, don't keep stale tags.
-      // This hook feeds the "Suggested for you" ranking on /map and /discover,
+      // This hook feeds the "Suggested for you" ranking on /map (it also fed
+      // /discover until that route was archived in goal g-12d33864),
       // so without the listener an account switch (or a Settings clear) would
       // keep RANKING against the previous profile's tags until remount — the
       // same class of leak the profile-change notification exists to close,

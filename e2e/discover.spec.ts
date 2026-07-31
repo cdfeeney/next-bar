@@ -23,11 +23,26 @@ test.describe('/discover is archived', () => {
     await denyGeolocation(context);
   });
 
+  test('the SERVER answers 307 to /map — not a client-side bounce', async ({
+    request,
+  }) => {
+    // Asserted on the UN-FOLLOWED response, deliberately. Checking only that we
+    // end up on /map with a <400 status would pass for a client component that
+    // calls router.replace('/map') after hydration — which would violate the
+    // server-redirect requirement, ship the client bundle we just archived, and
+    // flash the old surface. This is the assertion that can tell them apart.
+    // The Location header is the load-bearing half. A `redirect('/map')` page
+    // component ALSO answers 307, but with no Location — Next prerenders it as
+    // an HTML document that navigates itself, which browsers follow and curl,
+    // crawlers and link checkers do not. Asserting the header is what forced
+    // the redirect into next.config.js where it belongs.
+    const res = await request.get('/discover', { maxRedirects: 0 });
+    expect(res.status()).toBe(307);
+    expect(res.headers()['location']).toMatch(/\/map$/);
+  });
+
   test('a direct request lands on /map, not a 404', async ({ page }) => {
     const response = await page.goto('/discover');
-
-    // The redirect is served, not errored. Next's redirect() answers 307 and
-    // Playwright follows it, so the final response must be a success.
     expect(response?.status()).toBeLessThan(400);
 
     await expect(page).toHaveURL(/\/map$/);

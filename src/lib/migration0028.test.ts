@@ -60,8 +60,10 @@ describe('migration 0028', () => {
   });
 
   test("marks Fleming's closed using the vocabulary the app actually filters on", () => {
-    // matching.ts:165 and discover/page.tsx:220 both filter on this exact
-    // string. A typo here is invisible: the venue simply keeps being suggested.
+    // matching.ts filters on this exact string. A typo here is invisible: the
+    // venue simply keeps being suggested. (discover/page.tsx was the second
+    // filter site until that route was archived in goal g-12d33864 — do not go
+    // looking for it.)
     expect(SQL).toContain("business_status = 'CLOSED_PERMANENTLY'");
   });
 

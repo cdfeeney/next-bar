@@ -103,7 +103,24 @@ export default function MapFilterSheet({
     () => ({ neighborhoods: hoods, radius, vibes: Array.from(vibes) }),
     [hoods, radius, vibes],
   );
-  const draftCount = countActiveFilters(draft);
+
+  /**
+   * The count must reflect filters that are actually DOING something.
+   *
+   * A radius survives in `filters` after the user applies "Walkable" and then
+   * loses or revokes location — and `filterBars` deliberately no-ops radius
+   * when `userCoords` is null, so the results are the full unfiltered set. The
+   * badge counting that radius would claim an active filter the user can
+   * neither see the effect of nor switch off (the Distance chips are disabled
+   * without a location). The Distance row's own summary already reads
+   * "Anywhere" in that state; this keeps the numeral honest with it.
+   *
+   * The stored value is deliberately NOT cleared: the user asked for Walkable,
+   * and if location comes back it should still mean Walkable rather than having
+   * been silently discarded by opening a sheet.
+   */
+  const effectiveDraft = hasLocation ? draft : { ...draft, radius: null };
+  const draftCount = countActiveFilters(effectiveDraft);
 
   const hoodSummary = hoods.length > 0 ? hoods.map(displayHood).join(' · ') : '';
   const radiusKind = radius?.kind ?? 'anywhere';
