@@ -113,9 +113,17 @@ export default function MapPage(): JSX.Element {
   //    nothing exactly when the user had narrowed hardest.
   const suggestedBudget = suggestedCount(filteredBars.length);
   const hasIntent = filters.vibes.length > 0;
+  // Rank the WHOLE eligible cohort, not just `suggestedBudget` of it. Asking
+  // for exactly the budget made the stabilisation below a near no-op: a bar
+  // that was highlighted, is still eligible, but now ranks just below the
+  // cutoff would be absent from `rankedIds` entirely, so there was nothing to
+  // preserve and the highlights swapped anyway — the precise case
+  // stableSuggestions exists to prevent. The budget is applied AFTER stability,
+  // not before it. No extra cost: this ranked the full catalog before the
+  // filtered-cohort change, so a cohort is strictly less work.
   const { suggestedIds: rankedIds, hasProfile, profileChecked } = useSuggestions(
     coords,
-    suggestedBudget,
+    filteredBars.length,
     hasIntent ? { tags: filters.vibes, bars: filteredBars } : { bars: filteredBars },
   );
 
