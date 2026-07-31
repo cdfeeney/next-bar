@@ -124,8 +124,10 @@ async function main() {
 
   // Backup + delete live in lib/photoFiles so the destructive step is
   // testable; this script only supplies the paths and reports the result.
-  const { deleted, bytes } = backupAndDeleteOrphans(PHOTO_DIR, BACKUP_DIR, orphans);
-  console.log(`\nbacked up ${deleted} files (${(bytes / 1024).toFixed(0)} KB) to ${BACKUP_DIR}`);
+  // The "backed up N files" line is emitted by the function itself, BETWEEN the
+  // copy and delete phases, so it survives a crash during deletion. Only the
+  // post-delete summary belongs here.
+  const { deleted } = backupAndDeleteOrphans(PHOTO_DIR, BACKUP_DIR, orphans);
   console.log(`deleted ${deleted} files; ${fs.readdirSync(PHOTO_DIR).length} remain`);
 }
 

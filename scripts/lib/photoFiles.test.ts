@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, test } from 'vitest';
 import {
   existsSync,
   mkdirSync,
@@ -434,6 +434,78 @@ describe('backupAndDeleteOrphans', () => {
       // real.webp was backed up but must NOT have been deleted, because the
       // unlink phase never started.
       expect(readdirSync(photoDir)).toEqual(['real.webp']);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('backupAndDeleteOrphans — guards added by the review panel', () => {
+  function makeDir(): { photoDir: string; backupDir: string; root: string; cleanup: () => void } {
+    const root = mkdtempSync(join(tmpdir(), 'prune-guard-'));
+    const photoDir = join(root, 'bar-photos');
+    const backupDir = join(root, 'backup');
+    mkdirSync(photoDir, { recursive: true });
+    return { photoDir, backupDir, root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  }
+
+  // Built from a char code so no source-level escape can silently collapse it.
+  // The first draft of this fixture wrote a single backslash, which JS parsed
+  // as the escape `\e` -> 'e', so it tested '..escape.webp' (no separator at
+  // all) and the assertion failed for the wrong reason. The guard was fine.
+  const BACKSLASH = String.fromCharCode(92);
+
+  it.each([
+    ['parent traversal', '../escape.webp'],
+    ['nested path', 'sub/inner.webp'],
+    ['windows separator', `..${BACKSLASH}escape.webp`],
+    ['bare windows separator', `a${BACKSLASH}b.webp`],
+    ['empty string', ''],
+  ])('refuses a non-basename orphan entry (%s) and mutates NOTHING', (_label, bad) => {
+    // Without this, path.join(photoDir, '../escape.webp') would copy AND DELETE
+    // a file outside the photo directory (GLM + Kimi).
+    const { photoDir, backupDir, cleanup } = makeDir();
+    try {
+      writeFileSync(join(photoDir, 'real.webp'), 'keep');
+      expect(() => backupAndDeleteOrphans(photoDir, backupDir, ['real.webp', bad])).toThrow(
+        /not a bare filename/,
+      );
+      // Validation runs BEFORE mkdir/copy/unlink, so there are zero side effects.
+      expect(readdirSync(photoDir)).toEqual(['real.webp']);
+      expect(existsSync(backupDir)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('refuses a backupDir INSIDE photoDir — the safety net would eat itself', () => {
+    // Next run would classify the backups as orphans and delete them.
+    const { photoDir, cleanup } = makeDir();
+    try {
+      writeFileSync(join(photoDir, 'a.webp'), 'x');
+      expect(() =>
+        backupAndDeleteOrphans(photoDir, join(photoDir, '_backup'), ['a.webp']),
+      ).toThrow(/must not be inside/);
+      expect(readdirSync(photoDir)).toEqual(['a.webp']);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('logs the backup confirmation BEFORE any file is deleted', () => {
+    // The point of no return must be recorded while the originals still exist,
+    // so a crash mid-delete still leaves proof the backup landed (Codex + Kimi).
+    const { photoDir, backupDir, cleanup } = makeDir();
+    try {
+      writeFileSync(join(photoDir, 'a.webp'), 'x');
+      const seen: Array<{ msg: string; stillPresent: string[] }> = [];
+      backupAndDeleteOrphans(photoDir, backupDir, ['a.webp'], (msg: string) => {
+        seen.push({ msg, stillPresent: readdirSync(photoDir) });
+      });
+      expect(seen).toHaveLength(1);
+      expect(seen[0].msg).toMatch(/backed up 1 files/);
+      // The decisive assertion: at log time the original was NOT yet deleted.
+      expect(seen[0].stillPresent).toEqual(['a.webp']);
     } finally {
       cleanup();
     }

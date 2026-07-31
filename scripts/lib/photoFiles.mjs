@@ -133,13 +133,56 @@ export function assertDbIdsUsable(ids, requiredIds) {
  * function does no classification of its own and deletes exactly what it is
  * given, nothing more.
  *
+ * PRECONDITION: `orphans` must be bare basenames from partitionPhotoFiles()
+ * applied to `photoDir`. This function does not re-classify — the caller owns
+ * "what is an orphan". It DOES enforce the shape of what it is handed, because
+ * a function that deletes a user's files must not depend on an undocumented
+ * convention for its safety.
+ *
  * @param {string} photoDir  directory holding the photos
- * @param {string} backupDir directory to copy orphans into (created if needed)
- * @param {string[]} orphans basenames to back up and delete
+ * @param {string} backupDir directory to copy orphans into (created if needed);
+ *                           must NOT be inside photoDir
+ * @param {string[]} orphans bare basenames to back up and delete
+ * @param {(msg: string) => void} [log] injected so tests can capture the
+ *                           inter-phase confirmation; defaults to console.log
  * @returns {{ deleted: number, bytes: number }}
+ * @throws if any entry is not a bare filename, or backupDir is inside photoDir
  */
-export function backupAndDeleteOrphans(photoDir, backupDir, orphans) {
+export function backupAndDeleteOrphans(photoDir, backupDir, orphans, log = console.log) {
   if (orphans.length === 0) return { deleted: 0, bytes: 0 };
+
+  // VALIDATE EVERYTHING BEFORE MUTATING ANYTHING (GLM + Kimi review).
+  // This is a SHAPE check, not a re-run of the venue-id classifier — it does
+  // not stat, read directories, or decide what an orphan is. It only refuses
+  // an entry that is not a bare filename. Without it, one caller passing
+  // '../../something.jpg' would copy AND DELETE a file outside photoDir, and
+  // the only thing standing between this exported function and that outcome
+  // was the convention that its sole caller happens to pass basenames.
+  // Deliberately throws rather than skipping: a bad entry is a programming
+  // error, and silently filtering it is the "silent divergence" the other
+  // reviewer rightly warned about. Running before mkdir/copy/unlink means a
+  // violation leaves ZERO side effects.
+  for (const f of orphans) {
+    if (typeof f !== 'string' || f === '' || f !== path.basename(f)) {
+      throw new Error(
+        `refusing to delete: orphan entry is not a bare filename: ${JSON.stringify(f)}`,
+      );
+    }
+  }
+
+  // A backupDir inside photoDir would be classified as orphans on the NEXT
+  // run and deleted — the safety net eating itself. Reachable today only via
+  // the operator's --backup-dir flag, which is exactly when a typo happens.
+  const resolvedPhotoDir = path.resolve(photoDir);
+  const resolvedBackupDir = path.resolve(backupDir);
+  if (
+    resolvedBackupDir === resolvedPhotoDir ||
+    resolvedBackupDir.startsWith(resolvedPhotoDir + path.sep)
+  ) {
+    throw new Error(
+      `refusing to delete: backupDir must not be inside photoDir (${resolvedBackupDir})`,
+    );
+  }
 
   fs.mkdirSync(backupDir, { recursive: true });
   let bytes = 0;
@@ -148,6 +191,17 @@ export function backupAndDeleteOrphans(photoDir, backupDir, orphans) {
     bytes += fs.statSync(src).size;
     fs.copyFileSync(src, path.join(backupDir, f));
   }
+
+  // The inter-phase line is NOT cosmetic (Codex + Kimi review). It is the
+  // operator's confirmation that every backup landed before anything
+  // irreversible starts, and it marks the point of no return in the log. The
+  // extraction had moved it after the deletes, so a crash mid-delete left no
+  // record that a backup existed — the worst possible state for recovery.
+  // Injected rather than hard-wired to console.log so tests can capture it;
+  // kept INSIDE this function rather than splitting the phases into two
+  // exports, because splitting would ship a delete primitive with no backup
+  // guarantee.
+  log(`\nbacked up ${orphans.length} files (${(bytes / 1024).toFixed(0)} KB) to ${backupDir}`);
 
   // Phase 2 — only now that every backup exists.
   for (const f of orphans) fs.unlinkSync(path.join(photoDir, f));
