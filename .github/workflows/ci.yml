@@ -34,6 +34,24 @@ jobs:
       # it still catches a planted key.
       - name: Secret scan
         run: node scripts/secret-scan.mjs
+      # Env-var safety. Same reasoning as the secret scan above: cheap, narrow,
+      # and it must not cry wolf — it was fixed once already for manufacturing a
+      # CRITICAL on the legitimately-public Google browser key.
+      #
+      # NOTE the deliberate absence of `--environment production`. CI is not a
+      # deployment: it holds no Supabase variables (the build is dual-mode, see
+      # the build step below), so forcing the production profile here would fail
+      # every run on variables that are *correctly* absent. Verified by running
+      # it — it exited 1. Without the flag it derives from VERCEL_ENV and falls
+      # back to `local`, which still catches the dangerous class (a server
+      # secret mirrored under a NEXT_PUBLIC_ name) without demanding deployment
+      # values CI has no business holding.
+      #
+      # The rule set that DOES need real values is enforced where those values
+      # exist: the `prebuild` script runs this same check on Vercel, where
+      # VERCEL_ENV makes it production/preview and a bad env fails the deploy.
+      - name: Env-var safety check
+        run: node scripts/check-env.mjs
       - name: Type-check
         run: npx tsc --noEmit
       - name: Unit tests

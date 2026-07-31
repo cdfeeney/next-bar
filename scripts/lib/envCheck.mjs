@@ -18,7 +18,21 @@ export const SERVER_ONLY_SECRETS = [
   'GOOGLE_MAPS_API_KEY',
 ];
 
-/** Harness-only flags that must never be set in a production deployment. */
+/**
+ * Names that are PUBLIC BY DESIGN even though they collide with the
+ * `NEXT_PUBLIC_${secret}` construction in rule 1.
+ *
+ * `GOOGLE_MAPS_API_KEY` (server, Places calls) and
+ * `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` (browser, Places UI Kit) are two DIFFERENT
+ * keys with different restrictions — the browser one is meant to ship in the
+ * bundle. Without this exception the checker manufactured a CRITICAL on every
+ * correct production config and told the operator to rotate the wrong key.
+ * A checker that cries wolf gets switched off, so this false positive was worse
+ * than the leak it was guarding against.
+ */
+export const PUBLIC_BY_DESIGN = ['NEXT_PUBLIC_GOOGLE_MAPS_API_KEY'];
+
+/** Harness-only flags that must never be ENABLED in a production deployment. */
 export const HARNESS_ONLY = ['LOOP_UNATTENDED', 'G4_DUMP'];
 
 /** Required for the app to serve its core surface at all. */
@@ -26,6 +40,14 @@ export const REQUIRED_ALWAYS = [
   'NEXT_PUBLIC_SUPABASE_URL',
   'NEXT_PUBLIC_SUPABASE_ANON_KEY',
 ];
+
+/**
+ * Environments that are real deployments. `local` is excluded deliberately: the
+ * app supports a Supabase-free local mode (the client returns null and the
+ * middleware no-ops), so demanding those variables locally fails a config that
+ * is valid by design.
+ */
+const DEPLOYED = ['production', 'preview', 'staging'];
 
 const SEVERITY = { critical: 3, high: 2, medium: 1 };
 
@@ -42,8 +64,40 @@ export function checkEnv(env, opts = {}) {
   // 1. A server secret exposed under a NEXT_PUBLIC_ name is compiled into the
   //    browser bundle. This is the single worst misconfiguration available,
   //    and it is silent — the app works perfectly while leaking.
+  // 1a. VALUE mirror. The PUBLIC_BY_DESIGN exemption below is by NAME, which
+  //     leaves one realistic mistake invisible: pasting the SERVER key into the
+  //     browser variable. The names are then both legitimate and the value is
+  //     still in the bundle.
+  //
+  //     SCOPE, precisely — this net catches a mirrored value of the three names
+  //     in SERVER_ONLY_SECRETS and nothing else. A secret that is not in that
+  //     list has nothing to compare against and is invisible here. Do not read
+  //     this as "the exemption cannot smuggle a secret"; read it as "the
+  //     exemption cannot smuggle one of the three secrets we know about."
+  //
+  //     Substring, not equality: a key pasted into a longer value
+  //     (`?key=<secret>&restrict=none`) is just as exposed as a bare one.
+  //     Never print the value itself.
+  for (const secret of SERVER_ONLY_SECRETS) {
+    if (!present(secret)) continue;
+    for (const publicName of PUBLIC_BY_DESIGN) {
+      if (present(publicName) && env[publicName].includes(env[secret].trim())) {
+        findings.push({
+          severity: 'critical',
+          name: publicName,
+          message:
+            `${publicName} holds the SAME VALUE as ${secret}, a server-only secret. ` +
+            `A NEXT_PUBLIC_ name is compiled into the browser bundle, so that secret is ` +
+            `public. These are meant to be two different keys. Set the browser-restricted ` +
+            `key here and ROTATE ${secret}.`,
+        });
+      }
+    }
+  }
+
   for (const secret of SERVER_ONLY_SECRETS) {
     const exposed = `NEXT_PUBLIC_${secret}`;
+    if (PUBLIC_BY_DESIGN.includes(exposed)) continue;
     if (present(exposed)) {
       findings.push({
         severity: 'critical',
@@ -60,7 +114,9 @@ export function checkEnv(env, opts = {}) {
   //    a compliance problem that looks like nothing from the outside.
   if (environment === 'production') {
     for (const flag of HARNESS_ONLY) {
-      if (present(flag)) {
+      // The runtime branches on the exact string '1'. Flagging LOOP_UNATTENDED=0
+      // would fail a deploy over a config that is explicitly OFF.
+      if (env[flag] === '1') {
         findings.push({
           severity: 'critical',
           name: flag,
@@ -91,14 +147,17 @@ export function checkEnv(env, opts = {}) {
     }
   }
 
-  // 4. Missing essentials.
-  for (const name of REQUIRED_ALWAYS) {
-    if (!present(name)) {
-      findings.push({
-        severity: 'high',
-        name,
-        message: `${name} is missing. The app cannot reach Supabase without it.`,
-      });
+  // 4. Missing essentials — deployed environments only. Local supports a
+  //    Supabase-free mode by design, so requiring them there is a false alarm.
+  if (DEPLOYED.includes(environment)) {
+    for (const name of REQUIRED_ALWAYS) {
+      if (!present(name)) {
+        findings.push({
+          severity: 'high',
+          name,
+          message: `${name} is missing. The app cannot reach Supabase without it.`,
+        });
+      }
     }
   }
 
