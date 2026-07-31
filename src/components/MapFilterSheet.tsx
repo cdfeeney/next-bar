@@ -105,21 +105,30 @@ export default function MapFilterSheet({
   );
 
   /**
-   * The count must reflect filters that are actually DOING something.
+   * What the sheet SHOWS and what Apply STORES must be the same thing.
    *
    * A radius survives in `filters` after the user applies "Walkable" and then
-   * loses or revokes location — and `filterBars` deliberately no-ops radius
-   * when `userCoords` is null, so the results are the full unfiltered set. The
-   * badge counting that radius would claim an active filter the user can
-   * neither see the effect of nor switch off (the Distance chips are disabled
-   * without a location). The Distance row's own summary already reads
-   * "Anywhere" in that state; this keeps the numeral honest with it.
+   * loses or revokes location, and `filterBars` deliberately no-ops radius when
+   * `userCoords` is null — so the map shows every bar. Without this, the badge
+   * counted a filter the user could see no effect from and could not switch off
+   * (the Distance chips disable without a location).
    *
-   * The stored value is deliberately NOT cleared: the user asked for Walkable,
-   * and if location comes back it should still mean Walkable rather than having
-   * been silently discarded by opening a sheet.
+   * The first fix only corrected the COUNT and deliberately preserved the stored
+   * radius, on the reasoning that the user had asked for Walkable and losing GPS
+   * should not discard the request. A reviewer traced why that is worse, not
+   * better: the Distance row already reads "Anywhere" in this state, so the user
+   * is told the distance filter is off. Apply the sheet — even after changing
+   * only a vibe — and Walkable is silently re-persisted. Regain location later
+   * (leave the tunnel, step outside) and the map abruptly narrows to a 1.5-mile
+   * radius nobody asked for, with "nearby" reappearing in a summary the user
+   * last saw saying "Anywhere".
+   *
+   * So Apply emits the EFFECTIVE draft. Consistency with what the user was shown
+   * beats preserving an intent we told them we had dropped.
    */
-  const effectiveDraft = hasLocation ? draft : { ...draft, radius: null };
+  const effectiveDraft: FindBarFilters = hasLocation
+    ? draft
+    : { ...draft, radius: null };
   const draftCount = countActiveFilters(effectiveDraft);
 
   const hoodSummary = hoods.length > 0 ? hoods.map(displayHood).join(' · ') : '';
@@ -304,7 +313,7 @@ export default function MapFilterSheet({
       <div className="flex flex-col md:flex-row gap-3 justify-center items-center">
         <button
           type="button"
-          onClick={() => onApply(draft)}
+          onClick={() => onApply(effectiveDraft)}
           className={PRIMARY_BTN}
         >
           Apply

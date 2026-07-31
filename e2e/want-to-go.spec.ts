@@ -1,9 +1,15 @@
 /**
  * want-to-go.spec.ts (QA5-S2)
  *
- * The "Want to go" list tab on /rankings, backed by the fixed cross-slice
- * localStorage contract `next-bar:list:want-to-go:v1` (JSON array of
- * { barId, addedAt }) that the parallel /discover slice also writes.
+ * The "Want to go" list tab on /rankings, backed by the fixed localStorage
+ * contract `next-bar:list:want-to-go:v1` (JSON array of { barId, addedAt }).
+ *
+ * This used to say "that the parallel /discover slice also writes". That is no
+ * longer true and the difference matters: /discover was archived in goal
+ * g-12d33864 and it held the app's ONLY `addWantToGo` call site, so the key now
+ * has zero production writers and this list can only shrink. Do not read the
+ * surviving cross-tab machinery as a coordination invariant with a second
+ * slice. See src/lib/wantToGo.ts for the current writer count.
  *
  * What this covers:
  *   - Seeding the contract key shows the saved bars under the tab.

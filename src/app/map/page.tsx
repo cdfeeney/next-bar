@@ -17,6 +17,7 @@ import BarLightbox from '@/components/BarLightbox';
 import type { Bar } from '@/types';
 import {
   EMPTY_FILTERS,
+  countActiveFilters,
   filterBars,
   type FindBarFilters,
 } from '@/lib/findBarFilters';
@@ -72,13 +73,18 @@ export default function MapPage(): JSX.Element {
 
   // Count and summarize only what is actually filtering. A radius applied while
   // located survives in `filters` after location is lost, but `filterBars`
-  // no-ops it without coords — so counting it here would tell the user a filter
-  // is on while the map shows every bar, and the collapsed row is exactly where
-  // that lie is hardest to notice. Same rule as MapFilterSheet's badge; see the
-  // comment there for why the stored value is kept rather than cleared.
-  const radiusActive = coords !== null && filters.radius?.maxMiles != null;
-  const activeFilterCount =
-    filters.neighborhoods.length + filters.vibes.length + (radiusActive ? 1 : 0);
+  // no-ops it without coords — so counting it would tell the user a filter is on
+  // while the map shows every bar, and the collapsed row is exactly where that
+  // lie is hardest to notice.
+  //
+  // Composed from countActiveFilters rather than re-summing the fields by hand.
+  // Hand-rolling it worked and was still wrong: it created a second copy of the
+  // counting rule that the type system cannot keep in sync, so a new dimension
+  // on FindBarFilters would be counted by the sheet's badge and silently ignored
+  // by this one. Same shape as MapFilterSheet's `effectiveDraft`.
+  const effectiveFilters = coords ? filters : { ...filters, radius: null };
+  const activeFilterCount = countActiveFilters(effectiveFilters);
+  const radiusActive = effectiveFilters.radius?.maxMiles != null;
   // What the collapsed row says, so closing the panel never hides what it does.
   const filterSummary = useMemo(() => {
     const parts = [
