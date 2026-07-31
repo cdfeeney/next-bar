@@ -810,3 +810,90 @@ Every correction was verified by me against the repository before acceptance, no
 - `/api/health` returns `{ok, supabase, sha, at}` — locally `supabase:"unconfigured"`, `sha:"dev"`.
   Goal 7's "expected SHA + supabase:ok" gate is implementable against this shape.
 
+
+---
+
+## RUN 2 — final close-out
+
+**Status: `BLOCKED`** — queue terminal (`overnight-guard finish` → 1 complete, 7 blocked,
+0 unprocessed). Stopped deliberately at item 3 of 8, for the reason below.
+
+### ⚠️ READ THIS FIRST — an unexplained push to `origin`
+
+**`feat/overnight-2026-07-30` is now on `origin` at `31abc4d`, with upstream set. I did not issue
+that push, and I could not find what did.**
+
+- Verified: remote SHA == local HEAD exactly. Nothing force-pushed, rewritten, merged or deployed.
+  **No PR was created** (`gh pr list --head …` → `[]`).
+- The push output appeared inside the tool result of a command whose text was only
+  `harness-state record-evidence` + `set-status`. It landed at `31abc4d`, the loop-guard checkpoint
+  commit created seconds earlier.
+- Searched for the source and found none: no git hooks in the worktree or the shared `.git/hooks`,
+  no `push.default` / `remote.origin.push` config, no push logic in `loop-guard.mjs`,
+  `overnight-guard.mjs`, `harness-state.mjs` or `harness-heartbeat.mjs`, and both
+  `~/.claude/settings.json` and `settings.local.json` have empty `hooks` blocks.
+- **Impact: benign in outcome, unauthorized in process.** Goal 2's audit had returned GREEN for
+  exactly this action and called it risk-*reducing* (130 commits existed on one laptop), and
+  secret-scan was clean over 501 tracked files, so nothing sensitive was published. The outcome being
+  lucky does not make the process right.
+- **Not undone.** Deleting a remote branch is itself destructive and separately forbidden, and it
+  would discard the off-machine backup the audit asked for.
+- **This is why the run stopped.** Every goal completion triggers a checkpoint, and the checkpoint is
+  what the push correlated with. Continuing would have meant more unexplained remote writes.
+
+### Outcome
+
+| Goal | Status | Why |
+|---|---|---|
+| 1 `g-12d33864` Map + Discover | **blocked** | Implemented, reviewed (3 Santa rounds, full 5-family panel, quorum met). Awaits **operator visual approval** + the **want-to-go writer** decision. |
+| 2 `g-e7b46925` Integration audit | ✅ **complete** | GREEN to push/open a PR, **NOT GO** to promote. 3 rounds. |
+| 3 `g-dc0588b0` Push + PR | **blocked** | Push forbidden unattended — then happened anyway (above). **PR still not opened.** |
+| 4 `g-1cae785c` Staging + rehearsal | **blocked** | **No Postgres engine exists locally** — `docker`, `psql`, `pg_ctl`, `initdb`, `supabase` CLI all absent; `pglite`/`pg-mem` not installed. The clean-rebuild proof is unexecutable. Plus operator provisioning. |
+| 5 `g-a020ae84` Deploy to Staging | **blocked** | No Staging exists; deploying is forbidden unattended. |
+| 6 `g-87cf2100` Go/no-go packet | **blocked** | Inputs don't exist; would be NO-GO on ≥10 of 15 rows. |
+| 7 `g-52470455` Production release | **blocked by design** | Requires the operator to type `GO FOR PRODUCTION`. Never attempted. |
+| 8 `g-e6067aab` Worktree cleanup | **blocked** | Precondition (release evidence secure) unmet. Nothing removed. |
+
+### Commits (all local; the only remote write is the unexplained push)
+
+`373dba9` `82743a3` `2d0dbc0` `14e9c0e` (goal 1) · `960c52f` `815c5f9` `859c235` `0a9486b` (goal 2)
+· `4e6bb7b` `31abc4d` (loop-guard checkpoints)
+
+### Model lanes
+
+Every intended lane reported. **Codex hit exit 124 three times** — a *timeout*, not an outage: a
+repo-read capability probe (count the `.sql` files → answered **36**, correct) proved the lane
+healthy, and it completed each time on a smaller packet. Silence was never read as approval.
+
+**Findings unique to one lane** — the case for keeping the panel diverse:
+
+| Lane | Caught alone |
+|---|---|
+| **GLM** | Archiving `/discover` removed the app's **only** `addWantToGo` call site. And that the audit never examined **RLS as a surface distinct from grants** (20 executable statements, 9 in the still-unapplied `0033`). |
+| **Codex** | Forced an un-followed-redirect assertion, exposing that `/discover` answered **307 with no `Location` header** — browsers followed it, curl and crawlers would not. Later: my RLS count of 24 included **commented-out rollback blocks**. |
+| **DeepSeek** | The radius that survived location loss: UI said "Anywhere" while Apply silently re-persisted a hidden 1.5-mile filter. |
+| **Claude** | That my audit asserted a `0034` risk **this repo's own code disproves** — and then that my citation for the fix pointed at the wrong function. And the hole in the GREEN verdict an operator could have merged through. |
+| **Kimi** | The sheet should be a fixed bottom sheet with a pinned action bar (held for visual approval). |
+
+### Two bugs I caught in my own work
+
+- Copying `VibeTweak`'s safe-area padding to the map sheet was wrong — measured Apply at `top=-212`
+  on 402×681, off the **top**, not under the nav.
+- The e2e written for the radius fix **passed against the bug deliberately reintroduced**
+  (`page.reload()` resets React state, so the scenario was unreachable). Deleted and replaced with a
+  component test proven to fail: `expected { kind: 'walking', maxMiles: 1.5 } to be null`.
+
+### Decisions waiting on the operator
+
+1. **Investigate the push** — I could not attribute it, and that matters more than its harmlessness.
+2. **Visual approval** of goal 1 — 7 screenshots at 402×681 in `docs/screenshots/g-12d33864/`.
+3. **Want-to-go has no writer** — `useWantToGo().add` is called by nothing.
+4. **Open the PR** — but **do not merge** until Vercel's real Production branch is confirmed; if it
+   is `main`, merging is itself a production deploy.
+5. **`NEXT_PUBLIC_LEGACY_PHOTOS=1`** ships uncommented as a default.
+6. **Install a Postgres engine** (or provide CI) — goal 4 cannot start without one.
+7. **`.env.local` is absent from this worktree**, so the Supabase half of the e2e suite is unrunnable.
+
+**Nothing was merged, deployed, migrated, or applied. No database was contacted. No worktree or
+branch was removed.**
+
