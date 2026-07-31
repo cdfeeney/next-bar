@@ -114,3 +114,39 @@ it('is idempotent — safe to re-run on its own output (React StrictMode double-
   const twice = stableSuggestions(once, ranked, 3);
   expect(twice).toEqual(once);
 });
+
+/**
+ * The window. A reviewer built the repro these pin: with plain cohort
+ * membership as the eligibility test, a highlight could persist forever once
+ * the caller started ranking the whole cohort — a bar that stopped being a good
+ * answer kept glowing until some unrelated hard filter removed it.
+ */
+describe('stableSuggestions — the stability window', () => {
+  it('drops a survivor that has fallen far down the ranking, with no hard filter involved', () => {
+    // `stale` is still in the cohort, but now ranks 20th of 20.
+    const ranked = Array.from({ length: 19 }, (_, i) => `r${i}`).concat('stale');
+    const out = stableSuggestions(['stale'], ranked, 2);
+    expect(out).not.toContain('stale');
+    expect(out).toEqual(['r0', 'r1']);
+  });
+
+  it('keeps a survivor that only slipped a little — ordinary jitter must not blink highlights', () => {
+    // budget 2, window 3 → eligible = top 6. `kept` sits 5th, inside it.
+    const ranked = ['a', 'b', 'c', 'd', 'kept', 'f', 'g', 'h'];
+    expect(stableSuggestions(['kept'], ranked, 2)).toEqual(['kept', 'a']);
+  });
+
+  it('the window is a multiple of the budget, so a bigger tier tolerates more slip', () => {
+    const ranked = Array.from({ length: 40 }, (_, i) => `r${i}`);
+    // budget 10 → window covers the top 30; r25 survives.
+    expect(stableSuggestions(['r25'], ranked, 10)).toContain('r25');
+    // budget 1 → window covers only the top 3; r25 does not.
+    expect(stableSuggestions(['r25'], ranked, 1)).not.toContain('r25');
+  });
+
+  it('is still a fixed point with the window applied', () => {
+    const ranked = ['a', 'b', 'c', 'd', 'e', 'f'];
+    const once = stableSuggestions(['c', 'z'], ranked, 2);
+    expect(stableSuggestions(once, ranked, 2)).toEqual(once);
+  });
+});

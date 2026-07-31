@@ -34,6 +34,15 @@ export const MIN_COHORT_FOR_TIERS = 4;
 /** Share of the cohort to promote, before the cap and floor apply. */
 const SHARE = 0.3;
 
+/**
+ * How far down the current ranking a previously-highlighted bar may fall and
+ * still keep its slot, as a multiple of the budget. 3 means "top 3x the budget":
+ * generous enough that ordinary re-rank jitter does not blink the highlights,
+ * tight enough that a bar which genuinely stopped being a good answer loses the
+ * slot without waiting for a hard filter to remove it.
+ */
+export const STABILITY_WINDOW = 3;
+
 export function suggestedCount(cohortSize: number): number {
   if (!Number.isFinite(cohortSize) || cohortSize < MIN_COHORT_FOR_TIERS) return 0;
   return Math.min(SUGGESTED_CAP, Math.max(1, Math.floor(cohortSize * SHARE)));
@@ -64,9 +73,26 @@ export function stableSuggestions(
   previous: readonly string[],
   ranked: readonly string[],
   budget: number,
+  window: number = STABILITY_WINDOW,
 ): string[] {
   if (budget <= 0) return [];
-  const eligible = new Set(ranked);
+  // Eligibility is a WINDOW near the top of the current ranking, not simple
+  // cohort membership.
+  //
+  // The first version of this used `new Set(ranked)` — i.e. "still passes the
+  // hard filter, at any rank". That over-corrected: once the caller started
+  // ranking the whole cohort, a highlighted bar kept its slot no matter how far
+  // its score fell, so it could glow indefinitely. The repro a reviewer built:
+  // open /map before geolocation resolves, a bar 3 miles away scores into the
+  // top on tag affinity alone and gets highlighted; geolocation lands, proximity
+  // should now dominate — but the far bar is still a cohort member, so it holds
+  // its slot ahead of genuinely closer bars until some unrelated hard filter
+  // happens to exclude it.
+  //
+  // A window fixes both failure modes at once: a survivor is preserved while it
+  // remains plausibly good, and drops out once it falls far enough down the new
+  // ranking — no hard filter required.
+  const eligible = new Set(ranked.slice(0, Math.max(budget, budget * window)));
   // Survivors keep their previous relative order — that ordering is what the
   // user's eye has already learned. Dedupe as we go: `previous` is caller-
   // supplied and a repeated id would otherwise consume two slots and render the

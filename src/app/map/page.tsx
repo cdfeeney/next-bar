@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
 import { useGeolocation } from '@/hooks/useGeolocation';
@@ -135,11 +135,20 @@ export default function MapPage(): JSX.Element {
   // the map appeared to jump for an action that should only remove bars.
   // Prefer survivors, top up from the new ranking. See lib/suggestedTier.
   const previousRef = useRef<string[]>([]);
-  const suggestedIds = useMemo(() => {
-    const next = stableSuggestions(previousRef.current, rankedIds, suggestedBudget);
-    previousRef.current = next;
-    return next;
-  }, [rankedIds, suggestedBudget]);
+  const suggestedIds = useMemo(
+    () => stableSuggestions(previousRef.current, rankedIds, suggestedBudget),
+    [rankedIds, suggestedBudget],
+  );
+  // The ref write lives in an EFFECT, not in the memo factory. Writing it
+  // during render was benign only while the result did not really depend on
+  // `previous`; now that it does, a render that is discarded (StrictMode
+  // double-invoke today, a Suspense retry or concurrent re-render later) would
+  // leave behind a mutation from a render the user never saw, silently
+  // corrupting the next comparison. Post-commit means it only records what was
+  // actually shown.
+  useEffect(() => {
+    previousRef.current = suggestedIds;
+  }, [suggestedIds]);
 
   const highlightIds = useMemo(
     () =>
