@@ -4,10 +4,10 @@ Written 2026-07-30 for the attended migration window. **This document applies no
 Every command here is for a human operator at a keyboard, watching the output.
 
 Governing gate: the T0 live-revenue gate in `~/.claude/rules/common/development-workflow.md`
-(revert point → pre-deploy exercise → post-deploy smoke). Note that
-`tier-classify.mjs` currently returns **T1** for these files only because
-`.claude/tier-map.json` does not exist yet; the absence of a map is a gap, not a
-downgrade, and this window is treated as T0 regardless.
+(revert point → pre-deploy exercise → post-deploy smoke). `tier-classify.mjs` now
+returns **T0** for `supabase/migrations/**`, because `.claude/tier-map.json` was
+created and declares this project's T0 surface. (An earlier draft of this line said
+the classifier returned T1 for want of a map — true when written, fixed since.)
 
 ## What is being applied, and why the order is fixed
 
@@ -161,6 +161,36 @@ select grantee, privilege_type
 Behavioural check with a synthetic account (staging only): calling `share_night` with a night
 more than two days away must raise `night must be within 2 days of today`, and a night within
 the window must still return a token.
+
+## Step 5c — Verify the SEAMS between the three migrations
+
+Raised by GLM: each file reviewed alone looks fine; the failure mode lives between them.
+All four were checked against the current files and none applies to this set — but run
+them anyway after applying, because they are the checks that would have caught it.
+
+```sql
+-- 1. SECURITY DEFINER runs as the function OWNER, not the caller. Confirm 0034's
+--    revoke did not strip the owner's access to the tables these functions read.
+select proname, proowner::regrole
+  from pg_proc
+ where pronamespace = 'public'::regnamespace and prosecdef
+ order by proname;
+
+-- 2. 0034's revoke targets vs 0033's grant targets must not intersect.
+--    Verified disjoint at author time: 0033 grants only on vibe_profiles;
+--    0034 revokes only on profiles / ratings / pairwise_comparisons.
+
+-- 3. The ledger must record ALL THREE, in order — not merely "it applied".
+select name, applied_at from public.schema_migrations
+ where name like '003%' order by name;
+-- expect 0033, 0034, 0035
+```
+
+Also confirmed by reading `scripts/apply-migrations.ts`: on any failure it rolls back,
+sets a non-zero exit code and **returns** — it does not continue to later files. So a
+failed `0033` stops the window and `0035` never installs. That matters because PL/pgSQL
+resolves table references at execution, not at `create or replace` time, so a function
+CAN install successfully against objects that do not exist yet.
 
 ## Step 6 — Two-browser vibe-profile smoke (authoritative)
 

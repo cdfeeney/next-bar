@@ -30,6 +30,19 @@
 -- out, so the window costs no legitimate functionality — the same reasoning
 -- 0011/0012/0017 already record for the identical bound.
 --
+-- SCOPE, stated honestly (Kimi review). This bounds the KEYSPACE, not the
+-- volume. It is a validation rule, not a capacity control. The window slides
+-- daily, so a user legitimately accrues ~5 reachable nights at any moment and
+-- roughly 1,825 rows a year with no abuse at all, and nothing here rate-limits
+-- repeated calls against the same 5 keys. Closing C4 F1 properly needs the
+-- invariant stated as constants per principal — rows(user) <= K and
+-- writes(user, window) <= R — via retention plus a write cap. Recorded as
+-- follow-up rather than implied to be finished by this file.
+--
+-- Useful consequence of this bound: a row outside the window can never be
+-- re-shared or updated through this function, so it is unreachable and a
+-- future purge of aged rows is free correctness rather than data loss.
+--
 -- STYLE NOTE: share_night RAISES on invalid input (its siblings return false),
 -- so this guard raises too, with errcode 22023 (invalid_parameter_value) to
 -- match its existing range/shape rejections. Changing it to return null would
