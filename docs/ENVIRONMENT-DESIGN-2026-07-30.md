@@ -129,10 +129,14 @@ Ordered so that nothing depends on a step that has not run yet.
 ### 1. Supabase staging project
 1. Create a second Supabase project, named to make confusion impossible (`next-bar-staging`).
    **Tier: free.** See the cost note above, including auto-pause.
-2. Apply migrations `0000`→`0035` in order via `npm run db:migrate` with `DATABASE_URL`
-   pointed at **staging**. This doubles as the clean-database rehearsal that goal 1 was
-   blocked on.
-3. Seed the synthetic data above.
+2. After review, apply migrations `0000`→`0035` in order via
+   `npm run db:bootstrap` with `DATABASE_URL` pointed at **staging**. Do not use
+   `--baseline`; the bootstrap supplies the sanitized public catalog fixture
+   required after migration `0019`. Follow
+   `FRESH-STAGING-BOOTSTRAP-RUNBOOK-2026-07-31.md`. This doubles as the
+   clean-database rehearsal that goal 1 was blocked on.
+3. Seed any additional synthetic user/test data above. The catalog migration
+   fixture is already supplied by `db:bootstrap`.
 4. Record the project ref. **Do not** put its service-role key on a developer machine beyond
    the one that needs it.
 5. **Storage:** create the same bucket names the production project uses, in the *staging*
