@@ -9,10 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getUserMock = vi.fn();
 const deleteUserMock = vi.fn();
+const adminSignOutMock = vi.fn();
 const createClientMock = vi.fn(() => ({
   auth: {
     getUser: getUserMock,
-    admin: { deleteUser: deleteUserMock },
+    admin: { deleteUser: deleteUserMock, signOut: adminSignOutMock },
   },
 }));
 
@@ -59,6 +60,7 @@ describe('POST /api/account/delete', () => {
       error: null,
     });
     deleteUserMock.mockResolvedValue({ data: {}, error: null });
+    adminSignOutMock.mockResolvedValue({ data: null, error: null });
   });
 
   afterEach(() => {
@@ -218,6 +220,89 @@ describe('POST /api/account/delete', () => {
     expect(throttled.status).toBe(429);
     // The point of the cap: no further amplification into Supabase.
     expect(getUserMock).toHaveBeenCalledTimes(20);
+  });
+
+  it('revokes ALL refresh sessions (global) BEFORE deleting the user', async () => {
+    // Cross-device stale-session fix (staging 2026-08-01): deleting the auth
+    // user does not invalidate issued access tokens, and a browser that can
+    // still REFRESH holds authenticated UI forever. Revocation-then-delete
+    // closes the refresh path; order matters so a refresh cannot land in a
+    // delete-then-revoke gap.
+    const res = await POST(makeRequest({ token: 'valid' }));
+    expect(res.status).toBe(200);
+    expect(adminSignOutMock).toHaveBeenCalledTimes(1);
+    expect(adminSignOutMock).toHaveBeenCalledWith('valid', 'global');
+    expect(deleteUserMock).toHaveBeenCalledTimes(1);
+    expect(adminSignOutMock.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteUserMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('still deletes when revocation resolves with { error } (defense-in-depth must not block)', async () => {
+    // supabase-js resolves with { error } instead of throwing (DeepSeek
+    // design review) — a structured 503 from GoTrue must not stop deletion.
+    adminSignOutMock.mockResolvedValue({
+      data: null,
+      error: { message: 'service unavailable', status: 503 },
+    });
+    const res = await POST(makeRequest({ token: 'valid' }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(deleteUserMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still deletes when revocation THROWS (transport)', async () => {
+    adminSignOutMock.mockRejectedValue(new Error('socket hang up'));
+    const res = await POST(makeRequest({ token: 'valid' }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(deleteUserMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepted partial failure: revoke succeeded, delete failed → 500, and a retry still works', async () => {
+    // Santa round-1 (DeepSeek): after a successful global revocation a failed
+    // deleteUser leaves the user signed out everywhere with the account
+    // intact. Documented trade — NOT a lockout: the access token stays valid
+    // until expiry, so the same bearer can retry immediately.
+    deleteUserMock.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'db timeout' },
+    });
+    const failed = await POST(makeRequest({ token: 'valid' }));
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ ok: false, error: 'server_error' });
+    expect(adminSignOutMock).toHaveBeenCalledTimes(1);
+
+    const retry = await POST(makeRequest({ token: 'valid' }));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ ok: true });
+    expect(deleteUserMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('never revokes sessions for an UNVERIFIED token', async () => {
+    getUserMock.mockResolvedValue({
+      data: { user: null },
+      error: { message: 'invalid JWT' },
+    });
+    const res = await POST(makeRequest({ token: 'forged' }));
+    expect(res.status).toBe(401);
+    expect(adminSignOutMock).not.toHaveBeenCalled();
+  });
+
+  it('never revokes sessions on a rate-limited request', async () => {
+    // Revocation is a side effect reserved for a deletion we are committed
+    // to — a 429 must not sign the user out of every device.
+    for (let i = 0; i < 5; i++) {
+      expect(
+        (await POST(makeRequest({ token: 'valid', ip: `198.51.101.${i}` })))
+          .status,
+      ).toBe(200);
+    }
+    const throttled = await POST(
+      makeRequest({ token: 'valid', ip: '198.51.101.99' }),
+    );
+    expect(throttled.status).toBe(429);
+    expect(adminSignOutMock).toHaveBeenCalledTimes(5);
   });
 
   it('does not charge the IP bucket for OUR OWN transport failures', async () => {

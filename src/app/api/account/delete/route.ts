@@ -150,6 +150,41 @@ export async function POST(request: Request): Promise<NextResponse> {
     // Stage 2: the real quota, on an identity the caller cannot rotate.
     if (!userLimiter.allow(userId)) return rateLimited();
 
+    // Revoke EVERY refresh session BEFORE deleting (cross-device stale-session
+    // fix, staging 2026-08-01): deleting an auth user does not invalidate
+    // already-issued access tokens, and a device that can still refresh keeps
+    // authenticated UI past expiry. Revoke-then-delete means no refresh can
+    // land in a delete-then-revoke gap. Deliberately NON-blocking: deletion is
+    // the user's right and must not gate on defense-in-depth — deleteUser
+    // cascades sessions anyway, and the client-side getUser validation is the
+    // authoritative terminator for the already-issued token. Placed after
+    // stage 2 so a rate-limited request cannot sign the user out everywhere.
+    // supabase-js reports failure BOTH ways: a resolved { error } and a
+    // transport throw (DeepSeek review) — handle each, block on neither.
+    // PARTIAL-FAILURE TRADE, accepted (santa round-1): if revocation succeeds
+    // and deleteUser then fails, the user is signed out of every device while
+    // the account survives. Recoverable, not a lockout — the access token
+    // stays valid until expiry so the same bearer can retry this route, and
+    // password sign-in still works afterwards. Delete-first would instead
+    // forfeit the refresh-race protection the revocation exists to provide.
+    try {
+      const { error: revokeError } = await admin.auth.admin.signOut(
+        token,
+        'global',
+      );
+      if (revokeError) {
+        console.error(
+          '[account/delete] session revocation failed (continuing to delete):',
+          revokeError.message,
+        );
+      }
+    } catch (revokeThrown) {
+      console.error(
+        '[account/delete] session revocation threw (continuing to delete):',
+        revokeThrown,
+      );
+    }
+
     const { error: deleteError } = await admin.auth.admin.deleteUser(userId);
     if (deleteError) {
       console.error('[account/delete] failed:', deleteError.message);

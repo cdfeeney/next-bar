@@ -197,8 +197,16 @@ export default function SettingsPage(): JSX.Element {
     // hard redirect lands on a clean signed-out home. try/finally (Opus
     // review): the redirect must happen even if signOut throws — the
     // account no longer exists, staying on a signed-in-looking page lies.
+    // The catch swallows deliberately: nothing here can act on the error,
+    // and without it the rejection escapes the click handler as an
+    // unhandled-rejection while the redirect is already committed.
     try {
       await auth.signOut();
+    } catch (signOutError) {
+      // Account is deleted; a failed local sign-out changes nothing below —
+      // but log it (never swallow silently): if sign-out starts failing for
+      // reasons other than the just-deleted account, this is the only trail.
+      console.error('[settings] sign-out after deletion failed:', signOutError);
     } finally {
       window.location.assign('/');
     }
