@@ -66,7 +66,7 @@ git diff --exit-code -- supabase/migrations
 git status --porcelain -- supabase/migrations
 ```
 
-Expected: typecheck clean; **1653 tests passing across 103 files**; secret scan
+Expected: typecheck clean; **1674 tests passing across 104 files**; secret scan
 clean; no whitespace errors; **no** migration-file diff; and the last command
 prints **nothing** — a new file under `supabase/migrations` is as much a
 violation of the byte-freeze as an edit to an existing one. Stop if any command
@@ -119,8 +119,8 @@ order by id;
 
 Require all of the following:
 
-- the ordered ledger contains all 36 files and ends at
-  `0035_share_night_date_bound.sql`;
+- the ordered ledger contains all 37 files and ends at
+  `0036_protect_schema_migrations.sql`;
 - `bootstrap_marker` is `null`;
 - `bars_after_migrations` is 410;
 
@@ -146,7 +146,7 @@ next attempt; do not edit migration history or the ledger.
 ## F. RLS and grants proof
 
 Run the repository's focused RLS/security tests documented for migrations
-`0033`–`0035`. In the SQL editor, also inspect enabled RLS and grants rather than
+`0033`–`0036`. In the SQL editor, also inspect enabled RLS and grants rather than
 assuming migration success equals policy success:
 
 ```sql

@@ -129,7 +129,7 @@ Ordered so that nothing depends on a step that has not run yet.
 ### 1. Supabase staging project
 1. Create a second Supabase project, named to make confusion impossible (`next-bar-staging`).
    **Tier: free.** See the cost note above, including auto-pause.
-2. After review, apply migrations `0000`→`0035` in order via
+2. After review, apply migrations `0000`→`0036` in order via
    `npm run db:bootstrap` with `DATABASE_URL` pointed at **staging**. Do not use
    `--baseline`; the bootstrap supplies the sanitized public catalog fixture
    required after migration `0019`. Follow

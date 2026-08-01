@@ -76,6 +76,7 @@ import {
   type CatalogDependencyInventory,
   type CatalogBootstrapRow,
 } from './lib/catalogBootstrap';
+import { MIGRATION_LEDGER_DDL } from './lib/migrationLedger';
 
 // Hard gate: never write the live DB with the service-role/pooler creds
 // during the unattended overnight loop (DeepSeek security review). This
@@ -145,18 +146,6 @@ if (files.length === 0) {
   console.log('No migration files found. Nothing to do.');
   process.exit(0);
 }
-
-/**
- * The ledger is bootstrapped here rather than as a numbered migration —
- * a migration that records migrations cannot record itself.
- */
-const LEDGER_DDL = `
-  create table if not exists public.schema_migrations (
-    name       text primary key,
-    checksum   text not null,
-    applied_at timestamptz not null default now()
-  );
-`;
 
 const BOOTSTRAP_MARKER = BOOTSTRAP_MARKER_TABLE;
 const BOOTSTRAP_MARKER_REGCLASS = `public.${BOOTSTRAP_MARKER}`;
@@ -359,7 +348,11 @@ async function main() {
       `Migrations: ${files.length} file${files.length === 1 ? '' : 's'} → ${redactUrl(databaseUrl!)}`,
     );
 
-    await client.query(LEDGER_DDL);
+    // One parameterless query message: on a fresh database CREATE, ENABLE RLS,
+    // and REVOKE commit atomically, so Supabase's default browser-role grants
+    // are never externally visible. On an existing database this also repairs
+    // the ledger before its contents are trusted for planning.
+    await client.query(MIGRATION_LEDGER_DDL);
 
     const { rows } = await client.query<AppliedMigration>(
       'select name, checksum from public.schema_migrations',
