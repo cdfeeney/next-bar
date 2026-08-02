@@ -141,4 +141,47 @@ describe('GET /api/health', () => {
     const body = (await (await GET()).json()) as { sha: string };
     expect(body.sha).toBe('dev');
   });
+
+  // Normalized deployment identity (goal g-a5ec7d32) — what the post-deploy
+  // check reads to prove it reached the target it meant to.
+  it('reports the normalized environment, preferring VERCEL_TARGET_ENV', async () => {
+    vi.stubEnv('VERCEL_TARGET_ENV', 'staging');
+    vi.stubEnv('VERCEL_ENV', 'preview');
+    const { GET } = await loadRoute();
+    const body = (await (await GET()).json()) as { environment: string };
+    // A custom staging target still reports VERCEL_ENV=preview; primary wins.
+    expect(body.environment).toBe('staging');
+  });
+
+  it('falls back to VERCEL_ENV, and to local when nothing is set', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production');
+    const first = await loadRoute();
+    expect(
+      ((await (await first.GET()).json()) as { environment: string }).environment,
+    ).toBe('production');
+
+    vi.unstubAllEnvs();
+    const second = await loadRoute();
+    expect(
+      ((await (await second.GET()).json()) as { environment: string }).environment,
+    ).toBe('local');
+  });
+
+  it('reports UNKNOWN for an unrecognized target instead of guessing local', async () => {
+    vi.stubEnv('VERCEL_TARGET_ENV', 'preprod');
+    const { GET } = await loadRoute();
+    const body = (await (await GET()).json()) as { environment: string };
+    expect(body.environment).toBe('unknown');
+  });
+
+  it('keeps the existing sha and supabase fields alongside environment (additive)', async () => {
+    vi.stubEnv('VERCEL_TARGET_ENV', 'staging');
+    vi.stubEnv('VERCEL_GIT_COMMIT_SHA', '0123456789abcdef0123456789abcdef01234567');
+    const { GET } = await loadRoute();
+    const body = (await (await GET()).json()) as Record<string, unknown>;
+    expect(body.sha).toBe('0123456789ab');
+    expect(body).toHaveProperty('supabase');
+    expect(body).toHaveProperty('ok');
+    expect(body.environment).toBe('staging');
+  });
 });

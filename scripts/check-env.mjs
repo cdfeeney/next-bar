@@ -15,9 +15,44 @@
  * environment. To check a local file, export them into the shell first.
  */
 import { checkEnv, isEnvSafe } from './lib/envCheck.mjs';
+import { normalizeEnvironment, resolveEnvironment } from './lib/environmentIdentity.mjs';
 
+// Identity: explicit --environment wins (operators check a target by name),
+// otherwise VERCEL_TARGET_ENV → VERCEL_ENV → local. Both paths normalize, so
+// an unrecognized name is 'unknown' and refuses below rather than silently
+// skipping the deployed-environment requirements (goal g-a5ec7d32).
 const argEnv = process.argv.indexOf('--environment');
-const environment = argEnv !== -1 ? process.argv[argEnv + 1] : (process.env.VERCEL_ENV ?? 'local');
+const flagPresent = argEnv !== -1;
+const rawEnvironment = flagPresent ? process.argv[argEnv + 1] : null;
+
+// A PRESENT flag with a missing/blank value is a malformed invocation, not a
+// request for local (santa: Codex HIGH + Claude LOW, convergent). The realistic
+// case is CI running `--environment "$DEPLOY_ENV"` with the variable unset:
+// treating that as 'local' skips every deployed-environment requirement and
+// exits 0. An explicitly-passed environment must be explicitly valid.
+const flagValueMissing =
+  flagPresent && (rawEnvironment === undefined || String(rawEnvironment).trim() === '');
+
+const environment = flagValueMissing
+  ? 'unknown'
+  : flagPresent
+    ? normalizeEnvironment(rawEnvironment)
+    : resolveEnvironment(process.env);
+
+if (environment === 'unknown') {
+  const source = flagValueMissing
+    ? '--environment (flag given with no value)'
+    : flagPresent
+      ? `--environment ${rawEnvironment}`
+      : 'VERCEL_TARGET_ENV/VERCEL_ENV';
+  console.error(
+    `env check: UNKNOWN environment from ${source}.\n` +
+      `      Recognized: local (or development), preview, staging, production.\n` +
+      `      Refusing rather than guessing — an unrecognized target would skip ` +
+      `every deployed-environment requirement.`,
+  );
+  process.exit(1);
+}
 
 const findings = checkEnv(process.env, { environment });
 

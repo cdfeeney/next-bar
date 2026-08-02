@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { resolveEnvironment } from '@/lib/environment';
 
 /**
  * /api/health — deploy smoke-check endpoint (H1 App-Store pack + the T0
@@ -76,6 +77,12 @@ export async function GET(): Promise<NextResponse> {
     {
       ok,
       supabase,
+      // Normalized deployment identity (goal g-a5ec7d32) — this is what a
+      // post-deploy check reads to prove it is talking to the target it
+      // meant to. 'unknown' is reported honestly rather than guessed, so a
+      // misconfigured target is visible instead of masquerading as local.
+      // Additive only: `supabase` and `sha` below keep their exact shape.
+      environment: resolveEnvironment(process.env),
       // 12-char prefix (DeepSeek N2 review): plenty to match a deploy
       // against git for the smoke check, without handing out the exact
       // full revision for version-targeted reconnaissance.

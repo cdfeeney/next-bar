@@ -11,6 +11,8 @@
  * wrong without being able to take the app down.
  */
 
+import { DEPLOY_ENVIRONMENTS, isDeployedEnvironment } from './environmentIdentity.mjs';
+
 /** Secrets that must never be readable from the browser bundle. */
 export const SERVER_ONLY_SECRETS = [
   'SUPABASE_SERVICE_ROLE_KEY',
@@ -47,19 +49,48 @@ export const REQUIRED_ALWAYS = [
  * middleware no-ops), so demanding those variables locally fails a config that
  * is valid by design.
  */
-const DEPLOYED = ['production', 'preview', 'staging'];
+/**
+ * Single source of truth for identities — imported, never re-declared (santa:
+ * Claude MEDIUM). A local copy would drift: adding an identity to the pinned
+ * pair (environmentIdentity.mjs / src/lib/environment.ts) while this file kept
+ * a stale list would make check 0 reject a genuinely valid target, i.e. the
+ * fail-closed guard firing a false positive on a real environment.
+ */
+const RECOGNIZED_ENVIRONMENTS = DEPLOY_ENVIRONMENTS;
+const DEPLOYED = DEPLOY_ENVIRONMENTS.filter(isDeployedEnvironment);
 
 const SEVERITY = { critical: 3, high: 2, medium: 1 };
 
 /**
  * @param {Record<string,string|undefined>} env
- * @param {{ environment?: 'production'|'preview'|'staging'|'local' }} [opts]
+ * @param {{ environment?: string }} [opts] `environment` is intentionally a
+ *   plain string, not the recognized union: this function's contract is that
+ *   it accepts whatever a deploy target actually reports and FAILS CLOSED on
+ *   anything unrecognized (check 0). Typing it as the union would push that
+ *   validation onto callers and make the untrusted case unrepresentable —
+ *   exactly the input this must handle.
  * @returns {{ severity: string, name: string, message: string }[]}
  */
 export function checkEnv(env, opts = {}) {
   const environment = opts.environment ?? 'local';
   const findings = [];
   const present = (n) => typeof env[n] === 'string' && env[n].trim() !== '';
+
+  // 0. FAIL CLOSED on an unrecognized identity (goal g-a5ec7d32). Previously an
+  //    unknown string matched no branch and was absent from DEPLOYED, so every
+  //    deployed-environment requirement below was skipped in silence — a typo'd
+  //    target (`stg`, `preprod`) passed the check by doing nothing.
+  if (!RECOGNIZED_ENVIRONMENTS.includes(environment)) {
+    findings.push({
+      severity: 'critical',
+      name: 'ENVIRONMENT',
+      message:
+        `Unrecognized environment "${environment}". Recognized: ` +
+        `${RECOGNIZED_ENVIRONMENTS.join(', ')}. Refusing to evaluate: an ` +
+        `unknown target silently skips every deployed-environment requirement.`,
+    });
+    return findings;
+  }
 
   // 1. A server secret exposed under a NEXT_PUBLIC_ name is compiled into the
   //    browser bundle. This is the single worst misconfiguration available,

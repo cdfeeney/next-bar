@@ -190,3 +190,23 @@ describe('isEnvSafe', () => {
     expect(isEnvSafe([])).toBe(true);
   });
 });
+
+describe('unrecognized environment fails closed (goal g-a5ec7d32)', () => {
+  it('returns a single critical finding and evaluates nothing else', () => {
+    // Before this, an unknown string matched no branch and was absent from
+    // DEPLOYED, so the required-variable checks were skipped in silence.
+    const found = checkEnv({}, { environment: 'preprod' });
+    expect(found).toHaveLength(1);
+    expect(found[0].severity).toBe('critical');
+    expect(found[0].name).toBe('ENVIRONMENT');
+    expect(found[0].message).toMatch(/Unrecognized environment "preprod"/);
+    expect(isEnvSafe(found)).toBe(false);
+  });
+
+  it('still evaluates every recognized identity normally', () => {
+    for (const environment of ['local', 'preview', 'staging', 'production'] as const) {
+      const found = checkEnv({}, { environment });
+      expect(found.every((f) => f.name !== 'ENVIRONMENT')).toBe(true);
+    }
+  });
+});
