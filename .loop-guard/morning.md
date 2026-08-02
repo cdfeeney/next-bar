@@ -973,3 +973,9 @@ fact. **It is worth the operator checking**, because if a peer session is live a
 - The corrections ARE the deliverable: privacy labels FAIL (Q1/Q3 block), in-app deletion OPERATOR-BLOCKED (B1 invalid production service-role key ⇒ route dark), manifest 192-icon resolves to 512, monorepo stays LOCKED with measured gaps.
 - Evidence: npm run build exit 0. No accounts, no uploads, no move, no code change.
 - Checkpoint fix-up applied (operator docs untouched).
+
+### Entry 6 — g-8557db39 Want to Go writers: COMPLETE
+- Commit: 9ed37d9 (5 files). Tier T1. Lanes: Claude APPROVE + Codex — CONVERGENT MEDIUM (simultaneous-mount sync untested) fixed at unit AND e2e level, Codex confirm []; GLM SHIP; DeepSeek SHIP.
+- Tests: e2e 6/6 both viewports, unit 5/5, full 1761/1761, tsc clean, secret scan clean.
+
+## RUN CLOSE-OUT: COMPLETE — 6/6 goals, 0 blocked. See docs/OVERNIGHT-REPORT-2026-08-02.md.
