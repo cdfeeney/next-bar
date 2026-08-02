@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, MotionConfig, motion } from 'motion/react';
+import { STEP_TRANSITION } from '@/lib/motionTokens';
 import { quiz, deriveArchetype } from '@/lib/quiz';
 import type { QuizOption } from '@/lib/quiz';
 import NeighborhoodPicker from '@/components/NeighborhoodPicker';
@@ -55,22 +56,27 @@ export default function VibeQuiz({ onComplete }: VibeQuizProps) {
       </div>
 
       <div className="flex-1 flex flex-col items-center justify-center max-w-3xl mx-auto w-full">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={step}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.25 }}
-            className="w-full"
-          >
-            <p className="text-muted uppercase tracking-widest text-xs mb-4 text-center">
-              Question {step + 1} of {quiz.length}
-            </p>
+        {/* reducedMotion="user": respects prefers-reduced-motion — the
+            transform animation is skipped for those users while opacity
+            still crossfades (Motion's documented behavior). */}
+        <MotionConfig reducedMotion="user">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={step}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={STEP_TRANSITION}
+              className="w-full"
+            >
+              <p className="text-muted uppercase tracking-widest text-xs mb-4 text-center">
+                Question {step + 1} of {quiz.length}
+              </p>
 
-            {renderQuestion()}
-          </motion.div>
-        </AnimatePresence>
+              {renderQuestion()}
+            </motion.div>
+          </AnimatePresence>
+        </MotionConfig>
       </div>
     </section>
   );
