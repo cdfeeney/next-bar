@@ -950,3 +950,8 @@ fact. **It is worth the operator checking**, because if a peer session is live a
 - Tests: census 36/36; full 1731/1731; tsc clean; secret scan clean; mocked CLI run complete; --apply refused unattended (exit 1).
 - Residuals: cross-source neighborhood-grain near-dupes defer to curation; no mechanical evidence gate at attended apply (advisory); ≤1-page budget drift on hard crash (documented).
 - NOTE: loop-guard checkpoint 39a23b6 swept operator-protected docs via its built-in `git add -A`; reset --mixed'd (contents untouched) and replaced by a morning.md-only checkpoint commit. state.json's recorded sha 39a23b6 remains reflog-resolvable. Same fix-up will be applied after every item tonight.
+
+### Entry 2 — g-649592c7 PostHog foundation: COMPLETE
+- Commit: 47840be (4 files). Tier T1. Lanes: Claude APPROVE / Codex 1H+1M fixed + confirm [] / GLM SHIP / DeepSeek SHIP. Lane-unique: Codex → dispatcher bypass + beacon-refusal fallback; DeepSeek(design) → facade-constructed envelope + SSR registration; GLM → dormancy documentation.
+- Tests: 16 module, 1743 full, tsc clean, secret scan clean. Residual: adapter dormant until attended enablement.
+- Checkpoint fix-up applied (reset sweep commit, morning-log-only re-commit; operator docs untouched).
