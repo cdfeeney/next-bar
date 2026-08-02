@@ -8,6 +8,7 @@ import { hoursProvenanceNote, weekHoursRows } from '@/lib/openNow';
 import GoogleAttribution from '@/components/GoogleAttribution';
 import { displayHood } from '@/lib/hoodDisplay';
 import OpenNowBadge from '@/components/OpenNowBadge';
+import WantToGoToggle from '@/components/WantToGoToggle';
 
 /**
  * U2-2: photo headliner. Tapping a card's photo opens this full-screen
@@ -237,7 +238,8 @@ export default function BarLightbox({
             Google map — this is the permission that lets us keep Leaflet. */}
         <GoogleAttribution bar={bar} />
 
-        <div className="flex items-center gap-3 pb-4">
+        <div className="flex items-center gap-3 pb-4 flex-wrap">
+          <WantToGoToggle barId={bar.id} barName={bar.name} variant="full" />
           <Link
             href={`/rankings?add=${bar.id}`}
             className="flex-1 text-center bg-accent hover:bg-accentDim transition-colors text-bg font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation"

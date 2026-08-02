@@ -16,6 +16,7 @@ import OpenNowBadge from '@/components/OpenNowBadge';
 import BarVisualTile from '@/components/BarVisualTile';
 import BarLightbox from '@/components/BarLightbox';
 import RatingBadge from '@/components/RatingBadge';
+import WantToGoToggle from '@/components/WantToGoToggle';
 
 type ResultCardProps = {
   bar: Bar;
@@ -158,6 +159,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
           <div className="flex items-center gap-2 flex-wrap">
             <OpenNowBadge bar={bar} />
             <RatingBadge barId={bar.id} />
+            <WantToGoToggle barId={bar.id} barName={bar.name} />
           </div>
           {showShare ? (
             <ShareButton
