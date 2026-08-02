@@ -19,3 +19,4 @@ scripts/data/
 .osm-cache/
 .site-cache/
 .osm-cache/
+scripts/census/out/

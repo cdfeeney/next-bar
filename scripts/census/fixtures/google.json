@@ -1,0 +1,7 @@
+{
+  "places": [
+    { "id": "fixture-google-1", "displayName": { "text": "Mock Alehouse" }, "primaryType": "bar", "types": ["bar"], "location": { "latitude": 40.714, "longitude": -73.957 }, "formattedAddress": "100 Mock St, Brooklyn" },
+    { "id": "fixture-google-2", "displayName": { "text": "Fixture Wine Bar" }, "primaryType": "wine_bar", "types": ["wine_bar", "bar"], "location": { "latitude": 40.7301, "longitude": -73.9512 }, "formattedAddress": "200 Mock Ave, Brooklyn" },
+    { "id": "fixture-google-3", "displayName": { "text": "Not A Bar Trattoria" }, "primaryType": "italian_restaurant", "types": ["restaurant", "bar"], "location": { "latitude": 40.694, "longitude": -73.921 }, "formattedAddress": "300 Pasta Pl" }
+  ]
+}
