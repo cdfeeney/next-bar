@@ -967,3 +967,9 @@ fact. **It is worth the operator checking**, because if a peer session is live a
 - Tests: quiz e2e + smoke 43/43 both viewports; vitest 1756/1756; tsc clean.
 - ENVIRONMENT NOTE FOR OPERATOR: node_modules junction (→ next-bar) was reified by npm into a real local directory during the additive motion install. Primary checkout tree verified intact (203 dirs, framer-motion present). This worktree is now dependency-isolated (~extra disk). Recreate the junction only if you prefer shared trees.
 - Checkpoint fix-up applied (operator docs untouched).
+
+### Entry 5 — g-c8da7452 TestFlight/monorepo readiness: COMPLETE
+- Commit: 191c49b (2 docs). Tier T2. Lanes: Claude BLOCK (2 HIGH + 1 MEDIUM — first draft overstated readiness; all corrected, finder CONFIRMED RESOLVED) / Codex 1 MEDIUM (same icon defect).
+- The corrections ARE the deliverable: privacy labels FAIL (Q1/Q3 block), in-app deletion OPERATOR-BLOCKED (B1 invalid production service-role key ⇒ route dark), manifest 192-icon resolves to 512, monorepo stays LOCKED with measured gaps.
+- Evidence: npm run build exit 0. No accounts, no uploads, no move, no code change.
+- Checkpoint fix-up applied (operator docs untouched).
