@@ -379,6 +379,48 @@ export default function MapPage(): JSX.Element {
         </div>
       </header>
 
+      {/* Exact-filter recovery (goal g-6cc99120): when the ACTIVE filter
+          combination has no exact intersection, say so honestly and offer a
+          way forward — never silently weaken the request (filterBars stays a
+          strict AND; the no-weakening invariant is test-pinned). "Adjust"
+          reopens the sheet, which re-seeds from the APPLIED filters, so the
+          user's selections survive; "Clear" is the explicit reset. */}
+      {activeFilterCount > 0 && filteredBars.length === 0 ? (
+        <div
+          role="status"
+          data-testid="exact-filter-empty"
+          className="max-w-sm mx-auto mt-4 mb-2 px-4"
+        >
+          <div className="bg-surface border border-border rounded-2xl p-4 text-center flex flex-col gap-3">
+            <p className="text-sm">
+              No bar matches{' '}
+              <span className="font-display text-accent">{filterSummary}</span>{' '}
+              exactly.
+            </p>
+            <p className="text-xs text-muted">
+              Your filters are unchanged — nothing was widened behind your
+              back. Loosen one, or start over.
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => setFiltersOpen(true)}
+                className="min-h-[44px] touch-manipulation px-4 rounded-full bg-accent text-bg font-display text-sm"
+              >
+                Adjust filters
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilters(EMPTY_FILTERS)}
+                className="min-h-[44px] touch-manipulation px-4 rounded-full border border-border font-display text-sm hover:border-accent transition-colors"
+              >
+                Clear filters
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section className="px-0 md:px-6">
         <BarMap
           bars={filteredBars}

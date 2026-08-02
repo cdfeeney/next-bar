@@ -204,3 +204,35 @@ describe('filterBars — OR within an axis, AND across axes', () => {
     expect(out.map((b) => b.id)).toEqual(['harlem-club']);
   });
 });
+
+describe('filterBars — exact filters are NEVER silently weakened (goal g-6cc99120)', () => {
+  // Typed through the file's own factory (santa review: `as never` casts
+  // silenced real structural mismatches — these fixtures must fail loudly
+  // at compile time if Bar or FindBarFilters change shape).
+  const threeAxisCombo: FindBarFilters = {
+    neighborhoods: [],
+    radius: null,
+    vibes: ['chill', 'rooftop', 'old-nyc'],
+  };
+
+  test('a three-axis combo with only pairwise matches returns EMPTY — no padding, no fallback', () => {
+    // Chill (Energy) + Rooftop (Setting) + Old New York (Scene): every bar
+    // below matches exactly two of the three axes. The honest answer is [],
+    // and the UI's job is to say so — not to quietly widen the request.
+    const bars = [
+      makeBar({ id: 'chill-rooftop', tags: ['chill', 'rooftop'] }),
+      makeBar({ id: 'chill-oldnyc', tags: ['chill', 'old-nyc'] }),
+      makeBar({ id: 'rooftop-oldnyc', tags: ['rooftop', 'old-nyc'] }),
+      makeBar({ id: 'everything-else', tags: ['loud', 'club', 'trendy'] }),
+    ];
+    expect(filterBars(bars, threeAxisCombo, null)).toEqual([]);
+  });
+
+  test('the same combo DOES match a bar carrying all three (sanity: the AND is real, not vacuous)', () => {
+    const bars = [
+      makeBar({ id: 'the-unicorn', tags: ['chill', 'rooftop', 'old-nyc'] }),
+      makeBar({ id: 'chill-rooftop', tags: ['chill', 'rooftop'] }),
+    ];
+    expect(filterBars(bars, threeAxisCombo, null).map((b) => b.id)).toEqual(['the-unicorn']);
+  });
+});

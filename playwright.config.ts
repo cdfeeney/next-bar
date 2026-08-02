@@ -69,8 +69,14 @@ export default defineConfig({
       // therefore the identical way to fail on the shortest viewport. Its
       // acceptance criteria are stated at 402x681, so running it only on the
       // taller two would have tested everywhere except where it can break.
+      // exact-filter-empty added 2026-08-02 (goal g-6cc99120): the recovery
+      // card carries two 44px action buttons above the map — the same
+      // bottom-crowded control shape as the specs above, so it must run on
+      // the shortest configured viewport too.
+      // cancel-bottomnav added 2026-08-02 (goal g-2c788c17): its entire
+      // subject is Apply/Cancel-vs-fixed-nav geometry, stated at 402x681.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav)\.spec\.ts/,
     },
   ],
   webServer: {

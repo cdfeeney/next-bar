@@ -226,3 +226,27 @@ describe('wrong-venue guard, now enforced at generation time', () => {
     expect(sidecar).toContain('"googlePlaceId":');
   });
 });
+
+describe('exact-filter e2e fixture invariant (goal g-6cc99120)', () => {
+  it('no catalog bar carries chill + rooftop + old-nyc together', () => {
+    // e2e/exact-filter-empty.spec.ts drives the REAL catalog and depends on
+    // this combination having zero exact matches (santa review: an unpinned
+    // catalog assumption breaks that spec silently). If a venue legitimately
+    // gains all three tags, update the spec to a different impossible combo
+    // in the same edit — this failure is the pointer.
+    const offenders = bars.filter(
+      (b) =>
+        b.tags.includes('chill') &&
+        b.tags.includes('rooftop') &&
+        b.tags.includes('old-nyc'),
+    );
+    expect(offenders.map((b) => b.id)).toEqual([]);
+  });
+
+  it('dropping rooftop from the combo matches at least one bar (the recovery leg stays real)', () => {
+    const matches = bars.filter(
+      (b) => b.tags.includes('chill') && b.tags.includes('old-nyc'),
+    );
+    expect(matches.length).toBeGreaterThan(0);
+  });
+});
