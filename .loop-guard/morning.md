@@ -955,3 +955,9 @@ fact. **It is worth the operator checking**, because if a peer session is live a
 - Commit: 47840be (4 files). Tier T1. Lanes: Claude APPROVE / Codex 1H+1M fixed + confirm [] / GLM SHIP / DeepSeek SHIP. Lane-unique: Codex → dispatcher bypass + beacon-refusal fallback; DeepSeek(design) → facade-constructed envelope + SSR registration; GLM → dormancy documentation.
 - Tests: 16 module, 1743 full, tsc clean, secret scan clean. Residual: adapter dormant until attended enablement.
 - Checkpoint fix-up applied (reset sweep commit, morning-log-only re-commit; operator docs untouched).
+
+### Entry 3 — g-d494ba90 feature safety/continuation: COMPLETE
+- Commit: 3d7df82 (5 files). Tier T1. Lanes: Claude BLOCK + GLM BLOCK (convergent takeover TOCTOU) → resolved by DELETING auto-takeover (refusal-only lock, manual recovery); DeepSeek SHIP; Codex 3 iterative passes (broke two takeover fixes with real counter-examples, final error-shape Medium fixed via its prescription).
+- Lane-unique: Codex → blind-rm steal + 3-process vacancy race + EEXIST shape; Claude/GLM → original TOCTOU + snapshot-hash coverage; DeepSeek → completeOnce TOCTOU contract.
+- Tests: 13 module, 1756 full, tsc clean, secret scan clean. Residual: pid-reuse stuck-lock (fails safe).
+- Checkpoint fix-up applied (operator docs untouched).
