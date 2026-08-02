@@ -81,3 +81,27 @@ if per-user funnels are ever wanted, that's a new consented design.
    saves, visit records) — kept out of the skeleton PR so the flag flip
    is the only behavior change to review.
 5. Optional: enable Vercel Web Analytics in the dashboard for pageviews.
+
+## Adapter layer (2026-08-02, goal g-649592c7) — dark by default
+
+`src/lib/analyticsAdapters.ts` adds versioned, allowlist-enforced envelopes
+(`{ v: 1, name }`, facade-constructed only — no caller-supplied shapes, no
+free-form fields) and an adapter registry that `trackEvent` fans out to
+AFTER the unchanged legacy `/api/event` beacon (the existing four-counter
+aggregate path stays the temporary system of record).
+
+The PostHog adapter ships INERT and structurally cannot collect:
+
+- Triple gate, all required: `NEXT_PUBLIC_POSTHOG_ENABLED === '1'` (exact
+  string) AND `NEXT_PUBLIC_POSTHOG_KEY` AND `NEXT_PUBLIC_POSTHOG_HOST`.
+  None exist in any environment file.
+- No `posthog-js` dependency, no cookies, no localStorage, no `identify()`,
+  no per-user id — a constant anonymous `distinct_id` only, and only when
+  enabled.
+- Disabled ⇒ `capture()` returns before touching any browser/network API
+  (test-pinned with beacon+fetch spies).
+
+**Enabling is an attended operator action**: create the PostHog project,
+set the three env values in the deployment platform (never the repo), and
+review the event allowlist first. Until then this layer is a compile-time
+foundation only.
