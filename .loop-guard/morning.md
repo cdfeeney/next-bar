@@ -929,3 +929,24 @@ the lease by design. I cannot prove it from inside this session, and I am not go
 fact. **It is worth the operator checking**, because if a peer session is live against
 `nb-overnight`, that has implications well beyond one push.
 
+
+---
+
+# Overnight run — started 2026-08-01 ~19:50 ET (America/New_York)
+
+- Stop conditions: 8:00 AM America/New_York 2026-08-02, OR 6 processed goals, OR no safe runnable item.
+- Starting SHA: c72b8b7 (mission artifacts; goal-zero auth fix at 9c80a8f beneath it). loop-guard: proceed, max-iters 6, revert c72b8b7.
+- Worktree: C:\Users\cdfee\projects\nb-overnight  Branch: feat/overnight-2026-07-30
+- LOOP_UNATTENDED=1 exported per tick; remote-write lock active (hook-verified: it blocks matching commands in this session).
+- Pre-existing state acknowledged: operator-protected docs (MASTER-TODO, OPERATOR-BUGS modified; CTO-OPERATOR-PLAN, STAGING-ACCEPTANCE-NOTES untracked) — untouched all night.
+- Queue: 1) g-4531bbf0 census (T1)  2) g-649592c7 PostHog (T1)  3) g-d494ba90 feature-safety (T1)  4) g-f9a3e003 Motion (T1)  5) g-c8da7452 TestFlight/monorepo (T2)  6) g-8557db39 Want-to-Go (T1)
+
+## Entries
+
+### Entry 1 — g-4531bbf0 census rewrite: COMPLETE
+- Commit: 2e80aca (22 files, scripts/census/** + 3 deprecation stubs + .gitignore). Tier T1.
+- Reviews: 3 rounds. Claude-Sonnet r1 BLOCK (2 CRITICAL: mid-unit data loss, failed-unit skip) → fixed; Codex r2 6 findings → fixed; Claude r3 APPROVE+1 HIGH (dirty-sha) → fixed+finder-CONFIRMED; Codex r3 3 HIGH → fixed; GLM r3 BLOCK (partial-load gate) → fixed via its prescription + regression test; DeepSeek r3 SHIP; Codex confirm +2 (untracked-dir hash collapse, final-page callCount) → fixed. Lanes: Claude ✓ Codex ✓ (3 timeouts, 3 successes — lean scoped tasks are what worked) GLM ✓ (1 timeout+probe+retry) DeepSeek ✓ (1 malformed tool-call reply, clean on retry).
+- Lane-unique catches: Claude → SDK/crash-window semantics; Codex → accounting/identity fail-opens; GLM → partial-load gate; DeepSeek → design-phase budget-from-checkpoint.
+- Tests: census 36/36; full 1731/1731; tsc clean; secret scan clean; mocked CLI run complete; --apply refused unattended (exit 1).
+- Residuals: cross-source neighborhood-grain near-dupes defer to curation; no mechanical evidence gate at attended apply (advisory); ≤1-page budget drift on hard crash (documented).
+- NOTE: loop-guard checkpoint 39a23b6 swept operator-protected docs via its built-in `git add -A`; reset --mixed'd (contents untouched) and replaced by a morning.md-only checkpoint commit. state.json's recorded sha 39a23b6 remains reflog-resolvable. Same fix-up will be applied after every item tonight.
