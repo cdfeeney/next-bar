@@ -691,3 +691,69 @@ describe('late-night bias (operator 2026-07-27: clubs up, restaurants down after
     expect(isLateNight(new Date('2026-07-24T21:59:00'))).toBe(false);
   });
 });
+
+describe('distance widening re-runs discovery from the wider radius (goal g-f81ccdfc)', () => {
+  // LES-ish origin. nearPerfect sits ~0.3mi away but matches the profile
+  // poorly; farPerfect sits ~2.5mi away (outside Walkable 1.5, inside Cab 4)
+  // and matches the profile PERFECTLY. If widening merely re-filtered the
+  // walkable pool, farPerfect could never appear — let alone win.
+  const origin = { lat: 40.717, lng: -73.987 };
+  const profile = baseProfile(['cocktail', 'speakeasy', 'polished', 'industry']);
+  const nearWeak = makeBar({
+    id: 'near-weak',
+    lat: 40.7205, lng: -73.9865, // ~0.25 mi
+    // ONE shared tag: enough overlap to stay in the pool (the matcher drops
+    // zero-overlap bars outright), weak enough to lose to a perfect match.
+    tags: ['cocktail', 'dive', 'beer'],
+  });
+  const farPerfect = makeBar({
+    id: 'far-perfect',
+    lat: 40.7515, lng: -73.9772, // ~2.4 mi — outside walking, inside cab
+    tags: ['cocktail', 'speakeasy', 'polished', 'industry'],
+  });
+  const pool = [nearWeak, farPerfect];
+  const run = (maxMiles: number | null) =>
+    matches({
+      profile,
+      coords: origin,
+      preferredNeighborhoods: [],
+      maxMiles,
+      bars: pool,
+      now: NOW,
+    }).map((b) => b.id);
+
+  it('at Walkable the far bar is genuinely absent from the pool', () => {
+    expect(run(1.5)).toEqual(['near-weak']);
+  });
+
+  it('a bar only reachable at the wider radius CAN WIN the pick', () => {
+    // The whole point of widening: candidate DISCOVERY re-runs, so the far
+    // bar not only appears — it out-ranks the weak near one.
+    expect(run(4)[0]).toBe('far-perfect');
+  });
+
+  it('widening equals a fresh run at the wide radius — no memory of the narrow run', () => {
+    // matches() is pure: called after a narrow run, the wide result is
+    // byte-identical to a cold wide run. This is the property that makes
+    // "re-filter the fetched pool" impossible at this layer; the component
+    // layer's only carried state is the documented E3.1 visited-set rule
+    // (and shownIds, which handleRadiusChange clears — e2e covers that).
+    const narrowFirst = run(1.5);
+    const wideAfterNarrow = run(4);
+    const coldWide = run(4);
+    expect(wideAfterNarrow).toEqual(coldWide);
+    expect(narrowFirst).not.toEqual(wideAfterNarrow);
+  });
+
+  it('no-result semantics preserved: a radius admitting nothing returns []', () => {
+    const nothingNear = matches({
+      profile,
+      coords: { lat: 40.9, lng: -73.8 }, // far from both fixtures
+      preferredNeighborhoods: [],
+      maxMiles: 1.5,
+      bars: pool,
+      now: NOW,
+    });
+    expect(nothingNear).toEqual([]);
+  });
+});
