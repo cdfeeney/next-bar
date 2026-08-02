@@ -961,3 +961,9 @@ fact. **It is worth the operator checking**, because if a peer session is live a
 - Lane-unique: Codex → blind-rm steal + 3-process vacancy race + EEXIST shape; Claude/GLM → original TOCTOU + snapshot-hash coverage; DeepSeek → completeOnce TOCTOU contract.
 - Tests: 13 module, 1756 full, tsc clean, secret scan clean. Residual: pid-reuse stuck-lock (fails safe).
 - Checkpoint fix-up applied (operator docs untouched).
+
+### Entry 4 — g-f9a3e003 Motion foundation: COMPLETE
+- Commit: (see feat commit above checkpoint) — package.json/lock, VibeQuiz, motionTokens. Tier T1. Lanes: Claude APPROVE / Codex [] / GLM SHIP / DeepSeek SHIP.
+- Tests: quiz e2e + smoke 43/43 both viewports; vitest 1756/1756; tsc clean.
+- ENVIRONMENT NOTE FOR OPERATOR: node_modules junction (→ next-bar) was reified by npm into a real local directory during the additive motion install. Primary checkout tree verified intact (203 dirs, framer-motion present). This worktree is now dependency-isolated (~extra disk). Recreate the junction only if you prefer shared trees.
+- Checkpoint fix-up applied (operator docs untouched).
