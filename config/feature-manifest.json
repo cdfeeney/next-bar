@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "dataVersion": "bars-table-v1",
+  "features": [
+    {
+      "key": "posthog-adapter",
+      "description": "PostHog analytics adapter (dark foundation, goal g-649592c7)",
+      "defaults": { "development": false, "preview": false, "staging": false, "production": false },
+      "killSwitch": { "owner": "operator", "reason": "attended enablement only — no account/credentials exist", "since": "2026-08-02" },
+      "compat": { "minDataVersion": "bars-table-v1" }
+    },
+    {
+      "key": "census-live-calls",
+      "description": "Live provider spend for scripts/census (goal g-4531bbf0)",
+      "defaults": { "development": false, "preview": false, "staging": false, "production": false },
+      "killSwitch": { "owner": "operator", "reason": "LOOP_UNATTENDED gate + call budget; mocked-only unattended", "since": "2026-08-02" },
+      "compat": { "minDataVersion": "bars-table-v1" }
+    }
+  ]
+}
