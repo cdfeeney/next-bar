@@ -208,8 +208,14 @@ export function watchSearchVisibility(options: WatchOptions): WatchHandle {
     const anchorEl = options.anchor?.() ?? null;
     if (anchorEl && target instanceof HTMLElement && !target.contains(anchorEl)) return;
     const y = scrollTopOf(target, doc);
-    const prev = states.get(target) ?? initialAutoHideState();
-    const next = nextAutoHideState(prev, y, options.isFocused());
+    const stored = states.get(target) ?? initialAutoHideState();
+    // The PUBLISHED value is the only visibility continuation. Per-scroller
+    // storage carries lastY/acc alone: a stored `visible` would be a second
+    // source of truth that reveal() (or any future writer) can leave stale,
+    // and a later sub-threshold event would republish it — the bar hiding on
+    // a 2px upward nudge right after a focus reveal (round-2 panel, found
+    // independently by two lanes, reproduced against the shipped module).
+    const next = nextAutoHideState({ ...stored, visible }, y, options.isFocused());
     states.set(target, next);
     publish(next.visible);
   };

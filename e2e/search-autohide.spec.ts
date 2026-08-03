@@ -114,9 +114,18 @@ test.describe('/ search bar auto-hide (g-90f908bc)', () => {
     await search.focus();
     await expect(search).toHaveCSS('opacity', '1', { timeout: 5_000 });
 
-    // …and after blurring without any scroll, continued downward scrolling
-    // must hide it again — the stuck-visible state is the regression.
+    // …stay revealed through the tiny scroll browsers fire when the keyboard
+    // collapses on blur (round-2 panel: a stale per-scroller state used to
+    // re-hide the bar on exactly this sub-threshold upward nudge)…
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.evaluate(() => {
+      const scroller = document.scrollingElement ?? document.documentElement;
+      scroller.scrollTo({ top: scroller.scrollTop - 2, behavior: 'instant' });
+    });
+    await expect(search).toHaveCSS('opacity', '1');
+
+    // …and after that blur, continued DECISIVE downward scrolling must hide
+    // it again — the stuck-visible state is the round-1 regression.
     await page.evaluate(async () => {
       const scroller = document.scrollingElement ?? document.documentElement;
       for (let i = 0; i < 10; i++) {

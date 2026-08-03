@@ -274,6 +274,34 @@ describe('watchSearchVisibility', () => {
     el.remove();
   });
 
+  it('a sub-threshold wobble after reveal() does not re-hide (stale per-scroller state)', () => {
+    // Round-2 panel HIGH/MED (Opus reproduced it; Codex converged): reveal()
+    // used to flip only the published closure while the scroller's stored
+    // state kept visible:false — the next event that crossed no threshold
+    // (e.g. the tiny scroll browsers fire when the keyboard collapses on
+    // blur) republished the stale false and the bar vanished on an upward
+    // nudge. The published value must be the ONLY visibility continuation.
+    const el = scrollable(0);
+    const onChange = vi.fn();
+    const handle = watchSearchVisibility({ isFocused: () => false, onChange });
+
+    (el as unknown as { scrollTop: number }).scrollTop = 600;
+    el.dispatchEvent(new Event('scroll'));
+    expect(onChange).toHaveBeenLastCalledWith(false);
+
+    handle.reveal();
+    expect(onChange).toHaveBeenLastCalledWith(true);
+
+    onChange.mockClear();
+    // 2px upward wobble — under DIRECTION_COMMIT_PX, opposite direction.
+    (el as unknown as { scrollTop: number }).scrollTop = 598;
+    el.dispatchEvent(new Event('scroll'));
+    expect(onChange).not.toHaveBeenCalledWith(false);
+
+    handle.stop();
+    el.remove();
+  });
+
   it('clamps overscroll: rubber-band snap-back from past the bottom does not reveal', () => {
     // Round-1 panel MEDIUM (Codex; DeepSeek reached the same case): WebKit
     // rubber-banding reports offsets past the legal maximum, and the
