@@ -93,8 +93,12 @@ App Store Connect → TestFlight → Internal Testing → create group "Partners
 → add Apple IDs (Justin, Taylor, Cormac + Connor). Internal testers get
 builds **immediately, no beta review wait** (up to 100 members of your team;
 add them in Users and Access first with any role, e.g. Customer Support).
-External groups (friends, bar contacts) DO go through the one-time beta
-review — create group "Beta" and send the public link.
+
+**External groups: NOT for these builds.** Remote-origin (`server.url`)
+binaries are internal-only (see Architecture above) — an external group's
+one-time beta review would put a webview wrapper in front of Apple review.
+Create the external "Beta" group + public link only after the migration to
+the locally-packaged shell (TESTFLIGHT-ARCH-DECISION-g-39169b3b).
 
 Testers install the free **TestFlight** app, tap the invite, done.
 

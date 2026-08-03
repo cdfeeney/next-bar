@@ -17,19 +17,46 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // `server_url` dispatch input). Never hard-code a host here again.
 const serverUrl = process.env.CAP_SERVER_URL ?? 'https://next-bar.com';
 
+// Fail closed, and fail LEGIBLY, on a bad override: the origin must be a
+// clean https:// web origin. Without this, an http:/file:/javascript:
+// value would pass config loading (iOS ATS would then brick an http build
+// AFTER upload), and a scheme-less typo would surface only as a bare
+// "Invalid URL" stack trace deep in the CLI (review: Codex M2 + Fable LOW).
+const parsedOrigin = (() => {
+  let parsed: URL;
+  try {
+    parsed = new URL(serverUrl);
+  } catch {
+    throw new Error(
+      `Invalid CAP_SERVER_URL: "${serverUrl}" — must be a full https:// origin (e.g. https://next-bar.com)`,
+    );
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname === '' || parsed.username || parsed.password) {
+    throw new Error(
+      `Invalid CAP_SERVER_URL: "${serverUrl}" — only a credential-free https:// origin is allowed`,
+    );
+  }
+  return parsed;
+})();
+
 const config: CapacitorConfig = {
   appId: 'com.nextbar.app',
   appName: 'Next Bar',
-  // Offline fallback shell only — real content comes from server.url.
+  // Offline fallback shell — served when the remote origin cannot load.
   webDir: 'native/shell',
   server: {
     url: serverUrl,
+    // Without errorPath, webDir content is merely PACKAGED, never shown:
+    // a failed remote load renders a blank webview instead of the
+    // fallback page (review: Codex M1 — latent since PR #90, and load-
+    // bearing now that the default origin predates its DNS).
+    errorPath: 'index.html',
     // Keep in-webview navigation on our origin; everything else opens in
     // Safari (Capacitor default), which is what Apple review expects.
     // The canonical hosts stay allowed even when an override is active so
     // a DNS cutover mid-testing cannot strand an installed build.
     allowNavigation: [
-      ...new Set([new URL(serverUrl).host, 'next-bar.com', 'www.next-bar.com']),
+      ...new Set([parsedOrigin.host, 'next-bar.com', 'www.next-bar.com']),
     ],
   },
   ios: {
