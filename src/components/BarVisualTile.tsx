@@ -15,11 +15,13 @@ type BarVisualTileProps = {
  * photos into BarPicker rows, the Want-to-go list, Tonight suggestions,
  * shared night pages and recap rows. Criterion 12 excludes exactly those
  * surfaces: Google media may appear only on a visible recommendation card
- * and in the open lightbox, both of which now go through BarMedia.
+ * and in the open lightbox — both call resolveMedia (the ONE media
+ * boundary, src/lib/mediaPolicy.ts) directly, with their own chrome.
  *
- * So this component no longer decides anything about photos — there is one
- * media boundary (src/lib/mediaPolicy.ts) and this is not it. Surfaces that
- * ARE allowed imagery render <BarMedia>, which falls back to this tile.
+ * So this component no longer decides anything about photos. (A <BarMedia>
+ * wrapper over the same boundary existed but had zero adopters — every
+ * imagery surface documented its reason to use resolveMedia directly — and
+ * was removed with that evidence in goal g-43d6da5f.)
  *
  * Decorative (the bar name is always adjacent text), so aria-hidden.
  */

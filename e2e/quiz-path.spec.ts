@@ -112,6 +112,19 @@ test.describe('Quiz path', () => {
     expect([...profile.tags].sort()).toEqual(['beer', 'pub']);
   });
 
+  test('the quiz completes under prefers-reduced-motion (g-43d6da5f crit 6)', async ({
+    page,
+  }) => {
+    // MotionConfig reducedMotion="user" honors the OS setting — the flow
+    // must remain fully functional with animations reduced, not merely
+    // prettier without them.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await reachQuizResults(page);
+    await expect(
+      page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+    ).toBeVisible();
+  });
+
   test('results show a subtle dismissible install nudge, not the full marketing CTA', async ({ page }) => {
     await reachQuizResults(page);
 

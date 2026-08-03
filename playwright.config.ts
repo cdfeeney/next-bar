@@ -48,6 +48,20 @@ export default defineConfig({
       dependencies: ['warmup'],
       testIgnore: /warmup\.setup\.ts/,
     },
+    // Marketing/legal routes are read on DESKTOPS too (links get opened on
+    // laptops far more than app surfaces do), and until 2026-08-03 nothing
+    // exercised them above a phone viewport (g-43d6da5f crit 2 audit
+    // finding). Scoped tight: only the marketing-route spec.
+    {
+      name: 'Desktop marketing',
+      use: { ...devices['Desktop Chrome'] },
+      // app-shell-smoke included deliberately (santa: Codex): it holds the
+      // actual /install marketing-route test — app-store-pack alone visits
+      // /, /map and the legal pages, which left the audit's "desktop
+      // marketing coverage" claim technically hollow.
+      testMatch: /(app-store-pack|app-shell-smoke)\.spec\.ts/,
+      dependencies: ['warmup'],
+    },
     // Playwright's device registry stops at iPhone 15 Pro Max (checked again on
     // the 1.62 upgrade), so the current hardware is pinned by hand. The manual
     // viewport below is what makes this project correct regardless of what the
@@ -89,8 +103,11 @@ export default defineConfig({
       // subject is Apply/Cancel-vs-fixed-nav geometry, stated at 402x681.
       // search-bars added 2026-08-03 (goal g-7b6021a8): the acceptance is
       // stated at 402x681 (compact-mobile search + save reachability).
+      // install-sheet added 2026-08-03 (goal g-43d6da5f): a BOTTOM sheet
+      // whose primary control sits exactly where the fixed nav lives —
+      // the same bottom-crowded shape as every spec above.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet)\.spec\.ts/,
       dependencies: ['warmup'],
     },
   ],
