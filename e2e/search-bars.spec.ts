@@ -28,7 +28,37 @@ async function openSearch(page: Page): Promise<void> {
 }
 
 async function clearWantToGo(page: Page): Promise<void> {
-  await page.evaluate((key) => window.localStorage.removeItem(key), WANT_KEY);
+  // Saves live in the lists store now (g-ac3a291c facade); the legacy key
+  // may also hold pre-fold seeds — clear the reserved list AND the key.
+  await page.evaluate((key) => {
+    window.localStorage.removeItem(key);
+    try {
+      const raw = window.localStorage.getItem('next-bar:lists:v1');
+      if (!raw) return;
+      const lists = JSON.parse(raw) as Array<{ id: string }>;
+      window.localStorage.setItem(
+        'next-bar:lists:v1',
+        JSON.stringify(lists.filter((l) => l.id !== 'want-to-go')),
+      );
+    } catch {
+      // corrupt lists store — leave it; the app's tolerant read handles it
+    }
+  }, WANT_KEY);
+}
+
+/** Read the saved bar ids from where they now live (the lists store). */
+async function readWantIds(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    try {
+      const raw = window.localStorage.getItem('next-bar:lists:v1');
+      if (!raw) return [];
+      const lists = JSON.parse(raw) as Array<{ id: string; barIds: string[] }>;
+      const wtg = lists.find((l) => l.id === 'want-to-go');
+      return wtg ? wtg.barIds : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 const searchBox = (page: Page) => page.getByRole('textbox', { name: 'Search bars' });
@@ -222,6 +252,7 @@ test.describe('/search saves to Want to Go', () => {
 
     // The saved bar is on the Rankings → Want to go tab.
     await page.goto('/rankings');
+    await page.getByRole('button', { name: /Lists — showing/ }).click();
     await page.getByRole('button', { name: 'Want to go', exact: true }).click();
     const list = page.getByTestId('want-to-go-list');
     await expect(list.getByRole('heading', { name: 'Attaboy' })).toBeVisible();
@@ -265,6 +296,7 @@ test.describe('/search saves to Want to Go', () => {
     await page.goto('/rankings');
     await page.evaluate((key) => window.localStorage.removeItem(key), WANT_KEY);
     await page.reload();
+    await page.getByRole('button', { name: /Lists — showing/ }).click();
     await page.getByRole('button', { name: 'Want to go', exact: true }).click();
     await page.getByRole('link', { name: /Find bars to add/ }).click();
     await expect(page).toHaveURL(/\/search$/);
@@ -286,13 +318,9 @@ test.describe('/search saves to Want to Go', () => {
     await searchBox(page).fill('Attaboy');
     await page.getByRole('button', { name: 'Save Attaboy to Want to go' }).click();
     // Storage holds exactly ONE entry — dedup pinned at the storage level
-    // (santa: Codex/GLM).
-    const count = await page.evaluate((key) => {
-      const raw = window.localStorage.getItem(key);
-      const list = raw ? (JSON.parse(raw) as Array<{ barId: string }>) : [];
-      return list.filter((e) => e.barId === 'attaboy').length;
-    }, WANT_KEY);
-    expect(count).toBe(1);
+    // (santa: Codex/GLM). Reads the lists store, where saves now live.
+    const wantIds = await readWantIds(page);
+    expect(wantIds.filter((id) => id === 'attaboy')).toHaveLength(1);
     // Client-side tab switch (no reload) — the freshly mounted consumer
     // must see the save immediately.
     await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Rankings' }).click();
@@ -303,20 +331,26 @@ test.describe('/search saves to Want to Go', () => {
     // mutation trace) to delete the very save under test. exact: true +
     // the barrier makes mis-targeting impossible.
     await expect(page).toHaveURL(/\/rankings$/);
-    const pill = page.getByRole('button', { name: 'Want to go', exact: true });
-    // Retry: right after a client-side navigation the page can remount
-    // (dev double-mount) and drop the first activation.
+    // The Lists switcher replaced the chip row (g-ac3a291c): open it, pick
+    // Want to go, and confirm via the switcher's own label. Retry: right
+    // after a client-side navigation the page can remount (dev
+    // double-mount) and drop the first activation.
     await expect(async () => {
-      await pill.click();
-      await expect(pill).toHaveAttribute('aria-pressed', 'true', { timeout: 1_500 });
+      await page.getByRole('button', { name: /Lists — showing/ }).click();
+      await page
+        .getByRole('button', { name: 'Want to go', exact: true })
+        .click({ timeout: 1_500 });
+      await expect(
+        page.getByRole('button', { name: 'Lists — showing Want to go' }),
+      ).toBeVisible({ timeout: 1_500 });
     }).toPass({ timeout: 15_000 });
     // Split diagnosis: storage must STILL hold the save at this point —
     // separates "persistence lost" from "render lookup failed".
-    const storedAfterNav = await page.evaluate(
-      (key) => window.localStorage.getItem(key) ?? '',
-      WANT_KEY,
-    );
-    expect(storedAfterNav, 'save vanished from storage after client-side nav').toContain('attaboy');
+    const wantIdsAfterNav = await readWantIds(page);
+    expect(
+      wantIdsAfterNav.includes('attaboy'),
+      'save vanished from storage after client-side nav',
+    ).toBe(true);
     await expect(
       page.getByTestId('want-to-go-list').getByRole('heading', { name: 'Attaboy' }),
     ).toBeVisible();

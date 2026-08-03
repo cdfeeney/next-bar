@@ -15,8 +15,13 @@ import { isShareAbort } from '@/lib/share';
  * render, so this stays SSR-safe (no `window` during hydration).
  */
 export type ShareButtonProps = {
-  /** App-relative path to share, e.g. `/u/connor`. */
-  path: string;
+  /**
+   * App-relative path to share, e.g. `/u/connor`. OMIT for TEXT-ONLY
+   * sharing (g-ac3a291c crit 8): device-local data (lists) must never be
+   * dressed in a URL the server can't serve — the sheet and the clipboard
+   * then carry exactly the text.
+   */
+  path?: string;
   /** Share-sheet text. Also the clipboard payload, prefixed to the URL. */
   text: string;
   /** Visible button label. */
@@ -77,11 +82,13 @@ export default function ShareButton({
   };
 
   const attemptShare = async (): Promise<void> => {
-    const url = `${window.location.origin}${path}`;
+    const url = path === undefined ? null : `${window.location.origin}${path}`;
 
     if (typeof navigator.share === 'function') {
       try {
-        await navigator.share({ title: text, text, url });
+        await navigator.share(
+          url === null ? { title: text, text } : { title: text, text, url },
+        );
         onShared?.('native');
         return;
       } catch (err) {
@@ -92,7 +99,7 @@ export default function ShareButton({
     }
 
     try {
-      await navigator.clipboard.writeText(`${text} ${url}`);
+      await navigator.clipboard.writeText(url === null ? text : `${text} ${url}`);
       setCopied(true);
       onShared?.('clipboard');
       if (timer.current) clearTimeout(timer.current);

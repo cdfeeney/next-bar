@@ -27,9 +27,11 @@ describe('WantToGoToggle', () => {
 
     await user.click(save);
 
-    // Persisted via lib/wantToGo — same key/shape every other consumer reads.
+    // Persisted via lib/wantToGo — the facade now stores saves in the
+    // Lists model (g-ac3a291c), so assert through the same API every
+    // consumer reads rather than the retired legacy key.
     expect(loadWantToGo().map((e) => e.barId)).toEqual(['bar-1']);
-    expect(window.localStorage.getItem(WANT_TO_GO_KEY)).toContain('bar-1');
+    expect(window.localStorage.getItem('next-bar:lists:v1')).toContain('bar-1');
 
     const remove = screen.getByRole('button', {
       name: 'Remove Attaboy from Want to go',

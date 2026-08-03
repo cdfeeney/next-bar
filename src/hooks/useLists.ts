@@ -10,7 +10,10 @@ import {
   removeBarFromList as removeBarLib,
 } from '@/lib/lists';
 
-const KEY = 'next-bar:lists:v1';
+import { LISTS_KEY } from '@/lib/lists';
+import { ensureWantToGoFolded } from '@/lib/wantToGo';
+
+const KEY = LISTS_KEY;
 
 export type UseListsReturn = {
   lists: BarList[];
@@ -30,6 +33,11 @@ export function useLists(): UseListsReturn {
   const [lists, setLists] = useState<BarList[]>([]);
 
   useEffect(() => {
+    // Fold any legacy Want-to-go store into the lists model BEFORE the
+    // first read — /lists and every other lists consumer must see the
+    // reserved list on an upgraded device, not only after a want-to-go
+    // surface happened to mount first (santa: Codex, g-ac3a291c).
+    ensureWantToGoFolded();
     setLists(loadLists());
     const onStorage = (event: StorageEvent): void => {
       if (event.key !== null && event.key !== KEY) return;

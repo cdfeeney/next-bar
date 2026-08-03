@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildListShareText,
   buildMapsHref,
   buildPickPath,
   buildProfilePath,
@@ -131,5 +132,32 @@ describe('buildMapsHref', () => {
     const href = buildMapsHref(bar);
     expect(href).not.toContain('Death & Co');
     expect(href).toContain('Death%20%26%20Co');
+  });
+});
+
+describe('buildListShareText (g-ac3a291c — text-only list sharing)', () => {
+  const bars = [
+    { name: 'Attaboy', neighborhood: 'LES' },
+    { name: 'Death & Co', neighborhood: 'East Village' },
+  ];
+
+  it('builds a numbered, named text payload', () => {
+    const text = buildListShareText('Date bars', bars);
+    expect(text).toContain('Date bars');
+    expect(text).toContain('1. Attaboy (LES)');
+    expect(text).toContain('2. Death & Co (East Village)');
+  });
+
+  it('NEVER contains a URL — device-only data must not get a fake public link (crit 8)', () => {
+    const text = buildListShareText('Date bars', bars);
+    expect(text).not.toMatch(/https?:\/\//);
+    expect(text).not.toContain('next-bar');
+    expect(text).not.toContain('/share/');
+  });
+
+  it('empty lists share an honest empty line', () => {
+    const text = buildListShareText('Date bars', []);
+    expect(text).toContain('Date bars');
+    expect(text).not.toMatch(/\d\./);
   });
 });

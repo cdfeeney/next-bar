@@ -3,7 +3,9 @@ import {
   addBarToList,
   createList,
   deleteList,
+  foldIntoList,
   loadLists,
+  pruneBarsFromList,
   removeBarFromList,
 } from '@/lib/lists';
 
@@ -78,5 +80,41 @@ describe('lists lib', () => {
     const b = createList('Same');
     expect(a?.id).not.toBe(b?.id);
     expect(loadLists()).toHaveLength(2);
+  });
+
+  describe('foldIntoList (g-ac3a291c reserved-list fold)', () => {
+    it('creates the list with the given fixed id when absent', () => {
+      foldIntoList('want-to-go', 'Want to go', ['a', 'b']);
+      const list = loadLists().find((l) => l.id === 'want-to-go');
+      expect(list).toBeDefined();
+      expect(list!.name).toBe('Want to go');
+      expect(list!.barIds).toEqual(['a', 'b']);
+    });
+
+    it('appends only missing bars to an existing list, preserving order, in one write', () => {
+      foldIntoList('want-to-go', 'Want to go', ['a']);
+      foldIntoList('want-to-go', 'Want to go', ['b', 'a', 'c']);
+      const list = loadLists().find((l) => l.id === 'want-to-go');
+      expect(list!.barIds).toEqual(['a', 'b', 'c']);
+      expect(loadLists()).toHaveLength(1);
+    });
+
+    it('empty barIds still ensures the list exists', () => {
+      foldIntoList('want-to-go', 'Want to go', []);
+      expect(loadLists().find((l) => l.id === 'want-to-go')).toBeDefined();
+    });
+  });
+
+  describe('pruneBarsFromList', () => {
+    it('drops every matching bar in one pass and no-ops otherwise', () => {
+      foldIntoList('want-to-go', 'Want to go', ['a', 'b', 'c']);
+      pruneBarsFromList('want-to-go', new Set(['a', 'c', 'unrelated']));
+      expect(
+        loadLists().find((l) => l.id === 'want-to-go')!.barIds,
+      ).toEqual(['b']);
+      const before = window.localStorage.getItem(KEY);
+      pruneBarsFromList('want-to-go', new Set(['nope']));
+      expect(window.localStorage.getItem(KEY)).toBe(before);
+    });
   });
 });

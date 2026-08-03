@@ -51,8 +51,30 @@ async function seedWantToGo(page: Page, barIds: string[]): Promise<void> {
   await page.reload();
 }
 
+/**
+ * Open the Want-to-go view via the Lists switcher (g-ac3a291c): the old
+ * always-visible chip row is gone — the switcher discloses the options.
+ * Seeding above writes the LEGACY key on purpose: reaching the list
+ * through the switcher also proves the legacy→lists fold ran.
+ */
 async function openWantTab(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Want to go' }).click();
+  await page.getByRole('button', { name: /Lists — showing/ }).click();
+  await page.getByRole('button', { name: 'Want to go', exact: true }).click();
+}
+
+/** Read the folded saves from the lists store (where they now live). */
+async function readWantIds(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    try {
+      const raw = window.localStorage.getItem('next-bar:lists:v1');
+      if (!raw) return [];
+      const lists = JSON.parse(raw) as Array<{ id: string; barIds: string[] }>;
+      const wtg = lists.find((l) => l.id === 'want-to-go');
+      return wtg ? wtg.barIds : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 test.describe('Want to go list on /rankings (QA5-S2)', () => {
@@ -74,12 +96,14 @@ test.describe('Want to go list on /rankings (QA5-S2)', () => {
     await expect(list).not.toContainText(ATTABOY.name);
     await expect(list).toContainText(DEATH_AND_CO.name);
 
-    const stored = await page.evaluate(
+    // Persistence check reads the LISTS store — the legacy key is folded
+    // in and removed on first load (g-ac3a291c).
+    expect(await readWantIds(page)).toEqual([DEATH_AND_CO.id]);
+    const legacyKey = await page.evaluate(
       (key) => window.localStorage.getItem(key),
       WANT_KEY,
     );
-    const entries = JSON.parse(stored as string) as Array<{ barId: string }>;
-    expect(entries.map((e) => e.barId)).toEqual([DEATH_AND_CO.id]);
+    expect(legacyKey).toBeNull();
   });
 
   // Re-pointed at /map (goal g-12d33864): /discover is archived, so the empty
@@ -117,17 +141,12 @@ test.describe('Want to go list on /rankings (QA5-S2)', () => {
     // The bar is now ranked…
     await expect(page.locator('article').first()).toContainText(ATTABOY.name);
 
-    // …and the auto-prune dropped it from the want-to-go list.
+    // …and the auto-prune dropped it from the want-to-go list. Storage
+    // assertion reads the LISTS store — the legacy key is removed by the
+    // fold on first load, so polling it was vacuously green regardless of
+    // whether the prune ran (santa: Sonnet verifier, g-ac3a291c).
     await openWantTab(page);
     await expect(page.getByTestId('want-to-go-empty')).toBeVisible();
-    await expect.poll(async () => {
-      const stored = await page.evaluate(
-        (key) => window.localStorage.getItem(key),
-        WANT_KEY,
-      );
-      return stored === null
-        ? []
-        : (JSON.parse(stored) as Array<{ barId: string }>).map((e) => e.barId);
-    }).toEqual([]);
+    await expect.poll(async () => readWantIds(page)).toEqual([]);
   });
 });

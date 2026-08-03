@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { WantToGoEntry } from '@/lib/wantToGo';
+import { LISTS_KEY } from '@/lib/lists';
 import {
   WANT_TO_GO_KEY,
   addWantToGo as addLib,
@@ -37,8 +38,18 @@ export function useWantToGo(): UseWantToGoReturn {
 
   useEffect(() => {
     setEntries(loadWantToGo());
+    // Both keys: the facade's own legacy-contract key AND the lists store
+    // key — the saves now LIVE in the lists model (g-ac3a291c), so a
+    // removal made on /lists or the rankings switcher must refresh every
+    // mounted want-to-go consumer too.
     const onStorage = (event: StorageEvent): void => {
-      if (event.key !== null && event.key !== WANT_TO_GO_KEY) return;
+      if (
+        event.key !== null &&
+        event.key !== WANT_TO_GO_KEY &&
+        event.key !== LISTS_KEY
+      ) {
+        return;
+      }
       setEntries(loadWantToGo());
     };
     window.addEventListener('storage', onStorage);

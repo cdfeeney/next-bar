@@ -96,3 +96,22 @@ export function buildMapsHref(bar: Pick<Bar, 'name' | 'address'>): string {
     `${bar.name} ${bar.address}`,
   )}`;
 }
+
+/**
+ * Text-only share payload for a device-local bar list (g-ac3a291c crit
+ * 7/8): a numbered, human-readable list for the native share sheet or
+ * clipboard. DELIBERATELY contains no URL of any kind — lists live only
+ * on this device, and a link would be a promise the server cannot keep.
+ * If public list pages ever ship (server work), the URL joins then.
+ */
+export function buildListShareText(
+  listName: string,
+  bars: ReadonlyArray<{ name: string; neighborhood: string }>,
+): string {
+  const header = `${listName} — my NYC bar list:`;
+  if (bars.length === 0) return `${header} (empty so far)`;
+  const lines = bars.map(
+    (bar, i) => `${i + 1}. ${bar.name} (${bar.neighborhood})`,
+  );
+  return [header, ...lines].join('\n');
+}

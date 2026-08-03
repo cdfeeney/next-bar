@@ -3,8 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Bar } from '@/types';
 import type { Rating } from '@/types/ratings';
+import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { usePairwise } from '@/hooks/usePairwise';
+import { useLists } from '@/hooks/useLists';
+import { WANT_TO_GO_LIST_ID } from '@/lib/wantToGo';
 import { getBarById } from '@/lib/catalog';
 import BarPicker from '@/components/BarPicker';
 import PairwiseSheet from '@/components/PairwiseSheet';
@@ -77,6 +80,16 @@ export default function QuickAddBar({
     dismissPrompt,
     sessionProgress,
   } = usePairwise();
+  // Multi-list checkmarks during rating (g-ac3a291c crit 6): while the
+  // tier sheet is open, the bar can be toggled onto any NAMED list.
+  // Want-to-go is deliberately absent here — rating a bar means you've
+  // been, and rated bars are auto-pruned from Want-to-go, so offering it
+  // would undo itself.
+  const { lists, addBarToList, removeBarFromList } = useLists();
+  const namedLists = useMemo(
+    () => lists.filter((l) => l.id !== WANT_TO_GO_LIST_ID),
+    [lists],
+  );
 
   const isModalOpen = stage !== 'idle';
 
@@ -171,7 +184,7 @@ export default function QuickAddBar({
                 <BarPicker onPick={handlePick} />
               </div>
             ) : (
-              <div className="flex flex-col gap-3 pt-4">
+              <div className="flex flex-1 flex-col gap-3 pt-4 overflow-y-auto min-h-0">
                 {TIER_OPTIONS.map((option) => (
                   <button
                     key={option.rating}
@@ -189,6 +202,61 @@ export default function QuickAddBar({
                     <p className="text-xs mt-1 opacity-80">{option.hint}</p>
                   </button>
                 ))}
+
+                {/* Multi-list checkmarks (crit 6): membership toggles apply
+                    IMMEDIATELY and independently of the tier tap, so a bar
+                    can join lists whether or not the rating completes. */}
+                {selectedBar !== null ? (
+                  <div className="pt-2 border-t border-border">
+                    <p className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-2">
+                      Also on your lists
+                    </p>
+                    {namedLists.length === 0 ? (
+                      <p className="text-muted text-xs">
+                        No lists yet —{' '}
+                        <Link
+                          href="/lists"
+                          className="text-accent underline-offset-4 hover:underline"
+                        >
+                          create one on Your lists →
+                        </Link>
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {namedLists.map((list) => {
+                          const on = list.barIds.includes(selectedBar.id);
+                          return (
+                            <button
+                              key={list.id}
+                              type="button"
+                              aria-pressed={on}
+                              aria-label={
+                                on
+                                  ? `Remove ${selectedBar.name} from ${list.name}`
+                                  : `Add ${selectedBar.name} to ${list.name}`
+                              }
+                              onClick={() =>
+                                on
+                                  ? removeBarFromList(list.id, selectedBar.id)
+                                  : addBarToList(list.id, selectedBar.id)
+                              }
+                              className={[
+                                'min-h-[44px] touch-manipulation px-4 py-2 rounded-full',
+                                'font-display text-sm border transition-colors',
+                                on
+                                  ? 'bg-accent text-bg border-accent'
+                                  : 'bg-surface border-border text-muted hover:text-text',
+                              ].join(' ')}
+                            >
+                              {on ? '✓ ' : ''}
+                              {list.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

@@ -11,6 +11,7 @@ import Link from 'next/link';
 import BarPicker from '@/components/BarPicker';
 import { useLists } from '@/hooks/useLists';
 import type { BarList } from '@/lib/lists';
+import { WANT_TO_GO_LIST_ID, purgeWantToGo } from '@/lib/wantToGo';
 import { barById } from '@/lib/demo';
 
 export default function ListsPage(): JSX.Element {
@@ -94,6 +95,22 @@ export default function ListsPage(): JSX.Element {
                   // Mirror the settings confirm pattern (clear-ratings /
                   // clear-profile) — one tap must not destroy a list.
                   if (typeof window === 'undefined') return;
+                  // The reserved Want-to-go list is special-cased twice
+                  // (santa: GLM, g-ac3a291c): the honest message is "clear
+                  // your saves" (the list shell reappears on the next
+                  // save), and the purge also removes any un-folded legacy
+                  // store so old saves can't resurrect the deleted list.
+                  if (list.id === WANT_TO_GO_LIST_ID) {
+                    if (
+                      !window.confirm(
+                        'Clear ALL your Want-to-go saves? This cannot be undone.',
+                      )
+                    ) {
+                      return;
+                    }
+                    purgeWantToGo();
+                    return;
+                  }
                   if (
                     !window.confirm(
                       `Delete the list "${list.name}"? This cannot be undone.`,
