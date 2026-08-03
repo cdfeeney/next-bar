@@ -308,10 +308,14 @@ function DemoProfile({ handle }: { handle: string }): JSX.Element {
         <h1 className="font-display text-2xl mb-2">
           Sign in to see @{handle}&apos;s list
         </h1>
+        {/* No "takes you straight there" promise: /auth currently lands on
+            /settings after sign-in (no return-path plumbing — review:
+            Codex). A validated ?next= flow is Phase-B work; until then the
+            honest instruction is to reopen the link. */}
         <p className="text-muted text-sm mb-6 max-w-sm">
-          Bar lists are shared inside Next Bar. Sign in — or make an
-          account in about a minute — and this link will take you straight
-          to @{handle}.
+          Bar lists are shared inside Next Bar. Sign in — it&apos;s quick
+          to set up — then open this link again to see @{handle}&apos;s
+          picks.
         </p>
         <div className="flex flex-col items-center gap-3">
           <Link
