@@ -75,8 +75,10 @@ export default defineConfig({
       // the shortest configured viewport too.
       // cancel-bottomnav added 2026-08-02 (goal g-2c788c17): its entire
       // subject is Apply/Cancel-vs-fixed-nav geometry, stated at 402x681.
+      // search-bars added 2026-08-03 (goal g-7b6021a8): the acceptance is
+      // stated at 402x681 (compact-mobile search + save reachability).
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars)\.spec\.ts/,
     },
   ],
   webServer: {

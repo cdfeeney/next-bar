@@ -206,13 +206,24 @@ export default function BarLightbox({
   // hydration rule as OpenNowBadge).
   const [rows, setRows] = useState<ReturnType<typeof weekHoursRows>>(null);
 
+  // Data refresh (hours) tracks the OBJECT — a catalog swap delivers fresh
+  // hours for the same bar and the panel must show them.
+  useEffect(() => {
+    setRows(weekHoursRows(bar.hours, new Date()));
+  }, [bar]);
+
+  // Dialog lifecycle (focus steal/restore, key handlers, scroll lock) tracks
+  // the bar IDENTITY only. Keying this on the object meant the async catalog
+  // swap — which replaces every Bar's identity while ids survive — re-ran it
+  // on an open dialog and yanked focus back to ✕ mid-interaction, e.g. a
+  // keyboard user tabbing toward the Want-to-Go toggle on /search
+  // (santa: Codex, round 3). Handlers read refs, so nothing here goes stale.
   useEffect(() => {
     const opener =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
     closeRef.current?.focus();
-    setRows(weekHoursRows(bar.hours, new Date()));
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         onCloseRef.current();
@@ -270,7 +281,7 @@ export default function BarLightbox({
       document.body.style.overflow = prevOverflow;
       opener?.focus();
     };
-  }, [bar]);
+  }, [bar.id]);
 
   const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
     `${bar.name} ${bar.address}`,

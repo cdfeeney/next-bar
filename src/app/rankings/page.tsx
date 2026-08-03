@@ -126,12 +126,20 @@ export default function RankingsPage(): JSX.Element {
           A ~score is tentative — it sits at your tier&apos;s midpoint and
           firms up as you answer comparison prompts.
         </p>
-        <Link
-          href="/lists"
-          className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation mt-1"
-        >
-          Your lists →
-        </Link>
+        <div className="flex items-center justify-center gap-5">
+          <Link
+            href="/lists"
+            className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation mt-1"
+          >
+            Your lists →
+          </Link>
+          <Link
+            href="/search"
+            className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation mt-1"
+          >
+            Search bars →
+          </Link>
+        </div>
         {!hasNoRatings ? (
           // Persistent quick-add entry (B4). The empty state below mounts
           // its own instance — exactly one QuickAddBar renders at a time.
@@ -274,9 +282,15 @@ export default function RankingsPage(): JSX.Element {
       )}
 
       <p className="text-muted text-xs text-center mt-8 pb-24">
-        {auth.status === 'signed-in'
-          ? 'Synced to your account'
-          : 'Stored on this device · sign in to sync'}
+        {/* Want-to-go saves are localStorage-only on every auth path — the
+            signed-in "Synced" claim is true for RATINGS but was false on this
+            tab, contradicting /search's honest device-only disclosure
+            (santa: Codex, round 3). */}
+        {filter === 'want'
+          ? "Want-to-go saves stay on this device — cross-device sync isn't available yet"
+          : auth.status === 'signed-in'
+            ? 'Synced to your account'
+            : 'Stored on this device · sign in to sync'}
       </p>
     </main>
   );

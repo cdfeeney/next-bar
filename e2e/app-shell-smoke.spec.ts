@@ -61,6 +61,13 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/discover');
   });
 
+  test('/search renders the catalog search surface', async ({ page }) => {
+    await page.goto('/search');
+    await expect(page.getByRole('heading', { name: 'Search bars' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
+    await expectNoConsoleErrors(page, '/search');
+  });
+
   test('/rankings renders empty state when no ratings', async ({ page }) => {
     // Fresh Playwright contexts ship with empty localStorage by default —
     // no need to goto('/') first to clear. Skipping that extra navigation

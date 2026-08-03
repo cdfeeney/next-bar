@@ -86,7 +86,9 @@ test.describe('Want to go list on /rankings (QA5-S2)', () => {
   // state's forward path had to move or it would have sent users into a
   // redirect. The assertion is deliberately still on the href — an empty state
   // whose only CTA goes nowhere useful is the bug this test exists to catch.
-  test('empty state renders with the /map pointer', async ({ page }) => {
+  test('empty state renders with the /search pointer', async ({ page }) => {
+    // Was /map until /search became the dedicated find-and-save surface
+    // (goal g-7b6021a8; the click-through is covered in search-bars.spec.ts).
     await seedWantToGo(page, []);
     await openWantTab(page);
 
@@ -95,7 +97,7 @@ test.describe('Want to go list on /rankings (QA5-S2)', () => {
     await expect(empty).toContainText('Nothing saved yet.');
     const cta = empty.getByRole('link', { name: /find bars to add/i });
     await expect(cta).toBeVisible();
-    await expect(cta).toHaveAttribute('href', '/map');
+    await expect(cta).toHaveAttribute('href', '/search');
   });
 
   test('"Been — rank it" opens the ?add tier sheet; rating auto-prunes the bar', async ({
