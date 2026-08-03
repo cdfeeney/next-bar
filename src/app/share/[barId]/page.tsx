@@ -46,9 +46,11 @@ export default async function SharePickPage({
         </p>
 
         <article className="rounded-3xl p-6 border glow-accent border-accent bg-gradient-to-b from-accent/[0.08] to-surface text-center">
-          {/* R7 photo-first (g-b83d1c77): the recommendation card leads
-              with the bar's visual tile (photo when policy allows, glyph
-              fallback otherwise) — it was a pure text card. */}
+          {/* R7 (g-b83d1c77): the recommendation card leads with the bar's
+              deterministic GLYPH tile — it was a pure text card. Glyph
+              only, deliberately NOT a photo: BarVisualTile owns that
+              compliance boundary (see its docstring) and this card must
+              not tempt a photo call back in (santa: Opus, round 1). */}
           <div className="flex justify-center mb-3">
             <BarVisualTile bar={bar} size={56} />
           </div>
