@@ -1,6 +1,9 @@
 # Domain prep + design-audit decision packet (g-b83d1c77) — 2026-08-03
 
-Canonical domain: **next-bar.com**. next-bar.app is STALE — never use.
+Canonical public brand domain: **next-bar.com**. `next-bar.app` is STALE —
+never use. The operator-confirmed three-app topology is recorded in
+`DOMAIN-EMAIL-OPERATOR-RUNBOOK-2026-08-03.md` and supersedes this packet's
+earlier single-origin assumption.
 Nothing here is deployed; code changes in this slice are local commits.
 
 ## What this slice already fixed (mechanical/truthful, no judgment needed)
@@ -50,15 +53,18 @@ Nothing here is deployed; code changes in this slice are local commits.
 4. **CartoCDN map tiles** are a third-party runtime dependency on every
    map surface. Accept (industry-normal) or self-host later. No action
    taken.
-5. **DNS cutover** (when you buy/point next-bar.com — checklist):
-   - Vercel: add next-bar.com + www.next-bar.com to the production
-     project; recommendation: **www → apex 308 redirect** (apex
-     canonical). NOT configured by me.
-   - Set `NEXT_PUBLIC_SITE_URL=https://next-bar.com` on production (this
-     is now the single switch for metadataBase/OG/sitemap/robots).
-   - Intent (not created): `staging.next-bar.com` as the stable staging
-     host — needed by the Supabase auth allowlist and Maps referrer
-     restrictions.
+5. **DNS cutover** (operator-confirmed topology; still not configured):
+   - Public site: add `next-bar.com` + `www.next-bar.com` to the separate
+     public-site Production project; recommendation: **www → apex 308
+     redirect**. This surface owns marketing, install, legal, and support.
+   - Consumer app: add only `app.next-bar.com` to the consumer Production
+     project and set `NEXT_PUBLIC_SITE_URL=https://app.next-bar.com` there.
+   - Venue partner app: `partners.next-bar.com`, in its own project.
+   - Investor portal: `investors.next-bar.com`, in its own project.
+   - Keep `staging.next-bar.com` as the protected consumer Staging host,
+     needed by the Staging Supabase auth allowlist and Maps restrictions.
+   - Never attach a partner or investor hostname to the consumer project as
+     a placeholder, and do not treat "Production" as one shared app.
    - Email DNS before any mailto swap: MX (or forwarding), SPF, DKIM,
      DMARC (start p=none), and a deliverability probe to the new mailbox.
    - TLS is automatic via Vercel once DNS points.
@@ -70,7 +76,7 @@ Nothing here is deployed; code changes in this slice are local commits.
    | Local | http://localhost:3000 | http://localhost:3000/auth/callback |
    | Preview | (ephemeral) | own isolated project or no real auth |
    | Staging | https://staging.next-bar.com | staging callback only |
-   | Production | https://next-bar.com | https://next-bar.com/auth/callback ONLY — no wildcards, no staging host |
+   | Consumer Production | https://app.next-bar.com | https://app.next-bar.com/auth/callback ONLY — no wildcards, no staging/partner/investor host |
    Separate SMTP sender for non-production (never the production sender).
 7. **Apple associated domains**: no Team ID/bundle ID exists locally —
    correctly NOT invented; apple-app-site-association deferred until real

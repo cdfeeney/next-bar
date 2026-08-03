@@ -1,7 +1,7 @@
 # Next Bar domain and support-email operator runbook
 
 Date: 2026-08-03
-Canonical domain: `next-bar.com`
+Public brand domain: `next-bar.com`
 Goal: `g-ade01af7-2533-49d3-851f-ca4667704e97`
 Status: evidence and operator sequence only; no remote changes performed
 
@@ -60,6 +60,29 @@ name and generated hostname, Cloudflare's Active badge and proxy states, any
 conflicting dashboard-only records, and the email-routing state. Any
 already-complete Cloudflare item is checked off and skipped.
 
+### Confirmed three-app topology — operator decision 2026-08-03
+
+The operator confirmed this target mapping before any custom domain is attached:
+
+| Surface | Production origin | Role |
+|---|---|---|
+| Public brand site | `https://next-bar.com` (`www` redirects to apex) | Marketing, install, privacy, terms, and support |
+| Consumer app | `https://app.next-bar.com` | Consumer web app plus hosted API/auth origin; native releases package their UI locally |
+| Venue partner app | `https://partners.next-bar.com` | Bar/venue operator workflows |
+| Investor app | `https://investors.next-bar.com` | Authenticated investor portal |
+| Protected consumer Staging | `https://staging.next-bar.com` | Current consumer-app Staging; remains access protected |
+
+The public brand site is not counted as one of the three applications. Each app
+has its own Production environment; "Production" does not mean "investor
+portal." The current Vercel-generated deployment is the consumer app and must
+not be repurposed as either the investor or partner app.
+
+This topology supersedes the older single-origin assumption that placed the
+consumer app directly at `next-bar.com`. Before launch, the existing marketing,
+install, privacy, terms, and support surfaces must be served by the public brand
+site, while consumer authentication and canonical app metadata move to
+`app.next-bar.com`. No wildcard domain or callback is implied.
+
 ## 3. What the operator can check now without changing anything
 
 ### A. Cloudflare DNS inventory
@@ -115,9 +138,12 @@ Recommended defaults:
 
 | Decision | Recommendation |
 |---|---|
-| Canonical web origin | `https://next-bar.com` |
+| Public brand origin | `https://next-bar.com` |
+| Consumer app origin | `https://app.next-bar.com` |
+| Venue partner origin | `https://partners.next-bar.com` |
+| Investor portal origin | `https://investors.next-bar.com` |
 | `www` behavior | permanent redirect to apex |
-| Protected Staging hostname | `https://staging.next-bar.com` |
+| Protected consumer Staging hostname | `https://staging.next-bar.com` |
 | Initial proxy mode | DNS-only until Vercel ownership and TLS are proven |
 | Public support address | `hi@next-bar.com` |
 | Inbound support mail | Cloudflare Email Routing to a verified private inbox |
@@ -186,10 +212,11 @@ if the destination cannot be verified, or if outbound mail cannot authenticate.
 Export the pre-change DNS inventory before the attended change so rollback is
 exact.
 
-### Phase C — future Production domain cutover
+### Phase C — future Production domain cutovers
 
-This is a separate attended Production session and requires explicit Production
-authorization. Do not combine it with ordinary implementation work.
+These are separate attended Production sessions and require explicit Production
+authorization for each exact Vercel project and domain. Do not combine them with
+ordinary implementation work or assume one app's approval covers another.
 
 Prerequisites:
 
@@ -201,20 +228,39 @@ Prerequisites:
 - legacy-photo Production decision resolved;
 - analytics posture and privacy label resolved.
 
-Sequence:
+#### Phase C1 — public brand site
 
-1. Export Cloudflare's pre-change DNS record inventory.
-2. Add `next-bar.com` and `www.next-bar.com` to the exact Production Vercel
+1. Confirm the public-site project serves approved marketing, install, privacy,
+   terms, and support routes. Do not point the apex at the consumer or investor
+   app merely because those projects already exist.
+2. Export Cloudflare's pre-change DNS record inventory.
+3. Add `next-bar.com` and `www.next-bar.com` to the exact public-site Production
    project; do not move a domain from another project without identifying it.
-3. Use Vercel's requested DNS values, not remembered generic values.
-4. Verify TLS, then set apex canonical and redirect `www` to apex.
-5. Verify `/api/health` returns the reviewed Production identity and SHA.
-6. Set `NEXT_PUBLIC_SITE_URL=https://next-bar.com` only on the Production
-   target and redeploy a newly reviewed SHA if the platform requires it.
-7. Add only exact Production Supabase redirect URLs:
-   `https://next-bar.com/auth/callback` and any separately justified exact path.
-8. Test sign-up, verification, magic link, sign-in/out, deletion, redirects,
-   OG cards, privacy, terms, support, robots, sitemap, PWA install, and rollback.
+4. Use Vercel's requested DNS values, verify TLS, set the apex canonical, and
+   redirect `www` to the apex.
+5. Test identity, redirects, OG cards, privacy, terms, support, install links,
+   robots, sitemap, and rollback.
+
+#### Phase C2 — consumer app
+
+1. Add only `app.next-bar.com` to the reviewed consumer Production project.
+2. Verify `/api/health` returns the reviewed consumer Production identity and
+   SHA before changing authentication configuration.
+3. Set `NEXT_PUBLIC_SITE_URL=https://app.next-bar.com` only on the consumer
+   Production target and redeploy a newly reviewed SHA if required.
+4. Add only the exact consumer Production Supabase redirect URL:
+   `https://app.next-bar.com/auth/callback`. No apex, staging, partner, investor,
+   or wildcard callback belongs in this allowlist entry.
+5. Test sign-up, verification, magic link, sign-in/out, deletion, canonical
+   metadata, PWA/native handoff, universal links, and rollback.
+
+#### Phase C3 — partner and investor apps
+
+Attach `partners.next-bar.com` and `investors.next-bar.com` only after each is a
+separate reviewed application with an identified Vercel project, authentication
+boundary, authorization model, data-access policy, health identity, and rollback
+deployment. Never attach either hostname to the current consumer project as a
+placeholder, and never copy consumer or Production secrets between projects.
 
 Any correction that changes code or environment creates a new candidate and
 invalidates approval for the affected surface.
@@ -228,7 +274,10 @@ Cloudflare zone status:
 Apex record + proxy state:
 WWW record + proxy state:
 Additional conflicting records:
-Vercel Production project identity:
+Vercel public-site Production project identity:
+Vercel consumer Production project identity:
+Vercel partner Production project identity:
+Vercel investor Production project identity:
 Vercel domain status (read-only):
 Vercel Staging project identity:
 Staging domain status (read-only):

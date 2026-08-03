@@ -2,8 +2,9 @@
 
 DRAFT ONLY. No App Store Connect resources touched. Blockers before
 submission remain per TESTFLIGHT-READINESS-2026-08-02: privacy-label Q1
-(waitlist deletion path) and Q3 (analytics posture), plus the domain
-going live (privacy/support URLs below assume next-bar.com).
+(waitlist deletion path) and Q3 (analytics posture), plus the public brand site
+going live. The privacy/support/marketing URLs below belong on `next-bar.com`;
+the operator-confirmed consumer application origin is `app.next-bar.com`.
 
 - **Name:** Next Bar
 - **Subtitle (30 chars):** NYC bars, picked for you
