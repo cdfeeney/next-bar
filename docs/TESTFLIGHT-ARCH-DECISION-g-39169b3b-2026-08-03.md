@@ -243,7 +243,41 @@ deliberately writes it into no configuration.
    operator-triggered; cloud Mac).
 10. 4.2 surface (§5) before ANY external/review-visible build.
 
-## 10. Session boundary compliance
+## 10. Specialist-lane addendum (Kimi K3 deep, T0 panel round 2 — accepted refinements)
+
+The mobile/architecture specialist lane reviewed the decision and returned
+three refinements, accepted into the plan (none refute the ADR):
+
+1. **Migration step 0 (new): inventory the INVISIBLE server surface, not
+   just API routes.** `next/image`'s `/_next/image` optimizer is a server
+   route; `src/middleware.ts` does not run in a static export; a service
+   worker caching HTML/RSC keyed to the web origin can serve "old web UI in
+   a new binary" under `capacitor://localhost`. Native build profile must:
+   `images.unoptimized` (or CDN images), explicit middleware-behavior
+   audit, and a SW disabled/replaced by a git-SHA-versioned asset manifest.
+2. **Reorder: PKCE + deep-link auth (old step 3) must land BEFORE local
+   webDir packaging (old step 4)** — cookie/web-redirect auth cannot work
+   from a capacitor:// origin (no first-party cookies; WebKit blocks
+   third-party), so a local-assets build without PKCE would ship broken
+   sign-in. Register both the custom scheme and universal link with the
+   auth backend when the Bundle ID is confirmed; refresh tokens go to
+   Keychain via Capacitor Preferences, never localStorage.
+3. **Interim dogfood: ship it, with one cheap patch first.** The internal
+   TestFlight build's real value is validating the UNKNOWN signing/ASC/
+   fastlane pipeline end-to-end, which is architecture-independent — do
+   not wait for the config-driven-origin work. But patch the wrapper's
+   hard-coded stale host to next-bar.com (~1h, operator-approved change on
+   main) before the first build, and NEVER enable an external TestFlight
+   group for any server.url build — that prohibition is what makes the
+   graduation gate mechanical.
+4. **4.2 realism:** the likeliest rejection vector is the app *visibly
+   degrading* in review via webview geolocation prompts (core function =
+   location). Cheapest genuine preemption: the native geolocation bridge
+   (plugin + NSLocationWhenInUseUsageDescription + one JS location adapter
+   resolving natively in-app, browser API on web) — ship it with the share
+   sheet; defer push/universal-links/shortcuts until after first approval.
+
+## 11. Session boundary compliance
 
 No Apple identifier/cert/profile/record created; no push/deploy; no
 migration; analytics untouched (dark); no paid API calls; no DNS/credential
