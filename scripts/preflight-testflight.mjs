@@ -174,11 +174,16 @@ for (const [route, level] of [
   }
   let srcHits = '';
   try {
-    srcHits = execFileSync('git', ['grep', '-l', FORBIDDEN_PROD_REF, '--', 'src', 'scripts'], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
+    // ':(exclude)' this file itself: the forbidden ref necessarily appears
+    // here as the pattern being searched for, and without the exclusion the
+    // gate matches its own source on every run once tracked — a permanent
+    // false FAIL (caught by both T0 review lanes; the pre-commit "0 fail"
+    // run passed only because git grep skips untracked files).
+    srcHits = execFileSync(
+      'git',
+      ['grep', '-l', FORBIDDEN_PROD_REF, '--', 'src', 'scripts', ':(exclude)scripts/preflight-testflight.mjs'],
+      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    ).trim();
   } catch {
     // git grep exits 1 when nothing matches — that is the good outcome.
   }
