@@ -270,13 +270,24 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
     const ok = await fakeSignedIn(context, page);
     test.skip(!ok, 'no Supabase URL configured');
 
-    // Hold the unshare RPC open so the in-flight state is observable.
-    let releaseUnshare: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      releaseUnshare = resolve;
-    });
+    // Hold each night's unshare RPC open INDEPENDENTLY (keyed by the
+    // p_night the RPC posts) so both flights can overlap — the old
+    // single-slot bug only manifests when B's unshare STARTS while A's is
+    // in flight (santa: Opus round 3, proven empirically).
+    const releases = new Map<string, () => void>();
+    const gates = new Map<string, Promise<void>>();
+    for (const key of ['2026-07-30', '2026-07-24']) {
+      gates.set(
+        key,
+        new Promise<void>((resolve) => {
+          releases.set(key, resolve);
+        }),
+      );
+    }
     await page.route('**/rest/v1/rpc/unshare_night', async (route) => {
-      await gate;
+      const night = (route.request().postDataJSON() as { p_night?: string })
+        ?.p_night;
+      await (night ? gates.get(night) : undefined);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -330,20 +341,34 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
     // asserted here; its state is asserted on re-expand below.
     const rowB = page.getByTestId('night-row-2026-07-24');
     await rowB.getByRole('button', { name: /July 24/ }).click();
+    const stopB = rowB.getByRole('button', { name: 'Stop sharing' });
     // B's control is fully enabled while A's RPC is in flight (the old
     // shared busy slot disabled/re-enabled ACROSS rows — santa: Opus).
-    await expect(rowB.getByRole('button', { name: 'Stop sharing' })).toBeEnabled();
+    await expect(stopB).toBeEnabled();
 
-    // Re-expand A (collapses B): its busy state SURVIVED in the per-night
-    // set — the shared-slot bug showed a re-enabled button here.
+    // THE DISCRIMINATING STEP (santa: Opus round 3): INITIATE B's unshare
+    // while A's RPC is in flight — the pre-fix single busy slot is
+    // OVERWRITTEN by exactly this write ('A' → 'B'), which is what
+    // re-enabled A's button mid-flight. Without this click the pre-fix
+    // code passes this test (proven empirically against d6fbf27).
+    await stopB.click();
+    await expect(rowB.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+
+    // Re-expand A (collapses B): its busy state must have SURVIVED B's
+    // write. The shared-slot code shows a re-enabled "Stop sharing" here.
     await rowA.getByRole('button', { name: /July 30/ }).click();
     await expect(rowA.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
 
-    // Release A's RPC — only A's share state clears.
-    releaseUnshare();
+    // Release A's RPC — A's share state clears while B's is STILL in
+    // flight (independent lifecycles end to end).
+    releases.get('2026-07-30')?.();
     await expect(rowA).not.toContainText('· Shared');
     await expect(rowA.getByRole('button', { name: 'Stopping…' })).toHaveCount(0);
     await expect(rowB).toContainText('· Shared');
+
+    // Release B's — it completes independently too.
+    releases.get('2026-07-24')?.();
+    await expect(rowB).not.toContainText('· Shared');
   });
 
   test('unshare failure keeps the record and says so honestly', async ({
