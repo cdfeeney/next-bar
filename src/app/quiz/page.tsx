@@ -39,6 +39,9 @@ export default function QuizPage() {
 
   return (
     <main>
+      {/* Landmark h1 (g-b83d1c77 a11y audit): the page's first visible
+          heading was an h2 inside the quiz/location children. */}
+      <h1 className="sr-only">Vibe quiz</h1>
       <header className="px-6 py-4 flex items-center justify-between border-b border-border">
         <Link
           href="/"
@@ -144,7 +147,7 @@ function QuizResults({ profile, location }: QuizResultsProps) {
         </Link>
       </div>
       <footer className="px-6 py-6 text-center text-muted text-sm">
-        Next Bar · Manhattan · 2026
+        Next Bar · NYC · 2026
       </footer>
     </>
   );

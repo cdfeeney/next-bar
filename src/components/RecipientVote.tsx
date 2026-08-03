@@ -92,11 +92,14 @@ export default function RecipientVote({
 
       {current ? (
         // Deliberately /rankings, not /auth. The reward for voting is seeing
-        // the thing you just made, not a form.
+        // the thing you just made, not a form. OUTLINE, not accent-filled:
+        // the page already has one accent primary and the selected chip is
+        // accent-filled too — three stacked accents violated R2
+        // (g-b83d1c77 audit).
         <p className="text-center mt-4">
           <Link
             href="/rankings"
-            className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation"
+            className="inline-flex items-center justify-center border border-accent text-accent font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation hover:bg-accent hover:text-bg transition-colors"
           >
             See your list →
           </Link>

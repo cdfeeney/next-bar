@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import Avatar from '@/components/Avatar';
+import BarVisualTile from '@/components/BarVisualTile';
 import ShareButton from '@/components/ShareButton';
 import { buildProfilePath, shareProfileText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
@@ -234,21 +235,26 @@ export default function ProfilePage({
                   key={entry.barId}
                   className="bg-surface border border-border rounded-3xl p-5 flex flex-col gap-2"
                 >
-                  <div className="flex items-baseline justify-between gap-3">
-                    <h3 className="font-display text-lg leading-tight">
-                      <span className="text-accent mr-2 tabular-nums">
-                        {idx + 1}.
+                  {/* R7 (g-b83d1c77): list cards lead with the bar's
+                      visual tile — they were text-only. */}
+                  <div className="flex items-center gap-3">
+                    <BarVisualTile bar={bar} size={32} />
+                    <div className="flex-1 min-w-0 flex items-baseline justify-between gap-3">
+                      <h3 className="font-display text-lg leading-tight">
+                        <span className="text-accent mr-2 tabular-nums">
+                          {idx + 1}.
+                        </span>
+                        {bar.name}
+                      </h3>
+                      <span
+                        className={[
+                          'text-xs font-display px-2 py-0.5 rounded-full shrink-0',
+                          RATING_BADGE[entry.rating],
+                        ].join(' ')}
+                      >
+                        {RATING_LABEL[entry.rating]}
                       </span>
-                      {bar.name}
-                    </h3>
-                    <span
-                      className={[
-                        'text-xs font-display px-2 py-0.5 rounded-full shrink-0',
-                        RATING_BADGE[entry.rating],
-                      ].join(' ')}
-                    >
-                      {RATING_LABEL[entry.rating]}
-                    </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-muted text-xs uppercase tracking-wider">
@@ -375,16 +381,20 @@ function DemoProfile({ handle }: { handle: string }): JSX.Element {
               key={bar.id}
               className="bg-surface border border-border rounded-3xl p-5 flex flex-col gap-2"
             >
-              <div className="flex items-baseline justify-between gap-3">
-                <h3 className="font-display text-lg leading-tight">
-                  <span className="text-accent mr-2 tabular-nums">
-                    {idx + 1}.
+              {/* R7 (g-b83d1c77): same visual-tile lead as the real list. */}
+              <div className="flex items-center gap-3">
+                <BarVisualTile bar={bar} size={32} />
+                <div className="flex-1 min-w-0 flex items-baseline justify-between gap-3">
+                  <h3 className="font-display text-lg leading-tight">
+                    <span className="text-accent mr-2 tabular-nums">
+                      {idx + 1}.
+                    </span>
+                    {bar.name}
+                  </h3>
+                  <span className="font-display text-2xl tabular-nums text-accent shrink-0">
+                    {(rating.score ?? 0).toFixed(1)}
                   </span>
-                  {bar.name}
-                </h3>
-                <span className="font-display text-2xl tabular-nums text-accent shrink-0">
-                  {(rating.score ?? 0).toFixed(1)}
-                </span>
+                </div>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-muted text-xs uppercase tracking-wider">

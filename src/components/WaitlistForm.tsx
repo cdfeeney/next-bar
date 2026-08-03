@@ -56,7 +56,7 @@ export default function WaitlistForm({ profile }: WaitlistFormProps) {
           <div className="space-y-3">
             <a
               href="/quiz"
-              className="block bg-accent hover:bg-accentDim transition-colors text-bg font-display text-lg py-3 rounded-xl touch-manipulation"
+              className="block bg-accent hover:bg-accentDim transition-colors text-bg font-display text-lg py-3 rounded-xl min-h-[56px] leading-[32px] touch-manipulation"
             >
               Meanwhile — find tonight&apos;s bar →
             </a>
@@ -104,7 +104,7 @@ export default function WaitlistForm({ profile }: WaitlistFormProps) {
           <button
             type="submit"
             disabled={status === 'loading'}
-            className="w-full bg-accent hover:bg-accentDim disabled:opacity-60 transition-colors text-text font-display text-lg py-3 rounded-xl"
+            className="w-full bg-accent hover:bg-accentDim disabled:opacity-60 transition-colors text-text font-display text-lg py-3 rounded-xl min-h-[56px]"
           >
             {status === 'loading' ? 'Joining...' : 'Join the waitlist'}
           </button>

@@ -724,7 +724,7 @@ export default function SettingsPage(): JSX.Element {
           <div className="text-xs text-muted space-y-2 pl-1">
             <p>Next Bar · NYC · 2026</p>
             <p>
-              Coverage: Manhattan and parts of Brooklyn. More neighborhoods
+              Coverage: Manhattan, Brooklyn, and parts of Queens. More neighborhoods
               rolling out.
             </p>
             {/*

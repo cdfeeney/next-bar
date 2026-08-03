@@ -10,6 +10,9 @@ import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import CatalogRefresh from '@/components/CatalogRefresh';
 import AnalyticsInit from '@/components/AnalyticsInit';
 import VibeProfileSync from '@/components/VibeProfileSync';
+// Centralized in lib/siteIdentity (g-b83d1c77): sitemap.ts and robots.ts
+// resolve the same origin, so the canonical domain is one env-var change.
+import { resolveSiteUrl } from '@/lib/siteIdentity';
 
 // Brand font (2026-07-23 kit): Poppins — Bold 700 wordmark/headlines,
 // Medium 500 secondary headlines, Regular 400 body/captions. Self-hosted by
@@ -21,13 +24,7 @@ const poppins = Poppins({
   variable: '--font-poppins',
 });
 
-const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL ??
-  (process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-    : process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000');
+const siteUrl = resolveSiteUrl();
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -35,7 +32,7 @@ export const metadata: Metadata = {
   description:
     "Stop going to the same three bars. Take the vibe quiz, find your spot, and find the bar your whole group agrees on.",
   applicationName: 'Next Bar',
-  keywords: ['NYC bars', 'nightlife', 'bar finder', 'Manhattan', 'going out'],
+  keywords: ['NYC bars', 'nightlife', 'bar finder', 'Manhattan', 'Brooklyn', 'Queens', 'going out'],
   appleWebApp: {
     capable: true,
     title: 'Next Bar',

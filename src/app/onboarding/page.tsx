@@ -269,7 +269,7 @@ export default function OnboardingPage(): JSX.Element {
                     !isValidHandle(desired) ||
                     !isValidDisplayName(name)
                   }
-                  className="bg-accent text-bg font-display text-sm px-6 py-2.5 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50"
+                  className="bg-accent text-bg font-display text-sm px-6 py-2.5 rounded-full min-h-[56px] touch-manipulation disabled:opacity-50"
                 >
                   {status.kind === 'submitting' ? 'Setting up…' : "Let's go →"}
                 </button>

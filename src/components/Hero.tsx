@@ -5,7 +5,7 @@ export default function Hero() {
     <section className="px-6 pt-24 pb-20 md:pt-32 md:pb-28">
       <div className="max-w-4xl mx-auto text-center">
         <p className="text-accent uppercase tracking-[0.3em] text-xs mb-10">
-          Manhattan · Est. 2026
+          New York City · Est. 2026
         </p>
 
         <h1 className="font-display text-5xl md:text-7xl lg:text-8xl leading-[1.02] mb-10 tracking-tight">

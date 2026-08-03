@@ -13,7 +13,7 @@ const HEADLINES: Record<NonNullable<AppStoreCtaProps['variant']>, string> = {
 
 const SUBHEADS: Record<NonNullable<AppStoreCtaProps['variant']>, string> = {
   quiz:
-    'These ten bars are a teaser. Install Next Bar on your phone and it remembers what you love, learns your radius, and surfaces the next round in two taps.',
+    'These ten bars are a teaser. Install Next Bar on your phone and it remembers what you love and surfaces the next round in two taps.',
   'where-next':
     'Install on your home screen and Next Bar remembers your taste, picks up where you left off, and gets faster every time.',
   // Honest sync split (g-65a31bdf crit 11): signed-in ratings + vibe

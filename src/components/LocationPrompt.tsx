@@ -118,7 +118,7 @@ export default function LocationPrompt({ onResolved }: LocationPromptProps) {
           <div
             role="status"
             aria-label="Locating you"
-            className="h-8 w-8 rounded-full border-2 border-border border-t-accent animate-spin"
+            className="h-8 w-8 rounded-full border-2 border-border border-t-accent animate-spin motion-reduce:animate-none"
           />
           <p className="text-muted text-sm">Locating you…</p>
           <button

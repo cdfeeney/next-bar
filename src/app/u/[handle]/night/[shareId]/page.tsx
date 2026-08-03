@@ -109,7 +109,7 @@ export default function SharedNightPage({
         </p>
         <Link
           href="/"
-          className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display inline-flex items-center justify-center"
+          className="bg-accent text-bg rounded-full px-6 py-3 min-h-[56px] touch-manipulation font-display inline-flex items-center justify-center"
         >
           Find your next bar →
         </Link>
@@ -161,7 +161,7 @@ export default function SharedNightPage({
             ) : (
               <Link
                 href="/install"
-                className="min-h-[44px] touch-manipulation px-6 rounded-full font-display text-sm bg-accent border border-accent text-bg inline-flex items-center"
+                className="min-h-[56px] touch-manipulation px-6 rounded-full font-display text-sm bg-accent border border-accent text-bg inline-flex items-center"
               >
                 Get Next Bar →
               </Link>

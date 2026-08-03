@@ -221,7 +221,7 @@ export default function NightsPage(): JSX.Element {
           </p>
           <Link
             href="/"
-            className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display inline-flex items-center justify-center"
+            className="bg-accent text-bg rounded-full px-6 py-3 min-h-[56px] touch-manipulation font-display inline-flex items-center justify-center"
           >
             Find your next bar →
           </Link>

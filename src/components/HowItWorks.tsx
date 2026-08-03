@@ -14,7 +14,7 @@ const STEPS: Step[] = [
   {
     numeral: 'II',
     title: 'We pick ten bars.',
-    body: 'Manhattan only. Curated, not crowdsourced. Each one matched to the night you described — never the densest tag list.',
+    body: 'New York City. Curated, not crowdsourced. Each one matched to the night you described — never the densest tag list.',
   },
   {
     numeral: 'III',

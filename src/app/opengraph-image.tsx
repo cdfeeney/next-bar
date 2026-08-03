@@ -35,7 +35,7 @@ export default function OpengraphImage() {
             fontWeight: 700,
           }}
         >
-          Next Bar · Manhattan
+          Next Bar · NYC
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column' }}>
