@@ -94,6 +94,39 @@ test.describe('/ search bar auto-hide (g-90f908bc)', () => {
     await expect(search).toHaveCSS('pointer-events', 'auto');
   });
 
+  test('focus reveals the hidden bar; after blur, continued scrolling hides it again', async ({
+    page,
+  }) => {
+    // Round-1 review HIGH (found by two independent lanes): a focus reveal
+    // that bypasses the watcher leaves its change-dedup cache stale, so the
+    // next downward scroll computes hidden==hidden, never fires, and the bar
+    // sticks visible over the list for the rest of the session.
+    const search = page.getByRole('textbox', SEARCH);
+
+    // Deep but NOT at the bottom — we need downward room after the blur.
+    await page.evaluate(() => {
+      const scroller = document.scrollingElement ?? document.documentElement;
+      scroller.scrollTo({ top: 600, behavior: 'instant' });
+    });
+    await expect(search).toHaveCSS('opacity', '0', { timeout: 5_000 });
+
+    // Keyboard/AT-style focus (no scroll involved) must reveal…
+    await search.focus();
+    await expect(search).toHaveCSS('opacity', '1', { timeout: 5_000 });
+
+    // …and after blurring without any scroll, continued downward scrolling
+    // must hide it again — the stuck-visible state is the regression.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.evaluate(async () => {
+      const scroller = document.scrollingElement ?? document.documentElement;
+      for (let i = 0; i < 10; i++) {
+        scroller.scrollTo({ top: scroller.scrollTop + 30, behavior: 'instant' });
+        await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      }
+    });
+    await expect(search).toHaveCSS('opacity', '0', { timeout: 5_000 });
+  });
+
   test('the revealed bar is not decorative: filling it after the round-trip filters the list', async ({
     page,
   }) => {

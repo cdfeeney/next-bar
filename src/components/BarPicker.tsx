@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Bar, ManhattanNeighborhood } from '@/types';
 import { useBars } from '@/lib/useBars';
 import { displayHood } from '@/lib/hoodDisplay';
-import { watchSearchVisibility } from '@/lib/searchBarAutoHide';
+import { watchSearchVisibility, type WatchHandle } from '@/lib/searchBarAutoHide';
 import RatingBadge from '@/components/RatingBadge';
 import BarVisualTile from '@/components/BarVisualTile';
 
@@ -64,13 +64,19 @@ export default function BarPicker({
   // caught exactly that race. Only the transform animates.
   const [searchVisible, setSearchVisible] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
+  const watchRef = useRef<WatchHandle | null>(null);
   useEffect(() => {
     if (!autoHideSearchOnScroll) return;
-    return watchSearchVisibility({
+    const handle = watchSearchVisibility({
       isFocused: () => document.activeElement === searchRef.current,
       onChange: setSearchVisible,
       anchor: () => searchRef.current,
     });
+    watchRef.current = handle;
+    return () => {
+      watchRef.current = null;
+      handle.stop();
+    };
   }, [autoHideSearchOnScroll]);
 
   const grouped = useMemo(() => {
@@ -114,7 +120,10 @@ export default function BarPicker({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onFocus={() => {
-          if (autoHideSearchOnScroll) setSearchVisible(true);
+          // Through the watcher, never setSearchVisible directly: the watcher
+          // is the single writer, and a direct write desyncs its change-dedup
+          // cache (the bar would stick visible after focus→blur→scroll-down).
+          watchRef.current?.reveal();
         }}
         placeholder="Search bars..."
         aria-label="Search bars"

@@ -106,8 +106,12 @@ export default defineConfig({
       // install-sheet added 2026-08-03 (goal g-43d6da5f): a BOTTOM sheet
       // whose primary control sits exactly where the fixed nav lives —
       // the same bottom-crowded shape as every spec above.
+      // search-autohide added 2026-08-03 (goal g-90f908bc): pins the / search
+      // bar's hide-on-scroll behavior — the covered-card defect it guards was
+      // caught BY mobile-controls on this exact viewport, so its regression
+      // pin runs here too.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide)\.spec\.ts/,
       dependencies: ['warmup'],
     },
   ],

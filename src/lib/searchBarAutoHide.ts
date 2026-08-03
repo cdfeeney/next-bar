@@ -91,13 +91,23 @@ export function nextAutoHideState(
   return { visible, lastY: y, acc };
 }
 
-/** Current scroll offset of whatever fired the event. */
+/**
+ * Current scroll offset of whatever fired the event, CLAMPED to the
+ * scroller's legal range. WebKit rubber-banding reports offsets past the
+ * maximum (and below zero at the top); the snap-back from an overshoot would
+ * otherwise read as a committed opposite-direction gesture and re-reveal the
+ * bar at bottom rest (round-1 panel: Codex and DeepSeek independently).
+ * Clamped, the entire bounce is dy=0.
+ */
 export function scrollTopOf(target: EventTarget | null, doc: Document): number {
   if (!target) return 0;
-  if (target instanceof HTMLElement) return target.scrollTop;
-  // Document (or window) — read the designated document scroller.
-  const scroller = doc.scrollingElement ?? doc.documentElement;
-  return scroller ? scroller.scrollTop : 0;
+  const el =
+    target instanceof HTMLElement
+      ? target
+      : ((doc.scrollingElement ?? doc.documentElement) as HTMLElement | null);
+  if (!el) return 0;
+  const max = Math.max(0, el.scrollHeight - el.clientHeight);
+  return Math.min(Math.max(0, el.scrollTop), max);
 }
 
 export type WatchOptions = {
@@ -118,20 +128,76 @@ export type WatchOptions = {
   doc?: Document;
 };
 
+export type WatchHandle = {
+  stop: () => void;
+  /**
+   * Reveal through the watcher — the SINGLE writer of visibility. A focus
+   * handler that writes the consumer's state directly desyncs this module's
+   * change-dedup cache: the next downward scroll computes hidden==hidden,
+   * never fires onChange, and the bar sticks visible over the list
+   * (round-1 panel HIGH — Claude lane, independently found by Codex).
+   */
+  reveal: () => void;
+};
+
 /**
  * Subscribe to every scroller on the page (document and inner containers
- * alike) and drive `onChange`. Returns an unsubscribe function — callers in
- * effects must invoke it on unmount, same contract as deferUntilSafe.
+ * alike) and drive `onChange`. Callers in effects must call `stop()` on
+ * unmount, same contract as deferUntilSafe's cancel.
  *
  * Each scroller gets its own state entry (a WeakMap keyed by the event
  * target), so a dialog's inner list and the document cannot corrupt each
  * other's direction accumulators.
  */
-export function watchSearchVisibility(options: WatchOptions): () => void {
+export function watchSearchVisibility(options: WatchOptions): WatchHandle {
   const doc = options.doc ?? document;
   const win = doc.defaultView;
   const states = new WeakMap<EventTarget, AutoHideState>();
   let visible = true;
+
+  const publish = (next: boolean): void => {
+    if (next !== visible) {
+      visible = next;
+      options.onChange(next);
+    }
+  };
+
+  /**
+   * The scrollers that actually move the anchor: the document plus every
+   * ancestor that declares itself a vertical scroll container.
+   */
+  const relevantScrollers = (): EventTarget[] => {
+    const targets: EventTarget[] = [doc];
+    let node = options.anchor?.()?.parentElement ?? null;
+    while (node && node !== doc.body) {
+      const oy = win?.getComputedStyle(node).overflowY;
+      if (oy === 'auto' || oy === 'scroll') targets.push(node);
+      node = node.parentElement;
+    }
+    return targets;
+  };
+
+  /**
+   * Re-derive visibility from CURRENT offsets, replacing accumulated
+   * direction state. Used at subscribe (the picker can mount with the
+   * scroller already deep: in-place step swap, back/forward scroll
+   * restoration — no scroll event ever fires; round-1 panel, found
+   * independently by Codex, DeepSeek and GLM) and when the tab becomes
+   * visible again (a deferred catalog swap committed while hidden can shrink
+   * scrollHeight and the browser clamps scrollTop silently — GLM).
+   */
+  const resample = (): void => {
+    const sampled = relevantScrollers().map((target) => ({
+      target,
+      y: scrollTopOf(target, doc),
+    }));
+    const anyDeep = sampled.some(({ y }) => y > HIDE_AFTER_PX);
+    const next = options.isFocused() || !anyDeep;
+    for (const { target, y } of sampled) {
+      states.set(target, { visible: next, lastY: y, acc: 0 });
+    }
+    publish(next);
+  };
 
   const onScroll = (event: Event): void => {
     const target = event.target;
@@ -142,22 +208,26 @@ export function watchSearchVisibility(options: WatchOptions): () => void {
     const anchorEl = options.anchor?.() ?? null;
     if (anchorEl && target instanceof HTMLElement && !target.contains(anchorEl)) return;
     const y = scrollTopOf(target, doc);
-    // A scroller's first event seeds from offset 0, not from its current
-    // offset: subscribers mount at the top, so the first delta IS direction
-    // signal (and after a reload with scroll restoration, that first jump is
-    // a genuine downward move the bar should react to).
     const prev = states.get(target) ?? initialAutoHideState();
     const next = nextAutoHideState(prev, y, options.isFocused());
     states.set(target, next);
-    if (next.visible !== visible) {
-      visible = next.visible;
-      options.onChange(visible);
-    }
+    publish(next.visible);
+  };
+
+  const onVisibility = (): void => {
+    if (doc.visibilityState === 'visible') resample();
   };
 
   // Capture phase — inner-container scrolls do not bubble (trap #1).
   win?.addEventListener('scroll', onScroll, { capture: true, passive: true });
-  return () => {
-    win?.removeEventListener('scroll', onScroll, { capture: true } as EventListenerOptions);
+  doc.addEventListener('visibilitychange', onVisibility);
+  resample();
+
+  return {
+    stop: () => {
+      win?.removeEventListener('scroll', onScroll, { capture: true } as EventListenerOptions);
+      doc.removeEventListener('visibilitychange', onVisibility);
+    },
+    reveal: () => publish(true),
   };
 }

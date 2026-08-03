@@ -108,25 +108,40 @@ describe('nextAutoHideState', () => {
 });
 
 describe('scrollTopOf', () => {
-  it('reads scrollTop from an element target', () => {
+  function fakeScroller(scrollTop: number, scrollHeight: number, clientHeight: number) {
     const el = document.createElement('div');
-    Object.defineProperty(el, 'scrollTop', { value: 123, configurable: true });
-    expect(scrollTopOf(el, document)).toBe(123);
+    Object.defineProperty(el, 'scrollTop', { value: scrollTop, configurable: true });
+    Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true });
+    Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true });
+    return el;
+  }
+
+  it('reads scrollTop from an element target', () => {
+    expect(scrollTopOf(fakeScroller(123, 2000, 800), document)).toBe(123);
+  });
+
+  it('clamps offsets outside the legal range (rubber-band overscroll)', () => {
+    expect(scrollTopOf(fakeScroller(1300, 2000, 800), document)).toBe(1200);
+    expect(scrollTopOf(fakeScroller(-15, 2000, 800), document)).toBe(0);
   });
 
   it('reads the document scroller for a Document target', () => {
     const scroller = document.scrollingElement ?? document.documentElement;
-    const original = Object.getOwnPropertyDescriptor(
-      Object.getPrototypeOf(scroller),
-      'scrollTop',
-    );
+    const restore = ['scrollTop', 'scrollHeight', 'clientHeight'].map((k) => ({
+      k,
+      d: Object.getOwnPropertyDescriptor(scroller, k),
+    }));
     Object.defineProperty(scroller, 'scrollTop', { value: 77, configurable: true });
+    Object.defineProperty(scroller, 'scrollHeight', { value: 2000, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
     try {
       expect(scrollTopOf(document, document)).toBe(77);
     } finally {
       // jsdom shares the element across tests — restore.
-      if (original) Object.defineProperty(scroller, 'scrollTop', original);
-      else delete (scroller as unknown as Record<string, unknown>).scrollTop;
+      for (const { k, d } of restore) {
+        if (d) Object.defineProperty(scroller, k, d);
+        else delete (scroller as unknown as Record<string, unknown>)[k];
+      }
     }
   });
 
@@ -136,13 +151,27 @@ describe('scrollTopOf', () => {
 });
 
 describe('watchSearchVisibility', () => {
-  function scrollable(scrollTop: number): HTMLDivElement {
+  function scrollable(
+    scrollTop: number,
+    opts: { scrollHeight?: number; clientHeight?: number; declared?: boolean } = {},
+  ): HTMLDivElement {
     const el = document.createElement('div');
     Object.defineProperty(el, 'scrollTop', {
       value: scrollTop,
       configurable: true,
       writable: true,
     });
+    Object.defineProperty(el, 'scrollHeight', {
+      value: opts.scrollHeight ?? 2000,
+      configurable: true,
+    });
+    Object.defineProperty(el, 'clientHeight', {
+      value: opts.clientHeight ?? 800,
+      configurable: true,
+    });
+    // `declared: true` marks the element as a REAL scroll container in
+    // computed style, which is what subscribe-time seeding walks for.
+    if (opts.declared) el.style.overflowY = 'auto';
     document.body.appendChild(el);
     return el;
   }
@@ -150,25 +179,25 @@ describe('watchSearchVisibility', () => {
   it('fires onChange(false) when an inner container scrolls decisively down (capture phase)', () => {
     const el = scrollable(0);
     const onChange = vi.fn();
-    const stop = watchSearchVisibility({ isFocused: () => false, onChange });
+    const handle = watchSearchVisibility({ isFocused: () => false, onChange });
     (el as unknown as { scrollTop: number }).scrollTop = 300;
     el.dispatchEvent(new Event('scroll', { bubbles: false }));
     expect(onChange).toHaveBeenCalledWith(false);
-    stop();
+    handle.stop();
     el.remove();
   });
 
   it('fires onChange(true) again on scroll-up and stops after cancel', () => {
     const el = scrollable(0);
     const onChange = vi.fn();
-    const stop = watchSearchVisibility({ isFocused: () => false, onChange });
+    const handle = watchSearchVisibility({ isFocused: () => false, onChange });
     (el as unknown as { scrollTop: number }).scrollTop = 300;
     el.dispatchEvent(new Event('scroll'));
     (el as unknown as { scrollTop: number }).scrollTop = 280;
     el.dispatchEvent(new Event('scroll'));
     expect(onChange).toHaveBeenLastCalledWith(true);
 
-    stop();
+    handle.stop();
     onChange.mockClear();
     (el as unknown as { scrollTop: number }).scrollTop = 600;
     el.dispatchEvent(new Event('scroll'));
@@ -187,7 +216,7 @@ describe('watchSearchVisibility', () => {
     const tiny = scrollable(0);
 
     const onChange = vi.fn();
-    const stop = watchSearchVisibility({
+    const handle = watchSearchVisibility({
       isFocused: () => false,
       onChange,
       anchor: () => anchor,
@@ -204,7 +233,7 @@ describe('watchSearchVisibility', () => {
     tiny.dispatchEvent(new Event('scroll'));
     expect(onChange).not.toHaveBeenCalled();
 
-    stop();
+    handle.stop();
     listScroller.remove();
     tiny.remove();
   });
@@ -212,11 +241,104 @@ describe('watchSearchVisibility', () => {
   it('keeps the bar visible while the input is focused, whatever the scroll does', () => {
     const el = scrollable(0);
     const onChange = vi.fn();
-    const stop = watchSearchVisibility({ isFocused: () => true, onChange });
+    const handle = watchSearchVisibility({ isFocused: () => true, onChange });
     (el as unknown as { scrollTop: number }).scrollTop = 500;
     el.dispatchEvent(new Event('scroll'));
     expect(onChange).not.toHaveBeenCalledWith(false);
-    stop();
+    handle.stop();
     el.remove();
+  });
+
+  it('reveal() is the single writer: after a focus reveal, continued scroll-down hides again', () => {
+    // Round-1 panel HIGH (Claude Opus lane, independently found by Codex):
+    // a focus handler that writes React state directly desyncs the watcher's
+    // change-dedup cache — the next downward scroll computes hidden==hidden
+    // and never fires, leaving the bar stuck visible. reveal() must flow
+    // through the watcher so there is exactly one writer.
+    const el = scrollable(0);
+    const onChange = vi.fn();
+    const handle = watchSearchVisibility({ isFocused: () => false, onChange });
+
+    (el as unknown as { scrollTop: number }).scrollTop = 400;
+    el.dispatchEvent(new Event('scroll'));
+    expect(onChange).toHaveBeenLastCalledWith(false);
+
+    handle.reveal();
+    expect(onChange).toHaveBeenLastCalledWith(true);
+
+    (el as unknown as { scrollTop: number }).scrollTop = 700;
+    el.dispatchEvent(new Event('scroll'));
+    expect(onChange).toHaveBeenLastCalledWith(false);
+
+    handle.stop();
+    el.remove();
+  });
+
+  it('clamps overscroll: rubber-band snap-back from past the bottom does not reveal', () => {
+    // Round-1 panel MEDIUM (Codex; DeepSeek reached the same case): WebKit
+    // rubber-banding reports offsets past the legal maximum, and the
+    // snap-back to max would read as an upward gesture. Clamped, the whole
+    // bounce is dy=0.
+    const el = scrollable(0, { scrollHeight: 2000, clientHeight: 800 }); // max 1200
+    const onChange = vi.fn();
+    const handle = watchSearchVisibility({ isFocused: () => false, onChange });
+
+    (el as unknown as { scrollTop: number }).scrollTop = 1150;
+    el.dispatchEvent(new Event('scroll'));
+    expect(onChange).toHaveBeenLastCalledWith(false);
+
+    onChange.mockClear();
+    (el as unknown as { scrollTop: number }).scrollTop = 1300; // overscroll past max
+    el.dispatchEvent(new Event('scroll'));
+    (el as unknown as { scrollTop: number }).scrollTop = 1200; // snap back to max
+    el.dispatchEvent(new Event('scroll'));
+    expect(onChange).not.toHaveBeenCalledWith(true);
+
+    handle.stop();
+    el.remove();
+  });
+
+  it('subscribing while already deep-scrolled publishes hidden immediately (mount/restore)', () => {
+    // Round-1 panel MEDIUM, triple convergence (Codex, DeepSeek, GLM): the
+    // picker can mount with the scroller already deep (in-place step swap,
+    // back/forward scroll restoration) and no scroll event ever fires.
+    const listScroller = scrollable(500, { declared: true });
+    const anchor = document.createElement('input');
+    listScroller.appendChild(anchor);
+
+    const onChange = vi.fn();
+    const handle = watchSearchVisibility({
+      isFocused: () => false,
+      onChange,
+      anchor: () => anchor,
+    });
+    expect(onChange).toHaveBeenCalledWith(false);
+
+    handle.stop();
+    listScroller.remove();
+  });
+
+  it('recomputes from real offsets when the document becomes visible again', () => {
+    // Round-1 GLM edge: a deferred catalog swap can commit while the tab is
+    // hidden, and the browser may clamp scrollTop with NO scroll event — the
+    // bar would otherwise stay stranded hidden at what is now the top.
+    const listScroller = scrollable(500, { declared: true });
+    const anchor = document.createElement('input');
+    listScroller.appendChild(anchor);
+
+    const onChange = vi.fn();
+    const handle = watchSearchVisibility({
+      isFocused: () => false,
+      onChange,
+      anchor: () => anchor,
+    });
+    expect(onChange).toHaveBeenLastCalledWith(false);
+
+    (listScroller as unknown as { scrollTop: number }).scrollTop = 0;
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(onChange).toHaveBeenLastCalledWith(true);
+
+    handle.stop();
+    listScroller.remove();
   });
 });
