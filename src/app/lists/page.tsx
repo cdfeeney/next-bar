@@ -9,10 +9,13 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import BarPicker from '@/components/BarPicker';
+import ShareButton from '@/components/ShareButton';
 import { useLists } from '@/hooks/useLists';
 import type { BarList } from '@/lib/lists';
 import { WANT_TO_GO_LIST_ID, purgeWantToGo } from '@/lib/wantToGo';
 import { barById } from '@/lib/demo';
+import { buildListShareText } from '@/lib/share';
+import { displayHood } from '@/lib/hoodDisplay';
 import { trackEvent } from '@/lib/analytics';
 
 export default function ListsPage(): JSX.Element {
@@ -233,14 +236,38 @@ function ListCard({
               />
             </div>
           ) : (
-            <div className="flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => setPicking(true)}
-                className="bg-accent text-bg font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation"
-              >
-                + Add a bar
-              </button>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setPicking(true)}
+                  className="bg-accent text-bg font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation"
+                >
+                  + Add a bar
+                </button>
+                {/* Text-only share, same contract as the /rankings list
+                    views (parked advisory, shipped with g-b83d1c77's
+                    slice): device-local lists never get a fake public
+                    URL — the payload IS the numbered list. Only offered
+                    when there is something to share. */}
+                {list.barIds.length > 0 ? (
+                  <ShareButton
+                    text={buildListShareText(
+                      list.name,
+                      list.barIds
+                        .map((barId) => barById(barId))
+                        .filter((b): b is NonNullable<ReturnType<typeof barById>> => b != null)
+                        .map((b) => ({
+                          name: b.name,
+                          neighborhood: displayHood(b.neighborhood),
+                        })),
+                    )}
+                    label="Share"
+                    ariaLabel={`Share the list ${list.name} as text`}
+                    variant="outline"
+                  />
+                ) : null}
+              </div>
               <button
                 type="button"
                 aria-label={`Delete list ${list.name}`}

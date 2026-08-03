@@ -82,11 +82,52 @@ test.describe('Lists', () => {
     await expect(page.getByText(/No lists yet/i)).toBeVisible();
   });
 
-  test('rankings header links to lists', async ({ page }) => {
+  test('rankings reaches lists via the switcher (header link removed 2026-08-03)', async ({
+    page,
+  }) => {
     await page.goto('/rankings');
-    await page.getByRole('link', { name: /Your lists/i }).click();
+    await page.getByRole('button', { name: /Lists — showing/ }).click();
+    await page.getByRole('link', { name: /Manage lists/i }).click();
     await expect(
       page.getByRole('heading', { name: /Your lists/i }),
     ).toBeVisible();
+  });
+
+  test('a non-empty list card offers text-only share; payload has bars, NO URL', async ({
+    page,
+    context,
+    browserName,
+  }) => {
+    test.skip(browserName !== 'chromium', 'clipboard permissions are chromium-only in Playwright');
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.goto('/lists');
+    await page.evaluate(() => {
+      window.localStorage.setItem(
+        'next-bar:lists:v1',
+        JSON.stringify([
+          {
+            id: 'list-rooftops',
+            name: 'Rooftops',
+            barIds: ['attaboy'],
+            createdAt: '2026-07-01T00:00:00.000Z',
+            updatedAt: '2026-07-01T00:00:00.000Z',
+          },
+        ]),
+      );
+    });
+    await page.reload();
+    await page.getByRole('button', { name: /Rooftops/ }).click();
+    await page
+      .getByRole('button', { name: 'Share the list Rooftops as text' })
+      .click();
+    await expect(
+      page.getByRole('button', { name: 'Copied to clipboard' }),
+    ).toBeVisible();
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip).toContain('Rooftops');
+    expect(clip).toContain('Attaboy');
+    // Device-local lists never ship a fake public URL (crit-8 contract,
+    // same pin as rankings-lists).
+    expect(clip).not.toMatch(/https?:\/\//);
   });
 });

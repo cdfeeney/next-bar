@@ -20,10 +20,17 @@ import { trackEvent } from '@/lib/analytics';
  * geolocation, no remote calls — typing only filters the local catalog.
  *
  * Sits OUTSIDE the 5-tab bottom nav (CLAUDE.md: new tool routes decide
- * explicitly; the nav stays 5 tabs). Reached from /rankings ("Search
- * bars →") and the Want-to-go empty state. Input is intentionally NOT
- * sticky: a sticky search bar over a scrolled list is exactly the
- * covered-control failure mobile-controls flags on /.
+ * explicitly; the nav stays 5 tabs). Reached from the Want-to-go empty
+ * state (the /rankings header link was removed 2026-08-03 — Rankings has
+ * its own inline search now). Input is intentionally NOT sticky: a sticky
+ * search bar over a scrolled list is exactly the covered-control failure
+ * mobile-controls flags on /.
+ *
+ * ?q= deep link (parked advisory, shipped with g-b83d1c77's slice): a
+ * shared/bookmarked /search?q=dive opens pre-seeded. Read once from
+ * location.search on mount — same window-only pattern as /rankings'
+ * ?add= — then stripped so refresh doesn't re-assert stale text over
+ * whatever the user has since typed.
  */
 export default function SearchPage(): JSX.Element {
   const bars = useBars();
@@ -34,6 +41,19 @@ export default function SearchPage(): JSX.Element {
   // (santa: Codex).
   const { getRating } = useRatings();
   const [query, setQuery] = useState('');
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get('q');
+    if (!q || q.trim() === '') return;
+    setQuery(q);
+    params.delete('q');
+    const rest = params.toString();
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${rest ? `?${rest}` : ''}`,
+    );
+  }, []);
   // ID, not the Bar object: the async catalog swap replaces every bar's
   // object identity, and a captured object would keep an open lightbox on
   // stale data (santa: DeepSeek + Codex, convergent). Deriving from the

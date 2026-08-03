@@ -307,6 +307,20 @@ test.describe('/search saves to Want to Go', () => {
   // itself — /rankings now hosts its OWN inline search-to-rank bar, and
   // /search stays reachable via the Want-to-go empty state above.)
 
+  test('?q= deep link pre-seeds the search and strips the param', async ({
+    page,
+  }) => {
+    await page.goto('/search?q=Attaboy');
+    // The query landed: input holds it and results render.
+    await expect(searchBox(page)).toHaveValue('Attaboy');
+    await expect(
+      page.getByTestId('search-results').getByText('Attaboy').first(),
+    ).toBeVisible();
+    // The param was consumed — a refresh must not re-assert it over
+    // whatever the user types next (negative).
+    await expect(page).toHaveURL(/\/search$/);
+  });
+
   test('save is reflected on /rankings via client-side nav — no reload needed', async ({
     page,
   }) => {
