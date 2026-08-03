@@ -1,5 +1,43 @@
 # CONTINUATION — 2026-08-03 EVENING attended session (Next Bar)
 
+> **SECOND-WAVE UPDATE (same session, ~20:10 ET), supersedes §3's SHA
+> block.** After the first handoff the operator directed three things
+> (saved to harness memory `operator-priorities-testflight-social`):
+> patch the wrapper host on main + prep the internal build; prioritize
+> SOCIAL-FEATURE quality; next-bar.com is canonical everywhere. Executed:
+>
+> - **g-59f8cc16 COMPLETE (nb-ios worktree, LOCAL main):** wrapper origin
+>   is config-driven, defaults https://next-bar.com, CAP_SERVER_URL
+>   override (validated: credential-free https origin-only, normalized,
+>   legible errors), workflow `server_url` dispatch input, errorPath
+>   offline fallback actually wired (latent since PR #90), runbook
+>   updated incl. external-groups ban for remote-origin builds. Commits
+>   on LOCAL main: `666710c`, `2a18f71`, `127dcae` — **NOT pushed**; 3
+>   review rounds (Fable APPROVE ×3, Codex clean ×2 + 4 verified MEDs
+>   fixed). Operator steps to first internal build: approve+push these 3
+>   main commits, verify ASC_* secrets, dispatch ios-testflight.yml
+>   (blank input = canonical; pre-DNS: server_url=<current live host>),
+>   INTERNAL TestFlight group only.
+> - **g-0182f313 COMPLETE:** social quality audit
+>   (`docs/SOCIAL-QUALITY-AUDIT-g-0182f313-2026-08-03.md`, commit
+>   `d266df2`). Social e2e bundle 107/107 (+2 known skips). One CRITICAL
+>   viral-loop gap found; solid elsewhere (unshare privacy verified to
+>   SQL; consensus races; canonical links need no code change).
+> - **g-4a0f81a5 COMPLETE (Phase A):** honest signed-out /u/[handle]
+>   state (no more false "not on Next Bar" for real handles), the missing
+>   signed-out e2e, ShareNightButton ref guard. Commits `046b36a`,
+>   `7a86d94`; 2 rounds (Fable APPROVE ×2, Codex 1 MED fixed then clean).
+> - **NEW QUEUED GOAL — social hardening Phase B (attended migration
+>   session):** apply 0015 + settings opt-in + wire fetchPublicRatings;
+>   author+apply list_my_shared_nights; apply 0035; share→unshare→visit
+>   round-trip e2e; validated ?next= return path through /auth.
+>
+> **Final overnight-branch state: local HEAD `7a86d94`, 12 outgoing
+> commits** (§3's list + `d266df2`, `046b36a`, `7a86d94`, and `5dcab5f`
+> itself). **nb-ios main: local HEAD `127dcae`, 3 outgoing.** Origin tips
+> unchanged (`edd9d8f` / `ebbcd55`). Vitest 1948/1948; the operator's
+> Fable-reviewer directive is standing policy.
+
 Supersedes `docs/CONTINUATION-2026-08-03.md` (the afternoon record) as the
 system of record. Reconciled against live git, the goal store (workspace
 `9c928dacfabc5299`), the lease registry, the lock, and recorded test/review
