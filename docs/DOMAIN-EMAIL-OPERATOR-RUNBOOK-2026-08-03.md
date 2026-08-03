@@ -32,24 +32,33 @@ Read-only `Resolve-DnsName` checks on 2026-08-03 observed:
 This proves routing intent, not successful Vercel ownership, TLS, deployment
 identity, canonical redirects, email delivery, or Supabase callback safety.
 
-### Operator report — 2026-08-03
+### Operator correction — 2026-08-03
 
-The operator reports that they are reasonably sure the Cloudflare DNS setup in
-the checklist was already completed. Treat this as **operator-reported complete,
-dashboard reconciliation pending**—do not repeat or overwrite the setup.
+The overall custom-domain setup is **not complete**.
 
-Public DNS independently corroborates the important routing pieces:
+The operator confirms that Vercel currently exposes only a Vercel-generated
+hostname, reported in conversation as `next-bar-tw.vercel.app`. The exact
+hostname spelling must be verified in the Vercel dashboard before it is used
+anywhere; older repository material contains `next-bar-two.vercel.app`, so
+neither spelling is authoritative without the dashboard.
 
-- Cloudflare is authoritative for the zone.
-- The apex resolves to Vercel's general-purpose address.
-- `www` resolves through Vercel's CNAME.
+Current reconciled state:
 
-The remaining read-only reconciliation is limited to facts public DNS cannot
-prove: Cloudflare's Active badge, gray-versus-orange proxy state, conflicting
-dashboard-only records, Vercel project ownership/TLS/canonical redirect, and
-whether email records are configured but still propagating. Any already-complete
-item is checked off and skipped; no setup step is rerun merely because this
-packet lists it.
+- Cloudflare owns DNS, and the public apex and `www` records point toward Vercel.
+- `next-bar.com` and `www.next-bar.com` are not attached to the intended Vercel
+  project.
+- Custom-domain ownership, TLS, canonical redirect, and deployment identity are
+  not established. Therefore `next-bar.com` must not be described as live.
+- Do not recreate or overwrite the already-present Cloudflare records. During an
+  attended, separately approved session, first ask Vercel for the exact records
+  required by the intended project.
+- Configure and validate protected `staging.next-bar.com` before a later
+  Production custom-domain attachment.
+
+The remaining read-only reconciliation should establish the exact Vercel project
+name and generated hostname, Cloudflare's Active badge and proxy states, any
+conflicting dashboard-only records, and the email-routing state. Any
+already-complete Cloudflare item is checked off and skipped.
 
 ## 3. What the operator can check now without changing anything
 
@@ -73,6 +82,10 @@ record. Do not assume the general-purpose values are correct for the project;
 Vercel's domain inspector is authoritative for its requested records.
 
 ### B. Vercel ownership inventory
+
+Recorded answer: neither custom domain is attached; only a generated Vercel
+hostname is currently in use. Its exact spelling remains pending dashboard
+verification.
 
 1. Open the Vercel dashboard without changing configuration.
 2. Identify the exact project intended for future Production. Record the project
