@@ -128,8 +128,9 @@ Verified against `src/app/` this session:
   auth; client builds callbacks from `window.location.origin` (inherits
   whatever host it runs on — this is what makes the deep-link change in §2
   step 3 necessary and sufficient).
-- **Edge-runtime image routes:** `icon.tsx`, `apple-icon.tsx`, root +
-  `join` + `share/[barId]` `opengraph-image.tsx` — web-only concerns; a
+- **Edge-runtime image routes:** `icon.tsx`, `apple-icon.tsx`, and five
+  `opengraph-image.tsx` routes (root, `join`, `share/[barId]`,
+  `u/[handle]`, `u/[handle]/night/[shareId]`) — web-only concerns; a
   native shell does not need them.
 - **Dynamic metadata:** per-route `generateMetadata` incl. param-derived
   `/u/[handle]` and `/share/[barId]` — web/SEO surface, not needed in-shell.
