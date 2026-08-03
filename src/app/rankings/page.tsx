@@ -80,8 +80,13 @@ export default function RankingsPage(): JSX.Element {
     setDeepLinkBarId(add);
     params.delete('add');
     const query = params.toString();
+    // Preserve the CURRENT history state (not null): the App Router keeps
+    // its own markers in history.state, and clobbering them during
+    // hydration corrupts back/forward for this entry — same fix as
+    // /search's ?q= strip (santa: Codex, g-3e05ebf1; this sibling was
+    // deferred out of that goal's scope).
     window.history.replaceState(
-      null,
+      window.history.state,
       '',
       `${window.location.pathname}${query ? `?${query}` : ''}`,
     );
