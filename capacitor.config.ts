@@ -15,13 +15,17 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // pre-DNS internal build, set CAP_SERVER_URL to the current live host at
 // `npx cap sync ios` time (the workflow exposes this as the optional
 // `server_url` dispatch input). Never hard-code a host here again.
-const serverUrl = process.env.CAP_SERVER_URL ?? 'https://next-bar.com';
+const rawOverride = (process.env.CAP_SERVER_URL ?? '').trim();
+const serverUrl = rawOverride === '' ? 'https://next-bar.com' : rawOverride;
 
-// Fail closed, and fail LEGIBLY, on a bad override: the origin must be a
-// clean https:// web origin. Without this, an http:/file:/javascript:
-// value would pass config loading (iOS ATS would then brick an http build
-// AFTER upload), and a scheme-less typo would surface only as a bare
-// "Invalid URL" stack trace deep in the CLI (review: Codex M2 + Fable LOW).
+// Fail closed, and fail LEGIBLY, on a bad override: the value must be a
+// clean https:// ORIGIN — nothing else. Without this, an http:/file:/
+// javascript: value would pass config loading (iOS ATS would then brick an
+// http build AFTER upload), a scheme-less typo would surface only as a
+// bare "Invalid URL" stack trace deep in the CLI, and a path/query/
+// fragment (think a pasted preview URL with ?token=...) would be baked
+// verbatim into the shipped binary as its entry URL (review rounds:
+// Codex M2 + Fable LOW, then Codex round-2 origin-only).
 const parsedOrigin = (() => {
   let parsed: URL;
   try {
@@ -36,6 +40,11 @@ const parsedOrigin = (() => {
       `Invalid CAP_SERVER_URL: "${serverUrl}" — only a credential-free https:// origin is allowed`,
     );
   }
+  if ((parsed.pathname !== '/' && parsed.pathname !== '') || parsed.search !== '' || parsed.hash !== '') {
+    throw new Error(
+      `Invalid CAP_SERVER_URL: "${serverUrl}" — origin only, no path/query/fragment (e.g. https://next-bar.com)`,
+    );
+  }
   return parsed;
 })();
 
@@ -45,7 +54,9 @@ const config: CapacitorConfig = {
   // Offline fallback shell — served when the remote origin cannot load.
   webDir: 'native/shell',
   server: {
-    url: serverUrl,
+    // The NORMALIZED origin, never the raw input (strips a trailing slash;
+    // guarantees what ships is exactly scheme://host[:port]).
+    url: parsedOrigin.origin,
     // Without errorPath, webDir content is merely PACKAGED, never shown:
     // a failed remote load renders a blank webview instead of the
     // fallback page (review: Codex M1 — latent since PR #90, and load-
