@@ -121,9 +121,13 @@ test.describe('Settings clarity (g-65a31bdf)', () => {
     test.skip(!ok, 'no Supabase URL configured');
     await page.goto('/rankings');
     await expect(page.getByText('Nothing here yet.')).toBeVisible();
+    // The empty-state explainer prose is GONE (operator 2026-08-03 —
+    // "just the add a bar button"); the sync claim lives in the page
+    // footer now, and it still must not lie.
+    await expect(page.getByText(/Synced to your account/)).toBeVisible();
     await expect(
       page.getByText(/Your ratings sync to your account/),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await expect(page.getByText(/stay on this device until the/)).toHaveCount(0);
   });
 });

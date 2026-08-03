@@ -50,6 +50,12 @@ test.describe('E4.4 shared-night page', () => {
     await expect(rows.nth(0)).toContainText('Attaboy');
     await expect(rows.nth(1)).toContainText('Mister Paradise');
 
+    // g-919dae84 crit 5: the night's map renders — route bars only. The
+    // container is enough here; pin semantics are BarMap's own specs.
+    await expect(
+      page.getByTestId('shared-night-map').locator('.leaflet-container'),
+    ).toBeVisible({ timeout: 15_000 });
+
     // Signed-out recipient: the join CTA leads, and the link can travel
     // onward.
     await expect(page.getByRole('link', { name: /Get Next Bar/i })).toHaveAttribute(

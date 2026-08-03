@@ -94,6 +94,19 @@ export default function FriendsPage(): JSX.Element {
           <p className="font-display text-lg leading-snug">Plan Night Out →</p>
         </Link>
 
+        {/* Nights Out history entry (g-919dae84 crit 3): planning looks
+            forward, this looks back — past nights, their maps, and the
+            durable share/unshare controls live on /nights. Secondary
+            treatment so the primary action above stays the one CTA. */}
+        <Link
+          href="/nights"
+          className="block bg-surface border border-border rounded-2xl px-5 py-3 text-center touch-manipulation hover:border-accent transition-colors -mt-4"
+        >
+          <p className="font-display text-sm leading-snug">
+            Nights Out — your past nights →
+          </p>
+        </Link>
+
         {/* Tonight — your status (one tap; tap again clears) and which
             bars the circle is backing (poll suggestions). Audience control
             (close friends vs friends) is the next slice. */}

@@ -78,6 +78,12 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/rankings');
   });
 
+  test('/nights renders the Nights Out history surface', async ({ page }) => {
+    await page.goto('/nights');
+    await expect(page.getByRole('heading', { name: /^Nights Out$/ })).toBeVisible();
+    await expectNoConsoleErrors(page, '/nights');
+  });
+
   test('/friends renders the Instagram-model page (UX-A)', async ({ page }) => {
     await page.goto('/friends');
     await expect(page.getByRole('heading', { name: /^Friends$/ })).toBeVisible();

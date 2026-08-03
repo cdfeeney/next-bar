@@ -111,6 +111,14 @@ export default function RecapCard({ recap }: RecapCardProps) {
         {/* E4.4: publish + share the night (signed-in with a handle only —
             renders nothing otherwise). */}
         <ShareNightButton recap={recap} />
+        {/* g-919dae84 crit 7: the recap is a one-morning window; the
+            history page is where this night stays reachable after it. */}
+        <Link
+          href="/nights"
+          className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
+        >
+          All your nights →
+        </Link>
       </div>
 
       <div className="h-48">

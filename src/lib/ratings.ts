@@ -2,6 +2,9 @@ import type { BarRating, Rating } from '@/types/ratings';
 import { RATING_ORDER } from '@/types/ratings';
 
 const KEY = 'next-bar:ratings:v1';
+/** Exported so storage-event consumers can filter by key (house pattern —
+ *  /nights re-derives loved/badges from ratings and must see rating writes). */
+export const RATINGS_STORAGE_KEY = KEY;
 
 const VALID_RATINGS: ReadonlySet<Rating> = new Set<Rating>([
   'loved',

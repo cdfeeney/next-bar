@@ -616,12 +616,14 @@ export default function SettingsPage(): JSX.Element {
             {/* One honest sentence per auth state (crit 11). What actually
                 syncs for a signed-in account: ratings and the vibe profile
                 (server rows). What never leaves the device today: Want-to-go
-                saves and the night log. The old copy claimed NOTHING synced,
-                contradicting /rankings' "Synced to your account". */}
+                saves and night history — the log AND the /nights archive
+                (g-919dae84; a night only reaches the server when you share
+                it). The old copy claimed NOTHING synced, contradicting
+                /rankings' "Synced to your account". */}
             <p className="text-xs text-muted leading-relaxed">
               {auth.status === 'signed-in'
-                ? 'Your ratings and vibe profile sync to your account. Want-to-go saves and your night log stay on this device — cross-device sync for those isn’t available yet.'
-                : 'Everything lives on this device. Sign in to sync your ratings and vibe profile across devices; Want-to-go saves and your night log stay on this device either way.'}
+                ? 'Your ratings and vibe profile sync to your account. Want-to-go saves and your night history stay on this device — a night only leaves it when you share that night, and signing out clears them from this device.'
+                : 'Everything lives on this device. Sign in to sync your ratings and vibe profile across devices; Want-to-go saves and your night history stay on this device.'}
             </p>
             <button
               type="button"

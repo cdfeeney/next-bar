@@ -50,6 +50,19 @@ const PROFILE_MERGED_KEY = 'next-bar:profile:merged-for:v1';
 const DEMO_SEED_FLAG_KEY = 'next-bar:demo:seeded:v1';
 const DEMO_SEED_IDS_KEY = 'next-bar:demo:seeded-ids:v1';
 
+// g-919dae84: nightKey → share-token records mirror the signed-in account's
+// shared_nights rows, so they join the wipe set under the same B3 blueprint
+// rule as follows (no merged-for marker: a wipe just forgets the links;
+// the server rows are untouched and re-sharing re-records).
+const SHARED_NIGHTS_KEY = 'next-bar:shared-nights:v1';
+// The night ARCHIVE joins too (santa: DeepSeek Medium + Claude sign-off
+// flag, bf5d7f4f panel): 60 nights of where-you-were is a browser-history-
+// grade leak on a shared device. Same trade the vibe profile already
+// accepted above — sign-out forgets the device's night history; leaking it
+// to the next account is worse. The single-night LIVE log keeps its
+// pre-existing device-local behavior (out of this slice's scope).
+const NIGHT_ARCHIVE_KEY = 'next-bar:night-archive:v1';
+
 const ALL_KEYS = [
   RATINGS_KEY,
   RATINGS_MERGED_KEY,
@@ -60,6 +73,8 @@ const ALL_KEYS = [
   PROFILE_MERGED_KEY,
   DEMO_SEED_FLAG_KEY,
   DEMO_SEED_IDS_KEY,
+  SHARED_NIGHTS_KEY,
+  NIGHT_ARCHIVE_KEY,
 ] as const;
 
 /**

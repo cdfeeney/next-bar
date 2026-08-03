@@ -6,6 +6,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { fetchOwnProfile } from '@/lib/profile.server';
 import { shareNight } from '@/lib/nights.server';
+import { getCacheEpoch } from '@/lib/accountCache';
+import { recordSharedNight } from '@/lib/sharedNightsLocal';
 import { buildNightPath, isShareAbort, shareNightText } from '@/lib/share';
 import { trackEvent } from '@/lib/analytics';
 
@@ -70,6 +72,10 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
         setState('failed');
         return;
       }
+      // Epoch capture (santa: Codex, bf5d7f4f panel): if a sign-out wipes
+      // the account cache while the RPC is in flight, writing the returned
+      // token would re-plant account residue AFTER the wipe.
+      const epochBefore = getCacheEpoch();
       const token = await shareNight(supabase, {
         nightKey: recap.nightKey,
         barIds: recap.bars.map((b) => b.id),
@@ -78,6 +84,12 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
       if (!token) {
         setState('failed');
         return;
+      }
+      // Device-side record of the share (g-919dae84): lets /nights show
+      // "Shared", rebuild this link later, and offer unshare — without a
+      // server listing RPC.
+      if (getCacheEpoch() === epochBefore) {
+        recordSharedNight(recap.nightKey, token);
       }
       const url = `${window.location.origin}${buildNightPath(handle, token)}`;
       const text = shareNightText(handle, displayName, recap.bars.length);
