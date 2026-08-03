@@ -1,5 +1,12 @@
 # Overnight run — 2026-08-02/03 (Next Bar final unattended product/UI/design/site/social/photo/analytics mission)
 
+## ═══ FINAL STATUS: COMPLETE (queue terminal: 6 complete · 5 blocked-with-rationale · 0 review debt) ═══
+- overnight-guard finish: exit 0, QUEUE_TERMINAL {complete:6, blocked:5}; loop-guard done at iteration 7/12 ("overnight queue exhausted"), finished ~06:00 EDT, two hours before the 08:00 stop.
+- NOTHING pushed, deployed, migrated, or externally mutated. All work is local commits on feat/overnight-2026-07-30. Protected operator docs byte-identical throughout (hashes re-verified after every checkpoint fix-up).
+- COMPLETE (each with converged multi-model Santa + local commit): carousel handoff (peer, d192e81) · catalog search→WTG (50bd056) · fresh-hand widening (246d5f7) · onboarding/map/settings/quiz honesty pass (a883193) · Rankings Lists switcher + WTG fold-in + text share (a5cf32d) · dark analytics all-OFF (0bb25f3) · mobile/a11y audit + install-sheet fix + cleanup packet (5968c2d).
+- BLOCKED with recorded rationale (no product blockers — run these next, biggest first): g-31f36bf8 Pin-where-I-am (T0 auth surface — needs a full night at queue head) · g-919dae84 Friends/Nights Out · g-e9d493e9 night photos T0/0038 · g-b83d1c77 design/site/domain audit (best attended — brand judgment calls) · g-35babba8 photo sweep (UNATTENDED-UNSAFE by boundary: real API spend + staging DB writes — run attended like 2026-08-02).
+- OPERATOR ATTENTION, morning: (1) the attended cleanup packet in docs/AUDIT-MOBILE-A11Y-PLAYWRIGHT-2026-08-03.md §6 — note the REFRAME: the '8 stale bars' are labeled synthetic staging fixtures; decide intent before deleting anything; (2) the parked product advisories listed under entries 3-5; (3) the mobile-controls red trio still belongs to g-90f908bc; (4) session infra: loop-guard checkpoint auto-sweeps ALL dirty files — every checkpoint needed a manual fix-up to exclude your four docs (worth a harness fix); (5) the recurring dev-only catalogSwapped poll flake (night 2; warmup project shipped tonight should reduce it — watch night 3).
+
 ## Preflight record
 - Session: 846fba10-7b58-4e23-be0c-58b48a953a14
 - Worktree: C:\Users\cdfee\projects\nb-overnight (worktree-guard: SAFE, stale lease reclaimed)
