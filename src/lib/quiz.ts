@@ -34,9 +34,12 @@ export const quiz: QuizQuestion[] = [
   {
     kind: 'single',
     prompt: 'What energy are you bringing?',
+    // Never force a crowd-energy pick (g-65a31bdf crit 15): the neutral
+    // answer emits NO tags — an honest null, not a hedged middle.
     options: [
       { label: 'Loud — bring the noise', tags: ['loud', 'buzzy'] },
       { label: 'Mellow — we wanna talk', tags: ['chill'] },
+      { label: 'Depends on the night', tags: [] },
     ],
   },
   {
@@ -50,6 +53,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'A rooftop with views', tags: ['rooftop', 'instagrammable'] },
       { label: 'Tucked away inside', tags: ['lounge', 'speakeasy'] },
       { label: 'On a dance floor', tags: ['club', 'dance'] },
+      // Setting is never forced (crit 15).
+      { label: 'Wherever — surprise me', tags: [] },
     ],
   },
   {
@@ -65,6 +70,12 @@ export const quiz: QuizQuestion[] = [
       // 'live' (29 bars) was inexpressible — audit F6.
       { label: 'Live music', tags: ['live', 'jazz'] },
       { label: 'Jazz / lounge', tags: ['jazz', 'lounge'] },
+      // Music axis completeness (crit 14): quiet/background is a REAL
+      // preference (calm-venue tags, nothing that contradicts it — crit
+      // 17); "no music" is the pure null — some people just want to talk,
+      // and forcing a soundtrack pick misprofiled them (crit 15).
+      { label: 'Quiet / background music', tags: ['chill', 'lounge'] },
+      { label: 'No music — we came to talk', tags: [] },
     ],
   },
   {
@@ -74,6 +85,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'Locals & regulars', tags: ['locals', 'old-nyc', 'dive'] },
       { label: 'Trendy and lively', tags: ['trendy', 'instagrammable'] },
       { label: 'Industry / creative', tags: ['industry', 'cocktail'] },
+      // Crowd is never forced (crit 15).
+      { label: 'No preference', tags: [] },
     ],
   },
   {
@@ -87,6 +100,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'Post-work crew', tags: ['post-work', 'beer'] },
       { label: 'The whole group, going late', tags: ['buzzy', 'loud', 'dance'] },
       { label: 'Solo or one good friend', tags: ['chill', 'locals'] },
+      // Company is never forced (crit 15).
+      { label: 'Depends who texts back', tags: [] },
     ],
   },
   {
@@ -98,6 +113,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'Treating myself', tags: ['pricey', 'cocktail'] },
       // splurge(10 bars) was quiz-inexpressible — audit F2 tail.
       { label: 'Big night, no limits', tags: ['splurge', 'polished'] },
+      // Spending is never forced (crit 15).
+      { label: "Whatever the night costs", tags: [] },
     ],
   },
   {

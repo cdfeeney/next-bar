@@ -32,8 +32,17 @@ export default function SettingsPage(): JSX.Element {
   const { ratings } = useRatings();
   const bars = useBars();
   const auth = useAuth();
-  const [hasProfile, setHasProfile] = useState(false);
+  // The FULL stored quiz profile, not a boolean: Settings must show the
+  // actual saved archetype (g-65a31bdf crit 8) — the rating-derived taste
+  // label below is a different, later signal and displaying only it read
+  // as if the quiz answers had vanished.
+  const [storedQuiz, setStoredQuiz] = useState<ReturnType<typeof loadProfile>>(null);
+  const hasProfile = storedQuiz !== null;
   const [seeded, setSeeded] = useState(false);
+  // Demo tools are a reviewer/dev path, not an ordinary-user surface
+  // (crit 10): visible only via the explicit ?demo=1 URL or while a
+  // sample night is actually loaded (so removal stays reachable).
+  const [demoPath, setDemoPath] = useState(false);
   // null = unknown/unclaimed until the profile fetch lands; the claim UI
   // only renders once the fetch confirms handle IS NULL (handleKnown).
   const [handle, setHandle] = useState<string | null>(null);
@@ -60,10 +69,13 @@ export default function SettingsPage(): JSX.Element {
 
   useEffect(() => {
     const refresh = (): void => {
-      setHasProfile(loadProfile() !== null);
+      setStoredQuiz(loadProfile());
       setSeeded(isDemoSeeded());
     };
     refresh();
+    // Exactly ?demo=1 — has('demo') also accepted ?demo=0/false/empty,
+    // silently widening the reviewer path (santa: Codex).
+    setDemoPath(new URLSearchParams(window.location.search).get('demo') === '1');
     // auth.status is a dependency because signing out now DELETES the local
     // vibe profile (it joined accountCache.ALL_KEYS). Keying only on
     // ratings.length missed it entirely for a user with zero ratings — 0 before
@@ -178,7 +190,7 @@ export default function SettingsPage(): JSX.Element {
       }
     }
     clearProfile();
-    setHasProfile(false);
+    setStoredQuiz(null);
   };
 
   const handleDeleteAccount = async () => {
@@ -428,12 +440,20 @@ export default function SettingsPage(): JSX.Element {
           </div>
         </div>
 
-        {ratings.length > 0 ? (
-          <div>
-            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-              Badges
-            </h2>
-            <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
+        <div>
+          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+            Badges
+          </h2>
+          <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
+            {/* Always rendered — before the first rating this is the
+                progress/empty state, not a hidden section (g-65a31bdf
+                crit 9): badges are discoverable from day one. */}
+            {ratings.length === 0 ? (
+              <p className="text-xs text-muted" data-testid="badges-empty">
+                Rate your first bar to start earning badges — here&apos;s
+                what&apos;s waiting.
+              </p>
+            ) : (
               <p className="text-xs text-muted">
                 Explorer score{' '}
                 <span className="text-accent font-display tabular-nums">
@@ -443,6 +463,7 @@ export default function SettingsPage(): JSX.Element {
                   ? ` · ${badgeReport.weekendStreakCount}-weekend streak`
                   : null}
               </p>
+            )}
               <ul className="flex flex-wrap gap-2">
                 {badgeReport.badges.map((b) => (
                   <li
@@ -462,9 +483,8 @@ export default function SettingsPage(): JSX.Element {
                   </li>
                 ))}
               </ul>
-            </div>
           </div>
-        ) : null}
+        </div>
 
         {taste.archetype !== null ? (
           <div>
@@ -514,8 +534,20 @@ export default function SettingsPage(): JSX.Element {
           </h2>
           <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
             <div className="flex items-center justify-between">
+              {/* The ACTUAL saved quiz archetype (crit 8) — distinct from the
+                  rating-derived "Your taste" section above, which needs
+                  ratings to exist. */}
               <p className="text-sm">
-                {hasProfile ? 'Your quiz answers are saved.' : 'No vibe profile yet.'}
+                {storedQuiz !== null ? (
+                  <>
+                    Your quiz answers are saved:{' '}
+                    <span className="font-display text-accent">
+                      {storedQuiz.archetype}
+                    </span>
+                  </>
+                ) : (
+                  'No vibe profile yet.'
+                )}
               </p>
               {hasProfile ? (
                 <button
@@ -536,6 +568,7 @@ export default function SettingsPage(): JSX.Element {
           </div>
         </div>
 
+        {demoPath || seeded ? (
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Demo
@@ -573,15 +606,22 @@ export default function SettingsPage(): JSX.Element {
             )}
           </div>
         </div>
+        ) : null}
 
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Data
           </h2>
           <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
+            {/* One honest sentence per auth state (crit 11). What actually
+                syncs for a signed-in account: ratings and the vibe profile
+                (server rows). What never leaves the device today: Want-to-go
+                saves and the night log. The old copy claimed NOTHING synced,
+                contradicting /rankings' "Synced to your account". */}
             <p className="text-xs text-muted leading-relaxed">
-              Everything you&apos;ve rated lives only on this device until cross-device
-              sync ships with the native app.
+              {auth.status === 'signed-in'
+                ? 'Your ratings and vibe profile sync to your account. Want-to-go saves and your night log stay on this device — cross-device sync for those isn’t available yet.'
+                : 'Everything lives on this device. Sign in to sync your ratings and vibe profile across devices; Want-to-go saves and your night log stay on this device either way.'}
             </p>
             <button
               type="button"

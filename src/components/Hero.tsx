@@ -15,7 +15,9 @@ export default function Hero() {
         </h1>
 
         <p className="text-muted text-lg md:text-xl max-w-2xl mx-auto mb-12 leading-relaxed">
-          Ninety seconds. Six questions. A list of ten New York bars
+          {/* Count is a real claim — quiz.ts currently has eight questions;
+              quizShape.test.ts pins this copy to the actual length. */}
+          Ninety seconds. Eight questions. A list of ten New York bars
           built for the night you actually want.
         </p>
 

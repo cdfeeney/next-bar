@@ -135,6 +135,28 @@ async function typeInto(input: Locator, value: string): Promise<void> {
   await expect(input).toHaveValue(value);
 }
 
+/**
+ * Fill both fields, tolerating the dev server's one-time Fast Refresh full
+ * reload: the first on-demand compile of the page's module graph can
+ * reload /onboarding mid-interaction and reset the controlled form
+ * (Playwright-trace-verified; production builds are unaffected). A retry
+ * simply types again on the settled page.
+ */
+async function fillIdentity(
+  page: Page,
+  name: string,
+  handle: string,
+): Promise<void> {
+  await expect(async () => {
+    // Clear first so a retry after a partial fill can't append-duplicate.
+    await nameInput(page).fill('');
+    await usernameInput(page).fill('');
+    await typeInto(nameInput(page), name);
+    await typeInto(usernameInput(page), handle);
+    await expect(submitButton(page)).toBeEnabled({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+}
+
 async function signIn(page: Page): Promise<void> {
   const cookie = sessionCookie(SUPABASE_URL as string);
   await page.context().addCookies([
@@ -187,7 +209,7 @@ test.describe('identity onboarding (signed in)', () => {
     await expect(page.locator('body')).not.toContainText(USER_EMAIL);
   });
 
-  test('submit saves the name, claims the handle, and lands home — with the gate quiet', async ({
+  test('submit saves the name, claims the handle, and lands on the quiz when no vibe profile exists', async ({
     page,
   }) => {
     const patchBodies: string[] = [];
@@ -198,18 +220,45 @@ test.describe('identity onboarding (signed in)', () => {
     });
     await page.goto('/onboarding');
 
-    await typeInto(nameInput(page), 'Conor F');
-    await typeInto(usernameInput(page), 'connor_f');
+    await fillIdentity(page, 'Conor F', 'connor_f');
     await submitButton(page).click();
 
-    // Success = full navigation home; the (still handle-less) profile stub
-    // must NOT bounce us back — the once-per-session flag holds the gate.
+    // g-65a31bdf crit 1: after identity, the vibe quiz is the prominent
+    // next action for a profile-less account — a full navigation to /quiz
+    // (which keeps its own always-visible Skip: crit 2's honest path).
+    await page.waitForURL(
+      (url) => new URL(url).pathname === '/quiz',
+      { timeout: 15_000 },
+    );
+    await expect(page.getByRole('link', { name: 'Skip' })).toBeVisible();
+    expect(patchBodies.length).toBeGreaterThan(0);
+    expect(patchBodies[0]).toContain('"display_name":"Conor F"');
+  });
+
+  test('submit lands home when a vibe profile already exists — no quiz detour', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { profileHandle: null, claimResult: 'connor_f' });
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'next-bar:profile:v1',
+        JSON.stringify({
+          tags: ['dive'],
+          archetype: 'Dive regular',
+          preferredNeighborhoods: [],
+          savedAt: new Date().toISOString(),
+        }),
+      );
+    });
+    await page.goto('/onboarding');
+
+    await fillIdentity(page, 'Conor F', 'connor_f');
+    await submitButton(page).click();
+
     await page.waitForURL(
       (url) => new URL(url).pathname === '/',
       { timeout: 15_000 },
     );
-    expect(patchBodies.length).toBeGreaterThan(0);
-    expect(patchBodies[0]).toContain('"display_name":"Conor F"');
   });
 
   test('a lost claim race surfaces as "taken" and stays on the form', async ({
@@ -218,8 +267,7 @@ test.describe('identity onboarding (signed in)', () => {
     await stubSupabase(page, { profileHandle: null, claimResult: null });
     await page.goto('/onboarding');
 
-    await typeInto(nameInput(page), 'Conor F');
-    await typeInto(usernameInput(page), 'connor_f');
+    await fillIdentity(page, 'Conor F', 'connor_f');
     await submitButton(page).click();
 
     await expect(

@@ -52,6 +52,8 @@ type ResultsViewProps = {
    */
   widenedFromMiles?: number | null;
   seenIds?: readonly string[];
+  /** Forwarded to every ResultCard — see its doc (honest unset-vibe copy). */
+  hasSavedVibe?: boolean;
 };
 
 export default function ResultsView({
@@ -65,6 +67,7 @@ export default function ResultsView({
   showShare,
   widenedFromMiles,
   seenIds,
+  hasSavedVibe,
 }: ResultsViewProps) {
   const userCoords: Coords =
     location.kind === 'coords'
@@ -341,6 +344,7 @@ export default function ResultsView({
                   miles={miles}
                   userTags={profile.tags}
                   showShare={showShare}
+                  hasSavedVibe={hasSavedVibe}
                 />
               );
             })}

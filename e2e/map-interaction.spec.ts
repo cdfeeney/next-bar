@@ -173,15 +173,47 @@ test.describe('/map interaction', () => {
 });
 
 test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)', () => {
-  test('legend chip row renders all three tiers', async ({ page }) => {
+  test('legend is honest before any signal: tier renders but never claims "Suggested"', async ({
+    page,
+  }) => {
+    // g-65a31bdf crit 5: with no quiz profile, no vibe filters, and no
+    // location, the glowing tier must not be dressed up as personalized
+    // "Suggested" — but it still renders (UX-C: never blank).
     await page.goto('/map');
     const legend = page.getByTestId('map-legend');
     await expect(legend).toBeVisible();
-    await expect(legend).toContainText('Suggested');
+    await expect(legend).toContainText('Worth a look');
     await expect(legend).toContainText('Rated');
     // UX-C: the grey dot is just "Bar" — minimum words.
     await expect(legend).toContainText('Bar');
+    await expect(legend).not.toContainText('Suggested');
     await expect(legend).not.toContainText('Everything else');
+  });
+
+  test('legend says "Suggested for you" only once a quiz profile exists', async ({
+    page,
+  }) => {
+    await page.addInitScript(SEED_PROFILE_SCRIPT);
+    await page.goto('/map');
+    const legend = page.getByTestId('map-legend');
+    await expect(legend).toContainText('Suggested for you');
+  });
+
+  test('legend says "Closest to you" when located without a profile', async ({
+    page,
+    context,
+  }) => {
+    // g-65a31bdf crit 5: proximity is the only signal here — the label
+    // names it and must not claim personalization.
+    await context.grantPermissions(['geolocation']);
+    await context.setGeolocation(NYC);
+    await page.goto('/map');
+    await expect(
+      page.getByText(/Showing your location on the map/i),
+    ).toBeVisible({ timeout: 15_000 });
+    const legend = page.getByTestId('map-legend');
+    await expect(legend).toContainText('Closest to you');
+    await expect(legend).not.toContainText('Suggested');
   });
 
   test('seeded profile: suggested markers ≤ 10 and grey markers exist', async ({
@@ -310,6 +342,22 @@ test.describe('/map filter sheet (six axes + location, goal g-12d33864)', () => 
     await row.click();
     await expect(row).toHaveAttribute('aria-expanded', 'true');
   }
+
+  test('legend says "Matches your filters" once a vibe filter is applied (g-65a31bdf)', async ({
+    page,
+  }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+    const { sheet } = await openSheet(page);
+    await openRow(sheet, 'Setting');
+    await sheet.getByRole('button', { name: /^Club/ }).click();
+    await sheet.getByRole('button', { name: /^Apply$/ }).click();
+    await expect(page.getByTestId('map-legend')).toContainText(
+      'Matches your filters',
+    );
+  });
 
   test('the old horizontal rails are gone from the map entirely', async ({
     page,

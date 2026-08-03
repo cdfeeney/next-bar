@@ -26,6 +26,15 @@ type ResultCardProps = {
   /** Planning phase (operator 2026-07-27): show the "Send" share — text
    *  the bar to a group; recipients without the app land on /share/[id]. */
   showShare?: boolean;
+  /**
+   * True when a saved quiz profile exists even though THIS ranking runs
+   * with no vibe tags (the home surface ranks by proximity by operator
+   * decision). Telling a fresh quiz-taker to "set a vibe" minutes after
+   * the quiz read as the system forgetting them (santa: Kimi,
+   * g-65a31bdf) — this switches the unset copy to name the truth: the
+   * vibe is off HERE, and Tweak is where it comes into play.
+   */
+  hasSavedVibe?: boolean;
 };
 
 /**
@@ -42,7 +51,7 @@ type ResultCardProps = {
  * /rankings owns that flow), and the per-card photo attribution line is
  * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
-export default function ResultCard({ bar, rank, miles, userTags, showShare }: ResultCardProps) {
+export default function ResultCard({ bar, rank, miles, userTags, showShare, hasSavedVibe }: ResultCardProps) {
   const lead = leadCopy(miles, displayHood(bar.neighborhood));
   const badge = vibeMatchBadge(userTags, bar.tags);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -144,11 +153,21 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
         ) : null}
 
         {/* One meta line: the loud walk/ride time + the match count several
-            e2e specs key on ("Vibe match" — keep those words). */}
+            e2e specs key on ("Vibe match" — keep those words). With NO vibe
+            signal in play a numeric "0/1" badge implied matching that was
+            not happening (g-65a31bdf crit 3/5). "Set a vibe" is the honest
+            unlock for BOTH states this renders in: a first-timer with no
+            profile, and the auto surface, which by operator decision ranks
+            on proximity and ignores the saved quiz profile (the quiz/tweak
+            surfaces pass real tags and get the numeric badge). */}
         <p className="text-sm">
           <span className="font-display text-accent">{lead.text}</span>
           <span className="text-muted">
-            {' '}· Vibe match {badge.num}/{badge.den}
+            {userTags.length === 0
+              ? hasSavedVibe
+                ? ' · Vibe match off — Tweak to use yours'
+                : ' · Vibe match after you set a vibe'
+              : ` · Vibe match ${badge.num}/${badge.den}`}
           </span>
         </p>
 

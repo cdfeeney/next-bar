@@ -235,10 +235,14 @@ test.describe('QA-6 — the one results view', () => {
 
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
     await expect(cards).toHaveCount(5);
-    // Pure proximity: with no vibe tags in play the badge reads 0/1 for
-    // every card (jaccard vs an empty profile) — the saved jazz profile
-    // did NOT leak into the default ranking.
-    await expect(cards.first().getByText(/Vibe match 0\//)).toBeVisible();
+    // Pure proximity: with no vibe tags in play the badge shows the
+    // honest profile-aware copy (g-65a31bdf) — the saved jazz profile did
+    // NOT leak into the default ranking (a leak would render the numeric
+    // badge and fail this), while the copy still acknowledges the profile
+    // exists and points at Tweak, where its influence is explicit.
+    await expect(
+      cards.first().getByText(/Vibe match off — Tweak to use yours/),
+    ).toBeVisible();
 
     // The saved profile still PRE-FILLS the tweak surface (it moved, it
     // did not disappear): Sound axis shows Jazz already active.

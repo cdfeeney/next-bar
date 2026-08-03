@@ -1,7 +1,8 @@
 /**
  * quiz-path.spec.ts
  *
- * End-to-end: navigate directly to /quiz, complete the 6-question vibe quiz,
+ * End-to-end: navigate directly to /quiz, complete the vibe quiz (question
+ * count lives in src/lib/quiz.ts — pinned by quizShape.test.ts),
  * pick a neighborhood on the LocationPrompt (avoids the geolocation popup),
  * and confirm 3 result cards render with "Vibe match" text.
  *
@@ -62,7 +63,7 @@ async function reachQuizResults(page: Page): Promise<void> {
 }
 
 test.describe('Quiz path', () => {
-  test('navigates to /quiz, completes 6-question quiz, picks neighborhood, sees 3 result cards', async ({ page }) => {
+  test('navigates to /quiz, completes the quiz, picks neighborhood, sees 3 result cards', async ({ page }) => {
     await reachQuizResults(page);
 
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
@@ -72,6 +73,43 @@ test.describe('Quiz path', () => {
     const count = await cards.count();
     expect(count).toBeGreaterThanOrEqual(3);
     expect(count).toBeLessThanOrEqual(10);
+  });
+
+  test('all-neutral answers complete the quiz without forcing a single preference (g-65a31bdf)', async ({
+    page,
+  }) => {
+    // Criteria 13/15/17: every preference axis has a null answer; a user
+    // declining every axis still finishes and still gets results — with a
+    // profile whose only signal is the one real pick (Q1 has no neutral:
+    // it seeds the core vibe). The saved tags must contain ONLY that
+    // pick's tags — a neutral answer leaking tags is the contradiction
+    // bug this pins.
+    await page.goto('/quiz');
+    await expect(page.getByText('Friday, 11pm. What sounds good?')).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.getByRole('button', { name: 'Cold pints at a proper pub' }).click();
+    await page.getByRole('button', { name: 'Depends on the night' }).click();
+    await page.getByRole('button', { name: 'Wherever — surprise me' }).click();
+    await page.getByRole('button', { name: 'No music — we came to talk' }).click();
+    await page.getByRole('button', { name: 'No preference' }).click();
+    await page.getByRole('button', { name: 'Depends who texts back' }).click();
+    await page.getByRole('button', { name: 'Whatever the night costs' }).click();
+    await expect(page.getByText('Any neighborhoods you love?')).toBeVisible();
+    await page.getByRole('button', { name: 'Anywhere works' }).click();
+
+    await page.getByRole('button', { name: /Or pick a neighborhood/i }).click();
+    await page.getByRole('button', { name: 'East Village' }).click();
+    await expect(
+      page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+    ).toBeVisible();
+
+    const saved = await page.evaluate(() =>
+      window.localStorage.getItem('next-bar:profile:v1'),
+    );
+    expect(saved).not.toBeNull();
+    const profile = JSON.parse(saved!) as { tags: string[] };
+    expect([...profile.tags].sort()).toEqual(['beer', 'pub']);
   });
 
   test('results show a subtle dismissible install nudge, not the full marketing CTA', async ({ page }) => {

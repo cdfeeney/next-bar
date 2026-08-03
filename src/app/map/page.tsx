@@ -175,6 +175,25 @@ export default function MapPage(): JSX.Element {
     [ratings],
   );
 
+  // HONEST TIER NAMING (g-65a31bdf crit 4/5/6). The glowing markers mean
+  // different things in different states, and before a profile exists the
+  // word "Suggested" implied a personalization that had not happened:
+  //  - active vibe filters → the tier answers the filters ("Matches");
+  //  - saved quiz profile → genuinely personalized ("Suggested for you");
+  //  - neither, but located → proximity is the leading signal ("Closest");
+  //  - no signal at all → the blend still ranks on trustworthy hours and
+  //    the time-of-night nudge — real, but not personal ("Worth a look").
+  // The tier itself ALWAYS renders — UX-C ("no suggested bars for me now")
+  // is a standing operator decision that a profile-less map must not go
+  // blank; this change renames the tier honestly, it does not remove it.
+  const tierLabel = hasIntent
+    ? 'Matches your filters'
+    : hasProfile
+      ? 'Suggested for you'
+      : coords
+        ? 'Closest to you'
+        : 'Worth a look';
+
   const isLocating = state.status === 'requesting';
   const locationFailed =
     state.status === 'denied' || state.status === 'unavailable';
@@ -196,7 +215,7 @@ export default function MapPage(): JSX.Element {
         >
           <span className="inline-flex items-center gap-1.5">
             <span aria-hidden style={LEGEND_SWATCH.suggested} />
-            Suggested
+            {tierLabel}
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span aria-hidden style={LEGEND_SWATCH.rated} />
@@ -429,8 +448,9 @@ export default function MapPage(): JSX.Element {
           focusBarId={focus?.id ?? null}
           focusNonce={focus?.nonce}
           highlightIds={highlightIds}
-          // Always defined on /map → tiered rendering. Empty (no quiz
-          // profile) means no suggested tier: grey dots + rated rings only.
+          // Always defined on /map → tiered rendering; the tier is never
+          // blank (UX-C) and the legend names what it currently means
+          // (g-65a31bdf crit 4/5/6).
           suggestedIds={suggestedIds}
           // Tapping a marker opens the full venue detail (goal g-5ead112c).
           onSelectBar={setSelectedBar}

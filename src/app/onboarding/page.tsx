@@ -28,6 +28,8 @@ import {
 } from '@/lib/profile.server';
 import { useHandleAvailability } from '@/hooks/useHandleAvailability';
 import { setPromptedFlag } from '@/components/OnboardingGate';
+import { loadProfile } from '@/lib/storedProfile';
+import { syncVibeProfile } from '@/lib/vibeProfileSync';
 
 const CHARSET_HINT = '3–20 characters: letters, numbers, underscores.';
 
@@ -125,9 +127,44 @@ export default function OnboardingPage(): JSX.Element {
     // Belt-and-braces: the gate keys off the now-set handle, but the flag
     // spares one profile fetch per session.
     setPromptedFlag();
+    // The LOCAL cache alone can't answer "does this account have a vibe
+    // profile" on a fresh device — the server row may simply not have
+    // hydrated yet, and routing on the stale null would send an existing
+    // profile-holder back through the quiz (santa: Codex). Reconcile
+    // first; every failure mode falls open to the local read, and a wrong
+    // /quiz landing stays benign (always-visible Skip).
+    const epoch = getCacheEpoch();
+    try {
+      // Static import, deliberately: a submit-time dynamic import compiles
+      // a fresh chunk in dev and Fast Refresh answers with a full reload
+      // mid-submit, resetting the form under the user (observed via
+      // Playwright trace). Production is indifferent; dev correctness wins.
+      //
+      // Bounded: the Supabase client has no request timeout, and a
+      // black-holed connection here would strand the form on "Setting
+      // up…" forever (santa: Codex round 2). The sync is an optimization
+      // for the routing decision — after the bound, fall open to the
+      // local read.
+      await Promise.race([
+        syncVibeProfile({
+          supabase,
+          userId: auth.user.id,
+          stillCurrent: () => getCacheEpoch() === epoch,
+        }),
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 4_000);
+        }),
+      ]);
+    } catch {
+      // fall through to the local read
+    }
     // Full navigation (auth-page pattern) so every consumer boots with the
-    // fresh identity.
-    window.location.assign('/');
+    // fresh identity. After identity, the vibe quiz is the prominent next
+    // action for anyone without a profile (g-65a31bdf crit 1) — /quiz keeps
+    // its own always-visible Skip, so the path stays honest (crit 2).
+    // "Skip for now" above deliberately still goes home: someone declining
+    // the identity step is bailing, not asking for another step.
+    window.location.assign(loadProfile() === null ? '/quiz' : '/');
   };
 
   return (

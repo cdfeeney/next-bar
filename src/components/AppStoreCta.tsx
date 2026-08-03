@@ -16,8 +16,12 @@ const SUBHEADS: Record<NonNullable<AppStoreCtaProps['variant']>, string> = {
     'These ten bars are a teaser. Install Next Bar on your phone and it remembers what you love, learns your radius, and surfaces the next round in two taps.',
   'where-next':
     'Install on your home screen and Next Bar remembers your taste, picks up where you left off, and gets faster every time.',
+  // Honest sync split (g-65a31bdf crit 11): signed-in ratings + vibe
+  // profile sync TODAY; it's Want-to-go saves and the night log that wait
+  // for the launch. The old blanket "cross-device sync ships later"
+  // contradicted the Settings Data section (santa: GLM).
   tried:
-    'Install Next Bar on your home screen to keep your ratings close. Cross-device sync ships with the App Store launch.',
+    'Install Next Bar on your home screen to keep your ratings close. Sign in and they sync across devices today — Want-to-go saves join at the App Store launch.',
 };
 
 export default function AppStoreCta({ variant = 'quiz' }: AppStoreCtaProps) {

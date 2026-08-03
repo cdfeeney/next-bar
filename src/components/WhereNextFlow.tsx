@@ -94,9 +94,16 @@ export default function WhereNextFlow() {
   // Loaded client-side to avoid an SSR/localStorage hydration mismatch; falls
   // back to an empty profile (→ distance-only ranking) when the quiz is unseen.
   const [profile, setProfile] = useState<VibeProfile>(defaultProfile);
+  // True when a saved quiz profile with REAL tags exists. Feeds the honest
+  // unset-vibe card copy on the proximity-ranked surfaces (santa: Kimi):
+  // a quiz-taker must not be told to "set a vibe" they just set. An
+  // all-neutral profile (tags: []) deliberately reads as false — there is
+  // nothing for Tweak to apply, so "set a vibe" stays the true message.
+  const [hasSavedVibe, setHasSavedVibe] = useState(false);
   useEffect(() => {
     const syncProfile = (): void => {
       const saved = loadProfile();
+      setHasSavedVibe(saved !== null && saved.tags.length > 0);
       // Review MED: a cleared profile (Settings, another tab) must also
       // clear the Tweak-the-vibe pre-fill — fall back to empty, don't
       // keep stale tags in memory.
@@ -612,6 +619,7 @@ export default function WhereNextFlow() {
           excludeIds={autoExcludeIds}
           widenedFromMiles={widenedFromMiles}
           seenIds={widenActive ? shownIds : undefined}
+          hasSavedVibe={hasSavedVibe}
           onRanked={handleRanked}
           showShare={isPlanning}
         />
@@ -787,6 +795,7 @@ export default function WhereNextFlow() {
         excludeIds={manualExcludeIds}
         widenedFromMiles={widenedFromMiles}
         seenIds={widenActive ? shownIds : undefined}
+        hasSavedVibe={hasSavedVibe}
         hideClosedNow
         onRanked={handleRanked}
         showShare={isPlanning}

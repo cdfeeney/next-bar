@@ -42,6 +42,14 @@ const FOLLOWS_KEY = 'next-bar:follows:v1';
 const PROFILE_KEY = 'next-bar:profile:v1';
 const PROFILE_MERGED_KEY = 'next-bar:profile:merged-for:v1';
 
+// Demo sample-night flags (literals mirrored from lib/demo/seed.ts): the
+// seeded RATINGS live in RATINGS_KEY and are wiped here, so leaving the
+// flags behind stranded Settings showing Demo tools for a sample night
+// that no longer existed after a sign-out/account switch (santa: Codex,
+// g-65a31bdf).
+const DEMO_SEED_FLAG_KEY = 'next-bar:demo:seeded:v1';
+const DEMO_SEED_IDS_KEY = 'next-bar:demo:seeded-ids:v1';
+
 const ALL_KEYS = [
   RATINGS_KEY,
   RATINGS_MERGED_KEY,
@@ -50,6 +58,8 @@ const ALL_KEYS = [
   FOLLOWS_KEY,
   PROFILE_KEY,
   PROFILE_MERGED_KEY,
+  DEMO_SEED_FLAG_KEY,
+  DEMO_SEED_IDS_KEY,
 ] as const;
 
 /**

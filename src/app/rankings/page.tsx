@@ -183,10 +183,15 @@ export default function RankingsPage(): JSX.Element {
       ) : hasNoRatings ? (
         <section className="flex flex-col items-center justify-center text-center px-6 py-[120px]">
           <h2 className="font-display text-2xl mb-2">Nothing here yet.</h2>
+          {/* Auth-aware sync claim (g-65a31bdf crit 11): signed-in ratings DO
+              sync — the old unconditional "stay on this device" contradicted
+              the signed-in footer below (santa: Sonnet verifier, g-7b6021a8). */}
           <p className="text-muted text-sm mb-6 max-w-sm">
             Rate a bar after you check it out and it&apos;ll show up here, scored
-            0–10 by your own taste. Your rankings stay on this device until the
-            app ships with sync.
+            0–10 by your own taste.{' '}
+            {auth.status === 'signed-in'
+              ? 'Your ratings sync to your account.'
+              : 'Ratings stay on this device — sign in to sync.'}
           </p>
           <div className="mb-4">
             <QuickAddBar initialBarId={deepLinkBarId} onInitialConsumed={clearDeepLink} />

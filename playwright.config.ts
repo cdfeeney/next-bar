@@ -28,13 +28,25 @@ export default defineConfig({
     },
   },
   projects: [
+    // Compiles every route on the cold dev server BEFORE any real spec
+    // runs — see e2e/warmup.setup.ts for the Fast Refresh full-reload
+    // artifact this eliminates. Every device project depends on it.
+    {
+      name: 'warmup',
+      testMatch: /warmup\.setup\.ts/,
+      use: { ...devices['iPhone 13'] },
+    },
     {
       name: 'iPhone 13',
       use: { ...devices['iPhone 13'] },
+      dependencies: ['warmup'],
+      testIgnore: /warmup\.setup\.ts/,
     },
     {
       name: 'Pixel 7',
       use: { ...devices['Pixel 7'] },
+      dependencies: ['warmup'],
+      testIgnore: /warmup\.setup\.ts/,
     },
     // Playwright's device registry stops at iPhone 15 Pro Max (checked again on
     // the 1.62 upgrade), so the current hardware is pinned by hand. The manual
@@ -79,6 +91,7 @@ export default defineConfig({
       // stated at 402x681 (compact-mobile search + save reachability).
       testMatch:
         /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars)\.spec\.ts/,
+      dependencies: ['warmup'],
     },
   ],
   webServer: {
