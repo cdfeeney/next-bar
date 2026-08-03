@@ -6,11 +6,23 @@ Developer enrollment clearing.
 
 ## Architecture (30 seconds)
 
-Capacitor wraps the live site (`https://next-bar-two.vercel.app`) in a native
-iOS shell (`ios/` + `capacitor.config.ts`). Web deploys update the app
-instantly. The native shell only rebuilds when config, plugins, or icons
-change — via `.github/workflows/ios-testflight.yml` on a macOS runner with
-Xcode cloud signing (no certs stored anywhere).
+Capacitor wraps the live site in a native iOS shell (`ios/` +
+`capacitor.config.ts`). Web deploys update the app instantly. The native
+shell only rebuilds when config, plugins, or icons change — via
+`.github/workflows/ios-testflight.yml` on a macOS runner with Xcode cloud
+signing (no certs stored anywhere).
+
+**Origin (2026-08-03):** the shell's origin is config-driven and defaults
+to the canonical **`https://next-bar.com`**. Until next-bar.com DNS points
+at production, a default-origin binary loads only the offline fallback —
+for a pre-DNS internal build, fill the workflow's optional **`server_url`**
+input with the current live host. The canonical hosts stay in
+`allowNavigation` even under an override, so the DNS cutover cannot strand
+an installed build. **Remote-origin (`server.url`) builds are INTERNAL
+TestFlight groups only — never external/App Review** (Capacitor docs:
+server.url is "not intended for use in production"; the release
+architecture is the locally-packaged shell in
+TESTFLIGHT-ARCH-DECISION-g-39169b3b on the overnight branch).
 
 > PWABuilder was the original plan; its iOS generator was archived Sept 2025.
 > Capacitor is the maintained equivalent and later gives us native plugins
@@ -65,7 +77,10 @@ gh secret set ASC_KEY_P8_BASE64 --body "$(base64 -w0 AuthKey_XXXX.p8)"
 ## Every build after that (one command)
 
 ```bash
+# Canonical (requires next-bar.com DNS live):
 gh workflow run ios-testflight.yml --ref main
+# Pre-DNS internal dogfood (origin override, no code change):
+gh workflow run ios-testflight.yml --ref main -f server_url=https://<current-live-host>
 ```
 
 ~15 min on the Mac runner → build appears in App Store Connect → TestFlight
@@ -95,5 +110,9 @@ Testers install the free **TestFlight** app, tap the invite, done.
 - **Location prompts never appear** → `NSLocationWhenInUseUsageDescription`
   must stay in `ios/App/App/Info.plist`.
 - **Apple review "guideline 4.2 minimum functionality"** (App Store
-  submission, not TestFlight) → add `@capacitor/push-notifications` +
-  re-submit; that's the documented escalation path.
+  submission, not TestFlight) → a remote-origin build should never reach
+  review in the first place (internal groups only). The reviewed
+  escalation path (TESTFLIGHT-ARCH-DECISION-g-39169b3b, overnight branch)
+  is: migrate to the locally-packaged shell, ship the native geolocation
+  bridge first (the app's core function degrades visibly in a webview
+  prompt), then share sheet/haptics; push comes after first approval.

@@ -3,8 +3,19 @@ name: iOS TestFlight
 # Manual trigger only. Run from the Actions tab (or `gh workflow run
 # ios-testflight.yml`) whenever the native shell changes. Ordinary web
 # deploys do NOT need this — the shell loads the live site.
+#
+# server_url: the shell's origin defaults to https://next-bar.com
+# (canonical). Until next-bar.com DNS points at production, pass the
+# current live host here for an internal dogfood build — one field, no
+# code change. INTERNAL TestFlight groups only for any remote-origin
+# build (see TESTFLIGHT-ARCH-DECISION on the overnight branch).
 on:
   workflow_dispatch:
+    inputs:
+      server_url:
+        description: 'Override the shell origin (pre-DNS dogfood only; blank = https://next-bar.com)'
+        required: false
+        default: ''
 
 concurrency:
   group: ios-testflight
@@ -26,7 +37,12 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Sync Capacitor iOS shell
-        run: npx cap sync ios
+        env:
+          CAP_SERVER_URL: ${{ inputs.server_url }}
+        run: |
+          # An empty input must not override the canonical default.
+          if [ -z "$CAP_SERVER_URL" ]; then unset CAP_SERVER_URL; fi
+          npx cap sync ios
 
       - name: Write App Store Connect API key
         env:
