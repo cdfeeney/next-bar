@@ -620,9 +620,15 @@ export default function SettingsPage(): JSX.Element {
                 (g-919dae84; a night only reaches the server when you share
                 it). The old copy claimed NOTHING synced, contradicting
                 /rankings' "Synced to your account". */}
+            {/* Precision matters (santa: Opus+Codex convergent HIGH, g-919
+                round 1): sign-out wipes PAST nights + share records, but
+                tonight's in-progress log and Want-to-go saves are not in
+                the wipe set — the copy must not claim more than the wipe
+                does. Widening the wipe itself is an operator decision
+                (NIGHTS-OUT-NOTES). */}
             <p className="text-xs text-muted leading-relaxed">
               {auth.status === 'signed-in'
-                ? 'Your ratings and vibe profile sync to your account. Want-to-go saves and your night history stay on this device — a night only leaves it when you share that night, and signing out clears them from this device.'
+                ? 'Your ratings and vibe profile sync to your account. Want-to-go saves and your night history stay on this device — a night only leaves it when you share that night. Signing out clears your past nights and share records from this device; tonight’s in-progress log and Want-to-go saves remain.'
                 : 'Everything lives on this device. Sign in to sync your ratings and vibe profile across devices; Want-to-go saves and your night history stay on this device.'}
             </p>
             <button

@@ -42,6 +42,24 @@ describe('clearAccountCache', () => {
     expect(window.localStorage.getItem(FOLLOWS_KEY)).toBeNull();
   });
 
+  it('removes the shared-nights token record and the night archive — g-919dae84 registered them', () => {
+    // Shared-night tokens mirror the account's server rows; the archive is
+    // 60 nights of whereabouts — both are exactly what must not leak to the
+    // next account on a shared device (santa: Opus, g-919 round 1 — a
+    // future ALL_KEYS edit must not silently drop either).
+    window.localStorage.setItem(
+      'next-bar:shared-nights:v1',
+      JSON.stringify({ '2026-08-01': { token: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', sharedAt: 'x' } }),
+    );
+    window.localStorage.setItem(
+      'next-bar:night-archive:v1',
+      JSON.stringify([{ nightKey: '2026-08-01', visits: [{ barId: 'attaboy', at: 'x' }] }]),
+    );
+    clearAccountCache();
+    expect(window.localStorage.getItem('next-bar:shared-nights:v1')).toBeNull();
+    expect(window.localStorage.getItem('next-bar:night-archive:v1')).toBeNull();
+  });
+
   it('leaves unrelated keys alone', () => {
     // Exemplar changed from the vibe profile to the age acknowledgement (G1).
     // This test's PURPOSE — clearAccountCache is scoped to ALL_KEYS and does

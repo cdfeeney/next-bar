@@ -94,7 +94,12 @@ export default function NightsPage(): JSX.Element {
   const [rows, setRows] = useState<NightRow[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [readEpoch, setReadEpoch] = useState(0);
-  const [unshareBusy, setUnshareBusy] = useState<string | null>(null);
+  // Busy is keyed PER NIGHT (santa: Opus, g-919 round 1): one shared slot
+  // let a tap on row B re-enable row A's button while A's unshare was
+  // still in flight — a second tap then fired a duplicate RPC.
+  const [unshareBusy, setUnshareBusy] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [unshareError, setUnshareError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -176,7 +181,7 @@ export default function NightsPage(): JSX.Element {
 
   const handleUnshare = useCallback(async (nightKey: string) => {
     setUnshareError(null);
-    setUnshareBusy(nightKey);
+    setUnshareBusy((prev) => new Set(prev).add(nightKey));
     try {
       const supabase = getBrowserSupabase();
       if (!supabase) {
@@ -194,7 +199,11 @@ export default function NightsPage(): JSX.Element {
       if (getCacheEpoch() === epochBefore) forgetSharedNight(nightKey);
       setReadEpoch((n) => n + 1);
     } finally {
-      setUnshareBusy((k) => (k === nightKey ? null : k));
+      setUnshareBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(nightKey);
+        return next;
+      });
     }
   }, []);
 
@@ -321,11 +330,11 @@ export default function NightsPage(): JSX.Element {
                       {sharedToken && auth.status === 'signed-in' ? (
                         <button
                           type="button"
-                          disabled={unshareBusy === nightKey}
+                          disabled={unshareBusy.has(nightKey)}
                           onClick={() => void handleUnshare(nightKey)}
                           className="min-h-[44px] touch-manipulation px-5 rounded-full border border-border text-muted font-display text-sm hover:text-text hover:border-accent transition-colors disabled:opacity-60"
                         >
-                          {unshareBusy === nightKey
+                          {unshareBusy.has(nightKey)
                             ? 'Stopping…'
                             : 'Stop sharing'}
                         </button>

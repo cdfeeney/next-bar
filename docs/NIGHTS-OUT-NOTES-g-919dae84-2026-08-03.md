@@ -55,6 +55,33 @@ only; staging deploy needs operator approval per the standing rule.
   path; /nights adds no write volume (sharing is still one explicit tap
   per night).
 
+## Santa round-1 adjudications (evidence-countered findings, recorded)
+
+Three Codex round-1 findings were answered with repository evidence
+rather than code changes:
+
+- **"Successful share can leave no durable record" (epoch skip / quota
+  write failure)**: the epoch-skip is the CORRECT privacy behavior — a
+  share resolving after a sign-out wipe belongs to the previous account
+  and must not be written into the next account's store; the resulting
+  orphaned-share management gap is precisely the documented
+  `list_my_shared_nights` requirement above. A quota-failed local write
+  self-heals on the next re-share (same token, `share_night` keeps it).
+- **"Ratings snapshot only at displacement, not at the night boundary"**:
+  deliberate — the morning-after recap window is exactly when users rate
+  last night's bars, and a boundary-time snapshot would freeze the night
+  BEFORE those ratings. Displacement (next night's first visit) is the
+  earliest moment the night is genuinely finished.
+- **"Rollover is non-atomic under quota failure"**: matches the log's
+  own long-standing quota stance (writes degrade to "thinner record",
+  never throw); refusing tonight's first visit to protect yesterday's
+  archive would trade a live failure for a historical one.
+
+Additionally fixed from round 1: settings sign-out copy made precise
+(the wipe covers past nights + share records, NOT tonight's live log or
+Want-to-go — widening the wipe is an operator decision), wipe-set
+regression tests for the two new keys, and per-night unshare busy state.
+
 ## Attended decisions for the operator (crit 11)
 
 1. **Per-night thread vs persistent group chat**: recorded as REQUIRED
