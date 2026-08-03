@@ -62,6 +62,11 @@ describe('isPublicOrigin', () => {
     'https://172.16.5.5',
     'https://169.254.0.1',
     'https://printer.local',
+    'https://100.64.0.1',
+    'https://[fd12:3456::1]',
+    'https://[fe80::1]',
+    'https://[::ffff:10.0.0.1]',
+    'https://[::]',
     'http://next-bar.com',
     'garbage',
   ])('rejects %s', (origin) => {

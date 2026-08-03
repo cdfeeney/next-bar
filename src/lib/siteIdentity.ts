@@ -68,13 +68,22 @@ export function isPublicOrigin(origin: string): boolean {
       host === 'localhost' ||
       host.endsWith('.localhost') ||
       host.endsWith('.local') ||
-      host === '[::1]' ||
       host === '0.0.0.0' ||
       /^127\./.test(host) ||
       /^10\./.test(host) ||
       /^192\.168\./.test(host) ||
       /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-      /^169\.254\./.test(host)
+      /^169\.254\./.test(host) ||
+      // CGNAT (RFC 6598) — not publicly routable either.
+      /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+      // IPv6 non-public forms (santa: Codex, round 3): loopback,
+      // unspecified, ULA fc00::/7, link-local fe80::/10, and IPv4-mapped
+      // (which smuggles the v4 ranges past the v4 regexes above).
+      host === '[::1]' ||
+      host === '[::]' ||
+      /^\[f[cd]/.test(host) ||
+      /^\[fe[89ab]/.test(host) ||
+      host.startsWith('[::ffff:')
     ) {
       return false;
     }
