@@ -48,8 +48,12 @@ export default function SearchPage(): JSX.Element {
     setQuery(q);
     params.delete('q');
     const rest = params.toString();
+    // Preserve the CURRENT history state rather than nulling it: the App
+    // Router keeps its own markers in history.state, and clobbering them
+    // during hydration corrupts back/forward for this entry (santa:
+    // Codex; /rankings' ?add strip predates this finding — follow-up).
     window.history.replaceState(
-      null,
+      window.history.state,
       '',
       `${window.location.pathname}${rest ? `?${rest}` : ''}`,
     );

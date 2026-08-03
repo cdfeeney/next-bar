@@ -10,6 +10,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import BarPicker from '@/components/BarPicker';
 import ShareButton from '@/components/ShareButton';
+import { useBars } from '@/lib/useBars';
 import { useLists } from '@/hooks/useLists';
 import type { BarList } from '@/lib/lists';
 import { WANT_TO_GO_LIST_ID, purgeWantToGo } from '@/lib/wantToGo';
@@ -19,6 +20,10 @@ import { displayHood } from '@/lib/hoodDisplay';
 import { trackEvent } from '@/lib/analytics';
 
 export default function ListsPage(): JSX.Element {
+  // 0019 swap-day rule: this page resolves bars via barById (rows AND the
+  // share payload) — subscribe so the async catalog swap re-renders it
+  // with fresh names instead of serving stale reads (santa: Codex).
+  useBars();
   const { lists, createList, deleteList, addBarToList, removeBarFromList } =
     useLists();
   const [draftName, setDraftName] = useState('');
