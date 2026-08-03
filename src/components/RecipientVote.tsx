@@ -30,7 +30,9 @@ const CHOICES: ReadonlyArray<{ rating: Rating; label: string; hint: string }> = 
 ];
 
 const BASE =
-  'flex-1 min-h-[44px] touch-manipulation px-3 py-2.5 rounded-full font-display text-sm border transition-colors';
+  // 56px, not 44: these chips ARE the share route's primary-path action
+  // (R4 — santa: Codex, round 2).
+  'flex-1 min-h-[56px] touch-manipulation px-3 py-2.5 rounded-full font-display text-sm border transition-colors';
 const SELECTED = 'bg-accent border-accent text-bg';
 const UNSELECTED = 'bg-transparent border-border text-muted hover:text-text';
 

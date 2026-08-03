@@ -9,6 +9,18 @@ export const metadata: Metadata = {
   title: 'Join the waitlist — Next Bar',
   description:
     'Out tonight? Pick the bar with your friends. Join the Next Bar waitlist for early access.',
+  // Top-level fields don't cascade into the root's openGraph/twitter
+  // objects — without these, /join unfurls with the generic homepage
+  // text and og:url (santa: Codex, round 2).
+  openGraph: {
+    title: 'Join the Next Bar waitlist',
+    description: 'Out tonight? Pick the bar with your friends.',
+    url: '/join',
+  },
+  twitter: {
+    title: 'Join the Next Bar waitlist',
+    description: 'Out tonight? Pick the bar with your friends.',
+  },
 };
 
 export default function JoinPage() {

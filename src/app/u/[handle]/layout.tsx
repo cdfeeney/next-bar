@@ -16,6 +16,15 @@ export function generateMetadata({
   return {
     title: `@${handle} — Next Bar`,
     description: `@${handle}'s bar list on Next Bar.`,
+    openGraph: {
+      title: `@${handle} — Next Bar`,
+      description: `@${handle}'s bar list on Next Bar.`,
+      url: `/u/${encodeURIComponent(handle)}`,
+    },
+    twitter: {
+      title: `@${handle} — Next Bar`,
+      description: `@${handle}'s bar list on Next Bar.`,
+    },
   };
 }
 

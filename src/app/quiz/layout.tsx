@@ -6,6 +6,17 @@ export const metadata: Metadata = {
   title: 'Vibe quiz — Next Bar',
   description:
     'Eight questions about the night you want. Get bars matched to it.',
+  openGraph: {
+    title: 'Vibe quiz — Next Bar',
+    description:
+      'Eight questions about the night you want. Get bars matched to it.',
+    url: '/quiz',
+  },
+  twitter: {
+    title: 'Vibe quiz — Next Bar',
+    description:
+      'Eight questions about the night you want. Get bars matched to it.',
+  },
 };
 
 export default function QuizLayout({

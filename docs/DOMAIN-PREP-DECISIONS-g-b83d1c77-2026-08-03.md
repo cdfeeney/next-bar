@@ -19,7 +19,8 @@ Nothing here is deployed; code changes in this slice are local commits.
   /quiz gained a landmark h1; LocationPrompt spinner respects
   prefers-reduced-motion.
 - R7: /share/[barId] card and /u/[handle] list rows lead with the bar's
-  visual tile (photo-when-policy-allows, glyph fallback).
+  deterministic GLYPH tile (BarVisualTile is glyph-only by compliance
+  design — deliberately never a photo).
 - Metadata reconciliation: per-page titles/descriptions for /install,
   /join (matches its waitlist OG), /auth, /onboarding, /quiz, /nights,
   /u/[handle] and /u/[handle]/night/[shareId] (param-derived, display-only).

@@ -10,6 +10,17 @@ export const metadata: Metadata = {
   title: 'Get Next Bar — NYC bars, picked for you',
   description:
     'Stop going to the same three bars. A curated NYC nightlife matcher: tell it the night you want, it names the bar.',
+  openGraph: {
+    title: 'Get Next Bar — NYC bars, picked for you',
+    description:
+      'Stop going to the same three bars. Tell it the night you want, it names the bar.',
+    url: '/install',
+  },
+  twitter: {
+    title: 'Get Next Bar — NYC bars, picked for you',
+    description:
+      'Stop going to the same three bars. Tell it the night you want, it names the bar.',
+  },
 };
 
 export default function InstallPage() {

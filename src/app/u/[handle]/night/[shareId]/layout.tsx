@@ -14,6 +14,14 @@ export function generateMetadata({
   return {
     title: `@${handle}'s night out — Next Bar`,
     description: 'A night out on Next Bar — the route, the stops, the map.',
+    openGraph: {
+      title: `@${handle}'s night out — Next Bar`,
+      description: 'A night out on Next Bar — the route, the stops, the map.',
+    },
+    twitter: {
+      title: `@${handle}'s night out — Next Bar`,
+      description: 'A night out on Next Bar — the route, the stops, the map.',
+    },
   };
 }
 

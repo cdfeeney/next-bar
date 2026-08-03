@@ -34,7 +34,14 @@ export function resolveSiteUrl(
     const value = (candidate ?? '').trim();
     if (value === '') continue;
     try {
-      return new URL(value).origin;
+      const url = new URL(value);
+      // http(s) with a REAL origin only: opaque schemes (mailto:, data:)
+      // parse fine but their origin is the literal string "null", which
+      // would poison metadataBase and every sitemap URL (santa: Codex,
+      // round 2).
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+      if (url.origin === 'null') continue;
+      return url.origin;
     } catch {
       continue; // unparseable config falls through, never propagates
     }
@@ -51,11 +58,27 @@ export function resolveSiteUrl(
 export function isPublicOrigin(origin: string): boolean {
   try {
     const url = new URL(origin);
-    return (
-      url.protocol === 'https:' &&
-      url.hostname !== 'localhost' &&
-      url.hostname !== '127.0.0.1'
-    );
+    if (url.protocol !== 'https:') return false;
+    const host = url.hostname.toLowerCase();
+    // Loopback, link-local, RFC1918 private, unspecified, and .localhost /
+    // .local names are all non-public — two exact names was not actually
+    // fail-closed (`https://[::1]`, `https://127.0.0.2` slipped through;
+    // santa: Codex, round 2).
+    if (
+      host === 'localhost' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      host === '[::1]' ||
+      host === '0.0.0.0' ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      /^169\.254\./.test(host)
+    ) {
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }

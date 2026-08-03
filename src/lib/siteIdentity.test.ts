@@ -34,16 +34,37 @@ describe('resolveSiteUrl', () => {
       'http://localhost:3000',
     );
   });
+
+  it('rejects opaque schemes whose origin is the string "null"', () => {
+    expect(
+      resolveSiteUrl({
+        NEXT_PUBLIC_SITE_URL: 'mailto:hi@example.com',
+        VERCEL_URL: 'deploy.vercel.app',
+      }),
+    ).toBe('https://deploy.vercel.app');
+  });
 });
 
 describe('isPublicOrigin', () => {
   it('accepts a public https origin', () => {
     expect(isPublicOrigin('https://next-bar.com')).toBe(true);
   });
-  it.each(['http://localhost:3000', 'https://localhost', 'https://127.0.0.1', 'http://next-bar.com', 'garbage'])(
-    'rejects %s',
-    (origin) => {
-      expect(isPublicOrigin(origin)).toBe(false);
-    },
-  );
+  it.each([
+    'http://localhost:3000',
+    'https://localhost',
+    'https://foo.localhost',
+    'https://127.0.0.1',
+    'https://127.0.0.2',
+    'https://[::1]',
+    'https://0.0.0.0',
+    'https://10.1.2.3',
+    'https://192.168.1.10',
+    'https://172.16.5.5',
+    'https://169.254.0.1',
+    'https://printer.local',
+    'http://next-bar.com',
+    'garbage',
+  ])('rejects %s', (origin) => {
+    expect(isPublicOrigin(origin)).toBe(false);
+  });
 });

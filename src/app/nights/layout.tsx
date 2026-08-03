@@ -6,6 +6,17 @@ export const metadata: Metadata = {
   title: 'Nights Out — Next Bar',
   description:
     'Every night the app logged — stops, ratings, and the map, newest first.',
+  openGraph: {
+    title: 'Nights Out — Next Bar',
+    description:
+      'Every night the app logged — stops, ratings, and the map.',
+    url: '/nights',
+  },
+  twitter: {
+    title: 'Nights Out — Next Bar',
+    description:
+      'Every night the app logged — stops, ratings, and the map.',
+  },
 };
 
 export default function NightsLayout({
