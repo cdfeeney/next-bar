@@ -42,6 +42,12 @@
 
 ## Item entries
 
+### Entry 5 — g-ee6c250d dark analytics instrumentation: COMPLETE (commit 0bb25f3 + fix-up)
+- trackEvent wired to success boundaries only: search=completed selects (/search rows, /map picks), share=both share components' exact success lines (dismiss silent), save=new-write-only (libs return write booleans; duplicates/quota emit nothing). 'visit' honestly unwired (pin feature blocked tonight). AnalyticsInit lazy registration (deduped, StrictMode-safe, network-silent). All gates preserved; nothing enabled; migration 0018 untouched.
+- Santa CONVERGED IN ONE ROUND, zero blocking findings, all four lanes (Codex needed one foreground retry after a timeout — proof c711c29d findings:[]). New analytics-silence e2e proves zero traffic/storage/cookies with gates absent. vitest 1884/1884.
+- PARKED for the future attended enablement PR: ip:0/geoip-discard at the PostHog layer (GLM); document 'save'=any list-membership write and 'share' incl clipboard; success-definition asymmetry noted.
+- Known flake recurred: catalogSwapped poll (search-bars, iPhone 13, 2 tests) — green on re-run; second night observing it, still dev-only.
+
 ### Entry 4 — g-ac3a291c Rankings Lists switcher + WTG fold-in + text share: COMPLETE (commit a5cf32d + fix-up)
 - Chip row gone; Best Bars default; top-right switcher (Best Bars / Want to go / named lists / Manage). WTG saves migrated into the Lists model via a facade (public API unchanged — zero writer churn): one-time lossless fold with verify-before-remove (quota-tested), recursion-proof event discipline (writes report success; failed writes are silent), /lists folds up front, purge path prevents legacy resurrect after delete, honest special-cased confirm. Rating sheet multi-list checkmarks (WTG excluded — auto-prune would undo it). Share = native/clipboard TEXT ONLY, no URL ever (unit + clipboard e2e pins).
 - Santa 3 rounds, all lanes: Claude 3M fixed; DeepSeek two-tab/RMW analysis (benign) + quota lens → the lossless-fold guard; GLM 2 real (confirm honesty, pre-fold delete resurrection) fixed; Codex R1 timeout → retry found 2M (quota event recursion, /lists fold bypass) fixed → final findings:[] proof 97d4f96c; Sonnet verifier CONFIRMED + caught a vacuous e2e poll (repointed). Final diff 2aee90523dca4c72. vitest 1878/1878; e2e battery 76/76; secret-scan clean.
