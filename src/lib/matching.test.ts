@@ -79,6 +79,92 @@ describe('vibeMatchBadge', () => {
   });
 });
 
+describe('matches() — sliceCap (g-d3f8d912 fresh-hand depth)', () => {
+  it('returns ranked depth at the SAME adaptive threshold maxResults would settle on', () => {
+    // Four strong matches (jaccard 1) settle the relax loop at the 0.25
+    // start for relaxTarget max(3, maxResults=3). One weak bar (jaccard
+    // 1/5 = 0.2) passes only a relaxed threshold. sliceCap must return
+    // ALL bars at the SETTLED threshold — and never relax further to
+    // reach the deeper slice (that would weaken the vibe gate; the naive
+    // maxResults=pool.length approach did exactly that).
+    const strong = ['s1', 's2', 's3', 's4'].map((id) =>
+      makeBar({ id, tags: ['dive'] }),
+    );
+    const weak = makeBar({
+      id: 'weak',
+      tags: ['dive', 'cocktail', 'wine', 'speakeasy', 'polished'],
+    });
+    const args = {
+      profile: baseProfile(['dive']),
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [...strong, weak],
+      now: NOW,
+    };
+    const sliced = matches({ ...args, maxResults: 3, sliceCap: 100 });
+    expect(sliced.map((b) => b.id).sort()).toEqual(['s1', 's2', 's3', 's4']);
+    // Control: without sliceCap the same call slices to maxResults.
+    expect(matches({ ...args, maxResults: 3 })).toHaveLength(3);
+    // Control: the naive deep request DOES relax to the floor and admit
+    // the weak bar — the behavior sliceCap exists to avoid.
+    const naive = matches({ ...args, maxResults: 5 });
+    expect(naive.map((b) => b.id)).toContain('weak');
+  });
+
+  it('relaxDiscountIds relaxes exactly as far as hard-excluding those ids would (santa: Codex round 2)', () => {
+    // Seen bars qualify only at a RELAXED threshold; three fresh strong
+    // bars qualify at the 0.25 start. A run-it-again deal (seen bars
+    // hard-excluded) settles at 0.25 — the discounted soft-seen deal must
+    // settle there too. The superseded maxResults + seen.length target
+    // demanded five candidates and relaxed to 0.20, admitting the weak
+    // seen bars AND any weak fresh bar with them.
+    const fresh = ['f1', 'f2', 'f3'].map((id) => makeBar({ id, tags: ['dive'] }));
+    const seenWeak = ['w1', 'w2'].map((id) =>
+      makeBar({ id, tags: ['dive', 'cocktail', 'wine', 'speakeasy', 'polished'] }),
+    );
+    const args = {
+      profile: baseProfile(['dive']),
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [...fresh, ...seenWeak],
+      now: NOW,
+    };
+    const deal = matches({
+      ...args,
+      maxResults: 3,
+      sliceCap: 100,
+      relaxDiscountIds: ['w1', 'w2'],
+    });
+    expect(deal.map((b) => b.id).sort()).toEqual(['f1', 'f2', 'f3']);
+  });
+
+  it('discounted ids that DO qualify at the settled threshold stay ranked (fallback reuse)', () => {
+    // One seen strong bar + two fresh strong bars, target 3: the discount
+    // means only the fresh pair counts, so the loop relaxes to the floor
+    // hunting a third fresh candidate — but the seen bar remains in the
+    // output throughout, available to the arrangement as fallback.
+    const bars = [
+      makeBar({ id: 'seen-strong', tags: ['dive'] }),
+      makeBar({ id: 'f1', tags: ['dive'] }),
+      makeBar({ id: 'f2', tags: ['dive'] }),
+    ];
+    const deal = matches({
+      profile: baseProfile(['dive']),
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars,
+      now: NOW,
+      maxResults: 3,
+      sliceCap: 100,
+      relaxDiscountIds: ['seen-strong'],
+    });
+    expect(deal.map((b) => b.id).sort()).toEqual(['f1', 'f2', 'seen-strong']);
+  });
+});
+
 describe('matches() — filters', () => {
   const profile = baseProfile(['cocktail', 'speakeasy', 'polished', 'industry']);
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { advanceShownIds, nextWiderRadius } from './resultsRefresh';
+import { advanceShownIds, isWiderRadius, nextWiderRadius } from './resultsRefresh';
 
 describe('advanceShownIds (QA-6 run-it-again)', () => {
   test('appends a full page to the shown history', () => {
@@ -70,5 +70,24 @@ describe('advanceShownIds (QA-6 run-it-again)', () => {
     expect(
       advanceShownIds(['a', 'b', 'c', 'd', 'e'], ['f', 'g', 'h', 'i', 'j'], 5),
     ).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']);
+  });
+});
+
+describe('isWiderRadius (g-d3f8d912 fresh hand)', () => {
+  const walking = { kind: 'walking', maxMiles: 1.5 } as const;
+  const cab = { kind: 'cab', maxMiles: 4 } as const;
+  const anywhere = { kind: 'anywhere', maxMiles: null } as const;
+
+  test('each single and double step outward is wider', () => {
+    expect(isWiderRadius(cab, walking)).toBe(true);
+    expect(isWiderRadius(anywhere, cab)).toBe(true);
+    expect(isWiderRadius(anywhere, walking)).toBe(true);
+  });
+
+  test('narrowing and same-kind are not wider', () => {
+    expect(isWiderRadius(walking, cab)).toBe(false);
+    expect(isWiderRadius(cab, anywhere)).toBe(false);
+    expect(isWiderRadius(walking, anywhere)).toBe(false);
+    expect(isWiderRadius(cab, cab)).toBe(false);
   });
 });

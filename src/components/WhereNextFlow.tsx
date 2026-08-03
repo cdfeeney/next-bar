@@ -31,7 +31,7 @@ import {
   RADIUS_WALK,
   RESULTS_COUNT,
 } from '@/lib/constants';
-import { advanceShownIds, nextWiderRadius } from '@/lib/resultsRefresh';
+import { advanceShownIds, isWiderRadius, nextWiderRadius } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
 import DistanceChips from '@/components/DistanceChips';
@@ -234,6 +234,12 @@ export default function WhereNextFlow() {
   // fresh deal.
   const [resultsHood, setResultsHood] = useState<Neighborhood | null>(null);
   const [shownIds, setShownIds] = useState<readonly string[]>([]);
+  // Fresh-hand mode (g-d3f8d912): non-null after a WIDENING radius tap —
+  // holds the radius that was in force before it. While set, shownIds is
+  // the soft "seen" set (preferred against, reusable as fallback) instead
+  // of a hard exclusion, and the deal is arranged newly-eligible-first.
+  // One deal only: the next refresh, narrow, or context change ends it.
+  const [widenedFromMiles, setWidenedFromMiles] = useState<number | null>(null);
   const lastRankedRef = useRef<string[]>([]);
   // True once the user taps the distance chips themselves — the
   // auto-widen below must never fight an explicit choice.
@@ -249,29 +255,73 @@ export default function WhereNextFlow() {
   // 2026-07-27: home opens on Walkable; if an UNTOUCHED radius yields
   // zero, widen one visible chip step walking → cab → anywhere rather
   // than showing an empty first load).
+  // Deal-history reset: shown history + widen context. Deliberately does
+  // NOT touch lastRankedRef (santa: Codex round 2): descendant effects run
+  // before ancestor effects, so by the time a parent-level reset effect
+  // fires, ResultsView's onRanked has already stored the NEW context's
+  // hand — wiping it here would strand run-it-again and widen folding on
+  // an empty mirror. Staleness across remounts is fixed at the SOURCE
+  // instead: ResultsView's signature guard now always reports the first
+  // commit, empty included, so the mirror is refreshed before any user
+  // tap can consume it.
+  const resetDealHistory = useCallback((): void => {
+    setShownIds([]);
+    setWidenedFromMiles(null);
+  }, []);
   useEffect(() => {
     if (!rankedEmpty) return;
     if (shownIds.length > 0) {
       setShownIds([]);
+      setWidenedFromMiles(null);
       return;
     }
     if (!radiusTouchedRef.current) {
       setSelectedRadius((prev) => nextWiderRadius(prev));
     }
   }, [rankedEmpty, shownIds]);
+  // Render-time ref mirrors (same ref-carry pattern as onRankedRef in
+  // ResultsView): the two handlers below need the CURRENT radius/widen
+  // state without putting either in their deps, and state-updater
+  // functions must stay pure (StrictMode double-invokes them).
+  const selectedRadiusRef = useRef(selectedRadius);
+  selectedRadiusRef.current = selectedRadius;
+  const widenedFromMilesRef = useRef(widenedFromMiles);
+  widenedFromMilesRef.current = widenedFromMiles;
   const handleRunAgain = useCallback((): void => {
-    setShownIds((prev) =>
-      advanceShownIds(prev, lastRankedRef.current, RESULTS_COUNT),
-    );
+    if (widenedFromMilesRef.current === null) {
+      setShownIds((prev) =>
+        advanceShownIds(prev, lastRankedRef.current, RESULTS_COUNT),
+      );
+      return;
+    }
+    // Refresh after a widened deal: the arranged hand joins the shown
+    // history and refresh semantics return to the classic hard-exclusion
+    // cycle (advance/wrap unchanged). A double-tap before the re-rank
+    // lands takes the branch above, where the classic overlap guard
+    // makes it a no-op.
+    setShownIds((prev) => Array.from(new Set([...prev, ...lastRankedRef.current])));
+    setWidenedFromMiles(null);
   }, []);
   const handleRadiusChange = useCallback((next: Radius): void => {
     radiusTouchedRef.current = true;
+    const prev = selectedRadiusRef.current;
+    if (isWiderRadius(next, prev)) {
+      // WIDEN: fold the visible hand into the seen set and deal the
+      // fresh-hand arrangement from the previous radius (g-d3f8d912).
+      setShownIds((shown) =>
+        Array.from(new Set([...shown, ...lastRankedRef.current])),
+      );
+      setWidenedFromMiles(prev.maxMiles);
+    } else {
+      // NARROW/SAME: the long-pinned semantics — forget the dealt hand
+      // (distance-widening.spec.ts pins this via the narrow path).
+      resetDealHistory();
+    }
     setSelectedRadius(next);
-    setShownIds([]);
-  }, []);
+  }, [resetDealHistory]);
   const handleHoodChange = useCallback((next: Neighborhood | null): void => {
     setResultsHood(next);
-    setShownIds([]);
+    resetDealHistory();
     // Review MED: "In Harlem" must mean the WHOLE hood — a walking cap
     // measured from the hood's centroid silently drops edge bars. Picking
     // a hood widens the radius chip to Anywhere (visible state change;
@@ -279,11 +329,11 @@ export default function WhereNextFlow() {
     if (next !== null) {
       setSelectedRadius({ kind: 'anywhere', maxMiles: RADIUS_ANYWHERE });
     }
-  }, []);
+  }, [resetDealHistory]);
   const resetResultsControls = useCallback((): void => {
     setResultsHood(null);
-    setShownIds([]);
-  }, []);
+    resetDealHistory();
+  }, [resetDealHistory]);
 
   // E3.1: "not the places I've already been tonight." The night log's
   // visited set hard-excludes on the live surfaces (never the quiz).
@@ -318,16 +368,20 @@ export default function WhereNextFlow() {
   // contents actually change.
   const seedBarId =
     step.kind === 'results' || step.kind === 'tweakVibe' ? step.seedBar.id : null;
+  // In fresh-hand mode shownIds is the SOFT seen set (passed separately as
+  // seenIds so the widened deal can still reuse it as fallback) — only
+  // visited bars and the seed stay hard-excluded (g-d3f8d912).
+  const widenActive = widenedFromMiles !== null;
   const manualExcludeIds = useMemo(
     () =>
       seedBarId
-        ? [seedBarId, ...visitedIds, ...shownIds]
-        : [...visitedIds, ...shownIds],
-    [seedBarId, visitedIds, shownIds],
+        ? [seedBarId, ...visitedIds, ...(widenActive ? [] : shownIds)]
+        : [...visitedIds, ...(widenActive ? [] : shownIds)],
+    [seedBarId, visitedIds, shownIds, widenActive],
   );
   const autoExcludeIds = useMemo(
-    () => [...visitedIds, ...shownIds],
-    [visitedIds, shownIds],
+    () => [...visitedIds, ...(widenActive ? [] : shownIds)],
+    [visitedIds, shownIds, widenActive],
   );
 
   // E2.1: EVERY seed-bar entry lands on RESULTS immediately through this
@@ -389,7 +443,7 @@ export default function WhereNextFlow() {
     setNightVibe(nextTags);
     // QA-6: a new vibe is a new ranking — the run-it-again history resets
     // (the hood override survives; vibe and hood are orthogonal).
-    setShownIds([]);
+    resetDealHistory();
     setStep({ kind: 'results', seedBar: step.seedBar, tags: nextTags });
   };
 
@@ -408,7 +462,7 @@ export default function WhereNextFlow() {
     if (nextHood !== undefined) handleHoodChange(nextHood);
     saveNightVibe(nextTags);
     setNightVibe(nextTags);
-    setShownIds([]);
+    resetDealHistory();
     setStep({ kind: 'autoResults', coords: step.coords });
   };
 
@@ -428,6 +482,24 @@ export default function WhereNextFlow() {
     if (step.kind === 'freeTextSeed') return null;
     return { lat: step.seedBar.lat, lng: step.seedBar.lng };
   }, [geo.coords, step]);
+
+  // The ranking anchor can MOVE mid-deal: a pending geo.request() resolving
+  // replaces a seed/neighborhood anchor with real GPS coords the moment
+  // geo.coords exists (memo above). A dealt hand and any armed widen
+  // context are anchored to the coords they were dealt AT — carrying them
+  // across an anchor move mis-buckets "newly eligible" and treats a hand
+  // from the old anchor as seen at the new one (santa: Codex). Reset on
+  // any genuine move; getCurrentPosition is one-shot (no watchPosition),
+  // so this fires on discrete transitions, never GPS jitter.
+  const anchorKey = effectiveCoords
+    ? `${effectiveCoords.lat},${effectiveCoords.lng}`
+    : 'none';
+  const prevAnchorKeyRef = useRef(anchorKey);
+  useEffect(() => {
+    if (prevAnchorKeyRef.current === anchorKey) return;
+    prevAnchorKeyRef.current = anchorKey;
+    resetDealHistory();
+  }, [anchorKey, resetDealHistory]);
 
   if (step.kind === 'askLocation') {
     return (
@@ -538,6 +610,8 @@ export default function WhereNextFlow() {
           maxResults={RESULTS_COUNT}
           hideClosedNow
           excludeIds={autoExcludeIds}
+          widenedFromMiles={widenedFromMiles}
+          seenIds={widenActive ? shownIds : undefined}
           onRanked={handleRanked}
           showShare={isPlanning}
         />
@@ -711,6 +785,8 @@ export default function WhereNextFlow() {
         maxMiles={selectedRadius.maxMiles}
         maxResults={RESULTS_COUNT}
         excludeIds={manualExcludeIds}
+        widenedFromMiles={widenedFromMiles}
+        seenIds={widenActive ? shownIds : undefined}
         hideClosedNow
         onRanked={handleRanked}
         showShare={isPlanning}

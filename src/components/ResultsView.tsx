@@ -11,8 +11,9 @@ import type {
 import { useBars } from '@/lib/useBars';
 import { excludeClosedBars } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
+import { arrangeWidenedHand } from '@/lib/freshHand';
 import { haversineMiles } from '@/lib/distance';
-import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
+import { MAX_RESULTS, NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
 import { displayHood } from '@/lib/hoodDisplay';
 import { useRatings } from '@/hooks/useRatings';
 import ResultCard from '@/components/ResultCard';
@@ -41,6 +42,16 @@ type ResultsViewProps = {
   onRanked?: (ids: string[]) => void;
   /** Planning phase (operator 2026-07-27): cards carry a "Send" share. */
   showShare?: boolean;
+  /**
+   * Fresh-hand mode after a WIDENING radius tap (g-d3f8d912): the radius
+   * in force before the tap. When a number, the hand is arranged
+   * newly-eligible-first → unseen → previously-shown-as-fallback instead
+   * of a plain top-N slice, with `seenIds` as the soft seen set (the
+   * parent removes those ids from `excludeIds` in this mode — they must
+   * stay eligible for fallback reuse). Undefined/null = normal ranking.
+   */
+  widenedFromMiles?: number | null;
+  seenIds?: readonly string[];
 };
 
 export default function ResultsView({
@@ -52,6 +63,8 @@ export default function ResultsView({
   hideClosedNow,
   onRanked,
   showShare,
+  widenedFromMiles,
+  seenIds,
 }: ResultsViewProps) {
   const userCoords: Coords =
     location.kind === 'coords'
@@ -142,29 +155,54 @@ export default function ResultsView({
     return Array.from(tags);
   }, [ratings, bars]);
 
-  const ranked = useMemo(
-    () =>
-      matches({
-        profile,
-        coords: userCoords,
-        preferredNeighborhoods,
-        maxMiles,
-        bars: pool,
-        excludeIds: effectiveExcludeIds,
-        maxResults,
-        lovedTags,
-        // Late-night bias rides the SAME live clock as the open-now
-        // filter — quiz/planning surfaces (no hideClosedNow) never bias.
-        biasNow: filterNow ?? undefined,
-      }),
-    [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow],
-  );
+  // Fresh-hand mode (g-d3f8d912): after a widening tap, the adaptive vibe
+  // threshold must relax exactly as far as the equivalent run-it-again
+  // deal would. relaxDiscountIds delivers that equivalence precisely: the
+  // soft-seen bars do not count toward the relax target (as if
+  // hard-excluded, which is what run-again does) but stay ranked for
+  // fallback reuse. A naive maxResults = pool.length forced floor
+  // relaxation; a maxResults + seen.length target still over-relaxed when
+  // a seen bar itself failed the threshold (santa: Codex rounds 1 + 2 —
+  // "never weaken active vibe filters"). sliceCap returns every bar the
+  // settled threshold admits so arrangeWidenedHand can bucket
+  // newly-eligible → unseen → seen-as-fallback; it also keeps the
+  // exploration slot out of the arranged deal.
+  const widenActive = typeof widenedFromMiles === 'number';
+  const ranked = useMemo(() => {
+    const scored = matches({
+      profile,
+      coords: userCoords,
+      preferredNeighborhoods,
+      maxMiles,
+      bars: pool,
+      excludeIds: effectiveExcludeIds,
+      maxResults,
+      sliceCap: widenActive ? pool.length : undefined,
+      relaxDiscountIds: widenActive ? seenIds : undefined,
+      lovedTags,
+      // Late-night bias rides the SAME live clock as the open-now
+      // filter — quiz/planning surfaces (no hideClosedNow) never bias.
+      biasNow: filterNow ?? undefined,
+    });
+    if (!widenActive) return scored;
+    return arrangeWidenedHand({
+      ranked: scored,
+      coords: userCoords,
+      prevMaxMiles: widenedFromMiles,
+      seenIds: seenIds ?? [],
+      count: maxResults ?? MAX_RESULTS,
+    }).hand;
+  }, [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow, widenActive, widenedFromMiles, seenIds]);
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own
   // recompute. Signature guard: fire only when the id SEQUENCE changes —
   // never on mere array-identity churn (belt-and-braces against the
   // render-loop class above).
-  const lastRankedSigRef = useRef('');
+  // null sentinel, not '' (santa: Codex, g-d3f8d912): with '' a remounted
+  // view whose FIRST rank is empty never fired onRanked, so the parent's
+  // last-ranked mirror silently kept the PREVIOUS context's hand. The
+  // first commit must always report — even an empty rank.
+  const lastRankedSigRef = useRef<string | null>(null);
   // Ref-carried callback (DeepSeek review): an inline-lambda parent must
   // not re-trigger the effect on every render — only a ranked change does.
   const onRankedRef = useRef(onRanked);

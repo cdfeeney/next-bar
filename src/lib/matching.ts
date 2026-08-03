@@ -63,6 +63,32 @@ export type MatchesArgs = {
   bars: Bar[];
   excludeIds?: string[];
   maxResults?: number;
+  /**
+   * Return up to this many ranked bars while keeping the RELAXATION target
+   * (and therefore the adaptive vibe threshold) governed by `maxResults`
+   * exactly as a normal deal would. The fresh-hand arrangement
+   * (g-d3f8d912) needs ranked DEPTH to bucket newly-eligible bars — but
+   * passing a huge maxResults instead would drive the relax loop to the
+   * Jaccard floor and admit weak-vibe bars a normal deal at this radius
+   * would never have relaxed to (santa: Codex — "never weaken active vibe
+   * filters"); pair with `relaxDiscountIds` below, which is what delivers
+   * the exact-threshold equivalence for soft-seen deals. The exploration
+   * slot stays out of sliced-deep results; the caller owns that
+   * arrangement.
+   */
+  sliceCap?: number;
+  /**
+   * Soft-seen ids that do NOT count toward the relaxation target but stay
+   * in the results. This makes a fresh-hand deal relax EXACTLY as far as
+   * the equivalent run-it-again deal (which hard-excludes these ids)
+   * would: the loop keeps relaxing until `maxResults` NON-discounted
+   * candidates qualify — no further (santa: Codex round 2 — a plain
+   * `maxResults + seen.length` target over-relaxed whenever a seen bar
+   * did not itself qualify at the current threshold). Bars listed here
+   * that qualify at the settled threshold remain in the output so the
+   * arrangement can reuse them as fallback.
+   */
+  relaxDiscountIds?: readonly string[];
   now?: Date;
   /**
    * Live-surface clock for the LATE-NIGHT bias (operator 2026-07-27):
@@ -151,6 +177,8 @@ export function matches(args: MatchesArgs): Bar[] {
     bars,
     excludeIds,
     maxResults,
+    sliceCap,
+    relaxDiscountIds,
     now,
     biasNow,
     lovedTags = [],
@@ -189,11 +217,18 @@ export function matches(args: MatchesArgs): Bar[] {
     // rank the whole pool by proximity (+ loved affinity).
     candidates = pool;
   } else {
+    const discount = new Set(relaxDiscountIds ?? []);
+    const countedLength = (list: Bar[]): number =>
+      discount.size === 0
+        ? list.length
+        : list.filter((b) => !discount.has(b.id)).length;
     let threshold = JACCARD_START;
     candidates = [];
-    while (threshold >= JACCARD_FLOOR - 1e-9 && candidates.length < relaxTarget) {
+    let counted = 0;
+    while (threshold >= JACCARD_FLOOR - 1e-9 && counted < relaxTarget) {
       candidates = pool.filter((b) => jaccard(profile.tags, b.tags) >= threshold);
-      if (candidates.length >= relaxTarget) break;
+      counted = countedLength(candidates);
+      if (counted >= relaxTarget) break;
       threshold = Math.round((threshold - JACCARD_STEP) * 100) / 100;
     }
   }
@@ -211,7 +246,7 @@ export function matches(args: MatchesArgs): Bar[] {
     }))
     .sort((a, b) => b.score - a.score);
 
-  const top = ranked.slice(0, cap).map((r) => r.bar);
+  const top = ranked.slice(0, sliceCap ?? cap).map((r) => r.bar);
 
   // Exploration slot (B7b — ε-greedy, simplified): on surfaces showing 10+
   // results, the last slot goes to a QUALIFIED long-tail pick (still vibe-
@@ -219,7 +254,9 @@ export function matches(args: MatchesArgs): Bar[] {
   // pure exploit never re-surfaces the catalog's depth. Deterministically
   // seeded from (profile tags, day): stable within a day, rotates daily.
   // Small surfaces (default MAX_RESULTS = 3) are never taxed a slot.
-  if (cap >= EXPLORATION_MIN_RESULTS && ranked.length > cap) {
+  // Skipped for sliced-deep requests (sliceCap): those callers arrange the
+  // deal themselves and a swapped last-of-list slot is meaningless there.
+  if (sliceCap === undefined && cap >= EXPLORATION_MIN_RESULTS && ranked.length > cap) {
     // Every tail bar already cleared the adaptive Jaccard gate (which
     // bottoms out at JACCARD_FLOOR) or the empty-profile bypass — that IS
     // the "qualified" bar (DeepSeek review: a second floor filter here was
