@@ -1,15 +1,25 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Bar, ManhattanNeighborhood } from '@/types';
 import { useBars } from '@/lib/useBars';
 import { displayHood } from '@/lib/hoodDisplay';
+import { watchSearchVisibility } from '@/lib/searchBarAutoHide';
 import RatingBadge from '@/components/RatingBadge';
 import BarVisualTile from '@/components/BarVisualTile';
 
 type BarPickerProps = {
   onPick: (bar: Bar) => void;
   onNotListed?: () => void;
+  /**
+   * Hide the sticky search bar while the user scrolls down; reveal on
+   * scroll-up, near the top, or on focus (g-90f908bc). Opt-in per call site:
+   * on `/` the picker fills the document scroller and a pinned opaque bar
+   * over ~975 rows leaves whatever row rests under it untappable
+   * (mobile-controls pass 2 proves it). The dialog and inline call sites
+   * keep today's always-pinned behavior until reviewed separately.
+   */
+  autoHideSearchOnScroll?: boolean;
 };
 
 const NEIGHBORHOOD_ORDER: ManhattanNeighborhood[] = [
@@ -33,9 +43,35 @@ const NEIGHBORHOOD_ORDER: ManhattanNeighborhood[] = [
   'LIC',
 ];
 
-export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {
+export default function BarPicker({
+  onPick,
+  onNotListed,
+  autoHideSearchOnScroll = false,
+}: BarPickerProps) {
   const [query, setQuery] = useState('');
   const bars = useBars();
+
+  // Auto-hide (opt-in): opacity/pointer-events only — layout is untouched, so
+  // hiding can never reflow the list (which is what deferredCatalogSwap
+  // protects against). The input stays in the a11y tree and focusable while
+  // hidden; focus forces it visible (see searchBarAutoHide.ts for why
+  // aria-hidden is the worse trade).
+  //
+  // Opacity and pointer-events must flip ATOMICALLY (never transition
+  // opacity): a fading bar is a state where opacity≠0 while hit-testing
+  // already passes through, which reads as "covered" to any observer that
+  // samples computed style + elementFromPoint — mobile-controls pass 2
+  // caught exactly that race. Only the transform animates.
+  const [searchVisible, setSearchVisible] = useState(true);
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!autoHideSearchOnScroll) return;
+    return watchSearchVisibility({
+      isFocused: () => document.activeElement === searchRef.current,
+      onChange: setSearchVisible,
+      anchor: () => searchRef.current,
+    });
+  }, [autoHideSearchOnScroll]);
 
   const grouped = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -63,12 +99,18 @@ export default function BarPicker({ onPick, onNotListed }: BarPickerProps) {
   return (
     <section className="max-w-2xl mx-auto">
       <input
+        ref={searchRef}
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onFocus={() => {
+          if (autoHideSearchOnScroll) setSearchVisible(true);
+        }}
         placeholder="Search bars..."
         aria-label="Search bars"
-        className="w-full bg-surface border border-border rounded-2xl px-4 py-3 mb-4 focus:border-accent outline-none text-base sticky top-0 z-10"
+        className={`w-full bg-surface border border-border rounded-2xl px-4 py-3 mb-4 focus:border-accent outline-none text-base sticky top-0 z-10 transition-transform duration-200 ${
+          searchVisible ? '' : 'opacity-0 pointer-events-none -translate-y-2'
+        }`}
       />
 
       <div>
