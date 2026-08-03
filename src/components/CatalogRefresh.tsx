@@ -67,7 +67,14 @@ export default function CatalogRefresh(): null {
       // mid-scroll changes the row under someone's finger. Hold it and commit
       // at a point where nothing can move. See lib/deferredCatalogSwap.
       cancelPending = deferUntilSafe(() => {
-        if (!cancelled) replaceCatalog(next);
+        if (cancelled) return;
+        replaceCatalog(next);
+        // Observable commit marker: e2e must not interact across the swap
+        // (it remounts every marker and any open lightbox), and polling
+        // marker-count stability was probabilistic — a slow fetch or an
+        // unchanged count reads "settled" while the swap is still coming
+        // (santa: Codex). No behavior rides on this attribute.
+        document.documentElement.dataset.catalogSwapped = '1';
       });
     })();
     return () => {

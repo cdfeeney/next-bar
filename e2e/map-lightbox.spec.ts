@@ -18,6 +18,22 @@ async function openMap(page: import('@playwright/test').Page) {
   await page.goto('/map');
   await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.leaflet-marker-icon').first()).toBeVisible({ timeout: 15_000 });
+  // Wait out the CatalogRefresh DB swap BEFORE any interaction: it replaces
+  // the whole catalog (static → bars table) shortly after load, remounting
+  // every marker and any open lightbox. Interacting across that boundary is
+  // what made tests in this spec fail one-at-a-time, differently per run
+  // (clicked markers replaced mid-click, focus targets recycled, carousel
+  // state reset). CatalogRefresh stamps data-catalog-swapped on commit —
+  // deterministic, unlike the marker-count stability poll it replaces,
+  // which read "settled" whenever the fetch was merely slow (santa:
+  // Codex). The e2e env always has Supabase configured, so the swap
+  // always happens; if this ever times out, the swap itself broke.
+  await expect
+    .poll(
+      () => page.evaluate(() => document.documentElement.dataset.catalogSwapped),
+      { timeout: 20_000 },
+    )
+    .toBe('1');
 }
 
 /**
@@ -36,8 +52,25 @@ async function flyToBar(page: import('@playwright/test').Page, name: string) {
     .getByRole('list', { name: /Matching bars/i })
     .getByRole('button', { name: new RegExp(name, 'i') })
     .click();
-  // Let the fly animation settle so the marker really is under the centre.
-  await page.waitForTimeout(1200);
+  // Wait for the fly animation to genuinely SETTLE, not a fixed sleep: under
+  // parallel-worker load 1200ms was not always enough, and a mid-animation
+  // "centre" marker can sit under the bottom nav where the click is
+  // intercepted (observed: nth(211) intercepted by the Primary nav). Two
+  // pane-transform reads 450ms apart agreeing = the map has stopped moving.
+  let prev: string | null = null;
+  await expect
+    .poll(
+      async () => {
+        const cur = await page.evaluate(
+          () => document.querySelector('.leaflet-map-pane')?.getAttribute('style') ?? '',
+        );
+        const settled = prev !== null && cur === prev;
+        prev = cur;
+        return settled;
+      },
+      { intervals: Array(20).fill(450), timeout: 15_000 },
+    )
+    .toBe(true);
 }
 
 /**
@@ -280,6 +313,96 @@ test.describe('/map marker opens the venue detail', () => {
       return el.classList.contains('leaflet-marker-icon') ? 'marker' : el.tagName;
     });
     expect(focused, 'focus must return to the marker that opened the dialog').toBe('marker');
+  });
+
+  test('photo arrows cycle the carousel with a mouse, wrapping both ways (g-6c390813)', async ({
+    page,
+  }) => {
+    // Attaboy has 3 cached photos — enough to distinguish "advanced once"
+    // from "wrapped" and to make the wrap arithmetic meaningful.
+    await openMap(page);
+    await tapBarMarker(page, 'Attaboy');
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    const urlBefore = page.url();
+
+    const activeIndex = () =>
+      page.evaluate(() => {
+        const track = document.querySelector<HTMLElement>('[aria-label*=" photos,"]');
+        if (!track) return -1;
+        return Math.round(track.scrollLeft / track.clientWidth);
+      });
+
+    const next = dialog.getByRole('button', { name: 'Next photo' });
+    const prev = dialog.getByRole('button', { name: 'Previous photo' });
+    await expect(next).toBeVisible();
+    await expect(prev).toBeVisible();
+    // Poll, not a plain expect: WebKit can mount the snap track on the
+    // wrong slide and the component re-pins the start within 300ms.
+    await expect.poll(activeIndex).toBe(0);
+
+    // The RENDERED position, not scroll geometry: which dot is lit. A
+    // desync between scrollLeft and activePhoto state would pass a
+    // geometry-only assertion while the UI showed the wrong photo
+    // (santa: Claude — activeIndex recomputes the implementation's own
+    // formula, so it cannot catch that).
+    const activeDot = () =>
+      page.evaluate(() => {
+        const dots = Array.from(
+          document.querySelectorAll('figcaption span[aria-hidden] > span'),
+        );
+        return dots.findIndex((d) => d.className.includes('bg-accent'));
+      });
+
+    await next.click();
+    await expect.poll(activeIndex).toBe(1);
+    await expect.poll(activeDot).toBe(1);
+    await next.click();
+    await expect.poll(activeIndex).toBe(2);
+    // Wrap forward: past the last photo returns to the first.
+    await next.click();
+    await expect.poll(activeIndex).toBe(0);
+    await expect.poll(activeDot).toBe(0);
+    // Wrap backward: before the first returns to the last.
+    await prev.click();
+    await expect.poll(activeIndex).toBe(2);
+    await expect.poll(activeDot).toBe(2);
+
+    // NEGATIVES: cycling is not navigation and must not close the dialog.
+    await expect(dialog).toBeVisible();
+    expect(page.url()).toBe(urlBefore);
+  });
+
+  test('left/right arrow KEYS cycle photos without closing the dialog', async ({ page }) => {
+    await openMap(page);
+    await tapBarMarker(page, 'Attaboy');
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+
+    const activeIndex = () =>
+      page.evaluate(() => {
+        const track = document.querySelector<HTMLElement>('[aria-label*=" photos,"]');
+        if (!track) return -1;
+        return Math.round(track.scrollLeft / track.clientWidth);
+      });
+
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(activeIndex).toBe(1);
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(activeIndex).toBe(0);
+    await expect(dialog).toBeVisible();
+  });
+
+  test('a single-photo bar shows NO arrows — nothing to cycle', async ({ page }) => {
+    // Jimmy's Corner carries exactly one cached photo (photoRef, no
+    // photoCount). Arrows on a one-photo carousel would be dead controls.
+    await openMap(page);
+    await tapBarMarker(page, "Jimmy's Corner");
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await expect(dialog.locator('img[src*="bar-photos"]').first()).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Next photo' })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Previous photo' })).toHaveCount(0);
   });
 
   test('Escape closes it, and the page underneath scrolls again', async ({ page }) => {
