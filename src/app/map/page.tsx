@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBars } from '@/lib/useBars';
 import { useRatings } from '@/hooks/useRatings';
+import { trackEvent } from '@/lib/analytics';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import LocationAccessHelp from '@/components/LocationAccessHelp';
 import { useSuggestions } from '@/hooks/useSuggestions';
@@ -278,6 +279,9 @@ export default function MapPage(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => {
+                      // Dark analytics: completed search-select, name-only
+                      // (g-ee6c250d).
+                      trackEvent('search');
                       setFocus({ id: b.id, nonce: Date.now() });
                       setQuery('');
                     }}

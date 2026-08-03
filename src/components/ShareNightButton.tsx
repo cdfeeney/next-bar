@@ -7,6 +7,7 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import { fetchOwnProfile } from '@/lib/profile.server';
 import { shareNight } from '@/lib/nights.server';
 import { buildNightPath, isShareAbort, shareNightText } from '@/lib/share';
+import { trackEvent } from '@/lib/analytics';
 
 const COPIED_MS = 2000;
 
@@ -84,6 +85,9 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
       if (typeof navigator.share === 'function') {
         try {
           await navigator.share({ title: text, text, url });
+          // Dark analytics (g-ee6c250d): completed share only — the abort
+          // branch below never reaches this.
+          trackEvent('share');
           setState('idle');
           return;
         } catch (err) {
@@ -98,6 +102,7 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
       }
       try {
         await navigator.clipboard.writeText(`${text} ${url}`);
+        trackEvent('share');
         setState('copied');
         if (timer.current) clearTimeout(timer.current);
         timer.current = setTimeout(() => setState('idle'), COPIED_MS);

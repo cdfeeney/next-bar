@@ -19,7 +19,8 @@ export type UseListsReturn = {
   lists: BarList[];
   createList: (name: string) => BarList | null;
   deleteList: (id: string) => void;
-  addBarToList: (id: string, barId: string) => void;
+  /** Returns whether a NEW membership was written (false = duplicate/unknown). */
+  addBarToList: (id: string, barId: string) => boolean;
   removeBarFromList: (id: string, barId: string) => void;
 };
 
@@ -58,9 +59,10 @@ export function useLists(): UseListsReturn {
     setLists(loadLists());
   }, []);
 
-  const addBarToList = useCallback((id: string, barId: string): void => {
-    addBarLib(id, barId);
+  const addBarToList = useCallback((id: string, barId: string): boolean => {
+    const wrote = addBarLib(id, barId);
     setLists(loadLists());
+    return wrote;
   }, []);
 
   const removeBarFromList = useCallback((id: string, barId: string): void => {

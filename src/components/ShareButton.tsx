@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { isShareAbort } from '@/lib/share';
+import { trackEvent } from '@/lib/analytics';
 
 /**
  * The one share control.
@@ -89,6 +90,9 @@ export default function ShareButton({
         await navigator.share(
           url === null ? { title: text, text } : { title: text, text, url },
         );
+        // Dark analytics (g-ee6c250d): a COMPLETED share only — the abort
+        // branch below never reaches this. Name-only envelope.
+        trackEvent('share');
         onShared?.('native');
         return;
       } catch (err) {
@@ -101,6 +105,7 @@ export default function ShareButton({
     try {
       await navigator.clipboard.writeText(url === null ? text : `${text} ${url}`);
       setCopied(true);
+      trackEvent('share');
       onShared?.('clipboard');
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied(false), COPIED_MS);

@@ -13,6 +13,7 @@ import { useLists } from '@/hooks/useLists';
 import type { BarList } from '@/lib/lists';
 import { WANT_TO_GO_LIST_ID, purgeWantToGo } from '@/lib/wantToGo';
 import { barById } from '@/lib/demo';
+import { trackEvent } from '@/lib/analytics';
 
 export default function ListsPage(): JSX.Element {
   const { lists, createList, deleteList, addBarToList, removeBarFromList } =
@@ -120,7 +121,10 @@ export default function ListsPage(): JSX.Element {
                   }
                   deleteList(list.id);
                 }}
-                onAddBar={(barId) => addBarToList(list.id, barId)}
+                onAddBar={(barId) => {
+                  // Dark analytics: NEW membership only (g-ee6c250d).
+                  if (addBarToList(list.id, barId)) trackEvent('save');
+                }}
                 onRemoveBar={(barId) => removeBarFromList(list.id, barId)}
               />
             ))}

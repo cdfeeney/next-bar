@@ -14,7 +14,8 @@ import {
 export type UseWantToGoReturn = {
   /** Oldest-first saved bars. [] until mounted (SSR renders empty). */
   entries: WantToGoEntry[];
-  add: (barId: string) => void;
+  /** Returns whether a NEW save was written (false = already saved / failed). */
+  add: (barId: string) => boolean;
   remove: (barId: string) => void;
   /** Drop every entry that's since been rated (see lib docs). */
   pruneRated: (ratedBarIds: ReadonlySet<string>) => void;
@@ -56,9 +57,10 @@ export function useWantToGo(): UseWantToGoReturn {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  const add = useCallback((barId: string): void => {
-    addLib(barId);
+  const add = useCallback((barId: string): boolean => {
+    const wrote = addLib(barId);
     setEntries(loadWantToGo());
+    return wrote;
   }, []);
 
   const remove = useCallback((barId: string): void => {

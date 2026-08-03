@@ -20,6 +20,16 @@ import { trackEvent } from './analytics';
  */
 
 describe('analytics adapter foundation (dark by default)', () => {
+  test('registerAdapter dedupes by adapter name (g-ee6c250d crit 16)', () => {
+    registerAdapter({ name: 'posthog', capture: () => undefined });
+    registerAdapter({ name: 'posthog', capture: () => undefined });
+    registerAdapter({ name: 'other', capture: () => undefined });
+    expect(registeredAdapters().map((a) => a.name)).toEqual([
+      'posthog',
+      'other',
+    ]);
+  });
+
   beforeEach(() => {
     __resetAdaptersForTests();
   });

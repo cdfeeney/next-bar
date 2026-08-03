@@ -48,6 +48,10 @@ export function buildEnvelope(name: AnalyticsEvent): AnalyticsEnvelope | null {
 const adapters: AnalyticsAdapter[] = [];
 
 export function registerAdapter(adapter: AnalyticsAdapter): void {
+  // Dedupe by name (g-ee6c250d crit 16): React 18 StrictMode double-runs
+  // mount effects, and the same adapter capturing every envelope twice
+  // would double every count the day analytics is attended-enabled.
+  if (adapters.some((a) => a.name === adapter.name)) return;
   adapters.push(adapter);
 }
 

@@ -8,6 +8,7 @@ import BottomNav from '@/components/BottomNav';
 import OnboardingGate from '@/components/OnboardingGate';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import CatalogRefresh from '@/components/CatalogRefresh';
+import AnalyticsInit from '@/components/AnalyticsInit';
 import VibeProfileSync from '@/components/VibeProfileSync';
 
 // Brand font (2026-07-23 kit): Poppins — Bold 700 wordmark/headlines,
@@ -77,6 +78,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <OnboardingGate />
         <ServiceWorkerRegister />
         <CatalogRefresh />
+        {/* Dark analytics adapter registration — no network unless the
+            attended triple gate is ever enabled (g-ee6c250d). */}
+        <AnalyticsInit />
         <VibeProfileSync />
       </body>
     </html>

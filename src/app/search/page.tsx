@@ -10,6 +10,7 @@ import BarVisualTile from '@/components/BarVisualTile';
 import { RatingBadgeView } from '@/components/RatingBadge';
 import WantToGoToggle from '@/components/WantToGoToggle';
 import { useRatings } from '@/hooks/useRatings';
+import { trackEvent } from '@/lib/analytics';
 
 /**
  * /search — find any catalog bar and save it to Want to Go (goal
@@ -138,7 +139,14 @@ export default function SearchPage(): JSX.Element {
                 >
                   <button
                     type="button"
-                    onClick={() => setSelectedId(bar.id)}
+                    onClick={() => {
+                      // Dark analytics: a completed search = the user
+                      // SELECTED a result — never per-keystroke, and the
+                      // envelope is name-only (no query, no bar id)
+                      // (g-ee6c250d).
+                      trackEvent('search');
+                      setSelectedId(bar.id);
+                    }}
                     className="flex-1 min-w-0 min-h-[56px] flex items-center gap-3 px-2 py-3 text-left touch-manipulation hover:bg-surface active:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <BarVisualTile bar={bar} size={32} />

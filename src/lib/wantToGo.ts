@@ -120,13 +120,19 @@ export function loadWantToGo(): WantToGoEntry[] {
   return list.barIds.map((barId) => ({ barId }));
 }
 
-/** Save a bar for later. Already-saved bars are a true no-op (no write, no event). */
-export function addWantToGo(barId: string): void {
-  if (typeof window === 'undefined') return;
+/**
+ * Save a bar for later. Already-saved bars are a true no-op (no write, no
+ * event). Returns whether a NEW save was actually written — the honest
+ * success boundary for dark analytics (g-ee6c250d).
+ */
+export function addWantToGo(barId: string): boolean {
+  if (typeof window === 'undefined') return false;
   foldLegacy();
   if (foldIntoList(WANT_TO_GO_LIST_ID, WANT_TO_GO_NAME, [barId])) {
     notifyChange();
+    return true;
   }
+  return false;
 }
 
 export function removeWantToGo(barId: string): void {

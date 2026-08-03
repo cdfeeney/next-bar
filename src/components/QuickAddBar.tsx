@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { usePairwise } from '@/hooks/usePairwise';
 import { useLists } from '@/hooks/useLists';
+import { trackEvent } from '@/lib/analytics';
 import { WANT_TO_GO_LIST_ID } from '@/lib/wantToGo';
 import { getBarById } from '@/lib/catalog';
 import BarPicker from '@/components/BarPicker';
@@ -235,11 +236,17 @@ export default function QuickAddBar({
                                   ? `Remove ${selectedBar.name} from ${list.name}`
                                   : `Add ${selectedBar.name} to ${list.name}`
                               }
-                              onClick={() =>
-                                on
-                                  ? removeBarFromList(list.id, selectedBar.id)
-                                  : addBarToList(list.id, selectedBar.id)
-                              }
+                              onClick={() => {
+                                if (on) {
+                                  removeBarFromList(list.id, selectedBar.id);
+                                  return;
+                                }
+                                // Dark analytics: NEW membership only —
+                                // name-only envelope (g-ee6c250d).
+                                if (addBarToList(list.id, selectedBar.id)) {
+                                  trackEvent('save');
+                                }
+                              }}
                               className={[
                                 'min-h-[44px] touch-manipulation px-4 py-2 rounded-full',
                                 'font-display text-sm border transition-colors',

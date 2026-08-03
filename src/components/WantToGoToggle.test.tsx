@@ -1,8 +1,13 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WantToGoToggle from './WantToGoToggle';
 import { WANT_TO_GO_KEY, loadWantToGo } from '@/lib/wantToGo';
+import {
+  __resetAdaptersForTests,
+  registerAdapter,
+  type AnalyticsEnvelope,
+} from '@/lib/analyticsAdapters';
 
 /**
  * The restored Want-to-Go writer (goal g-8557db39). Unit level pins the
@@ -113,5 +118,33 @@ describe('WantToGoToggle', () => {
     expect(loadWantToGo().filter((e) => e.barId === 'bar-5')).toHaveLength(0);
     await user.click(screen.getByRole('button', { name: /^Save/ }));
     expect(loadWantToGo().filter((e) => e.barId === 'bar-5')).toHaveLength(1);
+  });
+
+  describe('dark analytics (g-ee6c250d): save emits ONE name-only event, only on success', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      __resetAdaptersForTests();
+    });
+
+    it('a successful save emits exactly one {v,name:"save"}; remove emits nothing', async () => {
+      vi.stubEnv('NEXT_PUBLIC_ANALYTICS', '1');
+      const seen: AnalyticsEnvelope[] = [];
+      registerAdapter({ name: 'spy', capture: (e) => seen.push(e) });
+      const user = userEvent.setup();
+      render(<WantToGoToggle barId="bar-9" barName="Attaboy" />);
+      await user.click(screen.getByRole('button', { name: /^Save/ }));
+      expect(seen).toEqual([{ v: 1, name: 'save' }]);
+      await user.click(screen.getByRole('button', { name: /^Remove/ }));
+      expect(seen).toHaveLength(1); // removal is not a save
+    });
+
+    it('with the master flag absent no event reaches any adapter', async () => {
+      const seen: AnalyticsEnvelope[] = [];
+      registerAdapter({ name: 'spy', capture: (e) => seen.push(e) });
+      const user = userEvent.setup();
+      render(<WantToGoToggle barId="bar-10" barName="Attaboy" />);
+      await user.click(screen.getByRole('button', { name: /^Save/ }));
+      expect(seen).toEqual([]);
+    });
   });
 });

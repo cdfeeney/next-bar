@@ -1,6 +1,7 @@
 'use client';
 
 import { useWantToGo } from '@/hooks/useWantToGo';
+import { trackEvent } from '@/lib/analytics';
 
 type WantToGoToggleProps = {
   barId: string;
@@ -51,7 +52,15 @@ export default function WantToGoToggle({
       type="button"
       aria-pressed={saved}
       aria-label={accessibleName}
-      onClick={() => (saved ? remove(barId) : add(barId))}
+      onClick={() => {
+        if (saved) {
+          remove(barId);
+          return;
+        }
+        // Dark analytics (g-ee6c250d): only a genuinely NEW save emits —
+        // name-only envelope, no bar id, nothing on remove or no-op.
+        if (add(barId)) trackEvent('save');
+      }}
       className={`${base} ${shape} ${tone} ${className}`.trim()}
     >
       <span aria-hidden>{saved ? '★' : '☆'}</span>
