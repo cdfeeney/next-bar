@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import type { Bar } from '@/types';
 import { resolveMedia } from '@/lib/mediaPolicy';
 import { hoursProvenanceNote, weekHoursRows } from '@/lib/openNow';
@@ -13,14 +12,18 @@ import WantToGoToggle from '@/components/WantToGoToggle';
 /**
  * U2-2: photo headliner. Tapping a card's photo opens this full-screen
  * overlay — big image, the bar's identity, FULL weekly hours (U2-1), the
- * review quote, and the two actions (Maps, Rank it). Single cached photo
- * today; when the ingest starts storing multiple photoRefs this becomes a
- * swipeable carousel without changing the entry point.
+ * Want-to-go toggle, and the Maps action. Single cached photo today; when
+ * the ingest starts storing multiple photoRefs this becomes a swipeable
+ * carousel without changing the entry point.
+ *
+ * NO rating entry here (operator 2026-08-03): ranking happens only from
+ * /rankings (its search/add flow) — the "Rank it →" deep link that used to
+ * sit beside the Maps action was legacy and is gone from every lightbox
+ * surface (map, search, home).
  *
  * Scroll-lock note: plain save/restore is safe here because no overlay
- * ever NESTS inside the lightbox — "Rank it" navigates to /rankings,
- * unmounting this first (reviewed; revisit with a lock-counter if an
- * in-place sheet is ever added).
+ * ever NESTS inside the lightbox (reviewed; revisit with a lock-counter if
+ * an in-place sheet is ever added).
  *
  * A11y (Opus review): dialog semantics; Escape + backdrop close; focus
  * moves to ✕ on open, Tab CYCLES inside the dialog (minimal trap), and
@@ -437,12 +440,6 @@ export default function BarLightbox({
 
         <div className="flex items-center gap-3 pb-4 flex-wrap">
           <WantToGoToggle barId={bar.id} barName={bar.name} variant="full" />
-          <Link
-            href={`/rankings?add=${bar.id}`}
-            className="flex-1 text-center bg-accent hover:bg-accentDim transition-colors text-bg font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation"
-          >
-            Rank it →
-          </Link>
           <a
             href={mapsHref}
             target="_blank"

@@ -5,9 +5,10 @@
  * (binary insert). Anonymous (local) mode: no auth stubs needed.
  *
  * What this covers:
- *   - "+ Add a bar" is present in the empty state AND in the header once
- *     the list is non-empty.
- *   - BarPicker search → tier pick → comparison chain via PairwiseSheet.
+ *   - "+ Add a bar" opens the BarPicker modal in the EMPTY state; once the
+ *     list is non-empty the header hosts the INLINE search-to-rank bar
+ *     instead (operator 2026-08-03) — type, pick a match, tier sheet.
+ *   - Either entry → tier pick → comparison chain via PairwiseSheet.
  *   - First bar: NO comparison prompt (no peer) — negative assertion.
  *   - Second bar: single one-shot prompt (1 peer → legacy fallback path).
  *   - Third/fourth bars: binary-insert chain with "1 of 2" / "2 of 2"
@@ -75,18 +76,32 @@ async function addBarLoved(
   name: string,
   expectedPrompts: number,
   expectedMaxSteps?: number,
+  via: 'picker' | 'search' = 'search',
 ): Promise<void> {
-  await page.getByRole('button', { name: '+ Add a bar' }).click();
-
-  const picker = page.getByRole('dialog', { name: 'Add a bar' });
-  await expect(picker).toBeVisible();
-  await typeInto(picker.getByLabel('Search bars'), name);
-  await picker.locator('li button').filter({ hasText: name }).first().click();
+  if (via === 'picker') {
+    // Empty state: "+ Add a bar" opens the BarPicker modal.
+    await page.getByRole('button', { name: '+ Add a bar' }).click();
+    const picker = page.getByRole('dialog', { name: 'Add a bar' });
+    await expect(picker).toBeVisible();
+    await typeInto(picker.getByLabel('Search bars'), name);
+    await picker.locator('li button').filter({ hasText: name }).first().click();
+  } else {
+    // Non-empty list: the header's inline search-to-rank bar.
+    const search = page.getByRole('searchbox', { name: 'Search bars' });
+    await typeInto(search, name);
+    await page
+      .getByRole('list', { name: 'Matching bars' })
+      .getByRole('button')
+      .filter({ hasText: name })
+      .first()
+      .click();
+  }
 
   // Tier stage — the heading confirms the picked bar carried over.
-  await expect(picker).toContainText(`How was ${name}?`);
-  await picker.getByRole('button', { name: /^Loved/ }).click();
-  await expect(picker).not.toBeVisible();
+  const sheet0 = page.getByRole('dialog', { name: 'Add a bar' });
+  await expect(sheet0).toContainText(`How was ${name}?`);
+  await sheet0.getByRole('button', { name: /^Loved/ }).click();
+  await expect(sheet0).not.toBeVisible();
 
   for (let i = 0; i < expectedPrompts; i++) {
     const sheet = page.getByRole('dialog');
@@ -127,13 +142,17 @@ test.describe('/rankings — B4 quick-add with comparison chain', () => {
     ).toBeVisible();
 
     // Bar 1 — no peers → no prompt (negative assertion).
-    await addBarLoved(page, 'Attaboy', 0);
+    await addBarLoved(page, 'Attaboy', 0, undefined, 'picker');
     await expect(page.locator('article')).toHaveCount(1);
 
-    // The list is non-empty now → the header hosts the persistent button.
+    // The list is non-empty now → the header hosts the INLINE search bar,
+    // and the empty-state button is gone (negative).
+    await expect(
+      page.getByRole('searchbox', { name: 'Search bars' }),
+    ).toBeVisible();
     await expect(
       page.getByRole('button', { name: '+ Add a bar' }),
-    ).toBeVisible();
+    ).toHaveCount(0);
 
     // Bar 2 — exactly 1 peer → single one-shot prompt (fallback path).
     await addBarLoved(page, 'Death & Co', 1);
@@ -172,20 +191,23 @@ test.describe('/rankings — B4 quick-add with comparison chain', () => {
   }) => {
     await page.goto('/rankings');
 
-    await addBarLoved(page, 'Attaboy', 0);
+    await addBarLoved(page, 'Attaboy', 0, undefined, 'picker');
     await addBarLoved(page, 'Death & Co', 1);
     await addBarLoved(page, 'Employees Only', 2, 2);
 
-    // Add a 4th bar but SKIP on the first probe.
-    await page.getByRole('button', { name: '+ Add a bar' }).click();
-    const picker = page.getByRole('dialog', { name: 'Add a bar' });
-    await typeInto(picker.getByLabel('Search bars'), 'Mr. Purple');
-    await picker
-      .locator('li button')
+    // Add a 4th bar via the inline search but SKIP on the first probe.
+    await typeInto(
+      page.getByRole('searchbox', { name: 'Search bars' }),
+      'Mr. Purple',
+    );
+    await page
+      .getByRole('list', { name: 'Matching bars' })
+      .getByRole('button')
       .filter({ hasText: 'Mr. Purple' })
       .first()
       .click();
-    await picker.getByRole('button', { name: /^Loved/ }).click();
+    const tierSheet = page.getByRole('dialog', { name: 'Add a bar' });
+    await tierSheet.getByRole('button', { name: /^Loved/ }).click();
 
     const sheet = page.getByRole('dialog');
     await expect(sheet).toBeVisible();

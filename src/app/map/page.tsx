@@ -465,10 +465,12 @@ export default function MapPage(): JSX.Element {
           Reuse of the EXISTING BarLightbox, deliberately not a second detail
           surface. It already renders approved cached/local photos through the
           one media policy, open status, the full weekly hours table with its
-          provenance note, address, description, and both the Maps and Rank-it
-          actions — plus dialog semantics, Escape/backdrop close, a focus trap
-          and focus return. Building a map-specific variant would have forked
-          all of that, and the Google-media kill switch with it.
+          provenance note, address, description, the Want-to-go toggle and the
+          Maps action — plus dialog semantics, Escape/backdrop close, a focus
+          trap and focus return. (No rating entry: ranking happens only from
+          /rankings — operator 2026-08-03.) Building a map-specific variant
+          would have forked all of that, and the Google-media kill switch with
+          it.
         */}
         {selectedBar ? (
           <BarLightbox bar={selectedBar} onClose={() => setSelectedBar(null)} />

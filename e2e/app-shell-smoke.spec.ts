@@ -73,7 +73,7 @@ test.describe('App-shell smoke', () => {
     // no need to goto('/') first to clear. Skipping that extra navigation
     // avoids the Next.js dev cold-compile race on /rankings.
     await page.goto('/rankings');
-    await expect(page.getByRole('heading', { name: /^Rankings$/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Bar Rankings$/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: /Nothing here yet/i })).toBeVisible();
     await expectNoConsoleErrors(page, '/rankings');
   });

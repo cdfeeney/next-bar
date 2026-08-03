@@ -10,8 +10,11 @@ import { useLists } from '@/hooks/useLists';
 import { trackEvent } from '@/lib/analytics';
 import { WANT_TO_GO_LIST_ID } from '@/lib/wantToGo';
 import { getBarById } from '@/lib/catalog';
+import { useBars } from '@/lib/useBars';
+import { displayHood } from '@/lib/hoodDisplay';
 import BarPicker from '@/components/BarPicker';
 import PairwiseSheet from '@/components/PairwiseSheet';
+import { RatingBadgeView } from '@/components/RatingBadge';
 
 type Stage = 'idle' | 'pick-bar' | 'pick-tier';
 
@@ -34,21 +37,31 @@ const TIER_BUTTON_CLASSES: Record<Rating, string> = {
 };
 
 /**
- * B4 quick-add flow on /rankings: "+ Add a bar" → BarPicker search →
- * tier pick → the pairwise comparison CHAIN (binary insert) runs via
- * usePairwise + PairwiseSheet. Works identically anonymous and signed-in —
- * the hook owns both persistence paths.
+ * B4 quick-add flow on /rankings: entry point → tier pick → the pairwise
+ * comparison CHAIN (binary insert) runs via usePairwise + PairwiseSheet.
+ * Works identically anonymous and signed-in — the hook owns both
+ * persistence paths.
+ *
+ * Two entry variants (operator, 2026-08-03): `button` renders the
+ * "+ Add a bar" trigger that opens the BarPicker modal (the empty state);
+ * `search` renders an INLINE search bar — type, pick a match, and the tier
+ * sheet opens directly, no modal picker step.
  *
  * Mount exactly ONE instance per page (the /rankings header xor its empty
  * state) — each instance owns its own usePairwise prompt state.
  */
 export default function QuickAddBar({
+  variant = 'button',
   initialBarId,
   onInitialConsumed,
 }: {
+  variant?: 'button' | 'search';
   /**
-   * U2-3 deep link: arrive with a bar preselected (from "Rank it →" on a
-   * suggestion card or the lightbox) and open straight at the tier pick.
+   * U2-3 deep link: arrive with a bar preselected and open straight at the
+   * tier pick. The only rendered producer of ?add= today is WantToGoList's
+   * "Been — rank it →" (the card/lightbox "Rank it" links are gone —
+   * ranking happens only from /rankings, operator 2026-08-03); direct URLs
+   * still work.
    */
   initialBarId?: string;
   /**
@@ -62,7 +75,23 @@ export default function QuickAddBar({
 } = {}): JSX.Element {
   const [stage, setStage] = useState<Stage>('idle');
   const [selectedBar, setSelectedBar] = useState<Bar | null>(null);
+  const [query, setQuery] = useState('');
+  const bars = useBars();
   const consumedInitialRef = useRef(false);
+
+  // Inline-search matches (search variant only): same matching rule as the
+  // /map search — name or neighborhood, capped at 5.
+  const q = query.trim().toLowerCase();
+  const searchMatches = useMemo(() => {
+    if (variant !== 'search' || q.length < 2) return [];
+    return bars
+      .filter(
+        (b) =>
+          b.name.toLowerCase().includes(q) ||
+          b.neighborhood.toLowerCase().includes(q),
+      )
+      .slice(0, 5);
+  }, [variant, bars, q]);
 
   useEffect(() => {
     if (!initialBarId || consumedInitialRef.current) return;
@@ -73,7 +102,7 @@ export default function QuickAddBar({
     setSelectedBar(bar);
     setStage('pick-tier');
   }, [initialBarId, onInitialConsumed]);
-  const { setRating } = useRatings();
+  const { setRating, getRating } = useRatings();
   const {
     pendingPrompt,
     requestPrompt,
@@ -93,6 +122,16 @@ export default function QuickAddBar({
   );
 
   const isModalOpen = stage !== 'idle';
+
+  // Focus lands INSIDE the dialog on open (parity with BarLightbox's "focus
+  // moves to ✕"). Load-bearing for the search variant: picking a match
+  // clears the query, which unmounts the focused match button — without
+  // this, focus drops to <body> and a keyboard user is stranded behind the
+  // overlay (santa: Codex + DeepSeek convergent, bea891c0 panel).
+  const modalCloseRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (isModalOpen) modalCloseRef.current?.focus();
+  }, [isModalOpen]);
 
   // Escape closes the picker modal (parity with PairwiseSheet). Body
   // scroll-lock also matches the sheet so the rankings list doesn't
@@ -129,6 +168,7 @@ export default function QuickAddBar({
 
   const handlePick = (bar: Bar): void => {
     setSelectedBar(bar);
+    setQuery('');
     setStage('pick-tier');
   };
 
@@ -149,13 +189,62 @@ export default function QuickAddBar({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setStage('pick-bar')}
-        className="bg-surface border border-accent text-accent rounded-full px-5 py-2 min-h-[44px] touch-manipulation font-display text-sm inline-flex items-center justify-center hover:bg-accent hover:text-bg transition-colors"
-      >
-        + Add a bar
-      </button>
+      {variant === 'search' ? (
+        <div className="max-w-sm mx-auto text-left">
+          <label htmlFor="rankings-search" className="sr-only">
+            Search bars
+          </label>
+          <input
+            id="rankings-search"
+            type="search"
+            inputMode="text"
+            autoComplete="off"
+            placeholder="Search a bar to rank it…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            // Inert behind the open tier sheet: the dialog is aria-modal
+            // but doesn't trap Tab, so a focusable input behind it breaks
+            // the modal contract (santa: DeepSeek, bea891c0 panel).
+            disabled={isModalOpen}
+            className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
+          />
+          {searchMatches.length > 0 ? (
+            <ul
+              aria-label="Matching bars"
+              className="mt-2 bg-surface border border-border rounded-2xl overflow-hidden divide-y divide-border"
+            >
+              {searchMatches.map((b) => (
+                <li key={b.id}>
+                  <button
+                    type="button"
+                    onClick={() => handlePick(b)}
+                    className="w-full text-left px-4 py-3 min-h-[44px] touch-manipulation hover:bg-bg transition-colors"
+                  >
+                    <span className="font-display text-sm">{b.name}</span>
+                    <span className="text-muted text-xs ml-2">
+                      {displayHood(b.neighborhood)}
+                    </span>
+                    {/* Already-rated cue — BarPicker rows show the same
+                        badge; ONE page-level useRatings feeds every row
+                        (see RatingBadge's mount-wave warning). */}
+                    <span className="ml-2">
+                      <RatingBadgeView rating={getRating(b.id)} />
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setStage('pick-bar')}
+          className="bg-surface border border-accent text-accent rounded-full px-5 py-2 min-h-[44px] touch-manipulation font-display text-sm inline-flex items-center justify-center hover:bg-accent hover:text-bg transition-colors"
+        >
+          + Add a bar
+        </button>
+      )}
 
       {isModalOpen ? (
         <div
@@ -172,6 +261,7 @@ export default function QuickAddBar({
                   : `How was ${selectedBar?.name ?? 'it'}?`}
               </h2>
               <button
+                ref={modalCloseRef}
                 type="button"
                 onClick={closeModal}
                 className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"

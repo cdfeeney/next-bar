@@ -6,7 +6,6 @@ import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
 import { useWantToGo } from '@/hooks/useWantToGo';
 import { sortRatingsByScore, tierMidpoint } from '@/lib/pairwise';
-import { seedSampleNight } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
 import { useBars } from '@/lib/useBars';
 import { displayHood } from '@/lib/hoodDisplay';
@@ -67,7 +66,8 @@ export default function RankingsPage(): JSX.Element {
   const [viewId, setViewId] = useState<string>(BEST_VIEW_ID);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const { lists, removeBarFromList } = useLists();
-  // U2-3 deep link (?add=<barId> from "Rank it →" on suggestion cards):
+  // U2-3 deep link (?add=<barId> — produced today only by WantToGoList's
+  // "Been — rank it →"; the card/lightbox "Rank it" links are gone):
   // read once from location.search on mount — window-only, so no
   // useSearchParams/Suspense prerender dance — then strip the param so a
   // refresh doesn't re-open the tier sheet.
@@ -145,29 +145,35 @@ export default function RankingsPage(): JSX.Element {
 
   return (
     <main className="min-h-screen">
-      <header className="relative px-6 pt-8 pb-2 text-center">
-        {/* Top-right Lists switcher (crit 2): a disclosure, not a chip row.
-            The current view's name is the control's label; opening it lists
-            Best Bars, Want to go, and every named list. */}
-        <div className="absolute right-4 top-6 z-20 text-right">
-          <button
-            type="button"
-            aria-expanded={switcherOpen}
-            aria-label={`Lists — showing ${viewLabel}`}
-            onClick={() => setSwitcherOpen((o) => !o)}
-            className="min-h-[44px] touch-manipulation inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-4 font-display text-sm text-text hover:border-accent transition-colors"
-          >
-            {viewLabel}
-            <span aria-hidden="true" className="text-muted">
-              {switcherOpen ? '▴' : '▾'}
-            </span>
-          </button>
-          {switcherOpen ? (
-            <div
-              role="group"
-              aria-label="Switch list"
-              className="mt-2 min-w-[180px] rounded-2xl border border-border bg-surface p-1.5 text-left shadow-lg"
+      <header className="px-6 pt-8 pb-2">
+        {/* Title row (operator 2026-08-03): the switcher sits IN FLOW next to
+            the title — the old absolute top-right pill overlapped the header
+            text on mobile. No eyebrow, no description paragraph: the title
+            says what the page is. */}
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="font-display text-3xl md:text-4xl">Bar Rankings</h1>
+          {/* Lists switcher (crit 2): a disclosure, not a chip row. The
+              current view's name is the control's label; opening it lists
+              Best Bars, Want to go, and every named list. */}
+          <div className="relative z-20 shrink-0 text-right">
+            <button
+              type="button"
+              aria-expanded={switcherOpen}
+              aria-label={`Lists — showing ${viewLabel}`}
+              onClick={() => setSwitcherOpen((o) => !o)}
+              className="min-h-[44px] touch-manipulation inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-4 font-display text-sm text-text hover:border-accent transition-colors max-w-[45vw]"
             >
+              <span className="truncate">{viewLabel}</span>
+              <span aria-hidden="true" className="text-muted">
+                {switcherOpen ? '▴' : '▾'}
+              </span>
+            </button>
+            {switcherOpen ? (
+              <div
+                role="group"
+                aria-label="Switch list"
+                className="absolute right-0 mt-2 min-w-[180px] rounded-2xl border border-border bg-surface p-1.5 text-left shadow-lg"
+              >
               {[
                 { id: BEST_VIEW_ID, name: 'Best Bars' },
                 { id: WANT_TO_GO_LIST_ID, name: 'Want to go' },
@@ -198,37 +204,21 @@ export default function RankingsPage(): JSX.Element {
               >
                 Manage lists →
               </Link>
-            </div>
-          ) : null}
-        </div>
-        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
-          Your nights, ranked
-        </p>
-        <h1 className="font-display text-3xl md:text-4xl mb-2">Rankings</h1>
-        <p className="text-muted text-sm max-w-md mx-auto">
-          Bars you&apos;ve rated, ordered by your personal 0–10 score.
-          A ~score is tentative — it sits at your tier&apos;s midpoint and
-          firms up as you answer comparison prompts.
-        </p>
-        <div className="flex items-center justify-center gap-5">
-          <Link
-            href="/lists"
-            className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation mt-1"
-          >
-            Your lists →
-          </Link>
-          <Link
-            href="/search"
-            className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation mt-1"
-          >
-            Search bars →
-          </Link>
+              </div>
+            ) : null}
+          </div>
         </div>
         {!hasNoRatings ? (
-          // Persistent quick-add entry (B4). The empty state below mounts
-          // its own instance — exactly one QuickAddBar renders at a time.
-          <div className="mt-3">
-            <QuickAddBar initialBarId={deepLinkBarId} onInitialConsumed={clearDeepLink} />
+          // Persistent add entry (B4), now an INLINE search bar (operator
+          // 2026-08-03): type → pick a match → tier sheet. The empty state
+          // below mounts its own button-variant instance — exactly one
+          // QuickAddBar renders at a time.
+          <div className="mt-4">
+            <QuickAddBar
+              variant="search"
+              initialBarId={deepLinkBarId}
+              onInitialConsumed={clearDeepLink}
+            />
           </div>
         ) : null}
       </header>
@@ -253,34 +243,12 @@ export default function RankingsPage(): JSX.Element {
           onRemoveBar={(barId) => removeBarFromList(activeNamedList.id, barId)}
         />
       ) : hasNoRatings ? (
+        // Empty state (operator 2026-08-03): heading + the one action. The
+        // "Find a bar →" link, sample-night seeder, and explainer prose are
+        // gone — reviewers reach the seeder via /settings?demo=1.
         <section className="flex flex-col items-center justify-center text-center px-6 py-[120px]">
-          <h2 className="font-display text-2xl mb-2">Nothing here yet.</h2>
-          {/* Auth-aware sync claim (g-65a31bdf crit 11): signed-in ratings DO
-              sync — the old unconditional "stay on this device" contradicted
-              the signed-in footer below (santa: Sonnet verifier, g-7b6021a8). */}
-          <p className="text-muted text-sm mb-6 max-w-sm">
-            Rate a bar after you check it out and it&apos;ll show up here, scored
-            0–10 by your own taste.{' '}
-            {auth.status === 'signed-in'
-              ? 'Your ratings sync to your account.'
-              : 'Ratings stay on this device — sign in to sync.'}
-          </p>
-          <div className="mb-4">
-            <QuickAddBar initialBarId={deepLinkBarId} onInitialConsumed={clearDeepLink} />
-          </div>
-          <Link
-            href="/"
-            className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display text-lg inline-flex items-center justify-center"
-          >
-            Find a bar →
-          </Link>
-          <button
-            type="button"
-            onClick={() => seedSampleNight()}
-            className="mt-4 text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
-          >
-            Or load a sample night to see it in action →
-          </button>
+          <h2 className="font-display text-2xl mb-6">Nothing here yet.</h2>
+          <QuickAddBar initialBarId={deepLinkBarId} onInitialConsumed={clearDeepLink} />
         </section>
       ) : (
         <section className="max-w-2xl mx-auto px-6 flex flex-col gap-4">

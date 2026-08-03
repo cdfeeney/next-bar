@@ -303,12 +303,9 @@ test.describe('/search saves to Want to Go', () => {
     await expect(page.getByRole('heading', { name: 'Search bars' })).toBeVisible();
   });
 
-  test('/rankings header links to /search', async ({ page }) => {
-    await page.goto('/rankings');
-    await page.getByRole('link', { name: 'Search bars →' }).click();
-    await expect(page).toHaveURL(/\/search$/);
-    await expect(page.getByRole('heading', { name: 'Search bars' })).toBeVisible();
-  });
+  // ("/rankings header links to /search" was removed with the header link
+  // itself — /rankings now hosts its OWN inline search-to-rank bar, and
+  // /search stays reachable via the Want-to-go empty state above.)
 
   test('save is reflected on /rankings via client-side nav — no reload needed', async ({
     page,

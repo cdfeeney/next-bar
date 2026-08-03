@@ -168,9 +168,10 @@ test.describe('/map marker opens the venue detail', () => {
     await expect(dialog.getByRole('heading', { name: /^Hours$/i })).toBeVisible({
       timeout: 10_000,
     });
-    // Both actions.
-    await expect(dialog.getByRole('link', { name: /Rank it/i })).toBeVisible();
+    // The Maps action renders; the "Rank it →" deep link is GONE for good —
+    // ranking happens only from /rankings (operator 2026-08-03).
     await expect(dialog.getByRole('link', { name: /View on Maps/i })).toBeVisible();
+    await expect(dialog.getByRole('link', { name: /Rank it/i })).toHaveCount(0);
   });
 
   test('opening a marker does NOT navigate, and closing does NOT reset the map', async ({

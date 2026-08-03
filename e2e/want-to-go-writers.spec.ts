@@ -56,9 +56,12 @@ test.describe('Want to go — result card writer', () => {
     const saved = firstCard.getByRole('button', { name: /^Remove .* from Want to go$/ });
     await expect(saved).toHaveAttribute('aria-pressed', 'true');
 
-    // It really persisted: the Want-to-go tab on /rankings lists it.
+    // It really persisted: the Want-to-go view on /rankings lists it.
+    // (Reached via the Lists switcher since g-ac3a291c — the old tier-chip
+    // row this spec used to click is gone; this locator was stale.)
     await page.goto('/rankings');
-    await page.getByRole('button', { name: /Want to go/i }).first().click();
+    await page.getByRole('button', { name: /Lists — showing/ }).click();
+    await page.getByRole('button', { name: 'Want to go', exact: true }).click();
     await expect(page.getByText(barName, { exact: false }).first()).toBeVisible();
 
     // Unsaving from the card removes it again (round-trip). Re-enter the
@@ -76,9 +79,10 @@ test.describe('Want to go — result card writer', () => {
       cardsOf(page).first().getByRole('button', { name: /^Save .* to Want to go$/ }),
     ).toHaveAttribute('aria-pressed', 'false');
 
-    // And it is gone from the Want-to-go tab.
+    // And it is gone from the Want-to-go view.
     await page.goto('/rankings');
-    await page.getByRole('button', { name: /Want to go/i }).first().click();
+    await page.getByRole('button', { name: /Lists — showing/ }).click();
+    await page.getByRole('button', { name: 'Want to go', exact: true }).click();
     await expect(page.getByText(barName, { exact: false })).toHaveCount(0);
   });
 
