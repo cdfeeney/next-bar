@@ -254,6 +254,98 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
     await expect(row).toContainText('loved Attaboy');
   });
 
+  test('busy state is PER NIGHT — stopping one share never disables or re-enables the other row', async ({
+    page,
+    context,
+  }) => {
+    // Self-initializing, byte-matched to the sequence a standalone probe
+    // verified deterministic (goto → clear → sign-in stubs → gate route →
+    // seed → ONE reload): interleaving with the shared beforeEach's boot
+    // cycle reproducibly broke the interaction on both mobile projects.
+    await page.goto('/nights');
+    await page.evaluate(() => {
+      window.localStorage.clear();
+      window.localStorage.setItem('next-bar:age-ack:v1', '1');
+    });
+    const ok = await fakeSignedIn(context, page);
+    test.skip(!ok, 'no Supabase URL configured');
+
+    // Hold the unshare RPC open so the in-flight state is observable.
+    let releaseUnshare: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseUnshare = resolve;
+    });
+    await page.route('**/rest/v1/rpc/unshare_night', async (route) => {
+      await gate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: 'true',
+      });
+    });
+
+    // TWO shared nights.
+    await page.evaluate(
+      ({ archiveKey, sharedKey, token }) => {
+        window.localStorage.setItem(
+          archiveKey,
+          JSON.stringify([
+            {
+              nightKey: '2026-07-30',
+              visits: [{ barId: 'attaboy', at: '2026-07-31T02:00:00.000Z' }],
+              ratings: [],
+            },
+            {
+              nightKey: '2026-07-24',
+              visits: [{ barId: 'death-and-co', at: '2026-07-25T01:00:00.000Z' }],
+              ratings: [],
+            },
+          ]),
+        );
+        window.localStorage.setItem(
+          sharedKey,
+          JSON.stringify({
+            '2026-07-30': { token, sharedAt: '2026-07-31T15:00:00.000Z' },
+            '2026-07-24': {
+              token: token.replace('4174000', '4174111'),
+              sharedAt: '2026-07-25T15:00:00.000Z',
+            },
+          }),
+        );
+      },
+      { archiveKey: ARCHIVE_KEY, sharedKey: SHARED_KEY, token: TOKEN },
+    );
+    await page.reload();
+
+    const rowA = page.getByTestId('night-row-2026-07-30');
+    await rowA.getByRole('button', { name: /July 30/ }).click();
+    const stopA = rowA.getByRole('button', { name: 'Stop sharing' });
+    await expect(stopA).toBeVisible();
+    await stopA.click();
+    // A is in flight and shows the busy label.
+    await expect(rowA.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+
+    // Open row B while A's RPC is STILL held open. The accordion has ONE
+    // expanded slot, so this UNMOUNTS A's panel — A's busy button can't be
+    // asserted here; its state is asserted on re-expand below.
+    const rowB = page.getByTestId('night-row-2026-07-24');
+    await rowB.getByRole('button', { name: /July 24/ }).click();
+    // B's control is fully enabled while A's RPC is in flight (the old
+    // shared busy slot disabled/re-enabled ACROSS rows — santa: Opus).
+    await expect(rowB.getByRole('button', { name: 'Stop sharing' })).toBeEnabled();
+
+    // Re-expand A (collapses B): its busy state SURVIVED in the per-night
+    // set — the shared-slot bug showed a re-enabled button here.
+    await rowA.getByRole('button', { name: /July 30/ }).click();
+    await expect(rowA.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+
+    // Release A's RPC — only A's share state clears.
+    releaseUnshare();
+    await expect(rowA).not.toContainText('· Shared');
+    await expect(rowA.getByRole('button', { name: 'Stopping…' })).toHaveCount(0);
+    await expect(rowB).toContainText('· Shared');
+  });
+
   test('unshare failure keeps the record and says so honestly', async ({
     page,
     context,
