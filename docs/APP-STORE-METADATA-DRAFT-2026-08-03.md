@@ -26,8 +26,9 @@ going live (privacy/support URLs below assume next-bar.com).
   · Plan Night Out: find the bar your whole group agrees on
   · Nights Out: your nights write themselves — stops, ratings, the map
   · Private by default: signed out, everything stays on your device;
-    sign in and only your ratings and vibe profile sync — nights stay
-    local unless you share one
+    sign in and your ratings, vibe profile, friend connections, and any
+    suggestions/RSVPs/votes you share with your circle sync — nights
+    stay local unless you share one
   Manhattan, Brooklyn, and parts of Queens today. More neighborhoods as
   the catalog grows.
 - **Review notes (draft):** App is fully usable without an account
