@@ -294,18 +294,39 @@ function DemoProfile({ handle }: { handle: string }): JSX.Element {
   const { isFollowing, toggleFollow } = useFollows();
 
   if (!friend) {
+    // HONEST fallback, not a false 404 (social audit g-0182f313 CRITICAL).
+    // Signed out, real-profile lookups are unavailable BY DESIGN (anon has
+    // no get_profile_by_handle), so this app cannot know whether @handle
+    // exists. The old copy ("they may not be on Next Bar yet") asserted a
+    // real person didn't exist at exactly the share-loop moment a friend's
+    // link landed here. Say the true thing — the list needs sign-in to
+    // view right now — and give forward paths. This branch stays correct
+    // after the public-list opt-in (0015) ships: it becomes the state for
+    // profiles that DIDN'T opt in.
     return (
       <main className="min-h-screen flex flex-col items-center justify-center text-center px-6 pb-28">
-        <h1 className="font-display text-2xl mb-2">No one here.</h1>
+        <h1 className="font-display text-2xl mb-2">
+          Sign in to see @{handle}&apos;s list
+        </h1>
         <p className="text-muted text-sm mb-6 max-w-sm">
-          We couldn&apos;t find @{handle}. They may not be on Next Bar yet.
+          Bar lists are shared inside Next Bar. Sign in — or make an
+          account in about a minute — and this link will take you straight
+          to @{handle}.
         </p>
-        <Link
-          href="/friends"
-          className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display inline-flex items-center justify-center"
-        >
-          ← Back to Friends
-        </Link>
+        <div className="flex flex-col items-center gap-3">
+          <Link
+            href="/auth"
+            className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display inline-flex items-center justify-center"
+          >
+            Sign in
+          </Link>
+          <Link
+            href="/install"
+            className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
+          >
+            What is Next Bar? →
+          </Link>
+        </div>
       </main>
     );
   }

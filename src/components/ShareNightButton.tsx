@@ -35,6 +35,15 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [state, setState] = useState<ShareState>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Re-entrancy guard as a REF, not the state read below: two taps in the
+   * same tick both see the pre-render `state === 'idle'` (stale closure)
+   * and would both fire shareNight. Harmless today only because
+   * share_night is an idempotent upsert — the ref closes the gap on
+   * principle and matches ShareButton's proven pattern (social audit
+   * g-0182f313 #6).
+   */
+  const inFlight = useRef(false);
 
   useEffect(() => {
     if (auth.status !== 'signed-in') {
@@ -64,7 +73,8 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
   if (auth.status !== 'signed-in' || !handle) return null;
 
   const share = async (): Promise<void> => {
-    if (state === 'busy') return;
+    if (inFlight.current || state === 'busy') return;
+    inFlight.current = true;
     setState('busy');
     try {
       const supabase = getBrowserSupabase();
@@ -122,6 +132,7 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
         setState('failed');
       }
     } finally {
+      inFlight.current = false;
       setState((s) => (s === 'busy' ? 'idle' : s));
     }
   };
