@@ -712,7 +712,15 @@ export default function WhereNextFlow() {
               </button>
             </div>
           )}
-          <BarPicker onPick={handlePickBar} onNotListed={handleNotListed} />
+          {/* autoHideSearchOnScroll: this is the one call site where the
+              picker fills the document scroller — a permanently pinned search
+              bar leaves whichever row rests under it untappable at any deep
+              scroll position (g-90f908bc, mobile-controls pass 2). */}
+          <BarPicker
+            onPick={handlePickBar}
+            onNotListed={handleNotListed}
+            autoHideSearchOnScroll
+          />
         </div>
       </section>
     );
