@@ -32,6 +32,25 @@ Read-only `Resolve-DnsName` checks on 2026-08-03 observed:
 This proves routing intent, not successful Vercel ownership, TLS, deployment
 identity, canonical redirects, email delivery, or Supabase callback safety.
 
+### Operator report — 2026-08-03
+
+The operator reports that they are reasonably sure the Cloudflare DNS setup in
+the checklist was already completed. Treat this as **operator-reported complete,
+dashboard reconciliation pending**—do not repeat or overwrite the setup.
+
+Public DNS independently corroborates the important routing pieces:
+
+- Cloudflare is authoritative for the zone.
+- The apex resolves to Vercel's general-purpose address.
+- `www` resolves through Vercel's CNAME.
+
+The remaining read-only reconciliation is limited to facts public DNS cannot
+prove: Cloudflare's Active badge, gray-versus-orange proxy state, conflicting
+dashboard-only records, Vercel project ownership/TLS/canonical redirect, and
+whether email records are configured but still propagating. Any already-complete
+item is checked off and skipped; no setup step is rerun merely because this
+packet lists it.
+
 ## 3. What the operator can check now without changing anything
 
 ### A. Cloudflare DNS inventory
