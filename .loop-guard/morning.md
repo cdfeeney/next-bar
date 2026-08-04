@@ -30,3 +30,12 @@
 - Boundaries held: nothing pushed/applied/deployed; draft inert in drafts/ (runner reads top-level only).
 
 > PROTOCOL DEVIATION (deliberate): `loop-guard checkpoint` broad-committed the four protected operator docs after item 1 (commit b24206c). That commit was undone with `git reset --mixed HEAD~1` (file contents untouched; exact dirty/untracked state verified restored). Remaining checkpoints this run are explicit narrow commits of .loop-guard/morning.md only — the mission's preserve-operator-docs / no-broad-staging constraints outrank the checkpoint helper. loop-guard iteration state is unaffected (tick/cap still enforced).
+
+### Item 2 — g-7de10fce (T1 matcher eval + KPI foundation) — COMPLETE
+- Commit: 49d9192 (15 files: eval engine + corpus gates + tasteSignals v1.1 + dark KPI contracts + evidence doc + report script)
+- Adopted on evidence: weighted Loved affinity (>=2-Loved floor) + cautious avoid nudge — lovedAlign 0.4210→0.4371, avoidHit 0.0456→0.0400, vibe unchanged, 0 hard-filter violations, repeat decay 0.470→0.523. Baseline preserved & measured; no ML; weights unchanged.
+- Tests: vitest 2058/2058; tsc/build/secret/diff clean; Playwright 105/105 + 85/85 (quiz/map/where-next/distance/tonight, 3 device shards)
+- Review: T1 panel Fable + Codex — both lanes succeeded BOTH rounds (Codex first-try this time; r1 packet-size lesson from item 1 applied). r1: Fable 2 HIGH (unexercised exploration/fresh-hand paths; inverted KPI forbidden-key belt) + Codex 4 MED; r2: Codex 2 MED + Fable APPROVE. All fixed + regression-tested.
+- Lane-unique catches: Fable = corpus-coverage-vs-doc-claim + belt inversion; Codex = /map filtered-cohort taste-model bug + gate tightness; GLM (planning consult) = cold-start echo-chamber (empirically confirmed by the corpus, fixed via caution floor).
+- KPI foundation stays DARK: 5 names allowlisted, envelope {v,name} only, PostHog/analytics off (unit-asserted), zero new dispatch call sites.
+- Boundaries held: no external writes, no paid calls, no analytics enablement, no migrations.
