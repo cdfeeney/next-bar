@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Bar, Coords, VibeProfile, VibeTag } from '@/types';
 import type { BarRating } from '@/types/ratings';
 import { matches } from '@/lib/matching';
+import {
+  buildAvoidTagWeights,
+  buildLovedTagWeights,
+} from '@/lib/tasteSignals';
 import { deriveArchetype } from '@/lib/quiz';
 import { loadProfile } from '@/lib/storedProfile';
 import { useBars } from '@/lib/useBars';
@@ -20,6 +24,15 @@ export type ComputeSuggestionsArgs = {
   maxResults?: number;
   /** Injectable clock for the staleness filter — tests pass a fixed date. */
   now?: Date;
+  /**
+   * The FULL catalog for taste-signal derivation (v1.1). `/map` ranks
+   * within a FILTERED `bars` pool, but the user's Loved/Passed history
+   * must always be interpreted against the whole catalog — a filter
+   * hiding one of two Loved bars must not drop the weighted affinity
+   * below its caution floor (santa: Codex + Fable, converged). Defaults
+   * to `bars` for callers that already rank the full set.
+   */
+  signalBars?: readonly Bar[];
 };
 
 /**
@@ -47,18 +60,30 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
     .filter((r) => r.rating === 'pass')
     .map((r) => r.barId);
 
-  // Flatten the vibe tags of every bar the user has Loved, so matches() can
-  // nudge bars with a similar taste profile up the rank (loved-affinity term).
-  const lovedBarIds = new Set(
-    ratings.filter((r) => r.rating === 'loved').map((r) => r.barId),
-  );
-  const lovedTagSet = new Set<VibeTag>();
-  if (lovedBarIds.size > 0) {
-    for (const b of bars) {
-      if (lovedBarIds.has(b.id)) {
-        for (const t of b.tags) lovedTagSet.add(t);
-      }
-    }
+  // v1.1 taste signals (g-7de10fce, eval-gated adoption): frequency-
+  // weighted Loved-tag affinity replaces the flattened union — a tag the
+  // user keeps loving counts more — plus the cautious avoid-tag nudge
+  // (≥2 Passed bars, never a Loved tag; tie-breaker scale only).
+  // Corpus evidence: loved-alignment 0.4210→0.4371, avoid-hit
+  // 0.0456→0.0400, vibe relevance unchanged, zero hard-filter
+  // violations (scripts/matcher-eval-report.mts).
+  //
+  // Signals derive from signalBars — the FULL catalog — never the
+  // (possibly filtered) ranking pool: a map filter that hides one of
+  // two Loved bars must not silently drop the weighted affinity below
+  // its caution floor or empty the avoid map (santa: Codex). Ranking
+  // still happens strictly within `bars`.
+  const signalBars = args.signalBars ?? bars;
+  const lovedIds = ratings
+    .filter((r) => r.rating === 'loved')
+    .map((r) => r.barId);
+  // Flat union kept as the FALLBACK affinity: below the ≥2-Loved caution
+  // floor the weight map is empty and scoreBar uses this instead (exact
+  // pre-v1.1 behavior — no cold-start echo chamber, no lost affinity).
+  const lovedIdSet = new Set(lovedIds);
+  const lovedFlat = new Set<VibeTag>();
+  for (const b of signalBars) {
+    if (lovedIdSet.has(b.id)) for (const t of b.tags) lovedFlat.add(t);
   }
 
   return matches({
@@ -70,7 +95,13 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
     excludeIds,
     maxResults,
     now,
-    lovedTags: Array.from(lovedTagSet),
+    lovedTags: Array.from(lovedFlat),
+    lovedTagWeights: buildLovedTagWeights(lovedIds, signalBars as Bar[]),
+    avoidTagWeights: buildAvoidTagWeights(
+      excludeIds,
+      lovedIds,
+      signalBars as Bar[],
+    ),
   });
 }
 
@@ -186,10 +217,13 @@ export function useSuggestions(
       profile: effective,
       coords,
       bars,
+      // Taste signals always read the FULL catalog, independent of the
+      // map's filtered ranking pool (parity with ResultsView).
+      signalBars: allBars,
       ratings,
       maxResults,
     }).map((b) => b.id);
-  }, [profile, intentTags, profileChecked, coords, bars, ratings, maxResults]);
+  }, [profile, intentTags, profileChecked, coords, bars, allBars, ratings, maxResults]);
 
   return { suggestedIds, hasProfile: profile !== null, profileChecked };
 }

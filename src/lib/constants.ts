@@ -66,6 +66,15 @@ export const UNVERIFIED_HOURS_PENALTY = 0.03;
 
 export const LATE_CLUB_BOOST = 0.06;
 export const LATE_RESTAURANT_PENALTY = 0.06;
+
+/**
+ * v1.1 cautious negative preference (g-7de10fce): maximum additive
+ * penalty for a bar fully covered by the user's avoid-tag signal
+ * (tags in ≥2 Passed bars, never Loved — see tasteSignals.ts). Same
+ * tie-breaker order of magnitude as the late-night nudge: it re-orders
+ * near-ties, it can never bury a strong vibe match or act as a filter.
+ */
+export const NEG_TAG_PENALTY = 0.06;
 export const RADIUS_CAB = 4;
 export const RADIUS_ANYWHERE = null;
 

@@ -9,6 +9,7 @@ import { haversineMiles } from '@/lib/distance';
 import { daysAgo } from '@/lib/freshness';
 import { effectiveNight } from '@/lib/cadence';
 import { hasTrustworthyHours } from '@/lib/openNow';
+import { weightedTagCoverage, type TagWeights } from '@/lib/tasteSignals';
 import {
   DIST_DECAY_MILES,
   DIST_WEIGHT,
@@ -17,6 +18,7 @@ import {
   LATE_NIGHT_START_HOUR,
   LATE_RESTAURANT_PENALTY,
   EXPLORATION_MIN_RESULTS,
+  NEG_TAG_PENALTY,
   JACCARD_FLOOR,
   JACCARD_START,
   JACCARD_STEP,
@@ -105,6 +107,21 @@ export type MatchesArgs = {
    * proximity only (fully backward-compatible).
    */
   lovedTags?: VibeTag[];
+  /**
+   * v1.1 (g-7de10fce, eval-gated): frequency-weighted Loved-tag map from
+   * tasteSignals.buildLovedTagWeights. When provided (non-empty) it
+   * REPLACES the flattened lovedTags union in the affinity term — a tag
+   * the user keeps loving counts more than one loved once. Omitted →
+   * exact pre-v1.1 behavior.
+   */
+  lovedTagWeights?: TagWeights;
+  /**
+   * v1.1 (g-7de10fce, eval-gated): cautious avoid-tag map from
+   * tasteSignals.buildAvoidTagWeights (≥2 Passed bars, never a Loved
+   * tag). Applied as a tie-breaker-scale additive penalty
+   * (NEG_TAG_PENALTY × coverage), NEVER a filter.
+   */
+  avoidTagWeights?: TagWeights;
 };
 
 /**
@@ -125,13 +142,36 @@ export function scoreBar(
   userTags: VibeTag[],
   coords: Coords | null,
   lovedTags: VibeTag[],
+  lovedTagWeights?: TagWeights,
 ): number {
   const vibe = jaccard(userTags, bar.tags);
   const proximity = coords
     ? Math.exp(-haversineMiles(coords, bar) / DIST_DECAY_MILES)
     : 1;
-  const affinity = lovedTags.length > 0 ? jaccard(bar.tags, lovedTags) : 0;
+  // v1.1: the weighted-coverage affinity replaces the flat union when a
+  // weight map is supplied; both are in [0, 1] so the blend is unchanged.
+  const affinity =
+    lovedTagWeights !== undefined && lovedTagWeights.size > 0
+      ? weightedTagCoverage(bar.tags, lovedTagWeights)
+      : lovedTags.length > 0
+        ? jaccard(bar.tags, lovedTags)
+        : 0;
   return VIBE_WEIGHT * vibe + DIST_WEIGHT * proximity + RATING_WEIGHT * affinity;
+}
+
+/**
+ * v1.1 cautious negative nudge: NEG_TAG_PENALTY × (weighted share of the
+ * user's avoid-signal this bar's tags cover), i.e. at most one
+ * tie-breaker-scale step down — deliberately the same order of magnitude
+ * as lateNightAdjustment/unverifiedHoursAdjustment, so it re-orders
+ * near-ties and can never bury a strong vibe match.
+ */
+export function avoidTagAdjustment(
+  bar: Pick<Bar, 'tags'>,
+  avoidTagWeights: TagWeights | undefined,
+): number {
+  if (avoidTagWeights === undefined || avoidTagWeights.size === 0) return 0;
+  return -NEG_TAG_PENALTY * weightedTagCoverage(bar.tags, avoidTagWeights);
 }
 
 /** 10pm–3:59am local — when the night bias applies. */
@@ -182,6 +222,8 @@ export function matches(args: MatchesArgs): Bar[] {
     now,
     biasNow,
     lovedTags = [],
+    lovedTagWeights,
+    avoidTagWeights,
   } = args;
 
   const exclude = new Set(excludeIds ?? []);
@@ -240,9 +282,10 @@ export function matches(args: MatchesArgs): Bar[] {
     .map((bar) => ({
       bar,
       score:
-        scoreBar(bar, profile.tags, coords, lovedTags) +
+        scoreBar(bar, profile.tags, coords, lovedTags, lovedTagWeights) +
         (late ? lateNightAdjustment(bar) : 0) +
-        unverifiedHoursAdjustment(bar),
+        unverifiedHoursAdjustment(bar) +
+        avoidTagAdjustment(bar, avoidTagWeights),
     }))
     .sort((a, b) => b.score - a.score);
 

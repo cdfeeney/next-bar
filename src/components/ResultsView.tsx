@@ -11,6 +11,10 @@ import type {
 import { useBars } from '@/lib/useBars';
 import { excludeClosedBars } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
+import {
+  buildAvoidTagWeights,
+  buildLovedTagWeights,
+} from '@/lib/tasteSignals';
 import { arrangeWidenedHand } from '@/lib/freshHand';
 import { haversineMiles } from '@/lib/distance';
 import { MAX_RESULTS, NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
@@ -142,20 +146,32 @@ export default function ResultsView({
     return Array.from(merged);
   }, [excludeIds, ratings]);
 
-  // Flatten the vibe tags of every bar the user has Loved, so matches() can
-  // nudge bars with a similar taste profile up the rank (loved-affinity term).
-  const lovedTags = useMemo(() => {
-    const lovedBarIds = new Set(
-      ratings.filter((r) => r.rating === 'loved').map((r) => r.barId),
-    );
-    if (lovedBarIds.size === 0) return [] as VibeTag[];
-    const tags = new Set<VibeTag>();
+  // v1.1 taste signals (g-7de10fce, eval-gated adoption): frequency-
+  // weighted Loved affinity (a tag loved five times counts more than one
+  // loved once) + the cautious avoid-tag nudge (≥2 Passed bars, never a
+  // Loved tag; tie-breaker scale). Corpus evidence in
+  // docs/MATCHER-EVAL-g-7de10fce-2026-08-04.md: loved-alignment up,
+  // avoid-hit down, vibe relevance and hard filters unchanged.
+  const tasteSignals = useMemo(() => {
+    const lovedIds = ratings
+      .filter((r) => r.rating === 'loved')
+      .map((r) => r.barId);
+    const passedIds = ratings
+      .filter((r) => r.rating === 'pass')
+      .map((r) => r.barId);
+    // Flat union kept as the FALLBACK affinity: below the ≥2-Loved
+    // caution floor the weight map is empty and scoreBar falls back to
+    // this (exact pre-v1.1 cold-start behavior).
+    const lovedIdSet = new Set(lovedIds);
+    const lovedFlat = new Set<VibeTag>();
     for (const b of bars) {
-      if (lovedBarIds.has(b.id)) {
-        for (const t of b.tags) tags.add(t);
-      }
+      if (lovedIdSet.has(b.id)) for (const t of b.tags) lovedFlat.add(t);
     }
-    return Array.from(tags);
+    return {
+      lovedTags: Array.from(lovedFlat),
+      lovedTagWeights: buildLovedTagWeights(lovedIds, bars),
+      avoidTagWeights: buildAvoidTagWeights(passedIds, lovedIds, bars),
+    };
   }, [ratings, bars]);
 
   // Fresh-hand mode (g-d3f8d912): after a widening tap, the adaptive vibe
@@ -182,7 +198,9 @@ export default function ResultsView({
       maxResults,
       sliceCap: widenActive ? pool.length : undefined,
       relaxDiscountIds: widenActive ? seenIds : undefined,
-      lovedTags,
+      lovedTags: tasteSignals.lovedTags,
+      lovedTagWeights: tasteSignals.lovedTagWeights,
+      avoidTagWeights: tasteSignals.avoidTagWeights,
       // Late-night bias rides the SAME live clock as the open-now
       // filter — quiz/planning surfaces (no hideClosedNow) never bias.
       biasNow: filterNow ?? undefined,
@@ -195,7 +213,7 @@ export default function ResultsView({
       seenIds: seenIds ?? [],
       count: maxResults ?? MAX_RESULTS,
     }).hand;
-  }, [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow, widenActive, widenedFromMiles, seenIds]);
+  }, [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, tasteSignals, filterNow, widenActive, widenedFromMiles, seenIds]);
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own
   // recompute. Signature guard: fire only when the id SEQUENCE changes —

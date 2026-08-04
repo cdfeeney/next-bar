@@ -19,7 +19,25 @@
  * one-way: analytics.ts consumes this module, never the reverse.
  * analytics.ts re-exports these for its existing public API.
  */
-export const ANALYTICS_EVENTS = ['search', 'share', 'save', 'visit'] as const;
+// g-7de10fce KPI foundation: five NAMES added dark (impression,
+// bar_detail, directions, checkin, night_rating). Names only — the
+// envelope stays { v, name } with no payload; the payload CONTRACTS
+// (what each event may ever carry, and what it must never carry) live
+// in src/lib/kpiContracts.ts and remain a specification until an
+// attended enablement adds server-side support. Nothing dispatches
+// these names tonight; the allowlist admits them so future call sites
+// need no adapter change.
+export const ANALYTICS_EVENTS = [
+  'search',
+  'share',
+  'save',
+  'visit',
+  'impression',
+  'bar_detail',
+  'directions',
+  'checkin',
+  'night_rating',
+] as const;
 export type AnalyticsEvent = (typeof ANALYTICS_EVENTS)[number];
 
 export const ENVELOPE_VERSION = 1 as const;
