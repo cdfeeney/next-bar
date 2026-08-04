@@ -39,3 +39,16 @@
 - Lane-unique catches: Fable = corpus-coverage-vs-doc-claim + belt inversion; Codex = /map filtered-cohort taste-model bug + gate tightness; GLM (planning consult) = cold-start echo-chamber (empirically confirmed by the corpus, fixed via caution floor).
 - KPI foundation stays DARK: 5 names allowlisted, envelope {v,name} only, PostHog/analytics off (unit-asserted), zero new dispatch call sites.
 - Boundaries held: no external writes, no paid calls, no analytics enablement, no migrations.
+
+### Item 3 — g-7104aed0 (T0 census, SAFE portion only) — READINESS VERIFIED, RETURNED TO planned (attended-only by design)
+- Commit: 79a8800 (docs/CENSUS-READINESS-2026-08-04.md)
+- Unit 60/60 + 0037 static guards; fixture CLI run complete (budget 9/50, 4 SYNTHETIC candidates, artifacts gitignored under scripts/census/out/); resume + report idempotent; LOOP_UNATTENDED=1 --apply REFUSED as designed; concurrent-writer refusal static+unit (live proof = attended 0037 apply). Zero readiness defects. NO activation, credentials, paid calls, Staging access, or bars added.
+- Status deliberately NOT terminal: the stored goal IS the attended activation pilot; per the operator mission it stays `planned` for an attended session.
+
+## RUN SUMMARY (2026-08-04 ~01:40 ET — 3h05m early of the 04:45 hard stop)
+- Top-level status: QUEUE_REMAINING by controller accounting (g-7104aed0 runnable-but-ATTENDED-ONLY, by operator design). All UNATTENDED-SAFE queue work is COMPLETE and reviewed. Mission terminal condition met: no safe goal with ≥90min runway remains.
+- Completed: g-31f36bf8 (T0, NICE @ deffdd1), g-7de10fce (T1, NICE @ 49d9192). Blocked: none new. Skipped: none. Remaining: g-7104aed0 (attended).
+- Reviewer lanes: item 1 = Fable×5 runs + Codex (2×124 then 2 successes w/ proofs) + DeepSeek×2; item 2 = Fable×2 (APPROVE final) + Codex×2 (proofs) + GLM planning consult. Sonnet: not used as a gating lane anywhere. All 124 timeouts had confirmed process-tree termination.
+- Timed-out commands: codex-review.mjs ×2 (both terminated cleanly; narrow packets then succeeded).
+- Human decisions needed: continuation §6 list + census attended gates + Phase B/photos/ranking/map-visual items.
+- NOTHING pushed, deployed, applied, or irreversibly changed; lock ARMED at close; leases empty; protected operator docs byte-identical (one broad checkpoint commit self-caught and reverted — see deviation note above).
