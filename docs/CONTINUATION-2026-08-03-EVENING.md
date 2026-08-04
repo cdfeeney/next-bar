@@ -1,5 +1,38 @@
 # CONTINUATION — 2026-08-03 EVENING attended session (Next Bar)
 
+> **FOURTH-WAVE / OVERNIGHT PICK-UP STATE (~21:50 ET, operator pausing
+> until tomorrow).** TestFlight pipeline debugging, three live dispatch
+> runs, each failure diagnosed + fixed via PR (all merged to origin/main;
+> lock re-armed after every remote action):
+> - Run 1 → `Capacitor CLI requires NodeJS >=22` → **PR #92** (`1514420`)
+>   node 20→24. Proved the #90 workflow had never run before.
+> - Run 2 → `no devices ... no iOS App Development profiles for
+>   com.nextbar.app` → attempted CODE_SIGN_IDENTITY override **PR #93**
+>   (`87c95c8`).
+> - Run 3 → `conflicting provisioning settings` (identity override vs
+>   automatic signing) → **PR #94** (`4b06ed6`) reverts the override and
+>   documents both signing lessons in the Fastfile. Correct model:
+>   automatic signing archives DEV-signed (needs >=1 registered device on
+>   the team), export re-signs for app-store via the ASC API key.
+> - Apple state: enrollment active; App ID `com.nextbar.app` +
+>   ASC app record "Next Bar" created by operator; Admin API key made;
+>   4 GitHub secrets set + verified. AppIcon in repo verified compliant.
+>
+> **TOMORROW'S EXACT PICK-UP (operator):**
+> 1. Finish registering the iPhone UDID (was installing the Apple
+>    Devices app): Apple Devices app → click under device name to cycle
+>    to UDID → copy; developer.apple.com → Devices → + → register.
+> 2. Dispatch: Actions → iOS TestFlight → Run workflow →
+>    `server_url=https://next-bar-two.vercel.app` (pre-DNS). Next
+>    expected failure surface, if any: the export/upload steps (gym
+>    export re-sign or upload_to_testflight) — paste log tail to the
+>    assistant.
+> 3. On success: ASC → TestFlight → build "Processing" ~15-30 min →
+>    Internal Testing group → invite 2 cofounders via Users and Access
+>    (NO UDIDs needed for testers — only the one build-machinery device).
+> 4. Then still open: DNS cutover (then blank-input canonical build),
+>    Codex icon-artwork PR, and the §5 decision list below.
+
 > **THIRD-WAVE UPDATE (operator-driven, ~21:00–21:30 ET).** With the
 > operator directing live:
 > - **Apple resources now EXIST (operator-created):** App ID
