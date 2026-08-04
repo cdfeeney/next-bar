@@ -186,11 +186,14 @@ four dirty docs/no lease/lock armed); zero discrepancies.
   armed at close. Overnight branch, nb-ios, nb-testflight-node22, and
   the four protected docs untouched. Production/Staging untouched; no
   migrations; census goal not yet started this session.
-- **Remaining Phase-1 steps (operator, in ASC):** wait out build
-  "Processing", create Internal Testing group, invite the 2 cofounders
-  via Users and Access, add build to the group. NO external group, NO
-  App Review submission. Expectation: shell loads next-bar-two.vercel.app
-  (no local Pin/matcher commits — those are the overnight branch).
+- **Phase 1 COMPLETE (operator-side):** build 5 processed ("Ready to
+  Submit" = processed; nothing submitted for review), Internal Testing
+  group created, operator installed the app on the registered iPhone via
+  TestFlight. Cofounder Users-and-Access invites SENT; adding them as
+  group testers awaits their acceptance (async, non-blocking). NO
+  external group, NO App Review submission. Shell loads
+  next-bar-two.vercel.app (no local Pin/matcher commits — those are the
+  overnight branch).
 
 ## 8. Tomorrow's exact iOS/UDID/TestFlight steps (operator, unchanged)
 
