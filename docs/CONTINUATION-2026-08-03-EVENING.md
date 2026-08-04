@@ -1,5 +1,33 @@
 # CONTINUATION — 2026-08-03 EVENING attended session (Next Bar)
 
+> **THIRD-WAVE UPDATE (operator-driven, ~21:00–21:30 ET).** With the
+> operator directing live:
+> - **Apple resources now EXIST (operator-created):** App ID
+>   `com.nextbar.app` registered; App Store Connect app record "Next Bar"
+>   created; Admin API key generated; all four GitHub secrets set and
+>   verified (`gh secret list`: APPLE_TEAM_ID, ASC_ISSUER_ID, ASC_KEY_ID,
+>   ASC_KEY_P8_BASE64).
+> - **PR #91 MERGED** (squash `7cc7fea`): the wrapper-origin work is on
+>   origin/main. **PR #92 MERGED** (squash `1514420`): workflow Node
+>   20→24 (first-ever dispatch proved the #90 workflow had never run —
+>   Capacitor CLI 8 requires Node ≥22).
+> - Lock was disarmed ONLY for these operator-approved remote actions and
+>   re-armed after each.
+> - The ios project's existing AppIcon verified compliant (decoded:
+>   1024×1024, colorType 2, no alpha) — first build NOT blocked on the
+>   operator's separate Codex icon-artwork work (land that as its own PR).
+> - **First real TestFlight dispatch IN FLIGHT** at update time:
+>   `server_url=https://next-bar-two.vercel.app` (pre-DNS override).
+>   3 internal testers planned (incl. operator).
+> - Local nb-ios worktree: DIVERGED from origin/main by design (3
+>   pre-squash commits + operator's uncommitted `.gitignore` edit +
+>   Package.swift EOL noise). Do NOT reset --hard (would destroy the
+>   uncommitted edit); reconcile next session by stashing the .gitignore
+>   edit first.
+> - Still open for the operator: DNS cutover (then blank-input canonical
+>   build), Users-and-Access invites for the other 2 testers, Internal
+>   Testing group creation once the build processes.
+
 > **SECOND-WAVE UPDATE (same session, ~20:10 ET), supersedes §3's SHA
 > block.** After the first handoff the operator directed three things
 > (saved to harness memory `operator-priorities-testflight-social`):
