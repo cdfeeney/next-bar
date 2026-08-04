@@ -35,7 +35,7 @@ describe('demoIntentFor', () => {
     expect(nightSnapshot(FRI)).toBe(nightSnapshot(FRI_LATER));
   });
 
-  it('keeps the small hours on the previous night (5am rollover)', () => {
+  it('keeps the small hours on the previous night (6am rollover)', () => {
     expect(nightSnapshot(SAT_1AM)).toBe(nightSnapshot(FRI));
   });
 

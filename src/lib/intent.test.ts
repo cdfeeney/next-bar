@@ -13,7 +13,7 @@ const KEY = 'next-bar:intent:v1';
 // Local-time strings (no Z) so assertions don't depend on the runner's TZ.
 const FRI_10PM = '2026-07-24T22:00:00';
 const SAT_1AM = '2026-07-25T01:00:00';
-const SAT_5AM = '2026-07-25T05:00:00';
+const SAT_6AM = '2026-07-25T06:00:00';
 const SAT_9PM = '2026-07-25T21:00:00';
 
 describe('nightOf', () => {
@@ -25,8 +25,8 @@ describe('nightOf', () => {
     expect(nightOf(SAT_1AM)).toBe('2026-07-24');
   });
 
-  it('starts a fresh night at 5am', () => {
-    expect(nightOf(SAT_5AM)).toBe('2026-07-25');
+  it('starts a fresh night at 6am (canonical socialNight rollover)', () => {
+    expect(nightOf(SAT_6AM)).toBe('2026-07-25');
   });
 });
 
@@ -73,18 +73,18 @@ describe('intent storage', () => {
     expect(loadIntent(new Date(SAT_9PM))).toBeNull();
   });
 
-  it('expires exactly at the 5am boundary mid-session (F5 rollover)', () => {
+  it('expires exactly at the 6am boundary mid-session (F5 rollover)', () => {
     // Set in the small hours (still Friday night)…
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ status: 'going', setAt: '2026-07-25T04:30:00' }),
+      JSON.stringify({ status: 'going', setAt: '2026-07-25T05:30:00' }),
     );
     // …still visible one second before the rollover…
     expect(
-      loadIntent(new Date('2026-07-25T04:59:59'))?.status,
+      loadIntent(new Date('2026-07-25T05:59:59'))?.status,
     ).toBe('going');
-    // …and gone the moment the clock hits 5am, without any write.
-    expect(loadIntent(new Date('2026-07-25T05:00:00'))).toBeNull();
+    // …and gone the moment the clock hits 6am, without any write.
+    expect(loadIntent(new Date('2026-07-25T06:00:00'))).toBeNull();
   });
 
   it('returns null on corrupted or unknown-status storage', () => {
@@ -170,20 +170,20 @@ describe('wasOutLastNight (E2.4 nightPhase input)', () => {
 
   // DST regression (review finding): the 24h-in-ms subtraction this
   // replaced lands an hour early on the spring-forward Sunday and crosses
-  // the 5am rollover for the 5:00–5:59am window. Only reproducible on a
+  // the 6am rollover for the 6:00–6:59am window. Only reproducible on a
   // runner whose local zone observes US DST, so gate on that.
   const observesUsDst =
-    new Date('2026-03-08T05:30:00').getTime() -
-      new Date('2026-03-07T05:30:00').getTime() ===
+    new Date('2026-03-08T06:30:00').getTime() -
+      new Date('2026-03-07T06:30:00').getTime() ===
     23 * 60 * 60 * 1000;
   it.runIf(observesUsDst)(
-    'spring-forward Sunday 5am hour still sees last night (DST regression)',
+    'spring-forward Sunday 6am hour still sees last night (DST regression)',
     () => {
       window.localStorage.setItem(
         KEY,
         JSON.stringify({ status: 'here', setAt: '2026-03-07T23:00:00' }),
       );
-      expect(wasOutLastNight(new Date('2026-03-08T05:30:00'))).toBe(true);
+      expect(wasOutLastNight(new Date('2026-03-08T06:30:00'))).toBe(true);
     },
   );
 

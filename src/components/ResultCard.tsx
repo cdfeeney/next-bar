@@ -17,6 +17,7 @@ import BarVisualTile from '@/components/BarVisualTile';
 import BarLightbox from '@/components/BarLightbox';
 import RatingBadge from '@/components/RatingBadge';
 import WantToGoToggle from '@/components/WantToGoToggle';
+import ImHereButton from '@/components/ImHereButton';
 
 type ResultCardProps = {
   bar: Bar;
@@ -179,6 +180,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
             <OpenNowBadge bar={bar} />
             <RatingBadge barId={bar.id} />
             <WantToGoToggle barId={bar.id} barName={bar.name} />
+            <ImHereButton bar={bar} />
           </div>
           {showShare ? (
             <ShareButton

@@ -27,7 +27,7 @@ describe('deriveNightPhase (E0.3)', () => {
 
   it('morning after a night out is RECAP; otherwise mornings PLAN', () => {
     expect(deriveNightPhase({ ...base, now: at(9), wasOutLastNight: true })).toBe('recap');
-    expect(deriveNightPhase({ ...base, now: at(5), wasOutLastNight: true })).toBe('recap');
+    expect(deriveNightPhase({ ...base, now: at(6), wasOutLastNight: true })).toBe('recap');
     expect(deriveNightPhase({ ...base, now: at(9) })).toBe('planning');
     expect(deriveNightPhase({ ...base, now: at(11, 59), wasOutLastNight: true })).toBe('recap');
   });
@@ -43,7 +43,7 @@ describe('deriveNightPhase (E0.3)', () => {
     expect(deriveNightPhase({ ...base, now: at(21), intent: 'going' })).toBe('out');
     expect(deriveNightPhase({ ...base, now: at(23, 30), intent: 'going' })).toBe('out');
     expect(deriveNightPhase({ ...base, now: at(3), intent: 'going' })).toBe('out');
-    expect(deriveNightPhase({ ...base, now: at(4, 59), intent: 'going' })).toBe('out');
+    expect(deriveNightPhase({ ...base, now: at(5, 59), intent: 'going' })).toBe('out');
     // No-signal / "maybe" nights derive OUT too — the find-a-bar home is
     // the fail-safe surface now that 'starting' is deleted.
     expect(deriveNightPhase({ ...base, now: at(23) })).toBe('out');

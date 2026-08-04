@@ -2,7 +2,7 @@
  * Seeded "tonight" intents for the demo friends — blueprint B2.
  *
  * Day-varying but deterministic (audit F3): each friend follows a fixed
- * weekly rhythm keyed off the effective night (same 5am rollover as
+ * weekly rhythm keyed off the effective night (same canonical 6am rollover as
  * src/lib/intent.ts), so "Claire is going out tonight" is no longer true
  * EVERY night, yet the surface stays reproducible — no Date.now() or
  * randomness at module scope; callers pass the current date in. The UI

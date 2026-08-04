@@ -1,4 +1,5 @@
 import { notifyProfileChanged } from '@/lib/storedProfile';
+import { resetSessionPin } from '@/lib/pinSignal';
 
 /**
  * Per-account localStorage cache guard (santa-loop round-1 fix).
@@ -93,6 +94,11 @@ export function getCacheEpoch(): number {
 export function clearAccountCache(): void {
   if (typeof window === 'undefined') return;
   cacheEpoch += 1;
+  // In-memory session stores wipe alongside the localStorage keys — a
+  // module variable outliving the account that wrote it is the same
+  // cross-account leak (g-31f36bf8 round-2 review: a stale "Pinned"
+  // presence surviving into the next account's session).
+  resetSessionPin();
   try {
     for (const key of ALL_KEYS) window.localStorage.removeItem(key);
   } catch {

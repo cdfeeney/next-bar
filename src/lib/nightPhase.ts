@@ -1,4 +1,5 @@
 import type { IntentStatus } from '@/lib/intent';
+import { NIGHT_ROLLOVER_HOUR } from '@/lib/socialNight';
 
 /**
  * nightPhase — derive which phase of a night out the user is in (E0.3).
@@ -16,8 +17,8 @@ import type { IntentStatus } from '@/lib/intent';
  * now derives 'out'.
  *
  * Pure function; persistence of the override (nightKey-scoped
- * localStorage, resets at the 5am rollover per R11) is the E2.4/E3.4
- * UI's concern.
+ * localStorage, resets at the canonical 6am rollover per R11 —
+ * src/lib/socialNight.ts) is the E2.4/E3.4 UI's concern.
  */
 
 export type NightPhase = 'planning' | 'out' | 'recap';
@@ -41,7 +42,7 @@ export type NightPhaseInputs = {
   override: NightPhase | null;
 };
 
-const MORNING_START = 5; // the rollover hour — mornings begin where nights end
+const MORNING_START = NIGHT_ROLLOVER_HOUR; // mornings begin where nights end
 const MIDDAY_START = 12;
 const EVENING_START = 17;
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import FindFriends from '@/components/FindFriends';
+import PinWhereIAm from '@/components/PinWhereIAm';
 import { RequestRow } from '@/components/FollowRows';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
@@ -115,6 +116,9 @@ export default function FriendsPage(): JSX.Element {
             Tonight
           </h2>
           <IntentPills />
+          {/* Pin where I am — explicit venue check-in, mutual friends
+              only, expires at the 6am social-night end (g-31f36bf8). */}
+          <PinWhereIAm />
           {isServer && suggestions !== null && suggestions.length > 0 ? (
             <div className="space-y-2 mt-3">
               {suggestions.map((s) => {

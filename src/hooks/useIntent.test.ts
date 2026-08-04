@@ -48,7 +48,7 @@ describe('useIntent', () => {
     expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 
-  it('visually clears a stale intent when the 5am rollover passes while the tab stays open (F5a)', () => {
+  it('visually clears a stale intent when the 6am rollover passes while the tab stays open (F5a)', () => {
     seedStoredIntent('2026-07-24T22:00:00');
     const { result } = renderHook(() => useIntent());
     expect(result.current.intent?.status).toBe('going');

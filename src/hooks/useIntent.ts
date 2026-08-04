@@ -10,7 +10,7 @@ import {
 
 const KEY = 'next-bar:intent:v1';
 
-/** How often an open tab re-checks the clock for the 5am rollover (F5). */
+/** How often an open tab re-checks the clock for the 6am rollover (F5). */
 const NIGHT_REFRESH_INTERVAL_MS = 60_000;
 
 export type UseIntentReturn = {
@@ -22,7 +22,7 @@ export type UseIntentReturn = {
 /**
  * Fire `refresh` once after mount, then every minute and whenever the tab
  * becomes visible again — the shared "the clock moved" signal that catches
- * the midnight/5am rollover while a tab stays open (F5). Used here to
+ * the midnight/6am rollover while a tab stays open (F5). Used here to
  * expire stale intents, and by every other nightKey-scoped consumer
  * (phase home, tonight-exclusion, the /friends Tonight strip).
  */
@@ -64,7 +64,7 @@ function reconcileIntent(
  * Your "tonight" intent over src/lib/intent.ts. Same shape as useLists:
  * hydrate after mount (SSR renders null), stay in sync via the lib's
  * synthesized `storage` events, and re-evaluate expiry on the night-refresh
- * signal so a stale chip visually clears at 5am without a reload (F5).
+ * signal so a stale chip visually clears at 6am without a reload (F5).
  */
 export function useIntent(): UseIntentReturn {
   const [intent, setIntent] = useState<TonightIntent | null>(null);
@@ -83,7 +83,7 @@ export function useIntent(): UseIntentReturn {
   }, []);
 
   // Decide set-vs-clear from the DISPLAYED state, not a fresh load: after
-  // the 5am rollover a still-lit chip loads as null (expired), and the old
+  // the 6am rollover a still-lit chip loads as null (expired), and the old
   // load-then-decide flow would SET a fresh intent instead of clearing (F5).
   const toggleIntent = useCallback(
     (status: IntentStatus): void => {

@@ -272,7 +272,7 @@ export function matches(args: MatchesArgs): Bar[] {
 /**
  * FNV-1a hash of (sorted profile tags + effective NIGHT) — deterministic
  * for a given profile/night so the pick doesn't jitter between renders,
- * rotating at the 5am LOCAL night rollover (cadence.ts), never mid-evening
+ * rotating at the canonical 6am LOCAL night rollover (socialNight.ts via cadence.ts), never mid-evening
  * (DeepSeek review: a UTC-midnight key rotated at 8pm ET — prime time for
  * a NYC product).
  *

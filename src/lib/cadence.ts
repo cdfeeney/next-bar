@@ -4,13 +4,13 @@
  * Nightlife cadence is weekly, not daily (daily streaks feel fake — see the
  * blueprint's failure-modes list), so the prompt only exists Thursday
  * through Saturday nights. The small hours belong to the previous night,
- * same 5am rollover as src/lib/intent.ts.
+ * same canonical rollover as src/lib/intent.ts (6am — socialNight.ts).
  *
  * Pure module: powers the in-app Tonight surface now; the same predicate
  * gates the web-push notification when VAPID keys land (escalated, D2).
  */
 
-const NIGHT_ROLLOVER_HOUR = 5;
+import { NIGHT_ROLLOVER_HOUR } from '@/lib/socialNight';
 
 const THURSDAY = 4;
 const FRIDAY = 5;
@@ -39,7 +39,7 @@ export function effectiveNight(date: Date): Date {
   return copy;
 }
 
-/** True on going-out nights: Thursday, Friday, Saturday (5am rollover). */
+/** True on going-out nights: Thursday, Friday, Saturday (6am rollover). */
 export function isWeekendNight(now: Date): boolean {
   const day = effectiveNight(now).getDay();
   return day === THURSDAY || day === FRIDAY || day === SATURDAY;

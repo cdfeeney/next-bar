@@ -8,9 +8,12 @@
  * Supabase pass syncs real ones.
  *
  * An intent is only meaningful for ONE night out, so reads expire stale
- * entries. A "night" runs until NIGHT_ROLLOVER_HOUR (5am local): Friday
- * 10pm and Saturday 1am are the same night, Saturday evening is not.
+ * entries. A "night" runs until the canonical NIGHT_ROLLOVER_HOUR (6am,
+ * local clock — see src/lib/socialNight.ts): Friday 10pm and Saturday
+ * 1am are the same night, Saturday evening is not.
  */
+
+import { NIGHT_ROLLOVER_HOUR } from '@/lib/socialNight';
 
 export type IntentStatus = 'going' | 'maybe' | 'here' | 'not-going';
 
@@ -20,9 +23,6 @@ export type TonightIntent = {
 };
 
 const KEY = 'next-bar:intent:v1';
-
-/** Small-hours cutoff: before this local hour you're still on last night. */
-const NIGHT_ROLLOVER_HOUR = 5;
 
 const VALID_STATUSES: ReadonlySet<IntentStatus> = new Set<IntentStatus>([
   'going',
@@ -101,8 +101,8 @@ export function loadIntent(now: Date = new Date()): TonightIntent | null {
 
 // The calendar day before a YYYY-MM-DD night date. Pure Date.UTC calendar
 // math — a raw 24h-in-ms subtraction lands one local hour early on the
-// spring-forward Sunday and can cross the 5am rollover (review finding),
-// misreading "last night" for the 5:00–5:59am window that morning.
+// spring-forward Sunday and can cross the rollover (review finding),
+// misreading "last night" for the final pre-rollover hour that morning.
 function previousNightDate(night: string): string {
   const [y, m, d] = night.split('-').map(Number);
   const prev = new Date(Date.UTC(y, m - 1, d - 1));
