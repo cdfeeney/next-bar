@@ -6,6 +6,7 @@ import type { VibeProfile } from '@/types';
 import { quiz } from '@/lib/quiz';
 import { displayHood } from '@/lib/hoodDisplay';
 import type { Neighborhood } from '@/types';
+import { resolveConsumerRequestUrl } from '@/lib/consumerOrigin';
 
 type WaitlistFormProps = { profile: VibeProfile | null };
 type Status = 'idle' | 'loading' | 'success' | 'error';
@@ -28,7 +29,7 @@ export default function WaitlistForm({ profile }: WaitlistFormProps) {
     event.preventDefault();
     setStatus('loading');
     try {
-      const res = await fetch('/api/waitlist', {
+      const res = await fetch(resolveConsumerRequestUrl('/api/waitlist'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, neighborhood, vibe_profile: profile }),

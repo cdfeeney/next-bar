@@ -5,10 +5,10 @@ describe('resolveSiteUrl', () => {
   it('prefers NEXT_PUBLIC_SITE_URL and normalizes to the origin', () => {
     expect(
       resolveSiteUrl({
-        NEXT_PUBLIC_SITE_URL: 'https://next-bar.com/',
+        NEXT_PUBLIC_SITE_URL: 'https://app.next-bar.com/',
         VERCEL_URL: 'preview.vercel.app',
       }),
-    ).toBe('https://next-bar.com');
+    ).toBe('https://app.next-bar.com');
   });
 
   it('a BLANK explicit value falls through to the Vercel identity', () => {

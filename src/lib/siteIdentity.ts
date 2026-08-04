@@ -4,9 +4,10 @@
  * One resolution rule, used by layout metadataBase, sitemap, and robots so
  * the canonical domain is a single env-var decision, never a scatter of
  * literals:
- *   1. NEXT_PUBLIC_SITE_URL — the explicit canonical (set this to
- *      https://next-bar.com when the domain goes live; next-bar.app is
- *      STALE and must never be used);
+ *   1. NEXT_PUBLIC_SITE_URL — the explicit canonical for THIS consumer app
+ *      (set this to https://app.next-bar.com for consumer Production;
+ *      next-bar.com is the separate public brand site and next-bar.app is
+ *      STALE);
  *   2. VERCEL_PROJECT_PRODUCTION_URL / VERCEL_URL — honest deployment
  *      identity until then;
  *   3. localhost dev fallback.

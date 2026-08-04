@@ -14,10 +14,10 @@ describe('robots.ts fail-closed composition', () => {
 
   it('production + public https origin → allows and advertises the sitemap', () => {
     vi.stubEnv('VERCEL_TARGET_ENV', 'production');
-    vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://next-bar.com');
+    vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://app.next-bar.com');
     const result = robots();
     expect(result.rules).toMatchObject({ userAgent: '*', allow: '/' });
-    expect(result.sitemap).toBe('https://next-bar.com/sitemap.xml');
+    expect(result.sitemap).toBe('https://app.next-bar.com/sitemap.xml');
   });
 
   it('production with a LOCALHOST origin still disallows everything', () => {

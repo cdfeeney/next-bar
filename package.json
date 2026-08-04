@@ -16,12 +16,16 @@
     "test:e2e:teardown-guard": "node scripts/g4-hang-loop.mjs --runs 3",
     "secret-scan": "node scripts/secret-scan.mjs",
     "preflight:testflight": "node scripts/preflight-testflight.mjs",
+    "preflight:testflight:internal": "node scripts/preflight-testflight.mjs --internal",
+    "native:sync:ios": "npx cap sync ios && node scripts/normalize-capacitor-spm.mjs",
     "check-env": "node scripts/check-env.mjs",
     "tier-validate": "git ls-files | node ~/.claude/bin/tier-classify.mjs --validate"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.0",
+    "@capacitor/geolocation": "^8.2.0",
     "@capacitor/ios": "^8.5.0",
+    "@capacitor/share": "^8.0.1",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.4",
     "leaflet": "1.9.4",

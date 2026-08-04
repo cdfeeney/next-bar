@@ -8,8 +8,10 @@ import { fetchOwnProfile } from '@/lib/profile.server';
 import { shareNight } from '@/lib/nights.server';
 import { getCacheEpoch } from '@/lib/accountCache';
 import { recordSharedNight } from '@/lib/sharedNightsLocal';
-import { buildNightPath, isShareAbort, shareNightText } from '@/lib/share';
+import { buildNightPath, shareNightText } from '@/lib/share';
 import { trackEvent } from '@/lib/analytics';
+import { attemptSystemShare } from '@/lib/nativeShare';
+import { resolveConsumerShareUrl } from '@/lib/consumerOrigin';
 
 const COPIED_MS = 2000;
 
@@ -91,27 +93,21 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
       if (getCacheEpoch() === epochBefore) {
         recordSharedNight(recap.nightKey, token);
       }
-      const url = `${window.location.origin}${buildNightPath(handle, token)}`;
+      const url = resolveConsumerShareUrl(buildNightPath(handle, token));
       const text = shareNightText(handle, displayName, recap.bars.length);
 
-      if (typeof navigator.share === 'function') {
-        try {
-          await navigator.share({ title: text, text, url });
-          // Dark analytics (g-ee6c250d): completed share only — the abort
-          // branch below never reaches this.
-          trackEvent('share');
-          setState('idle');
-          return;
-        } catch (err) {
-          if (isShareAbort(err)) {
-            // Dismissed the sheet — the night stays shared server-side
-            // (re-tapping re-opens the sheet with the SAME link).
-            setState('idle');
-            return;
-          }
-          // Genuine failure — fall through to clipboard.
-        }
+      const shareOutcome = await attemptSystemShare({ title: text, text, url });
+      if (shareOutcome === 'shared') {
+        trackEvent('share');
+        setState('idle');
+        return;
       }
+      if (shareOutcome === 'dismissed') {
+        // The night stays shared server-side; re-tapping opens the SAME link.
+        setState('idle');
+        return;
+      }
+      // Unsupported or genuine failure — fall through to clipboard.
       try {
         await navigator.clipboard.writeText(`${text} ${url}`);
         trackEvent('share');

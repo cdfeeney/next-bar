@@ -9,6 +9,12 @@ import type {
 } from '@/types';
 import { COARSE_ACCURACY_M } from '@/lib/constants';
 import { snapToNeighborhoodCentroid } from '@/lib/geo';
+import {
+  isNativeLocationRuntime,
+  NativeLocationPermissionDeniedError,
+  readNativeLocationPermission,
+  requestNativeLocation,
+} from '@/lib/nativeLocation';
 
 /**
  * Browser permission posture, independent of any single fix attempt.
@@ -35,7 +41,14 @@ const GEO_OPTIONS: PositionOptions = {
   maximumAge: 60_000,
 };
 
-function classifySuccess(position: GeolocationPosition): GeoState {
+type LocationPosition = {
+  coords: Pick<
+    GeolocationCoordinates,
+    'latitude' | 'longitude' | 'accuracy'
+  >;
+};
+
+function classifySuccess(position: LocationPosition): GeoState {
   const accuracyMeters = position.coords.accuracy;
   const raw: Coords = {
     lat: position.coords.latitude,
@@ -112,6 +125,7 @@ function deriveView(state: GeoState): {
 }
 
 function hasGeolocation(): boolean {
+  if (isNativeLocationRuntime()) return true;
   return (
     typeof navigator !== 'undefined' &&
     typeof navigator.geolocation !== 'undefined' &&
@@ -130,6 +144,15 @@ export function useGeolocation(): UseGeolocationReturn {
   // (live via onchange), and learned from request outcomes everywhere
   // (a code-1 failure means denied even without the API).
   useEffect(() => {
+    if (isNativeLocationRuntime()) {
+      let cancelled = false;
+      void readNativeLocationPermission().then((permission) => {
+        if (!cancelled) setPermissionState(permission);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     if (typeof navigator === 'undefined') return;
     if (typeof navigator.permissions?.query !== 'function') return;
     let cancelled = false;
@@ -169,6 +192,41 @@ export function useGeolocation(): UseGeolocationReturn {
   // tap-to-request behavior. 'prompt'/'denied' states never auto-request —
   // surprising permission dialogs on load are hostile.
   useEffect(() => {
+    if (isNativeLocationRuntime()) {
+      let cancelled = false;
+      void readNativeLocationPermission().then(async (permission) => {
+        if (
+          cancelled ||
+          permission !== 'granted' ||
+          stateRef.current.status !== 'idle'
+        ) {
+          return;
+        }
+        setState({ status: 'requesting' });
+        try {
+          const position = await requestNativeLocation(GEO_OPTIONS, false);
+          if (cancelled) return;
+          setState(classifySuccess(position));
+          setPermissionState('granted');
+        } catch (error) {
+          if (cancelled) return;
+          if (error instanceof NativeLocationPermissionDeniedError) {
+            setState({ status: 'denied' });
+            setPermissionState('denied');
+          } else {
+            // A silent resume must not paint an error the user did not ask
+            // for. The explicit request remains available.
+            setState({ status: 'idle' });
+          }
+        }
+      });
+      return () => {
+        cancelled = true;
+        setState((current) =>
+          current.status === 'requesting' ? { status: 'idle' } : current,
+        );
+      };
+    }
     if (!hasGeolocation()) return;
     if (typeof navigator.permissions?.query !== 'function') return;
     let cancelled = false;
@@ -225,6 +283,23 @@ export function useGeolocation(): UseGeolocationReturn {
     }
 
     setState({ status: 'requesting' });
+
+    if (isNativeLocationRuntime()) {
+      void requestNativeLocation(GEO_OPTIONS, true)
+        .then((position) => {
+          setState(classifySuccess(position));
+          setPermissionState('granted');
+        })
+        .catch((error: unknown) => {
+          if (error instanceof NativeLocationPermissionDeniedError) {
+            setState({ status: 'denied' });
+            setPermissionState('denied');
+          } else {
+            setState({ status: 'unavailable' });
+          }
+        });
+      return;
+    }
 
     navigator.geolocation.getCurrentPosition(
       (position) => {

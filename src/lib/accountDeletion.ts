@@ -9,7 +9,7 @@ export async function requestAccountDeletion(
   accessToken: string,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/account/delete', {
+    const res = await fetch(resolveConsumerRequestUrl('/api/account/delete'), {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -20,3 +20,4 @@ export async function requestAccountDeletion(
     return false;
   }
 }
+import { resolveConsumerRequestUrl } from './consumerOrigin';

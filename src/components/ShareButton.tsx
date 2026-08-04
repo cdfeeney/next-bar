@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { isShareAbort } from '@/lib/share';
 import { trackEvent } from '@/lib/analytics';
+import { attemptSystemShare } from '@/lib/nativeShare';
+import { resolveConsumerShareUrl } from '@/lib/consumerOrigin';
 
 /**
  * The one share control.
@@ -83,24 +84,22 @@ export default function ShareButton({
   };
 
   const attemptShare = async (): Promise<void> => {
-    const url = path === undefined ? null : `${window.location.origin}${path}`;
+    const url = path === undefined ? null : resolveConsumerShareUrl(path);
 
-    if (typeof navigator.share === 'function') {
-      try {
-        await navigator.share(
-          url === null ? { title: text, text } : { title: text, text, url },
-        );
-        // Dark analytics (g-ee6c250d): a COMPLETED share only — the abort
-        // branch below never reaches this. Name-only envelope.
-        trackEvent('share');
-        onShared?.('native');
-        return;
-      } catch (err) {
-        // Dismissed the sheet — dismiss ≠ consent. Do nothing at all.
-        if (isShareAbort(err)) return;
-        // Genuine share failure — fall through to clipboard.
-      }
+    const shareOutcome = await attemptSystemShare(
+      url === null ? { title: text, text } : { title: text, text, url },
+    );
+    if (shareOutcome === 'shared') {
+      // Dark analytics (g-ee6c250d): a COMPLETED share only. The native
+      // adapter deliberately under-counts ambiguous iOS results rather than
+      // treating a dismissal as success.
+      trackEvent('share');
+      onShared?.('native');
+      return;
     }
+    // Dismissed the sheet — dismiss ≠ consent. Do nothing at all.
+    if (shareOutcome === 'dismissed') return;
+    // Unsupported or genuinely failed share — fall through to clipboard.
 
     try {
       await navigator.clipboard.writeText(url === null ? text : `${text} ${url}`);

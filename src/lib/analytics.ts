@@ -16,6 +16,7 @@ import {
   isAnalyticsEnabled,
   type AnalyticsEvent,
 } from './analyticsAdapters';
+import { resolveConsumerRequestUrl } from './consumerOrigin';
 
 // Allowlist + type + master-flag check moved to analyticsAdapters.ts
 // (one-way dependency; the dispatcher needs the flag for its own defensive
@@ -40,13 +41,14 @@ export function trackEvent(name: AnalyticsEvent): void {
   dispatchToAdapters(envelope);
   try {
     const body = JSON.stringify({ name });
+    const endpoint = resolveConsumerRequestUrl('/api/event');
     // sendBeacon survives page navigations (share taps often navigate);
     // fetch keepalive is the fallback.
     if (navigator.sendBeacon) {
-      navigator.sendBeacon('/api/event', body);
+      navigator.sendBeacon(endpoint, body);
       return;
     }
-    void fetch('/api/event', {
+    void fetch(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body,
