@@ -33,14 +33,15 @@ platform :ios do
         "-authenticationKeyIssuerID #{ENV.fetch('ASC_ISSUER_ID')}",
         "-authenticationKeyPath #{ENV.fetch('ASC_KEY_PATH')}",
         "DEVELOPMENT_TEAM=#{ENV.fetch('APPLE_TEAM_ID')}",
-        "CURRENT_PROJECT_VERSION=#{ENV.fetch('BUILD_NUMBER')}",
-        # Archive with the DISTRIBUTION identity, not the default
-        # development one: development profiles require a registered
-        # device (a fresh team has none — first live run failed on
-        # exactly that), while App Store distribution profiles need no
-        # devices and cloud signing mints them from the API key.
-        "CODE_SIGN_IDENTITY='Apple Distribution'"
+        "CURRENT_PROJECT_VERSION=#{ENV.fetch('BUILD_NUMBER')}"
       ].join(" "),
+      # Signing lessons from the first live runs (2026-08-03), so nobody
+      # relearns them: (1) automatic signing archives with a DEVELOPMENT
+      # profile, and development profiles require >=1 registered device on
+      # the team — register a device before dispatching. (2) Overriding
+      # CODE_SIGN_IDENTITY='Apple Distribution' via xcargs conflicts with
+      # automatic signing ("conflicting provisioning settings") — don't.
+      # The app-store re-sign happens at export, driven by export_options.
       export_options: {
         signingStyle: "automatic",
         teamID: ENV.fetch("APPLE_TEAM_ID")
