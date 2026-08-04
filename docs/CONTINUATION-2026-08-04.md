@@ -151,6 +151,47 @@ confirmed both times) on broad review packets; narrow-scope packets
 succeeded immediately (proofs f7e363fa, 0c7c3c1e, 4997d0d1). 124 was
 packet weight, never an outage.
 
+## 7b. ATTENDED SESSION 2026-08-04 EVENING — TestFlight upload SUCCEEDED
+
+Grounding at session start matched §1 exactly (branch/HEAD/21-outgoing/
+four dirty docs/no lease/lock armed); zero discrepancies.
+
+- **UDID registered** by the operator (Apple Devices app path; first
+  cable was charge-only — Windows enumerated no Apple device until the
+  cable swap). UDID never printed or stored.
+- **Run 4** (main @ `4b06ed6`, operator-dispatched via GitHub UI,
+  server_url=https://next-bar-two.vercel.app): signing FIXED end to end
+  (archive w/ dev profile, automatic-signing export, NextBar.ipa) —
+  device registration was indeed the missing prerequisite. Upload failed
+  on a NEW Apple gate: altool 409 — uploads must be built with the
+  **iOS 26 SDK**; macos-15 caps at Xcode 16.4/iOS 18.5 SDK.
+- **Fix: PR #95** (`fix/ios-testflight-macos26`, commit `15a4876`,
+  squash-merged to main as **`6ec5e5d`**): one line,
+  `runs-on: macos-15` → `macos-26` (+comment). T1 per tier-map
+  (.github/**). Reviews: fresh Fable APPROVE (advisory M: consider
+  DEVELOPER_DIR pin later; advisory L: SPM-under-Xcode-26 provable only
+  live) + Codex APPROVE (no findings; recommends NO pin — image label
+  already constrains the Xcode major; patch pins break on rotation —
+  adopted). Direct push to main was rejected by branch protection
+  (PR + 2 checks required) → PR route, auto-merge after gates 1m49s +
+  Vercel green.
+- **Run 5 = 30958647881** (main @ `6ec5e5d`, assistant-dispatched with
+  the operator's explicit approval, same server_url): **ALL GREEN
+  including upload_to_testflight.** Build 5 uploaded to ASC
+  (App 6797689354). Only annotation: benign Node-20 deprecation notice
+  for GitHub's own actions.
+- **Lock discipline:** remote-write lock disarmed in three explicit,
+  operator-authorized windows (push branch/PR #95; dispatch run 5;
+  launch read-only watch) and **re-armed immediately after each** —
+  armed at close. Overnight branch, nb-ios, nb-testflight-node22, and
+  the four protected docs untouched. Production/Staging untouched; no
+  migrations; census goal not yet started this session.
+- **Remaining Phase-1 steps (operator, in ASC):** wait out build
+  "Processing", create Internal Testing group, invite the 2 cofounders
+  via Users and Access, add build to the group. NO external group, NO
+  App Review submission. Expectation: shell loads next-bar-two.vercel.app
+  (no local Pin/matcher commits — those are the overnight branch).
+
 ## 8. Tomorrow's exact iOS/UDID/TestFlight steps (operator, unchanged)
 
 1. Finish registering the iPhone UDID (Apple Devices app → copy UDID →
