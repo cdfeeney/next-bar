@@ -23,7 +23,11 @@ concurrency:
 
 jobs:
   build-and-upload:
-    runs-on: macos-15
+    # Apple rejects ASC uploads built with SDKs older than iOS 26 (altool
+    # 409 on the first signed run, 2026-08-04). Runner images ship one
+    # Xcode major per macOS version, so macos-15 (Xcode 16.4) can never
+    # satisfy this; macos-26 defaults to Xcode 26.x / iOS 26 SDK.
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
