@@ -33,7 +33,13 @@ platform :ios do
         "-authenticationKeyIssuerID #{ENV.fetch('ASC_ISSUER_ID')}",
         "-authenticationKeyPath #{ENV.fetch('ASC_KEY_PATH')}",
         "DEVELOPMENT_TEAM=#{ENV.fetch('APPLE_TEAM_ID')}",
-        "CURRENT_PROJECT_VERSION=#{ENV.fetch('BUILD_NUMBER')}"
+        "CURRENT_PROJECT_VERSION=#{ENV.fetch('BUILD_NUMBER')}",
+        # Archive with the DISTRIBUTION identity, not the default
+        # development one: development profiles require a registered
+        # device (a fresh team has none — first live run failed on
+        # exactly that), while App Store distribution profiles need no
+        # devices and cloud signing mints them from the API key.
+        "CODE_SIGN_IDENTITY='Apple Distribution'"
       ].join(" "),
       export_options: {
         signingStyle: "automatic",
