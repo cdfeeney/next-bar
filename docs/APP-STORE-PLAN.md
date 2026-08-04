@@ -1,15 +1,18 @@
 # App Store Plan — next-bar iOS (drafted 2026-07-25)
 
-> **2026-08-03 status corrections:** the canonical domain is
-> **next-bar.com** (next-bar.app is STALE — never use it); Apple Developer
+> **2026-08-03 status corrections:** the public brand domain is
+> **next-bar.com**, the consumer app/API origin is **app.next-bar.com**, and
+> next-bar.app is STALE — never use it. Apple Developer
 > enrollment is **ACTIVE**; an iOS Capacitor wrapper was merged to main on
 > 2026-08-02 (`ebbcd55`, PR #90) using the remote-origin `server.url`
 > design; and the build-path recommendation below is **SUPERSEDED** by
 > `docs/TESTFLIGHT-ARCH-DECISION-g-39169b3b-2026-08-03.md`, which rejects
 > `server.url` as a release architecture (official Capacitor docs: "not
 > intended for use in production") and adopts the locally-packaged shell
-> with hosted APIs as the target. Run `npm run preflight:testflight` for
-> the deterministic local readiness check.
+> with hosted APIs as the target. Phase 1 now provides fail-closed build
+> profiles plus native geolocation/share; release remains red on local assets
+> and PKCE. Run `npm run preflight:testflight` for the deterministic release
+> check or `npm run preflight:testflight:internal` for the internal-only probe.
 
 Operator is enrolled in the Apple Developer Program. This is the
 sequenced path from the live PWA to an App Store listing, grounded in
@@ -29,11 +32,10 @@ builds.** Operator is on Windows with no Mac.
 Cloud Mac build: Codemagic (Capacitor-native support) or GitHub Actions
 macOS runners. No local Mac needed until debugging demands one.
 
-Capacitor + Next.js note: the app is server-rendered on Vercel, so the
-wrap ships a native shell around the remote origin (Capacitor "server"
-config) rather than a static export — keeps one deploy pipeline, but
-means the 4.2 mitigation (native plugins actually used) carries the
-approval argument.
+Capacitor + Next.js note: the current app depends on Vercel server surfaces, so
+the old wrapper used a remote-origin `server.url`. That shape is retained only
+as an internal signing-pipeline probe. Release requires locally packaged UI,
+absolute hosted consumer API/auth calls, and PKCE/deep-link auth.
 
 ## Hard Apple requirements — status
 
@@ -49,8 +51,9 @@ approval argument.
 
 ## Assets checklist
 
-- App icon 1024×1024 (brand glyph exists — serif "N" on #0a0a0a; needs
-  non-italic vector render, no alpha)
+- App icon 1024×1024: PRESENT at the Xcode AppIcon path after wrapper
+  reconciliation; decoded RGB/no-alpha and visually matches the serif "N" on
+  #0a0a0a. Final operator visual approval remains.
 - Screenshots: 6.7" (1290×2796) + 5.5" (1242×2208) sets — home flow,
   quiz, map, rankings (with the new numbers), Where-should-we-go vote
 - Name ("Next Bar"), subtitle (≤30 chars), description, keywords,
@@ -61,10 +64,11 @@ approval argument.
 
 1. Operator: Apple Developer enrollment ($99/yr, individual — no D-U-N-S).
 2. Operator: service-role key re-copy → deletion go-live (repo-side ready).
-3. Domain live (next-bar.com → Vercel + Brevo DKIM/SPF + Supabase
-   allowlist) → finalize /privacy + /terms on it.
-4. Capacitor scaffold in-repo (`ios/` project, remote-origin config,
-   push/haptics/share plugins) + Codemagic pipeline → TestFlight build.
+3. Public domain live (`next-bar.com`) for marketing/legal/support; consumer
+   Production at `app.next-bar.com`; exact Supabase allowlists per environment.
+4. Finish Capacitor release migration: locally packaged UI, hosted consumer
+   API origin, PKCE/deep-link auth, and the integrated geolocation/share
+   plugins. Use the internal remote profile only for a gated pipeline probe.
 5. Operator phone-tests via TestFlight (replaces the PWA install for dogfooding).
 6. App Privacy questionnaire + assets + listing copy.
 7. Submit; expect one 4.2 conversation with review — the native-plugin
@@ -73,8 +77,8 @@ approval argument.
 
 ## Open questions
 
-- Q1: Bundle the web app statically in the shell later (offline + faster
-  cold start) vs stay remote-origin? Start remote, revisit.
+- Q1 RESOLVED: locally packaged UI is mandatory for release. Remote origin is
+  internal-only and cannot graduate to external TestFlight/App Store.
 - Q2: Push notifications launch scope — suggestions/RSVP pings for your
   circle is the obvious first (0009 tables + SW handlers exist).
 - Q3: Does the demo/sample-night experience need gating for review

@@ -4,8 +4,10 @@
  * (g-39169b3b). One command, no network, no paid APIs, no mutation: every
  * check reads the working tree or runs local toolchain commands only.
  *
- * Usage:  node scripts/preflight-testflight.mjs [--quick]
+ * Usage:  node scripts/preflight-testflight.mjs [--quick] [--internal]
  *   --quick  skip the two slow toolchain gates (typecheck, production build)
+ *   --internal  validate the temporary internal remote-shell profile while
+ *               keeping release-only local-assets gaps visible as warnings
  *
  * Exit 0: all hard checks pass (known gaps are listed as WARN).
  * Exit 1: at least one hard FAIL.
@@ -26,6 +28,7 @@ import path from 'node:path';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
 const QUICK = process.argv.includes('--quick');
+const INTERNAL = process.argv.includes('--internal');
 
 const results = [];
 function record(status, name, detail = '') {
@@ -99,7 +102,13 @@ run(
 
 // ------------------------------------------------------- 4. 1024 App Store icon
 {
-  const candidates = ['assets/appstore-icon-1024.png', 'public/appstore-icon-1024.png', 'assets/icon-1024.png'];
+  const candidates = [
+    'ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png',
+    'assets/icon-only.png',
+    'assets/appstore-icon-1024.png',
+    'public/appstore-icon-1024.png',
+    'assets/icon-1024.png',
+  ];
   const found = candidates.find((rel) => existsSync(path.join(ROOT, rel)));
   if (!found) {
     record('WARN', '1024×1024 App Store icon', 'not present (known gap — ADR §9.8; required before submission, not before internal preflight)');
@@ -243,21 +252,205 @@ run('committed-secret scan (scripts/secret-scan.mjs)', 'node', ['scripts/secret-
   if (configs.length === 0) {
     record('PASS', 'native config: none in this worktree', 'origin/main ebbcd55 wrapper (server.url design) is adjudicated in the ADR — not a release config');
   } else {
-    for (const rel of configs) {
-      const content = read(rel);
-      const serverUrl = /server\s*:\s*{[^}]*url\s*:/s.test(content);
-      const appIdMatch = content.match(/appId\s*:\s*['"]([^'"]+)['"]/);
-      if (serverUrl) {
-        record('FAIL', `native config ${rel}`, 'sets server.url — a live-reload/dev feature, "not intended for use in production" (Capacitor docs); forbidden as a release design');
+    const releaseEnv = { ...process.env, CAPACITOR_BUILD_PROFILE: 'release' };
+    delete releaseEnv.CAPACITOR_REMOTE_ORIGIN;
+    let release = null;
+    try {
+      const output = execFileSync(
+        'npx',
+        ['tsx', 'scripts/inspect-capacitor-config.mts'],
+        {
+          cwd: ROOT,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 120_000,
+          shell: process.platform === 'win32',
+          env: releaseEnv,
+        },
+      );
+      release = JSON.parse(output);
+    } catch (error) {
+      record('FAIL', 'release Capacitor config resolves', String(error.stderr ?? error.message).slice(0, 240));
+    }
+
+    if (release) {
+      if (release.serverUrl === null) {
+        record('PASS', 'release native config: no server.url');
       } else {
-        record('PASS', `native config ${rel}: no server.url (locally packaged assets)`);
+        record('FAIL', 'release native config', 'effective release profile contains server.url');
       }
-      if (!appIdMatch || /example|placeholder|com\.company/.test(appIdMatch[1])) {
-        record('FAIL', `native config ${rel} appId`, 'missing or placeholder');
+
+      if (release.webDir !== 'native/app') {
+        record('FAIL', 'release native webDir', `expected native/app, found ${String(release.webDir)}`);
       } else {
-        record('PASS', `native config appId present (${appIdMatch[1]}) — operator must have explicitly approved it`);
+        const releaseIndex = path.join(ROOT, release.webDir, 'index.html');
+        if (existsSync(releaseIndex)) {
+          record('PASS', 'locally packaged native product UI present');
+        } else {
+          record(
+            INTERNAL ? 'WARN' : 'FAIL',
+            'locally packaged native product UI',
+            'native/app/index.html is absent — PKCE/API-origin migration must land before external TestFlight',
+          );
+        }
+      }
+
+      if (!release.appId || /example|placeholder|com\.company/.test(release.appId)) {
+        record('FAIL', 'native config appId', 'missing or placeholder');
+      } else {
+        record('WARN', `native config appId present (${release.appId})`, 'operator confirmation still required before Apple registration');
       }
     }
+
+    const releaseCapablePaths = [
+      'capacitor.config.ts',
+      '.github/workflows/ios-testflight.yml',
+      'fastlane/Fastfile',
+      'scripts/inspect-capacitor-config.mts',
+    ].filter((rel) => existsSync(path.join(ROOT, rel)));
+    const staleHostHits = releaseCapablePaths.filter((rel) =>
+      /next-bar-two\.vercel\.app/i.test(read(rel)),
+    );
+    if (staleHostHits.length === 0) {
+      record('PASS', 'obsolete Vercel hostname absent from release-capable native files');
+    } else {
+      record('FAIL', 'obsolete Vercel hostname remains', staleHostHits.join(', '));
+    }
+
+    if (INTERNAL) {
+      const internalOrigin =
+        process.env.CAPACITOR_REMOTE_ORIGIN?.trim() || 'https://staging.next-bar.com';
+      const internalEnv = {
+        ...process.env,
+        CAPACITOR_BUILD_PROFILE: 'internal-remote',
+        CAPACITOR_INTERNAL_ONLY_CONFIRM: 'INTERNAL ONLY',
+        CAPACITOR_REMOTE_ORIGIN: internalOrigin,
+      };
+      try {
+        const output = execFileSync(
+          'npx',
+          ['tsx', 'scripts/inspect-capacitor-config.mts'],
+          {
+            cwd: ROOT,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: 120_000,
+            shell: process.platform === 'win32',
+            env: internalEnv,
+          },
+        );
+        const internal = JSON.parse(output);
+        const expected = new URL(internalOrigin);
+        if (
+          internal.serverUrl === expected.origin &&
+          internal.webDir === 'native/shell' &&
+          internal.allowNavigation.includes(expected.hostname)
+        ) {
+          record('PASS', 'internal-only remote profile resolves to the explicit consumer Staging origin');
+        } else {
+          record('FAIL', 'internal-only remote profile', 'effective config does not match the explicit origin/webDir/navigation boundary');
+        }
+        if (existsSync(path.join(ROOT, 'native/shell/index.html'))) {
+          record('PASS', 'internal remote profile offline fallback present');
+        } else {
+          record('FAIL', 'internal remote profile offline fallback', 'native/shell/index.html is absent');
+        }
+      } catch (error) {
+        record('FAIL', 'internal-only Capacitor config resolves', String(error.stderr ?? error.message).slice(0, 240));
+      }
+    }
+  }
+}
+
+// -------------------------------- 11. native plugins + auth graduation gates
+{
+  run(
+    'native architecture unit tests',
+    'npx',
+    [
+      'vitest',
+      'run',
+      'scripts/native-build-profile.test.ts',
+      'scripts/normalize-capacitor-spm.test.ts',
+      'src/lib/consumerOrigin.test.ts',
+      'src/lib/nativeLocation.test.ts',
+      'src/lib/nativeShare.test.ts',
+    ],
+    180_000,
+  );
+
+  const packageSwift = 'ios/App/CapApp-SPM/Package.swift';
+  if (existsSync(path.join(ROOT, packageSwift))) {
+    const source = read(packageSwift);
+    const pluginsPresent =
+      /CapacitorGeolocation/.test(source) && /CapacitorShare/.test(source);
+    if (pluginsPresent) record('PASS', 'native geolocation/share plugins registered in SwiftPM');
+    else record('FAIL', 'native plugin registration', 'Geolocation and Share must both be present in Package.swift');
+
+    if (/path:\s*"[^"]*\\/.test(source)) {
+      record('FAIL', 'SwiftPM plugin paths', 'Windows backslashes make Package.swift invalid on the cloud Mac');
+    } else {
+      record('PASS', 'SwiftPM plugin paths are cloud-Mac portable');
+    }
+  } else {
+    record('FAIL', 'SwiftPM package manifest', `${packageSwift} is absent`);
+  }
+
+  const plist = 'ios/App/App/Info.plist';
+  if (
+    existsSync(path.join(ROOT, plist)) &&
+    /NSLocationWhenInUseUsageDescription/.test(read(plist))
+  ) {
+    record('PASS', 'iOS location usage description present');
+  } else {
+    record('FAIL', 'iOS location usage description', 'Info.plist key is absent');
+  }
+
+  const authPage = read('src/app/auth/page.tsx');
+  const stillUsesWebCallback =
+    /window\.location\.origin/.test(authPage) && /\/auth\/callback/.test(authPage);
+  if (stillUsesWebCallback) {
+    record(
+      INTERNAL ? 'WARN' : 'FAIL',
+      'native PKCE/deep-link auth',
+      'web callback remains — valid for the internal remote shell, prohibited for locally packaged release UI',
+    );
+  } else {
+    record('PASS', 'native PKCE/deep-link auth boundary present');
+  }
+}
+
+// ----------------------------------------- 12. cloud-Mac upload safety rails
+{
+  const workflowPath = '.github/workflows/ios-testflight.yml';
+  const fastfilePath = 'fastlane/Fastfile';
+  if (
+    existsSync(path.join(ROOT, workflowPath)) &&
+    existsSync(path.join(ROOT, fastfilePath))
+  ) {
+    const workflow = read(workflowPath);
+    const fastfile = read(fastfilePath);
+    const workflowRails = [
+      /internal_only_confirmation/,
+      /expected_sha/,
+      /GITHUB_SHA.*EXPECTED_REVIEWED_SHA/,
+      /node-version:\s*22/,
+      /preflight:testflight:internal/,
+      /CAPACITOR_BUILD_PROFILE:\s*internal-remote/,
+    ];
+    if (workflowRails.every((pattern) => pattern.test(workflow))) {
+      record('PASS', 'cloud-Mac workflow internal-only/SHA/runtime gates present');
+    } else {
+      record('FAIL', 'cloud-Mac workflow safety rails', 'one or more internal-only, exact-SHA, Node 22, or preflight gates are absent');
+    }
+
+    if (/distribute_external:\s*false/.test(fastfile) && /GIT_SHA/.test(fastfile)) {
+      record('PASS', 'Fastlane upload is internal-only and source-SHA stamped');
+    } else {
+      record('FAIL', 'Fastlane upload safety rails', 'external distribution ban or source-SHA changelog is absent');
+    }
+  } else {
+    record('FAIL', 'cloud-Mac TestFlight workflow', 'workflow or Fastfile is absent');
   }
 }
 

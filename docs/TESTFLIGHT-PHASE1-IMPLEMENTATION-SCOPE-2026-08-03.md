@@ -42,7 +42,8 @@ binary, so protected Staging is not a safe Capacitor `server.url` target.
    Apple credentials, prioritizing native geolocation with a web fallback and
    native sharing where the existing product boundary supports it.
 7. Strengthen deterministic preflight checks for the architecture, origin map,
-   1024 icon/support-route gaps, environment isolation, and release provenance.
+   reconciled 1024 icon, support-route gap, environment isolation, and release
+   provenance.
 8. Run focused unit tests, typecheck, production build, TestFlight preflight,
    secret scan, and `git diff --check` in proportion to the final diff.
 

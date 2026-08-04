@@ -1,10 +1,23 @@
 name: iOS TestFlight
 
-# Manual trigger only. Run from the Actions tab (or `gh workflow run
-# ios-testflight.yml`) whenever the native shell changes. Ordinary web
-# deploys do NOT need this — the shell loads the live site.
+# Manual trigger only. This workflow is an INTERNAL remote-shell pipeline
+# probe while the locally packaged release architecture is unfinished. It
+# must never be used for external TestFlight or App Store distribution.
 on:
   workflow_dispatch:
+    inputs:
+      remote_origin:
+        description: "Reviewed consumer Staging HTTPS origin (no path/query/token)"
+        required: true
+        type: string
+      internal_only_confirmation:
+        description: "Type INTERNAL ONLY"
+        required: true
+        type: string
+      expected_sha:
+        description: "Exact 40-character reviewed commit SHA"
+        required: true
+        type: string
 
 concurrency:
   group: ios-testflight
@@ -14,19 +27,37 @@ jobs:
   build-and-upload:
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      CAPACITOR_BUILD_PROFILE: internal-remote
+      CAPACITOR_REMOTE_ORIGIN: ${{ inputs.remote_origin }}
+      CAPACITOR_INTERNAL_ONLY_CONFIRM: ${{ inputs.internal_only_confirmation }}
+      EXPECTED_REVIEWED_SHA: ${{ inputs.expected_sha }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify exact reviewed source SHA
+        shell: bash
+        run: |
+          if [[ ! "$EXPECTED_REVIEWED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "expected_sha must be a 40-character lowercase commit SHA" >&2
+            exit 1
+          fi
+          test "$GITHUB_SHA" = "$EXPECTED_REVIEWED_SHA"
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Capacitor CLI 8 requires Node >=22.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Validate internal-only architecture and repository gates
+        run: npm run preflight:testflight:internal
+
       - name: Sync Capacitor iOS shell
-        run: npx cap sync ios
+        run: npm run native:sync:ios
 
       - name: Write App Store Connect API key
         env:
@@ -42,6 +73,7 @@ jobs:
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           BUILD_NUMBER: ${{ github.run_number }}
+          GIT_SHA: ${{ github.sha }}
         run: |
           export ASC_KEY_PATH="$HOME/asc/AuthKey.p8"
           bundle exec fastlane ios beta 2>/dev/null || fastlane ios beta

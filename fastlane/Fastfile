@@ -10,7 +10,7 @@
 default_platform(:ios)
 
 platform :ios do
-  desc "Build the Capacitor shell and upload to TestFlight"
+  desc "Build the internal-only Capacitor pipeline probe and upload to TestFlight"
   lane :beta do
     api_key = app_store_connect_api_key(
       key_id: ENV.fetch("ASC_KEY_ID"),
@@ -43,6 +43,8 @@ platform :ios do
 
     upload_to_testflight(
       api_key: api_key,
+      distribute_external: false,
+      changelog: "Internal architecture probe #{ENV.fetch('GIT_SHA')}",
       skip_waiting_for_build_processing: true
     )
   end
