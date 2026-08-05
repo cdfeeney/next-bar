@@ -1,4 +1,9 @@
 import { notifyProfileChanged } from '@/lib/storedProfile';
+import {
+  ACCOUNT_CONTENT_META_KEY,
+  ACCOUNT_CONTENT_OWNER_KEY,
+  storageKeyForAccountContent,
+} from '@/lib/accountContent.local';
 
 /**
  * Per-account localStorage cache guard (santa-loop round-1 fix).
@@ -59,9 +64,16 @@ const SHARED_NIGHTS_KEY = 'next-bar:shared-nights:v1';
 // flag, bf5d7f4f panel): 60 nights of where-you-were is a browser-history-
 // grade leak on a shared device. Same trade the vibe profile already
 // accepted above — sign-out forgets the device's night history; leaking it
-// to the next account is worse. The single-night LIVE log keeps its
-// pre-existing device-local behavior (out of this slice's scope).
+// to the next account is worse. The single-night LIVE log joins the same wipe
+// below now that Beta 1 makes it account-backed too.
 const NIGHT_ARCHIVE_KEY = 'next-bar:night-archive:v1';
+
+// Beta 1 account persistence: custom lists (including Want-to-Go) and the live
+// night log are now account-owned write-through caches too. The meta clock and
+// owner marker are as sensitive as their payloads and must never survive an
+// account switch.
+const LISTS_KEY = storageKeyForAccountContent('lists');
+const NIGHT_LOG_KEY = storageKeyForAccountContent('night_log');
 
 const ALL_KEYS = [
   RATINGS_KEY,
@@ -75,6 +87,10 @@ const ALL_KEYS = [
   DEMO_SEED_IDS_KEY,
   SHARED_NIGHTS_KEY,
   NIGHT_ARCHIVE_KEY,
+  LISTS_KEY,
+  NIGHT_LOG_KEY,
+  ACCOUNT_CONTENT_META_KEY,
+  ACCOUNT_CONTENT_OWNER_KEY,
 ] as const;
 
 /**
@@ -93,10 +109,13 @@ export function getCacheEpoch(): number {
 export function clearAccountCache(): void {
   if (typeof window === 'undefined') return;
   cacheEpoch += 1;
-  try {
-    for (const key of ALL_KEYS) window.localStorage.removeItem(key);
-  } catch {
-    // Private mode / quota — non-fatal; the sign-in guard is the backstop.
+  for (const key of ALL_KEYS) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // One exotic storage failure must not prevent later sensitive keys from
+      // being attempted. The sign-in guard remains the next-session backstop.
+    }
   }
   // Same-document notification (G1). removeItem fires no `storage` event in the
   // document that wrote, so mounted consumers holding this account's data in
@@ -105,6 +124,19 @@ export function clearAccountCache(): void {
   // ten `storage` subscribers; dispatching the real event type reaches them all
   // and each simply re-reads its own key.
   notifyProfileChanged();
+  // A null-key storage event means "the storage area changed wholesale" and
+  // reaches key-filtered list/night consumers. AccountContentSync deliberately
+  // ignores key=null so this UI refresh can never be mistaken for four user
+  // deletions and pushed back to the server.
+  try {
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+  } catch {
+    try {
+      window.dispatchEvent(new Event('storage'));
+    } catch {
+      // Non-fatal: consumers refresh on their next mount.
+    }
+  }
 }
 
 /**
@@ -126,8 +158,11 @@ export function clearResidualAccountCache(): boolean {
       // profile marker was the one ownership signal the residual guard
       // could not see.
       window.localStorage.getItem(PROFILE_MERGED_KEY) !== null;
-    if (hadOwner) clearAccountCache();
-    return hadOwner;
+
+    const hasAccountContentOwner =
+      window.localStorage.getItem(ACCOUNT_CONTENT_OWNER_KEY) !== null;
+    if (hadOwner || hasAccountContentOwner) clearAccountCache();
+    return hadOwner || hasAccountContentOwner;
   } catch {
     return false;
   }
@@ -157,6 +192,7 @@ export function guardAgainstForeignCache(currentUserId: string): boolean {
       // key that happened to carry the marker would weaken a guard that
       // already prevented a real cross-account leak.
       window.localStorage.getItem(PROFILE_MERGED_KEY),
+      window.localStorage.getItem(ACCOUNT_CONTENT_OWNER_KEY),
     ];
     const isForeign = owners.some(
       (owner) => owner !== null && owner !== currentUserId,

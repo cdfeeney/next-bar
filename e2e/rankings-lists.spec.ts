@@ -143,11 +143,11 @@ test.describe('Rankings Lists switcher (g-ac3a291c)', () => {
     const clip = await page.evaluate(() => navigator.clipboard.readText());
     expect(clip).toContain('Want to go');
     expect(clip).toContain('Attaboy');
-    // THE crit-8 pin: no URL of any kind rides along with device-only data.
+    // THE crit-8 pin: no URL rides along with private, non-public-page data.
     expect(clip).not.toMatch(/https?:\/\//);
     // The surface says so too (crit 11).
     await expect(
-      page.getByText(/Lists stay on this device — sharing sends text, not a link/),
+      page.getByText(/Lists stay on this device until you sign in — sharing sends text, not a link/),
     ).toBeVisible();
   });
 

@@ -5,8 +5,8 @@
  * localStorage-backed, mirroring src/lib/ratings.ts exactly: validated
  * reads (corrupt data degrades to []), silent quota-safe writes, and a
  * synthesized `storage` event so every mounted useLists consumer refreshes.
- * Local-only for now — server sync joins the D1 Supabase pass alongside
- * ratings.
+ * The synchronous store remains the render/offline source; AccountContentSync
+ * writes it through to the signed-in account for reinstall/device recovery.
  */
 
 export type BarList = {
@@ -41,6 +41,11 @@ function isBarList(value: unknown): value is BarList {
 
 function isBarListArray(value: unknown): value is BarList[] {
   return Array.isArray(value) && value.every(isBarList);
+}
+
+/** Shared validator for localStorage and the account-sync boundary. */
+export function parseBarLists(value: unknown): BarList[] | null {
+  return isBarListArray(value) ? value : null;
 }
 
 function notifyChange(): void {
@@ -82,9 +87,7 @@ export function loadLists(): BarList[] {
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isBarListArray(parsed)) return [];
-    return parsed;
+    return parseBarLists(JSON.parse(raw) as unknown) ?? [];
   } catch {
     return [];
   }

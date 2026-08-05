@@ -370,13 +370,14 @@ export default function SettingsPage(): JSX.Element {
             ) : auth.status === 'unavailable' ? (
               <p className="text-muted text-xs leading-relaxed">
                 Sign-in is unavailable on this build — Supabase env vars are
-                missing. Ratings stay on this device only.
+                missing. Your ratings, lists, and night history stay on this
+                device only.
               </p>
             ) : (
               <div className="space-y-3">
                 <p className="text-sm text-muted leading-relaxed">
-                  Sign in to keep your ratings across devices and unlock Friends
-                  + Rankings.
+                  Sign in to keep your ratings, lists, and night history across
+                  devices and unlock Friends + Rankings.
                 </p>
                 <Link
                   href="/auth"
@@ -613,23 +614,14 @@ export default function SettingsPage(): JSX.Element {
             Data
           </h2>
           <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
-            {/* One honest sentence per auth state (crit 11). What actually
-                syncs for a signed-in account: ratings and the vibe profile
-                (server rows). What never leaves the device today: Want-to-go
-                saves and night history — the log AND the /nights archive
-                (g-919dae84; a night only reaches the server when you share
-                it). The old copy claimed NOTHING synced, contradicting
-                /rankings' "Synced to your account". */}
-            {/* Precision matters (santa: Opus+Codex convergent HIGH, g-919
-                round 1): sign-out wipes PAST nights + share records, but
-                tonight's in-progress log and Want-to-go saves are not in
-                the wipe set — the copy must not claim more than the wipe
-                does. Widening the wipe itself is an operator decision
-                (NIGHTS-OUT-NOTES). */}
+            {/* Account-owned Beta data is write-through cached: the phone keeps
+                rendering synchronously/offline, while ratings, vibe, lists and
+                night state restore after reinstall or a device change. Sign-out
+                wipes those caches so the next account cannot see them. */}
             <p className="text-xs text-muted leading-relaxed">
               {auth.status === 'signed-in'
-                ? 'Your ratings and vibe profile sync to your account. Want-to-go saves and your night history stay on this device — a night only leaves it when you share that night. Signing out clears your past nights and share records from this device; tonight’s in-progress log and Want-to-go saves remain.'
-                : 'Everything lives on this device. Sign in to sync your ratings and vibe profile across devices; Want-to-go saves and your night history stay on this device.'}
+                ? 'Your ratings, vibe profile, Want-to-go and custom lists, and night history sync to your account. Signing out removes that account’s copy from this device; signing back in restores it.'
+                : 'Everything stays on this device until you sign in. Sign in to keep your ratings, vibe profile, lists, and night history with your account across devices.'}
             </p>
             <button
               type="button"
@@ -650,8 +642,8 @@ export default function SettingsPage(): JSX.Element {
             <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
               <p className="text-xs text-muted leading-relaxed">
                 Deleting your account removes your login, profile, username,
-                ratings, rankings, and follows — permanently. There is no
-                undo.
+                ratings, rankings, lists, night history, and follows —
+                permanently. There is no undo.
               </p>
               {deleteState === 'idle' ? (
                 <button

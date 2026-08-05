@@ -4,9 +4,9 @@ import { loadRatings } from '@/lib/ratings';
 import type { BarRating } from '@/types/ratings';
 
 /**
- * nightLog — the LOCAL-FIRST Night object (E4.1, epic g-db540bdb Q1
- * decision: local-first now; server persistence arrives with the public
- * night page, E4.4).
+ * nightLog — the LOCAL-FIRST Night object (E4.1). The phone remains the
+ * synchronous/offline source; AccountContentSync durably mirrors the log for
+ * signed-in users without making the public shared-night surface enumerable.
  *
  * The log never asks the user anything: picking "the bar you're at" on
  * the home flow IS the visit signal, so a night assembles itself from
@@ -35,7 +35,7 @@ export type NightVisit = {
   at: string;
 };
 
-type StoredNightLog = {
+export type StoredNightLog = {
   night: string;
   visits: NightVisit[];
 };
@@ -54,15 +54,20 @@ function isNightVisit(value: unknown): value is NightVisit {
   return typeof obj.barId === 'string' && typeof obj.at === 'string';
 }
 
+/** Shared validator for localStorage and the account-sync boundary. */
+export function parseStoredNightLog(value: unknown): StoredNightLog | null {
+  if (value === null || typeof value !== 'object') return null;
+  const parsed = value as Record<string, unknown>;
+  if (typeof parsed.night !== 'string' || !Array.isArray(parsed.visits)) return null;
+  return { night: parsed.night, visits: parsed.visits.filter(isNightVisit) };
+}
+
 function readLog(): StoredNightLog | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredNightLog;
-    if (typeof parsed?.night !== 'string') return null;
-    if (!Array.isArray(parsed.visits)) return null;
-    return { night: parsed.night, visits: parsed.visits.filter(isNightVisit) };
+    return parseStoredNightLog(JSON.parse(raw) as unknown);
   } catch {
     return null; // corrupt storage reads as "no log" — never throws
   }

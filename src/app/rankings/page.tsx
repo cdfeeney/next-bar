@@ -330,12 +330,10 @@ export default function RankingsPage(): JSX.Element {
       )}
 
       <p className="text-muted text-xs text-center mt-8 pb-24">
-        {/* Want-to-go saves are localStorage-only on every auth path — the
-            signed-in "Synced" claim is true for RATINGS but was false on this
-            tab, contradicting /search's honest device-only disclosure
-            (santa: Codex, round 3). */}
         {viewId !== BEST_VIEW_ID
-          ? "Lists stay on this device — sharing sends text, not a link"
+          ? auth.status === 'signed-in'
+            ? 'Lists sync to your account — sharing sends text, not a link'
+            : 'Lists stay on this device until you sign in — sharing sends text, not a link'
           : auth.status === 'signed-in'
             ? 'Synced to your account'
             : 'Stored on this device · sign in to sync'}
@@ -345,10 +343,10 @@ export default function RankingsPage(): JSX.Element {
 }
 
 /**
- * Text-only native share for a device-local list (crit 7/8/9/11): the
+ * Text-only native share for a private account list (crit 7/8/9/11): the
  * payload is the numbered list itself — deliberately NO URL, because
- * these lists exist only on this device and a link would 404 for every
- * recipient. Public list pages are future server work; until then the
+ * there is no public list page and a link would 404 for every recipient.
+ * Public list pages are future server work; until then the
  * truthful share is text.
  */
 function ListShareRow({

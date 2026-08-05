@@ -10,9 +10,10 @@ import type { BarRating } from '@/types/ratings';
  * the displaced night lands instead: nightLog calls archiveNight() at the
  * rollover boundary (its one writer besides tests), and /nights reads it.
  *
- * Device-local by design — nights never leave the device unless their
- * owner explicitly shares one (share_night RPC). REGISTERED in the
- * accountCache wipe set (santa: DeepSeek + Claude convergent): sign-out /
+ * Private and owner-scoped by design — nights never become public unless
+ * their owner explicitly shares one (share_night RPC). Signed-in archives are
+ * durably mirrored through AccountContentSync and remain protected by RLS.
+ * REGISTERED in the accountCache wipe set: sign-out /
  * account-switch forgets the device's night history rather than showing
  * two months of one account's whereabouts to the next — the same trade
  * the vibe profile made. Anonymous data survives a FIRST sign-in (the
@@ -63,20 +64,24 @@ function isArchivedNight(value: unknown): value is ArchivedNight {
   return typeof obj.nightKey === 'string' && Array.isArray(obj.visits);
 }
 
+/** Shared validator for localStorage and the account-sync boundary. */
+export function parseArchivedNights(value: unknown): ArchivedNight[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter(isArchivedNight).map((n) => ({
+    nightKey: n.nightKey,
+    visits: n.visits.filter(isVisit),
+    ...(Array.isArray(n.ratings)
+      ? { ratings: n.ratings.filter(isRating) }
+      : {}),
+  }));
+}
+
 function read(): ArchivedNight[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = window.localStorage.getItem(NIGHT_ARCHIVE_STORAGE_KEY);
     if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isArchivedNight).map((n) => ({
-      nightKey: n.nightKey,
-      visits: n.visits.filter(isVisit),
-      ...(Array.isArray(n.ratings)
-        ? { ratings: n.ratings.filter(isRating) }
-        : {}),
-    }));
+    return parseArchivedNights(JSON.parse(raw) as unknown) ?? [];
   } catch {
     return []; // corrupt storage reads as empty — never throws
   }

@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   description: 'How Next Bar handles your data.',
 };
 
-const UPDATED = 'July 25, 2026';
+const UPDATED = 'August 5, 2026';
 
 export default function PrivacyPage(): JSX.Element {
   return (
@@ -32,9 +32,9 @@ export default function PrivacyPage(): JSX.Element {
           Next Bar helps you find NYC bars. Until you create an account,
           almost everything — your quiz answers, ratings, rankings, lists —
           lives in your browser on your device, not on our servers. If you
-          sign in, your ratings and social graph sync to our database so
-          they work across devices. We don&apos;t sell your data, and we
-          don&apos;t show ads.
+          sign in, your account content syncs privately to our database so it
+          works across devices. We don&apos;t sell your data, and we don&apos;t
+          show ads.
         </Block>
 
         <Block title="What we collect">
@@ -48,7 +48,8 @@ export default function PrivacyPage(): JSX.Element {
             </li>
             <li>
               <strong>If you create an account:</strong> your email address,
-              a username you choose, your bar ratings, rankings, and who you
+              a username you choose, your vibe profile, bar ratings, rankings,
+              saved lists, night history, share-management records, and who you
               follow — stored with our database provider (Supabase).
             </li>
             <li>
@@ -94,10 +95,12 @@ export default function PrivacyPage(): JSX.Element {
         </Block>
 
         <Block title="Deleting your data">
-          Signed-out data can be wiped any time from Settings → Clear all
-          ratings, or by clearing your browser storage. Signed in, go to
+          Signed-out ratings can be wiped from Settings → Clear all ratings;
+          clearing browser storage removes all signed-out device data. Signed
+          in, go to
           Settings → Delete account: it permanently removes your login,
-          profile, ratings, rankings, and follows — everything, immediately.
+          profile, ratings, rankings, lists, night history, and follows —
+          everything, immediately.
           Prefer to ask a human? Email us and we&apos;ll do it for you.
         </Block>
 

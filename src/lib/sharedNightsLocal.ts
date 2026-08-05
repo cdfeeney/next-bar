@@ -8,8 +8,9 @@ import { isShareToken } from '@/lib/nights.server';
  * anon read is get_shared_night(token), reviewed as an anti-enumeration
  * boundary). Rather than widen that surface with a new RPC/migration, the
  * client records the token share_night RETURNS at the moment of sharing —
- * which is enough for /nights to show "Shared", rebuild the link, and
- * offer unshare, all without touching the DB schema.
+ * enough for /nights to show "Shared", rebuild the link, and offer unshare.
+ * AccountContentSync privately mirrors that record so a signed-in user can
+ * still manage their links after reinstalling or changing devices.
  *
  * Account residue: tokens belong to the signed-in account's server rows,
  * so this key IS registered in accountCache's wipe set (same B3 blueprint
@@ -20,41 +21,42 @@ import { isShareToken } from '@/lib/nights.server';
 /** Exported for accountCache registration + storage-event filtering. */
 export const SHARED_NIGHTS_STORAGE_KEY = 'next-bar:shared-nights:v1';
 
-type SharedNightRecord = {
+export type SharedNightRecord = {
   token: string;
   sharedAt: string;
 };
 
-type Store = Record<string, SharedNightRecord>;
+export type SharedNightStore = Record<string, SharedNightRecord>;
 
-function read(): Store {
+/** Shared validator for localStorage and the account-sync boundary. */
+export function parseSharedNightStore(value: unknown): SharedNightStore | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const store: SharedNightStore = {};
+  for (const [nightKey, rec] of Object.entries(value as Record<string, unknown>)) {
+    if (rec === null || typeof rec !== 'object') continue;
+    const token = (rec as Record<string, unknown>).token;
+    const sharedAt = (rec as Record<string, unknown>).sharedAt;
+    if (typeof token !== 'string' || !isShareToken(token)) continue;
+    store[nightKey] = {
+      token,
+      sharedAt: typeof sharedAt === 'string' ? sharedAt : '',
+    };
+  }
+  return store;
+}
+
+function read(): SharedNightStore {
   if (typeof window === 'undefined') return {};
   try {
     const raw = window.localStorage.getItem(SHARED_NIGHTS_STORAGE_KEY);
     if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
-      return {};
-    const store: Store = {};
-    for (const [nightKey, rec] of Object.entries(
-      parsed as Record<string, unknown>,
-    )) {
-      if (rec === null || typeof rec !== 'object') continue;
-      const token = (rec as Record<string, unknown>).token;
-      const sharedAt = (rec as Record<string, unknown>).sharedAt;
-      if (typeof token !== 'string' || !isShareToken(token)) continue;
-      store[nightKey] = {
-        token,
-        sharedAt: typeof sharedAt === 'string' ? sharedAt : '',
-      };
-    }
-    return store;
+    return parseSharedNightStore(JSON.parse(raw) as unknown) ?? {};
   } catch {
     return {}; // corrupt storage reads as empty — never throws
   }
 }
 
-function write(store: Store): void {
+function write(store: SharedNightStore): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(

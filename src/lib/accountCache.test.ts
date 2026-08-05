@@ -13,6 +13,10 @@ const PAIRWISE_MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
 const FOLLOWS_KEY = 'next-bar:follows:v1';
 const PROFILE_KEY = 'next-bar:profile:v1';
 const PROFILE_MERGED_KEY = 'next-bar:profile:merged-for:v1';
+const LISTS_KEY = 'next-bar:lists:v1';
+const NIGHT_LOG_KEY = 'next-bar:night-log:v1';
+const CONTENT_META_KEY = 'next-bar:account-content:meta:v1';
+const CONTENT_OWNER_KEY = 'next-bar:account-content:owner:v1';
 
 function seedFullCache(owner: string): void {
   window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
@@ -86,6 +90,27 @@ describe('clearAccountCache', () => {
     expect(window.localStorage.getItem(PROFILE_MERGED_KEY)).toBeNull();
   });
 
+  it('removes lists, the live log, and their account-sync metadata', () => {
+    window.localStorage.setItem(LISTS_KEY, '[]');
+    window.localStorage.setItem(NIGHT_LOG_KEY, '{"night":"2026-08-01","visits":[]}');
+    window.localStorage.setItem(CONTENT_META_KEY, '{"lists":"2026-08-01T00:00:00Z"}');
+    window.localStorage.setItem(CONTENT_OWNER_KEY, 'user-a');
+    clearAccountCache();
+    expect(window.localStorage.getItem(LISTS_KEY)).toBeNull();
+    expect(window.localStorage.getItem(NIGHT_LOG_KEY)).toBeNull();
+    expect(window.localStorage.getItem(CONTENT_META_KEY)).toBeNull();
+    expect(window.localStorage.getItem(CONTENT_OWNER_KEY)).toBeNull();
+  });
+
+  it('emits a null-key refresh without turning the wipe into server tombstones', () => {
+    const keys: Array<string | null> = [];
+    const listener = (event: StorageEvent) => keys.push(event.key);
+    window.addEventListener('storage', listener);
+    clearAccountCache();
+    window.removeEventListener('storage', listener);
+    expect(keys).toContain(null);
+  });
+
   it('bumps the cache epoch so in-flight hydrates abandon their writes', () => {
     // The sign-out race: an async hydrate captures the epoch before its
     // fetch; a wipe during the fetch must invalidate the pending write.
@@ -156,6 +181,14 @@ describe('guardAgainstForeignCache', () => {
     expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
   });
 
+  it('wipes everything when the account-content owner names another user', () => {
+    window.localStorage.setItem(CONTENT_OWNER_KEY, 'user-a');
+    window.localStorage.setItem(LISTS_KEY, '[{"private":"user-a"}]');
+    expect(guardAgainstForeignCache('user-b')).toBe(true);
+    expect(window.localStorage.getItem(CONTENT_OWNER_KEY)).toBeNull();
+    expect(window.localStorage.getItem(LISTS_KEY)).toBeNull();
+  });
+
   it('preserves an anonymous profile — first sign-in upload is intended', () => {
     // No marker anywhere = genuine pre-first-sign-in data. Wiping it here
     // would destroy the quiz result of someone who just made an account.
@@ -176,5 +209,17 @@ describe('clearResidualAccountCache — profile marker (G1)', () => {
     window.localStorage.setItem(PROFILE_KEY, '{"tags":[],"savedAt":"x"}');
     expect(clearResidualAccountCache()).toBe(true);
     expect(window.localStorage.getItem(PROFILE_KEY)).toBeNull();
+  });
+});
+
+describe('clearResidualAccountCache — account-content marker', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('treats a lone account-content owner as signed-in residue', () => {
+    window.localStorage.setItem(CONTENT_OWNER_KEY, 'user-a');
+    window.localStorage.setItem(LISTS_KEY, '[]');
+    expect(clearResidualAccountCache()).toBe(true);
+    expect(window.localStorage.getItem(CONTENT_OWNER_KEY)).toBeNull();
+    expect(window.localStorage.getItem(LISTS_KEY)).toBeNull();
   });
 });

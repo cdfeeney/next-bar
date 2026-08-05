@@ -56,8 +56,8 @@ const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
  * from Friends ("Nights Out") and the recap card, and the standard 5-tab
  * nav still renders on it (only /install, /join, /api hide the nav).
  *
- * Device-local honesty: visits never leave this device unless a night is
- * explicitly shared, and the footer says so.
+ * Account-sync honesty: signed-in history is stored privately under owner-only
+ * RLS; explicitly sharing a night is the separate action that publishes it.
  */
 
 /** '2026-07-25' → 'Friday, July 25' — calendar parts, timezone-proof
@@ -354,7 +354,9 @@ export default function NightsPage(): JSX.Element {
       )}
 
       <p className="text-muted text-xs text-center mt-8 px-6">
-        Nights stay on this device — sharing one publishes just that night.
+        {auth.status === 'signed-in'
+          ? 'Night history syncs privately to your account — sharing one publishes just that night.'
+          : 'Nights stay on this device until you sign in — sharing one publishes just that night.'}
       </p>
     </main>
   );

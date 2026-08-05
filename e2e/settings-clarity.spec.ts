@@ -86,12 +86,12 @@ test.describe('Settings clarity (g-65a31bdf)', () => {
     await expect(page.getByRole('heading', { name: 'Demo' })).toHaveCount(0);
   });
 
-  test('signed-out Data copy states the true sync split (nothing syncs; sign-in syncs ratings + vibe profile)', async ({
+  test('signed-out Data copy states that account content stays local until sign-in', async ({
     page,
   }) => {
     await page.goto('/settings');
     await expect(
-      page.getByText(/Sign in to sync your ratings and vibe profile/),
+      page.getByText(/Sign in to keep your ratings, vibe profile, lists, and night history/),
     ).toBeVisible();
     await expect(
       page.getByText(/Everything you.?ve rated lives only on this device until/),
@@ -106,19 +106,17 @@ test.describe('Settings clarity (g-65a31bdf)', () => {
     test.skip(!ok, 'no Supabase URL configured');
     await page.goto('/settings');
     await expect(
-      page.getByText(/Your ratings and vibe profile sync to your account/),
+      page.getByText(/Your ratings, vibe profile, Want-to-go and custom lists, and night history sync to your account/),
     ).toBeVisible();
-    // The g-919dae84 round-1 HIGH pin: the sign-out claim must state the
-    // EXACT wipe split — past nights + share records cleared, tonight's
-    // live log + Want-to-go NOT. A reverted overclaim ("clears them from
-    // this device") passed the old prefix-only assertion (santa: Opus).
+    // Account-owned content now uses the same privacy boundary: sign-out
+    // removes every account cache from the phone; signing in restores it.
     await expect(
       page.getByText(
-        /Signing out clears your past nights and share records from this device; tonight’s in-progress log and Want-to-go saves remain/,
+        /Signing out removes that account’s copy from this device; signing back in restores it/,
       ),
     ).toBeVisible();
     await expect(
-      page.getByText(/Sign in to sync your ratings and vibe profile/),
+      page.getByText(/Sign in to keep your ratings, vibe profile, lists, and night history/),
     ).toHaveCount(0);
   });
 

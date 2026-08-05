@@ -98,8 +98,8 @@ export default function SearchPage(): JSX.Element {
         <h1 className="font-display text-3xl md:text-4xl mb-2">Search bars</h1>
         <p className="text-muted text-sm max-w-md mx-auto">
           Find any bar by name, neighborhood, or vibe and save it to your
-          Want-to-go list. Saves stay on this device — cross-device sync
-          isn&apos;t available yet.
+          Want-to-go list. Saves are immediate on this device; sign in to
+          keep them with your account across devices.
         </p>
       </header>
 

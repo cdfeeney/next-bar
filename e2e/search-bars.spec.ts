@@ -415,10 +415,10 @@ test.describe('/search quality gates', () => {
     ).toBe(0);
   });
 
-  test('device-only sync limitation is disclosed on the surface', async ({ page }) => {
+  test('local-first account sync is disclosed on the surface', async ({ page }) => {
     await page.goto('/search');
     await expect(
-      page.getByText(/Saves stay on this device — cross-device sync isn't available yet/),
+      page.getByText(/Saves are immediate on this device; sign in to keep them with your account across devices/),
     ).toBeVisible();
   });
 

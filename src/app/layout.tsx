@@ -11,6 +11,7 @@ import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import CatalogRefresh from '@/components/CatalogRefresh';
 import AnalyticsInit from '@/components/AnalyticsInit';
 import VibeProfileSync from '@/components/VibeProfileSync';
+import AccountContentSync from '@/components/AccountContentSync';
 // Centralized in lib/siteIdentity (g-b83d1c77): sitemap.ts and robots.ts
 // resolve the same origin, so the canonical domain is one env-var change.
 import { resolveSiteUrl } from '@/lib/siteIdentity';
@@ -81,6 +82,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             attended triple gate is ever enabled (g-ee6c250d). */}
         <AnalyticsInit />
         <VibeProfileSync />
+        <AccountContentSync />
       </body>
     </html>
   );
