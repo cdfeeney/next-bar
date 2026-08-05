@@ -26,11 +26,40 @@ function setCapacitor(value: unknown): void {
   Object.defineProperty(window, 'Capacitor', { configurable: true, value });
 }
 
+/** Control ONLY the `display-mode: standalone` signal. */
+function setDisplayMode(standalone: boolean): void {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: (query: string) => ({
+      matches: standalone && /display-mode:\s*standalone/.test(query),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
+/** Control ONLY iOS Safari's non-standard home-screen flag. */
+function setStandaloneFlag(value: boolean | undefined): void {
+  Object.defineProperty(window.navigator, 'standalone', {
+    configurable: true,
+    value,
+  });
+}
+
 beforeEach(() => {
   window.localStorage.setItem(AGE_KEY, '1');
   window.sessionStorage.clear();
   authState.current = { status: 'signed-out' };
   setCapacitor(undefined);
+  // Neutral baseline: neither PWA signal on, so each test opts in to exactly
+  // the one it means to exercise.
+  setDisplayMode(false);
+  setStandaloneFlag(undefined);
 });
 
 afterEach(() => {
@@ -65,6 +94,28 @@ describe('isInstalledAppDisplay', () => {
   });
 
   it('is false in an ordinary browser', () => {
+    expect(isInstalledAppDisplay()).toBe(false);
+  });
+
+  // The two PWA signals are checked INDEPENDENTLY here on purpose. The e2e
+  // helper forces both at once, so deleting either production branch would
+  // leave the browser suite green and Android/desktop-PWA or iOS-home-screen
+  // detection could regress unnoticed (santa re-verdict, Codex).
+  it('detects an installed PWA from display-mode alone', () => {
+    setStandaloneFlag(undefined);
+    setDisplayMode(true);
+    expect(isInstalledAppDisplay()).toBe(true);
+  });
+
+  it('detects an iOS home-screen web app from navigator.standalone alone', () => {
+    setDisplayMode(false);
+    setStandaloneFlag(true);
+    expect(isInstalledAppDisplay()).toBe(true);
+  });
+
+  it('is false when display-mode is browser and the iOS flag is absent', () => {
+    setDisplayMode(false);
+    setStandaloneFlag(undefined);
     expect(isInstalledAppDisplay()).toBe(false);
   });
 });
