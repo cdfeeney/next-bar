@@ -96,7 +96,21 @@ commit in the reconciled range mechanically (script in §8), not just these.
   BASENAMES of `git ls-files ':(glob)supabase/migrations/*.sql'` (top-level
   only — a bare `supabase/migrations/*.sql` pathspec would wrongly sweep in
   the runner-inert `drafts/0038`), and require the would-apply set to be
-  **exactly empty**; non-empty = abort, not a prompt. A first-class `--plan`
+  **exactly empty**; non-empty = abort, not a prompt. **Checksums must be
+  COMPARED, not merely fetched (re-verdict round, Codex HIGH + DeepSeek
+  convergent):** for every ledgered name, the stored `checksum` must equal the
+  checksum of the current file computed **with the runner's own
+  normalization** — CRLF→LF, strip trailing whitespace (end-of-file only,
+  not per-line), then SHA-256 over utf8; reference implementation
+  `checksum()` in `src/lib/migrationPlan.ts`.
+  **Do NOT use raw-byte hash tools** (`Get-FileHash`, `certutil`,
+  `sha256sum`): on this Windows/CRLF checkout they mismatch on every file and
+  would train the operator to ignore the drift signal (re-verdict round 2,
+  both lanes). A mismatch under the CORRECT normalization means the file was
+  edited after apply, so the live schema is unverified against current code
+  (the runner itself treats this as drift): **abort**. `to_regclass()` proves
+  table existence only, never column/policy shape — it does not substitute
+  for the checksum comparison. A first-class `--plan`
   flag belongs to the §8 automation (future T1 work), not to this release.
   **Scope note (round-3 DeepSeek):** the empty-would-apply gate is specific to
   THIS migration-free release, not a general promotion rule — a future release
@@ -167,6 +181,16 @@ commit in the reconciled range mechanically (script in §8), not just these.
   Before rolling back, check whether the RC wrote any new/reshaped
   localStorage keys or JSONB/metadata values the previous build parses
   differently; if it did, prefer roll-forward hotfix over rollback.
+  **Bridge-contract blind spot (re-verdict round, DeepSeek):** the
+  localStorage/JSONB check cannot see a native↔web bridge contract change
+  (postMessage payloads, URL-scheme params, injected interfaces) — the iOS
+  shell cannot roll back, so old web handlers would meet new-shell messages.
+  Pre-rollback: diff the shell-communication surface between **the source SHA
+  recorded for the actually-installed TestFlight binary** (build 5 ↔ main
+  `6ec5e5d` per the attended session record; current ASC state
+  ATTENDED/UNKNOWN) and the rollback-target web SHA — web deployment SHAs
+  alone do not establish the binary's provenance (re-verdict round 2, Codex).
+  If that surface changed, abort the rollback and roll forward.
 
 ### Abort conditions — promotion does not proceed / rolls back on ANY of:
 
@@ -213,8 +237,9 @@ operator authorization at execution time.
 
 - Migration failure mid-apply: the ledgered runner applies per-file
   `BEGIN..COMMIT` — semantics confirmed by static runner analysis during the
-  0041 review panel (DeepSeek lane). **0041 itself has been applied NOWHERE**;
-  no live apply of 0041 has ever run, so this is runner-semantics evidence,
+  0041 review panel (DeepSeek lane). **0041 has been applied NOWHERE as of
+  the attended checkpoint record** (same qualifier and sources as §4); no
+  live apply of 0041 is recorded, so this is runner-semantics evidence,
   not live-apply evidence. Recovery = fix forward or restore from the
   pre-apply snapshot; no partial-file state.
 - Clean-database rebuild rehearsal: **BLOCKED** locally — no isolated local
@@ -230,7 +255,8 @@ operator authorization at execution time.
 3. Production/preview Vercel env variable state (names audit per §5 scoping).
 4. Pins live degradation proof on a 0038-less database (§4b) — or pins stay OUT.
 5. Staging acceptance run (§7) with real accounts.
-6. Rollback rehearsal on Staging (§6) incl. TestFlight/cache behavior.
+6. Rollback rehearsal on Staging (§6) incl. TestFlight/cache behavior, AND
+   current ASC/TestFlight build state (referenced ATTENDED/UNKNOWN in §6).
 7. Production data-shape check for RC-assumed value sets (§4 drift check).
 8. Whether operator wants pins/matcher in the first promotion or web-fixes-only,
    and the login-window disposition (§6).
