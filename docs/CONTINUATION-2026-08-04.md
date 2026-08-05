@@ -195,6 +195,69 @@ four dirty docs/no lease/lock armed); zero discrepancies.
   next-bar-two.vercel.app (no local Pin/matcher commits — those are the
   overnight branch).
 
+## 7c. ATTENDED SESSION 2026-08-04/05 — census pilot (g-7104aed0, /code bound)
+
+Goal bound via /code (worktree-guard SAFE, lease held, heartbeat). All
+census evidence also recorded in the goal store.
+
+- **0037 APPLIED TO PROTECTED STAGING** (operator phrase received
+  verbatim). Identity triple-checked (label staging; pubRef==dbRef==
+  `wqxovhiovgcijmfzxgby` ≠ declared prod `nuhqlvneokucxomguxhi`).
+  Pre-apply read-only ledger check: 37 rows, 0036 present/0037 absent.
+  Ledgered runner applied `0037_census_provenance.sql` (checksum
+  `556799ce814a…`, applied 2026-08-04T23:39:39Z); idempotency re-run
+  "38 already applied". **Post-apply verification 25/25 PASS** (RLS, zero
+  policies, 24/24 browser-privilege denials, behavioral anon+authenticated
+  INSERT denial, 3 constraint probes, LIVE two-writer proof incl.
+  lock_timeout fast-fail, synthetic rows cleaned to 0 residual, anon still
+  reads bars). bars=411 = the known pre-existing anomaly, untouched.
+- **First LIVE pilot sweep found 2 real adapter defects** (fixtures
+  bypass network by design): Overpass 406s UA-less requests (fix:
+  User-Agent + form-encoded data= body); SLA dataset `nqur-w4p7` was
+  GASOLINE PRICES → now `9s3h-dpkz` (Current Liquor Authority Active
+  Licenses), real schema, title-case county, bar-class $where filter
+  (Additional Bar/Club/Cabaret/Night Club/Bottle Club; Restaurant
+  deliberately excluded), $order paging. TDD: regression tests written
+  first, proven failing.
+- **Commits (local only):** `f5d1579` (adapter fixes + a code-sha rebind
+  primitive + Lucinda's nomination seed) then `9480fb1` (fix cycle after
+  review — see below). Narrow commits; protected docs untouched.
+- **T0 panel on f5d1579:** fresh Fable APPROVE (2 M advisory);
+  **Codex BLOCK (2 HIGH, forensically proven)** — (H1) pre-existing
+  currentCodeSha() first-line porcelain mangle = fail-open identity;
+  (H2) rebind cannot prove byte identity (and the pilot's rebind target
+  provably wasn't byte-identical). DeepSeek (data/DB specialist)
+  independently found the same TOCTOU + staleness-clock nuance + ranked
+  SLA batch risks (offset-drift, permit-id instability, geo nulls,
+  legalname-vs-DBA) for the expansion phase.
+- **Fix cycle `9480fb1`:** parser extracted to codeIdentity.ts
+  (per-line, first-line regression tests); **rebind REMOVED** (tombstone
+  forbids reintroduction without a persisted content-tree digest);
+  unmapped borough now rejected before SoQL; class allowlist pinned.
+  67/67 tests; tsc clean.
+- **Authoritative pilot run: `run-2026-08-05T00-25-06-752Z`** executed
+  FRESH at clean HEAD `9480fb1` — complete, 8/8 tiles + full SLA, 1,382
+  candidates, $0.00, codeSha natively `9480fb1463f052a5626609afc876cfe0b24653ae`,
+  configHash `39d39ff8cb27…`, payloadSha256 `4907940ed8faa134808d393059eb88a230fc255a22ac59ab70f656acb4fe9db6`
+  — byte-identical to the prior sweep's payload (determinism
+  cross-check). The earlier run's rebound sidecar is DISCARDED as an
+  apply gate.
+- **Lucinda's (operator nomination, 169 Avenue A):** user-submission
+  seed merged by dedupe with independently-found OSM bar node
+  `13680449615` (website lucindasnyc.com; hours Mo-Fr 17-02, Sa-Su
+  14-02; address matches). Operator curation received: priceTier 2,
+  tags [live, cocktail, dance, buzzy], blurb "Live country, two-step
+  nights, and Southern cocktails on Avenue A.", scope = Lucinda's ONLY.
+  Curated file in session scratchpad (outside repo).
+- **PENDING at write time:** Codex re-review of 9480fb1 (to clear its
+  BLOCK) → final hash-bound package to operator → operator's separate
+  insert approval → sole attended --apply → post-insert verification.
+  **NO insert has occurred. Production untouched everywhere.**
+- **Operator decisions recorded this session:** (a) unauthenticated app
+  open MUST show a login window (queue as its own mission); (b) iOS
+  shell feedback: top-scroll oversize on Next Bar surface + a background
+  issue (verify against overnight-branch fixes before authoring).
+
 ## 8. Tomorrow's exact iOS/UDID/TestFlight steps (operator, unchanged)
 
 1. Finish registering the iPhone UDID (Apple Devices app → copy UDID →
