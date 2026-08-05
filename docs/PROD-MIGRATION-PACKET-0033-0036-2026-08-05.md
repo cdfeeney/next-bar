@@ -128,10 +128,29 @@ must run `npm ci` there first (git worktrees do not share dependencies).
    restore point/backup identifier before any DDL.
 2. Pre-flight read: confirm the Production ledger still ends at **`0032`**
    with 33 rows. Any difference ⇒ **abort**.
-3. Point the runner at Production **from the clean worktree only**, and
-   confirm its plan prints exactly the four names above before it proceeds.
-4. Apply. Then re-run for idempotency — expect "24 already applied".
-5. Verify (all must pass):
+3. **Pre-checks, in the window, before the apply** (round-3: these were prose
+   in §5a and are now steps, because a mitigation that is not a step does not
+   happen):
+   - `select current_user, has_table_privilege(current_user,
+     'public.schema_migrations', 'INSERT');` → must be true, else **abort**
+     (this is also what verifies the owner-role assumption in §5a);
+   - check `pg_stat_activity` for long-running transactions on `profiles`,
+     `ratings`, `pairwise_comparisons`; wait them out before `0034`;
+   - export a lock timeout for the runner process — the runner sets none
+     itself and takes no flag, so it must come through the connection:
+     `PGOPTIONS=-c lock_timeout=5s` (or append
+     `?options=-c%20lock_timeout%3D5s` to `DATABASE_URL`). Verify it took
+     effect with `show lock_timeout;` on the same connection string before
+     applying.
+4. Run the would-apply proof (§2) **again, immediately before applying** and
+   confirm it still prints exactly the four names.
+   **Note (round-3, verified):** the runner does **not** print its full plan
+   and pause — it prints `N already applied, skipped.` and then prints each
+   filename **as it applies it** (`scripts/apply-migrations.ts:464,494`).
+   There is no built-in confirmation prompt, so the §2 proof re-run is the
+   only real pre-apply confirmation available.
+5. Apply. Then re-run for idempotency — expect "24 already applied".
+6. Verify (all must pass):
    - ledger has **37 rows**, ending `0036`, with the four checksums above;
    - `schema_migrations` is **no longer readable by the anon key** (the P1
      probe that succeeded today must now be denied);
@@ -139,22 +158,33 @@ must run `npm ci` there first (git worktrees do not share dependencies).
      unchanged (`curated=401`, `import=855`, others 0);
    - `vibe_profiles` exists with RLS enabled and expected policies;
    - core-table grants match the revoke-first posture of `0034`;
-   - a share-night date outside ±2 days is rejected, inside is accepted;
+   - a share-night date outside ±2 days is **rejected** — this is a
+     read-only-safe negative probe. **Do NOT run the positive "inside is
+     accepted" case as a bare check:** `share_night` upserts and updates
+     `shared_at` (`0035_share_night_date_bound.sql:106-115`), which would
+     itself create a data delta and contradict the "no other delta" criterion
+     below. If the positive path must be exercised, do it inside an explicit
+     `BEGIN … ROLLBACK`, and record that it was rolled back (round-3);
    - Production `/api/health` still reports `ok` and SHA `6ec5e5d7ad1d`;
    - no other schema or data delta.
-6. **Ledger-vs-schema mismatch is a HARD STOP (round-1 HIGH).** If the
+7. **Ledger-vs-schema mismatch is a HARD STOP (round-1 HIGH).** If the
    functional checks pass but the ledger does **not** end at `0036` with 37
    rows, do **NOT** call the window successful and do **NOT** re-run the
    apply. That state means DDL landed without its ledger rows: stop, report,
    and remediate deliberately (establish which files actually applied, then
    record the correct ledger rows) before any further migration work on that
    database.
-7. Re-arm the remote-write lock immediately after the apply window.
+8. Re-arm the remote-write lock immediately after the apply window.
 
 ## 5a. Live-traffic and lock behavior (round-3 DeepSeek specialist)
 
-**Ledger lock-out: cannot happen, and here is why.** The runner connects as the
-table **owner**, and in PostgreSQL the owner is exempt from privilege checks —
+**Ledger lock-out: should not be possible — but the premise is an inference,
+so step 3 now proves it (round-3).** The runner does not enforce which role
+connects; it uses whatever `DATABASE_URL` resolves to
+(`scripts/apply-migrations.ts:343`), and no repository document states which
+Postgres role Production's `DATABASE_URL` authenticates as. **If** that is the
+conventional Supabase owner role, then in PostgreSQL the owner is exempt from
+privilege checks —
 `REVOKE ALL … FROM public, anon, authenticated` has no effect on it — while RLS
 is likewise skipped for the owner, and `service_role` additionally holds
 `BYPASSRLS`. So `0036` (and the startup DDL) cannot lock the runner or a future
@@ -178,22 +208,39 @@ sub-second; the real hazard is an unrelated long-running transaction already
 holding a weaker lock, which makes the `AccessExclusiveLock` request queue —
 and every subsequent reader then queues behind it.
 
-Runbook lines:
+Mitigations — **all three are now numbered steps in §5 step 3**, not advice:
 - Run the window at a **low-traffic hour**, not mid-evening.
-- Set a short **`lock_timeout`** (e.g. `SET lock_timeout = '5s'`) for the
-  session so `0034` **fails fast and rolls back** instead of stalling all
-  reads behind a lock queue. A timed-out `0034` is a clean retry; a lock
-  pile-up is a user-visible outage.
-- Before starting, check `pg_stat_activity` for long-running transactions and
-  wait them out.
+- Carry a short **`lock_timeout`** so `0034` fails fast and rolls back instead
+  of stalling every read behind a lock queue. **The runner sets none and
+  accepts no flag for it (verified)**, so a bare `SET lock_timeout` in some
+  other session does nothing — it must ride the runner's own connection via
+  `PGOPTIONS=-c lock_timeout=5s` or a `?options=` parameter on
+  `DATABASE_URL`. A timed-out `0034` is a clean retry; a lock pile-up is a
+  user-visible outage.
+- Check `pg_stat_activity` for long-running transactions first and wait them
+  out.
 
 ## 6. Rollback and abort
 
 - **Abort before applying** on: ledger not ending at 0032; plan not exactly
   the four; any drift row; missing backup/restore point; unresolved
   reconciliation blocker.
-- **Rollback — exact SQL, not paraphrase (round-1 MEDIUMs).** Quoted from each
-  migration's own rollback block so nothing must be extracted under pressure.
+- **ROLLBACK MUST ALSO DELETE THE LEDGER ROW (round-3 HIGH, verified).**
+  Each file commits its DDL **and** its ledger row in one transaction
+  (`scripts/apply-migrations.ts:487-499`). Reversing the schema alone leaves
+  the ledger row behind, and because `planMigrations` skips any file whose
+  recorded checksum matches (`src/lib/migrationPlan.ts:564-571`), **a later
+  run would silently skip the very migration you rolled back** — the schema
+  and the ledger would disagree permanently. For every file you revert, in the
+  same transaction as the revert:
+  ```sql
+  delete from public.schema_migrations where name = '<exact file name>';
+  ```
+
+- **Rollback SQL below is quoted from each migration's own rollback block**
+  (round-1/2/3 findings) so nothing must be extracted under pressure. Where a
+  migration's own rollback is prose rather than SQL, that is stated instead of
+  being dressed up as SQL.
 
   `0033` — three statements; `DROP TABLE` alone would leave the function behind:
   ```sql
@@ -219,10 +266,18 @@ Runbook lines:
   too): re-apply the `share_night` body from `0016_shared_nights.sql`, which
   is identical to `0035`'s minus the `p_night` range guard.
 
-  `0036` — see `supabase/migrations/0036_protect_schema_migrations.sql:24-27`:
-  its header states no application rollback is expected or useful, and that
-  re-granting **reopens the finding**. Since `0036` is itself the fix for a
-  live exposure, prefer **fix-forward** over rolling it back.
+  `0036` — its actual rollback SQL, quoted (round-3; previously only cited by
+  line number, which defeated the purpose of this section):
+  ```sql
+  alter table public.schema_migrations disable row level security;
+  grant all on table public.schema_migrations to anon, authenticated;
+  ```
+  **Emergency only.** This restores the insecure state `0036` exists to fix
+  and re-opens the P1 public-ledger exposure; the migration's own header says
+  no application rollback is expected or useful. Since `0036` is the fix for a
+  live exposure, prefer **fix-forward**. Note also that the runner re-applies
+  these protections at every startup via `MIGRATION_LEDGER_DDL`, so this
+  rollback is undone by the next migration run.
 - The web tier is untouched by this packet, so no deployment rollback is
   involved; the Production deployment stays at `6ec5e5d` throughout.
 
