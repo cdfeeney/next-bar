@@ -38,11 +38,12 @@ test.describe('installed-app sign-in gate', () => {
     page,
     context,
   }) => {
-    // THE case this feature exists for. The shell is a WKWebView on a remote
-    // server.url: navigator.standalone is Safari-only and display-mode is
-    // 'browser', so the PWA signals are deliberately NOT forced here. If the
-    // Capacitor branch of isInstalledAppDisplay() were deleted, only this
-    // test would fail — which is the point.
+    // THE case this feature exists for. In the Capacitor WKWebView shell
+    // navigator.standalone is Safari-only and display-mode is 'browser', so
+    // the PWA signals are deliberately NOT forced here — this is the only
+    // BROWSER-level test that would fail if the Capacitor branch of
+    // isInstalledAppDisplay() were deleted (the unit suite covers that branch
+    // directly too: SignInGate.test.tsx).
     await asCapacitorNativeApp(context);
     await page.goto('/');
     // Prove the PWA signals really are off, so this cannot pass via them.
@@ -177,6 +178,37 @@ test.describe('installed-app sign-in gate', () => {
     await expect(dialog.getByRole('link', { name: /sign in/i })).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
+  });
+
+  test('Tab is CONTAINED: focus cycles inside and never escapes to the page', async ({
+    page,
+    context,
+  }) => {
+    // aria-modal promises inertness the DOM does not deliver on its own; the
+    // Tab handler is what actually delivers it, and it was untested.
+    await asInstalledApp(context);
+    await page.goto('/');
+    const dialog = page.getByRole('dialog', GATE);
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    const signIn = dialog.getByRole('link', { name: /sign in/i });
+    const notNow = dialog.getByRole('button', { name: /not now/i });
+
+    await expect(signIn).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(notNow).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(signIn).toBeFocused();
+    // Shift+Tab must be contained too, not just forward Tab.
+    await page.keyboard.press('Shift+Tab');
+    await expect(notNow).toBeFocused();
+
+    // NEGATIVE: after cycling, focus is still inside the dialog — it never
+    // landed on the page or the bottom nav behind it.
+    const focusInsideDialog = await page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]');
+      return !!d && d.contains(document.activeElement);
+    });
+    expect(focusInsideDialog).toBe(true);
   });
 
   // NOTE: the sign-out re-arm is covered by src/components/SignInGate.test.tsx

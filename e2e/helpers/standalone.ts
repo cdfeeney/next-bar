@@ -1,12 +1,18 @@
 /**
- * standalone.ts — force the "installed app" display context for e2e.
+ * standalone.ts — force an "installed app" context for e2e.
  *
- * The installed-app surface (iOS home-screen / TestFlight shell) is detected
- * via `display-mode: standalone` and iOS Safari's non-standard
- * `navigator.standalone`. Playwright cannot launch a real standalone context,
- * so tests inject the same signals the browser would — the identical approach
- * `helpers/geo.ts` uses for geolocation, and for the same reason: relying on
- * engine defaults is not deterministic.
+ * There are TWO distinct installed surfaces and they are detected by
+ * different signals; conflating them is what shipped a gate that could never
+ * have fired in the iOS shell (g-31c59158 santa round-1):
+ *   - the Capacitor iOS shell → `window.Capacitor` (asCapacitorNativeApp).
+ *     `navigator.standalone` is Safari-only and is NOT set in a WKWebView.
+ *   - an installed PWA → `display-mode: standalone`, plus iOS Safari's
+ *     non-standard `navigator.standalone` for home-screen web apps
+ *     (asInstalledApp).
+ *
+ * Playwright cannot launch either context for real, so tests inject the
+ * signals the runtime would — the same approach `helpers/geo.ts` takes for
+ * geolocation, and for the same reason: engine defaults are not deterministic.
  */
 
 import type { BrowserContext } from '@playwright/test';
