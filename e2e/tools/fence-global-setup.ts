@@ -107,9 +107,13 @@ async function assertReusedServerFenced(attempt = 0): Promise<void> {
     // genuinely wedged (→ abort).
     const code = (e as { cause?: { code?: string } })?.cause?.code;
     if (code === 'ECONNREFUSED') return;
-    if (attempt === 0) {
+    // Up to 3 spaced retries (~6s total) — same rationale as the spawn
+    // readiness loop above: teardown of a previous run's webServer under
+    // Windows/AV load can exceed a single 2s window. A genuinely wedged
+    // server still exhausts the retries and aborts fail-closed.
+    if (attempt < 3) {
       await new Promise((r) => setTimeout(r, 2000));
-      return assertReusedServerFenced(1);
+      return assertReusedServerFenced(attempt + 1);
     }
     throw new Error(
       `reused dev server on :3000 did not answer the fence canary (${code ?? String(e)}) — ` +
