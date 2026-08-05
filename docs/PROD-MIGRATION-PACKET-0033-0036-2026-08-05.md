@@ -9,7 +9,7 @@ Fixes blocker **M1** and closes the CRITICAL finding **P1** from
 
 ## 1. The candidate
 
-- **Branch:** `release/prod-migrations-0033-0036` @ **`7654cb5`**
+- **Branch:** `release/prod-migrations-0033-0036` @ **`6e553fa`**
 - **Worktree:** `C:\Users\cdfee\projects\nb-release-migrations` (local only,
   never pushed)
 - **Base:** `origin/main` @ **`6ec5e5d`** — the exact SHA Production is
@@ -41,7 +41,10 @@ extracted with `git checkout` (byte-faithful) from the ledgered version —
 no schema change and no shipped application code. `pg`, `tsx`, and `dotenv`
 are already branch dependencies; the only cross-import on that path
 (`src/types`) exists on the branch. The branch's complete non-migration delta
-vs `6ec5e5d` is exactly those four tooling files. (The runner also has a lazy
+vs `6ec5e5d` is those four tooling files **plus
+`scripts/release/verify-migration-plan.mts`** (the tracked pre-apply verifier
+added in the re-verdict round) — nine files total with the four migrations,
+and nothing else. (The runner also has a lazy
 `await import('../src/lib/bars')` reached **only** under `--bootstrap`, which
 this window never uses; its transitive files happen to be present on the
 branch regardless.)
@@ -165,13 +168,27 @@ must run `npm ci` there first (git worktrees do not share dependencies).
      Or append to `DATABASE_URL` — `?options=-c%20lock_timeout%3D5s` if it has
      no query string, **`&options=…` if it already does** (re-verdict, Codex).
      Confirm with `show lock_timeout;` on that exact connection string first.
-4. **Re-run the would-apply proof immediately before applying** — the exact
-   command, from this repo (it reads the branch's files and planner and the
-   live ledger, and writes nothing):
+4. **Re-run the would-apply proof immediately before applying** — from the
+   clean worktree, using the tracked verifier on the branch (re-verdict: the
+   previously named script lived under a **gitignored** directory, so the gate
+   was not reproducible; and it read the ledger with a browser key, which
+   `0036` is about to make impossible):
+   ```powershell
+   npx tsx scripts/release/verify-migration-plan.mts --expect '0033,0034,0035,0036'
    ```
-   npx tsx scripts/census/out/plan-sim-branchcode-2026-08-05.mts
-   ```
-   Require `exactly-four-and-correct: true` and `drift 0`.
+   **Quote the list.** Unquoted, PowerShell parses `0033,0034,…` as an array
+   and strips the leading zeros, so the assertion silently compares against
+   `33,34,35,36` (observed while testing this gate).
+   It imports the **same** `planMigrations` the runner uses and reads the
+   ledger over `DATABASE_URL` with a single `SELECT`. Require `PASS` and
+   `drift 0`; it exits non-zero otherwise.
+
+   **Behaviorally proven, not just written:** run against protected Staging
+   (whose ledger already holds 0033–0036 plus 0037/0041) it correctly reported
+   `WOULD APPLY (0) … skip 24 | drift 0` and exited **FAIL / non-zero** — the
+   gate refuses when the plan does not match expectations. It has **not** been
+   run against Production (no Production `DATABASE_URL` is held by this
+   session); its first Production execution is step 4 itself.
    **Why this is the confirmation step:** the runner does **not** print a full
    plan and pause. It prints `N already applied, skipped.`
    (`scripts/apply-migrations.ts:464`) and then prints each filename **as it
