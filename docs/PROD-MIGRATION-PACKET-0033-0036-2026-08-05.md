@@ -151,6 +151,42 @@ must run `npm ci` there first (git worktrees do not share dependencies).
    database.
 7. Re-arm the remote-write lock immediately after the apply window.
 
+## 5a. Live-traffic and lock behavior (round-3 DeepSeek specialist)
+
+**Ledger lock-out: cannot happen, and here is why.** The runner connects as the
+table **owner**, and in PostgreSQL the owner is exempt from privilege checks —
+`REVOKE ALL … FROM public, anon, authenticated` has no effect on it — while RLS
+is likewise skipped for the owner, and `service_role` additionally holds
+`BYPASSRLS`. So `0036` (and the startup DDL) cannot lock the runner or a future
+migration out of its own ledger. Cheap belt-and-braces pre-check to run in the
+window before the first insert:
+
+```sql
+select current_user,
+       has_table_privilege(current_user, 'public.schema_migrations', 'INSERT');
+```
+
+Abort if that returns false.
+
+**`0034` is the one with live-traffic impact.** Its `REVOKE`/`GRANT` statements
+take an `AccessExclusiveLock` on `profiles`, `ratings`, and
+`pairwise_comparisons`, held until that file's transaction commits. Live
+`authenticated` queries against those tables **queue and hang** for the
+duration rather than erroring — to the iOS shell that reads as a spinner, and
+as a client-side timeout if it runs long. The work itself is catalog-only and
+sub-second; the real hazard is an unrelated long-running transaction already
+holding a weaker lock, which makes the `AccessExclusiveLock` request queue —
+and every subsequent reader then queues behind it.
+
+Runbook lines:
+- Run the window at a **low-traffic hour**, not mid-evening.
+- Set a short **`lock_timeout`** (e.g. `SET lock_timeout = '5s'`) for the
+  session so `0034` **fails fast and rolls back** instead of stalling all
+  reads behind a lock queue. A timed-out `0034` is a clean retry; a lock
+  pile-up is a user-visible outage.
+- Before starting, check `pg_stat_activity` for long-running transactions and
+  wait them out.
+
 ## 6. Rollback and abort
 
 - **Abort before applying** on: ledger not ending at 0032; plan not exactly
