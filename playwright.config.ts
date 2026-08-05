@@ -10,6 +10,13 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: 'http://localhost:3000',
+    // Network fence (overnight scope 2026-08-05): every non-loopback request
+    // from a test browser is sent to the local refuse-all logging proxy
+    // (e2e/tools/fence-proxy.mjs); loopback bypasses it. Tests must pass with
+    // the fence up — no spec may depend on live Supabase/Vercel/Google.
+    // Fail-closed: with the proxy down, non-loopback requests fail at
+    // connect time instead of escaping.
+    proxy: { server: 'http://127.0.0.1:39555', bypass: 'localhost,127.0.0.1' },
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     // Pre-acknowledge the 21+ age gate (H1) for every spec — the overlay
