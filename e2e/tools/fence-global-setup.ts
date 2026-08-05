@@ -89,7 +89,7 @@ function probe(PORT: number, BANNER: string): Promise<ProbeResult> {
  * unfenced within the last cache window can serve a stale non-'ok' — this
  * canary detects affirmative egress, it is not a fencedness proof.
  */
-async function assertReusedServerFenced(): Promise<void> {
+async function assertReusedServerFenced(attempt = 0): Promise<void> {
   let res: Response;
   try {
     res = await fetch('http://localhost:3000/api/health', {
@@ -101,26 +101,40 @@ async function assertReusedServerFenced(): Promise<void> {
   } catch (e) {
     // ONLY connection-refused means "no server" (Playwright will spawn one
     // WITH the env). A timeout/reset from a LIVE server is indeterminate and
-    // must fail CLOSED, not silently pass (round-4 Codex MEDIUM).
+    // must fail CLOSED, not silently pass (round-4 Codex MEDIUM) — but a
+    // PREVIOUS run's webServer mid-teardown can also reset here, so one
+    // short retry distinguishes "dying" (→ refused next probe) from
+    // genuinely wedged (→ abort).
     const code = (e as { cause?: { code?: string } })?.cause?.code;
     if (code === 'ECONNREFUSED') return;
+    if (attempt === 0) {
+      await new Promise((r) => setTimeout(r, 2000));
+      return assertReusedServerFenced(1);
+    }
     throw new Error(
       `reused dev server on :3000 did not answer the fence canary (${code ?? String(e)}) — ` +
         'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
     );
   }
+  let body: { supabase?: string };
   try {
-    const body = (await res.json()) as { supabase?: string };
-    if (body.supabase === 'ok') {
-      throw new Error(
-        'reused dev server on :3000 reached live Supabase server-side — it ' +
-          'is NOT fenced (started without the proxy env). Kill it and let ' +
-          'Playwright spawn the fenced one.',
-      );
-    }
+    body = (await res.json()) as { supabase?: string };
   } catch (e) {
-    if (e instanceof Error && e.message.includes('NOT fenced')) throw e;
-    // Non-JSON health response: leave it to the suite to fail honestly.
+    // Headers arrived but the body stalled, reset, or wasn't JSON — a real
+    // dev server always answers /api/health with JSON, so this is a wedged
+    // or impostor server: fail CLOSED (round-5 Codex MEDIUM — fetch resolves
+    // at headers, so body errors must not be swallowed).
+    throw new Error(
+      `reused server on :3000 answered the canary with an unreadable body (${String(e)}) — ` +
+        'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
+    );
+  }
+  if (body.supabase === 'ok') {
+    throw new Error(
+      'reused dev server on :3000 reached live Supabase server-side — it ' +
+        'is NOT fenced (started without the proxy env). Kill it and let ' +
+        'Playwright spawn the fenced one.',
+    );
   }
 }
 
