@@ -301,6 +301,31 @@ f428996, 0e48573 + report/continuation. Census goal stayed PAUSED; 0041
 applied nowhere; no credentials/paid calls; nothing pushed;
 Staging/Production/Apple/GitHub/Vercel untouched; lease released; lock ARMED.
 
+## 7e. ATTENDED CENSUS CLOSEOUT — 2026-08-05 (goal g-7104aed0 COMPLETE)
+
+Read-only grounding matched the checkpoint exactly (HEAD d0b77bd — all
+post-checkpoint commits reviewed test/docs work; 0041 byte-identical to
+48f9f93; identity triple-check staging/wqxov…≠prod; ledger 38 rows
+0037-present/0041-absent; bars 411, census 0). Then, on the exact operator
+phrase **"APPLY 0041 TO PROTECTED STAGING APPROVED"**: lock disarmed →
+ledgered apply ("0041 ok") → idempotency "39 already applied" → lock
+re-armed. Verification ALL PASS: ledger 39 rows, 0041 checksum
+`8ef77df28897…` (exact runner-normalized match); constraint = 5-value set
+incl 'census'; 411 rows intact; disallowed-probe rejected / census-probe
+accepted (both rolled back, 0 residue); RLS true, 1 policy, anon/auth
+SELECT-only. Then, on operator "approval carries": Lucinda's inserted via
+the census apply path (sidecar-bound to run-2026-08-05T00-25-06-752Z;
+code-drift override attended with mechanical empty-census-diff proof) —
+**APPLIED 1/1**, dedupe re-run 0/1, bars now **412** (census=1,
+curated=411), row fields exact, rollback scope = the one census row.
+Observation: 0037 evidence tables remain empty (provenance lives in the
+sidecar chain + run artifacts) — follow-up candidate. Staging writes this
+session: the 0041 apply + one row ONLY. Production/Apple/GitHub/Vercel
+untouched; nothing pushed; lock armed; lease released; goal COMPLETE.
+Next per operator: g-5dd241b6 loopback-clean e2e, then attended
+reconciliation → RC construction → Staging/mobile acceptance + rollback
+rehearsal → separate approvals for push/migrations/deploy/TestFlight.
+
 ## 8. Tomorrow's exact iOS/UDID/TestFlight steps (operator, unchanged)
 
 1. Finish registering the iPhone UDID (Apple Devices app → copy UDID →
