@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { AGE_ACK_EVENT } from '@/components/SignInGate';
 
 /**
  * 21+ age gate (H1 App-Store pack). Full-screen overlay on first visit;
@@ -43,6 +44,17 @@ export default function AgeGate(): JSX.Element | null {
       // Non-fatal: the session continues; the gate returns next visit.
     }
     setState('acked');
+    // Tell same-document listeners the legal gate is answered. SignInGate
+    // waits on this: without it, a FIRST-EVER install latched "age not acked"
+    // at mount and never showed its login window for the whole session
+    // (g-31c59158 santa round-1). A storage event would not do — that only
+    // fires in OTHER documents.
+    try {
+      window.dispatchEvent(new Event(AGE_ACK_EVENT));
+    } catch {
+      // Event constructor unavailable in an exotic runtime: the ack still
+      // persisted, so the next open behaves correctly.
+    }
   };
 
   return (

@@ -85,6 +85,60 @@ test.describe('installed-app sign-in gate', () => {
     await expect(page).toHaveURL(/\/auth/);
   });
 
+  test('FIRST-EVER install: after acknowledging 21+, the login window appears', async ({
+    page,
+    context,
+  }) => {
+    // The cohort this feature exists for. Round-1 regression: eligibility was
+    // latched at mount, before the age gate was answered, so the window never
+    // appeared for a brand-new install for the whole session.
+    await asInstalledApp(context);
+    await page.addInitScript(() => {
+      try {
+        window.localStorage.removeItem('next-bar:age-ack:v1');
+      } catch {
+        /* storage unavailable */
+      }
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: /21 or older/i }).click();
+    await expect(page.getByRole('dialog', GATE)).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('the sign-in action leaves /auth USABLE, not covered', async ({
+    page,
+    context,
+  }) => {
+    // Round-1 regression: the gate is layout-mounted, so it kept rendering on
+    // /auth and covered the very form it sent the user to.
+    await asInstalledApp(context);
+    await page.goto('/');
+    const dialog = page.getByRole('dialog', GATE);
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await dialog.getByRole('link', { name: /sign in/i }).click();
+    await expect(page).toHaveURL(/\/auth/);
+    await expect(page.getByRole('dialog', GATE)).toHaveCount(0);
+    // The password field must be genuinely interactable, not overlaid.
+    const password = page.locator('input[type="password"]').first();
+    await expect(password).toBeVisible();
+    await password.click();
+    await expect(password).toBeFocused();
+  });
+
+  test('Escape dismisses the window (keyboard contract)', async ({
+    page,
+    context,
+  }) => {
+    await asInstalledApp(context);
+    await page.goto('/');
+    const dialog = page.getByRole('dialog', GATE);
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    // Focus moves into the dialog on open.
+    await expect(dialog.getByRole('link', { name: /sign in/i })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+  });
+
   test('NEGATIVE: it does not cover the age gate on a first-ever open', async ({
     page,
     context,

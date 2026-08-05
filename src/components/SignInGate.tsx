@@ -12,14 +12,15 @@
  * SCOPE — deliberately narrow, because the signed-out WEB surface is a real
  * product, not an oversight (local-mode ratings, /install marketing, anonymous
  * browsing). This renders ONLY when all of the following hold:
- *   - the page is running as an installed app (display-mode: standalone, or
- *     iOS Safari's non-standard navigator.standalone);
+ *   - the page is running as an installed app (see isInstalledAppDisplay);
  *   - auth has resolved to signed-out — never during 'loading' (which would
  *     flash the window at a signed-in user on every cold open) and never on
  *     'unavailable' (no Supabase configured = local mode, where there is no
  *     account to sign into at all);
  *   - the 21+ age gate has been acknowledged, so the legal gate is answered
  *     first and this never renders on top of it;
+ *   - the route is not one of EXCLUDED_PREFIXES — above all /auth, which this
+ *     window's own button navigates to and would otherwise cover;
  *   - it has not already been dismissed in this app session.
  *
  * NOT a blocking wall: it offers "Sign in" and "Not now". The requirement is
@@ -30,8 +31,9 @@
  * stay the same.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 
 /**
@@ -43,9 +45,44 @@ import { useAuth } from '@/hooks/useAuth';
 export const SIGNIN_GATE_DISMISSED_KEY = 'next-bar:signin-gate-dismissed:v1';
 const AGE_ACK_KEY = 'next-bar:age-ack:v1';
 
-/** True when the document is being displayed as an installed application. */
+/**
+ * Broadcast by AgeGate the moment the 21+ ack is stored. Without it this gate
+ * would latch "age not acked" at mount and never reappear for the whole
+ * session — which on a FIRST-EVER install (the exact cohort this feature is
+ * for) meant the login window never showed at all (santa round-1, Fable +
+ * Codex convergent).
+ */
+export const AGE_ACK_EVENT = 'next-bar:age-acked';
+
+/** Never cover these flows; /auth is where this window's own button sends you. */
+const EXCLUDED_PREFIXES = ['/auth', '/onboarding', '/privacy', '/terms'];
+
+type CapacitorGlobal = { isNativePlatform?: () => boolean; getPlatform?: () => string };
+
+/**
+ * True when the document is being displayed as an installed application.
+ *
+ * Three signals, because the shells differ (santa round-1, Codex):
+ *  - Capacitor native — THE TestFlight/App Store shell. It is a WKWebView
+ *    loading a remote server.url (docs/TESTFLIGHT-ARCH-DECISION-g-39169b3b),
+ *    where `navigator.standalone` is a Safari-only property and display-mode
+ *    reports `browser`. Checking only the two PWA signals would have meant
+ *    this window never appeared in the actual app it was written for.
+ *  - display-mode: standalone — installed PWA (Android/desktop).
+ *  - navigator.standalone — iOS Safari home-screen web app.
+ */
 export function isInstalledAppDisplay(): boolean {
   if (typeof window === 'undefined') return false;
+  const cap = (window as { Capacitor?: CapacitorGlobal }).Capacitor;
+  if (cap) {
+    try {
+      if (cap.isNativePlatform?.() === true) return true;
+      const platform = cap.getPlatform?.();
+      if (platform && platform !== 'web') return true;
+    } catch {
+      // Malformed/partial Capacitor global — fall through to the PWA signals.
+    }
+  }
   try {
     if (window.matchMedia('(display-mode: standalone)').matches) return true;
   } catch {
@@ -54,45 +91,92 @@ export function isInstalledAppDisplay(): boolean {
   return (window.navigator as { standalone?: boolean }).standalone === true;
 }
 
+function readFlag(read: () => string | null): boolean {
+  try {
+    return read() === '1';
+  } catch {
+    // Storage unavailable (private mode / webview quirks).
+    return false;
+  }
+}
+
 export default function SignInGate(): JSX.Element | null {
   const { status } = useAuth();
-  // 'unknown' until the client-only checks resolve, so SSR and the first
-  // client frame agree and the window never flashes.
-  const [eligible, setEligible] = useState<'unknown' | 'yes' | 'no'>('unknown');
+  const pathname = usePathname();
+  // 'unknown' until the client-only display check resolves, so SSR and the
+  // first client frame agree and the window never flashes.
+  const [installed, setInstalled] = useState<'unknown' | 'yes' | 'no'>('unknown');
+  const [ageAcked, setAgeAcked] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const signInRef = useRef<HTMLAnchorElement | null>(null);
+  const dismissRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
-    if (!isInstalledAppDisplay()) {
-      setEligible('no');
-      return;
-    }
-    let ageAcked = false;
-    let dismissed = false;
-    try {
-      ageAcked = window.localStorage.getItem(AGE_ACK_KEY) === '1';
-      dismissed = window.sessionStorage.getItem(SIGNIN_GATE_DISMISSED_KEY) === '1';
-    } catch {
-      // Storage unavailable (private mode / webview quirks): treat the age
-      // gate as UNacknowledged so the legal gate keeps priority, and treat the
-      // window as undismissed. Fail toward showing the legal gate first.
-      ageAcked = false;
-      dismissed = false;
-    }
-    setEligible(ageAcked && !dismissed ? 'yes' : 'no');
+    setInstalled(isInstalledAppDisplay() ? 'yes' : 'no');
+    setAgeAcked(readFlag(() => window.localStorage.getItem(AGE_ACK_KEY)));
+    setDismissed(
+      readFlag(() => window.sessionStorage.getItem(SIGNIN_GATE_DISMISSED_KEY)),
+    );
   }, []);
 
-  const dismiss = (): void => {
+  // React to the age gate being answered DURING this session, rather than
+  // latching its value at mount. See AGE_ACK_EVENT above.
+  useEffect(() => {
+    const onAcked = (): void => setAgeAcked(true);
+    window.addEventListener(AGE_ACK_EVENT, onAcked);
+    return () => window.removeEventListener(AGE_ACK_EVENT, onAcked);
+  }, []);
+
+  const dismiss = useCallback((): void => {
     try {
       window.sessionStorage.setItem(SIGNIN_GATE_DISMISSED_KEY, '1');
     } catch {
-      // Best-effort: the window still closes for this render; it may return on
-      // the next navigation. Never let a storage throw trap the user.
+      // Best-effort: the window still closes for this render. Never let a
+      // storage throw trap the user.
     }
-    setEligible('no');
-  };
+    setDismissed(true);
+  }, []);
 
-  // Only a RESOLVED signed-out state opens this. 'loading' and 'unavailable'
-  // both render nothing.
-  if (eligible !== 'yes' || status !== 'signed-out') return null;
+  const excluded = EXCLUDED_PREFIXES.some(
+    (p) => pathname === p || pathname?.startsWith(`${p}/`),
+  );
+  const open =
+    installed === 'yes' &&
+    status === 'signed-out' &&
+    ageAcked &&
+    !dismissed &&
+    !excluded;
+
+  /**
+   * Dialog keyboard contract — the same opener-capture pattern InstallPrompt
+   * and BarLightbox use. `aria-modal` must not promise inertness the DOM does
+   * not deliver (santa: this repo already learned that in g-43d6da5f).
+   */
+  useEffect(() => {
+    if (!open) return;
+    const opener =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    signInRef.current?.focus();
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        dismiss();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      // Exactly two focusable elements: keep Tab cycling between them.
+      event.preventDefault();
+      const active = document.activeElement;
+      if (active === signInRef.current) dismissRef.current?.focus();
+      else signInRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      opener?.focus();
+    };
+  }, [open, dismiss]);
+
+  if (!open) return null;
 
   return (
     <div
@@ -100,11 +184,21 @@ export default function SignInGate(): JSX.Element | null {
       aria-modal="true"
       aria-labelledby="signin-gate-title"
       aria-describedby="signin-gate-body"
-      // z-[1500]: above BottomNav (z-[1000]) so the nav cannot be tapped
-      // behind it, but BELOW AgeGate (z-[2000]) — the 21+ gate is the legal
-      // one and must always win. The age-ack condition above means both are
-      // never open at once anyway; the ordering is defence in depth.
-      className="fixed inset-0 z-[1500] flex items-end justify-center bg-black/70 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center"
+      // INLINE zIndex, not a Tailwind arbitrary class: `z-[1600]` was a value
+      // no other file used, Tailwind never generated the rule, and the
+      // computed z-index silently stayed `auto` — so BottomNav (z-1000)
+      // painted ON TOP and swallowed taps on "Not now" (caught by the
+      // dismiss e2e, diagnosed by hit-testing). An inline style cannot be
+      // JIT-missed. 1600 = above BarLightbox (1500) so a lightbox opened
+      // while auth was still resolving cannot cover this, above BottomNav
+      // (1000), and below AgeGate (2000) because the 21+ gate is the legal
+      // one and must always win.
+      style={{ zIndex: 1600 }}
+      // Vertically CENTERED, never bottom-anchored: bottom-anchoring put the
+      // dismiss control within a pixel of the fixed nav's hit area — the
+      // same bottom-crowded failure cancel-bottomnav and vibe-tweak-reachable
+      // exist to prevent. Centring removes the collision by construction.
+      className="fixed inset-0 flex items-center justify-center bg-black/70 p-4"
     >
       <div className="w-full max-w-sm rounded-2xl bg-surface p-6 shadow-xl">
         <h2 id="signin-gate-title" className="text-xl font-semibold">
@@ -116,12 +210,14 @@ export default function SignInGate(): JSX.Element | null {
         </p>
         <div className="mt-6 flex flex-col gap-3">
           <Link
+            ref={signInRef}
             href="/auth"
             className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-accent px-4 font-medium text-black"
           >
             Sign in
           </Link>
           <button
+            ref={dismissRef}
             type="button"
             onClick={dismiss}
             className="inline-flex min-h-[44px] items-center justify-center rounded-xl px-4 text-sm text-muted"
