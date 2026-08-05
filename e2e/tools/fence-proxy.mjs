@@ -2,12 +2,22 @@
  * E2E network fence (overnight scope 2026-08-05): a refuse-everything HTTP
  * proxy for test runs.
  *
- * Loopback traffic never reaches this proxy — the Playwright `proxy.bypass`
- * list (browser side) and NO_PROXY (dev-server side) exclude
- * localhost/127.0.0.1. Therefore ANY request that arrives here is an
- * application request trying to leave the box during a test run. It is
- * refused (403 / refused CONNECT) and recorded by HOSTNAME ONLY — never the
- * path, query string, or headers, which could carry tokens.
+ * SCOPE — what is and is not fenced (be honest about this):
+ *  - Browser-side egress: fenced by `use.proxy` in playwright.config.ts
+ *    (bypass localhost,127.0.0.1). Covers HTTP, HTTPS CONNECT, and wss://.
+ *  - Dev-server-side egress: fenced ONLY via the env the Playwright
+ *    `webServer` block injects (HTTP(S)_PROXY + NODE_USE_ENV_PROXY=1, Node
+ *    ≥24 undici). A dev server started by hand without that env — possible
+ *    because reuseExistingServer is true — is NOT fenced server-side. Raw
+ *    TCP (e.g. pg) is never proxy-fenced; no app route uses it.
+ *  - Specs must still stub app API routes whose handlers call outward
+ *    (e.g. /api/account/delete, /api/event); the fence turns a missed stub
+ *    into a refused request, not into correct behavior.
+ * Loopback traffic never reaches this proxy, so ANY request arriving here is
+ * an application request trying to leave the box during a test run. It is
+ * refused (403 / refused CONNECT / destroyed upgrade) and recorded by
+ * HOSTNAME ONLY — never the path, query string, or headers, which could
+ * carry tokens.
  *
  * Fail-closed property: if this proxy is not running, proxied requests fail
  * at connect time (ERR_PROXY_CONNECTION_FAILED) — the fence never falls open.
@@ -56,6 +66,15 @@ server.on('connect', (req, clientSocket) => {
   // socket would crash the whole fence (observed ECONNRESET, 2026-08-05).
   clientSocket.on('error', () => {});
   clientSocket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+});
+
+// Plain ws:// upgrades (non-CONNECT) would otherwise be closed silently by
+// Node without firing 'request' — log them too, then refuse.
+server.on('upgrade', (req, socket) => {
+  const host = String(req.headers.host || 'unparseable-host').split(':')[0];
+  record('UPGRADE', host);
+  socket.on('error', () => {});
+  socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
 });
 
 // A raw client reset between accept and request must never kill the fence.

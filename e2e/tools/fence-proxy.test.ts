@@ -26,7 +26,9 @@ import path from 'node:path';
 const PROXY_PATH =
   process.env.FENCE_UNDER_TEST ??
   path.join(__dirname, 'fence-proxy.mjs');
-const PORT = 39615; // test-only port, distinct from the runtime default
+// PID-derived to avoid EADDRINUSE when parallel sessions run `npm test`
+// concurrently on this machine (a real occurrence under the overnight loop).
+const PORT = 39600 + (process.pid % 199);
 const LOG = path.join(mkdtempSync(path.join(tmpdir(), 'fence-test-')), 'log.txt');
 
 let proxy: ChildProcess;
@@ -50,7 +52,10 @@ function rawRequest(payload: string): Promise<string> {
   });
 }
 
+const SKIPPED = process.env.FENCE_TEST_SKIP === '1';
+
 beforeAll(async () => {
+  if (SKIPPED) return;
   proxy = spawn(process.execPath, [PROXY_PATH], {
     env: { ...process.env, FENCE_PORT: String(PORT), FENCE_LOG: LOG },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -62,11 +67,21 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
-  proxy.kill();
+afterAll(async () => {
+  if (SKIPPED) return;
+  // Await actual exit — on Windows a slow-to-die child can hold the port
+  // into the next run.
+  await new Promise<void>((resolve) => {
+    proxy.once('exit', () => resolve());
+    proxy.kill();
+    setTimeout(resolve, 3000);
+  });
 });
 
-describe('fence-proxy contract', () => {
+// FENCE_TEST_SKIP=1 is the escape hatch for sandboxed environments where
+// child_process.spawn or loopback binds are restricted — the rest of the
+// unit gate must not be hostage to this one integration-ish file there.
+describe.skipIf(process.env.FENCE_TEST_SKIP === '1')('fence-proxy contract', () => {
   it('refuses plain-HTTP proxying with 403 and logs hostname only', async () => {
     const res = await rawRequest(
       'GET http://fence-test-host.example/secret/path?token=SHOULD_NOT_LOG HTTP/1.1\r\n' +
@@ -117,6 +132,20 @@ describe('fence-proxy contract', () => {
   it('survives raw garbage bytes without dying', async () => {
     await rawRequest('\x00\x01garbage\r\n\r\n');
     await new Promise((r) => setTimeout(r, 200));
+    expect(proxyAlive()).toBe(true);
+  });
+
+  it('refuses AND logs plain ws:// upgrade attempts (not silently closed)', async () => {
+    const res = await rawRequest(
+      'GET / HTTP/1.1\r\n' +
+        'Host: fence-ws-host.example\r\n' +
+        'Connection: Upgrade\r\n' +
+        'Upgrade: websocket\r\n' +
+        'Sec-WebSocket-Key: dGVzdGtleXRlc3RrZXk=\r\n' +
+        'Sec-WebSocket-Version: 13\r\n\r\n',
+    );
+    expect(res).toContain('403');
+    expect(readFileSync(LOG, 'utf8')).toContain('UPGRADE fence-ws-host.example');
     expect(proxyAlive()).toBe(true);
   });
 });

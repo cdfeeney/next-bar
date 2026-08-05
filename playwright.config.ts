@@ -127,5 +127,18 @@ export default defineConfig({
     url: 'http://localhost:3000',
     reuseExistingServer: true,
     timeout: 120_000,
+    // Server-side half of the network fence: the dev server's own outbound
+    // fetch (undici) honors these ONLY because NODE_USE_ENV_PROXY=1 (Node
+    // ≥24); raw-TCP clients (pg) are NOT covered — no app route uses one.
+    // CAVEAT: reuseExistingServer means a dev server you started yourself,
+    // without these vars, is NOT fenced server-side. Kill it first if the
+    // egress guarantee matters for the run.
+    env: {
+      HTTP_PROXY: 'http://127.0.0.1:39555',
+      HTTPS_PROXY: 'http://127.0.0.1:39555',
+      NO_PROXY: 'localhost,127.0.0.1',
+      NODE_USE_ENV_PROXY: '1',
+      NEXT_TELEMETRY_DISABLED: '1',
+    },
   },
 });
