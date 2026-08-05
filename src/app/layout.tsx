@@ -4,6 +4,7 @@ import { Poppins } from 'next/font/google';
 import './globals.css';
 import 'leaflet/dist/leaflet.css';
 import AgeGate from '@/components/AgeGate';
+import SignInGate from '@/components/SignInGate';
 import BottomNav from '@/components/BottomNav';
 import OnboardingGate from '@/components/OnboardingGate';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
@@ -72,6 +73,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {children}
         <BottomNav />
         <AgeGate />
+        <SignInGate />
         <OnboardingGate />
         <ServiceWorkerRegister />
         <CatalogRefresh />
