@@ -325,7 +325,11 @@ Mitigations — **all three are now numbered steps in §5 step 3**, not advice:
 
   `0035` — the revert itself is **prose in the source, not SQL**: re-apply the
   `share_night` body from `0016_shared_nights.sql` (identical to `0035`'s minus
-  the `p_night` range guard). Do it in this shape:
+  the `p_night` range guard). **This is a restore-then-replay, not a true undo**
+  (specialist lane): `CREATE OR REPLACE` has no inverse, so the block below
+  restores the *older* function body and then deletes the ledger row so a
+  future run re-applies `0035`. Do not read "rolled back" as "0035 is gone" —
+  it will come back on the next migration run. Do it in this shape:
   ```sql
   begin;
   -- paste the CREATE OR REPLACE FUNCTION share_night(...) body from
@@ -346,7 +350,20 @@ Mitigations — **all three are now numbered steps in §5 step 3**, not advice:
   The migration's own header says no application rollback is expected or
   useful. Prefer **fix-forward**. Note too that the runner re-applies these
   protections at every startup via `MIGRATION_LEDGER_DDL`, so this rollback is
-  undone by the next migration run — which is a feature, not a bug.
+  undone by the next migration run — a feature, not a bug. **Consequence
+  (specialist lane): between this rollback and the next runner invocation the
+  ledger table is unguarded and browser-readable again.** Only do it inside a
+  maintenance window, and close it by running the runner again.
+- **Partial apply (e.g. `0034` commits, `0035` fails) — do NOT roll back
+  reflexively** (specialist lane). Files run in separate transactions, so a
+  ledger legitimately ending at `0034` is a *truthful resumable prefix*, not
+  corruption. Correct recovery: **re-run the runner.** It skips `0034`
+  (ledger row present, checksum matches) and retries `0035`. **Do not manually
+  delete `0034`'s ledger row** — it is correct, and removing it only re-runs
+  its DCL for no benefit. If `0035` then fails *identically*, the failure is
+  deterministic — triage its DDL against the live schema; it is not a
+  partial-apply artifact. This is distinct from step 7's hard stop, which
+  covers the different case of DDL landing with **no** ledger row at all.
 - The web tier is untouched by this packet, so no deployment rollback is
   involved; the Production deployment stays at `6ec5e5d` throughout.
 
