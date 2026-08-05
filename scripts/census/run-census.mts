@@ -22,6 +22,7 @@ import { refuseIfUnattended } from '../loop-guard.mjs';
 import {
   applyCurated,
   checkApplyPreconditions,
+  rebindCodeSha,
   type ApplySidecar,
   type CuratedCandidate,
 } from './apply';
@@ -94,6 +95,39 @@ const reportOnly = args.includes('--report');
 const applyFile = flagValue('--apply');
 
 async function main(): Promise<void> {
+  if (args.includes('--rebind-code-sha')) {
+    // Attended-only: rewrite the sidecar/report code identity to the current
+    // CLEAN commit after the operator narrowly committed byte-identical
+    // generation code (see rebindCodeSha in apply.ts for the contract).
+    refuseIfUnattended('census code-sha rebind');
+    const runId = flagValue('--run');
+    const fromSha = flagValue('--from-code-sha');
+    if (!runId || !fromSha) {
+      console.error('--rebind-code-sha requires --run <runId> --from-code-sha <sha>');
+      process.exit(2);
+    }
+    const runDir = join(OUT_DIR, runId);
+    const sidecar = JSON.parse(fs.readFileSync(join(runDir, 'apply-sidecar.json'), 'utf8')) as ApplySidecar;
+    const report = JSON.parse(fs.readFileSync(join(runDir, 'report.json'), 'utf8'));
+    const res = rebindCodeSha({
+      unattended: process.env.LOOP_UNATTENDED === '1',
+      sidecar,
+      reportCandidates: report.candidates,
+      fromCodeSha: fromSha,
+      toCodeSha: currentCodeSha(),
+      now: new Date(),
+    });
+    if (!res.ok) {
+      console.error(`rebind REFUSED: ${res.reason}`);
+      process.exit(3);
+    }
+    fs.writeFileSync(join(runDir, 'apply-sidecar.json'), JSON.stringify(res.sidecar, null, 2));
+    report.codeSha = res.sidecar.codeSha;
+    fs.writeFileSync(join(runDir, 'report.json'), JSON.stringify(report, null, 2));
+    console.log(`rebound ${runId}: ${fromSha} -> ${res.sidecar.codeSha}`);
+    return;
+  }
+
   if (applyFile) {
     await runApply(applyFile);
     return;

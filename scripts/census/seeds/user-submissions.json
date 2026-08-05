@@ -1,1 +1,10 @@
-[]
+[
+  {
+    "id": "operator-2026-08-04-lucindas",
+    "name": "Lucinda's",
+    "neighborhood": "East Village",
+    "borough": "manhattan",
+    "lat": 40.7283033,
+    "lng": -73.9821252
+  }
+]

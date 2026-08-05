@@ -34,7 +34,19 @@ export function osmAdapter(): ProviderAdapter {
       const lat = tile?.lat ?? 0;
       const lng = tile?.lng ?? 0;
       const query = `[out:json][timeout:25];(node["amenity"~"bar|pub|biergarten|nightclub"](around:${radius},${lat},${lng});way["amenity"~"bar|pub|biergarten|nightclub"](around:${radius},${lat},${lng}););out center;`;
-      const res = await ctx.transport(OVERPASS_URL, { method: 'POST', body: query });
+      // Live-pilot lesson (2026-08-04, fixtures bypass the network and could
+      // never catch this): overpass-api.de's abuse filter answers 406 to a
+      // request WITHOUT an identifying User-Agent — that header is what fixed
+      // it (verified live: no-UA 406, with-UA 200). The form-encoded `data=`
+      // body is the documented request shape; keep both.
+      const res = await ctx.transport(OVERPASS_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'next-bar-census/1.0 (attended operator pilot)',
+        },
+        body: `data=${encodeURIComponent(query)}`,
+      });
 
       if (res.status !== 200) {
         return {

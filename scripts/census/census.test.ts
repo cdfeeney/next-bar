@@ -20,6 +20,7 @@ import { runCensus } from './runner';
 import {
   applyCurated,
   checkApplyPreconditions,
+  rebindCodeSha,
   type ApplySidecar,
   type BarsWriteClient,
   type CuratedCandidate,
@@ -242,33 +243,128 @@ describe('osm adapter', () => {
     expect(res.saturated).toBe(true);
     expect(res.callsUsed).toBe(1);
   });
+
+  it('POSTs the query FORM-ENCODED — Overpass 406s a raw QL body (live pilot 2026-08-04)', async () => {
+    let seenInit: { method?: string; headers?: Record<string, string>; body?: string } | undefined;
+    const transport: Transport = async (_url, init) => {
+      seenInit = init as typeof seenInit;
+      return { status: 200, body: { elements: [] } };
+    };
+    await osmAdapter().fetchUnit('manhattan/East Village', null, ctxWith(transport));
+    expect(seenInit?.method).toBe('POST');
+    expect(seenInit?.headers?.['Content-Type']).toBe('application/x-www-form-urlencoded');
+    // The identifying UA is the load-bearing half: overpass-api.de's abuse
+    // filter 406s UA-less requests (verified live 2026-08-04).
+    expect(seenInit?.headers?.['User-Agent']).toMatch(/next-bar-census/);
+    expect(seenInit?.body).toMatch(/^data=/);
+    // The QL must be percent-encoded — a raw '[out:json]' body is what 406'd.
+    expect(seenInit?.body).not.toContain('[out:json]');
+    expect(decodeURIComponent(seenInit?.body ?? '')).toContain('[out:json]');
+  });
 });
 
 describe('sla adapter', () => {
-  it('pages by offset and saturates on a short page', async () => {
-    const fullPage = Array.from({ length: 100 }, (_, i) => ({
-      license_serial_number: `L${i}`,
-      premises_name: `BAR ${i}`,
-      latitude: '40.7',
-      longitude: '-73.9',
-      actual_address_of_premises_address1: `${i} Ave`,
-    }));
+  // Real 9s3h-dpkz schema (live pilot 2026-08-04): the old nqur-w4p7 id was a
+  // GASOLINE-PRICES dataset and every legacy column name was wrong.
+  const slaRow = (i: number) => ({
+    licensepermitid: `0001-23-${240000 + i}`,
+    premisescounty: 'Kings',
+    description: 'Additional Bar',
+    legalname: `BAR ${i} LLC`,
+    actualaddressofpremises: `${i} Ave`,
+    city: 'BROOKLYN',
+    zipcode: '11211',
+    georeference: { type: 'Point', coordinates: [-73.9, 40.7] },
+  });
+
+  it('targets the ACTIVE-LICENSES dataset with title-case county + class filter + stable order', async () => {
     let seenUrl = '';
     const transport: Transport = async (url) => {
       seenUrl = url;
-      return { status: 200, body: url.includes('$offset=100') ? fullPage.slice(0, 3) : fullPage };
+      return { status: 200, body: [] };
+    };
+    await slaAdapter().fetchUnit('manhattan', null, ctxWith(transport));
+    expect(seenUrl).toContain('9s3h-dpkz');
+    expect(seenUrl).not.toContain('nqur-w4p7'); // the gasoline dataset — never again
+    const decoded = decodeURIComponent(seenUrl);
+    expect(decoded).toContain("premisescounty='New York'"); // title-case, not 'NEW YORK'
+    expect(decoded).toContain('$order=licensepermitid'); // offset paging is unstable without it
+    expect(decoded).toContain('Additional Bar'); // bar-shaped class subset
+  });
+
+  it('maps the real schema: id, legalname, georeference coords, class signal', async () => {
+    const rows = [
+      slaRow(1),
+      { ...slaRow(2), legalname: undefined }, // nameless → dropped
+      { ...slaRow(3), georeference: undefined }, // no coords → dropped
+    ];
+    const transport: Transport = async () => ({ status: 200, body: rows });
+    const res = await slaAdapter().fetchUnit('brooklyn', null, ctxWith(transport));
+    expect(res.candidates).toHaveLength(1);
+    const c = res.candidates[0];
+    expect(c.externalId).toBe('sla:0001-23-240001');
+    expect(c.name).toBe('BAR 1 LLC');
+    expect(c.lat).toBe(40.7);
+    expect(c.lng).toBe(-73.9);
+    expect(c.address).toBe('1 Ave');
+    expect(c.signals).toContain('sla:Additional Bar');
+    expect(c.verification).toBe('unverified');
+    expect(res.evidence[0].url).toContain('licensepermitid=0001-23-240001');
+  });
+
+  it('pages by offset and saturates on a short page', async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => slaRow(i));
+    let seenUrl = '';
+    const transport: Transport = async (url) => {
+      seenUrl = url;
+      return { status: 200, body: url.includes('offset=100') ? fullPage.slice(0, 3) : fullPage };
     };
     const a = slaAdapter();
     const first = await a.fetchUnit('brooklyn', null, ctxWith(transport));
     expect(first.candidates).toHaveLength(100);
     expect(first.nextCursor).toBe('100');
     expect(first.saturated).toBe(false);
-    expect(seenUrl).toContain('$offset=0');
+    expect(decodeURIComponent(seenUrl)).toContain('$offset=0');
 
     const second = await a.fetchUnit('brooklyn', '100', ctxWith(transport));
     expect(second.candidates).toHaveLength(3);
     expect(second.nextCursor).toBeNull();
     expect(second.saturated).toBe(true);
+  });
+});
+
+describe('rebindCodeSha (attended code-identity rebind)', () => {
+  const cands = [{ externalId: 'osm:node/1', name: 'A', neighborhood: 'LES', lat: 1, lng: 2, signals: [], evidenceIds: [], verification: 'unverified', provider: 'osm' }] as never[];
+  const sidecar = () => ({
+    runId: 'r1',
+    payloadSha256: sha256Of(JSON.stringify(cands)),
+    configHash: 'cfg',
+    codeSha: 'abc-dirty-123456789012',
+    generatedAt: '2026-08-04T00:00:00.000Z',
+  });
+  const base = { reportCandidates: cands, fromCodeSha: 'abc-dirty-123456789012', toCodeSha: 'def4567', now: new Date('2026-08-05T00:00:00Z') };
+
+  it('refuses unattended', () => {
+    expect(rebindCodeSha({ ...base, unattended: true, sidecar: sidecar() })).toMatchObject({ ok: false, reason: 'unattended' });
+  });
+  it('refuses a from-sha that does not match the sidecar', () => {
+    expect(rebindCodeSha({ ...base, unattended: false, sidecar: sidecar(), fromCodeSha: 'wrong' }).ok).toBe(false);
+  });
+  it('refuses a dirty rebind target — the whole point is an immutable SHA', () => {
+    expect(rebindCodeSha({ ...base, unattended: false, sidecar: sidecar(), toCodeSha: 'def-dirty-999999999999' }).ok).toBe(false);
+  });
+  it('refuses when the candidates payload no longer matches the sidecar hash', () => {
+    const s = { ...sidecar(), payloadSha256: 'tampered' };
+    expect(rebindCodeSha({ ...base, unattended: false, sidecar: s }).ok).toBe(false);
+  });
+  it('rebinding rewrites codeSha and appends an audit entry; payload hash untouched', () => {
+    const res = rebindCodeSha({ ...base, unattended: false, sidecar: sidecar() });
+    if (!res.ok) throw new Error('expected ok');
+    expect(res.sidecar.codeSha).toBe('def4567');
+    expect(res.sidecar.payloadSha256).toBe(sidecar().payloadSha256);
+    expect(res.sidecar.rebindHistory).toEqual([
+      { from: 'abc-dirty-123456789012', to: 'def4567', at: '2026-08-05T00:00:00.000Z' },
+    ]);
   });
 });
 

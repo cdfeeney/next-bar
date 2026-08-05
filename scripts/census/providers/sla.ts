@@ -1,35 +1,51 @@
 import type { CensusContext, Evidence, NormalizedCandidate, ProviderAdapter, ProviderResult } from '../types';
 
 /**
- * NY State Liquor Authority adapter (data.ny.gov Socrata dataset). Unit =
- * borough (license rows carry county, not neighborhood tiles); cursor =
- * numeric row offset; saturated when a page comes back short. On-premises
- * license classes are the bar-shaped subset — a license is EVIDENCE a venue
- * can pour, not proof it is a bar, so candidates stay 'unverified' and carry
- * the license class as a signal for curation.
+ * NY State Liquor Authority adapter — data.ny.gov Socrata dataset 9s3h-dpkz
+ * ("Current Liquor Authority Active Licenses"). Unit = borough (license rows
+ * carry premisescounty, not neighborhood tiles); cursor = numeric row offset;
+ * saturated when a page comes back short. Server-side filter to the
+ * bar-shaped license classes — a license is EVIDENCE a venue can pour, not
+ * proof it is a bar, so candidates stay 'unverified' and carry the class as
+ * a signal for curation.
+ *
+ * REWRITTEN after the first live pilot (2026-08-04): the previous dataset id
+ * nqur-w4p7 was a GASOLINE-PRICES table and every column name here was
+ * fictional relative to the real schema. Names in 9s3h-dpkz are LEGAL names
+ * ("BEER TIME STORE INC") — display naming is a curation concern.
  */
 
-export const SLA_DATASET_URL =
-  'https://data.ny.gov/resource/nqur-w4p7.json';
+export const SLA_DATASET_URL = 'https://data.ny.gov/resource/9s3h-dpkz.json';
 
 export const SLA_PAGE_SIZE = 100;
 
+/**
+ * Bar-shaped license classes observed in the live dataset (Manhattan counts,
+ * 2026-08-04: Additional Bar 1434, Club 90, Cabaret 19, Bottle Club 8,
+ * Night Club 1). 'Restaurant' (3989) is deliberately excluded from the
+ * pilot — it floods curation with venues that are not bars; revisit at
+ * expansion with its own approval.
+ */
+export const SLA_BAR_CLASSES = ['Additional Bar', 'Club', 'Cabaret', 'Night Club', 'Bottle Club'];
+
+/** Title-case values as the dataset stores them (e.g. 'New York', not 'NEW YORK'). */
 const BOROUGH_TO_COUNTY: Record<string, string> = {
-  manhattan: 'NEW YORK',
-  brooklyn: 'KINGS',
-  queens: 'QUEENS',
-  bronx: 'BRONX',
-  'staten island': 'RICHMOND',
+  manhattan: 'New York',
+  brooklyn: 'Kings',
+  queens: 'Queens',
+  bronx: 'Bronx',
+  'staten island': 'Richmond',
 };
 
 interface SlaRow {
-  license_serial_number?: string;
-  premises_name?: string;
-  doing_business_as_name?: string;
-  latitude?: string;
-  longitude?: string;
-  actual_address_of_premises_address1?: string;
-  license_type_name?: string;
+  licensepermitid?: string;
+  premisescounty?: string;
+  description?: string;
+  legalname?: string;
+  actualaddressofpremises?: string;
+  city?: string;
+  zipcode?: string;
+  georeference?: { type?: string; coordinates?: [number, number] };
 }
 
 export function slaAdapter(): ProviderAdapter {
@@ -38,8 +54,14 @@ export function slaAdapter(): ProviderAdapter {
     units: (borough: string) => [borough.toLowerCase()],
     async fetchUnit(unit, cursor, ctx: CensusContext): Promise<ProviderResult> {
       const offset = cursor ? Number(cursor) : 0;
-      const county = BOROUGH_TO_COUNTY[unit] ?? unit.toUpperCase();
-      const url = `${SLA_DATASET_URL}?$limit=${SLA_PAGE_SIZE}&$offset=${offset}&county=${encodeURIComponent(county)}`;
+      const county = BOROUGH_TO_COUNTY[unit] ?? unit;
+      const where = `premisescounty='${county}' AND description in(${SLA_BAR_CLASSES.map((c) => `'${c}'`).join(',')})`;
+      // $order makes offset paging deterministic — Socrata row order is
+      // otherwise unstable across requests and pages could overlap/skip.
+      const url =
+        `${SLA_DATASET_URL}?$limit=${SLA_PAGE_SIZE}&$offset=${offset}` +
+        `&$order=${encodeURIComponent('licensepermitid')}` +
+        `&$where=${encodeURIComponent(where)}`;
       const res = await ctx.transport(url);
 
       if (res.status !== 200) {
@@ -58,17 +80,18 @@ export function slaAdapter(): ProviderAdapter {
       const candidates: NormalizedCandidate[] = [];
       const evidence: Evidence[] = [];
       for (const row of rows) {
-        const serial = row.license_serial_number;
-        const name = row.doing_business_as_name || row.premises_name;
-        const lat = row.latitude ? Number(row.latitude) : undefined;
-        const lng = row.longitude ? Number(row.longitude) : undefined;
+        const serial = row.licensepermitid;
+        const name = row.legalname;
+        const coords = row.georeference?.coordinates;
+        const lng = coords?.[0];
+        const lat = coords?.[1];
         if (!serial || !name || lat === undefined || lng === undefined) continue;
         if (Number.isNaN(lat) || Number.isNaN(lng)) continue;
         const externalId = `sla:${serial}`;
         evidence.push({
           id: externalId,
           provider: 'sla',
-          url: `${SLA_DATASET_URL}?license_serial_number=${serial}`,
+          url: `${SLA_DATASET_URL}?licensepermitid=${encodeURIComponent(serial)}`,
           externalId: serial,
           retrievedAt,
         });
@@ -78,8 +101,8 @@ export function slaAdapter(): ProviderAdapter {
           neighborhood: unit, // borough-grain; curation refines neighborhoods
           lat,
           lng,
-          address: row.actual_address_of_premises_address1,
-          signals: row.license_type_name ? [`sla:${row.license_type_name}`] : [],
+          address: row.actualaddressofpremises,
+          signals: row.description ? [`sla:${row.description}`] : [],
           evidenceIds: [externalId],
           verification: 'unverified',
           provider: 'sla',
