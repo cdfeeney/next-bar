@@ -7,6 +7,12 @@ supersedes that file's stale pre-TestFlight operator steps. Live Git, the goal
 store, lease registry, remote-write lock, deployment identities, and database
 ledgers remain authoritative over this document.
 
+If the local-only overnight verification loop ran, also read
+`docs/OVERNIGHT-TEST-AND-READINESS-SCOPE-2026-08-05.md` and its expected output
+`docs/OVERNIGHT-TEST-REPORT-2026-08-05.md`. Reconcile the report's base/final
+SHAs and do not treat mocked/local results as Staging, Production, native, or
+capacity proof.
+
 ## Non-negotiable boundaries
 
 - Product/census workspace: `C:\Users\cdfee\projects\nb-overnight`.
