@@ -33,14 +33,18 @@ precisely the "ledger lying about its own state" failure this packet forbids
 elsewhere. The original proof used *this* repo's planner, which the branch did
 not contain: **the proof and the instruction described different code.**
 
-Fix (branch commit `7654cb5`): the runner's exact dependency closure was added,
+Fix (branch commit `7654cb5`): the runner's dependency closure **for the plain
+apply path** was added,
 extracted with `git checkout` (byte-faithful) from the ledgered version —
 `scripts/apply-migrations.ts`, `scripts/lib/migrationLedger.ts`,
 `scripts/lib/catalogBootstrap.ts`, `src/lib/migrationPlan.ts`. Tooling only:
 no schema change and no shipped application code. `pg`, `tsx`, and `dotenv`
-are already branch dependencies; the only cross-import (`src/types`) exists on
-the branch. The branch's complete non-migration delta vs `6ec5e5d` is exactly
-those four tooling files.
+are already branch dependencies; the only cross-import on that path
+(`src/types`) exists on the branch. The branch's complete non-migration delta
+vs `6ec5e5d` is exactly those four tooling files. (The runner also has a lazy
+`await import('../src/lib/bars')` reached **only** under `--bootstrap`, which
+this window never uses; its transitive files happen to be present on the
+branch regardless.)
 
 **Consequence to know before approving:** the ledgered runner executes
 `MIGRATION_LEDGER_DDL` at startup — `create table if not exists` **plus
@@ -161,15 +165,23 @@ must run `npm ci` there first (git worktrees do not share dependencies).
   drop function if exists public.vibe_profiles_lww_guard();
   drop table if exists public.vibe_profiles;
   ```
-  `0034` — restores the pre-revoke grants:
+  `0034` — **all six** statements from its rollback block. The last two are
+  load-bearing: without them `profiles` is left with a full table-level
+  `UPDATE` grant instead of the column-scoped grant the pre-migration state
+  had (round-2 finding — an earlier revision of this packet quoted only the
+  first four):
   ```sql
   grant all on table public.profiles             to anon, authenticated;
   grant all on table public.ratings              to anon, authenticated;
   grant all on table public.pairwise_comparisons to anon, authenticated;
   revoke all on table public.ratings from anon;  -- restore 0015:96
+  revoke update on table public.profiles from public, anon, authenticated;
+  grant update (display_name, is_private) on table public.profiles
+    to authenticated;                            -- restore 0006:82-83
   ```
-  `0035` — re-apply the `share_night` body from `0016_shared_nights.sql`,
-  which is identical to `0035`'s minus the `p_night` range guard.
+  `0035` — **not literal SQL** (its source rollback is a prose instruction
+  too): re-apply the `share_night` body from `0016_shared_nights.sql`, which
+  is identical to `0035`'s minus the `p_night` range guard.
 
   `0036` — see `supabase/migrations/0036_protect_schema_migrations.sql:24-27`:
   its header states no application rollback is expected or useful, and that
