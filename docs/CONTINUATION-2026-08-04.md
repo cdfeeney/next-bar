@@ -279,6 +279,28 @@ census evidence also recorded in the goal store.
   shell feedback: top-scroll oversize on Next Bar surface + a background
   issue (verify against overnight-branch fixes before authoring).
 
+## 7d. LOCAL-ONLY OVERNIGHT VERIFICATION LOOP — 2026-08-05 (~01:30–04:00 ET)
+
+Ran per `docs/OVERNIGHT-TEST-AND-READINESS-SCOPE-2026-08-05.md`; full record
+in `docs/OVERNIGHT-TEST-REPORT-2026-08-05.md` (authoritative for tonight).
+Summary: 9 goals queued via /mission; Gates 1–5 executed (unit 2065→2069 all
+green, tsc, secret scan, build, preflight 13ok/3warn/0fail); a loopback
+NETWORK FENCE was built and proved the social suites loopback-clean (fence
+refused 390 protected-Staging + ~248 tile-CDN requests, suites green) while
+the FULL matrix exposed 101 failures = one root cause: the broader e2e suite
+depends on live egress (catalog swap from Staging anon REST + carto tiles +
+console-purity assertions). Gate 6 produced the panel-reviewed
+`docs/RELEASE-READINESS-SIM-2026-08-05.md` (3 santa rounds, parked for one
+re-verdict per the round cap). Gate 7 landed RED-first fence contract tests
+(3 more santa rounds; unresolved hardening items folded into new goal
+g-5dd241b6). Packets (beta epics, Crews, APNs, 20k) NOT RUN — queued with
+full specs (g-6b9f79ec, g-9b97c22d). New goals also queued: g-31c59158
+(login window), g-b07c73bc (mobile-shell regression), g-8354588a
+(tier-validate Windows fix). Local commits: d40e644, d579a2e, fec5d6c,
+f428996, 0e48573 + report/continuation. Census goal stayed PAUSED; 0041
+applied nowhere; no credentials/paid calls; nothing pushed;
+Staging/Production/Apple/GitHub/Vercel untouched; lease released; lock ARMED.
+
 ## 8. Tomorrow's exact iOS/UDID/TestFlight steps (operator, unchanged)
 
 1. Finish registering the iPhone UDID (Apple Devices app → copy UDID →
