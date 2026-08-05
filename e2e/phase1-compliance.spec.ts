@@ -45,6 +45,18 @@ test('catalog loads past the 1,000-row PostgREST cap', async ({ page }) => {
   const total = sizes.reduce((n, s) => n + s, 0);
   // >1000 proves the paging loop ran; a single capped page would be exactly 1000.
   expect(total, `catalog page sizes seen: ${JSON.stringify(sizes)}`).toBeGreaterThan(1000);
+
+  // The loop RUNNING is not the loop WORKING: overlapping/duplicated pages
+  // would sum past 1000 too, but rowsToCatalog rejects duplicate ids and the
+  // swap never commits. Asserting the commit marker closes that hole
+  // (santa: Codex). Live-PostgREST paging remains Staging-acceptance
+  // coverage — this test now owns the client loop, stub-side.
+  await expect
+    .poll(
+      () => page.evaluate(() => document.documentElement.dataset.catalogSwapped),
+      { timeout: 20_000 },
+    )
+    .toBe('1');
 });
 
 test('Google-derived hours are labelled unverified, with attribution', async ({

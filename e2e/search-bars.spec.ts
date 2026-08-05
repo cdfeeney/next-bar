@@ -151,7 +151,7 @@ test.describe('/search finds catalog bars', () => {
     const gate = new Promise<void>((resolve) => {
       releaseBars = resolve;
     });
-    await page.route('**/rest/v1/bars*', async (route) => {
+    await page.route(/\/rest\/v1\/bars(\?|$)/, async (route) => {
       await gate;
       // fallback(), not continue(): continue() goes to the NETWORK (fenced),
       // fallback() chains to the loopback catalog fixture registered in the

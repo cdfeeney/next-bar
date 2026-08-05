@@ -14,35 +14,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { bars as staticBars } from '../../src/lib/bars';
-import type { Bar } from '../../src/types';
-import type { BarsTableRow } from '../../src/lib/catalogServer';
-
-function barToRow(b: Bar): BarsTableRow {
-  return {
-    id: b.id,
-    name: b.name,
-    lat: b.lat,
-    lng: b.lng,
-    tags: [...b.tags],
-    neighborhood: b.neighborhood,
-    price_tier: b.priceTier,
-    hours: b.hours ?? null,
-    blurb: b.blurb ?? '',
-    address: b.address ?? '',
-    place_id: b.googlePlaceId ?? null,
-    business_status: b.businessStatus ?? null,
-    // Legacy single-photo bars carry photoRef with no photoCount; the real
-    // bars-table rows for them store photo_count=1 (0020 backfill), and the
-    // map-lightbox single-photo test depends on exactly that.
-    photo_count: b.photoCount ?? (b.photoRef ? 1 : 0),
-    photo_attributions: b.photoAttributions ?? null,
-    reviews: null, // not in CATALOG_COLUMNS; loaded on demand
-    last_verified: b.lastVerified,
-    hours_source: b.hoursSource ?? null,
-    hours_confidence: b.hoursConfidence ?? null,
-    hours_verified_at: b.hoursVerifiedAt ?? null,
-  };
-}
+import { barToRow } from './catalogFixtureMap';
 
 const rows = staticBars.map(barToRow);
 const outDir = path.join(process.cwd(), 'e2e', 'fixtures');

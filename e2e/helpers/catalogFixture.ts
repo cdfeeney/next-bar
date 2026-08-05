@@ -38,7 +38,12 @@ export function loadBundledRows(): Row[] {
   return bundledRows;
 }
 
-/** Parse supabase-js paging: Range header first, offset/limit params second. */
+/**
+ * Parse paging. The installed supabase-js (postgrest-js 2.x) sends
+ * offset/limit QUERY PARAMS — that is the live path here; the Range-header
+ * branch is compatibility for older clients only (santa: Fable — do not
+ * read the header branch as what the app does).
+ */
 function parseRange(route: Route): { from: number; to: number } {
   const headers = route.request().headers();
   const range = headers['range'];
@@ -59,7 +64,10 @@ export async function installCatalogFixture(
   const sorted = [...(opts.rows ?? loadBundledRows())].sort((a, b) =>
     a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   );
-  await page.route('**/rest/v1/bars**', async (route) => {
+  // Regex, not '**/rest/v1/bars**': the glob would also swallow a future
+  // /rest/v1/bars_something endpoint and silently bypass the fence for it
+  // (santa: Codex).
+  await page.route(/\/rest\/v1\/bars(\?|$)/, async (route) => {
     if (route.request().method() !== 'GET') {
       await route.fulfill({ status: 403, contentType: 'application/json', body: '{}' });
       return;
@@ -70,7 +78,10 @@ export async function installCatalogFixture(
       status: 200,
       contentType: 'application/json',
       headers: {
-        'content-range': `${from}-${from + slice.length - 1}/*`,
+        // PostgREST emits '*/*' (not a backward range) for an empty page.
+        'content-range': slice.length
+          ? `${from}-${from + slice.length - 1}/*`
+          : '*/*',
       },
       body: JSON.stringify(slice),
     });
