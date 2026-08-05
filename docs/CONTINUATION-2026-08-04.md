@@ -1,0 +1,378 @@
+# CONTINUATION — 2026-08-04 overnight run (Next Bar) — SYSTEM OF RECORD
+
+Supersedes `docs/CONTINUATION-2026-08-03-EVENING.md`. Reconciled against
+live git, the goal store (workspace `9c928dacfabc5299`), the lease
+registry, the remote-write lock, and recorded test/review evidence at
+write time (2026-08-04 ~01:35 ET). Unattended six-hour overnight run,
+launched 23:01 ET 2026-08-03, finished ~01:40 ET — well inside the
+04:45 hard stop.
+
+## 1. Exact final state
+
+- Branch `feat/overnight-2026-07-30`; **local HEAD = the commit
+  containing this file** (parent `79a8800`).
+- **Origin tip unchanged — NOTHING was pushed.** Before tonight the
+  branch was 15 ahead / 0 behind; tonight added 6 local commits
+  (below + this one) → **21 outgoing**.
+- Dirty/untracked paths: EXACTLY the four protected operator documents
+  (`docs/MASTER-TODO-2026-07-30.md`, `docs/OPERATOR-BUGS-2026-07-28.md`
+  modified; `docs/CTO-OPERATOR-PLAN-2026-07-31.md`,
+  `docs/STAGING-ACCEPTANCE-NOTES-2026-08-01.md` untracked) — byte-for-
+  byte preserved (see §7 incident note).
+- Remote-write lock ARMED throughout and at close
+  (`next-bar/.git/OVERNIGHT_REMOTE_WRITE_LOCK`). Lease registry empty at
+  close. No `.claude`/worktree deletions; no branches removed.
+
+## 2. Commits created tonight (all local-only)
+
+| SHA | What | Files |
+|---|---|---|
+| `deffdd1` | feat: [T0][g-31f36bf8] live venue presence — Pin where I am | 32 files: socialNight canonical boundary (+nightKey/intent/cadence/nightPhase move 5am→6am + test updates + comment sweep incl. useIntent/matching/demo), pins.server(+test), pinSignal(+test), useSessionPin, useDialogA11y(+test), PinWhereIAm, PinConfirmDialog, ImHereButton, ResultCard, friends/page, accountCache (pin reset wiring), e2e/pin-where-i-am.spec.ts, drafts/0038_venue_pins.sql, migration0038.test.ts, MIGRATION-PLAN-RECONCILIATION doc |
+| `8d66533` | chore: checkpoint (morning log only) | .loop-guard/morning.md |
+| `49d9192` | feat: [T1][g-7de10fce] matcher v1.1 + dark KPI foundation | 15 files: matcherEval(+corpus gates), tasteSignals(+test), matching/constants, ResultsView, useSuggestions(+test), kpiContracts(+test), analyticsAdapters(+analytics.test), matcher-eval-report.mts, MATCHER-EVAL doc |
+| `70356e3` | chore: checkpoint (morning log only) | .loop-guard/morning.md |
+| `79a8800` | docs: [T2][g-7104aed0] census readiness (no activation) | CENSUS-READINESS-2026-08-04.md |
+| (this commit) | docs: continuation | this file + morning log |
+
+## 3. Goal outcomes
+
+**COMPLETE (Santa NICE, evidence in store):**
+- `g-31f36bf8-4979-4d52-88b3-a433570c717e` — T0 Pin where I am @
+  `deffdd1`. Review: 3 rounds + scoped closure. R1 Fable BLOCK(2H) +
+  Codex timeout(124, packet size); R2 Fable BLOCK(3H) + Codex timeout;
+  R3 FULL success — Fable(1H) + Codex(proof f7e363fa; 2H/3M) +
+  DeepSeek(advisory, prescribed the epoch guard); scoped closure Fable +
+  Codex(proof f7e363fa→4997… see store) converged on one HIGH
+  (owner-gated pins sync). Every C/H/M fixed as prescribed +
+  regression-tested. Final: pin e2e 37/37 (iPhone 13 + Pixel 7),
+  affected suites 81/81 → 51/51, vitest full, tsc/build/secret/diff
+  clean. DeepSeek round-0 design consult: SQL authz/DST clean.
+- `g-7de10fce-2f05-442c-a7d0-26adc0ad8bf9` — T1 matcher v1.1 + KPI @
+  `49d9192`. Review: 2 rounds, Fable + Codex both succeeded both rounds
+  (proofs 0c7c3c1e, 4997d0d1; Fable r2 VERDICT APPROVE). GLM planning
+  consult caught a REAL cold-start echo-chamber (entropy 2.137→2.055,
+  eval-confirmed) → MIN_LOVED_BARS_FOR_WEIGHTS=2 floor.
+
+**Matcher metrics (32-scenario corpus over the real 403-bar bundled
+catalog; engine = CI gates = report script):**
+baseline → adopted(A+B): lovedAlign 0.4210→**0.4371**, avoidHit
+0.0456→**0.0400**, vibe 0.3389→0.3398, hoods 1.781→1.813, miles
+0.3271→0.3386 (+0.014 = tie-breaker scale), violations 0 everywhere,
+repeat-hand second-hand vibe 0.470→**0.523**. Full table + weakness
+audit + GLM triage: `docs/MATCHER-EVAL-g-7de10fce-2026-08-04.md`.
+
+**SAFE PORTION DONE, RETURNED TO `planned` (attended-only):**
+- `g-7104aed0-7305-491e-8297-b47729cd1496` — census activation pilot.
+  Tonight: unit 60/60, fixture CLI run complete
+  (run-2026-08-04T05-29-22-661Z, budget 9/50, 4 SYNTHETIC candidates,
+  artifacts only under gitignored scripts/census/out/), resume/report
+  idempotent, LOOP_UNATTENDED=1 --apply REFUSED as designed,
+  concurrent-writer refusal verified static+unit (live two-writer proof
+  needs the attended 0037 apply). Zero readiness defects.
+  **NO bars added; no credentials/paid calls/Staging access/0037 apply.**
+  Full record: `docs/CENSUS-READINESS-2026-08-04.md`. Attended gates
+  listed there (ledger check → 0037 approval → pilot area/sources →
+  cost ceiling → report → curation → sole attended apply →
+  post-apply verification + rollback).
+
+**BLOCKED / QUEUED (unchanged tonight unless noted):**
+- `g-c8b26779` — social hardening Phase B: attended T0 migration
+  session (apply 0015 + 0035 + author list_my_shared_nights/Close
+  Friends as **0039** per docs/MIGRATION-PLAN-RECONCILIATION-2026-08-04.md).
+- `g-e9d493e9` — night photos: blocked; its future migration is
+  **0040** (renumbered from prose-"0038" by the reconciliation doc; no
+  file ever existed). Tonight's venue-pins draft OWNS 0038 (in
+  `supabase/migrations/drafts/`, runner-inert, NEVER applied).
+- `g-4ed5f834` — numeric ranking: still blocked on the operator's 3
+  design answers (docs/DESIGN-NUMERIC-RANKING-g-4ed5f834-2026-08-03.md).
+- `g-12d33864` — Map implementation: RECONCILIATION (per operator
+  mission): technically reviewed; its old Want-to-Go-writer blocker was
+  RESOLVED by g-8557db39; final status still awaits **operator visual
+  approval** — not granted, not invented.
+- `g-35babba8` (paid photo sweep, $250 cap), /support (mailbox
+  decision), Staging 411-row anomaly (attended reconciliation),
+  worktree cleanup (deferred; nothing pruned) — all unchanged.
+- Older blocked items (g-1cae785c, g-52470455, g-7c12a62f, g-87cf2100,
+  g-91db2f50, g-a020ae84, g-dc0588b0 integration PR — which must also
+  reconcile main's #86–#94, g-e6067aab) — unchanged.
+
+## 4. Test/verification evidence at final source state (`49d9192`+docs)
+
+- vitest **2058/2058**; `tsc --noEmit` clean; `next build` clean;
+  secret scan clean (622 tracked files); `git diff --check` clean.
+- Playwright (all bounded, foreground, iPhone 13 + Pixel 7 (+iPhone 17
+  shards where configured)): pin suite **37/37**; ranking surfaces
+  **105/105** then **85/85** at final state; social/affected suites
+  **81/81** and **51/51**. ZERO new failures; the known /quiz
+  cold-compile flake did not occur.
+
+## 5. Residual risks / follow-ups (non-blocking, documented)
+
+- Pin: BarLightbox not yet migrated onto useDialogA11y (two dialog
+  lifecycles until then); per-instance night-refresh timers bounded by
+  MAX_RESULTS=3; multi-tab pin divergence self-corrects on fetch; LIVE
+  two-user SQL authorization + Postgres-side DST proof belong to the
+  attended 0038 apply.
+- Matcher: per-question quiz normalization + exploration identity salt
+  deferred (documented future candidates; corpus now exists to evaluate
+  them); GLM's geographic-avoid-clustering and false-avoid-regret
+  metrics recorded as future eval work.
+- KPI: contracts are specification-only; server-side payload support +
+  call-site wiring (8 sites listed in the eval doc) await the attended
+  analytics enablement decision.
+
+## 6. Operator decisions still open (carried from 2026-08-03 §5)
+
+1. iOS TODAY (see §8). 2. B1 production SUPABASE_SERVICE_ROLE_KEY
+repair. 3. Privacy labels Q1/Q3. 4. Domain/DNS + mailbox → then six
+mailto swaps. 5. /support route vs /install. 6. 1024 no-alpha icon
+approval. 7. g-4ed5f834's 3 ranking answers. 8. Sign-out wipe scope;
+/search reachability; cleanup packet. 9. Staging 411-row anomaly.
+10. #90 wrapper adjudication items already partially executed 8/03
+(PRs #91–#94) — see that doc's fourth wave for what remains.
+
+## 7. Session-boundary confirmation + incident note
+
+Nothing pushed, deployed, migrated, or uploaded. Production untouched;
+Staging untouched (no reads either); no Apple/App Store/TestFlight/UDID
+actions; DNS/credentials/email untouched; no paid API calls; PostHog +
+all analytics DARK (unit-asserted); no migration applied anywhere —
+0038 exists only as a runner-inert draft in `drafts/`.
+
+**Incident (self-caught + fixed):** `loop-guard checkpoint` broad-
+committed the four protected operator docs after item 1 (commit
+b24206c). Undone with `git reset --mixed HEAD~1` (contents untouched;
+exact dirty/untracked state verified restored); remaining checkpoints
+were explicit narrow commits of the morning log only. The stray commit
+object is unreachable and harmless.
+
+**Codex lane lesson:** two 540s timeouts (exit 124, tree termination
+confirmed both times) on broad review packets; narrow-scope packets
+succeeded immediately (proofs f7e363fa, 0c7c3c1e, 4997d0d1). 124 was
+packet weight, never an outage.
+
+## 7b. ATTENDED SESSION 2026-08-04 EVENING — TestFlight upload SUCCEEDED
+
+Grounding at session start matched §1 exactly (branch/HEAD/21-outgoing/
+four dirty docs/no lease/lock armed); zero discrepancies.
+
+- **UDID registered** by the operator (Apple Devices app path; first
+  cable was charge-only — Windows enumerated no Apple device until the
+  cable swap). UDID never printed or stored.
+- **Run 4** (main @ `4b06ed6`, operator-dispatched via GitHub UI,
+  server_url=https://next-bar-two.vercel.app): signing FIXED end to end
+  (archive w/ dev profile, automatic-signing export, NextBar.ipa) —
+  device registration was indeed the missing prerequisite. Upload failed
+  on a NEW Apple gate: altool 409 — uploads must be built with the
+  **iOS 26 SDK**; macos-15 caps at Xcode 16.4/iOS 18.5 SDK.
+- **Fix: PR #95** (`fix/ios-testflight-macos26`, commit `15a4876`,
+  squash-merged to main as **`6ec5e5d`**): one line,
+  `runs-on: macos-15` → `macos-26` (+comment). T1 per tier-map
+  (.github/**). Reviews: fresh Fable APPROVE (advisory M: consider
+  DEVELOPER_DIR pin later; advisory L: SPM-under-Xcode-26 provable only
+  live) + Codex APPROVE (no findings; recommends NO pin — image label
+  already constrains the Xcode major; patch pins break on rotation —
+  adopted). Direct push to main was rejected by branch protection
+  (PR + 2 checks required) → PR route, auto-merge after gates 1m49s +
+  Vercel green.
+- **Run 5 = 30958647881** (main @ `6ec5e5d`, assistant-dispatched with
+  the operator's explicit approval, same server_url): **ALL GREEN
+  including upload_to_testflight.** Build 5 uploaded to ASC
+  (App 6797689354). Only annotation: benign Node-20 deprecation notice
+  for GitHub's own actions.
+- **Lock discipline:** remote-write lock disarmed in three explicit,
+  operator-authorized windows (push branch/PR #95; dispatch run 5;
+  launch read-only watch) and **re-armed immediately after each** —
+  armed at close. Overnight branch, nb-ios, nb-testflight-node22, and
+  the four protected docs untouched. Production/Staging untouched; no
+  migrations; census goal not yet started this session.
+- **Phase 1 COMPLETE (operator-side):** build 5 processed ("Ready to
+  Submit" = processed; nothing submitted for review), Internal Testing
+  group created, operator installed the app on the registered iPhone via
+  TestFlight. Cofounder Users-and-Access invites SENT; adding them as
+  group testers awaits their acceptance (async, non-blocking). NO
+  external group, NO App Review submission. Shell loads
+  next-bar-two.vercel.app (no local Pin/matcher commits — those are the
+  overnight branch).
+
+## 7c. ATTENDED SESSION 2026-08-04/05 — census pilot (g-7104aed0, /code bound)
+
+Goal bound via /code (worktree-guard SAFE, lease held, heartbeat). All
+census evidence also recorded in the goal store.
+
+- **0037 APPLIED TO PROTECTED STAGING** (operator phrase received
+  verbatim). Identity triple-checked (label staging; pubRef==dbRef==
+  `wqxovhiovgcijmfzxgby` ≠ declared prod `nuhqlvneokucxomguxhi`).
+  Pre-apply read-only ledger check: 37 rows, 0036 present/0037 absent.
+  Ledgered runner applied `0037_census_provenance.sql` (checksum
+  `556799ce814a…`, applied 2026-08-04T23:39:39Z); idempotency re-run
+  "38 already applied". **Post-apply verification 25/25 PASS** (RLS, zero
+  policies, 24/24 browser-privilege denials, behavioral anon+authenticated
+  INSERT denial, 3 constraint probes, LIVE two-writer proof incl.
+  lock_timeout fast-fail, synthetic rows cleaned to 0 residual, anon still
+  reads bars). bars=411 = the known pre-existing anomaly, untouched.
+- **First LIVE pilot sweep found 2 real adapter defects** (fixtures
+  bypass network by design): Overpass 406s UA-less requests (fix:
+  User-Agent + form-encoded data= body); SLA dataset `nqur-w4p7` was
+  GASOLINE PRICES → now `9s3h-dpkz` (Current Liquor Authority Active
+  Licenses), real schema, title-case county, bar-class $where filter
+  (Additional Bar/Club/Cabaret/Night Club/Bottle Club; Restaurant
+  deliberately excluded), $order paging. TDD: regression tests written
+  first, proven failing.
+- **Commits (local only):** `f5d1579` (adapter fixes + a code-sha rebind
+  primitive + Lucinda's nomination seed) then `9480fb1` (fix cycle after
+  review — see below). Narrow commits; protected docs untouched.
+- **T0 panel on f5d1579:** fresh Fable APPROVE (2 M advisory);
+  **Codex BLOCK (2 HIGH, forensically proven)** — (H1) pre-existing
+  currentCodeSha() first-line porcelain mangle = fail-open identity;
+  (H2) rebind cannot prove byte identity (and the pilot's rebind target
+  provably wasn't byte-identical). DeepSeek (data/DB specialist)
+  independently found the same TOCTOU + staleness-clock nuance + ranked
+  SLA batch risks (offset-drift, permit-id instability, geo nulls,
+  legalname-vs-DBA) for the expansion phase.
+- **Fix cycle `9480fb1`:** parser extracted to codeIdentity.ts
+  (per-line, first-line regression tests); **rebind REMOVED** (tombstone
+  forbids reintroduction without a persisted content-tree digest);
+  unmapped borough now rejected before SoQL; class allowlist pinned.
+  67/67 tests; tsc clean.
+- **Authoritative pilot run: `run-2026-08-05T00-25-06-752Z`** executed
+  FRESH at clean HEAD `9480fb1` — complete, 8/8 tiles + full SLA, 1,382
+  candidates, $0.00, codeSha natively `9480fb1463f052a5626609afc876cfe0b24653ae`,
+  configHash `39d39ff8cb27…`, payloadSha256 `4907940ed8faa134808d393059eb88a230fc255a22ac59ab70f656acb4fe9db6`
+  — byte-identical to the prior sweep's payload (determinism
+  cross-check). The earlier run's rebound sidecar is DISCARDED as an
+  apply gate.
+- **Lucinda's (operator nomination, 169 Avenue A):** user-submission
+  seed merged by dedupe with independently-found OSM bar node
+  `13680449615` (website lucindasnyc.com; hours Mo-Fr 17-02, Sa-Su
+  14-02; address matches). Operator curation received: priceTier 2,
+  tags [live, cocktail, dance, buzzy], blurb "Live country, two-step
+  nights, and Southern cocktails on Avenue A.", scope = Lucinda's ONLY.
+  Curated file in session scratchpad (outside repo).
+- **CHECKPOINT (operator-ordered pause, 2026-08-05 ~00:55 ET) — exact
+  stop point:** Codex re-review of 9480fb1 came back APPROVE zero
+  findings (it independently recomputed the payload hash). Operator gave
+  the Lucinda's insert approval verbatim; the attempt was **REJECTED by
+  the database** — `bars_source_check` (0019) does not allow 'census'
+  (typed refusal; nothing inserted; bars still 411 rows). Fix authored
+  as **migration 0041** (`0041_bars_source_census.sql`, commit
+  `48f9f93` = HEAD at checkpoint): idempotent DROP IF EXISTS + ADD
+  widening source to include 'census'; 0038/0039/0040 remain reserved.
+  **0041 panel COMPLETE, all approve:** Fable database-lane APPROVE
+  (2 LOW), Codex APPROVE (0 C/H/M; 2 LOW: header wording overstates
+  source-keyed dedupe, doc-only; no lock_timeout, minor), DeepSeek clear
+  (runner per-file BEGIN..COMMIT atomicity independently confirmed —
+  no unconstrained window possible). **PENDING: (1) the exact phrase
+  "APPLY 0041 TO PROTECTED STAGING APPROVED" was requested and NOT yet
+  given — 0041 is applied NOWHERE; (2) after 0041 applies, operator to
+  confirm whether the standing Lucinda's insert approval carries or must
+  be re-issued.** Authoritative run `run-2026-08-05T00-25-06-752Z`
+  (codeSha `9480fb1…`, payload `4907940e…`, config `39d39ff8…`); curated
+  row (tier 2, tags live/cocktail/dance/buzzy, operator blurb) in the
+  session scratchpad at
+  `…\3e02bf7f-…\scratchpad\lucindas-curated.json` — recreate from §7c
+  curation record if the scratchpad is gone. Staging writes this whole
+  session: the verified 0037 apply ONLY. **Production untouched
+  everywhere. Lock armed; lease released; goal left `paused`.**
+- **Operator decisions recorded this session:** (a) unauthenticated app
+  open MUST show a login window (queue as its own mission); (b) iOS
+  shell feedback: top-scroll oversize on Next Bar surface + a background
+  issue (verify against overnight-branch fixes before authoring).
+
+## 7d. LOCAL-ONLY OVERNIGHT VERIFICATION LOOP — 2026-08-05 (~01:30–04:00 ET)
+
+Ran per `docs/OVERNIGHT-TEST-AND-READINESS-SCOPE-2026-08-05.md`; full record
+in `docs/OVERNIGHT-TEST-REPORT-2026-08-05.md` (authoritative for tonight).
+Summary: 9 goals queued via /mission; Gates 1–5 executed (unit 2065→2069 all
+green, tsc, secret scan, build, preflight 13ok/3warn/0fail); a loopback
+NETWORK FENCE was built and proved the social suites loopback-clean (fence
+refused 390 protected-Staging + ~248 tile-CDN requests, suites green) while
+the FULL matrix exposed 101 failures = one root cause: the broader e2e suite
+depends on live egress (catalog swap from Staging anon REST + carto tiles +
+console-purity assertions). Gate 6 produced the panel-reviewed
+`docs/RELEASE-READINESS-SIM-2026-08-05.md` (3 santa rounds, parked for one
+re-verdict per the round cap). Gate 7 landed RED-first fence contract tests
+(3 more santa rounds; unresolved hardening items folded into new goal
+g-5dd241b6). Packets (beta epics, Crews, APNs, 20k) NOT RUN — queued with
+full specs (g-6b9f79ec, g-9b97c22d). New goals also queued: g-31c59158
+(login window), g-b07c73bc (mobile-shell regression), g-8354588a
+(tier-validate Windows fix). Local commits: d40e644, d579a2e, fec5d6c,
+f428996, 0e48573 + report/continuation. Census goal stayed PAUSED; 0041
+applied nowhere; no credentials/paid calls; nothing pushed;
+Staging/Production/Apple/GitHub/Vercel untouched; lease released; lock ARMED.
+
+## 7e. ATTENDED CENSUS CLOSEOUT — 2026-08-05 (goal g-7104aed0 COMPLETE)
+
+Read-only grounding matched the checkpoint exactly (HEAD d0b77bd — all
+post-checkpoint commits reviewed test/docs work; 0041 byte-identical to
+48f9f93; identity triple-check staging/wqxov…≠prod; ledger 38 rows
+0037-present/0041-absent; bars 411, census 0). Then, on the exact operator
+phrase **"APPLY 0041 TO PROTECTED STAGING APPROVED"**: lock disarmed →
+ledgered apply ("0041 ok") → idempotency "39 already applied" → lock
+re-armed. Verification ALL PASS: ledger 39 rows, 0041 checksum
+`8ef77df28897…` (exact runner-normalized match); constraint = 5-value set
+incl 'census'; 411 rows intact; disallowed-probe rejected / census-probe
+accepted (both rolled back, 0 residue); RLS true, 1 policy, anon/auth
+SELECT-only. Then, on operator "approval carries": Lucinda's inserted via
+the census apply path (sidecar-bound to run-2026-08-05T00-25-06-752Z;
+code-drift override attended with mechanical empty-census-diff proof) —
+**APPLIED 1/1**, dedupe re-run 0/1, bars now **412** (census=1,
+curated=411), row fields exact, rollback scope = the one census row.
+Observation: 0037 evidence tables remain empty (provenance lives in the
+sidecar chain + run artifacts) — follow-up candidate. Staging writes this
+session: the 0041 apply + one row ONLY. Production/Apple/GitHub/Vercel
+untouched; nothing pushed; lock armed; lease released; goal COMPLETE.
+Next per operator: g-5dd241b6 loopback-clean e2e, then attended
+reconciliation → RC construction → Staging/mobile acceptance + rollback
+rehearsal → separate approvals for push/migrations/deploy/TestFlight.
+
+## 8. Tomorrow's exact iOS/UDID/TestFlight steps (operator, unchanged)
+
+1. Finish registering the iPhone UDID (Apple Devices app → copy UDID →
+   developer.apple.com → Devices → +).
+2. Dispatch: GitHub Actions → iOS TestFlight → Run workflow →
+   `server_url=https://next-bar-two.vercel.app` (pre-DNS). Next likely
+   failure surface: gym export re-sign / upload_to_testflight — paste
+   the log tail to the assistant.
+3. On success: ASC → TestFlight → build "Processing" 15–30 min →
+   create Internal Testing group → invite the 2 cofounders via Users
+   and Access (no UDIDs needed for testers).
+4. Then: DNS cutover (then blank-input canonical build), Codex
+   icon-artwork PR, §6 decision list.
+
+## 9. Exact next commands
+
+- **Attended session (recommended first):** `/code
+  g-7104aed0-7305-491e-8297-b47729cd1496` — census activation pilot
+  (its safe-portion evidence is already in the store; start at the
+  Staging ledger check), OR the Phase B migration session for
+  `g-c8b26779` (authors 0039).
+- **Next unattended overnight:** no stored goal is safely runnable
+  without operator input (census/Phase B/photos are attended; ranking
+  needs answers; map needs visual approval). Queue new /mission items
+  first.
+
+## 10. Continuation prompt (copy-paste)
+
+```
+This is an attended Next Bar continuation.
+
+Workspace: C:\Users\cdfee\projects\nb-overnight
+
+Read CLAUDE.md and docs/CONTINUATION-2026-08-04.md first. Treat that
+file, Git history, and the stored goal system as the system of record —
+not transcript memory.
+
+Verify before any work: branch feat/overnight-2026-07-30; only the four
+protected operator documents dirty; no lease; remote-write lock armed;
+origin tip unchanged (21 outgoing local commits). If anything differs,
+stop and report the exact difference.
+
+Gating reviewers: fresh Claude FABLE + Codex (T1); + risk-routed
+specialist (T0). Sonnet is informational only.
+
+Then show me: tonight's two completed goals; the census readiness
+result and its attended gates; the operator decision list (§6); and the
+recommended next goal. Do not push, deploy, apply migrations, create
+Apple resources, or touch Production/Staging without explicit approval.
+```

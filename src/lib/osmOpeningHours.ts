@@ -1,0 +1,231 @@
+import type { WeeklyHours } from '@/types';
+
+/**
+ * Parse an OpenStreetMap `opening_hours` tag into our WeeklyHours shape.
+ *
+ * OSM's grammar is enormous — month ranges, week selectors, sunrise/sunset
+ * offsets, holiday selectors, fallback rules, comments. We implement a
+ * CONSERVATIVE SUBSET and return null for anything else, so an exotic spec
+ * becomes human review instead of a confident wrong answer. That is the whole
+ * point: a venue whose hours we cannot parse is a venue we say nothing about.
+ *
+ * Rather than blocklist the syntax we do not support — a list that would rot as
+ * OSM grows — every rule must MATCH a strict shape. Anything unrecognised fails
+ * closed for free, including forms nobody has thought of yet.
+ *
+ * Supported:
+ *   24/7
+ *   Mo-Fr 17:00-02:00
+ *   Sa,Su 12:00-04:00           (day lists)
+ *   Mo-Su 17:00-02:00           (ranges wrap the week)
+ *   Mo 12:00-15:00,17:00-23:00  (several windows in a day)
+ *   Mo-Sa 17:00-02:00; Su off   (multiple rules; later rules override earlier)
+ *   Mo-We 17:00-02:00, Th 17:00-03:00
+ *                               (comma as a RULE separator — see splitRules for
+ *                                how that is told apart from a day list)
+ *
+ * Day numbering matches WeeklyHours and JS getDay(): 0 = Sunday … 6 = Saturday.
+ */
+
+const DAY_INDEX: Record<string, number> = {
+  su: 0,
+  mo: 1,
+  tu: 2,
+  we: 3,
+  th: 4,
+  fr: 5,
+  sa: 6,
+};
+
+type Interval = { open: string; close: string };
+
+/** A rule is a day selector, whitespace, then either times or a closed marker. */
+const RULE_RE =
+  /^([a-z]{2}(?:-[a-z]{2})?(?:,[a-z]{2}(?:-[a-z]{2})?)*)\s+(.+)$/;
+
+/**
+ * A time span. The CLOSING side accepts OSM's extended-time syntax — hours 24–47
+ * mean "this many hours past midnight on the following day", which is how a bar
+ * open until 4am is tagged (`14:00-28:00`, seen on real NYC venues). Those roll
+ * over below; 48:00 and beyond is refused, as are minutes over 59. Extended
+ * hours are a CLOSING concept only, so `24:00-04:00` remains invalid.
+ */
+const SPAN_RE = /^([01]\d|2[0-3]):([0-5]\d)-([0-4]\d):([0-5]\d)$/;
+
+/** Holiday selectors carry no weekday meaning — see parse() for why we skip. */
+const HOLIDAY_RULE_RE = /^(ph|sh)\b/;
+
+/**
+ * Expand `mo-su` style ranges, wrapping at the week boundary so `sa-su` is two
+ * days and `mo-su` is seven.
+ */
+function expandDayRange(start: number, end: number): number[] {
+  const out: number[] = [];
+  let d = start;
+  for (let guard = 0; guard < 7; guard++) {
+    out.push(d);
+    if (d === end) break;
+    d = (d + 1) % 7;
+  }
+  return out;
+}
+
+/** `mo-fr`, `sa,su`, `mo` → day indices, or null if any token is not a day. */
+function parseDaySelector(selector: string): number[] | null {
+  const days: number[] = [];
+  for (const part of selector.split(',')) {
+    const [from, to] = part.split('-');
+    const start = DAY_INDEX[from];
+    if (start === undefined) return null;
+    if (to === undefined) {
+      days.push(start);
+      continue;
+    }
+    const end = DAY_INDEX[to];
+    if (end === undefined) return null;
+    days.push(...expandDayRange(start, end));
+  }
+  return days;
+}
+
+/** `17:00-02:00,20:00-23:00` → intervals, or null if any span is malformed. */
+function parseTimeSelector(selector: string): Interval[] | null {
+  const intervals: Interval[] = [];
+  for (const span of selector.split(',')) {
+    const m = SPAN_RE.exec(span.trim());
+    if (!m) return null;
+    let closeHour = Number(m[3]);
+    if (closeHour >= 48) return null;
+    // Roll extended hours back into a real clock reading. isOpenNow already
+    // treats close < open as crossing midnight, so 28:00 -> 04:00 carries the
+    // same meaning without needing a new representation.
+    if (closeHour >= 24) closeHour -= 24;
+    const close = `${String(closeHour).padStart(2, '0')}:${m[4]}`;
+    intervals.push({ open: `${m[1]}:${m[2]}`, close });
+  }
+  return intervals.length > 0 ? intervals : null;
+}
+
+/**
+ * Is this text ALREADY a complete rule — a day selector plus times, or an off
+ * marker? Used to decide whether a following comma opens a new rule.
+ */
+function isCompleteRule(text: string): boolean {
+  const m = RULE_RE.exec(text);
+  if (!m) return false;
+  if (parseDaySelector(m[1]) === null) return false;
+  const timePart = m[2].trim();
+  if (timePart === 'off' || timePart === 'closed') return true;
+  return parseTimeSelector(timePart) !== null;
+}
+
+/** A day token followed by whitespace — `Th 17:00-03:00` opening a new rule. */
+const RULE_START_RE = /^[a-z]{2}(?:-[a-z]{2})?\s/;
+
+/**
+ * A day token and NOTHING else. After a completed rule this can only be the
+ * start of the next rule's day list — `Mo-Fr 12:00-02:00, Sa,Su 11:00-02:00`,
+ * where the new rule opens with `Sa` rather than with `Sa 11:00…`.
+ */
+const BARE_DAY_RE = /^[a-z]{2}(?:-[a-z]{2})?$/;
+
+/**
+ * Split a normalised spec into rules.
+ *
+ * OSM's canonical rule separator is `;`, but a large minority of real NYC
+ * venues use a comma instead (`Mo-We 17:00-02:00, Th 17:00-03:00`) — 83 of the
+ * matched venues in the live sweep, the single largest remaining refusal.
+ *
+ * A comma is ambiguous: it also separates days inside a list (`Sa,Su 12:00-04:00`)
+ * and time spans inside one rule (`Su 12:00-16:00,17:00-02:00`). Splitting on
+ * every comma would invent hours for days nobody tagged, which is worse than
+ * refusing. So a comma opens a new rule only when BOTH hold:
+ *   - what precedes it already parses as a complete rule, and
+ *   - what follows begins with a day token followed by whitespace.
+ * `Sa,Su …` fails the first test (`Sa` alone is not a rule) and stays a day
+ * list; `17:00-02:00` fails the second and stays a span.
+ */
+function splitRules(normalised: string): string[] {
+  const rules: string[] = [];
+  for (const segment of normalised.split(';')) {
+    let current: string[] = [];
+    for (const part of segment.split(',')) {
+      if (
+        current.length > 0 &&
+        (RULE_START_RE.test(part) || BARE_DAY_RE.test(part)) &&
+        isCompleteRule(current.join(','))
+      ) {
+        rules.push(current.join(','));
+        current = [part];
+      } else {
+        current.push(part);
+      }
+    }
+    if (current.length > 0) rules.push(current.join(','));
+  }
+  return rules;
+}
+
+export function parseOsmOpeningHours(spec: string | undefined | null): WeeklyHours | null {
+  if (typeof spec !== 'string') return null;
+  const normalised = spec
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    // Collapse whitespace around commas so "Sa, Su 13:00-04:00" parses. Spaced
+    // day lists were the single largest source of refusals in the live NYC
+    // sweep, and the space carries no meaning in the grammar.
+    .replace(/\s*,\s*/g, ',');
+  if (normalised === '') return null;
+
+  if (normalised === '24/7') {
+    const always: Record<number, Interval[]> = {};
+    for (let d = 0; d < 7; d++) always[d] = [{ open: '00:00', close: '00:00' }];
+    return always as unknown as WeeklyHours;
+  }
+
+  const days: Record<number, Interval[]> = {};
+
+  for (const raw of splitRules(normalised)) {
+    const rule = raw.trim();
+    if (rule === '') continue;
+
+    // Skip holiday rules rather than rejecting the whole spec. Ignoring `PH off`
+    // can only overclaim "open" on a public holiday, which is the safe direction
+    // here — the same asymmetry the open-now badge uses. Rejecting outright would
+    // discard otherwise-good weekday hours for a very common tag.
+    if (HOLIDAY_RULE_RE.test(rule)) continue;
+
+    // A bare time span with no day selector applies to EVERY day — "11:30-04:00"
+    // is a common and unambiguous way to tag a venue open daily. Tried before the
+    // day-selector shape because it cannot be confused with one.
+    const everyDay = parseTimeSelector(rule);
+    if (everyDay !== null) {
+      for (let d = 0; d < 7; d++) days[d] = everyDay;
+      continue;
+    }
+
+    const m = RULE_RE.exec(rule);
+    if (!m) return null;
+
+    const selectedDays = parseDaySelector(m[1]);
+    if (selectedDays === null) return null;
+
+    const timePart = m[2].trim();
+
+    // Later rules override earlier ones for the same day — OSM semantics, and
+    // the reason this assigns rather than merges.
+    if (timePart === 'off' || timePart === 'closed') {
+      for (const d of selectedDays) delete days[d];
+      continue;
+    }
+
+    const intervals = parseTimeSelector(timePart);
+    if (intervals === null) return null;
+    for (const d of selectedDays) days[d] = intervals;
+  }
+
+  // A spec that parsed cleanly but leaves the venue closed all week tells us
+  // nothing usable, and must not be written as hours.
+  return Object.keys(days).length > 0 ? (days as unknown as WeeklyHours) : null;
+}

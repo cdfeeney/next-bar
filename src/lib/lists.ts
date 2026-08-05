@@ -18,7 +18,13 @@ export type BarList = {
   updatedAt: string; // ISO timestamp
 };
 
-const KEY = 'next-bar:lists:v1';
+/**
+ * Exported (santa: Claude, g-ac3a291c): three files listen on this key
+ * (useLists, useWantToGo, this store) — re-typed literals would let a
+ * rename silently detach a listener.
+ */
+export const LISTS_KEY = 'next-bar:lists:v1';
+const KEY = LISTS_KEY;
 
 function isBarList(value: unknown): value is BarList {
   if (value === null || typeof value !== 'object') return false;
@@ -46,12 +52,21 @@ function notifyChange(): void {
   }
 }
 
-function writeAll(items: BarList[]): void {
-  if (typeof window === 'undefined') return;
+/**
+ * Returns whether the write actually landed (santa: Codex, g-ac3a291c):
+ * under quota failure a caller that notified anyway would tell every
+ * listener "something changed" when nothing did — and the want-to-go
+ * fold's listener chain turned that into synchronous unbounded
+ * recursion (event → load → fold retry → event …).
+ */
+function writeAll(items: BarList[]): boolean {
+  if (typeof window === 'undefined') return false;
   try {
     window.localStorage.setItem(KEY, JSON.stringify(items));
+    return true;
   } catch {
-    // Ignore quota / private-mode errors silently.
+    // Quota / private-mode — nothing was written.
+    return false;
   }
 }
 
@@ -88,7 +103,7 @@ export function createList(name: string): BarList | null {
     createdAt: now,
     updatedAt: now,
   };
-  writeAll([...loadLists(), list]);
+  if (!writeAll([...loadLists(), list])) return null;
   notifyChange();
   return list;
 }
@@ -98,15 +113,15 @@ export function deleteList(id: string): void {
   const current = loadLists();
   const updated = current.filter((l) => l.id !== id);
   if (updated.length === current.length) return;
-  writeAll(updated);
+  if (!writeAll(updated)) return;
   notifyChange();
 }
 
 function updateList(
   id: string,
   update: (list: BarList) => BarList,
-): void {
-  if (typeof window === 'undefined') return;
+): boolean {
+  if (typeof window === 'undefined') return false;
   const current = loadLists();
   let changed = false;
   const updated = current.map((l) => {
@@ -115,14 +130,70 @@ function updateList(
     changed = next !== l;
     return next;
   });
-  if (!changed) return;
-  writeAll(updated);
+  if (!changed) return false;
+  if (!writeAll(updated)) return false;
   notifyChange();
+  return true;
+}
+
+/**
+ * Find-or-create a list with a FIXED id and append any missing bars in one
+ * write (g-ac3a291c): the reserved Want-to-go list folds its legacy store
+ * in through this, and per-bar appends would have meant N writes and N
+ * storage events for one migration.
+ */
+export function foldIntoList(
+  id: string,
+  name: string,
+  barIds: readonly string[],
+): boolean {
+  if (typeof window === 'undefined') return false;
+  const current = loadLists();
+  const now = new Date().toISOString();
+  const existing = current.find((l) => l.id === id);
+  if (!existing) {
+    const wrote = writeAll([
+      ...current,
+      { id, name, barIds: [...new Set(barIds)], createdAt: now, updatedAt: now },
+    ]);
+    if (!wrote) return false;
+    notifyChange();
+    return true;
+  }
+  const have = new Set(existing.barIds);
+  const missing = barIds.filter((b) => {
+    if (have.has(b)) return false;
+    have.add(b);
+    return true;
+  });
+  if (missing.length === 0) return false;
+  const wrote = writeAll(
+    current.map((l) =>
+      l.id === id
+        ? { ...l, barIds: [...l.barIds, ...missing], updatedAt: now }
+        : l,
+    ),
+  );
+  if (!wrote) return false;
+  notifyChange();
+  return true;
+}
+
+/** Drop every listed bar from a list in one write. No-op when none match. */
+export function pruneBarsFromList(
+  id: string,
+  barIds: ReadonlySet<string>,
+): boolean {
+  return updateList(id, (list) => {
+    const kept = list.barIds.filter((b) => !barIds.has(b));
+    if (kept.length === list.barIds.length) return list;
+    return { ...list, barIds: kept, updatedAt: new Date().toISOString() };
+  });
 }
 
 /** Append a bar to a list (no duplicates). Unknown list ids are no-ops. */
-export function addBarToList(id: string, barId: string): void {
-  updateList(id, (list) => {
+export function addBarToList(id: string, barId: string): boolean {
+  return updateList(id, (list) => {
     if (list.barIds.includes(barId)) return list;
     return {
       ...list,
@@ -132,8 +203,8 @@ export function addBarToList(id: string, barId: string): void {
   });
 }
 
-export function removeBarFromList(id: string, barId: string): void {
-  updateList(id, (list) => {
+export function removeBarFromList(id: string, barId: string): boolean {
+  return updateList(id, (list) => {
     if (!list.barIds.includes(barId)) return list;
     return {
       ...list,

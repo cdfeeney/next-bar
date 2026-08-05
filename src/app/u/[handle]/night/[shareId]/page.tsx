@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import Avatar from '@/components/Avatar';
 import BarVisualTile from '@/components/BarVisualTile';
 import ShareButton from '@/components/ShareButton';
@@ -11,6 +12,8 @@ import { fetchSharedNight, type SharedNight } from '@/lib/nights.server';
 import { buildNightPath, shareNightText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
+
+const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
 
 /**
  * /u/[handle]/night/[shareId] — a shared night, viewable by ANYONE with
@@ -106,7 +109,7 @@ export default function SharedNightPage({
         </p>
         <Link
           href="/"
-          className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display inline-flex items-center justify-center"
+          className="bg-accent text-bg rounded-full px-6 py-3 min-h-[56px] touch-manipulation font-display inline-flex items-center justify-center"
         >
           Find your next bar →
         </Link>
@@ -158,7 +161,7 @@ export default function SharedNightPage({
             ) : (
               <Link
                 href="/install"
-                className="min-h-[44px] touch-manipulation px-6 rounded-full font-display text-sm bg-accent border border-accent text-bg inline-flex items-center"
+                className="min-h-[56px] touch-manipulation px-6 rounded-full font-display text-sm bg-accent border border-accent text-bg inline-flex items-center"
               >
                 Get Next Bar →
               </Link>
@@ -180,6 +183,22 @@ export default function SharedNightPage({
             The bars from this night have left the catalog.
           </p>
         ) : (
+          <>
+            {/* g-919dae84 crit 5: the night's map — recap's own treatment.
+                ROUTE BARS ONLY, deliberately: no viewer location, no
+                personal pins, no personal photos on an anonymous page
+                (crit 9) — the pins are the same public venues the list
+                below already names. */}
+            <div
+              className="h-48 rounded-2xl overflow-hidden border border-border mb-4"
+              data-testid="shared-night-map"
+            >
+              <BarMap
+                bars={bars}
+                fitToBars
+                highlightIds={loved ? [loved.id] : []}
+              />
+            </div>
           <ol className="flex flex-col gap-3">
             {bars.map((bar, i) => (
               <li
@@ -207,6 +226,7 @@ export default function SharedNightPage({
               </li>
             ))}
           </ol>
+          </>
         )}
 
         <p className="text-muted text-xs text-center mt-8 leading-relaxed">

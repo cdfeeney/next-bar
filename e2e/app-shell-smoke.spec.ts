@@ -11,6 +11,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
+import { installLoopbackFixtures } from './helpers/catalogFixture';
 
 async function expectNoConsoleErrors(page: Page, label: string): Promise<void> {
   const errors: string[] = [];
@@ -23,6 +24,14 @@ async function expectNoConsoleErrors(page: Page, label: string): Promise<void> {
 }
 
 test.describe('App-shell smoke', () => {
+  // Loopback fixtures: under the network fence, the catalog fetch and map
+  // tiles would otherwise be refused — which is correct fencing, but the
+  // refusals surface as console errors and fail the purity assertion below.
+  // Serving them in-test keeps every route rendering exactly as deployed.
+  test.beforeEach(async ({ page }) => {
+    await installLoopbackFixtures(page);
+  });
+
   test('/ (Next Bar?) falls back to BarPicker when location is denied', async ({
     page,
   }) => {
@@ -51,14 +60,21 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/map');
   });
 
-  test('/discover renders the swipe stack', async ({ page }) => {
+  // /discover was archived (goal g-12d33864). The smoke entry stays, re-pointed
+  // at the redirect: the URL is still public, so "does it still resolve without
+  // erroring" is exactly what a smoke test should keep asserting.
+  test('/discover redirects to /map', async ({ page }) => {
     await page.goto('/discover');
-    await expect(page.getByRole('heading', { name: /^Discover$/ })).toBeVisible();
-    // A fresh context has nothing rated/saved, so a card is always up.
-    await expect(page.getByTestId('discover-card-heading')).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(page).toHaveURL(/\/map$/);
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
     await expectNoConsoleErrors(page, '/discover');
+  });
+
+  test('/search renders the catalog search surface', async ({ page }) => {
+    await page.goto('/search');
+    await expect(page.getByRole('heading', { name: 'Search bars' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
+    await expectNoConsoleErrors(page, '/search');
   });
 
   test('/rankings renders empty state when no ratings', async ({ page }) => {
@@ -66,9 +82,15 @@ test.describe('App-shell smoke', () => {
     // no need to goto('/') first to clear. Skipping that extra navigation
     // avoids the Next.js dev cold-compile race on /rankings.
     await page.goto('/rankings');
-    await expect(page.getByRole('heading', { name: /^Rankings$/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Bar Rankings$/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: /Nothing here yet/i })).toBeVisible();
     await expectNoConsoleErrors(page, '/rankings');
+  });
+
+  test('/nights renders the Nights Out history surface', async ({ page }) => {
+    await page.goto('/nights');
+    await expect(page.getByRole('heading', { name: /^Nights Out$/ })).toBeVisible();
+    await expectNoConsoleErrors(page, '/nights');
   });
 
   test('/friends renders the Instagram-model page (UX-A)', async ({ page }) => {

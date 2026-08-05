@@ -4,7 +4,11 @@ import { useCallback, useState } from 'react';
 import type { Bar, VibeTag } from '@/types';
 import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
-import { barImageUrls } from '@/lib/barVisual';
+import {
+  needsGoogleAttribution,
+  resolveMedia,
+} from '@/lib/mediaPolicy';
+import GoogleAttribution from '@/components/GoogleAttribution';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { displayHood } from '@/lib/hoodDisplay';
 import ShareButton from '@/components/ShareButton';
@@ -12,6 +16,7 @@ import OpenNowBadge from '@/components/OpenNowBadge';
 import BarVisualTile from '@/components/BarVisualTile';
 import BarLightbox from '@/components/BarLightbox';
 import RatingBadge from '@/components/RatingBadge';
+import WantToGoToggle from '@/components/WantToGoToggle';
 
 type ResultCardProps = {
   bar: Bar;
@@ -21,6 +26,15 @@ type ResultCardProps = {
   /** Planning phase (operator 2026-07-27): show the "Send" share — text
    *  the bar to a group; recipients without the app land on /share/[id]. */
   showShare?: boolean;
+  /**
+   * True when a saved quiz profile exists even though THIS ranking runs
+   * with no vibe tags (the home surface ranks by proximity by operator
+   * decision). Telling a fresh quiz-taker to "set a vibe" minutes after
+   * the quiz read as the system forgetting them (santa: Kimi,
+   * g-65a31bdf) — this switches the unset copy to name the truth: the
+   * vibe is off HERE, and Tweak is where it comes into play.
+   */
+  hasSavedVibe?: boolean;
 };
 
 /**
@@ -37,7 +51,7 @@ type ResultCardProps = {
  * /rankings owns that flow), and the per-card photo attribution line is
  * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
-export default function ResultCard({ bar, rank, miles, userTags, showShare }: ResultCardProps) {
+export default function ResultCard({ bar, rank, miles, userTags, showShare, hasSavedVibe }: ResultCardProps) {
   const lead = leadCopy(miles, displayHood(bar.neighborhood));
   const badge = vibeMatchBadge(userTags, bar.tags);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -47,7 +61,17 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
   const [heroFailed, setHeroFailed] = useState(false);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
 
-  const photos = barImageUrls(bar);
+  // Criterion 12/13: the hero is an ALLOWED Google surface (a visible
+  // recommendation card), but it must resolve through the one media policy
+  // rather than building /bar-photos/... URLs itself — otherwise the kill
+  // switch cannot reach it. The bespoke overlay below (gradient, photo
+  // count, name) is why this uses resolveMedia directly instead of the
+  // <BarMedia> wrapper: same boundary, different chrome.
+  const decision = resolveMedia(bar);
+  const photos =
+    decision.source === 'glyph' || decision.source === 'google-live'
+      ? []
+      : decision.urls;
   const showHero = photos.length > 0 && !heroFailed;
 
   return (
@@ -100,6 +124,12 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
         </div>
       ) : null}
 
+      {/* Criterion 4: visible attribution wherever Google-derived imagery is
+          shown. Sits directly under the hero it refers to. */}
+      {showHero && needsGoogleAttribution(decision) ? (
+        <GoogleAttribution bar={bar} label="Photo via Google" className="px-4 pt-2" />
+      ) : null}
+
       <div className="p-4 pt-3 flex flex-col gap-2">
         {!showHero ? (
           <div className="flex items-start gap-3">
@@ -109,9 +139,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
               aria-label={`See photos and hours for ${bar.name}`}
               className="shrink-0 touch-manipulation rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              {/* photoDisabled: the hero already exhausted every photo URL —
-                  don't re-request a known-broken file. */}
-              <BarVisualTile bar={bar} size={56} photoDisabled={heroFailed} />
+              <BarVisualTile bar={bar} size={56} />
             </button>
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
               <h3 className="font-display text-lg leading-snug">
@@ -125,11 +153,21 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
         ) : null}
 
         {/* One meta line: the loud walk/ride time + the match count several
-            e2e specs key on ("Vibe match" — keep those words). */}
+            e2e specs key on ("Vibe match" — keep those words). With NO vibe
+            signal in play a numeric "0/1" badge implied matching that was
+            not happening (g-65a31bdf crit 3/5). "Set a vibe" is the honest
+            unlock for BOTH states this renders in: a first-timer with no
+            profile, and the auto surface, which by operator decision ranks
+            on proximity and ignores the saved quiz profile (the quiz/tweak
+            surfaces pass real tags and get the numeric badge). */}
         <p className="text-sm">
           <span className="font-display text-accent">{lead.text}</span>
           <span className="text-muted">
-            {' '}· Vibe match {badge.num}/{badge.den}
+            {userTags.length === 0
+              ? hasSavedVibe
+                ? ' · Vibe match off — Tweak to use yours'
+                : ' · Vibe match after you set a vibe'
+              : ` · Vibe match ${badge.num}/${badge.den}`}
           </span>
         </p>
 
@@ -140,6 +178,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
           <div className="flex items-center gap-2 flex-wrap">
             <OpenNowBadge bar={bar} />
             <RatingBadge barId={bar.id} />
+            <WantToGoToggle barId={bar.id} barName={bar.name} />
           </div>
           {showShare ? (
             <ShareButton

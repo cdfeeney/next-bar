@@ -2,9 +2,10 @@
  * pairwise-flow.spec.ts
  *
  * Pairwise comparison flow in signed-out (local) mode, driven through the
- * U2-3 DEEP-LINK entry (`/rankings?add=<barId>` — what "Rank it →" on
- * suggestion cards navigates to). The "+ Add a bar" picker entry to the
- * same machinery is covered by rankings-add-flow.spec.ts.
+ * U2-3 DEEP-LINK entry (`/rankings?add=<barId>` — produced today only by
+ * WantToGoList's "Been — rank it →"; the card/lightbox "Rank it" links are
+ * gone). The picker/search entries to the same machinery are covered by
+ * rankings-add-flow.spec.ts.
  *
  * What this covers:
  *   - The deep link opens the tier sheet pre-armed for that bar.

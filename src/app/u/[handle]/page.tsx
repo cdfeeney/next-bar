@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import Avatar from '@/components/Avatar';
+import BarVisualTile from '@/components/BarVisualTile';
 import ShareButton from '@/components/ShareButton';
 import { buildProfilePath, shareProfileText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
@@ -234,21 +235,26 @@ export default function ProfilePage({
                   key={entry.barId}
                   className="bg-surface border border-border rounded-3xl p-5 flex flex-col gap-2"
                 >
-                  <div className="flex items-baseline justify-between gap-3">
-                    <h3 className="font-display text-lg leading-tight">
-                      <span className="text-accent mr-2 tabular-nums">
-                        {idx + 1}.
+                  {/* R7 (g-b83d1c77): list cards lead with the bar's
+                      visual tile — they were text-only. */}
+                  <div className="flex items-center gap-3">
+                    <BarVisualTile bar={bar} size={32} />
+                    <div className="flex-1 min-w-0 flex items-baseline justify-between gap-3">
+                      <h3 className="font-display text-lg leading-tight">
+                        <span className="text-accent mr-2 tabular-nums">
+                          {idx + 1}.
+                        </span>
+                        {bar.name}
+                      </h3>
+                      <span
+                        className={[
+                          'text-xs font-display px-2 py-0.5 rounded-full shrink-0',
+                          RATING_BADGE[entry.rating],
+                        ].join(' ')}
+                      >
+                        {RATING_LABEL[entry.rating]}
                       </span>
-                      {bar.name}
-                    </h3>
-                    <span
-                      className={[
-                        'text-xs font-display px-2 py-0.5 rounded-full shrink-0',
-                        RATING_BADGE[entry.rating],
-                      ].join(' ')}
-                    >
-                      {RATING_LABEL[entry.rating]}
-                    </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-muted text-xs uppercase tracking-wider">
@@ -288,18 +294,43 @@ function DemoProfile({ handle }: { handle: string }): JSX.Element {
   const { isFollowing, toggleFollow } = useFollows();
 
   if (!friend) {
+    // HONEST fallback, not a false 404 (social audit g-0182f313 CRITICAL).
+    // Signed out, real-profile lookups are unavailable BY DESIGN (anon has
+    // no get_profile_by_handle), so this app cannot know whether @handle
+    // exists. The old copy ("they may not be on Next Bar yet") asserted a
+    // real person didn't exist at exactly the share-loop moment a friend's
+    // link landed here. Say the true thing — the list needs sign-in to
+    // view right now — and give forward paths. This branch stays correct
+    // after the public-list opt-in (0015) ships: it becomes the state for
+    // profiles that DIDN'T opt in.
     return (
       <main className="min-h-screen flex flex-col items-center justify-center text-center px-6 pb-28">
-        <h1 className="font-display text-2xl mb-2">No one here.</h1>
+        <h1 className="font-display text-2xl mb-2">
+          Sign in to see @{handle}&apos;s list
+        </h1>
+        {/* No "takes you straight there" promise: /auth currently lands on
+            /settings after sign-in (no return-path plumbing — review:
+            Codex). A validated ?next= flow is Phase-B work; until then the
+            honest instruction is to reopen the link. */}
         <p className="text-muted text-sm mb-6 max-w-sm">
-          We couldn&apos;t find @{handle}. They may not be on Next Bar yet.
+          Bar lists are shared inside Next Bar. Sign in — it&apos;s quick
+          to set up — then open this link again to see @{handle}&apos;s
+          picks.
         </p>
-        <Link
-          href="/friends"
-          className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display inline-flex items-center justify-center"
-        >
-          ← Back to Friends
-        </Link>
+        <div className="flex flex-col items-center gap-3">
+          <Link
+            href="/auth"
+            className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display inline-flex items-center justify-center"
+          >
+            Sign in
+          </Link>
+          <Link
+            href="/install"
+            className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
+          >
+            What is Next Bar? →
+          </Link>
+        </div>
       </main>
     );
   }
@@ -375,16 +406,20 @@ function DemoProfile({ handle }: { handle: string }): JSX.Element {
               key={bar.id}
               className="bg-surface border border-border rounded-3xl p-5 flex flex-col gap-2"
             >
-              <div className="flex items-baseline justify-between gap-3">
-                <h3 className="font-display text-lg leading-tight">
-                  <span className="text-accent mr-2 tabular-nums">
-                    {idx + 1}.
+              {/* R7 (g-b83d1c77): same visual-tile lead as the real list. */}
+              <div className="flex items-center gap-3">
+                <BarVisualTile bar={bar} size={32} />
+                <div className="flex-1 min-w-0 flex items-baseline justify-between gap-3">
+                  <h3 className="font-display text-lg leading-tight">
+                    <span className="text-accent mr-2 tabular-nums">
+                      {idx + 1}.
+                    </span>
+                    {bar.name}
+                  </h3>
+                  <span className="font-display text-2xl tabular-nums text-accent shrink-0">
+                    {(rating.score ?? 0).toFixed(1)}
                   </span>
-                  {bar.name}
-                </h3>
-                <span className="font-display text-2xl tabular-nums text-accent shrink-0">
-                  {(rating.score ?? 0).toFixed(1)}
-                </span>
+                </div>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-muted text-xs uppercase tracking-wider">

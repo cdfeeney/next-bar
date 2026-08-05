@@ -30,7 +30,9 @@ const CHOICES: ReadonlyArray<{ rating: Rating; label: string; hint: string }> = 
 ];
 
 const BASE =
-  'flex-1 min-h-[44px] touch-manipulation px-3 py-2.5 rounded-full font-display text-sm border transition-colors';
+  // 56px, not 44: these chips ARE the share route's primary-path action
+  // (R4 — santa: Codex, round 2).
+  'flex-1 min-h-[56px] touch-manipulation px-3 py-2.5 rounded-full font-display text-sm border transition-colors';
 const SELECTED = 'bg-accent border-accent text-bg';
 const UNSELECTED = 'bg-transparent border-border text-muted hover:text-text';
 
@@ -92,11 +94,14 @@ export default function RecipientVote({
 
       {current ? (
         // Deliberately /rankings, not /auth. The reward for voting is seeing
-        // the thing you just made, not a form.
+        // the thing you just made, not a form. OUTLINE, not accent-filled:
+        // the page already has one accent primary and the selected chip is
+        // accent-filled too — three stacked accents violated R2
+        // (g-b83d1c77 audit).
         <p className="text-center mt-4">
           <Link
             href="/rankings"
-            className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation"
+            className="inline-flex items-center justify-center border border-accent text-accent font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation hover:bg-accent hover:text-bg transition-colors"
           >
             See your list →
           </Link>

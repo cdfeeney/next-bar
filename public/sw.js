@@ -2,10 +2,30 @@
 // eligibility on Chrome/Edge and offline fallback for the home route.
 //
 // Strategy: network-first for navigations, cache-fallback when offline.
-// Static assets pass through to the browser cache.
+//
+// CORRECTION 2026-07-28: this header used to claim "static assets pass through
+// to the browser cache". That was FALSE. The catch-all stale-while-revalidate
+// branch at the bottom cached every same-origin GET, which included
+// /bar-photos/*.webp — so the service worker was holding re-hosted Google Place
+// photos, and because that branch is cache-FIRST with no revalidation it would
+// serve them indefinitely. Flipping the Google-media kill switch could not
+// reach an already-installed client, and deleting the files from the server
+// would not have either. See NEVER_CACHE below.
+//
+// CACHE_NAME is v2 so `activate` deletes the v1 cache and its photo entries.
+// That bump is the eviction lever: the Phase 1 plan doc recorded that bumping
+// CACHE_NAME would NOT purge cached photos, which is wrong — `activate` below
+// deletes every cache whose key is not CACHE_NAME.
 
-const CACHE_NAME = 'next-bar-shell-v1';
+const CACHE_NAME = 'next-bar-shell-v2';
 const SHELL_URLS = ['/', '/quiz', '/where-next', '/tried', '/manifest.webmanifest'];
+
+// Paths the service worker must never store or serve. Google-derived media has
+// to stay revocable: the kill switch and any future deletion must take effect
+// for installed clients without shipping a new service worker. These requests
+// bypass the SW entirely and fall through to the ordinary browser HTTP cache,
+// which honours normal expiry.
+const NEVER_CACHE = /^\/bar-photos\//;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -100,6 +120,9 @@ self.addEventListener('fetch', (event) => {
   // Skip cross-origin requests (tile servers, fonts) — let the browser handle.
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+
+  // Revocable media never enters the SW cache — see NEVER_CACHE above.
+  if (NEVER_CACHE.test(url.pathname)) return;
 
   // Network-first for navigations; fall back to cached shell.
   if (request.mode === 'navigate') {

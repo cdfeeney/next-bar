@@ -1,4 +1,5 @@
 import { nycNightKey } from '@/lib/nightKey';
+import { archiveNight } from '@/lib/nightArchive';
 import { loadRatings } from '@/lib/ratings';
 import type { BarRating } from '@/types/ratings';
 
@@ -100,7 +101,17 @@ export function recordVisit(barId: string, now: Date = new Date()): void {
   if (barId.startsWith('synthetic:')) return;
   const tonight = nycNightKey(now);
   const stored = readLog();
-  // First visit of a new night replaces last night's log wholesale.
+  // First visit of a new night replaces last night's log wholesale — and
+  // since g-919dae84 the displaced night is ARCHIVED first, so /nights can
+  // show previous nights instead of the app forgetting them. The ratings
+  // snapshot rides along (see nightArchive's module doc for why).
+  if (stored && stored.night !== tonight && stored.visits.length > 0) {
+    archiveNight({
+      nightKey: stored.night,
+      visits: stored.visits,
+      ratings: nightRatings(stored.night),
+    });
+  }
   const log: StoredNightLog =
     stored && stored.night === tonight ? stored : { night: tonight, visits: [] };
   const last = log.visits[log.visits.length - 1];
@@ -121,18 +132,40 @@ export function loadNightVisits(nightKey: string): NightVisit[] {
 }
 
 /**
+ * The LIVE log as-is — whichever night it currently holds, or null.
+ * /nights (g-919dae84) merges this with the archive so tonight/last night
+ * appears in history before the rollover archives it.
+ */
+export function loadCurrentLog(): {
+  nightKey: string;
+  visits: NightVisit[];
+} | null {
+  const stored = readLog();
+  if (!stored || stored.visits.length === 0) return null;
+  return { nightKey: stored.night, visits: stored.visits };
+}
+
+/**
+ * Every rating made during a night (ratedAt falls inside it). THE join
+ * rule for night↔ratings — archived nights (which store visits only)
+ * reuse it so a later re-rating is reflected, never contradicted by a
+ * stale copy.
+ */
+export function nightRatings(nightKey: string): BarRating[] {
+  return loadRatings().filter((r) => {
+    const rated = new Date(r.ratedAt);
+    return !Number.isNaN(rated.getTime()) && nycNightKey(rated) === nightKey;
+  });
+}
+
+/**
  * Assemble the Night object for a nightKey: ordered visits from the log
  * plus every rating made during that night. Pure read — safe for both
  * tonight (E3.1 exclusion) and yesterday (E4.2 recap, until tonight's
  * first visit replaces the stored log).
  */
 export function assembleNight(nightKey: string): NightRecord {
-  const visits = loadNightVisits(nightKey);
-  const ratings = loadRatings().filter((r) => {
-    const rated = new Date(r.ratedAt);
-    return !Number.isNaN(rated.getTime()) && nycNightKey(rated) === nightKey;
-  });
-  return { nightKey, visits, ratings };
+  return { nightKey, visits: loadNightVisits(nightKey), ratings: nightRatings(nightKey) };
 }
 
 /**

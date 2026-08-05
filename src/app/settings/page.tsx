@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
 import { loadProfile, clearProfile } from '@/lib/storedProfile';
+import { deleteServerVibeProfile } from '@/lib/vibeProfile.server';
 import { useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import SetPassword from '@/components/SetPassword';
@@ -31,8 +32,17 @@ export default function SettingsPage(): JSX.Element {
   const { ratings } = useRatings();
   const bars = useBars();
   const auth = useAuth();
-  const [hasProfile, setHasProfile] = useState(false);
+  // The FULL stored quiz profile, not a boolean: Settings must show the
+  // actual saved archetype (g-65a31bdf crit 8) — the rating-derived taste
+  // label below is a different, later signal and displaying only it read
+  // as if the quiz answers had vanished.
+  const [storedQuiz, setStoredQuiz] = useState<ReturnType<typeof loadProfile>>(null);
+  const hasProfile = storedQuiz !== null;
   const [seeded, setSeeded] = useState(false);
+  // Demo tools are a reviewer/dev path, not an ordinary-user surface
+  // (crit 10): visible only via the explicit ?demo=1 URL or while a
+  // sample night is actually loaded (so removal stays reachable).
+  const [demoPath, setDemoPath] = useState(false);
   // null = unknown/unclaimed until the profile fetch lands; the claim UI
   // only renders once the fetch confirms handle IS NULL (handleKnown).
   const [handle, setHandle] = useState<string | null>(null);
@@ -58,9 +68,23 @@ export default function SettingsPage(): JSX.Element {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   useEffect(() => {
-    setHasProfile(loadProfile() !== null);
-    setSeeded(isDemoSeeded());
-  }, [ratings.length]);
+    const refresh = (): void => {
+      setStoredQuiz(loadProfile());
+      setSeeded(isDemoSeeded());
+    };
+    refresh();
+    // Exactly ?demo=1 — has('demo') also accepted ?demo=0/false/empty,
+    // silently widening the reviewer path (santa: Codex).
+    setDemoPath(new URLSearchParams(window.location.search).get('demo') === '1');
+    // auth.status is a dependency because signing out now DELETES the local
+    // vibe profile (it joined accountCache.ALL_KEYS). Keying only on
+    // ratings.length missed it entirely for a user with zero ratings — 0 before
+    // and 0 after — leaving this page showing "Your quiz answers are saved"
+    // and an active Clear button for data that had just been wiped.
+    // The 'storage' listener covers the same-document wipe and other tabs.
+    window.addEventListener('storage', refresh);
+    return () => window.removeEventListener('storage', refresh);
+  }, [ratings.length, auth.status]);
 
   useEffect(() => {
     if (auth.status !== 'signed-in') return;
@@ -128,11 +152,45 @@ export default function SettingsPage(): JSX.Element {
   const taste = deriveTasteProfile(ratings, bars);
   const badgeReport = deriveBadges(ratings, bars, new Date());
 
-  const handleClearProfile = () => {
+  const handleClearProfile = async () => {
     if (typeof window === 'undefined') return;
     if (!window.confirm('Clear your saved vibe profile? You can retake the quiz anytime.')) return;
+    // Signed-in: the server row is the source of truth — delete it BEFORE the
+    // local clear, or VibeProfileSync re-hydrates it on the next mount and the
+    // profile the user just cleared silently reappears. Same rule, and the same
+    // failure surfacing, as handleClearRatings below.
+    if (auth.status === 'signed-in') {
+      const supabase = getBrowserSupabase();
+      if (supabase) {
+        let ok = false;
+        try {
+          ok = await deleteServerVibeProfile(supabase, auth.user.id);
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          // KNOWN PRE-0033 LIMITATION, accepted deliberately. A MISSING table is
+          // forgiven (42P01/PGRST205), but an OFFLINE request fails as a
+          // transport error, and the client cannot tell "no table, so no row can
+          // exist" from "table exists and I couldn't reach it". So while offline,
+          // a signed-in user cannot clear. Once 0033 is applied this is the
+          // CORRECT behavior: a surviving server row would otherwise re-hydrate
+          // the profile the user just cleared.
+          //
+          // A reviewer proposed feature-gating the remote delete until 0033 is
+          // live. Rejected: that flag has to be manually retired, and forgetting
+          // it silently re-opens the data-resurrection bug this whole path
+          // exists to prevent. A refusal with an honest, retryable message is
+          // the safer failure.
+          window.alert(
+            "Couldn't reach the server, so your vibe profile was NOT cleared. It's still saved on this device — try again in a moment.",
+          );
+          return;
+        }
+      }
+    }
     clearProfile();
-    setHasProfile(false);
+    setStoredQuiz(null);
   };
 
   const handleDeleteAccount = async () => {
@@ -151,8 +209,16 @@ export default function SettingsPage(): JSX.Element {
     // hard redirect lands on a clean signed-out home. try/finally (Opus
     // review): the redirect must happen even if signOut throws — the
     // account no longer exists, staying on a signed-in-looking page lies.
+    // The catch swallows deliberately: nothing here can act on the error,
+    // and without it the rejection escapes the click handler as an
+    // unhandled-rejection while the redirect is already committed.
     try {
       await auth.signOut();
+    } catch (signOutError) {
+      // Account is deleted; a failed local sign-out changes nothing below —
+      // but log it (never swallow silently): if sign-out starts failing for
+      // reasons other than the just-deleted account, this is the only trail.
+      console.error('[settings] sign-out after deletion failed:', signOutError);
     } finally {
       window.location.assign('/');
     }
@@ -218,7 +284,17 @@ export default function SettingsPage(): JSX.Element {
         <h1 className="font-display text-3xl md:text-4xl mb-2">Settings</h1>
       </header>
 
-      <section className="max-w-md mx-auto px-6 mt-8 mb-24 space-y-8">
+      {/*
+        pb, not mb. `mb-24` here created NO clearance above the fixed BottomNav:
+        measured at rest on iPhone 13, document scrollHeight (1500) equalled the
+        section's own bottom edge, so neither the 96px bottom margin (it collapses
+        out of a parent with no bottom border/padding) nor the body's
+        pb-[calc(64px+...)] contributed any scrollable space. The footer's last
+        line therefore rested at y 620-664 with the nav occupying 603-664, i.e.
+        its centre point was inside the nav.
+        Padding cannot collapse, so it genuinely extends the scroll area.
+      */}
+      <section className="max-w-md mx-auto px-6 mt-8 pb-24 space-y-8">
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Account
@@ -364,12 +440,20 @@ export default function SettingsPage(): JSX.Element {
           </div>
         </div>
 
-        {ratings.length > 0 ? (
-          <div>
-            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-              Badges
-            </h2>
-            <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
+        <div>
+          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+            Badges
+          </h2>
+          <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
+            {/* Always rendered — before the first rating this is the
+                progress/empty state, not a hidden section (g-65a31bdf
+                crit 9): badges are discoverable from day one. */}
+            {ratings.length === 0 ? (
+              <p className="text-xs text-muted" data-testid="badges-empty">
+                Rate your first bar to start earning badges — here&apos;s
+                what&apos;s waiting.
+              </p>
+            ) : (
               <p className="text-xs text-muted">
                 Explorer score{' '}
                 <span className="text-accent font-display tabular-nums">
@@ -379,6 +463,7 @@ export default function SettingsPage(): JSX.Element {
                   ? ` · ${badgeReport.weekendStreakCount}-weekend streak`
                   : null}
               </p>
+            )}
               <ul className="flex flex-wrap gap-2">
                 {badgeReport.badges.map((b) => (
                   <li
@@ -398,9 +483,8 @@ export default function SettingsPage(): JSX.Element {
                   </li>
                 ))}
               </ul>
-            </div>
           </div>
-        ) : null}
+        </div>
 
         {taste.archetype !== null ? (
           <div>
@@ -450,8 +534,20 @@ export default function SettingsPage(): JSX.Element {
           </h2>
           <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
             <div className="flex items-center justify-between">
+              {/* The ACTUAL saved quiz archetype (crit 8) — distinct from the
+                  rating-derived "Your taste" section above, which needs
+                  ratings to exist. */}
               <p className="text-sm">
-                {hasProfile ? 'Your quiz answers are saved.' : 'No vibe profile yet.'}
+                {storedQuiz !== null ? (
+                  <>
+                    Your quiz answers are saved:{' '}
+                    <span className="font-display text-accent">
+                      {storedQuiz.archetype}
+                    </span>
+                  </>
+                ) : (
+                  'No vibe profile yet.'
+                )}
               </p>
               {hasProfile ? (
                 <button
@@ -472,6 +568,7 @@ export default function SettingsPage(): JSX.Element {
           </div>
         </div>
 
+        {demoPath || seeded ? (
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Demo
@@ -509,15 +606,30 @@ export default function SettingsPage(): JSX.Element {
             )}
           </div>
         </div>
+        ) : null}
 
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Data
           </h2>
           <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
+            {/* One honest sentence per auth state (crit 11). What actually
+                syncs for a signed-in account: ratings and the vibe profile
+                (server rows). What never leaves the device today: Want-to-go
+                saves and night history — the log AND the /nights archive
+                (g-919dae84; a night only reaches the server when you share
+                it). The old copy claimed NOTHING synced, contradicting
+                /rankings' "Synced to your account". */}
+            {/* Precision matters (santa: Opus+Codex convergent HIGH, g-919
+                round 1): sign-out wipes PAST nights + share records, but
+                tonight's in-progress log and Want-to-go saves are not in
+                the wipe set — the copy must not claim more than the wipe
+                does. Widening the wipe itself is an operator decision
+                (NIGHTS-OUT-NOTES). */}
             <p className="text-xs text-muted leading-relaxed">
-              Everything you&apos;ve rated lives only on this device until cross-device
-              sync ships with the native app.
+              {auth.status === 'signed-in'
+                ? 'Your ratings and vibe profile sync to your account. Want-to-go saves and your night history stay on this device — a night only leaves it when you share that night. Signing out clears your past nights and share records from this device; tonight’s in-progress log and Want-to-go saves remain.'
+                : 'Everything lives on this device. Sign in to sync your ratings and vibe profile across devices; Want-to-go saves and your night history stay on this device.'}
             </p>
             <button
               type="button"
@@ -618,29 +730,47 @@ export default function SettingsPage(): JSX.Element {
           <div className="text-xs text-muted space-y-2 pl-1">
             <p>Next Bar · NYC · 2026</p>
             <p>
-              Coverage: Manhattan and parts of Brooklyn. More neighborhoods
+              Coverage: Manhattan, Brooklyn, and parts of Queens. More neighborhoods
               rolling out.
             </p>
+            {/*
+              Split into two <p>s for the same reason as /map's quiz link: a
+              44px inline-flex box must not share a line box with 12px prose, or
+              that line inflates ~3.7x against its neighbours.
+              Measured on iPhone 13 the link happened to wrap onto its own line
+              anyway — but that depends on the prose filling the first line, and
+              Pixel 7 (412px) and iPhone 17 (402px) are WIDER, so the wrap is not
+              guaranteed. Two reviewers flagged relying on that. Splitting makes
+              the treatment identical to /map and removes the viewport
+              dependence entirely. `space-y-2` on the parent handles the gap.
+            */}
+            <p>Hours and specials are best-effort.</p>
             <p>
-              Hours and specials are best-effort.{' '}
               <Link
                 href="mailto:hi@next-bar.app?subject=Bar+correction"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline inline-flex items-center min-h-[44px] touch-manipulation"
               >
                 Tell us if something&apos;s wrong.
               </Link>
             </p>
-            <p>
+            {/*
+              Laid out as a flex row rather than inline text. Both links need a
+              real 44px box (they were 17px tall), and with two inline-flex
+              links inside a plain <p> the " · " separator would sit on the
+              line-box baseline — visually low against two 44px-tall
+              neighbours. A flex row centres all three together.
+            */}
+            <p className="flex items-center gap-2">
               <Link
                 href="/privacy"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline inline-flex items-center min-h-[44px] touch-manipulation"
               >
                 Privacy Policy
               </Link>
-              {' · '}
+              <span aria-hidden="true">·</span>
               <Link
                 href="/terms"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline inline-flex items-center min-h-[44px] touch-manipulation"
               >
                 Terms of Use
               </Link>

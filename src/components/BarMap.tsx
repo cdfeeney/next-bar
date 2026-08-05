@@ -34,6 +34,17 @@ type BarMapProps = {
    * kept so embedded maps (WhereNextFlow results) are untouched.
    */
   suggestedIds?: string[];
+  /**
+   * Tapping a marker selects that bar instead of opening the built-in popup
+   * (goal g-5ead112c). `/map` uses this to open the existing BarLightbox —
+   * full photo, open status, the complete weekly hours table, address,
+   * description and the Maps / Rank-it actions — rather than the two lines a
+   * Leaflet popup can hold.
+   *
+   * Optional on purpose: the embedded maps in WhereNextFlow show a single seed
+   * bar where a detail overlay would be noise, so they keep the popup.
+   */
+  onSelectBar?: (bar: Bar) => void;
   /** When set, the map zooms to fit every bar marker (used by the full catalog view). */
   fitToBars?: boolean;
   /**
@@ -186,7 +197,7 @@ function FocusBar({ bar, nonce }: { bar: Bar | null; nonce?: number }) {
   return null;
 }
 
-export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
+export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, onSelectBar, fitToBars, oneFingerPan }: BarMapProps) {
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -279,15 +290,31 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
                   position={[bar.lat, bar.lng]}
                   icon={icon}
                   zIndexOffset={isTiered ? TIER_Z_OFFSET[tier] : 0}
+                  eventHandlers={
+                    onSelectBar ? { click: () => onSelectBar(bar) } : undefined
+                  }
                 >
-                  <Popup>
-                    <div className="font-bold">{bar.name}</div>
-                    <div className="text-xs">
-                      {travelLabel
-                        ? `${displayHood(bar.neighborhood)} · ${travelLabel}`
-                        : displayHood(bar.neighborhood)}
-                    </div>
-                  </Popup>
+                  {/*
+                    When the consumer supplies `onSelectBar`, tapping a marker
+                    opens the full venue detail instead of a two-line popup, so
+                    the marker renders NO <Popup> child — otherwise Leaflet
+                    would open its popup *and* the lightbox on the same tap.
+
+                    The search fly-to popup is unaffected: that one is built
+                    imperatively in FlyToBar via L.popup(), not from these
+                    children, so "search names the bar you flew to" still works
+                    and its test still passes.
+                  */}
+                  {onSelectBar ? null : (
+                    <Popup>
+                      <div className="font-bold">{bar.name}</div>
+                      <div className="text-xs">
+                        {travelLabel
+                          ? `${displayHood(bar.neighborhood)} · ${travelLabel}`
+                          : displayHood(bar.neighborhood)}
+                      </div>
+                    </Popup>
+                  )}
                 </Marker>
               );
             })}

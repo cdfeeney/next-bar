@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Bar, Coords, VibeProfile, VibeTag } from '@/types';
 import type { BarRating } from '@/types/ratings';
 import { matches } from '@/lib/matching';
+import {
+  buildAvoidTagWeights,
+  buildLovedTagWeights,
+} from '@/lib/tasteSignals';
 import { deriveArchetype } from '@/lib/quiz';
 import { loadProfile } from '@/lib/storedProfile';
 import { useBars } from '@/lib/useBars';
@@ -20,6 +24,15 @@ export type ComputeSuggestionsArgs = {
   maxResults?: number;
   /** Injectable clock for the staleness filter — tests pass a fixed date. */
   now?: Date;
+  /**
+   * The FULL catalog for taste-signal derivation (v1.1). `/map` ranks
+   * within a FILTERED `bars` pool, but the user's Loved/Passed history
+   * must always be interpreted against the whole catalog — a filter
+   * hiding one of two Loved bars must not drop the weighted affinity
+   * below its caution floor (santa: Codex + Fable, converged). Defaults
+   * to `bars` for callers that already rank the full set.
+   */
+  signalBars?: readonly Bar[];
 };
 
 /**
@@ -47,18 +60,30 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
     .filter((r) => r.rating === 'pass')
     .map((r) => r.barId);
 
-  // Flatten the vibe tags of every bar the user has Loved, so matches() can
-  // nudge bars with a similar taste profile up the rank (loved-affinity term).
-  const lovedBarIds = new Set(
-    ratings.filter((r) => r.rating === 'loved').map((r) => r.barId),
-  );
-  const lovedTagSet = new Set<VibeTag>();
-  if (lovedBarIds.size > 0) {
-    for (const b of bars) {
-      if (lovedBarIds.has(b.id)) {
-        for (const t of b.tags) lovedTagSet.add(t);
-      }
-    }
+  // v1.1 taste signals (g-7de10fce, eval-gated adoption): frequency-
+  // weighted Loved-tag affinity replaces the flattened union — a tag the
+  // user keeps loving counts more — plus the cautious avoid-tag nudge
+  // (≥2 Passed bars, never a Loved tag; tie-breaker scale only).
+  // Corpus evidence: loved-alignment 0.4210→0.4371, avoid-hit
+  // 0.0456→0.0400, vibe relevance unchanged, zero hard-filter
+  // violations (scripts/matcher-eval-report.mts).
+  //
+  // Signals derive from signalBars — the FULL catalog — never the
+  // (possibly filtered) ranking pool: a map filter that hides one of
+  // two Loved bars must not silently drop the weighted affinity below
+  // its caution floor or empty the avoid map (santa: Codex). Ranking
+  // still happens strictly within `bars`.
+  const signalBars = args.signalBars ?? bars;
+  const lovedIds = ratings
+    .filter((r) => r.rating === 'loved')
+    .map((r) => r.barId);
+  // Flat union kept as the FALLBACK affinity: below the ≥2-Loved caution
+  // floor the weight map is empty and scoreBar uses this instead (exact
+  // pre-v1.1 behavior — no cold-start echo chamber, no lost affinity).
+  const lovedIdSet = new Set(lovedIds);
+  const lovedFlat = new Set<VibeTag>();
+  for (const b of signalBars) {
+    if (lovedIdSet.has(b.id)) for (const t of b.tags) lovedFlat.add(t);
   }
 
   return matches({
@@ -70,7 +95,13 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
     excludeIds,
     maxResults,
     now,
-    lovedTags: Array.from(lovedTagSet),
+    lovedTags: Array.from(lovedFlat),
+    lovedTagWeights: buildLovedTagWeights(lovedIds, signalBars as Bar[]),
+    avoidTagWeights: buildAvoidTagWeights(
+      excludeIds,
+      lovedIds,
+      signalBars as Bar[],
+    ),
   });
 }
 
@@ -99,11 +130,33 @@ export type UseSuggestionsReturn = {
  * flow, this hook composes the same primitives (storedProfile + useRatings
  * + useBars + matches) with identical semantics via computeSuggestions().
  */
+export type SuggestionIntent = {
+  /**
+   * The ACTIVE intent to rank by, replacing the saved quiz profile's tags.
+   * `/map` passes what the user has currently filtered for, so the prominent
+   * markers answer "what I asked for just now" rather than "what I said in a
+   * quiz once". Omit to keep the saved-profile behaviour. (That branch used to
+   * be what `/discover` used; /discover was archived in goal g-12d33864, so
+   * /map is the only caller now and reaches the omit-tags path itself whenever
+   * no vibe filter is active.)
+   */
+  tags?: readonly VibeTag[];
+  /**
+   * Rank within THIS set rather than the whole catalog. `/map` passes the
+   * filtered bars: ranking the full catalog and then hiding most of it would
+   * score bars the user cannot see, and the cohort-relative tier cut in
+   * `suggestedTier` would be computed against the wrong denominator.
+   */
+  bars?: readonly Bar[];
+};
+
 export function useSuggestions(
   coords: Coords | null,
   maxResults: number = MAP_SUGGESTION_COUNT,
+  intent?: SuggestionIntent,
 ): UseSuggestionsReturn {
-  const bars = useBars();
+  const allBars = useBars();
+  const bars = intent?.bars ? (intent.bars as Bar[]) : allBars;
   const { ratings } = useRatings();
 
   // The saved vibe profile is read client-side after mount (same pattern as
@@ -111,37 +164,66 @@ export function useSuggestions(
   const [profile, setProfile] = useState<VibeProfile | null>(null);
   const [profileChecked, setProfileChecked] = useState(false);
   useEffect(() => {
-    const saved = loadProfile();
-    if (saved) {
-      setProfile({
-        tags: saved.tags,
-        archetype: saved.archetype,
-        preferredNeighborhoods: saved.preferredNeighborhoods,
-      });
-    }
-    setProfileChecked(true);
+    const syncProfile = (): void => {
+      const saved = loadProfile();
+      // G1: fall back to null when the profile is gone, don't keep stale tags.
+      // This hook feeds the "Suggested for you" ranking on /map (it also fed
+      // /discover until that route was archived in goal g-12d33864),
+      // so without the listener an account switch (or a Settings clear) would
+      // keep RANKING against the previous profile's tags until remount — the
+      // same class of leak the profile-change notification exists to close,
+      // just expressed as ranking rather than displayed tags.
+      setProfile(
+        saved
+          ? {
+              tags: saved.tags,
+              archetype: saved.archetype,
+              preferredNeighborhoods: saved.preferredNeighborhoods,
+            }
+          : null,
+      );
+      setProfileChecked(true);
+    };
+    syncProfile();
+    window.addEventListener('storage', syncProfile);
+    return () => window.removeEventListener('storage', syncProfile);
   }, []);
 
   // UX-C (operator: "no suggested bars for me now"): a missing quiz
   // profile must not blank the suggested tier — fall back to the EMPTY
   // profile (the home flow's defaultProfile pattern: distance/affinity-
   // ranked). hasProfile still reports the truth for the personalize hint.
+  const intentTags = intent?.tags;
   const suggestedIds = useMemo(() => {
     if (!profileChecked) return [];
-    const effective: VibeProfile =
-      profile ?? {
-        tags: [],
-        archetype: deriveArchetype([]),
-        preferredNeighborhoods: [],
-      };
+    // An ACTIVE intent wins over the saved quiz profile. Without this the map's
+    // prominent markers reflected a quiz answered once, while the user was
+    // staring at filters they had just set — the two disagreed and the map
+    // looked broken. preferredNeighborhoods is deliberately dropped in intent
+    // mode: the neighborhood filter already narrowed `bars`, and re-applying it
+    // as a ranking preference would double-count it.
+    const effective: VibeProfile = intentTags
+      ? {
+          tags: [...intentTags],
+          archetype: deriveArchetype([...intentTags]),
+          preferredNeighborhoods: [],
+        }
+      : profile ?? {
+          tags: [],
+          archetype: deriveArchetype([]),
+          preferredNeighborhoods: [],
+        };
     return computeSuggestions({
       profile: effective,
       coords,
       bars,
+      // Taste signals always read the FULL catalog, independent of the
+      // map's filtered ranking pool (parity with ResultsView).
+      signalBars: allBars,
       ratings,
       maxResults,
     }).map((b) => b.id);
-  }, [profile, profileChecked, coords, bars, ratings, maxResults]);
+  }, [profile, intentTags, profileChecked, coords, bars, allBars, ratings, maxResults]);
 
   return { suggestedIds, hasProfile: profile !== null, profileChecked };
 }

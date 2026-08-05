@@ -6,7 +6,10 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { fetchOwnProfile } from '@/lib/profile.server';
 import { shareNight } from '@/lib/nights.server';
+import { getCacheEpoch } from '@/lib/accountCache';
+import { recordSharedNight } from '@/lib/sharedNightsLocal';
 import { buildNightPath, isShareAbort, shareNightText } from '@/lib/share';
+import { trackEvent } from '@/lib/analytics';
 
 const COPIED_MS = 2000;
 
@@ -32,6 +35,15 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [state, setState] = useState<ShareState>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Re-entrancy guard as a REF, not the state read below: two taps in the
+   * same tick both see the pre-render `state === 'idle'` (stale closure)
+   * and would both fire shareNight. Harmless today only because
+   * share_night is an idempotent upsert — the ref closes the gap on
+   * principle and matches ShareButton's proven pattern (social audit
+   * g-0182f313 #6).
+   */
+  const inFlight = useRef(false);
 
   useEffect(() => {
     if (auth.status !== 'signed-in') {
@@ -61,7 +73,8 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
   if (auth.status !== 'signed-in' || !handle) return null;
 
   const share = async (): Promise<void> => {
-    if (state === 'busy') return;
+    if (inFlight.current || state === 'busy') return;
+    inFlight.current = true;
     setState('busy');
     try {
       const supabase = getBrowserSupabase();
@@ -69,6 +82,10 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
         setState('failed');
         return;
       }
+      // Epoch capture (santa: Codex, bf5d7f4f panel): if a sign-out wipes
+      // the account cache while the RPC is in flight, writing the returned
+      // token would re-plant account residue AFTER the wipe.
+      const epochBefore = getCacheEpoch();
       const token = await shareNight(supabase, {
         nightKey: recap.nightKey,
         barIds: recap.bars.map((b) => b.id),
@@ -78,12 +95,21 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
         setState('failed');
         return;
       }
+      // Device-side record of the share (g-919dae84): lets /nights show
+      // "Shared", rebuild this link later, and offer unshare — without a
+      // server listing RPC.
+      if (getCacheEpoch() === epochBefore) {
+        recordSharedNight(recap.nightKey, token);
+      }
       const url = `${window.location.origin}${buildNightPath(handle, token)}`;
       const text = shareNightText(handle, displayName, recap.bars.length);
 
       if (typeof navigator.share === 'function') {
         try {
           await navigator.share({ title: text, text, url });
+          // Dark analytics (g-ee6c250d): completed share only — the abort
+          // branch below never reaches this.
+          trackEvent('share');
           setState('idle');
           return;
         } catch (err) {
@@ -98,6 +124,7 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
       }
       try {
         await navigator.clipboard.writeText(`${text} ${url}`);
+        trackEvent('share');
         setState('copied');
         if (timer.current) clearTimeout(timer.current);
         timer.current = setTimeout(() => setState('idle'), COPIED_MS);
@@ -105,6 +132,7 @@ export default function ShareNightButton({ recap }: { recap: Recap }) {
         setState('failed');
       }
     } finally {
+      inFlight.current = false;
       setState((s) => (s === 'busy' ? 'idle' : s));
     }
   };

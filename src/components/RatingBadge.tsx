@@ -32,15 +32,22 @@ function labelFor(rating: Rating): string {
   }
 }
 
+/**
+ * Presentational badge for callers that already hold the rating. Surfaces
+ * that render MANY badges per interaction (e.g. /search result rows, which
+ * remount on every query change) must use this with ONE page-level
+ * useRatings, not the hook-bearing default export: each hook instance runs
+ * the hydration effect, and the single-flight guard is in-flight only, so
+ * a mount wave AFTER a settled run refires server hydration for signed-in
+ * users (santa: Codex).
+ */
+export function RatingBadgeView({ rating }: { rating: Rating | null }): JSX.Element | null {
+  if (rating === null) return null;
+  const classes = [BASE_BADGE_CLASSES, badgeClassesFor(rating)].join(' ');
+  return <span className={classes}>{labelFor(rating)}</span>;
+}
+
 export default function RatingBadge({ barId }: RatingBadgeProps) {
   const { getRating } = useRatings();
-  const current = getRating(barId);
-
-  if (current === null) {
-    return null;
-  }
-
-  const classes = [BASE_BADGE_CLASSES, badgeClassesFor(current)].join(' ');
-
-  return <span className={classes}>{labelFor(current)}</span>;
+  return <RatingBadgeView rating={getRating(barId)} />;
 }

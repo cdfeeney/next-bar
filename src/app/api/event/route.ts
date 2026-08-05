@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { clientIpFromHeaders, createIpRateLimiter } from '@/lib/waitlistGuard';
+import { clientIpFromHeaders, createRateLimiter } from '@/lib/waitlistGuard';
 import { ANALYTICS_EVENTS } from '@/lib/analytics';
 import { nycNightKey } from '@/lib/nightKey';
 
@@ -28,7 +28,7 @@ import { nycNightKey } from '@/lib/nightKey';
  */
 
 const RATE_LIMIT_PER_MINUTE = 60;
-const limiter = createIpRateLimiter({
+const limiter = createRateLimiter({
   limit: RATE_LIMIT_PER_MINUTE,
   windowMs: 60 * 1000,
 });

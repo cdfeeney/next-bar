@@ -66,7 +66,9 @@ export default function LocationAccessHelp({
           <button
             type="button"
             onClick={onRetry}
-            className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
+            // min-w floor: "Try again" at text-xs measured 41px wide, so the
+            // height was already compliant and the WIDTH was the failure.
+            className="text-xs text-accent font-display min-h-[44px] min-w-[44px] inline-flex items-center justify-center touch-manipulation hover:underline underline-offset-4"
           >
             Try again
           </button>

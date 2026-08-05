@@ -11,8 +11,13 @@ import type {
 import { useBars } from '@/lib/useBars';
 import { excludeClosedBars } from '@/lib/openNow';
 import { matches } from '@/lib/matching';
+import {
+  buildAvoidTagWeights,
+  buildLovedTagWeights,
+} from '@/lib/tasteSignals';
+import { arrangeWidenedHand } from '@/lib/freshHand';
 import { haversineMiles } from '@/lib/distance';
-import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
+import { MAX_RESULTS, NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
 import { displayHood } from '@/lib/hoodDisplay';
 import { useRatings } from '@/hooks/useRatings';
 import ResultCard from '@/components/ResultCard';
@@ -41,6 +46,18 @@ type ResultsViewProps = {
   onRanked?: (ids: string[]) => void;
   /** Planning phase (operator 2026-07-27): cards carry a "Send" share. */
   showShare?: boolean;
+  /**
+   * Fresh-hand mode after a WIDENING radius tap (g-d3f8d912): the radius
+   * in force before the tap. When a number, the hand is arranged
+   * newly-eligible-first → unseen → previously-shown-as-fallback instead
+   * of a plain top-N slice, with `seenIds` as the soft seen set (the
+   * parent removes those ids from `excludeIds` in this mode — they must
+   * stay eligible for fallback reuse). Undefined/null = normal ranking.
+   */
+  widenedFromMiles?: number | null;
+  seenIds?: readonly string[];
+  /** Forwarded to every ResultCard — see its doc (honest unset-vibe copy). */
+  hasSavedVibe?: boolean;
 };
 
 export default function ResultsView({
@@ -52,6 +69,9 @@ export default function ResultsView({
   hideClosedNow,
   onRanked,
   showShare,
+  widenedFromMiles,
+  seenIds,
+  hasSavedVibe,
 }: ResultsViewProps) {
   const userCoords: Coords =
     location.kind === 'coords'
@@ -94,6 +114,24 @@ export default function ResultsView({
 
   const pool = useMemo(
     () =>
+      // `hideClosedNow` is NOT a strict-provenance filter — it is the
+      // "don't show me closed bars" behaviour, and WhereNextFlow passes it
+      // hardcoded true, so this is the DEFAULT path for the main surface.
+      //
+      // It must therefore use excludeClosedBars, which is already the correct
+      // half of criterion 9: unverified hours never CLOSE a bar (dropping a
+      // real, probably-open venue on data we may not rely on is the wrong
+      // error), while the ranker de-prioritises those venues via
+      // unverifiedHoursAdjustment.
+      //
+      // DO NOT put openNowStrict here. It excludes every venue without
+      // trustworthy hours, and today that is ALL 1,265 of them — 1,192
+      // google/unverified plus 73 with no provenance — so the main surface
+      // returns zero recommendations. That regression shipped in eb643b3 and
+      // is what e2e/where-next-path + e2e/one-results-view catch.
+      // openNowStrict is for an EXPLICIT strict "Open now" control, which does
+      // not exist yet and must not be built until trustworthy hours do (goal
+      // g-3eedd7a1 H3/M3).
       hideClosedNow && filterNow
         ? excludeClosedBars(bars, filterNow, OPENS_SOON_WINDOW_MIN)
         : bars,
@@ -108,45 +146,84 @@ export default function ResultsView({
     return Array.from(merged);
   }, [excludeIds, ratings]);
 
-  // Flatten the vibe tags of every bar the user has Loved, so matches() can
-  // nudge bars with a similar taste profile up the rank (loved-affinity term).
-  const lovedTags = useMemo(() => {
-    const lovedBarIds = new Set(
-      ratings.filter((r) => r.rating === 'loved').map((r) => r.barId),
-    );
-    if (lovedBarIds.size === 0) return [] as VibeTag[];
-    const tags = new Set<VibeTag>();
+  // v1.1 taste signals (g-7de10fce, eval-gated adoption): frequency-
+  // weighted Loved affinity (a tag loved five times counts more than one
+  // loved once) + the cautious avoid-tag nudge (≥2 Passed bars, never a
+  // Loved tag; tie-breaker scale). Corpus evidence in
+  // docs/MATCHER-EVAL-g-7de10fce-2026-08-04.md: loved-alignment up,
+  // avoid-hit down, vibe relevance and hard filters unchanged.
+  const tasteSignals = useMemo(() => {
+    const lovedIds = ratings
+      .filter((r) => r.rating === 'loved')
+      .map((r) => r.barId);
+    const passedIds = ratings
+      .filter((r) => r.rating === 'pass')
+      .map((r) => r.barId);
+    // Flat union kept as the FALLBACK affinity: below the ≥2-Loved
+    // caution floor the weight map is empty and scoreBar falls back to
+    // this (exact pre-v1.1 cold-start behavior).
+    const lovedIdSet = new Set(lovedIds);
+    const lovedFlat = new Set<VibeTag>();
     for (const b of bars) {
-      if (lovedBarIds.has(b.id)) {
-        for (const t of b.tags) tags.add(t);
-      }
+      if (lovedIdSet.has(b.id)) for (const t of b.tags) lovedFlat.add(t);
     }
-    return Array.from(tags);
+    return {
+      lovedTags: Array.from(lovedFlat),
+      lovedTagWeights: buildLovedTagWeights(lovedIds, bars),
+      avoidTagWeights: buildAvoidTagWeights(passedIds, lovedIds, bars),
+    };
   }, [ratings, bars]);
 
-  const ranked = useMemo(
-    () =>
-      matches({
-        profile,
-        coords: userCoords,
-        preferredNeighborhoods,
-        maxMiles,
-        bars: pool,
-        excludeIds: effectiveExcludeIds,
-        maxResults,
-        lovedTags,
-        // Late-night bias rides the SAME live clock as the open-now
-        // filter — quiz/planning surfaces (no hideClosedNow) never bias.
-        biasNow: filterNow ?? undefined,
-      }),
-    [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow],
-  );
+  // Fresh-hand mode (g-d3f8d912): after a widening tap, the adaptive vibe
+  // threshold must relax exactly as far as the equivalent run-it-again
+  // deal would. relaxDiscountIds delivers that equivalence precisely: the
+  // soft-seen bars do not count toward the relax target (as if
+  // hard-excluded, which is what run-again does) but stay ranked for
+  // fallback reuse. A naive maxResults = pool.length forced floor
+  // relaxation; a maxResults + seen.length target still over-relaxed when
+  // a seen bar itself failed the threshold (santa: Codex rounds 1 + 2 —
+  // "never weaken active vibe filters"). sliceCap returns every bar the
+  // settled threshold admits so arrangeWidenedHand can bucket
+  // newly-eligible → unseen → seen-as-fallback; it also keeps the
+  // exploration slot out of the arranged deal.
+  const widenActive = typeof widenedFromMiles === 'number';
+  const ranked = useMemo(() => {
+    const scored = matches({
+      profile,
+      coords: userCoords,
+      preferredNeighborhoods,
+      maxMiles,
+      bars: pool,
+      excludeIds: effectiveExcludeIds,
+      maxResults,
+      sliceCap: widenActive ? pool.length : undefined,
+      relaxDiscountIds: widenActive ? seenIds : undefined,
+      lovedTags: tasteSignals.lovedTags,
+      lovedTagWeights: tasteSignals.lovedTagWeights,
+      avoidTagWeights: tasteSignals.avoidTagWeights,
+      // Late-night bias rides the SAME live clock as the open-now
+      // filter — quiz/planning surfaces (no hideClosedNow) never bias.
+      biasNow: filterNow ?? undefined,
+    });
+    if (!widenActive) return scored;
+    return arrangeWidenedHand({
+      ranked: scored,
+      coords: userCoords,
+      prevMaxMiles: widenedFromMiles,
+      seenIds: seenIds ?? [],
+      count: maxResults ?? MAX_RESULTS,
+    }).hand;
+  }, [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, tasteSignals, filterNow, widenActive, widenedFromMiles, seenIds]);
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own
   // recompute. Signature guard: fire only when the id SEQUENCE changes —
   // never on mere array-identity churn (belt-and-braces against the
   // render-loop class above).
-  const lastRankedSigRef = useRef('');
+  // null sentinel, not '' (santa: Codex, g-d3f8d912): with '' a remounted
+  // view whose FIRST rank is empty never fired onRanked, so the parent's
+  // last-ranked mirror silently kept the PREVIOUS context's hand. The
+  // first commit must always report — even an empty rank.
+  const lastRankedSigRef = useRef<string | null>(null);
   // Ref-carried callback (DeepSeek review): an inline-lambda parent must
   // not re-trigger the effect on every render — only a ranked change does.
   const onRankedRef = useRef(onRanked);
@@ -285,6 +362,7 @@ export default function ResultsView({
                   miles={miles}
                   userTags={profile.tags}
                   showShare={showShare}
+                  hasSavedVibe={hasSavedVibe}
                 />
               );
             })}

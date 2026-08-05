@@ -1,0 +1,54 @@
+# Overnight run — 2026-08-03 → 2026-08-04
+
+- Launch: 2026-08-03 23:01 EDT (America/New_York)
+- Hard stop: 2026-08-04 04:45 EDT (six-hour cap 05:01, operator ceiling ~04:30–05:00)
+- No new implementation goal after 03:15 EDT (90-min runway rule)
+- Worktree: C:\Users\cdfee\projects\nb-overnight
+- Branch: feat/overnight-2026-07-30
+- Starting SHA: 5171ff2dc2ef900c2c43697adc89bcabfd48beee (0 behind / 15 ahead of origin)
+- Remote-write lock: ARMED (verified)
+- Dirty paths at start (protected operator docs, preserve exactly):
+  M docs/MASTER-TODO-2026-07-30.md
+  M docs/OPERATOR-BUGS-2026-07-28.md
+  ?? docs/CTO-OPERATOR-PLAN-2026-07-31.md
+  ?? docs/STAGING-ACCEPTANCE-NOTES-2026-08-01.md
+- Queue (in order):
+  1. g-31f36bf8-4979-4d52-88b3-a433570c717e — T0 Pin where I am (status planned)
+  2. g-7de10fce-2f05-442c-a7d0-26adc0ad8bf9 — T1 matcher eval + KPI foundation (status planned)
+  3. g-7104aed0-7305-491e-8297-b47729cd1496 — T0 census, SAFE overnight portion only (status planned; attended activation out of scope)
+- Review policy: T1 = fresh Claude FABLE + Codex; T0 = FABLE + Codex + risk-routed specialist. Sonnet informational only.
+- Boundaries: local-only; no push/PR/deploy/DNS/Apple/TestFlight/credential/remote-DB/external writes; no migrations applied anywhere; no paid calls; no analytics enablement; never broad-stage.
+
+## Item log
+
+### Item 1 — g-31f36bf8 (T0 Pin where I am) — COMPLETE
+- Commit: deffdd1 (32 files; feature + canonical socialNight 6am boundary + never-applied drafts/0038_venue_pins.sql + numbering-reconciliation doc)
+- Tests: vitest full suite green (incl. 30 static SQL guards); tsc/build/secret-scan/diff-check clean; e2e/pin-where-i-am 37/37 (iPhone 13 + Pixel 7); affected suites 81/81 then 51/51 at final state
+- Review: T0 panel per operator policy. R1 Fable BLOCK(2H)+Codex timeout; R2 Fable BLOCK(3H)+Codex timeout; R3 Fable+Codex+DeepSeek ALL lanes succeeded (Fable 1H, Codex 2H/3M, DeepSeek advisory); scoped closure Fable+Codex converged 1H. Every C/H/M fixed as prescribed + regression-tested. Codex r1/r2 timeouts were packet-size, not outage (r3 narrow packet succeeded with proof).
+- Lane-unique catches: Fable = dialog a11y contract + pinSignal lifecycle + 6am rollover revalidation; Codex = epoch/night/revision write-guards + owner-tagged rows + stub night-scoping; DeepSeek = prescribed the epoch-guard design + confirmed SQL DST/authz clean.
+- Residual (non-blocking, documented): BarLightbox→useDialogA11y migration debt; per-instance night-refresh timers (bounded, MAX_RESULTS=3); multi-tab pin divergence self-corrects; LIVE two-user SQL authorization + DST proof deferred to attended 0038 apply (no local Postgres engine).
+- Boundaries held: nothing pushed/applied/deployed; draft inert in drafts/ (runner reads top-level only).
+
+> PROTOCOL DEVIATION (deliberate): `loop-guard checkpoint` broad-committed the four protected operator docs after item 1 (commit b24206c). That commit was undone with `git reset --mixed HEAD~1` (file contents untouched; exact dirty/untracked state verified restored). Remaining checkpoints this run are explicit narrow commits of .loop-guard/morning.md only — the mission's preserve-operator-docs / no-broad-staging constraints outrank the checkpoint helper. loop-guard iteration state is unaffected (tick/cap still enforced).
+
+### Item 2 — g-7de10fce (T1 matcher eval + KPI foundation) — COMPLETE
+- Commit: 49d9192 (15 files: eval engine + corpus gates + tasteSignals v1.1 + dark KPI contracts + evidence doc + report script)
+- Adopted on evidence: weighted Loved affinity (>=2-Loved floor) + cautious avoid nudge — lovedAlign 0.4210→0.4371, avoidHit 0.0456→0.0400, vibe unchanged, 0 hard-filter violations, repeat decay 0.470→0.523. Baseline preserved & measured; no ML; weights unchanged.
+- Tests: vitest 2058/2058; tsc/build/secret/diff clean; Playwright 105/105 + 85/85 (quiz/map/where-next/distance/tonight, 3 device shards)
+- Review: T1 panel Fable + Codex — both lanes succeeded BOTH rounds (Codex first-try this time; r1 packet-size lesson from item 1 applied). r1: Fable 2 HIGH (unexercised exploration/fresh-hand paths; inverted KPI forbidden-key belt) + Codex 4 MED; r2: Codex 2 MED + Fable APPROVE. All fixed + regression-tested.
+- Lane-unique catches: Fable = corpus-coverage-vs-doc-claim + belt inversion; Codex = /map filtered-cohort taste-model bug + gate tightness; GLM (planning consult) = cold-start echo-chamber (empirically confirmed by the corpus, fixed via caution floor).
+- KPI foundation stays DARK: 5 names allowlisted, envelope {v,name} only, PostHog/analytics off (unit-asserted), zero new dispatch call sites.
+- Boundaries held: no external writes, no paid calls, no analytics enablement, no migrations.
+
+### Item 3 — g-7104aed0 (T0 census, SAFE portion only) — READINESS VERIFIED, RETURNED TO planned (attended-only by design)
+- Commit: 79a8800 (docs/CENSUS-READINESS-2026-08-04.md)
+- Unit 60/60 + 0037 static guards; fixture CLI run complete (budget 9/50, 4 SYNTHETIC candidates, artifacts gitignored under scripts/census/out/); resume + report idempotent; LOOP_UNATTENDED=1 --apply REFUSED as designed; concurrent-writer refusal static+unit (live proof = attended 0037 apply). Zero readiness defects. NO activation, credentials, paid calls, Staging access, or bars added.
+- Status deliberately NOT terminal: the stored goal IS the attended activation pilot; per the operator mission it stays `planned` for an attended session.
+
+## RUN SUMMARY (2026-08-04 ~01:40 ET — 3h05m early of the 04:45 hard stop)
+- Top-level status: QUEUE_REMAINING by controller accounting (g-7104aed0 runnable-but-ATTENDED-ONLY, by operator design). All UNATTENDED-SAFE queue work is COMPLETE and reviewed. Mission terminal condition met: no safe goal with ≥90min runway remains.
+- Completed: g-31f36bf8 (T0, NICE @ deffdd1), g-7de10fce (T1, NICE @ 49d9192). Blocked: none new. Skipped: none. Remaining: g-7104aed0 (attended).
+- Reviewer lanes: item 1 = Fable×5 runs + Codex (2×124 then 2 successes w/ proofs) + DeepSeek×2; item 2 = Fable×2 (APPROVE final) + Codex×2 (proofs) + GLM planning consult. Sonnet: not used as a gating lane anywhere. All 124 timeouts had confirmed process-tree termination.
+- Timed-out commands: codex-review.mjs ×2 (both terminated cleanly; narrow packets then succeeded).
+- Human decisions needed: continuation §6 list + census attended gates + Phase B/photos/ranking/map-visual items.
+- NOTHING pushed, deployed, applied, or irreversibly changed; lock ARMED at close; leases empty; protected operator docs byte-identical (one broad checkpoint commit self-caught and reverted — see deviation note above).

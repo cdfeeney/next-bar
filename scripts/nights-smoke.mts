@@ -39,7 +39,19 @@ const STAMP = Date.now().toString(36);
 const TEST_EMAIL = `nextbar.nights.smoke.${STAMP}@example.com`;
 const TEST_PASSWORD = `nights-smoke-${STAMP}-Aa1!`;
 const TEST_HANDLE = `smoke_${STAMP}`;
-const NIGHT = '2026-07-25';
+/**
+ * TODAY, not a frozen literal (Codex review of migration 0035).
+ *
+ * This was hard-coded to '2026-07-25' and was already five days stale. Once
+ * 0035 lands — it clamps share_night's p_night to `current_date ± 2`, matching
+ * the bound suggest_bar/rsvp_bar/cast_vibe_vote already enforce — a fixed date
+ * makes this smoke script fail permanently, and it would fail as a *migration*
+ * bug report rather than as the stale fixture it actually is.
+ *
+ * Computed in UTC to match how the RPC's `date` parameter is parsed; the ±2
+ * window absorbs any NYC/UTC offset.
+ */
+const NIGHT = new Date().toISOString().slice(0, 10);
 
 let failures = 0;
 function check(label: string, ok: boolean, detail?: unknown) {

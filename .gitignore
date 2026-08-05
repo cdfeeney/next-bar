@@ -14,3 +14,9 @@ tsconfig.tsbuildinfo
 
 # Generated ingestion candidates (regenerable via scripts/ingest-bars.ts)
 scripts/data/
+
+# OSM Overpass response cache (dev reconnaissance, not source)
+.osm-cache/
+.site-cache/
+.osm-cache/
+scripts/census/out/

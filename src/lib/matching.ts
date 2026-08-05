@@ -8,6 +8,8 @@ import type {
 import { haversineMiles } from '@/lib/distance';
 import { daysAgo } from '@/lib/freshness';
 import { effectiveNight } from '@/lib/cadence';
+import { hasTrustworthyHours } from '@/lib/openNow';
+import { weightedTagCoverage, type TagWeights } from '@/lib/tasteSignals';
 import {
   DIST_DECAY_MILES,
   DIST_WEIGHT,
@@ -16,6 +18,7 @@ import {
   LATE_NIGHT_START_HOUR,
   LATE_RESTAURANT_PENALTY,
   EXPLORATION_MIN_RESULTS,
+  NEG_TAG_PENALTY,
   JACCARD_FLOOR,
   JACCARD_START,
   JACCARD_STEP,
@@ -23,6 +26,7 @@ import {
   MAX_RESULTS,
   MIN_CANDIDATES,
   RATING_WEIGHT,
+  UNVERIFIED_HOURS_PENALTY,
   VIBE_WEIGHT,
 } from '@/lib/constants';
 
@@ -61,6 +65,32 @@ export type MatchesArgs = {
   bars: Bar[];
   excludeIds?: string[];
   maxResults?: number;
+  /**
+   * Return up to this many ranked bars while keeping the RELAXATION target
+   * (and therefore the adaptive vibe threshold) governed by `maxResults`
+   * exactly as a normal deal would. The fresh-hand arrangement
+   * (g-d3f8d912) needs ranked DEPTH to bucket newly-eligible bars — but
+   * passing a huge maxResults instead would drive the relax loop to the
+   * Jaccard floor and admit weak-vibe bars a normal deal at this radius
+   * would never have relaxed to (santa: Codex — "never weaken active vibe
+   * filters"); pair with `relaxDiscountIds` below, which is what delivers
+   * the exact-threshold equivalence for soft-seen deals. The exploration
+   * slot stays out of sliced-deep results; the caller owns that
+   * arrangement.
+   */
+  sliceCap?: number;
+  /**
+   * Soft-seen ids that do NOT count toward the relaxation target but stay
+   * in the results. This makes a fresh-hand deal relax EXACTLY as far as
+   * the equivalent run-it-again deal (which hard-excludes these ids)
+   * would: the loop keeps relaxing until `maxResults` NON-discounted
+   * candidates qualify — no further (santa: Codex round 2 — a plain
+   * `maxResults + seen.length` target over-relaxed whenever a seen bar
+   * did not itself qualify at the current threshold). Bars listed here
+   * that qualify at the settled threshold remain in the output so the
+   * arrangement can reuse them as fallback.
+   */
+  relaxDiscountIds?: readonly string[];
   now?: Date;
   /**
    * Live-surface clock for the LATE-NIGHT bias (operator 2026-07-27):
@@ -77,6 +107,21 @@ export type MatchesArgs = {
    * proximity only (fully backward-compatible).
    */
   lovedTags?: VibeTag[];
+  /**
+   * v1.1 (g-7de10fce, eval-gated): frequency-weighted Loved-tag map from
+   * tasteSignals.buildLovedTagWeights. When provided (non-empty) it
+   * REPLACES the flattened lovedTags union in the affinity term — a tag
+   * the user keeps loving counts more than one loved once. Omitted →
+   * exact pre-v1.1 behavior.
+   */
+  lovedTagWeights?: TagWeights;
+  /**
+   * v1.1 (g-7de10fce, eval-gated): cautious avoid-tag map from
+   * tasteSignals.buildAvoidTagWeights (≥2 Passed bars, never a Loved
+   * tag). Applied as a tie-breaker-scale additive penalty
+   * (NEG_TAG_PENALTY × coverage), NEVER a filter.
+   */
+  avoidTagWeights?: TagWeights;
 };
 
 /**
@@ -97,13 +142,36 @@ export function scoreBar(
   userTags: VibeTag[],
   coords: Coords | null,
   lovedTags: VibeTag[],
+  lovedTagWeights?: TagWeights,
 ): number {
   const vibe = jaccard(userTags, bar.tags);
   const proximity = coords
     ? Math.exp(-haversineMiles(coords, bar) / DIST_DECAY_MILES)
     : 1;
-  const affinity = lovedTags.length > 0 ? jaccard(bar.tags, lovedTags) : 0;
+  // v1.1: the weighted-coverage affinity replaces the flat union when a
+  // weight map is supplied; both are in [0, 1] so the blend is unchanged.
+  const affinity =
+    lovedTagWeights !== undefined && lovedTagWeights.size > 0
+      ? weightedTagCoverage(bar.tags, lovedTagWeights)
+      : lovedTags.length > 0
+        ? jaccard(bar.tags, lovedTags)
+        : 0;
   return VIBE_WEIGHT * vibe + DIST_WEIGHT * proximity + RATING_WEIGHT * affinity;
+}
+
+/**
+ * v1.1 cautious negative nudge: NEG_TAG_PENALTY × (weighted share of the
+ * user's avoid-signal this bar's tags cover), i.e. at most one
+ * tie-breaker-scale step down — deliberately the same order of magnitude
+ * as lateNightAdjustment/unverifiedHoursAdjustment, so it re-orders
+ * near-ties and can never bury a strong vibe match.
+ */
+export function avoidTagAdjustment(
+  bar: Pick<Bar, 'tags'>,
+  avoidTagWeights: TagWeights | undefined,
+): number {
+  if (avoidTagWeights === undefined || avoidTagWeights.size === 0) return 0;
+  return -NEG_TAG_PENALTY * weightedTagCoverage(bar.tags, avoidTagWeights);
 }
 
 /** 10pm–3:59am local — when the night bias applies. */
@@ -124,6 +192,22 @@ export function lateNightAdjustment(bar: Pick<Bar, 'tags'>): number {
   return 0;
 }
 
+/**
+ * Criterion 9: de-prioritise venues whose hours we may not rely on, rather
+ * than excluding them. Same additive tie-breaker scale as
+ * `lateNightAdjustment`, at half its magnitude — see
+ * UNVERIFIED_HOURS_PENALTY for why this is a nudge and not a partition.
+ *
+ * A venue with NO hours at all is penalised too: the user-visible outcome is
+ * identical ("we can't vouch for when this is open"), so treating it as a
+ * third case would be a distinction without a difference.
+ */
+export function unverifiedHoursAdjustment(
+  bar: Pick<Bar, 'hours' | 'hoursConfidence'>,
+): number {
+  return hasTrustworthyHours(bar) ? 0 : -UNVERIFIED_HOURS_PENALTY;
+}
+
 export function matches(args: MatchesArgs): Bar[] {
   const {
     profile,
@@ -133,9 +217,13 @@ export function matches(args: MatchesArgs): Bar[] {
     bars,
     excludeIds,
     maxResults,
+    sliceCap,
+    relaxDiscountIds,
     now,
     biasNow,
     lovedTags = [],
+    lovedTagWeights,
+    avoidTagWeights,
   } = args;
 
   const exclude = new Set(excludeIds ?? []);
@@ -171,11 +259,18 @@ export function matches(args: MatchesArgs): Bar[] {
     // rank the whole pool by proximity (+ loved affinity).
     candidates = pool;
   } else {
+    const discount = new Set(relaxDiscountIds ?? []);
+    const countedLength = (list: Bar[]): number =>
+      discount.size === 0
+        ? list.length
+        : list.filter((b) => !discount.has(b.id)).length;
     let threshold = JACCARD_START;
     candidates = [];
-    while (threshold >= JACCARD_FLOOR - 1e-9 && candidates.length < relaxTarget) {
+    let counted = 0;
+    while (threshold >= JACCARD_FLOOR - 1e-9 && counted < relaxTarget) {
       candidates = pool.filter((b) => jaccard(profile.tags, b.tags) >= threshold);
-      if (candidates.length >= relaxTarget) break;
+      counted = countedLength(candidates);
+      if (counted >= relaxTarget) break;
       threshold = Math.round((threshold - JACCARD_STEP) * 100) / 100;
     }
   }
@@ -187,12 +282,14 @@ export function matches(args: MatchesArgs): Bar[] {
     .map((bar) => ({
       bar,
       score:
-        scoreBar(bar, profile.tags, coords, lovedTags) +
-        (late ? lateNightAdjustment(bar) : 0),
+        scoreBar(bar, profile.tags, coords, lovedTags, lovedTagWeights) +
+        (late ? lateNightAdjustment(bar) : 0) +
+        unverifiedHoursAdjustment(bar) +
+        avoidTagAdjustment(bar, avoidTagWeights),
     }))
     .sort((a, b) => b.score - a.score);
 
-  const top = ranked.slice(0, cap).map((r) => r.bar);
+  const top = ranked.slice(0, sliceCap ?? cap).map((r) => r.bar);
 
   // Exploration slot (B7b — ε-greedy, simplified): on surfaces showing 10+
   // results, the last slot goes to a QUALIFIED long-tail pick (still vibe-
@@ -200,7 +297,9 @@ export function matches(args: MatchesArgs): Bar[] {
   // pure exploit never re-surfaces the catalog's depth. Deterministically
   // seeded from (profile tags, day): stable within a day, rotates daily.
   // Small surfaces (default MAX_RESULTS = 3) are never taxed a slot.
-  if (cap >= EXPLORATION_MIN_RESULTS && ranked.length > cap) {
+  // Skipped for sliced-deep requests (sliceCap): those callers arrange the
+  // deal themselves and a swapped last-of-list slot is meaningless there.
+  if (sliceCap === undefined && cap >= EXPLORATION_MIN_RESULTS && ranked.length > cap) {
     // Every tail bar already cleared the adaptive Jaccard gate (which
     // bottoms out at JACCARD_FLOOR) or the empty-profile bypass — that IS
     // the "qualified" bar (DeepSeek review: a second floor filter here was

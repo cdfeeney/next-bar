@@ -34,9 +34,12 @@ export const quiz: QuizQuestion[] = [
   {
     kind: 'single',
     prompt: 'What energy are you bringing?',
+    // Never force a crowd-energy pick (g-65a31bdf crit 15): the neutral
+    // answer emits NO tags — an honest null, not a hedged middle.
     options: [
       { label: 'Loud — bring the noise', tags: ['loud', 'buzzy'] },
       { label: 'Mellow — we wanna talk', tags: ['chill'] },
+      { label: 'Depends on the night', tags: [] },
     ],
   },
   {
@@ -50,6 +53,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'A rooftop with views', tags: ['rooftop', 'instagrammable'] },
       { label: 'Tucked away inside', tags: ['lounge', 'speakeasy'] },
       { label: 'On a dance floor', tags: ['club', 'dance'] },
+      // Setting is never forced (crit 15).
+      { label: 'Wherever — surprise me', tags: [] },
     ],
   },
   {
@@ -65,6 +70,12 @@ export const quiz: QuizQuestion[] = [
       // 'live' (29 bars) was inexpressible — audit F6.
       { label: 'Live music', tags: ['live', 'jazz'] },
       { label: 'Jazz / lounge', tags: ['jazz', 'lounge'] },
+      // Music axis completeness (crit 14): quiet/background is a REAL
+      // preference (calm-venue tags, nothing that contradicts it — crit
+      // 17); "no music" is the pure null — some people just want to talk,
+      // and forcing a soundtrack pick misprofiled them (crit 15).
+      { label: 'Quiet / background music', tags: ['chill', 'lounge'] },
+      { label: 'No music — we came to talk', tags: [] },
     ],
   },
   {
@@ -74,6 +85,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'Locals & regulars', tags: ['locals', 'old-nyc', 'dive'] },
       { label: 'Trendy and lively', tags: ['trendy', 'instagrammable'] },
       { label: 'Industry / creative', tags: ['industry', 'cocktail'] },
+      // Crowd is never forced (crit 15).
+      { label: 'No preference', tags: [] },
     ],
   },
   {
@@ -87,6 +100,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'Post-work crew', tags: ['post-work', 'beer'] },
       { label: 'The whole group, going late', tags: ['buzzy', 'loud', 'dance'] },
       { label: 'Solo or one good friend', tags: ['chill', 'locals'] },
+      // Company is never forced (crit 15).
+      { label: 'Depends who texts back', tags: [] },
     ],
   },
   {
@@ -98,6 +113,8 @@ export const quiz: QuizQuestion[] = [
       { label: 'Treating myself', tags: ['pricey', 'cocktail'] },
       // splurge(10 bars) was quiz-inexpressible — audit F2 tail.
       { label: 'Big night, no limits', tags: ['splurge', 'polished'] },
+      // Spending is never forced (crit 15).
+      { label: "Whatever the night costs", tags: [] },
     ],
   },
   {
@@ -147,19 +164,43 @@ export const quiz: QuizQuestion[] = [
   },
 ];
 
+/**
+ * The user-facing label for a taste profile.
+ *
+ * S2 (operator): the old labels read like a market-research segment —
+ * "Industry-crowd insider", "Jazz lounge sophisticate", "Backyard session
+ * regular". Two problems. They were stiff and long enough to wrap on the
+ * mobile surfaces that show them, and a few implied an in-crowd the reader
+ * either belongs to or doesn't ("insider", "connoisseur", "sophisticate").
+ * A label the user sees about themselves should sound like something a friend
+ * would say, not a segment they've been sorted into.
+ *
+ * BRANCH ORDER AND PREDICATES ARE UNCHANGED — only the returned strings moved.
+ * The ordering is load-bearing: `cocktail + polished` is tested before
+ * `industry + cocktail`, so someone with all three reads as the cocktail
+ * branch. Every label is <= 21 characters, under the previous longest (24,
+ * "Jazz lounge sophisticate"), so nothing that fitted before can wrap now.
+ */
 export function deriveArchetype(tags: VibeTag[]): string {
   const has = (tag: VibeTag) => tags.includes(tag);
 
-  if (has('dive') && has('locals')) return 'Dive devotee';
-  if (has('cocktail') && has('polished')) return 'Cocktail connoisseur';
+  if (has('dive') && has('locals')) return 'Dive regular';
+  if (has('cocktail') && has('polished')) return 'Cocktail lover';
   if (has('speakeasy') && has('romantic')) return 'Hidden-door romantic';
-  if (has('dance') && has('house')) return 'Late-night dancefloor';
-  if (has('jazz') && has('lounge')) return 'Jazz lounge sophisticate';
-  if (has('rough') && has('cheap')) return 'No-frills regular';
-  if (has('trendy') && has('instagrammable')) return 'New-wave trendsetter';
-  if (has('industry') && has('cocktail')) return 'Industry-crowd insider';
-  if (has('rooftop')) return 'Skyline-view chaser';
-  if (has('garden') && has('chill')) return 'Backyard session regular';
-  if (has('wine') && has('romantic')) return 'Wine-bar romantic';
-  return 'NYC vibe explorer';
+  if (has('dance') && has('house')) return 'Here for the dancing';
+  if (has('jazz') && has('lounge')) return 'Slow night, live jazz';
+  if (has('rough') && has('cheap')) return 'Cheap and cheerful';
+  if (has('trendy') && has('instagrammable')) return 'Always somewhere new';
+  // "Knows the bartender" was the first attempt here and a reviewer rightly
+  // rejected it: framing the label around privileged access to staff keeps the
+  // in-crowd implication this rewrite exists to remove. Describe the occasion
+  // instead of the connection.
+  if (has('industry') && has('cocktail')) return 'Cocktails after hours';
+  if (has('rooftop')) return 'Up where the view is';
+  // Names only what the predicate actually tests. An earlier draft said
+  // "Backyard and a beer", which invents a drink preference — and read as a
+  // flat contradiction for anyone whose tags included wine.
+  if (has('garden') && has('chill')) return 'Garden seat, no rush';
+  if (has('wine') && has('romantic')) return 'Wine and low light';
+  return 'Still exploring NYC';
 }

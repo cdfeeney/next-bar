@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -31,6 +31,38 @@ export default function InstallPrompt() {
   const [platform, setPlatform] = useState<Platform>('other');
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIosSheet, setShowIosSheet] = useState(false);
+  const gotItRef = useRef<HTMLButtonElement | null>(null);
+
+  // Dialog keyboard contract (g-43d6da5f crit 5, santa: Codex + Claude
+  // convergent): while the sheet is open, focus moves to its action,
+  // Escape closes it, and closing returns focus to whatever opened it —
+  // the same opener-capture pattern BarLightbox uses.
+  useEffect(() => {
+    if (!showIosSheet) return;
+    const opener =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    gotItRef.current?.focus();
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setShowIosSheet(false);
+        return;
+      }
+      // aria-modal must not promise inertness the DOM doesn't deliver
+      // (santa: GLM). With exactly ONE focusable element the complete
+      // trap is one line: Tab in any direction stays on the action.
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        gotItRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      opener?.focus();
+    };
+  }, [showIosSheet]);
 
   useEffect(() => {
     setPlatform(detectPlatform());
@@ -85,7 +117,11 @@ export default function InstallPrompt() {
             role="dialog"
             aria-modal="true"
             aria-label="Install on iPhone"
-            className="fixed inset-0 z-[60] flex items-end md:items-center justify-center bg-bg/80 backdrop-blur"
+            // z-[1100] = the app's modal tier (QuickAddBar, BarLightbox).
+            // The old z-[60] sat UNDER the z-[1000] BottomNav, which painted
+            // over this bottom sheet's lower edge and intercepted the
+            // "Got it" tap (g-43d6da5f crit 1; pinned by install-sheet e2e).
+            className="fixed inset-0 z-[1100] flex items-end md:items-center justify-center bg-bg/80 backdrop-blur"
             onClick={() => setShowIosSheet(false)}
           >
             <div
@@ -116,6 +152,7 @@ export default function InstallPrompt() {
               </ol>
               <button
                 type="button"
+                ref={gotItRef}
                 onClick={() => setShowIosSheet(false)}
                 className="mt-6 w-full min-h-[44px] touch-manipulation bg-bg border border-border text-text font-display text-sm py-3 rounded-2xl"
               >

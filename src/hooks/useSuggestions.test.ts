@@ -42,6 +42,61 @@ const profile = (
   preferredNeighborhoods,
 });
 
+describe('computeSuggestions — signalBars parity (santa: Codex r2)', () => {
+  it('a filtered ranking pool must NOT change the taste model: signals derive from signalBars', () => {
+    // History: THREE Loved bars — two scream 'cocktail', one is a
+    // garden/wine outlier. Full-catalog weights: cocktail 2/3,
+    // garden 1/3, wine 1/3.
+    const lovedA = makeBar({ id: 'loved-a', tags: ['cocktail'] });
+    const lovedB = makeBar({ id: 'loved-b', tags: ['cocktail'] });
+    const lovedC = makeBar({ id: 'loved-c', tags: ['garden', 'wine'] });
+    // Two candidates with EQUAL profile overlap ('dive'); only the
+    // affinity term separates them.
+    const candCocktail = makeBar({ id: 'cand-cocktail', tags: ['dive', 'cocktail'] });
+    const candGarden = makeBar({ id: 'cand-garden', tags: ['dive', 'garden'] });
+    const fullCatalog = [lovedA, lovedB, lovedC, candCocktail, candGarden];
+    // The map filter hides BOTH cocktail Loved bars from the ranking
+    // pool — the user's dominant taste must survive the filter.
+    const filteredPool = [lovedC, candCocktail, candGarden];
+    const ratings = [
+      makeRating('loved-a', 'loved'),
+      makeRating('loved-b', 'loved'),
+      makeRating('loved-c', 'loved'),
+    ];
+
+    const withSignalBars = computeSuggestions({
+      profile: profile(['dive']),
+      coords: null,
+      bars: filteredPool,
+      signalBars: fullCatalog,
+      ratings,
+      now: NOW,
+    }).map((b) => b.id);
+    // Full-catalog weights keep 'cocktail' dominant (coverage 0.5 vs
+    // 0.25): the cocktail candidate outranks the garden one.
+    expect(withSignalBars.indexOf('cand-cocktail')).toBeLessThan(
+      withSignalBars.indexOf('cand-garden'),
+    );
+    // Hidden Loved bars are still NOT ranked (not in the pool).
+    expect(withSignalBars).not.toContain('loved-a');
+
+    // DISCRIMINATING control: deriving signals from the filtered pool
+    // sees ONE visible Loved bar (< caution floor) → flat-union
+    // fallback {garden, wine} → the ORDER FLIPS. This proves the
+    // signalBars wiring is load-bearing, not decorative.
+    const withoutSignalBars = computeSuggestions({
+      profile: profile(['dive']),
+      coords: null,
+      bars: filteredPool,
+      ratings,
+      now: NOW,
+    }).map((b) => b.id);
+    expect(withoutSignalBars.indexOf('cand-garden')).toBeLessThan(
+      withoutSignalBars.indexOf('cand-cocktail'),
+    );
+  });
+});
+
 describe('computeSuggestions — pure map-suggestion pipeline (B6)', () => {
   it('excludes pass-rated bars from suggestions', () => {
     const bars = [

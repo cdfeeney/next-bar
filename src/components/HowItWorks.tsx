@@ -8,12 +8,13 @@ const STEPS: Step[] = [
   {
     numeral: 'I',
     title: 'Tell us the vibe.',
-    body: 'Six questions, ninety seconds. No "rate your favorite cocktail one to ten."',
+    // Count is a real claim — pinned to quiz.ts length by quizShape.test.ts.
+    body: 'Eight questions, ninety seconds. No "rate your favorite cocktail one to ten."',
   },
   {
     numeral: 'II',
     title: 'We pick ten bars.',
-    body: 'Manhattan only. Curated, not crowdsourced. Each one matched to the night you described — never the densest tag list.',
+    body: 'New York City. Curated, not crowdsourced. Each one matched to the night you described — never the densest tag list.',
   },
   {
     numeral: 'III',

@@ -1,0 +1,235 @@
+'use client';
+
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  MAX_LOAD_MS,
+  WIDGET_LOAD_TIMEOUT_MS,
+  isPlacesUiKitConfigured,
+  loadPlacesUiKit,
+  markRequested,
+} from '@/lib/placesUiKit';
+
+/**
+ * The compliant photo surface: Google's own Places UI Kit web component renders
+ * the photo, so we never receive, store or re-host the bytes.
+ *
+ * This is the replacement for `public/bar-photos/` — 3,435 photo files
+ * downloaded from Google, re-encoded and served from our domain, which Google's
+ * Places policy does not permit (only `place_id` is exempt from its caching
+ * restrictions). See docs/UI-KIT-BUILD-PLAN.md.
+ *
+ * COST. Each component request is one billable event ($1.00/1,000, first 10,000
+ * per month free) regardless of how much content it renders, so the only lever
+ * is issuing fewer requests. Two behaviours here do that work:
+ *
+ *   - Lazy mount. The widget is not created until the card scrolls into view, so
+ *     a long result list bills for what the user actually reaches, not for
+ *     everything rendered.
+ *   - Keep mounted. Once created it is never torn down on scroll. A destroyed
+ *     widget has nothing to show, so remounting necessarily refetches and
+ *     rebills — re-mount amplification is what turns a ~$140/month bill into
+ *     ~$590 at the same traffic.
+ *
+ * ⚠️ CONSTRAINT ON THE CALLER, and this component cannot enforce it (santa-loop
+ * round 2): "keep mounted" only holds if the PARENT keeps it mounted. A
+ * virtualized or windowed list that unmounts off-screen cards defeats it
+ * entirely and re-bills on every scroll pass. Before wiring this into a list
+ * surface, confirm that surface does not recycle rows — and if it must, hide
+ * with CSS (`content-visibility`) rather than unmounting.
+ *
+ * The elements are built imperatively rather than in JSX. They are custom
+ * elements with no React typings, and more importantly this keeps the moment of
+ * creation — the billable moment — explicit and in one place.
+ */
+
+type GooglePlacePhotoProps = {
+  /** Google place_id. The only Google value we are permitted to retain. */
+  placeId: string;
+  /**
+   * False on surfaces criterion 12 excludes (pickers, saved lists, recaps,
+   * dense maps, markers). Defence in depth: those surfaces should not render
+   * this component at all, so the SDK never reaches their bundle.
+   */
+  allowed?: boolean;
+  className?: string;
+  /**
+   * Rendered whenever a photo cannot be shown. Never a broken tile.
+   *
+   * ⚠️ MUST NOT be a legacy Google photo. The natural-looking choice — "fall
+   * back to the copy already on our server" — would serve a re-hosted Google
+   * file on every widget failure, so the compliance migration would only LOOK
+   * complete: the non-compliant path would have moved into the failure branch.
+   * Derive this from `resolveFallbackMedia()` in mediaPolicy.ts, which forces
+   * both Google tiers off and can only return owned media or the glyph.
+   * (Flagged by GLM during /review-routed.)
+   */
+  fallback: ReactNode;
+  /** Fires once when a billable request is actually issued. For the meter. */
+  onBillableRequest?: (placeId: string) => void;
+};
+
+type Status = 'pending' | 'ready' | 'unavailable';
+
+export default function GooglePlacePhoto({
+  placeId,
+  allowed = true,
+  className,
+  fallback,
+  onBillableRequest,
+}: GooglePlacePhotoProps) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const builtRef = useRef(false);
+  const [status, setStatus] = useState<Status>('pending');
+
+  /**
+   * The billing callback is held in a ref and deliberately NOT an effect
+   * dependency.
+   *
+   * It was a dependency until Codex review of 0f614b8 found this: callers pass
+   * an inline arrow, so its identity changes every render, which re-ran the
+   * effect. Cleanup set `cancelled` and cleared the timeout, the re-run bailed
+   * immediately on `builtRef`, and every in-flight async path then no-opped — so
+   * nothing ever moved `status` off 'pending' and the user was left staring at
+   * an empty reserved box with neither a photo nor the fallback. Stabilising the
+   * dependency list removes the trigger entirely.
+   */
+  const onBillableRequestRef = useRef(onBillableRequest);
+  useEffect(() => {
+    onBillableRequestRef.current = onBillableRequest;
+  });
+
+  useEffect(() => {
+    // A genuine placeId/allowed change must be able to rebuild, so the guard is
+    // reset here rather than latched for the component's whole lifetime.
+    builtRef.current = false;
+    setStatus('pending');
+    hostRef.current?.replaceChildren();
+
+    if (!allowed || !placeId || !isPlacesUiKitConfigured()) {
+      setStatus('unavailable');
+      return;
+    }
+
+    const host = hostRef.current;
+    if (!host) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const build = async () => {
+      // StrictMode double-invokes effects in development. Without this guard
+      // that is a duplicated billable request per card, every render.
+      if (builtRef.current || cancelled) return;
+      builtRef.current = true;
+
+      // Arm the safety timer BEFORE awaiting the loader.
+      //
+      // It used to be armed only after the await, so if loadPlacesUiKit() never
+      // settled nothing downstream ran and the card sat on 'pending' forever —
+      // an empty box with neither photo nor fallback. The loader is bounded now
+      // too, but a component must not depend on a collaborator's internal
+      // timing for its own liveness: whatever happens below, this guarantees the
+      // user sees something. (santa-loop round 3.)
+      timer = window.setTimeout(() => {
+        if (!cancelled) setStatus('unavailable');
+      }, MAX_LOAD_MS);
+
+      const ok = await loadPlacesUiKit();
+      if (cancelled) return;
+      if (!ok) {
+        window.clearTimeout(timer);
+        setStatus('unavailable');
+        return;
+      }
+
+      const details = document.createElement('gmp-place-details');
+
+      const request = document.createElement('gmp-place-details-place-request');
+      request.setAttribute('place', placeId);
+
+      const config = document.createElement('gmp-place-content-config');
+
+      const media = document.createElement('gmp-place-media');
+      media.setAttribute('lightbox-preferred', '');
+
+      // Attribution lives HERE, not in each consumer. Google treats missing
+      // attribution as a policy violation, and making every surface remember it
+      // is how one eventually forgets.
+      const attribution = document.createElement('gmp-place-attribution');
+      attribution.setAttribute('light-scheme-color', 'gray');
+      attribution.setAttribute('dark-scheme-color', 'white');
+
+      config.append(media, attribution);
+      details.append(request, config);
+
+      details.addEventListener('gmp-load', () => {
+        if (cancelled) return;
+        window.clearTimeout(timer);
+        setStatus('ready');
+      });
+
+      // Hand the budget over from the load phase to the widget phase: the
+      // pre-await timer above has done its job once we get here.
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (!cancelled) setStatus('unavailable');
+      }, WIDGET_LOAD_TIMEOUT_MS);
+
+      // Appending is the billable moment — record it here and nowhere else.
+      //
+      // Fires on EVERY creation, not only the first sighting of a place_id.
+      // Google bills per widget created, so two cards sharing one googlePlaceId
+      // (the Fleming's/Dominie's collision 0028 resolves) bill twice;
+      // de-duplicating the callback would silently undercount real spend.
+      host.appendChild(details);
+      markRequested(placeId);
+      onBillableRequestRef.current?.(placeId);
+    };
+
+    // Lazy mount. IntersectionObserver is absent in some test environments;
+    // fall back to building immediately rather than never showing a photo.
+    if (typeof IntersectionObserver === 'undefined') {
+      void build();
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timer);
+      };
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          observer.disconnect();
+          void build();
+        }
+      },
+      // Start slightly before the card is visible so the photo is there by the
+      // time the user reaches it, without prefetching the whole list.
+      { rootMargin: '200px' },
+    );
+    observer.observe(host);
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      window.clearTimeout(timer);
+    };
+    // Only placeId and allowed. Re-running this effect can issue a billable
+    // request, so it must never be triggered by unrelated prop churn — see the
+    // stuck-'pending' bug documented on onBillableRequestRef above.
+  }, [placeId, allowed]);
+
+  if (status === 'unavailable') return <>{fallback}</>;
+
+  return (
+    <div
+      ref={hostRef}
+      data-testid="google-place-photo"
+      data-status={status}
+      // The 21/9 box is reserved from first paint, before the SDK has loaded,
+      // so degrading to the glyph shifts nothing. CLS is the reason this is an
+      // aspect-ratio container and not a height that grows with its content.
+      className={className ?? 'w-full aspect-[21/9] overflow-hidden'}
+    />
+  );
+}

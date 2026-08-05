@@ -1,3 +1,5 @@
+import { notifyProfileChanged } from '@/lib/storedProfile';
+
 /**
  * Per-account localStorage cache guard (santa-loop round-1 fix).
  *
@@ -26,6 +28,40 @@ const PAIRWISE_MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
 // into an account (demo handles aren't real profiles), so there's no
 // ownership latch to track — a wipe just re-seeds the demo circle.
 const FOLLOWS_KEY = 'next-bar:follows:v1';
+// G1: the vibe profile became a server-synced surface (migration 0033), so
+// its keys join the guard under the same B3 blueprint rule as follows above.
+// Both are registered: the payload so it cannot outlive the account that
+// owns it, and the marker so ownership is tracked like ratings/pairwise.
+//
+// CONSEQUENCE, accepted deliberately: signing out now DELETES the local
+// profile, where previously it survived. That is the correct trade — after
+// sign-out the browser is anonymous, and continuing to show the previous
+// account's vibe profile is exactly the cross-account leak this module
+// exists to prevent. Retaking the quiz is a 30-second cost; leaking one
+// user's taste profile to the next person on a shared phone is not.
+const PROFILE_KEY = 'next-bar:profile:v1';
+const PROFILE_MERGED_KEY = 'next-bar:profile:merged-for:v1';
+
+// Demo sample-night flags (literals mirrored from lib/demo/seed.ts): the
+// seeded RATINGS live in RATINGS_KEY and are wiped here, so leaving the
+// flags behind stranded Settings showing Demo tools for a sample night
+// that no longer existed after a sign-out/account switch (santa: Codex,
+// g-65a31bdf).
+const DEMO_SEED_FLAG_KEY = 'next-bar:demo:seeded:v1';
+const DEMO_SEED_IDS_KEY = 'next-bar:demo:seeded-ids:v1';
+
+// g-919dae84: nightKey → share-token records mirror the signed-in account's
+// shared_nights rows, so they join the wipe set under the same B3 blueprint
+// rule as follows (no merged-for marker: a wipe just forgets the links;
+// the server rows are untouched and re-sharing re-records).
+const SHARED_NIGHTS_KEY = 'next-bar:shared-nights:v1';
+// The night ARCHIVE joins too (santa: DeepSeek Medium + Claude sign-off
+// flag, bf5d7f4f panel): 60 nights of where-you-were is a browser-history-
+// grade leak on a shared device. Same trade the vibe profile already
+// accepted above — sign-out forgets the device's night history; leaking it
+// to the next account is worse. The single-night LIVE log keeps its
+// pre-existing device-local behavior (out of this slice's scope).
+const NIGHT_ARCHIVE_KEY = 'next-bar:night-archive:v1';
 
 const ALL_KEYS = [
   RATINGS_KEY,
@@ -33,6 +69,12 @@ const ALL_KEYS = [
   PAIRWISE_KEY,
   PAIRWISE_MERGED_KEY,
   FOLLOWS_KEY,
+  PROFILE_KEY,
+  PROFILE_MERGED_KEY,
+  DEMO_SEED_FLAG_KEY,
+  DEMO_SEED_IDS_KEY,
+  SHARED_NIGHTS_KEY,
+  NIGHT_ARCHIVE_KEY,
 ] as const;
 
 /**
@@ -56,6 +98,13 @@ export function clearAccountCache(): void {
   } catch {
     // Private mode / quota — non-fatal; the sign-in guard is the backstop.
   }
+  // Same-document notification (G1). removeItem fires no `storage` event in the
+  // document that wrote, so mounted consumers holding this account's data in
+  // React state would keep RENDERING it after the wipe — on an account switch
+  // that means account A's vibe tags showing to account B. The app already has
+  // ten `storage` subscribers; dispatching the real event type reaches them all
+  // and each simply re-reads its own key.
+  notifyProfileChanged();
 }
 
 /**
@@ -71,7 +120,12 @@ export function clearResidualAccountCache(): boolean {
   try {
     const hadOwner =
       window.localStorage.getItem(RATINGS_MERGED_KEY) !== null ||
-      window.localStorage.getItem(PAIRWISE_MERGED_KEY) !== null;
+      window.localStorage.getItem(PAIRWISE_MERGED_KEY) !== null ||
+      // G1: a user who signed in and synced ONLY a vibe profile (took the
+      // quiz, rated nothing) still left account residue. Without this the
+      // profile marker was the one ownership signal the residual guard
+      // could not see.
+      window.localStorage.getItem(PROFILE_MERGED_KEY) !== null;
     if (hadOwner) clearAccountCache();
     return hadOwner;
   } catch {
@@ -96,6 +150,13 @@ export function guardAgainstForeignCache(currentUserId: string): boolean {
     const owners = [
       window.localStorage.getItem(RATINGS_MERGED_KEY),
       window.localStorage.getItem(PAIRWISE_MERGED_KEY),
+      // G1: a foreign profile marker wipes everything, exactly as a foreign
+      // ratings or pairwise marker does. Keeping the wipe GLOBAL rather than
+      // per-key is deliberate — one proven-foreign marker means this browser
+      // holds someone else's residue, and narrowing the wipe to just the
+      // key that happened to carry the marker would weaken a guard that
+      // already prevented a real cross-account leak.
+      window.localStorage.getItem(PROFILE_MERGED_KEY),
     ];
     const isForeign = owners.some(
       (owner) => owner !== null && owner !== currentUserId,

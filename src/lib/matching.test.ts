@@ -79,6 +79,92 @@ describe('vibeMatchBadge', () => {
   });
 });
 
+describe('matches() — sliceCap (g-d3f8d912 fresh-hand depth)', () => {
+  it('returns ranked depth at the SAME adaptive threshold maxResults would settle on', () => {
+    // Four strong matches (jaccard 1) settle the relax loop at the 0.25
+    // start for relaxTarget max(3, maxResults=3). One weak bar (jaccard
+    // 1/5 = 0.2) passes only a relaxed threshold. sliceCap must return
+    // ALL bars at the SETTLED threshold — and never relax further to
+    // reach the deeper slice (that would weaken the vibe gate; the naive
+    // maxResults=pool.length approach did exactly that).
+    const strong = ['s1', 's2', 's3', 's4'].map((id) =>
+      makeBar({ id, tags: ['dive'] }),
+    );
+    const weak = makeBar({
+      id: 'weak',
+      tags: ['dive', 'cocktail', 'wine', 'speakeasy', 'polished'],
+    });
+    const args = {
+      profile: baseProfile(['dive']),
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [...strong, weak],
+      now: NOW,
+    };
+    const sliced = matches({ ...args, maxResults: 3, sliceCap: 100 });
+    expect(sliced.map((b) => b.id).sort()).toEqual(['s1', 's2', 's3', 's4']);
+    // Control: without sliceCap the same call slices to maxResults.
+    expect(matches({ ...args, maxResults: 3 })).toHaveLength(3);
+    // Control: the naive deep request DOES relax to the floor and admit
+    // the weak bar — the behavior sliceCap exists to avoid.
+    const naive = matches({ ...args, maxResults: 5 });
+    expect(naive.map((b) => b.id)).toContain('weak');
+  });
+
+  it('relaxDiscountIds relaxes exactly as far as hard-excluding those ids would (santa: Codex round 2)', () => {
+    // Seen bars qualify only at a RELAXED threshold; three fresh strong
+    // bars qualify at the 0.25 start. A run-it-again deal (seen bars
+    // hard-excluded) settles at 0.25 — the discounted soft-seen deal must
+    // settle there too. The superseded maxResults + seen.length target
+    // demanded five candidates and relaxed to 0.20, admitting the weak
+    // seen bars AND any weak fresh bar with them.
+    const fresh = ['f1', 'f2', 'f3'].map((id) => makeBar({ id, tags: ['dive'] }));
+    const seenWeak = ['w1', 'w2'].map((id) =>
+      makeBar({ id, tags: ['dive', 'cocktail', 'wine', 'speakeasy', 'polished'] }),
+    );
+    const args = {
+      profile: baseProfile(['dive']),
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [...fresh, ...seenWeak],
+      now: NOW,
+    };
+    const deal = matches({
+      ...args,
+      maxResults: 3,
+      sliceCap: 100,
+      relaxDiscountIds: ['w1', 'w2'],
+    });
+    expect(deal.map((b) => b.id).sort()).toEqual(['f1', 'f2', 'f3']);
+  });
+
+  it('discounted ids that DO qualify at the settled threshold stay ranked (fallback reuse)', () => {
+    // One seen strong bar + two fresh strong bars, target 3: the discount
+    // means only the fresh pair counts, so the loop relaxes to the floor
+    // hunting a third fresh candidate — but the seen bar remains in the
+    // output throughout, available to the arrangement as fallback.
+    const bars = [
+      makeBar({ id: 'seen-strong', tags: ['dive'] }),
+      makeBar({ id: 'f1', tags: ['dive'] }),
+      makeBar({ id: 'f2', tags: ['dive'] }),
+    ];
+    const deal = matches({
+      profile: baseProfile(['dive']),
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars,
+      now: NOW,
+      maxResults: 3,
+      sliceCap: 100,
+      relaxDiscountIds: ['seen-strong'],
+    });
+    expect(deal.map((b) => b.id).sort()).toEqual(['f1', 'f2', 'seen-strong']);
+  });
+});
+
 describe('matches() — filters', () => {
   const profile = baseProfile(['cocktail', 'speakeasy', 'polished', 'industry']);
 
@@ -689,5 +775,71 @@ describe('late-night bias (operator 2026-07-27: clubs up, restaurants down after
     expect(isLateNight(new Date('2026-07-25T04:00:00'))).toBe(false);
     expect(isLateNight(new Date('2026-07-24T22:00:00'))).toBe(true);
     expect(isLateNight(new Date('2026-07-24T21:59:00'))).toBe(false);
+  });
+});
+
+describe('distance widening re-runs discovery from the wider radius (goal g-f81ccdfc)', () => {
+  // LES-ish origin. nearPerfect sits ~0.3mi away but matches the profile
+  // poorly; farPerfect sits ~2.5mi away (outside Walkable 1.5, inside Cab 4)
+  // and matches the profile PERFECTLY. If widening merely re-filtered the
+  // walkable pool, farPerfect could never appear — let alone win.
+  const origin = { lat: 40.717, lng: -73.987 };
+  const profile = baseProfile(['cocktail', 'speakeasy', 'polished', 'industry']);
+  const nearWeak = makeBar({
+    id: 'near-weak',
+    lat: 40.7205, lng: -73.9865, // ~0.25 mi
+    // ONE shared tag: enough overlap to stay in the pool (the matcher drops
+    // zero-overlap bars outright), weak enough to lose to a perfect match.
+    tags: ['cocktail', 'dive', 'beer'],
+  });
+  const farPerfect = makeBar({
+    id: 'far-perfect',
+    lat: 40.7515, lng: -73.9772, // ~2.4 mi — outside walking, inside cab
+    tags: ['cocktail', 'speakeasy', 'polished', 'industry'],
+  });
+  const pool = [nearWeak, farPerfect];
+  const run = (maxMiles: number | null) =>
+    matches({
+      profile,
+      coords: origin,
+      preferredNeighborhoods: [],
+      maxMiles,
+      bars: pool,
+      now: NOW,
+    }).map((b) => b.id);
+
+  it('at Walkable the far bar is genuinely absent from the pool', () => {
+    expect(run(1.5)).toEqual(['near-weak']);
+  });
+
+  it('a bar only reachable at the wider radius CAN WIN the pick', () => {
+    // The whole point of widening: candidate DISCOVERY re-runs, so the far
+    // bar not only appears — it out-ranks the weak near one.
+    expect(run(4)[0]).toBe('far-perfect');
+  });
+
+  it('widening equals a fresh run at the wide radius — no memory of the narrow run', () => {
+    // matches() is pure: called after a narrow run, the wide result is
+    // byte-identical to a cold wide run. This is the property that makes
+    // "re-filter the fetched pool" impossible at this layer; the component
+    // layer's only carried state is the documented E3.1 visited-set rule
+    // (and shownIds, which handleRadiusChange clears — e2e covers that).
+    const narrowFirst = run(1.5);
+    const wideAfterNarrow = run(4);
+    const coldWide = run(4);
+    expect(wideAfterNarrow).toEqual(coldWide);
+    expect(narrowFirst).not.toEqual(wideAfterNarrow);
+  });
+
+  it('no-result semantics preserved: a radius admitting nothing returns []', () => {
+    const nothingNear = matches({
+      profile,
+      coords: { lat: 40.9, lng: -73.8 }, // far from both fixtures
+      preferredNeighborhoods: [],
+      maxMiles: 1.5,
+      bars: pool,
+      now: NOW,
+    });
+    expect(nothingNear).toEqual([]);
   });
 });

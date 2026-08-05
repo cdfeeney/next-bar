@@ -1,7 +1,17 @@
 # Next Bar — agent operating notes
 
-Project context lives in `docs/PRD.md`, `docs/PRD-v0.3.1.md`, `docs/PRD-v0.5.md`,
-and `docs/ARCHITECTURE-v0.2.md`. Read those before making non-trivial changes.
+Current project context lives in `docs/PRD-v0.5.md` and
+`docs/ARCHITECTURE-v0.2.md`. Read only the sections relevant to the active
+task. Consult `docs/PRD.md` or `docs/PRD-v0.3.1.md` only when tracing an older
+decision; do not load all four documents by default.
+
+## Token discipline
+
+- Work in one agent unless Connor explicitly starts a deep-profile session.
+- Search exact symbols and paths first; read the smallest relevant ranges.
+- Filter logs and test output to failures plus useful surrounding context.
+- Do not perform broad web or repository sweeps when a focused check can prove
+  the acceptance criterion.
 
 ## Testing principle: every interactive feature gets an e2e test
 
@@ -36,9 +46,16 @@ once before debugging.
 
 SQL migrations live in `supabase/migrations/` as numbered `.sql` files. Apply
 them with `npm run db:migrate` — the runner reads `DATABASE_URL` from
-`.env.local` and applies every file in lexical order. Migrations must be
-idempotent (`CREATE ... IF NOT EXISTS`, `DROP POLICY IF EXISTS`, etc.) —
-there's no schema_migrations ledger yet.
+`.env.local` and applies every file in lexical order.
+
+There **is** a ledger: `scripts/apply-migrations.ts` hashes each file and records
+it in `public.schema_migrations`, so an already-applied migration is skipped by
+checksum rather than replayed, and an edited-after-apply file is reported as
+drift. (This note previously said no ledger existed — stale since 2026-07-28.)
+
+Still write migrations idempotently (`CREATE ... IF NOT EXISTS`,
+`DROP POLICY IF EXISTS`, etc.): the ledger is per-database, so a fresh
+environment replays every file from scratch.
 
 ## Other ground rules
 

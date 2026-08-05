@@ -10,13 +10,17 @@ import {
   removeBarFromList as removeBarLib,
 } from '@/lib/lists';
 
-const KEY = 'next-bar:lists:v1';
+import { LISTS_KEY } from '@/lib/lists';
+import { ensureWantToGoFolded } from '@/lib/wantToGo';
+
+const KEY = LISTS_KEY;
 
 export type UseListsReturn = {
   lists: BarList[];
   createList: (name: string) => BarList | null;
   deleteList: (id: string) => void;
-  addBarToList: (id: string, barId: string) => void;
+  /** Returns whether a NEW membership was written (false = duplicate/unknown). */
+  addBarToList: (id: string, barId: string) => boolean;
   removeBarFromList: (id: string, barId: string) => void;
 };
 
@@ -30,6 +34,11 @@ export function useLists(): UseListsReturn {
   const [lists, setLists] = useState<BarList[]>([]);
 
   useEffect(() => {
+    // Fold any legacy Want-to-go store into the lists model BEFORE the
+    // first read — /lists and every other lists consumer must see the
+    // reserved list on an upgraded device, not only after a want-to-go
+    // surface happened to mount first (santa: Codex, g-ac3a291c).
+    ensureWantToGoFolded();
     setLists(loadLists());
     const onStorage = (event: StorageEvent): void => {
       if (event.key !== null && event.key !== KEY) return;
@@ -50,9 +59,10 @@ export function useLists(): UseListsReturn {
     setLists(loadLists());
   }, []);
 
-  const addBarToList = useCallback((id: string, barId: string): void => {
-    addBarLib(id, barId);
+  const addBarToList = useCallback((id: string, barId: string): boolean => {
+    const wrote = addBarLib(id, barId);
     setLists(loadLists());
+    return wrote;
   }, []);
 
   const removeBarFromList = useCallback((id: string, barId: string): void => {

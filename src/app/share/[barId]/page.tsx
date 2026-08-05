@@ -8,6 +8,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import BarVisualTile from '@/components/BarVisualTile';
 import RecipientVote from '@/components/RecipientVote';
 import { getBarByIdServer } from '@/lib/barServer';
 import { buildMapsHref } from '@/lib/share';
@@ -45,6 +46,14 @@ export default async function SharePickPage({
         </p>
 
         <article className="rounded-3xl p-6 border glow-accent border-accent bg-gradient-to-b from-accent/[0.08] to-surface text-center">
+          {/* R7 (g-b83d1c77): the recommendation card leads with the bar's
+              deterministic GLYPH tile — it was a pure text card. Glyph
+              only, deliberately NOT a photo: BarVisualTile owns that
+              compliance boundary (see its docstring) and this card must
+              not tempt a photo call back in (santa: Opus, round 1). */}
+          <div className="flex justify-center mb-3">
+            <BarVisualTile bar={bar} size={56} />
+          </div>
           <h1 className="font-display text-3xl leading-tight mb-1">
             {bar.name}
           </h1>
@@ -77,7 +86,7 @@ export default async function SharePickPage({
               stays one tap away as a full-size secondary, not a footnote. */}
           <Link
             href="/"
-            className="inline-flex items-center justify-center bg-accent text-bg font-display text-lg px-6 py-3 rounded-full min-h-[44px] touch-manipulation"
+            className="inline-flex items-center justify-center bg-accent text-bg font-display text-lg px-6 py-3 rounded-full min-h-[56px] touch-manipulation"
           >
             Find your next bar →
           </Link>

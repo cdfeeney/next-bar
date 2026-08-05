@@ -87,17 +87,36 @@ export type BarReview = {
 /** A per-bar patch produced by the Google Places refresh job (keyed by bar id).
  * Overlaid onto the curated catalog at load time so the hand-authored bar files
  * stay clean and the machine-generated data can be regenerated wholesale.
- * NOTE: photo/review fields ride the SAME patch object as coords/hours on
- * purpose — bars.ts's wrong-venue bbox guard rejects the patch wholesale, so a
- * mis-resolved venue's photo and reviews are dropped along with its coords. */
+ * NOTE: the wrong-venue guard this comment used to describe no longer runs in
+ * bars.ts. It moved into scripts/refresh-places.mjs when coordinates stopped
+ * being persisted — an out-of-area match is discarded before it is written rather
+ * than shipped and filtered on read.
+ *
+ * Precisely where, because "enforced at serialisation" would overstate it: the
+ * bbox check runs at FETCH time, the only point where a coordinate exists. What
+ * serialisation enforces is what is observable in the artifact — no persisted
+ * lat/lng, and no entry for a venue the app does not have. */
 export type PlacePatch = {
-  lat?: number;
-  lng?: number;
+  /**
+   * NO COORDINATES HERE, deliberately.
+   *
+   * `lat`/`lng` were removed 2026-07-29. Google's terms permit caching them for
+   * at most 30 consecutive days and this sidecar is a generated file committed to
+   * git and shipped to every client, so anything stored here outlives that window
+   * by construction. Coordinates now come from OpenStreetMap (migrations
+   * 0029-0032) and live in the catalog files and the bars table, where no expiry
+   * applies. Only place_id is exempt from Google's caching restrictions, which is
+   * why it is the one Google-derived field that remains.
+   *
+   * The wrong-venue bbox guard that used to run on these coordinates at runtime
+   * now runs at GENERATION time in scripts/refresh-places.mjs — an out-of-area
+   * match is discarded before it is ever written.
+   */
   googlePlaceId?: string;
   businessStatus?: BusinessStatus;
   hours?: WeeklyHours;
   /** Places photo resource name (places/{id}/photos/{ref}); presence means a
-   * local photo was ingested to public/bar-photos/<barId>.jpg. */
+   * local photo was ingested to public/bar-photos/<barId>.webp. */
   photoRef?: string;
   photoCount?: number;
   photoAttributions?: string[];
@@ -125,15 +144,37 @@ export type Bar = {
   hours?: WeeklyHours;
   photoRef?: string;
   photoAttribution?: string;
-  /** Carousel photo count (photos-multi ingest) — files are <id>.jpg,
-   * <id>-2.jpg … <id>-N.jpg. Photo resource names live in
+  /** Carousel photo count (photos-multi ingest) — files are <id>.webp,
+   * <id>-2.webp … <id>-N.webp (PHOTO_EXT in barVisual.ts; the .jpg this comment
+   * used to claim predates the 2026-07-27 WebP re-encode). Photo resource names live in
    * scripts/data/photo-refs.json (ingest bookkeeping, NOT bundled — they
    * pushed the edge OG function past Vercel's 1MB limit). */
   photoCount?: number;
   /** Per-photo author attributions, index-aligned by photo order ('' = unknown). */
   photoAttributions?: string[];
   reviews?: BarReview[];
+  /** Where `hours` came from. Google's Places policy permits storing the
+   * place_id indefinitely and nothing else beyond narrow exceptions —
+   * opening hours are NOT covered — so Google-derived hours are marked
+   * 'unverified' and must not drive the strict Open-now filter. */
+  hoursSource?: HoursSource;
+  hoursConfidence?: HoursConfidence;
+  hoursVerifiedAt?: string;
 };
+
+export type HoursSource =
+  | 'google'
+  | 'venue'
+  | 'nextbar'
+  | 'user'
+  | 'official_site'
+  /** OpenStreetMap `opening_hours`, ODbL-licensed. Its own source rather than
+   *  being folded into 'user' or 'official_site': OSM is neither our users nor
+   *  the venue, and provenance that lies is the thing this schema exists to
+   *  prevent. Attribution obligations follow the data. */
+  | 'osm';
+
+export type HoursConfidence = 'unverified' | 'reported' | 'verified';
 
 // E3.2: distance as intent, not units — "Walkable" / "Worth a cab" chips
 // (values live in constants.ts: RADIUS_WALK / RADIUS_CAB) plus the

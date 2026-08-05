@@ -60,14 +60,17 @@ test.describe('Friends + consensus', () => {
   });
 
   test('sample-night seeder populates rankings from empty', async ({ page }) => {
+    // The seeder's ONLY entry is /settings?demo=1 (operator 2026-08-03
+    // removed the rankings empty-state link); the empty state itself is
+    // pinned by rankings-header.spec.ts.
     await page.goto('/rankings');
     await expect(
       page.getByRole('heading', { name: /Nothing here yet/i }),
     ).toBeVisible();
 
-    await page
-      .getByRole('button', { name: /load a sample night/i })
-      .click();
+    await page.goto('/settings?demo=1');
+    await page.getByRole('button', { name: /Load sample night/i }).click();
+    await page.getByRole('link', { name: /View rankings/i }).click();
 
     // Rankings now show the seeded bars, sorted by score.
     await expect(

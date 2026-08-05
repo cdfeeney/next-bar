@@ -11,8 +11,18 @@ describe('analytics skeleton (N4 — dark by default)', () => {
     vi.unstubAllGlobals();
   });
 
-  test('exactly the four privacy-light product events exist', () => {
-    expect(ANALYTICS_EVENTS).toEqual(['search', 'share', 'save', 'visit']);
+  test('exactly the nine privacy-light product event NAMES exist (4 original + 5 dark KPI names, g-7de10fce)', () => {
+    expect(ANALYTICS_EVENTS).toEqual([
+      'search',
+      'share',
+      'save',
+      'visit',
+      'impression',
+      'bar_detail',
+      'directions',
+      'checkin',
+      'night_rating',
+    ]);
   });
 
   test('disabled without the flag — no network call ever fires', () => {

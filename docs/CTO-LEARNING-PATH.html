@@ -1,0 +1,1599 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Next Bar CTO Learning Path</title>
+  <meta name="description" content="A practical CTO learning path and launch-readiness cockpit for Next Bar.">
+  <style>
+    :root {
+      --ink: #162321;
+      --muted: #62706c;
+      --paper: #f3f0e8;
+      --surface: #fffdf8;
+      --navy: #173c39;
+      --navy-2: #22514d;
+      --mint: #b9e2d0;
+      --mint-soft: #e8f5ef;
+      --amber: #eaa84e;
+      --amber-soft: #fff2d9;
+      --rose: #c95e59;
+      --rose-soft: #fbe9e5;
+      --blue: #477c9d;
+      --blue-soft: #e8f1f6;
+      --line: #d7d7cc;
+      --shadow: 0 18px 50px rgba(22, 35, 33, 0.09);
+      --radius: 18px;
+      --radius-sm: 11px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 80% 0%, rgba(185, 226, 208, 0.62), transparent 30rem),
+        var(--paper);
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    button,
+    a {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    a {
+      color: var(--navy-2);
+      text-underline-offset: 3px;
+    }
+
+    button:focus-visible,
+    a:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible {
+      outline: 3px solid rgba(71, 124, 157, 0.45);
+      outline-offset: 3px;
+    }
+
+    .skip-link {
+      position: fixed;
+      left: 1rem;
+      top: -5rem;
+      z-index: 20;
+      padding: 0.8rem 1rem;
+      color: white;
+      background: var(--navy);
+      border-radius: 8px;
+    }
+
+    .skip-link:focus {
+      top: 1rem;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: 292px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      padding: 2rem 1.25rem;
+      color: #f8fbf9;
+      background:
+        linear-gradient(170deg, rgba(255, 255, 255, 0.05), transparent 38%),
+        var(--navy);
+      overflow-y: auto;
+    }
+
+    .eyebrow {
+      margin: 0 0 0.4rem;
+      color: var(--amber);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 2.05rem;
+      font-weight: 500;
+      line-height: 1;
+    }
+
+    .brand p {
+      margin: 0.8rem 0 0;
+      color: rgba(248, 251, 249, 0.72);
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .progress-card {
+      margin: 1.8rem 0;
+      padding: 1rem;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-sm);
+    }
+
+    .progress-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.7rem;
+    }
+
+    .progress-row strong {
+      font-size: 1.4rem;
+    }
+
+    .progress-row span {
+      color: rgba(248, 251, 249, 0.66);
+      font-size: 0.78rem;
+    }
+
+    .progress-track {
+      height: 8px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+    }
+
+    .progress-fill {
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, var(--amber), #f4d38f);
+      border-radius: inherit;
+      transition: width 220ms ease;
+    }
+
+    nav {
+      display: grid;
+      gap: 0.35rem;
+    }
+
+    .nav-button {
+      min-height: 46px;
+      padding: 0.7rem 0.85rem;
+      color: rgba(248, 251, 249, 0.72);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: 9px;
+      cursor: pointer;
+    }
+
+    .nav-button:hover,
+    .nav-button[aria-current="page"] {
+      color: white;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .aside-actions {
+      display: grid;
+      gap: 0.6rem;
+      margin-top: 1.8rem;
+    }
+
+    .aside-actions a,
+    .aside-actions button {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      padding: 0.65rem 0.75rem;
+      color: white;
+      text-decoration: none;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 9px;
+      cursor: pointer;
+    }
+
+    .aside-actions .primary-link {
+      color: var(--ink);
+      font-weight: 800;
+      background: var(--mint);
+      border-color: var(--mint);
+    }
+
+    main {
+      width: min(1180px, 100%);
+      padding: 3.5rem clamp(1.25rem, 4vw, 4.25rem) 5rem;
+    }
+
+    .view[hidden] {
+      display: none;
+    }
+
+    .page-heading {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 2rem;
+      margin-bottom: 2rem;
+    }
+
+    .page-heading h2 {
+      max-width: 800px;
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2.45rem, 5vw, 4.7rem);
+      font-weight: 500;
+      line-height: 0.98;
+      letter-spacing: -0.04em;
+    }
+
+    .page-heading p {
+      max-width: 680px;
+      margin: 1rem 0 0;
+      color: var(--muted);
+      font-size: 1.05rem;
+      line-height: 1.65;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      min-height: 34px;
+      align-items: center;
+      padding: 0.4rem 0.75rem;
+      white-space: nowrap;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-radius: 999px;
+    }
+
+    .status-active,
+    .status-evidenced {
+      color: #174537;
+      background: var(--mint);
+    }
+
+    .status-attended,
+    .status-progress {
+      color: #704509;
+      background: var(--amber-soft);
+    }
+
+    .status-blocked,
+    .status-missing {
+      color: #7b2f2b;
+      background: var(--rose-soft);
+    }
+
+    .status-unverified,
+    .status-locked {
+      color: #345c75;
+      background: var(--blue-soft);
+    }
+
+    .hero-grid,
+    .two-column {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+      gap: 1rem;
+    }
+
+    .card {
+      padding: clamp(1.15rem, 2.5vw, 1.75rem);
+      background: rgba(255, 253, 248, 0.9);
+      border: 1px solid rgba(215, 215, 204, 0.9);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .card h3 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.45rem;
+      font-weight: 500;
+    }
+
+    .card p {
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .scoreboard {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.8rem;
+      margin-top: 1.3rem;
+    }
+
+    .score {
+      padding: 1rem;
+      background: var(--mint-soft);
+      border-radius: var(--radius-sm);
+    }
+
+    .score strong {
+      display: block;
+      font-size: 2rem;
+      line-height: 1;
+    }
+
+    .score span {
+      display: block;
+      margin-top: 0.4rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .principle {
+      display: grid;
+      align-content: space-between;
+      min-height: 100%;
+      color: white;
+      background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.08), transparent),
+        var(--navy-2);
+      border-color: transparent;
+    }
+
+    .principle p,
+    .principle .eyebrow {
+      color: rgba(255, 255, 255, 0.74);
+    }
+
+    .principle blockquote {
+      margin: 2rem 0 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.8rem, 3vw, 2.75rem);
+      line-height: 1.05;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 1rem;
+      margin: 2.4rem 0 1rem;
+    }
+
+    .section-heading h3 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 2rem;
+      font-weight: 500;
+    }
+
+    .section-heading p {
+      max-width: 560px;
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .task-list {
+      display: grid;
+      gap: 0.65rem;
+      margin-top: 1rem;
+    }
+
+    .task {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      align-items: start;
+      gap: 0.75rem;
+      min-height: 44px;
+      padding: 0.7rem 0.8rem;
+      background: rgba(232, 245, 239, 0.58);
+      border-radius: 9px;
+      cursor: pointer;
+    }
+
+    .task input {
+      width: 19px;
+      height: 19px;
+      margin: 0.15rem 0 0;
+      accent-color: var(--navy-2);
+    }
+
+    .task span {
+      line-height: 1.45;
+    }
+
+    .callout {
+      margin-top: 1rem;
+      padding: 1rem 1.1rem;
+      color: #6b4613;
+      background: var(--amber-soft);
+      border-left: 4px solid var(--amber);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      line-height: 1.55;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(100px, 1fr));
+      align-items: stretch;
+      gap: 0.5rem;
+      margin-top: 1.2rem;
+    }
+
+    .flow-step {
+      position: relative;
+      display: grid;
+      min-height: 94px;
+      place-items: center;
+      padding: 0.75rem;
+      text-align: center;
+      background: var(--mint-soft);
+      border: 1px solid #cfe6dc;
+      border-radius: 12px;
+      font-size: 0.87rem;
+      font-weight: 750;
+      line-height: 1.35;
+    }
+
+    .flow-step:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      right: -0.55rem;
+      content: "→";
+      color: var(--navy-2);
+      font-size: 1.2rem;
+    }
+
+    .module-grid,
+    .readiness-grid,
+    .risk-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .module {
+      display: grid;
+      align-content: start;
+      min-height: 290px;
+    }
+
+    .module-number {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .module-number strong {
+      display: grid;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      color: white;
+      background: var(--navy);
+      border-radius: 50%;
+    }
+
+    .module ul,
+    .readiness-item ul {
+      padding-left: 1.1rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .module .proof {
+      margin-top: auto;
+      padding-top: 1rem;
+      color: var(--ink);
+      font-size: 0.87rem;
+      font-weight: 750;
+    }
+
+    .exercise {
+      margin-bottom: 1rem;
+    }
+
+    .exercise h3 {
+      font-family: inherit;
+      font-size: 1.05rem;
+      font-weight: 800;
+    }
+
+    .exercise textarea {
+      width: 100%;
+      min-height: 118px;
+      margin-top: 0.8rem;
+      padding: 0.9rem;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      resize: vertical;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-top: 1rem;
+    }
+
+    .button {
+      min-height: 44px;
+      padding: 0.65rem 0.9rem;
+      color: white;
+      font-weight: 800;
+      background: var(--navy-2);
+      border: 1px solid var(--navy-2);
+      border-radius: 9px;
+      cursor: pointer;
+    }
+
+    .button.secondary {
+      color: var(--navy-2);
+      background: transparent;
+    }
+
+    .answer {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: var(--blue-soft);
+      border-radius: 10px;
+      line-height: 1.6;
+    }
+
+    .answer[hidden] {
+      display: none;
+    }
+
+    .credential-table,
+    .status-table {
+      width: 100%;
+      margin-top: 1rem;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    .credential-table th,
+    .credential-table td,
+    .status-table th,
+    .status-table td {
+      padding: 0.7rem;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .credential-table th,
+    .status-table th {
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .risk-card {
+      min-height: 200px;
+      box-shadow: none;
+    }
+
+    .risk-card .risk-number {
+      color: var(--rose);
+      font-size: 0.72rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .risk-card h3 {
+      margin-top: 0.45rem;
+    }
+
+    .risk-card p {
+      margin-bottom: 0;
+    }
+
+    .readiness-item {
+      min-height: 225px;
+      box-shadow: none;
+    }
+
+    .readiness-item header {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 0.65rem;
+    }
+
+    .readiness-item h3 {
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 850;
+    }
+
+    .source-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .source-list a {
+      display: grid;
+      min-height: 62px;
+      align-content: center;
+      padding: 0.75rem 0.9rem;
+      text-decoration: none;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .source-list a:hover {
+      border-color: var(--navy-2);
+    }
+
+    .footer-note {
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.55;
+    }
+
+    @media (max-width: 980px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+        width: 100%;
+        min-width: 0;
+        height: auto;
+        padding: 1rem;
+      }
+
+      .brand,
+      .progress-card {
+        display: none;
+      }
+
+      nav {
+        display: flex;
+        max-width: 100%;
+        overflow-x: auto;
+        scrollbar-width: thin;
+      }
+
+      .nav-button {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .aside-actions {
+        display: none;
+      }
+
+      main {
+        width: 100%;
+        min-width: 0;
+        padding-top: 2rem;
+      }
+
+      .module-grid,
+      .readiness-grid,
+      .risk-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 680px) {
+      .page-heading,
+      .hero-grid,
+      .two-column {
+        grid-template-columns: 1fr;
+      }
+
+      .page-heading h2 {
+        font-size: 2.65rem;
+      }
+
+      .page-heading .status-pill {
+        justify-self: start;
+      }
+
+      .module-grid,
+      .readiness-grid,
+      .risk-grid,
+      .source-list {
+        grid-template-columns: 1fr;
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-step:not(:last-child)::after {
+        right: auto;
+        bottom: -0.75rem;
+        content: "↓";
+      }
+
+      .credential-table {
+        font-size: 0.78rem;
+      }
+
+      .credential-table th,
+      .credential-table td {
+        padding: 0.55rem 0.35rem;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      .app-shell {
+        display: block;
+      }
+
+      aside,
+      .button-row,
+      textarea {
+        display: none !important;
+      }
+
+      main {
+        width: 100%;
+        padding: 0;
+      }
+
+      .view[hidden] {
+        display: block;
+      }
+
+      .view {
+        break-before: page;
+      }
+
+      .card {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <div class="app-shell">
+    <aside aria-label="Learning path navigation">
+      <div class="brand">
+        <p class="eyebrow">Next Bar operating school</p>
+        <h1>CTO Path</h1>
+        <p>Learn the decisions that keep a real product safe, recoverable, and worth building.</p>
+      </div>
+
+      <div class="progress-card" aria-live="polite">
+        <div class="progress-row">
+          <strong id="progress-percent">0%</strong>
+          <span id="progress-count">0 of 0 actions</span>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+      </div>
+
+      <nav>
+        <button class="nav-button" type="button" data-view="overview" aria-current="page">Overview</button>
+        <button class="nav-button" type="button" data-view="path">Learning path</button>
+        <button class="nav-button" type="button" data-view="lesson">Current lesson</button>
+        <button class="nav-button" type="button" data-view="risk">Change-risk brief</button>
+        <button class="nav-button" type="button" data-view="readiness">Launch readiness</button>
+        <button class="nav-button" type="button" data-view="sources">Sources & records</button>
+      </nav>
+
+      <div class="aside-actions">
+        <a class="primary-link" href="PRODUCTION-READINESS-MISSION-2026-07-30.md">Open Claude mission</a>
+        <button type="button" id="export-progress">Export progress</button>
+        <button type="button" id="reset-progress">Reset local progress</button>
+      </div>
+    </aside>
+
+    <main id="main-content">
+      <section class="view" id="overview" data-view-panel>
+        <header class="page-heading">
+          <div>
+            <p class="eyebrow">Your operating objective</p>
+            <h2>Ship boldly.<br>Fail safely.</h2>
+            <p>Become the person who can approve consequential changes, detect trouble early, and direct recovery without needing to be the strongest coder in every room.</p>
+          </div>
+          <span class="status-pill status-active">Module 1 active</span>
+        </header>
+
+        <div class="hero-grid">
+          <article class="card">
+            <p class="eyebrow">Current evidence</p>
+            <h3>Systems and environments</h3>
+            <p>You recognized the main production risks and passed the additive-versus-destructive migration practice. The remaining work is credential boundaries, delayed recall, and a Next Bar architecture artifact.</p>
+            <div class="scoreboard">
+              <div class="score">
+                <strong>65%</strong>
+                <span>Cold recall</span>
+              </div>
+              <div class="score">
+                <strong>90%</strong>
+                <span>Migration practice</span>
+              </div>
+            </div>
+            <div class="task-list">
+              <label class="task">
+                <input type="checkbox" data-task="cold-check" checked>
+                <span>Complete the initial architecture cold check</span>
+              </label>
+              <label class="task">
+                <input type="checkbox" data-task="migration-practice" checked>
+                <span>Distinguish additive migrations from rollback-breaking changes</span>
+              </label>
+              <label class="task">
+                <input type="checkbox" data-task="credential-transfer">
+                <span>Pass the credential-boundary transfer exercise</span>
+              </label>
+              <label class="task">
+                <input type="checkbox" data-task="architecture-artifact">
+                <span>Produce the Next Bar architecture and environment diagram</span>
+              </label>
+              <label class="task">
+                <input type="checkbox" data-task="delayed-review">
+                <span>Pass a delayed review at 80% or better</span>
+              </label>
+            </div>
+          </article>
+
+          <article class="card principle">
+            <div>
+              <p class="eyebrow">The durable idea</p>
+              <h3>CTO is a control role</h3>
+            </div>
+            <blockquote>“Not king coder. King of controlled change.”</blockquote>
+          </article>
+        </div>
+
+        <div class="section-heading">
+          <h3>Request path to remember</h3>
+          <p>The service-role key stays in the trusted server layer. The iPhone asks; it never receives the key.</p>
+        </div>
+
+        <div class="flow" aria-label="Account deletion request path">
+          <div class="flow-step">iPhone or browser interface</div>
+          <div class="flow-step">HTTPS request</div>
+          <div class="flow-step">Next.js API on Vercel</div>
+          <div class="flow-step">Auth + server-only credential</div>
+          <div class="flow-step">Supabase Auth, DB, Storage</div>
+        </div>
+
+        <p class="footer-note">This page stores checkmarks and notes only in this browser. It never reads repository secrets or contacts a server.</p>
+      </section>
+
+      <section class="view" id="path" data-view-panel hidden>
+        <header class="page-heading">
+          <div>
+            <p class="eyebrow">Six evidence-backed modules</p>
+            <h2>Your CTO learning path</h2>
+            <p>Each module ends in an applied Next Bar artifact. Time spent does not unlock mastery; unaided recall, delayed recall, transfer, and proof do.</p>
+          </div>
+        </header>
+
+        <div class="module-grid">
+          <article class="card module">
+            <div class="module-number">
+              <strong>1</strong>
+              <span class="status-pill status-active">Active</span>
+            </div>
+            <h3>Systems & environments</h3>
+            <ul>
+              <li>Request paths and trust boundaries</li>
+              <li>Local, Preview, Staging, Production</li>
+              <li>Public keys versus server secrets</li>
+              <li>Vercel, Supabase, DNS, mobile clients</li>
+            </ul>
+            <p class="proof">Proof: architecture and environment diagram</p>
+          </article>
+
+          <article class="card module">
+            <div class="module-number">
+              <strong>2</strong>
+              <span class="status-pill status-locked">Locked</span>
+            </div>
+            <h3>Safe software delivery</h3>
+            <ul>
+              <li>Git, PRs, CI and release gates</li>
+              <li>Preview and staging verification</li>
+              <li>Expand/contract migrations</li>
+              <li>Rollback and forward-fix decisions</li>
+            </ul>
+            <p class="proof">Proof: rehearsed release and rollback runbook</p>
+          </article>
+
+          <article class="card module">
+            <div class="module-number">
+              <strong>3</strong>
+              <span class="status-pill status-locked">Locked</span>
+            </div>
+            <h3>Data, security & privacy</h3>
+            <ul>
+              <li>Authentication versus authorization</li>
+              <li>RLS, service roles and least privilege</li>
+              <li>Retention, deletion and privacy labels</li>
+              <li>Threat modeling and abuse cases</li>
+            </ul>
+            <p class="proof">Proof: reviewed data map and security register</p>
+          </article>
+
+          <article class="card module">
+            <div class="module-number">
+              <strong>4</strong>
+              <span class="status-pill status-locked">Locked</span>
+            </div>
+            <h3>Reliability & incidents</h3>
+            <ul>
+              <li>Logs, metrics, alerts and SLOs</li>
+              <li>Incident command and communication</li>
+              <li>Kill switches and dependency failure</li>
+              <li>Blameless postmortems</li>
+            </ul>
+            <p class="proof">Proof: incident simulation and postmortem</p>
+          </article>
+
+          <article class="card module">
+            <div class="module-number">
+              <strong>5</strong>
+              <span class="status-pill status-locked">Locked</span>
+            </div>
+            <h3>Scale & economics</h3>
+            <ul>
+              <li>Capacity and first bottlenecks</li>
+              <li>Rate limits, quotas and backpressure</li>
+              <li>Cost per active user</li>
+              <li>Vendor risk and budget alerts</li>
+            </ul>
+            <p class="proof">Proof: 10× capacity and unit-cost model</p>
+          </article>
+
+          <article class="card module">
+            <div class="module-number">
+              <strong>6</strong>
+              <span class="status-pill status-locked">Locked</span>
+            </div>
+            <h3>Technical leadership</h3>
+            <ul>
+              <li>Go, defer, delegate or stop</li>
+              <li>Architecture decision records</li>
+              <li>Hiring and review systems</li>
+              <li>Product value versus technical risk</li>
+            </ul>
+            <p class="proof">Proof: three reviewed technical decisions</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" id="lesson" data-view-panel hidden>
+        <header class="page-heading">
+          <div>
+            <p class="eyebrow">Module 1 · Transfer</p>
+            <h2>Credential boundaries</h2>
+            <p>Classify where each value may exist. The goal is not memorizing names; it is recognizing which trust boundary a credential crosses.</p>
+          </div>
+          <span class="status-pill status-progress">In progress</span>
+        </header>
+
+        <article class="card exercise">
+          <h3>Write your classification before revealing the answer</h3>
+          <p>For each value, state whether it may exist in the iPhone/browser, Vercel Preview, Vercel Production server, and trusted local development.</p>
+          <ol>
+            <li><code>NEXT_PUBLIC_SUPABASE_URL</code></li>
+            <li><code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code></li>
+            <li><code>SUPABASE_SERVICE_ROLE_KEY</code></li>
+            <li><code>DATABASE_URL</code></li>
+          </ol>
+          <textarea id="credential-notes" aria-label="Your credential classification" placeholder="Write your answer here. It is saved only in this browser."></textarea>
+          <div class="button-row">
+            <button class="button" type="button" data-reveal="credential-answer">Reveal worked answer</button>
+            <button class="button secondary" type="button" id="mark-credential-complete">Mark transfer complete</button>
+          </div>
+          <div class="answer" id="credential-answer" hidden>
+            <table class="credential-table">
+              <thead>
+                <tr>
+                  <th>Value</th>
+                  <th>Browser/iPhone</th>
+                  <th>Preview</th>
+                  <th>Production server</th>
+                  <th>Trusted local</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>NEXT_PUBLIC_SUPABASE_URL</code></td>
+                  <td>Yes</td>
+                  <td>Yes, staging/branch URL</td>
+                  <td>Yes, Production URL</td>
+                  <td>Yes, local/staging URL</td>
+                </tr>
+                <tr>
+                  <td><code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code></td>
+                  <td>Yes; designed to be public</td>
+                  <td>Yes, staging/branch key</td>
+                  <td>Yes, Production anon key</td>
+                  <td>Yes, local/staging key</td>
+                </tr>
+                <tr>
+                  <td><code>SUPABASE_SERVICE_ROLE_KEY</code></td>
+                  <td><strong>Never</strong></td>
+                  <td>Only a staging/branch service key if the server truly needs it; never Production</td>
+                  <td>Yes, server-only secret</td>
+                  <td>Local/staging key only, protected</td>
+                </tr>
+                <tr>
+                  <td><code>DATABASE_URL</code></td>
+                  <td><strong>Never</strong></td>
+                  <td>Staging/branch DB only</td>
+                  <td>Production server/jobs only</td>
+                  <td>Local/staging DB, protected</td>
+                </tr>
+              </tbody>
+            </table>
+            <p><strong>Key insight:</strong> “Publicly exposable” does not mean “safe to point at Production.” A Preview using a Production anon key can still perform legitimate user actions against Production through RLS.</p>
+          </div>
+        </article>
+
+        <div class="two-column">
+          <article class="card exercise">
+            <h3>Applied question</h3>
+            <p>A new Preview contains only public Supabase credentials, but they point to the Production project. Is that acceptable? Explain the blast radius.</p>
+            <textarea id="preview-notes" aria-label="Your Preview credential answer"></textarea>
+          </article>
+
+          <article class="card">
+            <p class="eyebrow">Mastery gate</p>
+            <h3>What remains</h3>
+            <div class="task-list">
+              <label class="task">
+                <input type="checkbox" data-task="credential-transfer">
+                <span>Credential-boundary transfer passed</span>
+              </label>
+              <label class="task">
+                <input type="checkbox" data-task="architecture-artifact">
+                <span>Architecture artifact completed</span>
+              </label>
+              <label class="task">
+                <input type="checkbox" data-task="delayed-review">
+                <span>Delayed review ≥80%</span>
+              </label>
+            </div>
+            <div class="callout">Next scheduled retrieval: 2026-07-31. Shorten the interval after a failure; widen it after reliable delayed recall.</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" id="risk" data-view-panel hidden>
+        <header class="page-heading">
+          <div>
+            <p class="eyebrow">Mandatory for consequential work</p>
+            <h2>The nine-factor change brief</h2>
+            <p>Before implementation: predict the risk. After verification: report what actually happened. Unknown is not low risk.</p>
+          </div>
+        </header>
+
+        <div class="risk-grid">
+          <article class="card risk-card">
+            <span class="risk-number">01 · Damage</span>
+            <h3>Blast radius</h3>
+            <p>If wrong, which users, systems, services, data, or company commitments can it damage?</p>
+          </article>
+          <article class="card risk-card">
+            <span class="risk-number">02 · Signal</span>
+            <h3>Detection</h3>
+            <p>Which tests, logs, metrics, alerts, or user-visible signals reveal the failure?</p>
+          </article>
+          <article class="card risk-card">
+            <span class="risk-number">03 · Escape</span>
+            <h3>Recovery</h3>
+            <p>Can it be disabled, rolled back, repaired, restored, or forward-fixed?</p>
+          </article>
+          <article class="card risk-card">
+            <span class="risk-number">04 · Trust</span>
+            <h3>Data</h3>
+            <p>Could users lose data, receive incorrect data, or expose private information?</p>
+          </article>
+          <article class="card risk-card">
+            <span class="risk-number">05 · Power</span>
+            <h3>Access</h3>
+            <p>Which people, services, and credentials can perform or affect this operation?</p>
+          </article>
+          <article class="card risk-card">
+            <span class="risk-number">06 · Exposure</span>
+            <h3>Cost</h3>
+            <p>Can abuse, retries, loops, traffic, or vendor behavior create material expense?</p>
+          </article>
+          <article class="card risk-card">
+            <span class="risk-number">07 · Time</span>
+            <h3>Compatibility</h3>
+            <p>Do older browser sessions and installed iPhone versions still work with the new backend?</p>
+          </article>
+          <article class="card risk-card">
+            <span class="risk-number">08 · Response</span>
+            <h3>Ownership</h3>
+            <p>Who responds outside working hours, and which runbook or escalation path do they use?</p>
+          </article>
+          <article class="card risk-card">
+            <span class="risk-number">09 · Purpose</span>
+            <h3>Business value</h3>
+            <p>Which measurable user or company outcome makes accepting this risk worthwhile?</p>
+          </article>
+        </div>
+
+        <div class="callout">Every answer should contain a risk rating, plain-language explanation, evidence, mitigation, owner, and unresolved questions. High or critical unresolved risk requires attended approval.</div>
+      </section>
+
+      <section class="view" id="readiness" data-view-panel hidden>
+        <header class="page-heading">
+          <div>
+            <p class="eyebrow">Evidence, not optimism</p>
+            <h2>Production launch cockpit</h2>
+            <p>Repository evidence is separated from external dashboard state. “Unverified” means exactly that—it is a prompt to check, not a claim that the service is broken.</p>
+          </div>
+          <a class="status-pill status-active" href="PRODUCTION-READINESS-MISSION-2026-07-30.md">Open full mission</a>
+        </header>
+
+        <div class="callout"><strong>Boundary for tonight:</strong> the overnight loop may finish code, tests, audits, documentation, migration rehearsal, and security-test preparation. Applying migrations 0033/0034, running the two-browser live smoke, changing dashboards, or actively testing a deployed target requires an attended approval.</div>
+
+        <div class="section-heading">
+          <h3>Immediate development finish queue</h3>
+          <p>The latest handoff was duplicated; this is the deduplicated sequence.</p>
+        </div>
+        <table class="status-table">
+          <thead>
+            <tr>
+              <th>Order</th>
+              <th>Work</th>
+              <th>Status</th>
+              <th>Completion evidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Review the active slice; rehearse 0033 then 0034</td>
+              <td><span class="status-pill status-attended">Attended apply</span></td>
+              <td>Clean Staging apply, compatibility proof, live ledger, backup/forward-fix plan, two-browser smoke</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>Audit 28 browser-callable security-definer functions</td>
+              <td><span class="status-pill status-progress">Highest security value</span></td>
+              <td>Per-function authorization matrix, adversarial tests, findings, fixes, and review evidence</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>Fix the <code>/</code> async catalog reflow</td>
+              <td><span class="status-pill status-progress">3 real E2E failures</span></td>
+              <td>Focused regression passes without re-deriving the recorded diagnosis</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>Test debt, padded-email validation, and stale docs</td>
+              <td><span class="status-pill status-attended">Queued</span></td>
+              <td>Delete-path coverage, carousel cap, bias-smoke decision, signup test, reconciled claims</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="readiness-grid">
+          <article class="card readiness-item">
+            <header>
+              <h3>Migrations 0033/0034</h3>
+              <span class="status-pill status-attended">Operator gate</span>
+            </header>
+            <ul>
+              <li>Apply in exact order</li>
+              <li>Reported live ledger ends at 0032</li>
+              <li>Two-browser profile smoke after apply</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>CI baseline</h3>
+              <span class="status-pill status-evidenced">Evidenced</span>
+            </header>
+            <ul>
+              <li>TypeScript</li>
+              <li>Vitest</li>
+              <li>Production build</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Staging environment</h3>
+              <span class="status-pill status-unverified">Unverified</span>
+            </header>
+            <ul>
+              <li>Vercel staging boundary</li>
+              <li>Separate Supabase project</li>
+              <li>Synthetic users and data</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Production recovery</h3>
+              <span class="status-pill status-unverified">Unverified</span>
+            </header>
+            <ul>
+              <li>Paid backup capability</li>
+              <li>Restore rehearsal</li>
+              <li>App rollback with migrated schema</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Security audits</h3>
+              <span class="status-pill status-progress">In progress</span>
+            </header>
+            <ul>
+              <li>C2 rate-limit audit exists</li>
+              <li>C3 RLS audit exists</li>
+              <li>Remediation and live reconciliation remain</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>RPC authorization</h3>
+              <span class="status-pill status-attended">Queued</span>
+            </header>
+            <ul>
+              <li>28 browser-callable definer functions</li>
+              <li>Identity derivation</li>
+              <li>Enumeration and rate caps</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Error monitoring</h3>
+              <span class="status-pill status-missing">Missing evidence</span>
+            </header>
+            <ul>
+              <li>Browser/API/native errors</li>
+              <li>Release identifiers</li>
+              <li>Alert delivery drill</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Account deletion</h3>
+              <span class="status-pill status-progress">Code active</span>
+            </header>
+            <ul>
+              <li>Server route and tests exist</li>
+              <li>Credential/live behavior attended</li>
+              <li>Rate-limit remediation active</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Privacy inventory</h3>
+              <span class="status-pill status-progress">Decisions remain</span>
+            </header>
+            <ul>
+              <li>Code-evidenced inventory exists</li>
+              <li>Waitlist and audit-retention decisions</li>
+              <li>Analytics/log/backup confirmation</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Domain and email</h3>
+              <span class="status-pill status-unverified">Operator check</span>
+            </header>
+            <ul>
+              <li>DNS and TLS</li>
+              <li>Brevo DKIM/SPF</li>
+              <li>Supabase callbacks and delivery</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Maps, media and costs</h3>
+              <span class="status-pill status-attended">Operator setup</span>
+            </header>
+            <ul>
+              <li>Restricted keys</li>
+              <li>Quotas and billing alerts</li>
+              <li>Runtime kill switch</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>TestFlight path</h3>
+              <span class="status-pill status-unverified">Unverified</span>
+            </header>
+            <ul>
+              <li>Capacitor and native features</li>
+              <li>Cloud Mac build/signing</li>
+              <li>Staging versus Production config</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Physical iPhone pass</h3>
+              <span class="status-pill status-attended">Human only</span>
+            </header>
+            <ul>
+              <li>Portrait and landscape</li>
+              <li>Keyboard, sheets, bottom navigation</li>
+              <li>Permissions and account deletion</li>
+            </ul>
+          </article>
+
+          <article class="card readiness-item">
+            <header>
+              <h3>Safe adversarial test</h3>
+              <span class="status-pill status-attended">Prepare first</span>
+            </header>
+            <ul>
+              <li>Staging and synthetic accounts first</li>
+              <li>Default-deny Rules of Engagement</li>
+              <li>Production confirmation attended only</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="section-heading">
+          <h3>Security assessment sequence</h3>
+          <p><a href="SAFE-SECURITY-TEST-ROE-2026-07-30.md">Open the Rules of Engagement</a>. Stop at minimum proof; never enumerate real-user data.</p>
+        </div>
+        <div class="flow" aria-label="Safe security assessment sequence">
+          <div class="flow-step">Authorize exact assets</div>
+          <div class="flow-step">Source + passive review</div>
+          <div class="flow-step">Staging active checks</div>
+          <div class="flow-step">Fix + staging retest</div>
+          <div class="flow-step">Attended production confirmation</div>
+        </div>
+
+        <div class="section-heading">
+          <h3>Release sequence</h3>
+        </div>
+        <div class="flow" aria-label="Production release sequence">
+          <div class="flow-step">Pull request + CI</div>
+          <div class="flow-step">Preview review</div>
+          <div class="flow-step">Staging + migration</div>
+          <div class="flow-step">Approval + TestFlight</div>
+          <div class="flow-step">Production + monitor</div>
+        </div>
+      </section>
+
+      <section class="view" id="sources" data-view-panel hidden>
+        <header class="page-heading">
+          <div>
+            <p class="eyebrow">Durable references</p>
+            <h2>Sources and records</h2>
+            <p>Use official documentation for platform behavior and the repository records for Next Bar’s actual state.</p>
+          </div>
+        </header>
+
+        <div class="two-column">
+          <article class="card">
+            <h3>Saved Next Bar records</h3>
+            <div class="source-list">
+              <a href="PRODUCTION-READINESS-MISSION-2026-07-30.md">Production-readiness mission</a>
+              <a href="SAFE-SECURITY-TEST-ROE-2026-07-30.md">Safe security-test Rules of Engagement</a>
+              <a href="CTO-LEARNING-PROGRESS.json">Learning progress JSON</a>
+              <a href="C2-RATE-LIMIT-AUDIT-2026-07-30.md">C2 rate-limit audit</a>
+              <a href="C3-RLS-AUDIT-2026-07-30.md">C3 RLS audit</a>
+              <a href="APP-PRIVACY-LABELS-2026-07-30.md">App Privacy inventory</a>
+              <a href="APP-STORE-PLAN.md">App Store plan</a>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Official learning sources</h3>
+            <div class="source-list">
+              <a href="https://vercel.com/docs/deployments/environments">Vercel environments</a>
+              <a href="https://supabase.com/docs/guides/deployment">Supabase deployment</a>
+              <a href="https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments">GitHub environments</a>
+              <a href="https://developer.apple.com/testflight/">Apple TestFlight</a>
+              <a href="https://owasp.org/www-project-application-security-verification-standard/">OWASP ASVS</a>
+              <a href="https://owasp.org/www-project-web-security-testing-guide/">OWASP Web Security Testing Guide</a>
+              <a href="https://mas.owasp.org/MASTG/">OWASP Mobile Security Testing Guide</a>
+              <a href="https://dora.dev/guides/dora-metrics/">DORA delivery metrics</a>
+            </div>
+          </article>
+        </div>
+
+        <article class="card" style="margin-top: 1rem;">
+          <h3>Learning record</h3>
+          <table class="status-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Node</th>
+                <th>Cold recall</th>
+                <th>Practice</th>
+                <th>Next review</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>2026-07-30</td>
+                <td>Systems and environments</td>
+                <td>65%</td>
+                <td>90%</td>
+                <td>2026-07-31</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="footer-note">Mastery still requires a delayed recall pass, transfer pass, and durable architecture artifact.</p>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const storageKey = "next-bar-cto-learning-v1";
+      const taskInputs = Array.from(document.querySelectorAll("[data-task]"));
+      const noteFields = ["credential-notes", "preview-notes"];
+      const defaultDone = ["cold-check", "migration-practice"];
+
+      function loadState() {
+        try {
+          const stored = JSON.parse(localStorage.getItem(storageKey) || "{}");
+          return {
+            done: Array.isArray(stored.done) ? stored.done : defaultDone,
+            notes: stored.notes && typeof stored.notes === "object" ? stored.notes : {}
+          };
+        } catch {
+          return { done: defaultDone, notes: {} };
+        }
+      }
+
+      let state = loadState();
+
+      function saveState() {
+        localStorage.setItem(storageKey, JSON.stringify(state));
+      }
+
+      function syncTasks() {
+        taskInputs.forEach((input) => {
+          input.checked = state.done.includes(input.dataset.task);
+        });
+
+        const uniqueTasks = Array.from(new Set(taskInputs.map((input) => input.dataset.task)));
+        const complete = uniqueTasks.filter((task) => state.done.includes(task)).length;
+        const percent = uniqueTasks.length ? Math.round((complete / uniqueTasks.length) * 100) : 0;
+        document.getElementById("progress-percent").textContent = `${percent}%`;
+        document.getElementById("progress-count").textContent = `${complete} of ${uniqueTasks.length} actions`;
+        document.getElementById("progress-fill").style.width = `${percent}%`;
+      }
+
+      taskInputs.forEach((input) => {
+        input.addEventListener("change", () => {
+          const task = input.dataset.task;
+          if (input.checked && !state.done.includes(task)) state.done.push(task);
+          if (!input.checked) state.done = state.done.filter((item) => item !== task);
+          saveState();
+          syncTasks();
+        });
+      });
+
+      noteFields.forEach((id) => {
+        const field = document.getElementById(id);
+        field.value = state.notes[id] || "";
+        field.addEventListener("input", () => {
+          state.notes[id] = field.value;
+          saveState();
+        });
+      });
+
+      document.querySelectorAll("[data-reveal]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const answer = document.getElementById(button.dataset.reveal);
+          const isHidden = answer.hidden;
+          answer.hidden = !isHidden;
+          button.textContent = isHidden ? "Hide worked answer" : "Reveal worked answer";
+        });
+      });
+
+      document.getElementById("mark-credential-complete").addEventListener("click", () => {
+        if (!state.done.includes("credential-transfer")) state.done.push("credential-transfer");
+        saveState();
+        syncTasks();
+      });
+
+      const navButtons = Array.from(document.querySelectorAll("[data-view]"));
+      const panels = Array.from(document.querySelectorAll("[data-view-panel]"));
+
+      function showView(id) {
+        panels.forEach((panel) => {
+          panel.hidden = panel.id !== id;
+        });
+        navButtons.forEach((button) => {
+          if (button.dataset.view === id) {
+            button.setAttribute("aria-current", "page");
+          } else {
+            button.removeAttribute("aria-current");
+          }
+        });
+        history.replaceState(null, "", `#${id}`);
+        document.getElementById(id).querySelector("h2")?.focus?.({ preventScroll: true });
+        window.scrollTo({ top: 0, behavior: "instant" });
+      }
+
+      navButtons.forEach((button) => {
+        button.addEventListener("click", () => showView(button.dataset.view));
+      });
+
+      document.getElementById("reset-progress").addEventListener("click", () => {
+        const confirmed = window.confirm("Reset checkmarks and notes stored in this browser?");
+        if (!confirmed) return;
+        state = { done: defaultDone, notes: {} };
+        noteFields.forEach((id) => {
+          document.getElementById(id).value = "";
+        });
+        saveState();
+        syncTasks();
+      });
+
+      document.getElementById("export-progress").addEventListener("click", () => {
+        const payload = {
+          exported_at: new Date().toISOString(),
+          course: "Next Bar CTO Learning Path",
+          completed_actions: state.done,
+          notes: state.notes
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "next-bar-cto-browser-progress.json";
+        link.click();
+        URL.revokeObjectURL(url);
+      });
+
+      const initialView = location.hash.slice(1);
+      if (panels.some((panel) => panel.id === initialView)) showView(initialView);
+      syncTasks();
+    })();
+  </script>
+</body>
+</html>

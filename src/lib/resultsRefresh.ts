@@ -30,6 +30,22 @@ export function nextWiderRadius(prev: Radius): Radius {
   return prev;
 }
 
+/**
+ * Widening detection for the fresh-hand rule (g-d3f8d912): a WIDER tap
+ * keeps the shown history as a soft "seen" preference (arrangeWidenedHand),
+ * while narrowing keeps the long-pinned clear-and-redeal semantics
+ * (distance-widening.spec.ts pins the narrow path).
+ */
+const RADIUS_ORDER: Record<Radius['kind'], number> = {
+  walking: 0,
+  cab: 1,
+  anywhere: 2,
+};
+
+export function isWiderRadius(next: Radius, prev: Radius): boolean {
+  return RADIUS_ORDER[next.kind] > RADIUS_ORDER[prev.kind];
+}
+
 export function advanceShownIds(
   prevShown: readonly string[],
   lastRanked: readonly string[],

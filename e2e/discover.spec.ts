@@ -1,99 +1,65 @@
 /**
- * discover.spec.ts — /discover swipe surface (QA5-S3).
+ * discover.spec.ts — /discover is ARCHIVED and redirects to /map (goal
+ * g-12d33864).
  *
- * Covers the button (accessible) path, which shares the exact commit
- * handlers with the pointer-drag path:
- *   - stack renders a card with a heading,
- *   - Save writes { barId, addedAt } into next-bar:list:want-to-go:v1
- *     and advances to the next card,
- *   - Skip advances WITHOUT writing (session-only),
- *   - a saved bar stays gone across a reload.
+ * This file used to cover the Tinder-style swipe stack (QA5-S3): save/skip
+ * writes into next-bar:list:want-to-go:v1, advance-on-commit, and persistence
+ * across a reload. That surface was archived for the current product, so the
+ * spec was RE-POINTED rather than deleted: the route still exists as a public
+ * URL, and a redirect that silently breaks is exactly the kind of regression a
+ * deleted spec stops catching. `git log --follow -- e2e/discover.spec.ts`
+ * recovers the swipe coverage if the surface is ever revived.
+ *
+ * Both the positive (you end up on /map) and the negative (no 404, and no trace
+ * of the old surface renders) are asserted, per CLAUDE.md.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
 
-const WANT_TO_GO_KEY = 'next-bar:list:want-to-go:v1';
-
-type WantToGoEntry = { barId: string; addedAt: string };
-
-async function readWantToGo(page: Page): Promise<WantToGoEntry[] | null> {
-  return page.evaluate((key) => {
-    const raw = window.localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as { barId: string; addedAt: string }[]) : null;
-  }, WANT_TO_GO_KEY);
-}
-
-/** The current top card's bar id + displayed name. */
-async function topCard(page: Page): Promise<{ id: string; name: string }> {
-  const card = page.getByTestId('discover-card');
-  await expect(card).toBeVisible({ timeout: 15_000 });
-  const id = await card.getAttribute('data-bar-id');
-  const name = await page.getByTestId('discover-card-heading').innerText();
-  expect(id).toBeTruthy();
-  return { id: id as string, name: name.trim() };
-}
-
-test.describe('/discover swipe surface', () => {
+test.describe('/discover is archived', () => {
   test.beforeEach(async ({ context }) => {
-    // Deterministic: no geo prompt/fix — the pool is browse-order anyway.
+    // Deterministic: no geo prompt. /map renders the full catalog without one.
     await denyGeolocation(context);
   });
 
-  test('renders a card stack with a heading', async ({ page }) => {
-    await page.goto('/discover');
-    await expect(page.getByRole('heading', { name: /^Discover$/ })).toBeVisible();
-    const { name } = await topCard(page);
-    expect(name.length).toBeGreaterThan(0);
-    // Both action buttons are present and labelled for this bar.
-    await expect(page.getByRole('button', { name: `Save ${name}` })).toBeVisible();
-    await expect(page.getByRole('button', { name: `Skip ${name}` })).toBeVisible();
+  test('the SERVER answers 307 to /map — not a client-side bounce', async ({
+    request,
+  }) => {
+    // Asserted on the UN-FOLLOWED response, deliberately. Checking only that we
+    // end up on /map with a <400 status would pass for a client component that
+    // calls router.replace('/map') after hydration — which would violate the
+    // server-redirect requirement, ship the client bundle we just archived, and
+    // flash the old surface. This is the assertion that can tell them apart.
+    // The Location header is the load-bearing half. A `redirect('/map')` page
+    // component ALSO answers 307, but with no Location — Next prerenders it as
+    // an HTML document that navigates itself, which browsers follow and curl,
+    // crawlers and link checkers do not. Asserting the header is what forced
+    // the redirect into next.config.js where it belongs.
+    const res = await request.get('/discover', { maxRedirects: 0 });
+    expect(res.status()).toBe(307);
+    expect(res.headers()['location']).toMatch(/\/map$/);
   });
 
-  test('Save writes the bar into want-to-go and advances', async ({ page }) => {
-    await page.goto('/discover');
-    const first = await topCard(page);
+  test('a direct request lands on /map, not a 404', async ({ page }) => {
+    const response = await page.goto('/discover');
+    expect(response?.status()).toBeLessThan(400);
 
-    await page.getByRole('button', { name: `Save ${first.name}` }).click();
+    await expect(page).toHaveURL(/\/map$/);
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
 
-    // Storage contract: JSON array of { barId, addedAt } under the fixed key.
-    const entries = await readWantToGo(page);
-    expect(entries).not.toBeNull();
-    expect(entries).toHaveLength(1);
-    expect(entries![0].barId).toBe(first.id);
-    expect(typeof entries![0].addedAt).toBe('string');
-    expect(Number.isNaN(Date.parse(entries![0].addedAt))).toBe(false);
-
-    // Advanced: a new bar is on top.
-    const second = await topCard(page);
-    expect(second.id).not.toBe(first.id);
+    // NEGATIVE: none of the archived surface survives the redirect.
+    await expect(page.getByRole('heading', { name: /^Discover$/ })).toHaveCount(0);
+    await expect(page.getByTestId('discover-card')).toHaveCount(0);
   });
 
-  test('Skip advances without writing', async ({ page }) => {
-    await page.goto('/discover');
-    const first = await topCard(page);
+  test('the map offers no route back to /discover', async ({ page }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
 
-    await page.getByRole('button', { name: `Skip ${first.name}` }).click();
-
-    const second = await topCard(page);
-    expect(second.id).not.toBe(first.id);
-    // Session-only: nothing lands in the want-to-go key.
-    expect(await readWantToGo(page)).toBeNull();
-  });
-
-  test('a saved bar does not come back after reload', async ({ page }) => {
-    await page.goto('/discover');
-    const first = await topCard(page);
-    await page.getByRole('button', { name: `Save ${first.name}` }).click();
-    await topCard(page); // wait for the advance before reloading
-
-    await page.reload();
-
-    const afterReload = await topCard(page);
-    expect(afterReload.id).not.toBe(first.id);
-    // The write survived the reload too.
-    const entries = await readWantToGo(page);
-    expect(entries).toHaveLength(1);
-    expect(entries![0].barId).toBe(first.id);
+    // The "Discover →" link used to sit under the search box. Its removal is
+    // the acceptance criterion — a redirect alone would still leave a link that
+    // bounces the user straight back to the page they were already on.
+    await expect(page.locator('a[href="/discover"]')).toHaveCount(0);
   });
 });

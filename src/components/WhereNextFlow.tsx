@@ -31,11 +31,10 @@ import {
   RADIUS_WALK,
   RESULTS_COUNT,
 } from '@/lib/constants';
-import { advanceShownIds, nextWiderRadius } from '@/lib/resultsRefresh';
+import { advanceShownIds, isWiderRadius, nextWiderRadius } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
 import DistanceChips from '@/components/DistanceChips';
-import ResultsHoodChips from '@/components/ResultsHoodChips';
 import VibeTweak from '@/components/VibeTweak';
 import ResultsView from '@/components/ResultsView';
 
@@ -95,9 +94,16 @@ export default function WhereNextFlow() {
   // Loaded client-side to avoid an SSR/localStorage hydration mismatch; falls
   // back to an empty profile (→ distance-only ranking) when the quiz is unseen.
   const [profile, setProfile] = useState<VibeProfile>(defaultProfile);
+  // True when a saved quiz profile with REAL tags exists. Feeds the honest
+  // unset-vibe card copy on the proximity-ranked surfaces (santa: Kimi):
+  // a quiz-taker must not be told to "set a vibe" they just set. An
+  // all-neutral profile (tags: []) deliberately reads as false — there is
+  // nothing for Tweak to apply, so "set a vibe" stays the true message.
+  const [hasSavedVibe, setHasSavedVibe] = useState(false);
   useEffect(() => {
     const syncProfile = (): void => {
       const saved = loadProfile();
+      setHasSavedVibe(saved !== null && saved.tags.length > 0);
       // Review MED: a cleared profile (Settings, another tab) must also
       // clear the Tweak-the-vibe pre-fill — fall back to empty, don't
       // keep stale tags in memory.
@@ -235,6 +241,12 @@ export default function WhereNextFlow() {
   // fresh deal.
   const [resultsHood, setResultsHood] = useState<Neighborhood | null>(null);
   const [shownIds, setShownIds] = useState<readonly string[]>([]);
+  // Fresh-hand mode (g-d3f8d912): non-null after a WIDENING radius tap —
+  // holds the radius that was in force before it. While set, shownIds is
+  // the soft "seen" set (preferred against, reusable as fallback) instead
+  // of a hard exclusion, and the deal is arranged newly-eligible-first.
+  // One deal only: the next refresh, narrow, or context change ends it.
+  const [widenedFromMiles, setWidenedFromMiles] = useState<number | null>(null);
   const lastRankedRef = useRef<string[]>([]);
   // True once the user taps the distance chips themselves — the
   // auto-widen below must never fight an explicit choice.
@@ -250,29 +262,73 @@ export default function WhereNextFlow() {
   // 2026-07-27: home opens on Walkable; if an UNTOUCHED radius yields
   // zero, widen one visible chip step walking → cab → anywhere rather
   // than showing an empty first load).
+  // Deal-history reset: shown history + widen context. Deliberately does
+  // NOT touch lastRankedRef (santa: Codex round 2): descendant effects run
+  // before ancestor effects, so by the time a parent-level reset effect
+  // fires, ResultsView's onRanked has already stored the NEW context's
+  // hand — wiping it here would strand run-it-again and widen folding on
+  // an empty mirror. Staleness across remounts is fixed at the SOURCE
+  // instead: ResultsView's signature guard now always reports the first
+  // commit, empty included, so the mirror is refreshed before any user
+  // tap can consume it.
+  const resetDealHistory = useCallback((): void => {
+    setShownIds([]);
+    setWidenedFromMiles(null);
+  }, []);
   useEffect(() => {
     if (!rankedEmpty) return;
     if (shownIds.length > 0) {
       setShownIds([]);
+      setWidenedFromMiles(null);
       return;
     }
     if (!radiusTouchedRef.current) {
       setSelectedRadius((prev) => nextWiderRadius(prev));
     }
   }, [rankedEmpty, shownIds]);
+  // Render-time ref mirrors (same ref-carry pattern as onRankedRef in
+  // ResultsView): the two handlers below need the CURRENT radius/widen
+  // state without putting either in their deps, and state-updater
+  // functions must stay pure (StrictMode double-invokes them).
+  const selectedRadiusRef = useRef(selectedRadius);
+  selectedRadiusRef.current = selectedRadius;
+  const widenedFromMilesRef = useRef(widenedFromMiles);
+  widenedFromMilesRef.current = widenedFromMiles;
   const handleRunAgain = useCallback((): void => {
-    setShownIds((prev) =>
-      advanceShownIds(prev, lastRankedRef.current, RESULTS_COUNT),
-    );
+    if (widenedFromMilesRef.current === null) {
+      setShownIds((prev) =>
+        advanceShownIds(prev, lastRankedRef.current, RESULTS_COUNT),
+      );
+      return;
+    }
+    // Refresh after a widened deal: the arranged hand joins the shown
+    // history and refresh semantics return to the classic hard-exclusion
+    // cycle (advance/wrap unchanged). A double-tap before the re-rank
+    // lands takes the branch above, where the classic overlap guard
+    // makes it a no-op.
+    setShownIds((prev) => Array.from(new Set([...prev, ...lastRankedRef.current])));
+    setWidenedFromMiles(null);
   }, []);
   const handleRadiusChange = useCallback((next: Radius): void => {
     radiusTouchedRef.current = true;
+    const prev = selectedRadiusRef.current;
+    if (isWiderRadius(next, prev)) {
+      // WIDEN: fold the visible hand into the seen set and deal the
+      // fresh-hand arrangement from the previous radius (g-d3f8d912).
+      setShownIds((shown) =>
+        Array.from(new Set([...shown, ...lastRankedRef.current])),
+      );
+      setWidenedFromMiles(prev.maxMiles);
+    } else {
+      // NARROW/SAME: the long-pinned semantics — forget the dealt hand
+      // (distance-widening.spec.ts pins this via the narrow path).
+      resetDealHistory();
+    }
     setSelectedRadius(next);
-    setShownIds([]);
-  }, []);
+  }, [resetDealHistory]);
   const handleHoodChange = useCallback((next: Neighborhood | null): void => {
     setResultsHood(next);
-    setShownIds([]);
+    resetDealHistory();
     // Review MED: "In Harlem" must mean the WHOLE hood — a walking cap
     // measured from the hood's centroid silently drops edge bars. Picking
     // a hood widens the radius chip to Anywhere (visible state change;
@@ -280,11 +336,11 @@ export default function WhereNextFlow() {
     if (next !== null) {
       setSelectedRadius({ kind: 'anywhere', maxMiles: RADIUS_ANYWHERE });
     }
-  }, []);
+  }, [resetDealHistory]);
   const resetResultsControls = useCallback((): void => {
     setResultsHood(null);
-    setShownIds([]);
-  }, []);
+    resetDealHistory();
+  }, [resetDealHistory]);
 
   // E3.1: "not the places I've already been tonight." The night log's
   // visited set hard-excludes on the live surfaces (never the quiz).
@@ -319,16 +375,20 @@ export default function WhereNextFlow() {
   // contents actually change.
   const seedBarId =
     step.kind === 'results' || step.kind === 'tweakVibe' ? step.seedBar.id : null;
+  // In fresh-hand mode shownIds is the SOFT seen set (passed separately as
+  // seenIds so the widened deal can still reuse it as fallback) — only
+  // visited bars and the seed stay hard-excluded (g-d3f8d912).
+  const widenActive = widenedFromMiles !== null;
   const manualExcludeIds = useMemo(
     () =>
       seedBarId
-        ? [seedBarId, ...visitedIds, ...shownIds]
-        : [...visitedIds, ...shownIds],
-    [seedBarId, visitedIds, shownIds],
+        ? [seedBarId, ...visitedIds, ...(widenActive ? [] : shownIds)]
+        : [...visitedIds, ...(widenActive ? [] : shownIds)],
+    [seedBarId, visitedIds, shownIds, widenActive],
   );
   const autoExcludeIds = useMemo(
-    () => [...visitedIds, ...shownIds],
-    [visitedIds, shownIds],
+    () => [...visitedIds, ...(widenActive ? [] : shownIds)],
+    [visitedIds, shownIds, widenActive],
   );
 
   // E2.1: EVERY seed-bar entry lands on RESULTS immediately through this
@@ -376,8 +436,12 @@ export default function WhereNextFlow() {
     setStep({ kind: 'pickBar' });
   };
 
-  const handleApplyTweak = (nextTags: VibeTag[]) => {
+  const handleApplyTweak = (nextTags: VibeTag[], nextHood?: Neighborhood | null) => {
     if (step.kind !== 'tweakVibe') return;
+    // H3: neighborhood now arrives from inside the tweak surface rather than
+    // from its own rail. `undefined` means the surface had no hood dimension;
+    // `null` is a deliberate "Anywhere". Only the latter should clear it.
+    if (nextHood !== undefined) handleHoodChange(nextHood);
     // An APPLIED tweak is tonight's vibe pick — cache it for re-searches
     // (E2.2 night cache). Cancel deliberately does not save. The shared
     // nightVibe state updates too: autoResults is re-reachable this
@@ -386,7 +450,7 @@ export default function WhereNextFlow() {
     setNightVibe(nextTags);
     // QA-6: a new vibe is a new ranking — the run-it-again history resets
     // (the hood override survives; vibe and hood are orthogonal).
-    setShownIds([]);
+    resetDealHistory();
     setStep({ kind: 'results', seedBar: step.seedBar, tags: nextTags });
   };
 
@@ -400,11 +464,12 @@ export default function WhereNextFlow() {
   // autoResults re-ranks with the tweaked tags immediately; Cancel
   // returns unchanged. Both land back on autoResults with the coords the
   // surface already had — the tweak never disturbs the geo.
-  const handleApplyAutoTweak = (nextTags: VibeTag[]) => {
+  const handleApplyAutoTweak = (nextTags: VibeTag[], nextHood?: Neighborhood | null) => {
     if (step.kind !== 'tweakVibeAuto') return;
+    if (nextHood !== undefined) handleHoodChange(nextHood);
     saveNightVibe(nextTags);
     setNightVibe(nextTags);
-    setShownIds([]);
+    resetDealHistory();
     setStep({ kind: 'autoResults', coords: step.coords });
   };
 
@@ -424,6 +489,24 @@ export default function WhereNextFlow() {
     if (step.kind === 'freeTextSeed') return null;
     return { lat: step.seedBar.lat, lng: step.seedBar.lng };
   }, [geo.coords, step]);
+
+  // The ranking anchor can MOVE mid-deal: a pending geo.request() resolving
+  // replaces a seed/neighborhood anchor with real GPS coords the moment
+  // geo.coords exists (memo above). A dealt hand and any armed widen
+  // context are anchored to the coords they were dealt AT — carrying them
+  // across an anchor move mis-buckets "newly eligible" and treats a hand
+  // from the old anchor as seen at the new one (santa: Codex). Reset on
+  // any genuine move; getCurrentPosition is one-shot (no watchPosition),
+  // so this fires on discrete transitions, never GPS jitter.
+  const anchorKey = effectiveCoords
+    ? `${effectiveCoords.lat},${effectiveCoords.lng}`
+    : 'none';
+  const prevAnchorKeyRef = useRef(anchorKey);
+  useEffect(() => {
+    if (prevAnchorKeyRef.current === anchorKey) return;
+    prevAnchorKeyRef.current = anchorKey;
+    resetDealHistory();
+  }, [anchorKey, resetDealHistory]);
 
   if (step.kind === 'askLocation') {
     return (
@@ -506,28 +589,17 @@ export default function WhereNextFlow() {
           >
             Pick my bar
           </button>
-          <button
-            type="button"
-            onClick={() => setStep({ kind: 'tweakVibeAuto', coords })}
-            className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
-          >
-            Tweak the vibe
-          </button>
         </div>
-        {/* QA-6 one results view: the SAME control set as the manual
-            results — optional hood override + distance chips. */}
+        {/*
+          H2 (goal g-44007df6): distance is the ONLY top-level rail. The
+          neighborhood picker moved INSIDE Tweak-the-vibe (H3) — the operator
+          asked for "just Walkable / Worth a cab / Anywhere, nothing else at
+          that level". DistanceChips already had exactly those three, so H2 was
+          never about adding chips; it was about removing everything beside
+          them.
+        */}
         <div className="px-6 pt-3">
-          <ResultsHoodChips
-            value={resultsHood}
-            onChange={handleHoodChange}
-            anchorLabel="Near me"
-          />
-          <div className="mt-3">
-            <DistanceChips
-              value={selectedRadius}
-              onChange={handleRadiusChange}
-            />
-          </div>
+          <DistanceChips value={selectedRadius} onChange={handleRadiusChange} />
         </div>
         <ResultsView
           profile={autoProfile}
@@ -545,6 +617,9 @@ export default function WhereNextFlow() {
           maxResults={RESULTS_COUNT}
           hideClosedNow
           excludeIds={autoExcludeIds}
+          widenedFromMiles={widenedFromMiles}
+          seenIds={widenActive ? shownIds : undefined}
+          hasSavedVibe={hasSavedVibe}
           onRanked={handleRanked}
           showShare={isPlanning}
         />
@@ -559,6 +634,22 @@ export default function WhereNextFlow() {
             ↻ Run it again
           </button>
         </div>
+        {/*
+          H1 (goal g-44007df6): "Tweak the vibe" moved from the top control row
+          to CENTRED AT THE BOTTOM, beneath the results. It is the deeper
+          control — you look at what you got, then reach for it — so it sits
+          after the thing it modifies rather than competing with "Pick my bar"
+          above the fold.
+        */}
+        <div className="px-6 pt-6 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setStep({ kind: 'tweakVibeAuto', coords })}
+            className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
+          >
+            Tweak the vibe
+          </button>
+        </div>
         {/* Operator fix 2026-07-27: the bottom duplicate of "Not at these
             bars?" is DELETED — the escape lives once, in the top control
             row. pb-28 spacer still clears the fixed bottom nav (R5). */}
@@ -569,7 +660,21 @@ export default function WhereNextFlow() {
 
   if (step.kind === 'pickBar') {
     return (
-      <section className="min-h-screen px-4 py-8 md:px-6">
+      /*
+        pb-24 (on top of py-8) reserves scroll clearance for the fixed BottomNav,
+        whose raised centre tab otherwise covered the LAST row of the bar list —
+        its centre point resolved to the nav tab, so the bottom row was
+        untappable. This lives HERE rather than inside BarPicker because this is
+        the only one of BarPicker's four call sites that sits in normal flow under
+        the nav; the others are z-[1100] dialogs and an inline card panel.
+        Padding not margin: a last-child bottom margin collapses out and adds
+        nothing to scrollHeight (measured — see the same fix on /settings).
+        `pt-8 pb-24` rather than `py-8 pb-24`: both reviewers noted the latter
+        relies on utility ordering to resolve the bottom edge and reads as though
+        the padding were symmetric. Measured identical output (top 32px, bottom
+        96px) with no ordering dependence.
+      */
+      <section className="min-h-screen px-4 pt-8 pb-24 md:px-6">
         <div className="max-w-2xl mx-auto">
           <h1 className="font-display text-3xl md:text-4xl text-center mb-2">
             Where are you?
@@ -607,7 +712,15 @@ export default function WhereNextFlow() {
               </button>
             </div>
           )}
-          <BarPicker onPick={handlePickBar} onNotListed={handleNotListed} />
+          {/* autoHideSearchOnScroll: this is the one call site where the
+              picker fills the document scroller — a permanently pinned search
+              bar leaves whichever row rests under it untappable at any deep
+              scroll position (g-90f908bc, mobile-controls pass 2). */}
+          <BarPicker
+            onPick={handlePickBar}
+            onNotListed={handleNotListed}
+            autoHideSearchOnScroll
+          />
         </div>
       </section>
     );
@@ -630,6 +743,7 @@ export default function WhereNextFlow() {
     return (
       <VibeTweak
         initialTags={nightVibe ?? profile.tags}
+        initialNeighborhood={resultsHood}
         onApply={handleApplyAutoTweak}
         onCancel={handleCancelAutoTweak}
       />
@@ -640,6 +754,7 @@ export default function WhereNextFlow() {
     return (
       <VibeTweak
         initialTags={step.tags}
+        initialNeighborhood={resultsHood}
         onApply={handleApplyTweak}
         onCancel={handleCancelTweak}
       />
@@ -661,33 +776,15 @@ export default function WhereNextFlow() {
       <section className="px-6 py-6 text-center">
         <p className="text-muted text-sm mb-1">From {step.seedBar.name}</p>
         <p className="font-display text-2xl mb-4">Next bars</p>
-        {/* E2.1: the radius fine-tune lives HERE now — one screen, live
-            re-rank, walking default. E3.2: distance is two intent chips
-            + the Anywhere escape, not units. QA-6: plus the optional
-            hood override — the same control set as the location results. */}
-        <div className="mb-3">
-          <ResultsHoodChips
-            value={resultsHood}
-            onChange={handleHoodChange}
-            anchorLabel="Near here"
-          />
-        </div>
+        {/* E2.1: the radius fine-tune lives HERE — one screen, live re-rank,
+            walking default. E3.2: distance is two intent chips + the Anywhere
+            escape, not units.
+            H2/H3 (goal g-44007df6): the hood rail that used to sit above this
+            has MOVED INSIDE Tweak-the-vibe, so distance is the only top-level
+            rail on both results surfaces. Keeping it here would have left the
+            two surfaces inconsistent, which is exactly what "land M1+H1+H2+H3
+            as one piece" exists to prevent. */}
         <DistanceChips value={selectedRadius} onChange={handleRadiusChange} />
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() =>
-              setStep({
-                kind: 'tweakVibe',
-                seedBar: step.seedBar,
-                tags: step.tags,
-              })
-            }
-            className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
-          >
-            Tweak the vibe
-          </button>
-        </div>
       </section>
       <ResultsView
         profile={seedProfile}
@@ -704,6 +801,9 @@ export default function WhereNextFlow() {
         maxMiles={selectedRadius.maxMiles}
         maxResults={RESULTS_COUNT}
         excludeIds={manualExcludeIds}
+        widenedFromMiles={widenedFromMiles}
+        seenIds={widenActive ? shownIds : undefined}
+        hasSavedVibe={hasSavedVibe}
         hideClosedNow
         onRanked={handleRanked}
         showShare={isPlanning}
@@ -716,6 +816,28 @@ export default function WhereNextFlow() {
           className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
         >
           ↻ Run it again
+        </button>
+      </div>
+      {/*
+        H1 on THIS surface too. The first pass moved the control on the auto
+        results only and left this one as a small underlined link ABOVE the
+        results — which reproduced exactly the cross-surface inconsistency that
+        "land M1+H1+H2+H3 as one piece" exists to prevent. Same position, same
+        affordance, both surfaces.
+      */}
+      <div className="px-6 pt-6 flex justify-center">
+        <button
+          type="button"
+          onClick={() =>
+            setStep({
+              kind: 'tweakVibe',
+              seedBar: step.seedBar,
+              tags: step.tags,
+            })
+          }
+          className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
+        >
+          Tweak the vibe
         </button>
       </div>
       <BarMap

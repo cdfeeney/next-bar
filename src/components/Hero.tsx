@@ -5,7 +5,7 @@ export default function Hero() {
     <section className="px-6 pt-24 pb-20 md:pt-32 md:pb-28">
       <div className="max-w-4xl mx-auto text-center">
         <p className="text-accent uppercase tracking-[0.3em] text-xs mb-10">
-          Manhattan · Est. 2026
+          New York City · Est. 2026
         </p>
 
         <h1 className="font-display text-5xl md:text-7xl lg:text-8xl leading-[1.02] mb-10 tracking-tight">
@@ -15,7 +15,9 @@ export default function Hero() {
         </h1>
 
         <p className="text-muted text-lg md:text-xl max-w-2xl mx-auto mb-12 leading-relaxed">
-          Ninety seconds. Six questions. A list of ten New York bars
+          {/* Count is a real claim — quiz.ts currently has eight questions;
+              quizShape.test.ts pins this copy to the actual length. */}
+          Ninety seconds. Eight questions. A list of ten New York bars
           built for the night you actually want.
         </p>
 

@@ -2,10 +2,12 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Next Bar — Manhattan',
+    // "NYC", not "Manhattan": the catalog spans Manhattan + Brooklyn +
+    // Queens since the 2026-07 expansions (g-b83d1c77 stale-claim audit).
+    name: 'Next Bar — NYC',
     short_name: 'Next Bar',
     description:
-      "Stop going to the same three bars. Manhattan's curated nightlife matcher.",
+      "Stop going to the same three bars. NYC's curated nightlife matcher.",
     start_url: '/',
     scope: '/',
     display: 'standalone',
@@ -14,15 +16,18 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: '#0a0a0a',
     lang: 'en-US',
     categories: ['lifestyle', 'food', 'travel'],
+    // Each src genuinely serves its declared size (icon.tsx
+    // generateImageMetadata renders per-id); e2e/manifest-icons.spec.ts
+    // fetches every entry and asserts decoded dimensions == declaration.
     icons: [
       {
-        src: '/icon',
+        src: '/icon/192',
         sizes: '192x192',
         type: 'image/png',
         purpose: 'any',
       },
       {
-        src: '/icon',
+        src: '/icon/512',
         sizes: '512x512',
         type: 'image/png',
         purpose: 'any',

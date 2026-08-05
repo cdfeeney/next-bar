@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { Bar, PlacePatch } from '@/types';
 import { applyPlaces, bars } from '@/lib/bars';
 import { rawBarCount } from '@/lib/catalog.slim';
+import { DB_ONLY_SIDECAR_IDS } from '../../scripts/lib/sidecar.mjs';
 
 // Normalize a bar name for duplicate detection: fold case, punctuation, and the
 // filler words that let the same venue slip in twice under slightly different
@@ -70,24 +73,180 @@ describe('applyPlaces wrong-venue guard', () => {
     reviews: [{ text: 'Great spot', author: 'Reviewer', rating: 5 }],
   };
 
-  it('passes photo + review fields through for an in-area patch', () => {
-    const [out] = applyPlaces([curated], {
-      'test-bar': { lat: 40.72, lng: -73.99, ...photoFields },
-    });
-    expect(out.lat).toBe(40.72);
+  it('passes photo fields through', () => {
+    const [out] = applyPlaces([curated], { 'test-bar': { ...photoFields } });
     expect(out.photoRef).toBe(photoFields.photoRef);
     expect(out.photoAttribution).toBe(photoFields.photoAttribution);
-    expect(out.reviews).toEqual(photoFields.reviews);
   });
 
-  it('drops photo + review fields together with rejected out-of-area coords', () => {
-    // Nassau County coords → wrong venue → NOTHING in the patch is trusted:
-    // the photo and reviews belong to that other place too.
+  // 2026-07-29: the patch no longer carries coordinates at all. Google permits
+  // caching lat/lng for 30 consecutive days and this sidecar is committed to git
+  // and shipped to every client, so storing them was non-compliant by
+  // construction. Coordinates come from OpenStreetMap via the curated catalog.
+  it('NEVER changes a curated coordinate', () => {
     const [out] = applyPlaces([curated], {
-      'test-bar': { lat: 40.7, lng: -73.6, ...photoFields },
+      // Cast: lat/lng are gone from PlacePatch. A stale generated sidecar, or a
+      // regression in refresh-places.mjs, could still supply them — this proves
+      // they would be ignored rather than silently overriding curated data.
+      'test-bar': { ...photoFields, lat: 40.99, lng: -73.7 } as PlacePatch,
     });
-    expect(out).toEqual(curated);
-    expect(out.photoRef).toBeUndefined();
+    expect(out.lat).toBe(curated.lat);
+    expect(out.lng).toBe(curated.lng);
+  });
+
+  // INVERTED 2026-07-28. This previously asserted that `reviews` were merged
+  // through, which is exactly the route by which Google review text reached
+  // BarLightbox even after migration 0023 nulled the database column. The merge
+  // is gone and the data with it (750 items across 250 sidecar entries), so the
+  // test now guards the removal instead of the behaviour.
+  it('NEVER merges Google review text, even when a patch supplies it', () => {
+    const [out] = applyPlaces([curated], { 'test-bar': { ...photoFields } });
     expect(out.reviews).toBeUndefined();
+  });
+});
+
+/**
+ * The wrong-venue guard MOVED to generation time on 2026-07-29 rather than being
+ * deleted. It used to reject any patch whose Google coordinates fell outside the
+ * service area, dropping hours and photos with them. Removing the coordinates
+ * removed its input, so scripts/refresh-places.mjs now discards an out-of-area
+ * match before writing it — the bad data never ships at all.
+ *
+ * These tests exist because that protection is now enforced in a plain .mjs
+ * script with no type checking and no unit tests of its own. Without them the
+ * guard could be silently dropped in a future edit and nothing would notice.
+ */
+describe('wrong-venue guard, now enforced at generation time', () => {
+  const GENERATOR = readFileSync(join(process.cwd(), 'scripts/refresh-places.mjs'), 'utf8');
+
+  // The BEHAVIOURAL coverage now lives in scripts/lib/sidecar.test.ts, which
+  // imports the real functions and exercises them. Two greps used to sit here —
+  // "does the file contain insideServiceArea" and "do its bbox literals match
+  // constants.ts" — and both passed while three actual bypasses were live
+  // (--only preserving a rejected entry, --photos-multi skipping the check,
+  // absent `location` writing unchecked). Grepping for a guard is not exercising
+  // one.
+  //
+  // The bbox-drift grep is now obsolete by construction: the generator imports
+  // SERVICE_AREA from scripts/lib/sidecar.mjs instead of keeping its own copy, so
+  // there is no second literal left to drift. sidecar.test.ts asserts that single
+  // copy equals SERVICE_AREA_BBOX.
+  //
+  // What remains here is the one property a unit test on the extracted module
+  // cannot see: that the generator routes EVERY write through the chokepoint.
+  it('every sidecar write goes through the single writeSidecar chokepoint', () => {
+    // Enumerate EVERY reference to the sidecar path rather than grepping for one
+    // write function. Codex's point on the first version: matching only
+    // `fs.writeFileSync(SIDECAR` would miss a bypass via fs.promises.writeFile,
+    // an aliased fs, or a different path expression. Whitelisting the known
+    // references catches any new use however it is spelled.
+    const refs = [...GENERATOR.matchAll(/^.*\bSIDECAR\b.*$/gm)].map((m) => m[0].trim());
+
+    const declaration = refs.filter((l) => l.startsWith('const SIDECAR'));
+    const reads = refs.filter((l) => l.includes('readFileSync(SIDECAR'));
+    const writes = refs.filter((l) => /write/i.test(l));
+    const other = refs.filter(
+      (l) => !declaration.includes(l) && !reads.includes(l) && !writes.includes(l),
+    );
+
+    expect(declaration).toHaveLength(1);
+    // Exactly one write, and it is the one inside writeSidecar.
+    expect(writes, `unexpected sidecar write(s): ${writes.join(' | ')}`).toHaveLength(1);
+    // Any reference that is neither the declaration, a read, nor the single write
+    // is something new touching the artifact — fail so it gets looked at.
+    expect(other, `unrecognised SIDECAR reference(s): ${other.join(' | ')}`).toEqual([]);
+
+    expect(GENERATOR).toMatch(/function writeSidecar\(/);
+    expect(GENERATOR).toMatch(/assertSidecarWritable\(/);
+    // …and both real paths route through it.
+    expect([...GENERATOR.matchAll(/^\s*writeSidecar\(/gm)].length).toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * santa-loop round 1, both reviewers: the 'indeterminate' verdict is only
+   * non-destructive if every ambiguous exit actually preserves the prior entry.
+   * The helper is unit-tested in scripts/lib/sidecar.test.ts; what THAT cannot see
+   * is whether the generator calls it at each ambiguous exit. Structural, and
+   * acknowledged as such — the alternative is executing the generator, which needs
+   * an API key and network.
+   */
+  it('every ambiguous exit in the generator preserves the prior entry', () => {
+    // no-place-id, location-indeterminate, and the caught exception.
+    const preserves = [...GENERATOR.matchAll(/carryForwardExisting\(patches, existing, bar\.id\)/g)];
+    expect(preserves.length, 'an ambiguous exit path does not preserve prior data').toBe(3);
+
+    // …and rejection is the ONLY thing that deletes. If rejectedIds gains an entry
+    // anywhere other than the confirmed-out-of-area branch, deletion has widened.
+    const rejects = [...GENERATOR.matchAll(/rejectedIds\.add\(/g)];
+    expect(rejects.length, 'rejectedIds is populated from more than one place').toBe(1);
+  });
+
+  it('the generator no longer writes coordinates into the sidecar', () => {
+    expect(GENERATOR).not.toMatch(/patch\.lat\s*=/);
+    expect(GENERATOR).not.toMatch(/patch\.lng\s*=/);
+  });
+
+  /**
+   * Orphan entries are Google data for venues the app does not have.
+   *
+   * 29 were removed on 2026-07-29: they matched no row in the catalog files and
+   * none in the bars table either, yet each shipped a place_id and 25 of them
+   * shipped a photoRef and attribution — 4% of the sidecar, describing venues
+   * that do not exist here. applyPlaces looks patches up BY catalog id, so they
+   * were unreachable dead weight rather than a rendering bug, which is exactly
+   * why nothing surfaced them.
+   *
+   * This guard is against re-accumulation. It can only see the catalog files, so
+   * genuinely DB-only venues are allowlisted by id; keeping that list short is
+   * the point.
+   */
+  it('the sidecar has no orphan entries', () => {
+    // Allowlist imported, not duplicated — one list, shared with the generator's
+    // own assertion so the two cannot disagree about what is legitimately DB-only.
+    const DB_ONLY_ALLOWLIST = DB_ONLY_SIDECAR_IDS;
+
+    const sidecar = readFileSync(join(process.cwd(), 'src/lib/bars.places.ts'), 'utf8');
+    const sidecarIds = [...sidecar.matchAll(/^ {2}'([^']+)':\s*\{/gm)].map((m) => m[1]);
+    expect(sidecarIds.length).toBeGreaterThan(300); // the check must not pass vacuously
+
+    const catalogIds = new Set(bars.map((b) => b.id));
+    const orphans = sidecarIds.filter(
+      (id) => !catalogIds.has(id) && !DB_ONLY_ALLOWLIST.has(id),
+    );
+    expect(orphans).toEqual([]);
+  });
+
+  it('the generated sidecar contains no coordinates', () => {
+    // The compliance assertion, checked against the real artifact rather than
+    // the code that produces it.
+    const sidecar = readFileSync(join(process.cwd(), 'src/lib/bars.places.ts'), 'utf8');
+    expect(sidecar).not.toContain('"lat":');
+    expect(sidecar).not.toContain('"lng":');
+    // …while place_id, the one field Google exempts from caching, is still there.
+    expect(sidecar).toContain('"googlePlaceId":');
+  });
+});
+
+describe('exact-filter e2e fixture invariant (goal g-6cc99120)', () => {
+  it('no catalog bar carries chill + rooftop + old-nyc together', () => {
+    // e2e/exact-filter-empty.spec.ts drives the REAL catalog and depends on
+    // this combination having zero exact matches (santa review: an unpinned
+    // catalog assumption breaks that spec silently). If a venue legitimately
+    // gains all three tags, update the spec to a different impossible combo
+    // in the same edit — this failure is the pointer.
+    const offenders = bars.filter(
+      (b) =>
+        b.tags.includes('chill') &&
+        b.tags.includes('rooftop') &&
+        b.tags.includes('old-nyc'),
+    );
+    expect(offenders.map((b) => b.id)).toEqual([]);
+  });
+
+  it('dropping rooftop from the combo matches at least one bar (the recovery leg stays real)', () => {
+    const matches = bars.filter(
+      (b) => b.tags.includes('chill') && b.tags.includes('old-nyc'),
+    );
+    expect(matches.length).toBeGreaterThan(0);
   });
 });

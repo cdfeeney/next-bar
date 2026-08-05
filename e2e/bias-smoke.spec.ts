@@ -10,7 +10,20 @@ import { test, expect } from '@playwright/test';
 
 const MIDTOWN_COORDS = { latitude: 40.7549, longitude: -73.984 };
 
+// CONTENTION, not a defect — and deliberately retried rather than relaxed.
+// This is the longest flow in the suite (full quiz walk + geolocation
+// auto-resolve + catalog compute) and it is the one that loses when six
+// workers hit one dev server. Verified 2026-07-28: runs 2/2 green in
+// isolation on both projects, and fails only in the full-suite run, where it
+// dies as "Target page, context or browser has been closed" — i.e. its worker
+// was force-killed, not its assertions broken. `test.slow()` and the per-step
+// timeouts below were an earlier round of the same fight (night-loop N1).
+//
+// Every assertion is left exactly as strict as it was. A failure on BOTH
+// attempts is a REAL signal and must be investigated, not retried again.
 test.describe('Bias smoke — Midtown geolocation', () => {
+  test.describe.configure({ retries: 1 });
+
   test.beforeEach(async ({ context }) => {
     await context.grantPermissions(['geolocation']);
     await context.setGeolocation(MIDTOWN_COORDS);
@@ -74,8 +87,14 @@ test.describe('Bias smoke — Midtown geolocation', () => {
 
     await expect(resultsHeading).toBeVisible({ timeout: 15_000 });
     const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-    const count = await cards.count();
-    expect(count).toBeGreaterThanOrEqual(3);
+    // RETRYING assertion, not a one-shot count(). The results heading can
+    // paint before the server-catalog swap finishes, and CatalogRefresh now
+    // PAGES that fetch (PostgREST caps responses at 1,000 rows and the
+    // catalog passed 1,000), so the swap lands a round trip later than it
+    // used to. A single count() snapshot reads the pre-swap DOM and flakes.
+    await expect
+      .poll(async () => cards.count(), { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(3);
 
     // Hell's Kitchen joined the catalog 2026-07-24 — from Midtown coords its
     // bars are legitimately the nearest strong matches (Bar Centrale 6/6).

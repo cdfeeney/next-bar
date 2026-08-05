@@ -15,6 +15,26 @@ import * as dotenv from 'dotenv';
 import { refuseIfUnattended } from './loop-guard.mjs';
 
 refuseIfUnattended('table photo ingest');
+
+// ─── FROZEN 2026-07-27 (Phase 1 compliance) ─────────────────────────────
+// Downloading Google Place photo bytes to our own storage is the practice
+// this phase exists to stop: Google's Places policy permits storing the
+// place_id indefinitely and little else, and re-hosting photo files is
+// redistribution of their licensed Content. Photos now come from
+// first-party media (bar_photos) or live Google UI at display time — see
+// src/lib/mediaPolicy.ts.
+//
+// This freeze is deliberately non-destructive: nothing already on disk is
+// touched. Set ALLOW_GOOGLE_PHOTO_INGEST=1 only for a reviewed, documented
+// one-off.
+if (process.env.ALLOW_GOOGLE_PHOTO_INGEST !== '1') {
+  console.error('FROZEN: Google photo ingest is disabled (Phase 1 compliance).');
+  console.error('Photos come from first-party media or live Google UI instead.');
+  console.error('See docs/WORK-LEDGER.md. Override: ALLOW_GOOGLE_PHOTO_INGEST=1');
+  process.exit(2);
+}
+// ────────────────────────────────────────────────────────────────────────
+
 dotenv.config({ path: '.env.local' });
 
 const APPLY = process.argv.includes('--apply');

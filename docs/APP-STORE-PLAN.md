@@ -1,13 +1,24 @@
 # App Store Plan — next-bar iOS (drafted 2026-07-25)
 
-Operator is enrolling in the Apple Developer Program. This is the
-sequenced path from the live PWA (next-bar-two.vercel.app) to an App
-Store listing, grounded in what already exists in the repo.
+> **2026-08-03 status corrections:** the canonical domain is
+> **next-bar.com** (next-bar.app is STALE — never use it); Apple Developer
+> enrollment is **ACTIVE**; an iOS Capacitor wrapper was merged to main on
+> 2026-08-02 (`ebbcd55`, PR #90) using the remote-origin `server.url`
+> design; and the build-path recommendation below is **SUPERSEDED** by
+> `docs/TESTFLIGHT-ARCH-DECISION-g-39169b3b-2026-08-03.md`, which rejects
+> `server.url` as a release architecture (official Capacitor docs: "not
+> intended for use in production") and adopts the locally-packaged shell
+> with hosted APIs as the target. Run `npm run preflight:testflight` for
+> the deterministic local readiness check.
 
-## Build-path decision (make this first)
+Operator is enrolled in the Apple Developer Program. This is the
+sequenced path from the live PWA to an App Store listing, grounded in
+what already exists in the repo.
 
-**Recommended: Capacitor wrap + cloud Mac builds.** Operator is on
-Windows with no Mac.
+## Build-path decision (SUPERSEDED — see banner above)
+
+**Original recommendation (2026-07-25): Capacitor wrap + cloud Mac
+builds.** Operator is on Windows with no Mac.
 
 | Path | Cost | Risk |
 |---|---|---|
@@ -29,11 +40,11 @@ approval argument.
 | Requirement | Status | Action |
 |---|---|---|
 | Account deletion in-app (mandatory since 2022) | Route BUILT, dark; **blocked on the invalid SUPABASE_SERVICE_ROLE_KEY in .env.local + Vercel env** | Operator re-copies key → deletion go-live → e2e already exists |
-| Privacy policy at public URL | `/privacy` draft has `[PLACEHOLDER]`s | Finalize copy; host on next-bar.app once DNS lands |
+| Privacy policy at public URL | `/privacy` draft has `[PLACEHOLDER]`s | Finalize copy; host on next-bar.com once DNS lands |
 | Terms | `/terms` draft, same | Same |
-| Support URL + marketing URL | none | next-bar.app (purchase in progress) + `mailto` or a /support page |
+| Support URL + marketing URL | none | next-bar.com + /support route (not built yet; /install fallback) + `mailto` or a /support page |
 | Age rating | 21+ gate SHIPPED (`next-bar:age-ack:v1`) | Declare 17+/frequent-alcohol in the rating questionnaire |
-| App Privacy "nutrition labels" | not started | Inventory: email (auth), display name/handle, bar ratings, RSVPs/suggestions, coarse+fine location (while-using, for matching), no tracking/ads. Generate from codebase before submission. |
+| App Privacy "nutrition labels" | inventory DONE | **`docs/APP-PRIVACY-LABELS-2026-07-30.md` is authoritative** — a code-evidenced inventory that supersedes the summary that used to sit in this cell. Do not restate it here; a second copy is how the two drift. Two operator answers still block submission: `public.waitlist` has no deletion path, and production analytics status is unconfirmed. |
 | Sign in with Apple | NOT required | Only mandated alongside third-party social logins; email/password + magic link is exempt |
 
 ## Assets checklist
@@ -50,7 +61,7 @@ approval argument.
 
 1. Operator: Apple Developer enrollment ($99/yr, individual — no D-U-N-S).
 2. Operator: service-role key re-copy → deletion go-live (repo-side ready).
-3. Domain live (next-bar.app → Vercel + Brevo DKIM/SPF + Supabase
+3. Domain live (next-bar.com → Vercel + Brevo DKIM/SPF + Supabase
    allowlist) → finalize /privacy + /terms on it.
 4. Capacitor scaffold in-repo (`ios/` project, remote-origin config,
    push/haptics/share plugins) + Codemagic pipeline → TestFlight build.

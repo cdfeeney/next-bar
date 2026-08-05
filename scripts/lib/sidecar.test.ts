@@ -1,0 +1,255 @@
+import { describe, expect, test } from 'vitest';
+import { SERVICE_AREA_BBOX } from '@/lib/constants';
+import {
+  DB_ONLY_SIDECAR_IDS,
+  SERVICE_AREA,
+  assertSidecarWritable,
+  carryForwardExisting,
+  classifyDetailsLocation,
+  insideServiceArea,
+  locationAcceptable,
+  mergeOnlyPatches,
+} from './sidecar.mjs';
+
+/**
+ * BEHAVIOURAL tests for the sidecar invariants.
+ *
+ * These replace source-text greps in bars.test.ts that asserted the generator
+ * *contained* certain strings. Those greps passed while three real defects were
+ * live — they would still have passed with dead code, a removed `continue`, or
+ * any of the bypasses /review-routed found. Grepping for a guard is not the same
+ * as exercising it.
+ *
+ * The logic lives in scripts/lib/sidecar.mjs precisely so it can be imported:
+ * refresh-places.mjs has top-level side effects (unattended-loop guard, API-key
+ * check, process.exit) and cannot be loaded by a test at all.
+ */
+
+const KNOWN = new Set(['attaboy', 'the-bonnie']);
+
+describe('insideServiceArea', () => {
+  test('mirrors SERVICE_AREA_BBOX exactly', () => {
+    // The generator cannot import the TypeScript constant, so it holds a copy.
+    // This is the only thing preventing silent divergence.
+    expect(SERVICE_AREA).toEqual(SERVICE_AREA_BBOX);
+  });
+
+  test('accepts a point inside and rejects one outside', () => {
+    expect(insideServiceArea(40.7188, -73.9913)).toBe(true);
+    // Nassau County — the real 2026-07-23 wrong-venue match.
+    expect(insideServiceArea(40.7, -73.6)).toBe(false);
+  });
+
+  test.each([
+    ['minLat', SERVICE_AREA.minLat, -73.99, true],
+    ['maxLat', SERVICE_AREA.maxLat, -73.99, true],
+    ['just below minLat', SERVICE_AREA.minLat - 0.0001, -73.99, false],
+    ['just above maxLat', SERVICE_AREA.maxLat + 0.0001, -73.99, false],
+  ])('boundary: %s', (_label, lat, lng, expected) => {
+    expect(insideServiceArea(lat as number, lng as number)).toBe(expected);
+  });
+});
+
+describe('locationAcceptable fails CLOSED', () => {
+  // The main refresh path used to write an unchecked patch when Google omitted
+  // `location`, because the guard only ran when both coordinates were present.
+  // An unchecked write is indistinguishable from a checked one once it is filed.
+  test.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['empty object', {}],
+    ['latitude only', { latitude: 40.72 }],
+    ['non-numeric', { latitude: '40.72', longitude: '-73.99' }],
+  ])('rejects a location that is %s', (_label, location) => {
+    expect(locationAcceptable(location as never)).toBe(false);
+  });
+
+  test('accepts a real in-area location', () => {
+    expect(locationAcceptable({ latitude: 40.7188, longitude: -73.9913 })).toBe(true);
+  });
+
+  test('rejects an in-range-looking but out-of-area location', () => {
+    expect(locationAcceptable({ latitude: 40.7, longitude: -73.6 })).toBe(false);
+  });
+});
+
+describe('classifyDetailsLocation — the two failure modes must not be conflated', () => {
+  /**
+   * Codex review of 3c805f4 caught this: `placeDetailsPhotosOnly` had no `res.ok`
+   * check, and rejection DELETES a venue's sidecar entry. An HTTP 429/500 returns
+   * an error body with no `location`, which looked identical to "resolved outside
+   * the service area" — so a transient API blip would have deleted good data.
+   *
+   * Write and delete therefore fail in OPPOSITE directions: closed on writing,
+   * safe on deleting.
+   */
+  test('an in-area location is accepted', () => {
+    expect(
+      classifyDetailsLocation({ ok: true, json: { location: { latitude: 40.7188, longitude: -73.9913 } } }),
+    ).toBe('accept');
+  });
+
+  test('a DEFINITE out-of-area location is rejected — safe to delete', () => {
+    expect(
+      classifyDetailsLocation({ ok: true, json: { location: { latitude: 40.7, longitude: -73.6 } } }),
+    ).toBe('reject');
+  });
+
+  test.each([
+    ['HTTP 429', { ok: false, status: 429, json: { error: { message: 'RESOURCE_EXHAUSTED' } } }],
+    ['HTTP 500', { ok: false, status: 500, json: {} }],
+    ['non-OK that still carries a valid in-area location', {
+      ok: false,
+      status: 403,
+      json: { location: { latitude: 40.7188, longitude: -73.9913 } },
+    }],
+    ['200 with no location at all', { ok: true, status: 200, json: { id: 'x' } }],
+    ['200 with a partial location', { ok: true, status: 200, json: { location: { latitude: 40.7 } } }],
+  ])('%s is INDETERMINATE — never delete on this', (_label, response) => {
+    expect(classifyDetailsLocation(response as never)).toBe('indeterminate');
+  });
+
+  test('indeterminate is distinct from reject, which is the whole point', () => {
+    const apiError = classifyDetailsLocation({ ok: false, status: 500, json: {} } as never);
+    const wrongVenue = classifyDetailsLocation({
+      ok: true,
+      json: { location: { latitude: 40.7, longitude: -73.6 } },
+    } as never);
+    expect(apiError).not.toBe(wrongVenue);
+    expect(apiError).toBe('indeterminate');
+  });
+});
+
+describe('assertSidecarWritable', () => {
+  test('accepts a clean patch set', () => {
+    expect(() =>
+      assertSidecarWritable(
+        { attaboy: { googlePlaceId: 'ChIJx', hours: {} } },
+        KNOWN,
+      ),
+    ).not.toThrow();
+  });
+
+  test('THROWS on a persisted coordinate, naming the offender', () => {
+    // The compliance invariant: Google allows 30 days, this file ships forever.
+    expect(() =>
+      assertSidecarWritable({ attaboy: { googlePlaceId: 'ChIJx', lat: 40.72 } }, KNOWN),
+    ).toThrow(/attaboy\.lat/);
+  });
+
+  test('throws on lng as well as lat', () => {
+    expect(() =>
+      assertSidecarWritable({ attaboy: { lng: -73.99 } }, KNOWN),
+    ).toThrow(/attaboy\.lng/);
+  });
+
+  test('THROWS on an orphan id', () => {
+    // 29 orphans accumulated unnoticed because nothing checked.
+    expect(() =>
+      assertSidecarWritable({ 'ghost-bar': { googlePlaceId: 'ChIJx' } }, KNOWN),
+    ).toThrow(/orphan/i);
+  });
+
+  test('allows a DB-only id from the shared allowlist', () => {
+    const [dbOnly] = [...DB_ONLY_SIDECAR_IDS];
+    expect(dbOnly).toBeTruthy();
+    expect(() =>
+      assertSidecarWritable({ [dbOnly]: { googlePlaceId: 'ChIJx' } }, KNOWN),
+    ).not.toThrow();
+  });
+
+  test('rejects a non-object entry rather than writing garbage', () => {
+    expect(() => assertSidecarWritable({ attaboy: null }, KNOWN)).toThrow(/not an object/);
+  });
+});
+
+describe('carryForwardExisting — the full-refresh regression', () => {
+  /**
+   * Both santa-loop reviewers found this independently. The 'indeterminate'
+   * verdict exists to avoid destroying data on ambiguity, and it delivered that
+   * on --only and --photos-multi — but the DEFAULT wholesale path builds `patches`
+   * from scratch and writes it directly, so a bar that hit `continue` on a
+   * transient 429 was simply absent from the rewritten sidecar. The guarantee was
+   * written in a comment before it was true everywhere.
+   */
+  test('preserves a prior entry when this run could not resolve the bar', () => {
+    const patches: Record<string, unknown> = {};
+    const existing = { attaboy: { googlePlaceId: 'ChIJprior', hours: {} } };
+
+    expect(carryForwardExisting(patches, existing, 'attaboy')).toBe(true);
+    expect(patches.attaboy).toEqual({ googlePlaceId: 'ChIJprior', hours: {} });
+  });
+
+  test('never overwrites a fresh patch produced this run', () => {
+    const patches: Record<string, unknown> = { attaboy: { googlePlaceId: 'ChIJfresh' } };
+    expect(carryForwardExisting(patches, { attaboy: { googlePlaceId: 'ChIJstale' } }, 'attaboy')).toBe(false);
+    expect(patches.attaboy).toEqual({ googlePlaceId: 'ChIJfresh' });
+  });
+
+  test('is a no-op when there is nothing prior to preserve', () => {
+    const patches: Record<string, unknown> = {};
+    expect(carryForwardExisting(patches, {}, 'brand-new')).toBe(false);
+    expect(carryForwardExisting(patches, undefined, 'brand-new')).toBe(false);
+    expect(Object.keys(patches)).toEqual([]);
+  });
+
+  /**
+   * The property that keeps wholesale semantics intact: preserving PER BAR, only
+   * for bars this run actually attempted, still drops a venue that has left the
+   * catalog — because such a venue is never iterated and so never passed here.
+   * Merging all of `existing` instead would have resurrected the 29 orphans.
+   */
+  test('a venue absent from this run is NOT resurrected', () => {
+    const patches: Record<string, unknown> = { 'still-here': { googlePlaceId: 'ChIJx' } };
+    const existing = {
+      'still-here': { googlePlaceId: 'ChIJx' },
+      'left-the-catalog': { googlePlaceId: 'ChIJorphan' },
+    };
+    // Only ids the loop reaches are offered to carryForwardExisting.
+    carryForwardExisting(patches, existing, 'still-here');
+    expect(patches['left-the-catalog']).toBeUndefined();
+    expect(Object.keys(patches)).toEqual(['still-here']);
+  });
+});
+
+describe('mergeOnlyPatches — the --only regression', () => {
+  /**
+   * The defect this exists for: under --only the writer did
+   * `{ ...existing, ...patches }`. A bar failing the location check hit
+   * `continue`, so patches[id] was never set — and the spread PRESERVED its
+   * stale entry. The guard perpetuated exactly the patch it was meant to reject.
+   */
+  test('DELETES a rejected bar rather than carrying it forward', () => {
+    const existing = {
+      attaboy: { googlePlaceId: 'ChIJgood' },
+      'the-bonnie': { googlePlaceId: 'ChIJwrong-venue' },
+    };
+    const merged = mergeOnlyPatches(existing, {}, new Set(['the-bonnie']));
+
+    expect(merged['the-bonnie']).toBeUndefined();
+    // …while every untargeted bar survives, which is why --only merges at all.
+    expect(merged.attaboy).toEqual({ googlePlaceId: 'ChIJgood' });
+  });
+
+  test('a fresh patch still overwrites the existing entry', () => {
+    const merged = mergeOnlyPatches(
+      { attaboy: { googlePlaceId: 'old' } },
+      { attaboy: { googlePlaceId: 'new' } },
+    );
+    expect(merged.attaboy).toEqual({ googlePlaceId: 'new' });
+  });
+
+  test('rejection wins even if a patch was somehow also produced', () => {
+    const merged = mergeOnlyPatches(
+      { attaboy: { googlePlaceId: 'old' } },
+      { attaboy: { googlePlaceId: 'new' } },
+      new Set(['attaboy']),
+    );
+    expect(merged.attaboy).toBeUndefined();
+  });
+
+  test('no rejections behaves as a plain merge', () => {
+    const merged = mergeOnlyPatches({ a: { x: 1 } } as never, { b: { y: 2 } } as never);
+    expect(Object.keys(merged).sort()).toEqual(['a', 'b']);
+  });
+});
