@@ -1,7 +1,16 @@
 import { defineConfig, devices } from '@playwright/test';
 
+// Single source for the fence address — a split-coverage edit (browser fenced,
+// server not) is exactly the gap the fence exists to close. The proxy's own
+// default port in e2e/tools/fence-proxy.mjs must match.
+const FENCE_PROXY = 'http://127.0.0.1:39555';
+
 export default defineConfig({
   testDir: './e2e',
+  // Ensures the network fence is up and AUTHENTIC (banner-probed) before any
+  // spec runs; spawns it if absent, aborts if an impostor holds the port, and
+  // canary-checks that a REUSED dev server is fenced server-side.
+  globalSetup: './e2e/tools/fence-global-setup.ts',
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: true,
@@ -16,7 +25,7 @@ export default defineConfig({
     // the fence up — no spec may depend on live Supabase/Vercel/Google.
     // Fail-closed: with the proxy down, non-loopback requests fail at
     // connect time instead of escaping.
-    proxy: { server: 'http://127.0.0.1:39555', bypass: 'localhost,127.0.0.1' },
+    proxy: { server: FENCE_PROXY, bypass: 'localhost,127.0.0.1' },
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     // Pre-acknowledge the 21+ age gate (H1) for every spec — the overlay
@@ -134,9 +143,15 @@ export default defineConfig({
     // without these vars, is NOT fenced server-side. Kill it first if the
     // egress guarantee matters for the run.
     env: {
-      HTTP_PROXY: 'http://127.0.0.1:39555',
-      HTTPS_PROXY: 'http://127.0.0.1:39555',
+      // Both cases: Node's built-in env-proxy gives lowercase precedence, so
+      // an inherited lowercase http_proxy/no_proxy would silently win over
+      // uppercase-only injection (santa round-2, Codex).
+      HTTP_PROXY: FENCE_PROXY,
+      http_proxy: FENCE_PROXY,
+      HTTPS_PROXY: FENCE_PROXY,
+      https_proxy: FENCE_PROXY,
       NO_PROXY: 'localhost,127.0.0.1',
+      no_proxy: 'localhost,127.0.0.1',
       NODE_USE_ENV_PROXY: '1',
       NEXT_TELEMETRY_DISABLED: '1',
     },

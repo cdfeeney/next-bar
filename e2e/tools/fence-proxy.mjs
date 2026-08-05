@@ -35,9 +35,22 @@ const PORT = Number(process.env.FENCE_PORT) || 39555;
 const LOG =
   process.env.FENCE_LOG || path.join(tmpdir(), 'nb-e2e-fence-log.txt');
 
+/**
+ * Reduce whatever arrived in a request line / Host header to something that
+ * can only be a hostname: strip ports, then drop every character outside the
+ * hostname alphabet and cap the length. Malformed/hostile input must not be
+ * able to smuggle paths, queries, or tokens into the log.
+ */
+function sanitizeHost(raw) {
+  const first = String(raw || 'unparseable-host').split(/[/?#\s]/)[0];
+  const noPort = first.replace(/:\d+$/, '');
+  const clean = noPort.replace(/[^a-zA-Z0-9.\-\[\]:]/g, '');
+  return (clean || 'unparseable-host').slice(0, 253);
+}
+
 function record(kind, host) {
   // Hostname only — deliberately no path/query/header capture.
-  const line = `${new Date().toISOString()} ${kind} ${host}\n`;
+  const line = `${new Date().toISOString()} ${kind} ${sanitizeHost(host)}\n`;
   try {
     appendFileSync(LOG, line);
   } catch {

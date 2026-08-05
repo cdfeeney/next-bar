@@ -148,6 +148,24 @@ describe.skipIf(process.env.FENCE_TEST_SKIP === '1')('fence-proxy contract', () 
     expect(readFileSync(LOG, 'utf8')).toContain('UPGRADE fence-ws-host.example');
     expect(proxyAlive()).toBe(true);
   });
+
+  it('sanitizes hostile host strings on CONNECT and upgrade paths — tokens never reach the log', async () => {
+    await rawRequest(
+      'CONNECT evil-connect.example/steal?token=CONNECT_TOKEN_LEAK:443 HTTP/1.1\r\n\r\n',
+    );
+    await rawRequest(
+      'GET / HTTP/1.1\r\n' +
+        'Host: evil-ws.example/path?token=UPGRADE_TOKEN_LEAK\r\n' +
+        'Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n',
+    );
+    const log = readFileSync(LOG, 'utf8');
+    expect(log).toContain('evil-connect.example');
+    expect(log).toContain('evil-ws.example');
+    expect(log).not.toContain('TOKEN_LEAK');
+    expect(log).not.toContain('steal');
+    expect(log).not.toContain('token');
+    expect(proxyAlive()).toBe(true);
+  });
 });
 
 // http import is used to document intent only if extended; keep referenced.
