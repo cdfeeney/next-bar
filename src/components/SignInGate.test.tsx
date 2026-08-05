@@ -90,6 +90,41 @@ describe('SignInGate sign-out re-arm', () => {
     expect(screen.getByRole('dialog', { name: /sign in to next bar/i })).toBeTruthy();
   });
 
+  it('PRESERVES a dismissal when the user was never signed in', () => {
+    // The re-arm must key off an actual signed-in -> signed-out transition,
+    // not merely observing 'signed-out'. Otherwise "Not now" would be
+    // undone on the next render and the window would nag forever.
+    setCapacitor({ isNativePlatform: () => true, getPlatform: () => 'ios' });
+    window.sessionStorage.setItem(SIGNIN_GATE_DISMISSED_KEY, '1');
+    authState.current = { status: 'signed-out' };
+    const { rerender } = render(<SignInGate />);
+    rerender(<SignInGate />);
+    expect(window.sessionStorage.getItem(SIGNIN_GATE_DISMISSED_KEY)).toBe('1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('re-arms even when sessionStorage.removeItem throws', () => {
+    setCapacitor({ isNativePlatform: () => true, getPlatform: () => 'ios' });
+    window.sessionStorage.setItem(SIGNIN_GATE_DISMISSED_KEY, '1');
+    const removeItem = vi
+      .spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => {
+        throw new Error('storage unavailable');
+      });
+    try {
+      authState.current = { status: 'signed-in' };
+      const { rerender } = render(<SignInGate />);
+      act(() => {
+        authState.current = { status: 'signed-out' };
+      });
+      rerender(<SignInGate />);
+      // The throw must not prevent the window from re-arming in-memory.
+      expect(screen.getByRole('dialog', { name: /sign in to next bar/i })).toBeTruthy();
+    } finally {
+      removeItem.mockRestore();
+    }
+  });
+
   it('does NOT render for a signed-in user in the installed app', () => {
     setCapacitor({ isNativePlatform: () => true, getPlatform: () => 'ios' });
     authState.current = { status: 'signed-in' };

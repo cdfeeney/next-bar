@@ -12,12 +12,14 @@
 import type { BrowserContext } from '@playwright/test';
 
 /**
- * Simulate the REAL TestFlight/App Store shell: Capacitor native, loading a
- * remote server.url in a WKWebView. Critically it leaves the PWA signals
- * FALSE — in that shell `navigator.standalone` is a Safari-only property and
- * display-mode reports `browser`. Any test that also forces the PWA signals
- * would pass even if the Capacitor branch were deleted, which is exactly the
- * gap this helper exists to close (santa round-2, both lanes).
+ * Simulate the iOS Capacitor shell. Critically it leaves the PWA signals
+ * FALSE: `navigator.standalone` is Safari-only and is not set in a WKWebView,
+ * and under the current internal build (architecture "A" in
+ * docs/TESTFLIGHT-ARCH-DECISION-g-39169b3b — a remote `server.url` shell the
+ * ADR rejects for release in favour of "C") display-mode reports `browser`.
+ * Any test that also forced the PWA signals would still pass with the
+ * Capacitor branch deleted, which is exactly the gap this closes (santa
+ * round-2, both lanes).
  */
 export async function asCapacitorNativeApp(
   context: BrowserContext,

@@ -97,6 +97,25 @@ test.describe('installed-app sign-in gate', () => {
       .not.toBe('hidden');
   });
 
+  test('tapping the backdrop dismisses; tapping the card does NOT', async ({
+    page,
+    context,
+  }) => {
+    await asInstalledApp(context);
+    await page.goto('/');
+    const dialog = page.getByRole('dialog', GATE);
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+
+    // NEGATIVE first: a tap on the card itself must not close it.
+    await dialog.getByRole('heading', { name: /sign in to next bar/i }).click();
+    await expect(dialog).toBeVisible();
+
+    // The backdrop is the dialog element itself; click near the top edge,
+    // clear of the centred card.
+    await dialog.click({ position: { x: 5, y: 5 } });
+    await expect(dialog).toHaveCount(0);
+  });
+
   test('the sign-in action goes to /auth', async ({ page, context }) => {
     await asInstalledApp(context);
     await page.goto('/');

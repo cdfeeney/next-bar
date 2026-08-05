@@ -40,8 +40,13 @@ import { AGE_ACK_EVENT } from '@/lib/appEvents';
 /**
  * UI preference only — deliberately NOT registered in accountCache ALL_KEYS,
  * for the same reason as the age-gate ack and the onboarding flag: it holds no
- * account data, and a sign-out must not resurrect a window the person already
- * dismissed in this session.
+ * account data, so the account wipe has no business touching it.
+ *
+ * It IS cleared explicitly on a signed-in → signed-out transition (see below).
+ * That is not a contradiction: staying out of ALL_KEYS means "not account
+ * data", while the explicit clear answers a different question — the person
+ * who dismissed this may not be the person holding the phone after a
+ * sign-out (santa round-2/3).
  */
 export const SIGNIN_GATE_DISMISSED_KEY = 'next-bar:signin-gate-dismissed:v1';
 const AGE_ACK_KEY = 'next-bar:age-ack:v1';
@@ -58,11 +63,15 @@ type CapacitorGlobal = { isNativePlatform?: () => boolean; getPlatform?: () => s
  * True when the document is being displayed as an installed application.
  *
  * Three signals, because the shells differ (santa round-1, Codex):
- *  - Capacitor native — THE TestFlight/App Store shell. It is a WKWebView
- *    loading a remote server.url (docs/TESTFLIGHT-ARCH-DECISION-g-39169b3b),
- *    where `navigator.standalone` is a Safari-only property and display-mode
- *    reports `browser`. Checking only the two PWA signals would have meant
- *    this window never appeared in the actual app it was written for.
+ *  - Capacitor native — the iOS shell. Today's internal TestFlight build is
+ *    architecture "A" in docs/TESTFLIGHT-ARCH-DECISION-g-39169b3b: a
+ *    WKWebView on a remote `server.url`. That ADR REJECTS A for release and
+ *    adopts "C" (UI shipped as local assets, data via hosted APIs). Keying
+ *    off `window.Capacitor` is correct for BOTH, because both are Capacitor —
+ *    whereas in neither is `navigator.standalone` set (that is Safari-only)
+ *    and under A display-mode reports `browser`. Checking only the two PWA
+ *    signals would have meant this window never appeared in the shell it was
+ *    written for.
  *  - display-mode: standalone — installed PWA (Android/desktop).
  *  - navigator.standalone — iOS Safari home-screen web app.
  */
