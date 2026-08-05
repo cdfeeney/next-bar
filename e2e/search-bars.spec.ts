@@ -13,6 +13,13 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { installLoopbackFixtures } from './helpers/catalogFixture';
+
+// openSearch waits on the data-catalog-swapped marker; under the network
+// fence the swap's bars fetch must be served in-test or it never lands.
+test.beforeEach(async ({ page }) => {
+  await installLoopbackFixtures(page);
+});
 
 const WANT_KEY = 'next-bar:list:want-to-go:v1';
 
@@ -146,7 +153,10 @@ test.describe('/search finds catalog bars', () => {
     });
     await page.route('**/rest/v1/bars*', async (route) => {
       await gate;
-      await route.continue();
+      // fallback(), not continue(): continue() goes to the NETWORK (fenced),
+      // fallback() chains to the loopback catalog fixture registered in the
+      // file-wide beforeEach — the gate still controls WHEN the swap lands.
+      await route.fallback();
     });
 
     await page.goto('/search');

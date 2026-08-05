@@ -1,4 +1,11 @@
 import { expect, test } from '@playwright/test';
+import { installLoopbackFixtures } from './helpers/catalogFixture';
+
+// Under the network fence the catalog swap and map tiles must be served
+// in-test — openMap waits on the swap marker, which never lands otherwise.
+test.beforeEach(async ({ page }) => {
+  await installLoopbackFixtures(page);
+});
 
 /**
  * Goal g-5ead112c: tapping a marker on /map opens the EXISTING BarLightbox,

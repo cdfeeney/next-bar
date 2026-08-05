@@ -1,5 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
+import { installLoopbackFixtures } from './helpers/catalogFixture';
+
+// Map surface: catalog swap + tiles served in-test under the network fence.
+test.beforeEach(async ({ page }) => {
+  await installLoopbackFixtures(page);
+});
 
 // Fixed clock (Fri 11pm) for the same reason the other home specs use one: the
 // live surfaces hard-filter known-closed bars, so the results view is only
@@ -142,6 +148,15 @@ test.describe('MapFilterSheet actions are reachable on a compact phone', () => {
   }) => {
     await denyGeolocation(page.context());
     await page.goto('/map');
+    // Interact only after the catalog swap commits — the swap remounts the
+    // header this sheet lives in, and a click across that boundary lands on
+    // a recycled node (same convention as map-lightbox's openMap).
+    await expect
+      .poll(
+        () => page.evaluate(() => document.documentElement.dataset.catalogSwapped),
+        { timeout: 20_000 },
+      )
+      .toBe('1');
     await page.getByRole('button', { name: /Tweak the vibe/i }).click();
     await expect(page.getByTestId('findbar-filters')).toBeVisible();
     await expect(page.getByRole('button', { name: /^Apply$/i })).toBeVisible();
@@ -171,6 +186,13 @@ test.describe('MapFilterSheet actions are reachable on a compact phone', () => {
   test('Cancel dismisses the sheet and does NOT change the URL', async ({ page }) => {
     await denyGeolocation(page.context());
     await page.goto('/map');
+    // Same swap-boundary rule as above.
+    await expect
+      .poll(
+        () => page.evaluate(() => document.documentElement.dataset.catalogSwapped),
+        { timeout: 20_000 },
+      )
+      .toBe('1');
     const before = page.url();
     await page.getByRole('button', { name: /Tweak the vibe/i }).click();
     await expect(page.getByRole('button', { name: /^Cancel$/i })).toBeVisible();

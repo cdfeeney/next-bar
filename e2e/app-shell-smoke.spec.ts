@@ -11,6 +11,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
+import { installLoopbackFixtures } from './helpers/catalogFixture';
 
 async function expectNoConsoleErrors(page: Page, label: string): Promise<void> {
   const errors: string[] = [];
@@ -23,6 +24,14 @@ async function expectNoConsoleErrors(page: Page, label: string): Promise<void> {
 }
 
 test.describe('App-shell smoke', () => {
+  // Loopback fixtures: under the network fence, the catalog fetch and map
+  // tiles would otherwise be refused — which is correct fencing, but the
+  // refusals surface as console errors and fail the purity assertion below.
+  // Serving them in-test keeps every route rendering exactly as deployed.
+  test.beforeEach(async ({ page }) => {
+    await installLoopbackFixtures(page);
+  });
+
   test('/ (Next Bar?) falls back to BarPicker when location is denied', async ({
     page,
   }) => {

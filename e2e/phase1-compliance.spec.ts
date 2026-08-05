@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
+import {
+  installCatalogFixture,
+  installLoopbackFixtures,
+  syntheticRows,
+} from './helpers/catalogFixture';
 
 /**
  * Phase 1 behavioral gate: prove the compliance changes actually render.
@@ -16,6 +21,11 @@ import { denyGeolocation } from './helpers/geo';
 const FIXED = new Date('2026-07-24T23:00:00');
 
 test('catalog loads past the 1,000-row PostgREST cap', async ({ page }) => {
+  // Loopback paged fixture with >1000 valid rows: the app's REAL paging loop
+  // (order by id, Range 0-999 then 1000-…) runs against PostgREST-shaped
+  // pages without any live database. What this proves is unchanged: the
+  // client keeps requesting past the 1,000-row cap until a short page.
+  await installCatalogFixture(page, { rows: syntheticRows(1005) });
   const sizes: number[] = [];
   page.on('response', async (res) => {
     if (res.url().includes('/rest/v1/bars') && res.request().method() === 'GET') {
@@ -41,6 +51,7 @@ test('Google-derived hours are labelled unverified, with attribution', async ({
   page,
   context,
 }) => {
+  await installLoopbackFixtures(page);
   await denyGeolocation(context);
   await page.clock.setFixedTime(FIXED);
   await page.goto('/');
