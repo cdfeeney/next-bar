@@ -1,14 +1,18 @@
 /**
- * DEPRECATED (2026-08-02, goal g-4531bbf0): replaced by the provider-based
- * census command. OSM/Google candidate ingestion is now the `osm` and
- * `google` adapters of:
+ * DEPRECATED (2026-08-02, goal g-4531bbf0): superseded by the provider-based
+ * census command, which turned OSM/Google candidate ingestion into `osm` and
+ * `google` adapters producing a reviewed report instead of writing
+ * scripts/data/candidates.json directly.
  *
- *   npx tsx scripts/census/run-census.mts --borough <name> --sources osm,google
- *
- * Candidates land as a reviewed report under scripts/census/out/<runId>/
- * instead of scripts/data/candidates.json. Full history: git log --follow.
+ * That census tooling is INTENTIONALLY ABSENT from the Beta 1 release
+ * candidate — catalog expansion is a separate, attended track and is not part
+ * of this release. So there is no local replacement command to point at here;
+ * do not try to run one. The successor lives on the overnight development
+ * branch, and its full history is available via `git log --follow`.
  */
 console.error(
-  'ingest-bars.ts is deprecated — use: npx tsx scripts/census/run-census.mts --borough <name> --sources osm,google',
+  'ingest-bars.ts is deprecated. Its successor (the census command) is ' +
+    'deliberately excluded from the Beta 1 RC — catalog expansion is a ' +
+    'separate attended track, so no local replacement exists in this tree.',
 );
 process.exit(1);

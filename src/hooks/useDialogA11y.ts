@@ -10,8 +10,8 @@ import { useEffect, useRef, type RefObject } from 'react';
  * migrating it onto this hook is tracked follow-up debt, and until then
  * the two implementations must not be assumed to share the stack below.
  *
- * STACKING: dialogs can nest (PinWhereIAm's picker opens a confirm on
- * top). Every mounted instance registers on a module-level stack and
+ * STACKING: dialogs can nest (a picker opening a confirmation on top of
+ * itself). Every mounted instance registers on a module-level stack and
  * only the TOPMOST one responds to Escape/Tab — without this, one
  * Escape press would bubble to every open dialog and close the whole
  * stack at once. Scroll lock is reference-counted for the same reason.

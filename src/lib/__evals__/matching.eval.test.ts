@@ -163,7 +163,7 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
     ).toBeGreaterThanOrEqual(JACCARD_FLOOR);
   });
 
-  it('the pick is deterministic for (profile, night) and rotates across nights — at the 6am LOCAL rollover, not UTC midnight', () => {
+  it('the pick is deterministic for (profile, night) and rotates across nights — at the 5am LOCAL rollover, not UTC midnight', () => {
     // Local-noon dates: unambiguous nights in any timezone.
     const run = (dayOfMonth: number, hour = 12) =>
       matches({
@@ -177,8 +177,8 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
       })[EXPLORATION_MIN_RESULTS - 1].id;
 
     expect(run(25)).toBe(run(25));
-    // 2am belongs to the PREVIOUS night (6am rollover, socialNight.ts): the
-    // pick must NOT rotate mid-evening or at midnight.
+    // 2am belongs to the PREVIOUS night (5am local rollover, cadence.ts):
+    // the pick must NOT rotate mid-evening or at midnight.
     expect(run(26, 2)).toBe(run(25, 23));
     // Across many nights the pick must not be constant (rotation works).
     const nights = [25, 26, 27, 28, 29].map((d) => run(d));

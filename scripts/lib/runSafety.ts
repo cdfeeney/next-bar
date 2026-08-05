@@ -3,10 +3,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from 'node:path';
 
 /**
- * Continuation safety primitives (goal g-d494ba90). Same identity
- * semantics as the census checkpoint contract (scripts/census/checkpoint.ts
- * keeps its own copy deliberately — it was independently reviewed and this
- * module must stay dependency-free for other tooling to adopt).
+ * Continuation safety primitives (goal g-d494ba90). Deliberately
+ * dependency-free so any tooling can adopt it without pulling a graph in.
  */
 
 export interface RunIdentity {

@@ -1,11 +1,11 @@
 # Next Bar data, media, and venue-owner plan
 
-**Status:** Approved planning direction; not yet implemented  
-**Recorded:** July 27, 2026  
-**Scope:** NYC launch catalog, Google Places usage, bar photography, data
-provenance, venue-owner outreach, production cost controls  
-**Related documents:** `APP-STORE-PLAN.md`, `BARS-TABLE-SCHEMA.md`,
-`SCALE-PLAN.md`
+- **Status:** Approved planning direction; not yet implemented
+- **Recorded:** July 27, 2026
+- **Scope:** NYC launch catalog, Google Places usage, bar photography, data
+  provenance, venue-owner outreach, production cost controls
+- **Related documents:** `APP-STORE-PLAN.md`, `BARS-TABLE-SCHEMA.md`,
+  `SCALE-PLAN.md`
 
 > This is an engineering and operating plan, not legal advice. Have counsel
 > review the final photo license, owner-claim terms, privacy disclosures, and
@@ -812,4 +812,3 @@ Accessed July 27, 2026:
   if served from the Next.js origin.
 - `docs/SCALE-PLAN.md` - replace stale photo counts and the old assumption that
   user count does not affect Google cost.
-

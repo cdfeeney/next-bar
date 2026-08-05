@@ -24,10 +24,13 @@ const VALID: FeatureManifest = {
       compat: { minDataVersion: 'bars-table-v1' },
     },
     {
-      key: 'census-live-calls',
-      description: 'Live provider spend for the census command',
+      // Synthetic second entry — the manifest ships one feature today, but
+      // duplicate detection, snapshot ordering and per-feature hashing all
+      // need a multi-entry fixture to mean anything.
+      key: 'example-second-feature',
+      description: 'Fixture-only entry exercising multi-feature parsing',
       defaults: { development: false, preview: false, staging: false, production: false },
-      killSwitch: { owner: 'operator', reason: 'LOOP_UNATTENDED gate + budget', since: '2026-08-02' },
+      killSwitch: { owner: 'operator', reason: 'fixture only; never shipped', since: '2026-08-02' },
       compat: { minDataVersion: 'bars-table-v1' },
     },
   ],
@@ -79,7 +82,10 @@ describe('feature manifest', () => {
     };
     expect(releaseSnapshot(changed).hash).not.toBe(a.hash);
     // The snapshot names what changed at the feature grain.
-    expect(a.entries.map((e) => e.key).sort()).toEqual(['census-live-calls', 'posthog-adapter']);
+    expect(a.entries.map((e) => e.key).sort()).toEqual([
+      'example-second-feature',
+      'posthog-adapter',
+    ]);
   });
 
   it('snapshot hash also moves on kill-switch and compat changes (santa review)', () => {
