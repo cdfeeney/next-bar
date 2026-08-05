@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AGE_ACK_EVENT } from '@/components/SignInGate';
+import { AGE_ACK_EVENT } from '@/lib/appEvents';
 
 /**
  * 21+ age gate (H1 App-Store pack). Full-screen overlay on first visit;

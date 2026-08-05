@@ -11,7 +11,29 @@
 
 import type { BrowserContext } from '@playwright/test';
 
-/** Make the page report that it is running as an installed app. */
+/**
+ * Simulate the REAL TestFlight/App Store shell: Capacitor native, loading a
+ * remote server.url in a WKWebView. Critically it leaves the PWA signals
+ * FALSE — in that shell `navigator.standalone` is a Safari-only property and
+ * display-mode reports `browser`. Any test that also forces the PWA signals
+ * would pass even if the Capacitor branch were deleted, which is exactly the
+ * gap this helper exists to close (santa round-2, both lanes).
+ */
+export async function asCapacitorNativeApp(
+  context: BrowserContext,
+): Promise<void> {
+  await context.addInitScript(() => {
+    Object.defineProperty(window, 'Capacitor', {
+      configurable: true,
+      value: {
+        isNativePlatform: () => true,
+        getPlatform: () => 'ios',
+      },
+    });
+  });
+}
+
+/** Make the page report that it is running as an installed PWA. */
 export async function asInstalledApp(context: BrowserContext): Promise<void> {
   await context.addInitScript(() => {
     const realMatchMedia = window.matchMedia.bind(window);

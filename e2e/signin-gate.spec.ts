@@ -12,7 +12,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { asInstalledApp } from './helpers/standalone';
+import { asCapacitorNativeApp, asInstalledApp } from './helpers/standalone';
 import { fakeSignedIn } from './helpers/fakeAuth';
 import { installLoopbackFixtures } from './helpers/catalogFixture';
 
@@ -32,6 +32,27 @@ test.describe('installed-app sign-in gate', () => {
     const dialog = page.getByRole('dialog', GATE);
     await expect(dialog).toBeVisible({ timeout: 15_000 });
     await expect(dialog.getByRole('link', { name: /sign in/i })).toBeVisible();
+  });
+
+  test('CAPACITOR NATIVE (the real TestFlight shell) sees it, with PWA signals FALSE', async ({
+    page,
+    context,
+  }) => {
+    // THE case this feature exists for. The shell is a WKWebView on a remote
+    // server.url: navigator.standalone is Safari-only and display-mode is
+    // 'browser', so the PWA signals are deliberately NOT forced here. If the
+    // Capacitor branch of isInstalledAppDisplay() were deleted, only this
+    // test would fail — which is the point.
+    await asCapacitorNativeApp(context);
+    await page.goto('/');
+    // Prove the PWA signals really are off, so this cannot pass via them.
+    const pwaSignals = await page.evaluate(() => ({
+      displayMode: window.matchMedia('(display-mode: standalone)').matches,
+      iosStandalone:
+        (window.navigator as { standalone?: boolean }).standalone === true,
+    }));
+    expect(pwaSignals).toEqual({ displayMode: false, iosStandalone: false });
+    await expect(page.getByRole('dialog', GATE)).toBeVisible({ timeout: 15_000 });
   });
 
   test('NEGATIVE: an ordinary web browser never sees it', async ({ page }) => {
@@ -138,6 +159,11 @@ test.describe('installed-app sign-in gate', () => {
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
   });
+
+  // NOTE: the sign-out re-arm is covered by src/components/SignInGate.test.tsx
+  // instead — driving the auth store through signed-in -> signed-out is a unit
+  // concern, and an e2e "test" that only re-set the storage key would assert
+  // nothing about the component.
 
   test('NEGATIVE: it does not cover the age gate on a first-ever open', async ({
     page,

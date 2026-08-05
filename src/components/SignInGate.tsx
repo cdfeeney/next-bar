@@ -35,6 +35,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { AGE_ACK_EVENT } from '@/lib/appEvents';
 
 /**
  * UI preference only — deliberately NOT registered in accountCache ALL_KEYS,
@@ -45,14 +46,8 @@ import { useAuth } from '@/hooks/useAuth';
 export const SIGNIN_GATE_DISMISSED_KEY = 'next-bar:signin-gate-dismissed:v1';
 const AGE_ACK_KEY = 'next-bar:age-ack:v1';
 
-/**
- * Broadcast by AgeGate the moment the 21+ ack is stored. Without it this gate
- * would latch "age not acked" at mount and never reappear for the whole
- * session — which on a FIRST-EVER install (the exact cohort this feature is
- * for) meant the login window never showed at all (santa round-1, Fable +
- * Codex convergent).
- */
-export const AGE_ACK_EVENT = 'next-bar:age-acked';
+// AGE_ACK_EVENT lives in @/lib/appEvents so the legal gate does not import
+// this feature gate's module graph just to name a string (santa round-2).
 
 /** Never cover these flows; /auth is where this window's own button sends you. */
 const EXCLUDED_PREFIXES = ['/auth', '/onboarding', '/privacy', '/terms'];
@@ -120,12 +115,38 @@ export default function SignInGate(): JSX.Element | null {
   }, []);
 
   // React to the age gate being answered DURING this session, rather than
-  // latching its value at mount. See AGE_ACK_EVENT above.
+  // latching its value at mount.
   useEffect(() => {
     const onAcked = (): void => setAgeAcked(true);
     window.addEventListener(AGE_ACK_EVENT, onAcked);
     return () => window.removeEventListener(AGE_ACK_EVENT, onAcked);
   }, []);
+
+  /**
+   * A real sign-out re-arms the window (santa round-2, Fable).
+   *
+   * Dismissal is a session preference, but "I dismissed this" was answered by
+   * whoever was using the app BEFORE the sign-out. Without this, one person
+   * dismissing, signing in, then signing out left the gate suppressed for the
+   * rest of the session — on a shared device the next person got exactly the
+   * no-way-to-sign-in surface this feature exists to remove.
+   */
+  const wasSignedIn = useRef(false);
+  useEffect(() => {
+    if (status === 'signed-in') {
+      wasSignedIn.current = true;
+      return;
+    }
+    if (status === 'signed-out' && wasSignedIn.current) {
+      wasSignedIn.current = false;
+      try {
+        window.sessionStorage.removeItem(SIGNIN_GATE_DISMISSED_KEY);
+      } catch {
+        // Best-effort; the state reset below is what actually re-arms it.
+      }
+      setDismissed(false);
+    }
+  }, [status]);
 
   const dismiss = useCallback((): void => {
     try {
@@ -184,23 +205,32 @@ export default function SignInGate(): JSX.Element | null {
       aria-modal="true"
       aria-labelledby="signin-gate-title"
       aria-describedby="signin-gate-body"
-      // INLINE zIndex, not a Tailwind arbitrary class: `z-[1600]` was a value
-      // no other file used, Tailwind never generated the rule, and the
-      // computed z-index silently stayed `auto` — so BottomNav (z-1000)
-      // painted ON TOP and swallowed taps on "Not now" (caught by the
-      // dismiss e2e, diagnosed by hit-testing). An inline style cannot be
-      // JIT-missed. 1600 = above BarLightbox (1500) so a lightbox opened
+      // INLINE zIndex, deliberately. With the `z-[1600]` utility class the
+      // computed z-index was observed as `auto`, so BottomNav (z-1000)
+      // painted ON TOP and swallowed taps on "Not now" — caught by the
+      // dismiss e2e and pinned by hit-testing (elementFromPoint returned the
+      // nav's link). The exact reason the class did not apply was NOT
+      // established (Tailwind does scan src/**, so "JIT missed it" is not a
+      // supported explanation — santa round-2, Codex); an inline value
+      // removes the class-generation variable from a control the user must be
+      // able to tap. 1600 = above BarLightbox (1500) so a lightbox opened
       // while auth was still resolving cannot cover this, above BottomNav
       // (1000), and below AgeGate (2000) because the 21+ gate is the legal
       // one and must always win.
       style={{ zIndex: 1600 }}
+      // Backdrop dismiss, matching InstallPrompt's dialog convention; the
+      // card below stops propagation so taps inside never close it.
+      onClick={dismiss}
       // Vertically CENTERED, never bottom-anchored: bottom-anchoring put the
       // dismiss control within a pixel of the fixed nav's hit area — the
       // same bottom-crowded failure cancel-bottomnav and vibe-tweak-reachable
       // exist to prevent. Centring removes the collision by construction.
       className="fixed inset-0 flex items-center justify-center bg-black/70 p-4"
     >
-      <div className="w-full max-w-sm rounded-2xl bg-surface p-6 shadow-xl">
+      <div
+        className="w-full max-w-sm rounded-2xl bg-surface p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <h2 id="signin-gate-title" className="text-xl font-semibold">
           Sign in to Next Bar
         </h2>
