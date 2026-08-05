@@ -249,10 +249,31 @@ census evidence also recorded in the goal store.
   tags [live, cocktail, dance, buzzy], blurb "Live country, two-step
   nights, and Southern cocktails on Avenue A.", scope = Lucinda's ONLY.
   Curated file in session scratchpad (outside repo).
-- **PENDING at write time:** Codex re-review of 9480fb1 (to clear its
-  BLOCK) → final hash-bound package to operator → operator's separate
-  insert approval → sole attended --apply → post-insert verification.
-  **NO insert has occurred. Production untouched everywhere.**
+- **CHECKPOINT (operator-ordered pause, 2026-08-05 ~00:55 ET) — exact
+  stop point:** Codex re-review of 9480fb1 came back APPROVE zero
+  findings (it independently recomputed the payload hash). Operator gave
+  the Lucinda's insert approval verbatim; the attempt was **REJECTED by
+  the database** — `bars_source_check` (0019) does not allow 'census'
+  (typed refusal; nothing inserted; bars still 411 rows). Fix authored
+  as **migration 0041** (`0041_bars_source_census.sql`, commit
+  `48f9f93` = HEAD at checkpoint): idempotent DROP IF EXISTS + ADD
+  widening source to include 'census'; 0038/0039/0040 remain reserved.
+  **0041 panel COMPLETE, all approve:** Fable database-lane APPROVE
+  (2 LOW), Codex APPROVE (0 C/H/M; 2 LOW: header wording overstates
+  source-keyed dedupe, doc-only; no lock_timeout, minor), DeepSeek clear
+  (runner per-file BEGIN..COMMIT atomicity independently confirmed —
+  no unconstrained window possible). **PENDING: (1) the exact phrase
+  "APPLY 0041 TO PROTECTED STAGING APPROVED" was requested and NOT yet
+  given — 0041 is applied NOWHERE; (2) after 0041 applies, operator to
+  confirm whether the standing Lucinda's insert approval carries or must
+  be re-issued.** Authoritative run `run-2026-08-05T00-25-06-752Z`
+  (codeSha `9480fb1…`, payload `4907940e…`, config `39d39ff8…`); curated
+  row (tier 2, tags live/cocktail/dance/buzzy, operator blurb) in the
+  session scratchpad at
+  `…\3e02bf7f-…\scratchpad\lucindas-curated.json` — recreate from §7c
+  curation record if the scratchpad is gone. Staging writes this whole
+  session: the verified 0037 apply ONLY. **Production untouched
+  everywhere. Lock armed; lease released; goal left `paused`.**
 - **Operator decisions recorded this session:** (a) unauthenticated app
   open MUST show a login window (queue as its own mission); (b) iOS
   shell feedback: top-scroll oversize on Next Bar surface + a background
