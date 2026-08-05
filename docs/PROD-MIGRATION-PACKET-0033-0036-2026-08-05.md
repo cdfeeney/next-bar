@@ -128,43 +128,101 @@ must run `npm ci` there first (git worktrees do not share dependencies).
    restore point/backup identifier before any DDL.
 2. Pre-flight read: confirm the Production ledger still ends at **`0032`**
    with 33 rows. Any difference ⇒ **abort**.
-3. **Pre-checks, in the window, before the apply** (round-3: these were prose
-   in §5a and are now steps, because a mitigation that is not a step does not
-   happen):
-   - `select current_user, has_table_privilege(current_user,
-     'public.schema_migrations', 'INSERT');` → must be true, else **abort**
-     (this is also what verifies the owner-role assumption in §5a);
-   - check `pg_stat_activity` for long-running transactions on `profiles`,
-     `ratings`, `pairwise_comparisons`; wait them out before `0034`;
-   - export a lock timeout for the runner process — the runner sets none
-     itself and takes no flag, so it must come through the connection:
-     `PGOPTIONS=-c lock_timeout=5s` (or append
-     `?options=-c%20lock_timeout%3D5s` to `DATABASE_URL`). Verify it took
-     effect with `show lock_timeout;` on the same connection string before
-     applying.
-4. Run the would-apply proof (§2) **again, immediately before applying** and
-   confirm it still prints exactly the four names.
-   **Note (round-3, verified):** the runner does **not** print its full plan
-   and pause — it prints `N already applied, skipped.` and then prints each
-   filename **as it applies it** (`scripts/apply-migrations.ts:464,494`).
-   There is no built-in confirmation prompt, so the §2 proof re-run is the
-   only real pre-apply confirmation available.
-5. Apply. Then re-run for idempotency — expect "24 already applied".
+3. **Pre-checks, in the window, before the apply** (these were prose in §5a
+   and are steps because a mitigation that is not a step does not happen):
+   - **Confirm the connecting role actually OWNS the ledger table.**
+     `has_table_privilege(…,'INSERT')` is **not** an ownership test — a merely
+     granted role passes it while still lacking the `ALTER TABLE … ENABLE RLS`
+     and `REVOKE` rights the runner's startup DDL requires (re-verdict, both
+     lanes). Use:
+     ```sql
+     select current_user,
+            pg_get_userbyid(relowner) as ledger_owner,
+            pg_get_userbyid(relowner) = current_user as is_owner
+     from pg_class where oid = 'public.schema_migrations'::regclass;
+     ```
+     `is_owner` must be true, else **abort** — this is what proves the §5a
+     premise rather than assuming it.
+   - **Run the window at a low-traffic hour** (moved here from §5a so it is an
+     actual step).
+   - **Wait out long-running transactions** on the `0034` tables:
+     ```sql
+     select a.pid, a.state, now() - a.xact_start as age, c.relname
+     from pg_stat_activity a
+     join pg_locks l on l.pid = a.pid
+     join pg_class c on c.oid = l.relation
+     where c.relname in ('profiles','ratings','pairwise_comparisons')
+       and a.xact_start is not null
+     order by age desc;
+     ```
+     Proceed only when nothing old is holding those relations.
+   - **Carry a lock timeout on the runner's own connection.** The runner sets
+     none and exposes no flag, so a bare `SET` elsewhere does nothing. In
+     PowerShell (this operator's shell):
+     ```powershell
+     $env:PGOPTIONS = '-c lock_timeout=5s'
+     ```
+     Or append to `DATABASE_URL` — `?options=-c%20lock_timeout%3D5s` if it has
+     no query string, **`&options=…` if it already does** (re-verdict, Codex).
+     Confirm with `show lock_timeout;` on that exact connection string first.
+4. **Re-run the would-apply proof immediately before applying** — the exact
+   command, from this repo (it reads the branch's files and planner and the
+   live ledger, and writes nothing):
+   ```
+   npx tsx scripts/census/out/plan-sim-branchcode-2026-08-05.mts
+   ```
+   Require `exactly-four-and-correct: true` and `drift 0`.
+   **Why this is the confirmation step:** the runner does **not** print a full
+   plan and pause. It prints `N already applied, skipped.`
+   (`scripts/apply-migrations.ts:464`) and then prints each filename **as it
+   begins applying it** (`:483`). There is no built-in prompt, so this proof
+   re-run is the only genuine pre-apply gate.
+5. Apply — the exact command, from the clean worktree only, after `npm ci`:
+   ```
+   npm run db:migrate
+   ```
+   Then re-run the same command for idempotency — expect "24 already applied".
 6. Verify (all must pass):
    - ledger has **37 rows**, ending `0036`, with the four checksums above;
-   - `schema_migrations` is **no longer readable by the anon key** (the P1
-     probe that succeeded today must now be denied);
+   - `schema_migrations` is locked down on **every** browser surface, not just
+     anon read (re-verdict): the P1 anon read must now be denied, **and** the
+     `authenticated` role must also be denied read **and** write, **and** RLS
+     must show enabled —
+     ```sql
+     select relrowsecurity from pg_class
+     where oid = 'public.schema_migrations'::regclass;               -- true
+     select has_table_privilege('anon','public.schema_migrations','SELECT'),
+            has_table_privilege('authenticated','public.schema_migrations','SELECT'),
+            has_table_privilege('authenticated','public.schema_migrations','INSERT');
+     ```
+     all three privilege checks must be **false**;
    - `bars` still has exactly **1,256** rows and its source distribution is
      unchanged (`curated=401`, `import=855`, others 0);
-   - `vibe_profiles` exists with RLS enabled and expected policies;
+   - **`vibe_profiles` is the table `0033` describes, not merely a table with
+     that name** (re-verdict, Codex HIGH): `0033` uses
+     `create table if not exists`, so an existence-only check would pass a
+     pre-existing malformed table. Verify columns and types, the unique
+     constraint, RLS enabled, the expected policies, **and** that the trigger
+     `vibe_profiles_lww` and function `public.vibe_profiles_lww_guard()` both
+     exist:
+     ```sql
+     select column_name, data_type from information_schema.columns
+     where table_name = 'vibe_profiles' order by ordinal_position;
+     select tgname from pg_trigger
+     where tgrelid = 'public.vibe_profiles'::regclass and not tgisinternal;
+     select proname from pg_proc where proname = 'vibe_profiles_lww_guard';
+     ```
    - core-table grants match the revoke-first posture of `0034`;
-   - a share-night date outside ±2 days is **rejected** — this is a
-     read-only-safe negative probe. **Do NOT run the positive "inside is
-     accepted" case as a bare check:** `share_night` upserts and updates
-     `shared_at` (`0035_share_night_date_bound.sql:106-115`), which would
-     itself create a data delta and contradict the "no other delta" criterion
-     below. If the positive path must be exercised, do it inside an explicit
-     `BEGIN … ROLLBACK`, and record that it was rolled back (round-3);
+   - a share-night date outside ±2 days is **rejected — as an AUTHENTICATED
+     caller, asserting SQLSTATE `22023` specifically** (re-verdict, Codex).
+     An unauthenticated probe raises `28000` ("not signed in",
+     `0035_share_night_date_bound.sql:76`) which looks like a rejection but
+     proves nothing about the date guard — that false pass is the trap.
+     **Do NOT run the positive "inside is accepted" case as a bare check:**
+     `share_night` upserts and updates `shared_at` (`:106-115`), creating a
+     data delta that contradicts the "no other delta" criterion below. If the
+     positive path must be exercised, wrap it in an explicit
+     `BEGIN … ROLLBACK` and record that it was rolled back;
    - Production `/api/health` still reports `ok` and SHA `6ec5e5d7ad1d`;
    - no other schema or data delta.
 7. **Ledger-vs-schema mismatch is a HARD STOP (round-1 HIGH).** If the
@@ -188,15 +246,15 @@ privilege checks —
 `REVOKE ALL … FROM public, anon, authenticated` has no effect on it — while RLS
 is likewise skipped for the owner, and `service_role` additionally holds
 `BYPASSRLS`. So `0036` (and the startup DDL) cannot lock the runner or a future
-migration out of its own ledger. Cheap belt-and-braces pre-check to run in the
-window before the first insert:
-
-```sql
-select current_user,
-       has_table_privilege(current_user, 'public.schema_migrations', 'INSERT');
-```
-
-Abort if that returns false.
+migration out of its own ledger. **§5 step 3 proves that premise** with a true
+ownership test (`pg_get_userbyid(relowner) = current_user`). Note why a
+privilege test would NOT do: run before the apply, `has_table_privilege(…,
+'INSERT')` returns true for almost any role, because the revoke that would
+remove that privilege has not happened yet — it cannot distinguish "exempt as
+owner" from "still holds the default grant about to be revoked" (re-verdict,
+Fable). Containment if the premise were somehow false: `MIGRATION_LEDGER_DDL`
+runs at the top of the same invocation and each file is one transaction, so
+the failure is a loud rollback on `0033`, not a silent partial state.
 
 **`0034` is the one with live-traffic impact.** Its `REVOKE`/`GRANT` statements
 take an `AccessExclusiveLock` on `profiles`, `ratings`, and
@@ -231,29 +289,29 @@ Mitigations — **all three are now numbered steps in §5 step 3**, not advice:
   the ledger row behind, and because `planMigrations` skips any file whose
   recorded checksum matches (`src/lib/migrationPlan.ts:564-571`), **a later
   run would silently skip the very migration you rolled back** — the schema
-  and the ledger would disagree permanently. For every file you revert, in the
-  same transaction as the revert:
-  ```sql
-  delete from public.schema_migrations where name = '<exact file name>';
-  ```
+  and the ledger would disagree permanently.
 
-- **Rollback SQL below is quoted from each migration's own rollback block**
-  (round-1/2/3 findings) so nothing must be extracted under pressure. Where a
-  migration's own rollback is prose rather than SQL, that is stated instead of
-  being dressed up as SQL.
+- **Ready-to-run rollback blocks — copy one whole block, do not assemble**
+  (re-verdict, both lanes: the revert SQL and the ledger delete were stated
+  separately, forcing manual assembly mid-incident). Each block is one
+  transaction, revert **plus** ledger delete. Roll back in **reverse order**
+  (0036 → 0033) if reverting more than one.
 
-  `0033` — three statements; `DROP TABLE` alone would leave the function behind:
+  `0033` — `DROP TABLE` alone would leave the guard function behind:
   ```sql
+  begin;
   drop trigger if exists vibe_profiles_lww on public.vibe_profiles;
   drop function if exists public.vibe_profiles_lww_guard();
   drop table if exists public.vibe_profiles;
+  delete from public.schema_migrations where name = '0033_vibe_profiles.sql';
+  commit;
   ```
-  `0034` — **all six** statements from its rollback block. The last two are
-  load-bearing: without them `profiles` is left with a full table-level
-  `UPDATE` grant instead of the column-scoped grant the pre-migration state
-  had (round-2 finding — an earlier revision of this packet quoted only the
-  first four):
+
+  `0034` — **all six** statements. The last two are load-bearing: without them
+  `profiles` keeps a full table-level `UPDATE` grant instead of the
+  column-scoped grant the pre-migration state had:
   ```sql
+  begin;
   grant all on table public.profiles             to anon, authenticated;
   grant all on table public.ratings              to anon, authenticated;
   grant all on table public.pairwise_comparisons to anon, authenticated;
@@ -261,32 +319,53 @@ Mitigations — **all three are now numbered steps in §5 step 3**, not advice:
   revoke update on table public.profiles from public, anon, authenticated;
   grant update (display_name, is_private) on table public.profiles
     to authenticated;                            -- restore 0006:82-83
+  delete from public.schema_migrations where name = '0034_revoke_first_grants.sql';
+  commit;
   ```
-  `0035` — **not literal SQL** (its source rollback is a prose instruction
-  too): re-apply the `share_night` body from `0016_shared_nights.sql`, which
-  is identical to `0035`'s minus the `p_night` range guard.
 
-  `0036` — its actual rollback SQL, quoted (round-3; previously only cited by
-  line number, which defeated the purpose of this section):
+  `0035` — the revert itself is **prose in the source, not SQL**: re-apply the
+  `share_night` body from `0016_shared_nights.sql` (identical to `0035`'s minus
+  the `p_night` range guard). Do it in this shape:
   ```sql
+  begin;
+  -- paste the CREATE OR REPLACE FUNCTION share_night(...) body from
+  -- supabase/migrations/0016_shared_nights.sql here, unmodified
+  delete from public.schema_migrations where name = '0035_share_night_date_bound.sql';
+  commit;
+  ```
+
+  `0036` — **emergency only**; this restores the insecure state `0036` exists
+  to fix and re-opens the P1 public-ledger exposure:
+  ```sql
+  begin;
   alter table public.schema_migrations disable row level security;
   grant all on table public.schema_migrations to anon, authenticated;
+  delete from public.schema_migrations where name = '0036_protect_schema_migrations.sql';
+  commit;
   ```
-  **Emergency only.** This restores the insecure state `0036` exists to fix
-  and re-opens the P1 public-ledger exposure; the migration's own header says
-  no application rollback is expected or useful. Since `0036` is the fix for a
-  live exposure, prefer **fix-forward**. Note also that the runner re-applies
-  these protections at every startup via `MIGRATION_LEDGER_DDL`, so this
-  rollback is undone by the next migration run.
+  The migration's own header says no application rollback is expected or
+  useful. Prefer **fix-forward**. Note too that the runner re-applies these
+  protections at every startup via `MIGRATION_LEDGER_DDL`, so this rollback is
+  undone by the next migration run — which is a feature, not a bug.
 - The web tier is untouched by this packet, so no deployment rollback is
   involved; the Production deployment stays at `6ec5e5d` throughout.
 
 ## 7. Review status
 
-**T0 — not yet independently reviewed.** Per policy this packet requires a
-fresh Fable + Codex panel plus a risk-routed specialist before the operator
-should act on it, and the operator additionally asked that behavior be
-verified against a **restored Staging** first (blocked on S1 — see the
+**T0 — reviewed across four rounds** (fresh Fable + Codex each round, plus the
+operator-authorized DeepSeek database/security specialist), under review goal
+`g-697b00ec`. The review found and this packet fixed: a CRITICAL (the branch
+originally carried main's ledger-less runner, so the documented apply would
+have re-run all 24 files and written no ledger rows), and HIGHs covering the
+truncated `0034` rollback, the missing ledger-row deletion on rollback,
+mitigations that were prose instead of steps, an unactionable `lock_timeout`,
+and a claim that the runner pauses to show its plan when it does not. Round-4
+verdicts: Fable APPROVE, Codex BLOCK — its remaining items are folded in
+above.
+
+**This does not make the packet approved to run.** It remains CONDITIONAL: the
+operator additionally requires behavior verified against a **restored
+Staging** first (blocked on S1 — see the
 companion Staging finding below).
 
 ## 8. Companion finding — why Staging is down (S1 root cause, read-only)
