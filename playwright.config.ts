@@ -133,8 +133,12 @@ export default defineConfig({
       // bar's hide-on-scroll behavior — the covered-card defect it guards was
       // caught BY mobile-controls on this exact viewport, so its regression
       // pin runs here too.
+      // mobile-shell-pack added 2026-08-05 (goal g-b07c73bc): web-layer pins
+      // for the operator's TestFlight shell feedback (top-region size,
+      // background/resume, overlay idempotency). The safe-area geometry it
+      // pins differs per device, so current hardware must run it.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|mobile-shell-pack)\.spec\.ts/,
       dependencies: ['warmup'],
     },
   ],
