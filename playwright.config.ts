@@ -7,6 +7,11 @@ const FENCE_PROXY = 'http://127.0.0.1:39555';
 
 export default defineConfig({
   testDir: './e2e',
+  // e2e/tools holds the fence's VITEST units (fence-proxy.test.ts) and infra —
+  // Playwright's default testMatch would otherwise collect that .test.ts and
+  // crash on the vitest import (santa: Codex). NOTE: projects that set their
+  // own testIgnore OVERRIDE this root value and must repeat the exclusion.
+  testIgnore: /e2e[\\/]tools[\\/]/,
   // Ensures the network fence is up and AUTHENTIC (banner-probed) before any
   // spec runs; spawns it if absent, aborts if an impostor holds the port, and
   // canary-checks that a REUSED dev server is fenced server-side.
@@ -56,13 +61,15 @@ export default defineConfig({
       name: 'iPhone 13',
       use: { ...devices['iPhone 13'] },
       dependencies: ['warmup'],
-      testIgnore: /warmup\.setup\.ts/,
+      // Repeats the tools/ exclusion: a project-level testIgnore REPLACES the
+      // root one rather than merging with it.
+      testIgnore: /(warmup\.setup\.ts|e2e[\\/]tools[\\/])/,
     },
     {
       name: 'Pixel 7',
       use: { ...devices['Pixel 7'] },
       dependencies: ['warmup'],
-      testIgnore: /warmup\.setup\.ts/,
+      testIgnore: /(warmup\.setup\.ts|e2e[\\/]tools[\\/])/,
     },
     // Marketing/legal routes are read on DESKTOPS too (links get opened on
     // laptops far more than app surfaces do), and until 2026-08-03 nothing

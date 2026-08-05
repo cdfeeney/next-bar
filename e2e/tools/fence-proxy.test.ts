@@ -166,6 +166,22 @@ describe.skipIf(process.env.FENCE_TEST_SKIP === '1')('fence-proxy contract', () 
     expect(log).not.toContain('token');
     expect(proxyAlive()).toBe(true);
   });
+
+  it('cuts at the first invalid character — percent-encoded smuggling never partially survives', async () => {
+    // Old delete-in-place sanitization turned `evil2.example%2FSECRET` into
+    // `evil2.example2FSECRET`, leaking the tail into the log.
+    await rawRequest('CONNECT evil2.example%2FPCT_TOKEN_LEAK:443 HTTP/1.1\r\n\r\n');
+    const log = readFileSync(LOG, 'utf8');
+    expect(log).toContain('CONNECT evil2.example');
+    expect(log).not.toContain('PCT_TOKEN_LEAK');
+    expect(log).not.toContain('2FPCT');
+  });
+
+  it('logs bracketed IPv6 CONNECT targets intact instead of mangling at the first colon', async () => {
+    await rawRequest('CONNECT [2001:db8::1]:443 HTTP/1.1\r\n\r\n');
+    const log = readFileSync(LOG, 'utf8');
+    expect(log).toContain('CONNECT [2001:db8::1]');
+  });
 });
 
 // http import is used to document intent only if extended; keep referenced.

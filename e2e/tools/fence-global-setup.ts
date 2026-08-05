@@ -2,47 +2,74 @@
  * Playwright globalSetup: guarantee the network fence is up AND authentic
  * before any spec runs.
  *
- * Two failure modes this closes (santa round-2, Codex):
- *  - nobody started the fence → non-loopback requests would fail closed but
- *    unlogged, and a later accidental removal of use.proxy would fall open;
- *  - some OTHER process squats 127.0.0.1:39555 → it could be a real relay,
- *    silently forwarding "fenced" traffic outward. We probe with an
- *    absolute-form request to a canary host and demand the fence's own 403
- *    banner; anything else aborts the run.
+ * Failure modes closed (santa rounds 2–4):
+ *  - nobody started the fence → spawn it (detached BY DESIGN: it outlives
+ *    the run so back-to-back runs reuse it; it is stateless and loopback-only,
+ *    so leaving it up is safe — kill port 39555 to retire it);
+ *  - a STALE fence from before a behavior change → the banner carries
+ *    FENCE_CONTRACT_VERSION, so an old proxy fails the probe loudly instead
+ *    of silently masking the edit;
+ *  - some OTHER process squats the port → the probe demands the fence's own
+ *    403 status line AND versioned banner; anything else aborts the run;
+ *  - a REUSED dev server started without the proxy env → the /api/health
+ *    canary aborts on affirmative live egress (supabase:'ok').
  */
 
 import { spawn } from 'node:child_process';
 import { createConnection } from 'node:net';
 import path from 'node:path';
 
-const PORT = 39555;
-const BANNER = 'fenced: non-loopback application traffic is refused during tests';
+// Single source of truth: the proxy module exports its own contract.
+// Importing does NOT start the server (main-module guard in the .mjs).
+// Loaded via dynamic import inside the setup function: Playwright transpiles
+// this file to CJS, and a static `import` of an ESM .mjs sibling fails there.
+async function loadContract(): Promise<{ BANNER: string; PORT: number }> {
+  const mod = (await import(
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore — untyped .mjs sibling
+    './fence-proxy.mjs'
+  )) as { BANNER: string; DEFAULT_PORT: number };
+  return {
+    BANNER: mod.BANNER,
+    PORT: Number(process.env.FENCE_PORT) || mod.DEFAULT_PORT,
+  };
+}
 
-function probe(): Promise<'fence' | 'other' | 'none'> {
+type ProbeResult = 'fence' | 'other' | 'none';
+
+function probe(PORT: number, BANNER: string): Promise<ProbeResult> {
   return new Promise((resolve) => {
     const sock = createConnection(PORT, '127.0.0.1');
     let data = '';
-    const done = (v: 'fence' | 'other' | 'none') => {
+    let connected = false;
+    let settled = false;
+    const done = (v: ProbeResult) => {
+      if (settled) return;
+      settled = true;
       sock.destroy();
       resolve(v);
     };
-    sock.on('connect', () =>
+    const classify = (): ProbeResult => {
+      // Authenticity = the fence's own 403 status line AND its versioned
+      // banner. A connected socket that answered anything else — or nothing —
+      // is an impostor ('other'), NOT absence: spawning over it would just
+      // EADDRINUSE.
+      if (data.startsWith('HTTP/1.1 403') && data.includes(BANNER)) return 'fence';
+      return connected ? 'other' : 'none';
+    };
+    sock.on('connect', () => {
+      connected = true;
       sock.write(
         'GET http://fence-canary.invalid/ HTTP/1.1\r\nHost: fence-canary.invalid\r\n\r\n',
-      ),
-    );
+      );
+    });
     sock.on('data', (c) => {
       data += c.toString();
-      if (data.includes(BANNER)) done('fence');
-      else if (data.length > 4096 || data.includes('\r\n\r\n')) {
-        if (!data.includes(BANNER)) {
-          // Wait a beat for the body; some stacks split header/body packets.
-          setTimeout(() => done(data.includes(BANNER) ? 'fence' : 'other'), 250);
-        }
-      }
+      if (classify() === 'fence') done('fence');
     });
-    sock.on('error', () => done('none'));
-    setTimeout(() => done(data.includes(BANNER) ? 'fence' : data ? 'other' : 'none'), 3000);
+    sock.on('close', () => done(classify()));
+    sock.on('error', () => done(connected ? 'other' : 'none'));
+    setTimeout(() => done(classify()), 3000);
   });
 }
 
@@ -52,15 +79,20 @@ function probe(): Promise<'fence' | 'other' | 'none'> {
  * webServer.env is never applied to a reused server. If a server already
  * answers on :3000, hit /api/health: its handler performs a SERVER-SIDE fetch
  * to the Supabase auth health URL. supabase:'ok' is affirmative proof that a
- * live call left the box → abort. 'unreachable'/'unconfigured' pass (fenced,
- * dark, or Supabase itself down — no egress either way). This proves
- * non-egress for the supabase path specifically; it is a canary, not a full
- * server-side guarantee.
+ * live call left the box → abort. 'unreachable'/'unconfigured' pass — that IS
+ * the fenced outcome (indistinguishable from Supabase-down, which also means
+ * no egress). KNOWN RESIDUAL: /api/health caches its probe ~30s, so a server
+ * unfenced within the last cache window can serve a stale non-'ok' — this
+ * canary detects affirmative egress, it is not a fencedness proof.
  */
 async function assertReusedServerFenced(): Promise<void> {
   let res: Response;
   try {
-    res = await fetch('http://localhost:3000/api/health', { cache: 'no-store' });
+    res = await fetch('http://localhost:3000/api/health', {
+      cache: 'no-store',
+      redirect: 'manual', // a redirecting impostor must not steer this fetch
+      signal: AbortSignal.timeout(10_000), // a wedged server must not hang setup
+    });
   } catch {
     return; // No server running — Playwright will spawn one WITH the env.
   }
@@ -80,23 +112,31 @@ async function assertReusedServerFenced(): Promise<void> {
 }
 
 export default async function fenceGlobalSetup(): Promise<void> {
-  let state = await probe();
+  const { BANNER, PORT } = await loadContract();
+  let state = await probe(PORT, BANNER);
   if (state === 'none') {
     const child = spawn(
       process.execPath,
       [path.join(__dirname, 'fence-proxy.mjs')],
-      { detached: true, stdio: 'ignore' },
+      { detached: true, stdio: 'ignore', windowsHide: true },
     );
     child.unref();
-    // Give it a moment, then re-probe.
-    await new Promise((r) => setTimeout(r, 600));
-    state = await probe();
+    // Readiness is a retry loop, not one fixed sleep: Windows AV scanning of
+    // a fresh node.exe regularly exceeds a single 600ms window.
+    for (let i = 0; i < 10 && state === 'none'; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      state = await probe(PORT, BANNER);
+    }
   }
   if (state !== 'fence') {
     throw new Error(
       `network fence not authentic on 127.0.0.1:${PORT} (probe: ${state}) — ` +
-        'refusing to run browser tests. Kill whatever holds the port or start ' +
-        'e2e/tools/fence-proxy.mjs manually.',
+        'refusing to run browser tests. ' +
+        (state === 'other'
+          ? 'Something else (or a STALE fence from before a contract change) holds the port — kill it. '
+          : 'The fence failed to start — check `node e2e/tools/fence-proxy.mjs` manually. ') +
+        'Expected banner: ' +
+        BANNER,
     );
   }
   await assertReusedServerFenced();
