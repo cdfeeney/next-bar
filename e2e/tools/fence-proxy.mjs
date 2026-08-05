@@ -21,7 +21,7 @@ import { appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const PORT = 39555;
+const PORT = Number(process.env.FENCE_PORT) || 39555;
 const LOG =
   process.env.FENCE_LOG || path.join(tmpdir(), 'nb-e2e-fence-log.txt');
 

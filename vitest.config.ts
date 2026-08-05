@@ -24,6 +24,11 @@ export default defineConfig({
       'src/**/*.test.{ts,tsx}',
       'ceo/**/*.test.{ts,tsx}',
       'scripts/**/*.test.{ts,tsx}',
+      // e2e/tools holds the network-fence proxy that guarantees test runs
+      // make no non-loopback requests (2026-08-05). Its contract tests are
+      // units (child-process spawn), not Playwright specs, and the gate must
+      // actually run them — same rationale as scripts/** above.
+      'e2e/tools/**/*.test.{ts,tsx}',
     ],
   },
   resolve: {
