@@ -13,18 +13,18 @@ import {
 import { normalizeName, RunDeduper, splitAgainstCatalog } from './dedupe';
 import { googleAdapter, GOOGLE_PRIMARY_BAR_TYPES } from './providers/google';
 import { osmAdapter } from './providers/osm';
-import { slaAdapter } from './providers/sla';
+import { slaAdapter, SLA_BAR_CLASSES } from './providers/sla';
 import { urlSeedAdapter } from './providers/urlSeed';
 import { userSubmissionAdapter } from './providers/userSubmission';
 import { runCensus } from './runner';
 import {
   applyCurated,
   checkApplyPreconditions,
-  rebindCodeSha,
   type ApplySidecar,
   type BarsWriteClient,
   type CuratedCandidate,
 } from './apply';
+import { dirtyPathsFromPorcelain } from './codeIdentity';
 import { sha256Of } from './checkpoint';
 import type { CensusContext, NormalizedCandidate, Transport } from './types';
 
@@ -312,6 +312,18 @@ describe('sla adapter', () => {
     expect(res.evidence[0].url).toContain('licensepermitid=0001-23-240001');
   });
 
+  it('pins the pilot class allowlist — Restaurant deliberately excluded', () => {
+    expect(SLA_BAR_CLASSES).toEqual(['Additional Bar', 'Club', 'Cabaret', 'Night Club', 'Bottle Club']);
+    expect(SLA_BAR_CLASSES).not.toContain('Restaurant');
+  });
+
+  it('REJECTS an unmapped borough instead of interpolating it into SoQL (Fable+Codex M on f5d1579)', async () => {
+    const transport: Transport = async () => ({ status: 200, body: [] });
+    await expect(slaAdapter().fetchUnit('atlantis', null, ctxWith(transport))).rejects.toThrow(
+      /unknown borough 'atlantis'/,
+    );
+  });
+
   it('pages by offset and saturates on a short page', async () => {
     const fullPage = Array.from({ length: 100 }, (_, i) => slaRow(i));
     let seenUrl = '';
@@ -333,38 +345,20 @@ describe('sla adapter', () => {
   });
 });
 
-describe('rebindCodeSha (attended code-identity rebind)', () => {
-  const cands = [{ externalId: 'osm:node/1', name: 'A', neighborhood: 'LES', lat: 1, lng: 2, signals: [], evidenceIds: [], verification: 'unverified', provider: 'osm' }] as never[];
-  const sidecar = () => ({
-    runId: 'r1',
-    payloadSha256: sha256Of(JSON.stringify(cands)),
-    configHash: 'cfg',
-    codeSha: 'abc-dirty-123456789012',
-    generatedAt: '2026-08-04T00:00:00.000Z',
-  });
-  const base = { reportCandidates: cands, fromCodeSha: 'abc-dirty-123456789012', toCodeSha: 'def4567', now: new Date('2026-08-05T00:00:00Z') };
-
-  it('refuses unattended', () => {
-    expect(rebindCodeSha({ ...base, unattended: true, sidecar: sidecar() })).toMatchObject({ ok: false, reason: 'unattended' });
-  });
-  it('refuses a from-sha that does not match the sidecar', () => {
-    expect(rebindCodeSha({ ...base, unattended: false, sidecar: sidecar(), fromCodeSha: 'wrong' }).ok).toBe(false);
-  });
-  it('refuses a dirty rebind target — the whole point is an immutable SHA', () => {
-    expect(rebindCodeSha({ ...base, unattended: false, sidecar: sidecar(), toCodeSha: 'def-dirty-999999999999' }).ok).toBe(false);
-  });
-  it('refuses when the candidates payload no longer matches the sidecar hash', () => {
-    const s = { ...sidecar(), payloadSha256: 'tampered' };
-    expect(rebindCodeSha({ ...base, unattended: false, sidecar: s }).ok).toBe(false);
-  });
-  it('rebinding rewrites codeSha and appends an audit entry; payload hash untouched', () => {
-    const res = rebindCodeSha({ ...base, unattended: false, sidecar: sidecar() });
-    if (!res.ok) throw new Error('expected ok');
-    expect(res.sidecar.codeSha).toBe('def4567');
-    expect(res.sidecar.payloadSha256).toBe(sidecar().payloadSha256);
-    expect(res.sidecar.rebindHistory).toEqual([
-      { from: 'abc-dirty-123456789012', to: 'def4567', at: '2026-08-05T00:00:00.000Z' },
+describe('dirtyPathsFromPorcelain (code-identity parsing)', () => {
+  it('does NOT mangle the first line — a global trim ate its status prefix (Codex H1 on f5d1579)', () => {
+    // ' M <path>' as the FIRST line: the old inline parser trimmed the whole
+    // output first, so slice(3) produced 'cripts/…' and that file's content
+    // silently collapsed to '<deleted>' in the identity hash.
+    const porcelain = ' M scripts/census/providers/osm.ts\n?? scripts/census/seeds/x.json\n';
+    expect(dirtyPathsFromPorcelain(porcelain)).toEqual([
+      'scripts/census/providers/osm.ts',
+      'scripts/census/seeds/x.json',
     ]);
+  });
+  it('drops out/ artifacts, empty lines, and CRLF terminators', () => {
+    const porcelain = ' M scripts/census/out/run-1/report.json\r\nM  scripts/census/apply.ts\r\n\n';
+    expect(dirtyPathsFromPorcelain(porcelain)).toEqual(['scripts/census/apply.ts']);
   });
 });
 

@@ -17,54 +17,17 @@ export interface ApplySidecar {
   configHash: string;
   codeSha: string;
   generatedAt: string;
-  /** Audit trail of attended code-identity rebinds — never silently rewritten. */
-  rebindHistory?: Array<{ from: string; to: string; at: string }>;
 }
 
-/**
- * ATTENDED code-identity rebind. Exists for exactly one situation: a run was
- * generated against a dirty tree (live-pilot bug fixing), the operator then
- * NARROWLY COMMITTED that identical content, and the durable binding should
- * be the immutable commit SHA rather than a base-SHA-plus-dirty-fingerprint.
- *
- * Soundness contract (enforced by the caller sequence, asserted here where
- * possible): before committing, currentCodeSha() must equal the sidecar's
- * dirty codeSha (proving zero drift since generation); the commit snapshots
- * that same content; after committing, the tree must be CLEAN so the new
- * SHA names identical bytes. This function refuses to rebind FROM a value
- * that does not match the sidecar, TO a non-clean identity, or when the
- * candidates payload no longer hashes to the sidecar's payloadSha256.
- */
-export function rebindCodeSha(input: {
-  unattended: boolean;
-  sidecar: ApplySidecar;
-  reportCandidates: NormalizedCandidate[];
-  fromCodeSha: string;
-  toCodeSha: string;
-  now: Date;
-}): { ok: true; sidecar: ApplySidecar } | { ok: false; reason: string } {
-  if (input.unattended) return { ok: false, reason: 'unattended' };
-  if (input.sidecar.codeSha !== input.fromCodeSha) {
-    return { ok: false, reason: `from_mismatch: sidecar has ${input.sidecar.codeSha}` };
-  }
-  if (input.toCodeSha.includes('-dirty-')) {
-    return { ok: false, reason: 'target_not_clean: rebind target must be an immutable commit SHA' };
-  }
-  if (sha256Of(JSON.stringify(input.reportCandidates)) !== input.sidecar.payloadSha256) {
-    return { ok: false, reason: 'payload_hash: candidates no longer match the sidecar' };
-  }
-  return {
-    ok: true,
-    sidecar: {
-      ...input.sidecar,
-      codeSha: input.toCodeSha,
-      rebindHistory: [
-        ...(input.sidecar.rebindHistory ?? []),
-        { from: input.fromCodeSha, to: input.toCodeSha, at: input.now.toISOString() },
-      ],
-    },
-  };
-}
+// NOTE (T0 review of f5d1579, Codex H2 + DeepSeek TOCTOU, both confirmed):
+// a `rebindCodeSha` primitive briefly lived here to re-point a dirty-tree
+// codeSha at a later clean commit. It could not PROVE byte identity between
+// the generation tree and the rebind target (any clean-A sidecar could be
+// rebound to unrelated clean-B), so it was removed the same night. The
+// sound procedure is: commit first, then RE-RUN the census at the clean
+// SHA so the sidecar is natively bound to immutable code. Do not
+// reintroduce a rebind without a persisted, verifiable content-tree digest
+// captured at generation time.
 
 export interface CuratedCandidate {
   id: string;

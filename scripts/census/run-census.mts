@@ -13,8 +13,6 @@
  * and refuses curated rows whose provenance is not in the reviewed report.
  * --mock uses local fixtures — the only mode permitted unattended.
  */
-import { execSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { config as dotenv } from 'dotenv';
@@ -22,10 +20,10 @@ import { refuseIfUnattended } from '../loop-guard.mjs';
 import {
   applyCurated,
   checkApplyPreconditions,
-  rebindCodeSha,
   type ApplySidecar,
   type CuratedCandidate,
 } from './apply';
+import { currentCodeSha } from './codeIdentity';
 import { runCensus } from './runner';
 import type { Transport } from './types';
 
@@ -44,45 +42,8 @@ function flagValues(name: string): string[] {
 
 const OUT_DIR = 'scripts/census/out';
 
-/**
- * Code identity for checkpoints and the apply sidecar. HEAD alone is blind
- * to UNCOMMITTED edits of the generation logic (santa round-3): a tweaked
- * tiles.ts or dedupe.ts would pass every code_sha/code_drift check while
- * silently changing resume arithmetic and filtering. Dirt in the
- * generation-relevant paths therefore taints the SHA with a CONTENT hash
- * of those files — not a bare '-dirty' marker, which would let two
- * different uncommitted states masquerade as the same code (Codex
- * round-3). Identical uncommitted state still matches itself, so
- * iterating without committing works; any edit changes the identity.
- */
-function currentCodeSha(): string {
-  const head = execSync('git rev-parse HEAD').toString().trim();
-  // -uall is load-bearing (Codex confirm pass): without it an UNTRACKED
-  // directory prints as one `?? scripts/census/` line, readFileSync on the
-  // directory throws, and the "content hash" collapses to a constant —
-  // exactly the fail-open this function exists to prevent.
-  const dirtyList = execSync(
-    'git status --porcelain -uall -- scripts/census src/lib/catalogServer.ts',
-  )
-    .toString()
-    .trim();
-  if (!dirtyList) return head;
-  const hash = createHash('sha256');
-  const files = dirtyList
-    .split('\n')
-    .map((line) => line.slice(3).trim())
-    .filter((p) => p && !p.startsWith('scripts/census/out'))
-    .sort();
-  for (const f of files) {
-    hash.update(f);
-    try {
-      hash.update(fs.readFileSync(f));
-    } catch {
-      hash.update('<deleted>');
-    }
-  }
-  return `${head}-dirty-${hash.digest('hex').slice(0, 12)}`;
-}
+// currentCodeSha lives in ./codeIdentity (extracted + first-line parsing bug
+// fixed after the Codex T0 review of f5d1579 — see that module's header).
 const boroughs = flagValues('--borough').map((b) => b.toLowerCase());
 const sources = (flagValue('--sources') ?? 'google,osm,sla,url-seed,user-submission')
   .split(',')
@@ -95,39 +56,6 @@ const reportOnly = args.includes('--report');
 const applyFile = flagValue('--apply');
 
 async function main(): Promise<void> {
-  if (args.includes('--rebind-code-sha')) {
-    // Attended-only: rewrite the sidecar/report code identity to the current
-    // CLEAN commit after the operator narrowly committed byte-identical
-    // generation code (see rebindCodeSha in apply.ts for the contract).
-    refuseIfUnattended('census code-sha rebind');
-    const runId = flagValue('--run');
-    const fromSha = flagValue('--from-code-sha');
-    if (!runId || !fromSha) {
-      console.error('--rebind-code-sha requires --run <runId> --from-code-sha <sha>');
-      process.exit(2);
-    }
-    const runDir = join(OUT_DIR, runId);
-    const sidecar = JSON.parse(fs.readFileSync(join(runDir, 'apply-sidecar.json'), 'utf8')) as ApplySidecar;
-    const report = JSON.parse(fs.readFileSync(join(runDir, 'report.json'), 'utf8'));
-    const res = rebindCodeSha({
-      unattended: process.env.LOOP_UNATTENDED === '1',
-      sidecar,
-      reportCandidates: report.candidates,
-      fromCodeSha: fromSha,
-      toCodeSha: currentCodeSha(),
-      now: new Date(),
-    });
-    if (!res.ok) {
-      console.error(`rebind REFUSED: ${res.reason}`);
-      process.exit(3);
-    }
-    fs.writeFileSync(join(runDir, 'apply-sidecar.json'), JSON.stringify(res.sidecar, null, 2));
-    report.codeSha = res.sidecar.codeSha;
-    fs.writeFileSync(join(runDir, 'report.json'), JSON.stringify(report, null, 2));
-    console.log(`rebound ${runId}: ${fromSha} -> ${res.sidecar.codeSha}`);
-    return;
-  }
-
   if (applyFile) {
     await runApply(applyFile);
     return;

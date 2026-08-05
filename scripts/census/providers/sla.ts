@@ -54,7 +54,14 @@ export function slaAdapter(): ProviderAdapter {
     units: (borough: string) => [borough.toLowerCase()],
     async fetchUnit(unit, cursor, ctx: CensusContext): Promise<ProviderResult> {
       const offset = cursor ? Number(cursor) : 0;
-      const county = BOROUGH_TO_COUNTY[unit] ?? unit;
+      const county = BOROUGH_TO_COUNTY[unit];
+      // Fail fast on an unmapped borough instead of interpolating the raw
+      // CLI value into a quoted SoQL literal (T0 review of f5d1579: Fable M
+      // + Codex M — URL-encoding does not escape SoQL syntax, and a
+      // lowercase fallback would silently match zero rows anyway).
+      if (!county) {
+        throw new Error(`sla adapter: unknown borough '${unit}' — add it to BOROUGH_TO_COUNTY`);
+      }
       const where = `premisescounty='${county}' AND description in(${SLA_BAR_CLASSES.map((c) => `'${c}'`).join(',')})`;
       // $order makes offset paging deterministic — Socrata row order is
       // otherwise unstable across requests and pages could overlap/skip.
