@@ -29,10 +29,11 @@ async function loadContract(): Promise<{ BANNER: string; PORT: number }> {
     // @ts-ignore — untyped .mjs sibling
     './fence-proxy.mjs'
   )) as { BANNER: string; DEFAULT_PORT: number };
-  return {
-    BANNER: mod.BANNER,
-    PORT: Number(process.env.FENCE_PORT) || mod.DEFAULT_PORT,
-  };
+  // Deliberately IGNORES the FENCE_PORT env var: playwright.config.ts pins
+  // its browser/server proxy address to the default port, so honoring
+  // FENCE_PORT here would authenticate a listener the actual test traffic
+  // never uses (round-4 Codex HIGH). FENCE_PORT is a unit-test-only knob.
+  return { BANNER: mod.BANNER, PORT: mod.DEFAULT_PORT };
 }
 
 type ProbeResult = 'fence' | 'other' | 'none';
@@ -50,11 +51,14 @@ function probe(PORT: number, BANNER: string): Promise<ProbeResult> {
       resolve(v);
     };
     const classify = (): ProbeResult => {
-      // Authenticity = the fence's own 403 status line AND its versioned
-      // banner. A connected socket that answered anything else — or nothing —
-      // is an impostor ('other'), NOT absence: spawning over it would just
-      // EADDRINUSE.
-      if (data.startsWith('HTTP/1.1 403') && data.includes(BANNER)) return 'fence';
+      // Authenticity = the fence's own exact 403 status line AND its
+      // versioned banner (trailing space so 'HTTP/1.1 4030' can't prefix-
+      // match). Threat model: accidental squatters and stale fences on
+      // loopback — a deliberate local adversary replaying the banner is out
+      // of scope. A connected socket that answered anything else — or
+      // nothing — is an impostor ('other'), NOT absence: spawning over it
+      // would just EADDRINUSE.
+      if (data.startsWith('HTTP/1.1 403 ') && data.includes(BANNER)) return 'fence';
       return connected ? 'other' : 'none';
     };
     sock.on('connect', () => {
@@ -91,10 +95,19 @@ async function assertReusedServerFenced(): Promise<void> {
     res = await fetch('http://localhost:3000/api/health', {
       cache: 'no-store',
       redirect: 'manual', // a redirecting impostor must not steer this fetch
-      signal: AbortSignal.timeout(10_000), // a wedged server must not hang setup
+      // Generous: a reused dev server may cold-compile /api/health.
+      signal: AbortSignal.timeout(30_000),
     });
-  } catch {
-    return; // No server running — Playwright will spawn one WITH the env.
+  } catch (e) {
+    // ONLY connection-refused means "no server" (Playwright will spawn one
+    // WITH the env). A timeout/reset from a LIVE server is indeterminate and
+    // must fail CLOSED, not silently pass (round-4 Codex MEDIUM).
+    const code = (e as { cause?: { code?: string } })?.cause?.code;
+    if (code === 'ECONNREFUSED') return;
+    throw new Error(
+      `reused dev server on :3000 did not answer the fence canary (${code ?? String(e)}) — ` +
+        'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
+    );
   }
   try {
     const body = (await res.json()) as { supabase?: string };
@@ -118,8 +131,18 @@ export default async function fenceGlobalSetup(): Promise<void> {
     const child = spawn(
       process.execPath,
       [path.join(__dirname, 'fence-proxy.mjs')],
-      { detached: true, stdio: 'ignore', windowsHide: true },
+      {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        // Pin the child to the contract port even if the parent env carries
+        // FENCE_PORT (unit-test knob) — the config's proxy address is fixed.
+        env: { ...process.env, FENCE_PORT: String(PORT) },
+      },
     );
+    // A spawn failure (ENOENT etc.) must abort via the probe loop below, not
+    // crash globalSetup with an unhandled 'error' event.
+    child.on('error', () => {});
     child.unref();
     // Readiness is a retry loop, not one fixed sleep: Windows AV scanning of
     // a fresh node.exe regularly exceeds a single 600ms window.
