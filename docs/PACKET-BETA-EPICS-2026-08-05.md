@@ -19,7 +19,7 @@ physical-device proof. Rows that need those say so.
 |---|---|
 | Built | Implemented on `feat/overnight-2026-07-30` (or earlier main) |
 | Local | Verified by unit + mocked-localhost e2e (both mobile viewports) |
-| Staging | Behaviorally verified against protected Staging. **Only the read-only pass in `STAGING-ACCEPTANCE-2026-08-05.md` exists; NO write-path Staging acceptance has ever run** (continuation §5.4) |
+| Staging | Behaviorally verified against protected Staging. **Only the read-only pass in `STAGING-ACCEPTANCE-2026-08-05.md` exists — a route sweep plus a handful of named render checks, NOT per-feature behavioral verification (santa round-3: Fable) — and NO write-path Staging acceptance has ever run** (continuation §5.4). A "read-only ✔" cell below means the surface rendered in that sweep, nothing stronger |
 | Prod | The code exists in the deployed `6ec5e5d` (existence ≠ verified; no Production behavioral verification has run) |
 
 Deployment reality check: Production and Staging both serve `6ec5e5d`.
@@ -126,6 +126,12 @@ passes.**
 | E5.3 TestFlight dogfood | **blocked as proof surface**: device tests write Production data and cannot see branch code | same ADR; `MOBILE-SHELL-DEVICE-CHECKLIST-2026-08-05.md` |
 | E5.4 Listing | app-store-pack e2e covers legal/marketing routes locally | `app-store-pack.spec.ts` |
 
+States (santa round-3: Codex — the rubric applies to every epic): E5 is a
+release-process epic with no runtime surface of its own — all 8 states are
+n/a HERE because each shipped sub-feature's runtime states are assessed in
+its owning E0–E4 row; the process risks (wrong build target, Production
+writes from device tests) are captured above and in the checklist doc.
+
 ## Operator-reported items — carried OPEN (per goal instruction)
 
 | Item | Web-layer status | What remains OPEN |
@@ -151,7 +157,10 @@ passes.**
 2. Nothing on this branch is deployed; device verification is structurally
    blocked until an ADR-C build or a release.
 3. Crews/invited Night Outs and Close Friends are absent, not partial.
-4. Concurrent/stale states are the systematically uncovered acceptance
-   states across every social row.
+4. **Concurrent** is uncovered across every social row; **stale** is
+   covered only in mocked forms (vibe-cache rollover units, mocked
+   revocation, pin epoch guard) — real cross-device staleness is unproven
+   everywhere (santa round-3: Codex — the earlier phrasing contradicted
+   the per-epic ✓ marks).
 5. Persistent async votes + poll register + lock (E1.4 remainder) are the
    biggest built-feature gap inside an otherwise-shipped epic.

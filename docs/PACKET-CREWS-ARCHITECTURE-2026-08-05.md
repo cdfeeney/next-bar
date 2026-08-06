@@ -54,7 +54,16 @@ crew_invitations      id, crew_id, inviter_id, token_hash, invitee_id NULL
 night_outs            id, crew_id NULL (a crew may be deleted later;
                       the night survives), owner_id, night_key, status
                       ('open'|'locked'|'closed'), winner_suggestion_id
-                      NULL → night_out_suggestions, created_at, closes_at
+                      NULL → night_out_suggestions (soft pointer,
+                      ON DELETE SET NULL), winner_bar_id NULL → bars
+                      (denormalized at lock), locked_tally jsonb NULL
+                      (frozen per-suggestion counts + suggester
+                      identities, written at lock), created_at, closes_at
+night_out_invitations id, night_out_id, inviter_id, token_hash,
+                      invitee_id NULL (bound on accept), status
+                      ('pending'|'accepted'|'revoked'|'expired'),
+                      used_at NULL (single-use burn), created_at,
+                      expires_at (= the night's closes_at)
 night_out_members     night_out_id, user_id, role ('owner'|'member'|'guest'),
                       source ('crew'|'guest_invite'), added_at,
                       removed_at NULL, PK (night_out_id, user_id)
@@ -157,12 +166,13 @@ a test on real Staging (step 10).
 | Table | SELECT | INSERT/UPDATE/DELETE |
 |---|---|---|
 | crews | members only | owner only (rename/delete); creation by any authed user |
-| crew_members | members of that crew | owner only (add/remove); self-remove allowed |
+| crew_members | members of that crew | additions ONLY via the acceptance definer RPC (no direct owner-add policy exists — every join passes through an invitation); owner removes; self-remove allowed |
 | crew_invitations | inviter + bound invitee only — **never listable by token** | inviter creates/revokes; invitee accepts via definer RPC |
 | night_outs | current members (`removed_at IS NULL`) only | owner only |
-| night_out_members | current members of that night | owner (add/remove/guest-invite); self-leave |
+| night_out_members | current members of that night | additions only while `status='open'`, and only via the start-snapshot / guest-accept definer RPCs; removals (owner, self-leave, moderation) in every state |
 | night_out_suggestions | current members | suggester inserts (open only); owner or suggester deletes (open only — lock freezes deletion) |
-| night_out_votes | current members | voter inserts/deletes own vote only |
+| night_out_votes | current members | voter mutates own vote, `status='open'` only — enforced in the policy predicate itself, not just the RPC |
+| night_out_invitations | inviter + bound invitee only — never listable by token | inviter creates/revokes (open only); acceptance via definer RPC CAS |
 
 Cross-cutting rules:
 
@@ -189,11 +199,33 @@ Cross-cutting rules:
   the earlier absolute contradicting close and Block): what lock freezes
   is *member-initiated* mutation — votes, suggestions, suggestion
   deletion, roster ADDITIONS. Privileged, privacy-TIGHTENING definer
-  operations — moderation removals (incl. v1 Block's compound removal)
-  and close's guest termination — are permitted in every state, and the
-  trigger encodes exactly that exception; a rule that blocked removals
-  after lock would leave a blocked member authorized, which is the worse
-  failure.
+  operations — moderation removals (incl. v1 Block's compound removal,
+  which targets every NON-CLOSED night: open AND locked — santa round-3:
+  Codex) and close's guest termination — are permitted in every state;
+  a rule that blocked removals after lock would leave a blocked member
+  authorized, which is the worse failure. Division of labor, stated
+  precisely (santa round-3: Fable): the `night_outs` trigger owns ONLY
+  the status state machine (open→locked→closed, plus a direct
+  open→closed CANCEL transition for abandoned nights, which skips
+  materialization and leaves the winner columns NULL); the per-table
+  freeze/exception rules live in each table's policies and definer RPCs
+  — no triggers on the child tables.
+- **All member mutations flow through definer RPCs; direct DML is denied
+  by policy** (santa round-3: Codex + DeepSeek + Kimi, independently):
+  votes and suggestions carry no direct INSERT/DELETE grant — the RPCs
+  are the only writers, each takes the night row's `FOR UPDATE` lock
+  before mutating, and the `status='open'` predicate additionally lives
+  in the policies as defense in depth. This closes the remaining race: a
+  vote cannot land between the lock transaction's count and its status
+  flip, because every write path serializes on the row lock the lock
+  transaction already holds.
+- **Nothing closes a night except code that runs** (santa round-3: Codex
+  + DeepSeek — time passing flips no row): the authorization predicate
+  treats a night as effectively open only while `status='open' AND
+  now() < closes_at`, so expiry revokes mutation immediately with no
+  scheduler; the first definer-RPC touch after `closes_at` executes the
+  close transition lazily — no cron dependency, and an owner who goes
+  dark cannot strand a night in a writable state.
 - **The recorded outcome is denormalized at lock, in the model** (santa
   round-2: Codex + DeepSeek + Kimi, independently): the lock transaction
   takes `FOR UPDATE` on the `night_outs` row, counts votes under that
@@ -209,10 +241,10 @@ Cross-cutting rules:
   **selects from the CAS UPDATE's RETURNING set** — never from raw
   parameters — so a failed CAS cannot commit a roster row (santa
   round-2: Kimi).
-- **Crew removal does not propagate into open nights** (santa: Kimi —
+- **Crew removal does not propagate into non-closed nights** (santa: Kimi —
   named as the deliberate consequence of the snapshot, with its lever):
   removing someone from a crew leaves them on nights already started;
-  the moderation UI's compound action "remove from crew AND open nights"
+  the moderation UI's compound action "remove from crew AND all non-closed nights" (open and locked)
   is the operator-facing lever, executing per-night roster removals.
 - **Close sets guests' `removed_at` — decided, one behavior** (consult:
   DeepSeek; fork resolved santa round-2: Fable): closing a night stamps
@@ -281,7 +313,7 @@ Owner removes members (crew or night); removed members lose access
 immediately via the `removed_at` predicate (step 7). **In v1, "Block" IS
 the compound removal** (santa: Codex — step 7 names blocked members, so
 the trace must be explicit): the moderation UI's Block action performs
-removal from the crew and all open nights; there is no independent block
+removal from the crew and all non-closed nights (open AND locked — santa round-3: Codex); there is no independent block
 state or table. Guests expire with the night. Ownership transfer,
 reporting, and a durable block system are named non-goals of v1 — each is
 an operator decision if wanted.
@@ -365,3 +397,6 @@ post-close).
    read access to the frozen winner/tally (a growth-friendly artifact,
    also a privacy expansion)? Proposed: full revocation for beta; the
    share-loop question returns with group-night sharing later.
+8. **Who may start a Night Out** (santa round-3: Fable — stated in prose,
+   now listed): v1 default is the crew owner only (contract step 3);
+   relaxing start to any member is an operator decision, not a default.
