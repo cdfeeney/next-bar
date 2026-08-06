@@ -17,7 +17,7 @@
     "secret-scan": "node scripts/secret-scan.mjs",
     "preflight:testflight": "node scripts/preflight-testflight.mjs",
     "check-env": "node scripts/check-env.mjs",
-    "tier-validate": "git ls-files | node ~/.claude/bin/tier-classify.mjs --validate"
+    "tier-validate": "node scripts/tier-validate.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.3",
