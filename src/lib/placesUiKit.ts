@@ -74,9 +74,20 @@ const requested = new Set<string>();
  */
 let billableEvents = 0;
 
-export function markRequested(placeId: string): void {
+/** Billable creations attributed per surface ('result-card', 'bar-lightbox').
+ *  Spend without a surface breakdown cannot tell which migration step is
+ *  responsible for a bill spike, so the meter records where, not just that. */
+const surfaceEvents = new Map<string, number>();
+
+export function markRequested(placeId: string, surface = 'unattributed'): void {
   requested.add(placeId);
   billableEvents += 1;
+  surfaceEvents.set(surface, (surfaceEvents.get(surface) ?? 0) + 1);
+}
+
+/** Billable widget creations recorded against one surface this session. */
+export function billableEventCountForSurface(surface: string): number {
+  return surfaceEvents.get(surface) ?? 0;
 }
 
 export function hasRequested(placeId: string): boolean {
@@ -105,6 +116,56 @@ export function __retainedForTests(): readonly unknown[] {
 export function __resetRequested(): void {
   requested.clear();
   billableEvents = 0;
+  surfaceEvents.clear();
+}
+
+/**
+ * Runtime kill switch (D1): /api/flags decides SERVER-SIDE whether google-live
+ * media may issue requests, so cost can be cut off in ~TTL seconds without a
+ * redeploy — the build-time NEXT_PUBLIC_GOOGLE_MEDIA flag is eligibility, this
+ * is permission. FAIL-CLOSED: any error, timeout, non-200, or malformed body
+ * reads as disabled. A confirmed verdict is cached briefly so a scroll burst
+ * does not turn the flag route into a per-card request; a FAILED check is
+ * never cached, so the next widget creation retries.
+ */
+export const RUNTIME_FLAG_TTL_MS = 60_000;
+export const RUNTIME_FLAG_TIMEOUT_MS = 3_000;
+
+let runtimeFlag: { value: boolean; at: number } | null = null;
+let runtimeFlagInFlight: Promise<boolean> | null = null;
+
+export function isRuntimeGoogleMediaEnabled(): Promise<boolean> {
+  if (runtimeFlag && Date.now() - runtimeFlag.at < RUNTIME_FLAG_TTL_MS) {
+    return Promise.resolve(runtimeFlag.value);
+  }
+  if (runtimeFlagInFlight) return runtimeFlagInFlight;
+  runtimeFlagInFlight = (async () => {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), RUNTIME_FLAG_TIMEOUT_MS);
+      const res = await fetch('/api/flags', { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) return false;
+      const body: unknown = await res.json();
+      const value =
+        body !== null &&
+        typeof body === 'object' &&
+        (body as { googleMedia?: unknown }).googleMedia === true;
+      runtimeFlag = { value, at: Date.now() };
+      return value;
+    } catch {
+      return false;
+    } finally {
+      runtimeFlagInFlight = null;
+    }
+  })();
+  return runtimeFlagInFlight;
+}
+
+/** Test seam only. */
+export function __resetRuntimeFlag(): void {
+  runtimeFlag = null;
+  runtimeFlagInFlight = null;
 }
 
 type MapsGlobal = {

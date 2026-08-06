@@ -6,9 +6,11 @@ import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
 import {
   needsGoogleAttribution,
+  resolveFallbackMedia,
   resolveMedia,
 } from '@/lib/mediaPolicy';
 import GoogleAttribution from '@/components/GoogleAttribution';
+import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { displayHood } from '@/lib/hoodDisplay';
 import ShareButton from '@/components/ShareButton';
@@ -51,6 +53,29 @@ type ResultCardProps = {
  * /rankings owns that flow), and the per-card photo attribution line is
  * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
+/**
+ * What a failed/blocked google-live widget degrades to. Derived through
+ * resolveFallbackMedia — the ONE policy that forces both Google tiers off —
+ * so a failure can only ever show media we own, or nothing (the body row's
+ * glyph tile already carries the bar's identity). It can NEVER emit a
+ * /bar-photos/ legacy URL: that would move the compliance liability into
+ * the failure branch (see GooglePlacePhoto's fallback contract).
+ */
+function CardMediaFallback({ bar }: { bar: Bar }): JSX.Element | null {
+  const fallback = resolveFallbackMedia(bar);
+  if (!('urls' in fallback) || fallback.urls.length === 0) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- owned media
+    <img
+      src={fallback.urls[0]}
+      alt=""
+      data-testid="owned-media-fallback"
+      loading="lazy"
+      className="w-full aspect-[21/9] object-cover"
+    />
+  );
+}
+
 export default function ResultCard({ bar, rank, miles, userTags, showShare, hasSavedVibe }: ResultCardProps) {
   const lead = leadCopy(miles, displayHood(bar.neighborhood));
   const badge = vibeMatchBadge(userTags, bar.tags);
@@ -76,6 +101,20 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
 
   return (
     <article className="bg-surface border border-border rounded-3xl overflow-hidden flex flex-col">
+      {decision.source === 'google-live' ? (
+        // The compliant live path: Google's own widget renders the photo AND
+        // its attribution. Deliberately NOT wrapped in the lightbox button
+        // and NOT covered by the bespoke gradient/name overlay — anything
+        // painted over the widget risks obscuring the attribution Google
+        // requires. Identity text renders in the body row below (the same
+        // row the glyph card uses), and the widget's own lightbox handles
+        // photo expansion (`lightbox-preferred`).
+        <GooglePlacePhotoLazy
+          placeId={decision.placeId}
+          surface="result-card"
+          fallback={<CardMediaFallback bar={bar} />}
+        />
+      ) : null}
       {showHero ? (
         <div className="relative">
           <button

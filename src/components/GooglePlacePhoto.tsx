@@ -5,6 +5,7 @@ import {
   MAX_LOAD_MS,
   WIDGET_LOAD_TIMEOUT_MS,
   isPlacesUiKitConfigured,
+  isRuntimeGoogleMediaEnabled,
   loadPlacesUiKit,
   markRequested,
 } from '@/lib/placesUiKit';
@@ -66,6 +67,11 @@ type GooglePlacePhotoProps = {
   fallback: ReactNode;
   /** Fires once when a billable request is actually issued. For the meter. */
   onBillableRequest?: (placeId: string) => void;
+  /**
+   * Which surface is billing ('result-card', 'bar-lightbox'). Spend without a
+   * surface breakdown cannot say which migration step caused a bill spike.
+   */
+  surface?: string;
 };
 
 type Status = 'pending' | 'ready' | 'unavailable';
@@ -76,6 +82,7 @@ export default function GooglePlacePhoto({
   className,
   fallback,
   onBillableRequest,
+  surface,
 }: GooglePlacePhotoProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const builtRef = useRef(false);
@@ -134,6 +141,18 @@ export default function GooglePlacePhoto({
         if (!cancelled) setStatus('unavailable');
       }, MAX_LOAD_MS);
 
+      // Runtime kill switch (D1) — consulted per widget CREATION, before the
+      // SDK is even loaded, so an operator cut-off stops NEW billable
+      // requests within the flag's TTL even in sessions where the SDK is
+      // already resident. Fail-closed: unreachable flags mean no request.
+      const runtimeOk = await isRuntimeGoogleMediaEnabled();
+      if (cancelled) return;
+      if (!runtimeOk) {
+        window.clearTimeout(timer);
+        setStatus('unavailable');
+        return;
+      }
+
       const ok = await loadPlacesUiKit();
       if (cancelled) return;
       if (!ok) {
@@ -182,7 +201,7 @@ export default function GooglePlacePhoto({
       // (the Fleming's/Dominie's collision 0028 resolves) bill twice;
       // de-duplicating the callback would silently undercount real spend.
       host.appendChild(details);
-      markRequested(placeId);
+      markRequested(placeId, surface);
       onBillableRequestRef.current?.(placeId);
     };
 
@@ -214,10 +233,12 @@ export default function GooglePlacePhoto({
       observer.disconnect();
       window.clearTimeout(timer);
     };
-    // Only placeId and allowed. Re-running this effect can issue a billable
-    // request, so it must never be triggered by unrelated prop churn — see the
-    // stuck-'pending' bug documented on onBillableRequestRef above.
-  }, [placeId, allowed]);
+    // Only placeId, allowed, and surface. Re-running this effect can issue a
+    // billable request, so it must never be triggered by unrelated prop churn
+    // — see the stuck-'pending' bug documented on onBillableRequestRef above.
+    // `surface` is static per callsite; if it ever genuinely changed, the
+    // widget belongs to a different billing context and SHOULD rebuild.
+  }, [placeId, allowed, surface]);
 
   if (status === 'unavailable') return <>{fallback}</>;
 
