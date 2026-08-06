@@ -180,6 +180,14 @@ export default function NightsPage(): JSX.Element {
   }, [bars, readEpoch, auth.status]);
 
   const handleUnshare = useCallback(async (nightKey: string) => {
+    // Confirmation gates the RPC (g-5cb22f54): cancel must issue nothing.
+    if (
+      !window.confirm(
+        'Stop sharing this night? This disables any active link for this night.',
+      )
+    ) {
+      return;
+    }
     setUnshareError(null);
     setUnshareBusy((prev) => new Set(prev).add(nightKey));
     try {
@@ -327,7 +335,12 @@ export default function NightsPage(): JSX.Element {
                           shared night re-opens the sheet with the SAME link —
                           share_night keeps the token. */}
                       {recap ? <ShareNightButton recap={recap} /> : null}
-                      {sharedToken && auth.status === 'signed-in' ? (
+                      {/* Signed-in, EVERY night (g-5cb22f54): the server may
+                          hold an active share this device has no token for
+                          (wipe/reinstall/other device). unshare_night is
+                          owner-scoped and needs only the night date, so the
+                          control must not require a local record. */}
+                      {auth.status === 'signed-in' ? (
                         <button
                           type="button"
                           disabled={unshareBusy.has(nightKey)}

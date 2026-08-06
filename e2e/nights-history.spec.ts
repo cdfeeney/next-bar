@@ -229,6 +229,9 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
 
     await seedSharedNight(page);
     await page.reload();
+    // The Stop-sharing confirmation (g-5cb22f54) — accept it here; the
+    // cancel path has its own spec below.
+    page.on('dialog', (dialog) => dialog.accept());
 
     const row = page.getByTestId('night-row-2026-07-30');
     await expect(row).toContainText('· Shared');
@@ -244,11 +247,13 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
     await expect(stop).toBeVisible();
 
     await stop.click();
-    // Post-success: the RPC fired once and the share state cleared.
+    // Post-success: the RPC fired once and the share state cleared. The
+    // control itself REMAINS — signed-in it no longer requires a local
+    // token record (g-5cb22f54), so a successful revoke doesn't remove it.
     await expect(row).not.toContainText('· Shared');
     await expect(
       row.getByRole('button', { name: 'Stop sharing' }),
-    ).toHaveCount(0);
+    ).toBeEnabled();
     expect(unshareCalls).toBe(1);
     // NEGATIVE: the night itself is untouched — still listed.
     await expect(row).toContainText('loved Attaboy');
@@ -258,6 +263,13 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
     page,
     context,
   }) => {
+    // ~12 serialized interaction steps (two held-open RPCs, three
+    // expand/collapse cycles, two confirm dialogs) — under full-file
+    // parallel load on the webkit project the default 30s budget is
+    // exceeded by contention alone (observed 31.3s wall with every step
+    // green). Double the budget rather than thin the sequence: the
+    // ordering IS the regression being pinned.
+    test.setTimeout(60_000);
     // Self-initializing, byte-matched to the sequence a standalone probe
     // verified deterministic (goto → clear → sign-in stubs → gate route →
     // seed → ONE reload): interleaving with the shared beforeEach's boot
@@ -269,6 +281,9 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
     });
     const ok = await fakeSignedIn(context, page);
     test.skip(!ok, 'no Supabase URL configured');
+    // Accept every Stop-sharing confirmation (g-5cb22f54) — this spec
+    // exercises the in-flight busy states, not the dialog.
+    page.on('dialog', (dialog) => dialog.accept());
 
     // Hold each night's unshare RPC open INDEPENDENTLY (keyed by the
     // p_night the RPC posts) so both flights can overlap — the old
@@ -371,6 +386,112 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
     await expect(rowB).not.toContainText('· Shared');
   });
 
+  test('Stop sharing is reachable for an archived night with NO local token (owner-scoped RPC needs only the date)', async ({
+    page,
+    context,
+  }) => {
+    const ok = await fakeSignedIn(context, page);
+    test.skip(!ok, 'no Supabase URL configured');
+
+    let unshareCalls = 0;
+    const nights: string[] = [];
+    await page.route('**/rest/v1/rpc/unshare_night', (route) => {
+      unshareCalls += 1;
+      nights.push(
+        (route.request().postDataJSON() as { p_night?: string })?.p_night ?? '',
+      );
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: 'true',
+      });
+    });
+
+    // Archived night, NO shared-nights record: the local token store was
+    // wiped (account switch / reinstall) but the server may still hold an
+    // active share for this night.
+    await page.evaluate(
+      ({ archiveKey }) => {
+        window.localStorage.setItem(
+          archiveKey,
+          JSON.stringify([
+            {
+              nightKey: '2026-07-30',
+              visits: [{ barId: 'attaboy', at: '2026-07-31T02:00:00.000Z' }],
+              ratings: [],
+            },
+          ]),
+        );
+      },
+      { archiveKey: ARCHIVE_KEY },
+    );
+    await page.reload();
+
+    const messages: string[] = [];
+    page.on('dialog', (dialog) => {
+      messages.push(dialog.message());
+      return dialog.accept();
+    });
+
+    const row = page.getByTestId('night-row-2026-07-30');
+    await row.getByRole('button', { name: /July 30/ }).click();
+    // Token-less reachability: the control must exist without a record.
+    const stop = row.getByRole('button', { name: 'Stop sharing' });
+    await expect(stop).toBeVisible();
+
+    await stop.click();
+    // The RPC fired once, keyed by the night DATE alone.
+    await expect
+      .poll(() => unshareCalls, { timeout: 10_000 })
+      .toBe(1);
+    expect(nights).toEqual(['2026-07-30']);
+    // The confirmation carried the exact material sentence.
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain(
+      'This disables any active link for this night.',
+    );
+  });
+
+  test('cancelling the Stop-sharing confirmation issues NO RPC', async ({
+    page,
+    context,
+  }) => {
+    const ok = await fakeSignedIn(context, page);
+    test.skip(!ok, 'no Supabase URL configured');
+
+    let unshareCalls = 0;
+    await page.route('**/rest/v1/rpc/unshare_night', (route) => {
+      unshareCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: 'true',
+      });
+    });
+
+    await seedSharedNight(page);
+    await page.reload();
+
+    let sawDialog = false;
+    page.on('dialog', (dialog) => {
+      sawDialog = true;
+      return dialog.dismiss();
+    });
+
+    const row = page.getByTestId('night-row-2026-07-30');
+    await row.getByRole('button', { name: /July 30/ }).click();
+    const stop = row.getByRole('button', { name: 'Stop sharing' });
+    await expect(stop).toBeVisible();
+    await stop.click();
+
+    // The confirmation appeared and was declined — nothing may fire.
+    await expect.poll(() => sawDialog, { timeout: 10_000 }).toBe(true);
+    expect(unshareCalls).toBe(0);
+    // NEGATIVE: the share record survives untouched, still retryable.
+    await expect(row).toContainText('· Shared');
+    await expect(stop).toBeEnabled();
+  });
+
   test('unshare failure keeps the record and says so honestly', async ({
     page,
     context,
@@ -388,6 +509,7 @@ test.describe('/nights — signed-in share state (g-919dae84 crit 7)', () => {
 
     await seedSharedNight(page);
     await page.reload();
+    page.on('dialog', (dialog) => dialog.accept());
 
     const row = page.getByTestId('night-row-2026-07-30');
     await row.getByRole('button', { name: /July 30/ }).click();
