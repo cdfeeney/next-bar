@@ -13,6 +13,7 @@ import {
   clearAccountCache,
   clearResidualAccountCache,
 } from '@/lib/accountCache';
+import { setAccountContentAuthContext } from '@/lib/accountContent.context';
 
 export type AuthState =
   | { status: 'loading'; user: null; session: null }
@@ -54,6 +55,18 @@ let started = false;
 
 function setSharedState(next: AuthState): void {
   sharedState = next;
+  // Publish the account-content auth context IN LOCKSTEP with auth state
+  // (v2.1). This is the single choke point every auth transition passes
+  // through, so the readiness barrier can never observe a stale identity —
+  // publishing from a React effect instead was subject to child-vs-layout
+  // effect ordering and left first-frame reads racing the context.
+  setAccountContentAuthContext(
+    next.status === 'signed-in'
+      ? { kind: 'signed-in', userId: next.user.id }
+      : next.status === 'loading'
+        ? { kind: 'unknown' }
+        : { kind: 'signed-out' },
+  );
   for (const notify of listeners) notify();
 }
 

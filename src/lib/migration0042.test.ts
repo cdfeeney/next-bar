@@ -78,6 +78,44 @@ describe('migration 0042 — conflict and blast-radius guards', () => {
     expect(SQL).toMatch(/before update on public\.account_content_state/);
   });
 
+  test('range-checks the client clock on INSERT and UPDATE (v2.1)', () => {
+    // One guard function covers both statements: a bogus clock (pre-product
+    // or far-future) must never enter the LWW ordering, where it would
+    // permanently win or permanently lose every conflict.
+    expect(LIVE_SQL).toMatch(/create trigger account_content_state_clock\b/);
+    expect(LIVE_SQL).toMatch(
+      /before insert or update on public\.account_content_state/,
+    );
+    // The LWW guard remains its own UPDATE-only trigger.
+    expect(LIVE_SQL).toMatch(/before update on public\.account_content_state/);
+    expect(SQL).toMatch(/timestamptz '2026-01-01T00:00:00Z'/);
+    expect(SQL).toMatch(/now\(\) \+ interval '1 day'/);
+  });
+
+  test('an out-of-range clock RAISES, and the message carries no payload data', () => {
+    const raise = SQL.match(/raise exception '([^']+)'/)?.[1] ?? '';
+    expect(raise).toContain('client_updated_at');
+    expect(raise).not.toContain('payload');
+    // The raise interpolates only the clock and state_key — never new.payload.
+    const raiseBlock = SQL.match(/raise exception[\s\S]*?;/)?.[0] ?? '';
+    expect(raiseBlock).not.toMatch(/new\.payload/);
+  });
+
+  test('a stale but VALID update still returns null (silent LWW loss, no error)', () => {
+    // The LWW guard keeps its return-null contract for in-range stale
+    // writes; only out-of-range clocks raise.
+    expect(SQL).toMatch(/new\.client_updated_at <= old\.client_updated_at then\s*\n\s*return null;/);
+  });
+
+  test('documents the 0037–0041 numbering gap as no-dependency and the shared-token disclosure', () => {
+    expect(SQL).toMatch(/0037[–-]0041/);
+    expect(SQL).toMatch(/depend/i);
+    // Durable shared-token privacy disclosure: shared_nights payloads carry
+    // bearer share tokens server-side; the migration must say so.
+    expect(SQL).toMatch(/bearer/i);
+    expect(SQL).toMatch(/unshare_night/);
+  });
+
   test('does not modify an existing application table', () => {
     const touchedTables = [...LIVE_SQL.matchAll(/(?:create|alter) table(?: if not exists)? public\.(\w+)/g)]
       .map((match) => match[1]);

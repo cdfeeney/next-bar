@@ -1,6 +1,7 @@
 import { nycNightKey } from '@/lib/nightKey';
 import { archiveNight } from '@/lib/nightArchive';
 import { loadRatings } from '@/lib/ratings';
+import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
 import type { BarRating } from '@/types/ratings';
 
 /**
@@ -64,6 +65,8 @@ export function parseStoredNightLog(value: unknown): StoredNightLog | null {
 
 function readLog(): StoredNightLog | null {
   if (typeof window === 'undefined') return null;
+  // Readiness barrier (v2.1): unresolved/foreign state reads as "no log".
+  if (!accountContentReadAllowed()) return null;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;

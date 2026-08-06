@@ -46,11 +46,13 @@ describe('clearAccountCache', () => {
     expect(window.localStorage.getItem(FOLLOWS_KEY)).toBeNull();
   });
 
-  it('removes the shared-nights token record and the night archive — g-919dae84 registered them', () => {
+  it('moves the OWNED shared-nights record and night archive out of live storage — g-919dae84 / v2.1', () => {
     // Shared-night tokens mirror the account's server rows; the archive is
     // 60 nights of whereabouts — both are exactly what must not leak to the
-    // next account on a shared device (santa: Opus, g-919 round 1 — a
-    // future ALL_KEYS edit must not silently drop either).
+    // next account on a shared device (santa: Opus, g-919 round 1). Under
+    // v2.1 the leak-prevention property is unchanged (nothing stays LIVE),
+    // but owned content is PRESERVED in the quarantine rather than deleted —
+    // accountCache.preserve.test.ts pins the preservation half.
     window.localStorage.setItem(
       'next-bar:shared-nights:v1',
       JSON.stringify({ '2026-08-01': { token: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', sharedAt: 'x' } }),
@@ -59,6 +61,7 @@ describe('clearAccountCache', () => {
       'next-bar:night-archive:v1',
       JSON.stringify([{ nightKey: '2026-08-01', visits: [{ barId: 'attaboy', at: 'x' }] }]),
     );
+    window.localStorage.setItem(CONTENT_OWNER_KEY, 'user-a');
     clearAccountCache();
     expect(window.localStorage.getItem('next-bar:shared-nights:v1')).toBeNull();
     expect(window.localStorage.getItem('next-bar:night-archive:v1')).toBeNull();
@@ -90,7 +93,7 @@ describe('clearAccountCache', () => {
     expect(window.localStorage.getItem(PROFILE_MERGED_KEY)).toBeNull();
   });
 
-  it('removes lists, the live log, and their account-sync metadata', () => {
+  it('moves OWNED lists, the live log, and their account-sync metadata out of live storage', () => {
     window.localStorage.setItem(LISTS_KEY, '[]');
     window.localStorage.setItem(NIGHT_LOG_KEY, '{"night":"2026-08-01","visits":[]}');
     window.localStorage.setItem(CONTENT_META_KEY, '{"lists":"2026-08-01T00:00:00Z"}');

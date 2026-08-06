@@ -1,5 +1,6 @@
 import type { NightVisit } from '@/lib/nightLog';
 import type { BarRating } from '@/types/ratings';
+import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
 
 /**
  * nightArchive — the persistent history behind /nights (goal g-919dae84).
@@ -78,6 +79,8 @@ export function parseArchivedNights(value: unknown): ArchivedNight[] | null {
 
 function read(): ArchivedNight[] {
   if (typeof window === 'undefined') return [];
+  // Readiness barrier (v2.1): unresolved/foreign state reads as empty.
+  if (!accountContentReadAllowed()) return [];
   try {
     const raw = window.localStorage.getItem(NIGHT_ARCHIVE_STORAGE_KEY);
     if (!raw) return [];

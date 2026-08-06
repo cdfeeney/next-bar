@@ -4,6 +4,12 @@ import {
   ACCOUNT_CONTENT_OWNER_KEY,
   storageKeyForAccountContent,
 } from '@/lib/accountContent.local';
+import { ACCOUNT_CONTENT_CONFIRMED_KEY } from '@/lib/accountContent.confirmed';
+import {
+  quarantineAccountContent,
+  setPendingForeign,
+  wipeAllQuarantineState,
+} from '@/lib/accountContent.quarantine';
 
 /**
  * Per-account localStorage cache guard (santa-loop round-1 fix).
@@ -75,7 +81,15 @@ const NIGHT_ARCHIVE_KEY = 'next-bar:night-archive:v1';
 const LISTS_KEY = storageKeyForAccountContent('lists');
 const NIGHT_LOG_KEY = storageKeyForAccountContent('night_log');
 
-const ALL_KEYS = [
+/**
+ * v2.1 split: ACCOUNT CONTENT (the four synced domains + their clocks and
+ * owner marker) fails into PRESERVATION — sign-out and residue detection move
+ * it to the multi-account quarantine instead of deleting it. Everything else
+ * (ratings, pairwise, follows, profile, demo flags) keeps the wipe: those
+ * surfaces have their own server truth and merge markers, and deleting the
+ * local cache loses nothing that isn't already account-owned server-side.
+ */
+const NON_CONTENT_KEYS = [
   RATINGS_KEY,
   RATINGS_MERGED_KEY,
   PAIRWISE_KEY,
@@ -85,6 +99,9 @@ const ALL_KEYS = [
   PROFILE_MERGED_KEY,
   DEMO_SEED_FLAG_KEY,
   DEMO_SEED_IDS_KEY,
+] as const;
+
+const CONTENT_KEYS = [
   SHARED_NIGHTS_KEY,
   NIGHT_ARCHIVE_KEY,
   LISTS_KEY,
@@ -92,6 +109,8 @@ const ALL_KEYS = [
   ACCOUNT_CONTENT_META_KEY,
   ACCOUNT_CONTENT_OWNER_KEY,
 ] as const;
+
+const ALL_KEYS = [...NON_CONTENT_KEYS, ...CONTENT_KEYS] as const;
 
 /**
  * Monotonic wipe counter. An async hydrate captures the epoch when it
@@ -109,7 +128,28 @@ export function getCacheEpoch(): number {
 export function clearAccountCache(): void {
   if (typeof window === 'undefined') return;
   cacheEpoch += 1;
-  for (const key of ALL_KEYS) {
+  // Account content fails into preservation (v2.1): owned content moves to
+  // the quarantine through the crash-safe journal (owner marker removed
+  // LAST). Content with no owner marker is genuinely anonymous device data,
+  // not account residue — it survives, exactly as pre-sign-in data always
+  // has. A failed move (quota) leaves everything live; the readiness barrier
+  // keeps it unrendered and the next load retries.
+  try {
+    const owner = window.localStorage.getItem(ACCOUNT_CONTENT_OWNER_KEY);
+    if (owner !== null) {
+      const moved = quarantineAccountContent(owner);
+      // Flag the quarantined residue for resolution. The owner returning
+      // auto-clears this (barrier's owner-return branch), so it only ever
+      // surfaces to a DIFFERENT next user — who gets the one-tap
+      // Keep-it-for-them / Delete-permanently decision. Setting it on every
+      // owner-marked move (voluntary, involuntary, foreign) is what makes
+      // the block deterministic across effect-ordering races.
+      if (moved.ok) setPendingForeign(owner);
+    }
+  } catch {
+    // Preservation failure must never cascade into the non-content wipe.
+  }
+  for (const key of NON_CONTENT_KEYS) {
     try {
       window.localStorage.removeItem(key);
     } catch {
@@ -128,6 +168,36 @@ export function clearAccountCache(): void {
   // reaches key-filtered list/night consumers. AccountContentSync deliberately
   // ignores key=null so this UI refresh can never be mistaken for four user
   // deletions and pushed back to the server.
+  try {
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+  } catch {
+    try {
+      window.dispatchEvent(new Event('storage'));
+    } catch {
+      // Non-fatal: consumers refresh on their next mount.
+    }
+  }
+}
+
+/**
+ * ACCOUNT DELETION ONLY (v2.1): the account itself is gone, so every
+ * preservation structure goes with it — live content, v1 clocks, confirmed
+ * metadata, quarantine envelopes, raw-invalid captures, conflict and
+ * resolution state, and the journal. Unconditional by spec; the ordinary
+ * sign-out path must NEVER call this.
+ */
+export function destroyAllAccountContentState(): void {
+  if (typeof window === 'undefined') return;
+  cacheEpoch += 1;
+  for (const key of [...ALL_KEYS, ACCOUNT_CONTENT_CONFIRMED_KEY]) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // Deletion path: best-effort per key, attempt every one.
+    }
+  }
+  wipeAllQuarantineState();
+  notifyProfileChanged();
   try {
     window.dispatchEvent(new StorageEvent('storage', { key: null }));
   } catch {
@@ -197,7 +267,21 @@ export function guardAgainstForeignCache(currentUserId: string): boolean {
     const isForeign = owners.some(
       (owner) => owner !== null && owner !== currentUserId,
     );
-    if (isForeign) clearAccountCache();
+    if (isForeign) {
+      // v2.1: a foreign CONTENT owner is not merely wiped — the residue is
+      // preserved under its owner and flagged pending-foreign, so account-
+      // content features stay blocked for the current user until they choose
+      // Keep-it-for-them or Delete-permanently (same semantics as the
+      // readiness barrier; whichever runs first wins, both are idempotent).
+      const contentOwner = window.localStorage.getItem(
+        ACCOUNT_CONTENT_OWNER_KEY,
+      );
+      if (contentOwner !== null && contentOwner !== currentUserId) {
+        const moved = quarantineAccountContent(contentOwner);
+        if (moved.ok) setPendingForeign(contentOwner);
+      }
+      clearAccountCache();
+    }
     return isForeign;
   } catch {
     return false;

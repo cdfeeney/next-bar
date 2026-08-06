@@ -9,6 +9,8 @@
  * writes it through to the signed-in account for reinstall/device recovery.
  */
 
+import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
+
 export type BarList = {
   id: string;
   name: string;
@@ -84,6 +86,9 @@ function newId(): string {
 
 export function loadLists(): BarList[] {
   if (typeof window === 'undefined') return [];
+  // Readiness barrier (v2.1): before auth resolves, or while foreign residue
+  // awaits resolution, account content renders EMPTY — never someone else's.
+  if (!accountContentReadAllowed()) return [];
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return [];

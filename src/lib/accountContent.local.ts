@@ -14,6 +14,9 @@ import {
   parseSharedNightStore,
   type SharedNightStore,
 } from '@/lib/sharedNightsLocal';
+import { contentIdentity } from '@/lib/accountContent.digest';
+import { readConfirmedAccountContentMeta } from '@/lib/accountContent.confirmed';
+import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
 
 export const ACCOUNT_CONTENT_OWNER_KEY = 'next-bar:account-content:owner:v1';
 export const ACCOUNT_CONTENT_META_KEY = 'next-bar:account-content:meta:v1';
@@ -169,6 +172,9 @@ export function readLocalAccountContent(
   key: AccountContentKey,
 ): LocalAccountContentRead {
   if (typeof window === 'undefined') return { status: 'absent' };
+  // Readiness barrier (v2.1): unresolved/foreign state reads as absent. The
+  // preservation machinery itself reads under an explicit bypass.
+  if (!accountContentReadAllowed()) return { status: 'absent' };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEYS[key]);
     const meta = readMeta()[key];
@@ -194,6 +200,24 @@ export function stampLocalAccountContent(
   updatedAt = new Date().toISOString(),
 ): LocalAccountContentRead {
   if (!validIso(updatedAt)) return { status: 'invalid' };
+  // Digest-idempotent (v2.1): a storage event whose data digests equal to the
+  // recorded server confirmation is an ECHO (cross-tab hydration, wholesale
+  // refresh), not a user mutation. Bumping the clock here is what caused
+  // cross-tab re-upload loops and clock inflation — recognize and skip.
+  // Runtime-only import use keeps the local⇄confirmed module cycle inert.
+  const current = readLocalAccountContent(key);
+  if (current.status === 'present') {
+    const confirmed = readConfirmedAccountContentMeta(key);
+    if (confirmed !== null) {
+      const id = contentIdentity(current.value.data);
+      if (
+        id.digest === confirmed.digest &&
+        id.byteLength === confirmed.byteLength
+      ) {
+        return current;
+      }
+    }
+  }
   const previous = readMeta()[key];
   const nextUpdatedAt =
     previous && Date.parse(updatedAt) <= Date.parse(previous)
@@ -227,6 +251,43 @@ export function writeLocalAccountContent(
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * EXPLICIT NAMED DISCARD ONLY (v2.1 voluntary sign-out): drop the live value
+ * and the v1 clock for the named keys so they read `absent` — the server
+ * copy is untouched (no tombstone is created, because the clock goes too).
+ * Callers must have shown the user a confirmation NAMING these domains.
+ */
+export function discardLocalAccountContent(
+  keys: readonly AccountContentKey[],
+): void {
+  if (typeof window === 'undefined') return;
+  for (const key of keys) {
+    try {
+      window.localStorage.removeItem(STORAGE_KEYS[key]);
+    } catch {
+      // Attempt every key regardless.
+    }
+  }
+  try {
+    const meta = { ...readMeta() };
+    for (const key of keys) delete meta[key];
+    if (Object.keys(meta).length === 0) {
+      window.localStorage.removeItem(ACCOUNT_CONTENT_META_KEY);
+    } else {
+      window.localStorage.setItem(ACCOUNT_CONTENT_META_KEY, JSON.stringify(meta));
+    }
+  } catch {
+    // A stale clock alone cannot resurrect the removed values.
+  }
+  for (const key of keys) {
+    try {
+      window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEYS[key] }));
+    } catch {
+      // Non-fatal; consumers refresh on next mount.
+    }
   }
 }
 

@@ -12,7 +12,8 @@ import ClaimHandle from '@/components/ClaimHandle';
 import DisplayNameEditor from '@/components/DisplayNameEditor';
 import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
 import { fetchOutgoingRequests } from '@/lib/follows.server';
-import { getCacheEpoch } from '@/lib/accountCache';
+import { destroyAllAccountContentState, getCacheEpoch } from '@/lib/accountCache';
+import SignOutButton from '@/components/SignOutButton';
 import { requestAccountDeletion } from '@/lib/accountDeletion';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
@@ -220,6 +221,12 @@ export default function SettingsPage(): JSX.Element {
       // reasons other than the just-deleted account, this is the only trail.
       console.error('[settings] sign-out after deletion failed:', signOutError);
     } finally {
+      // The account no longer exists, so every preservation structure goes
+      // too (v2.1, unconditional by spec): live content, confirmed metadata,
+      // quarantine envelopes, raw/conflict captures, resolution state, and
+      // the journal. Sign-out's quarantine move above is deliberately
+      // superseded by this wipe.
+      destroyAllAccountContentState();
       window.location.assign('/');
     }
   };
@@ -325,13 +332,9 @@ export default function SettingsPage(): JSX.Element {
                       <p className="text-muted text-sm mt-1 truncate">@{handle}</p>
                     ) : null}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => auth.signOut()}
-                    className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
-                  >
-                    Sign out
-                  </button>
+                  {/* v2.1 preservation gate: unsynced content turns sign-out
+                      into an explicit Retry / named-Discard / Cancel choice. */}
+                  <SignOutButton />
                 </div>
                 {handleKnown && handle === null ? (
                   <div className="pt-3 border-t border-border space-y-3">

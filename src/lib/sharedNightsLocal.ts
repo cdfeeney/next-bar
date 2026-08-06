@@ -1,4 +1,5 @@
 import { isShareToken } from '@/lib/nights.server';
+import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
 
 /**
  * sharedNightsLocal — the device's record of WHICH nights this account has
@@ -47,6 +48,8 @@ export function parseSharedNightStore(value: unknown): SharedNightStore | null {
 
 function read(): SharedNightStore {
   if (typeof window === 'undefined') return {};
+  // Readiness barrier (v2.1): unresolved/foreign state reads as empty.
+  if (!accountContentReadAllowed()) return {};
   try {
     const raw = window.localStorage.getItem(SHARED_NIGHTS_STORAGE_KEY);
     if (!raw) return {};
