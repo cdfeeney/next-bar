@@ -45,22 +45,24 @@ arise for that surface.
 | E0.3 nightPhase | ✔ | ✔ | — | ✔ (pre-fork shape) | rollover/override units. **Scope note (santa: Fable):** THIS branch has a single 6am rollover (`socialNight.ts`, `NIGHT_ROLLOVER_HOUR = 6`); the 5am-personal/6am-nightKey split exists ONLY in the `release/beta1-rc` worktree, whose composition reverted the pin commit's unification (continuation §2). Nothing on this branch rolls at 5am |
 | E0.4 DESIGN-SYSTEM | ✔ | n/a (doc) | n/a | n/a | file present |
 
-States: happy/empty/error ✓ (units); offline/unauthorized/stale/concurrent
-n/a (pure functions). No gaps beyond deployment.
+States: happy/empty/error ✓ (units); loading/offline/unauthorized/stale/
+concurrent n/a (pure functions — no async, no auth, no shared state). No
+gaps beyond deployment.
 
 ## E1 — Plan a night with friends (Partiful register)
 
 | Sub | Built | Local | Staging | Prod | Evidence |
 |---|---|---|---|---|---|
-| E1.1 Night object create (date+invitees) | ✘ (group Night Out object absent; personal nightLog exists) | — | — | — | matrix "Crews/Invited Night Outs: NOT built" |
+| E1.1 Night object create (date+invitees) | ✘ (group Night Out object absent; personal nightLog exists) | — | — | — | matrix rows "Crews (reusable)" + "Invited Night Outs", each NOT built |
 | E1.2 Invite link + OG, no account | partial: `/join` is a **zero-server-state** link (not a night-scoped invite) | ✔ for `/join` | — | `/join` in 6ec5e5d ✔ | matrix; handoff block B |
 | E1.3 RSVP "I'm in" | ✔ (bar_rsvps 0012–0014) | ✔ | ✘ write-path never run | ✔ | `suggestions.spec.ts` rsvp paths; `rsvps.server.test.ts` |
 | E1.4 nominate→vote→lock | partial: suggestions votable (#28); **persistent async server votes, poll register, LOCK step remain unbuilt** | ✔ for shipped part | ✘ | shipped part ✔ | matrix Consensus/Suggestions rows. **Precision (santa: Fable):** "backing" a suggestion IS persistent server-side today (`suggest_bar`, capped, counts only) — what's absent is voting on someone else's pick without spending the cap, voter-name registers, and lock. **The remainder is expected to land AS the Crews night-vote/lock design** (`PACKET-CREWS-ARCHITECTURE-2026-08-05.md`), not as a widening of the followed-circle surface (santa: GLM) |
 | E1.5 planning home phase | ✔ (chip only; no plan card — QA5-S1 keeps Plan Night Out on Friends tab) | ✔ | — | chip ✔ | `home-phase.spec.ts`; page.tsx comments |
 
-States (shipped subset): happy/empty/error/mobile ✓; unauthorized ✓ (suggestion
-caps/declines); **offline ✗, stale ✗, concurrent ✗ everywhere; real
-multi-account board = attended gap**. The invited-group version of this epic
+States (shipped subset): happy/empty/loading/error ✓; unauthorized ✓
+(suggestion caps/declines); **offline ✗, stale ✗, concurrent ✗ everywhere;
+real multi-account board = attended gap**. (Both mobile viewports run every
+cited spec — viewport is the test matrix, not one of the 8 states.) The invited-group version of this epic
 is **NOT built** — that is the Crews packet's subject, deliberately not
 duplicated here (`docs/PACKET-CREWS-ARCHITECTURE-2026-08-05.md`).
 
@@ -105,10 +107,10 @@ rollover refresh, useNightRefresh); unauthorized n/a; concurrent ✗
 | E4.4 `/u/[handle]/night/[nightKey]` public page | ✔ (0035 window-bound; Phase A honest signed-out) | ✔ | ✘ revoked-link on real Staging | route ✔ | `night-page.spec.ts`, `profile-anon.spec.ts`, `migration0035.test.ts` |
 | E4.5 recap phase | ✔ | ✔ | — | ✘ post-fork | `recap-home.spec.ts` |
 
-States: happy/empty/loading/error/mobile ✓; unauthorized ✓ (viewer paths);
-stale ✓ (revoked mocked); **concurrent ✗ (two-device night-write
-convergence); revoked/expired on real Staging ✗** — both named attended gaps
-in the matrix. **Cross-reference, not counted:** sibling branch
+States: happy/empty/loading/error ✓; unauthorized ✓ (viewer paths);
+offline partially ✓ (fence-proven no-egress render only); stale ✓ (revoked
+mocked); **concurrent ✗ (two-device night-write convergence); revoked/
+expired on real Staging ✗** — both named attended gaps in the matrix. **Cross-reference, not counted:** sibling branch
 `feat/beta1-account-sync@f40783a` (worktree `nb-account-sync`) implements
 account persistence for Want-to-Go/custom lists, night history, and
 share-management records with migration `0042` — **unreviewed, unapplied,

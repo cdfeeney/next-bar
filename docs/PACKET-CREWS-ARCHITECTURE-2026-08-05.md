@@ -101,10 +101,14 @@ Design commitments the model encodes:
 ## Invitations and revocation
 
 - Crew invitations are **account-bound on acceptance**: the link carries a
-  single-use token (stored as `token_hash` — the raw token appears only in
-  the sent link, matching the bearer-hygiene pattern the shared-nights
-  review established); accepting while signed in binds `invitee_id` and
-  flips status. Accepting signed-out routes through `/auth` with the
+  single-use token stored as `token_hash`. **This is a deliberate
+  strengthening over, not a continuation of, the shared-nights precedent**
+  (santa round-2: Fable — 0016 stores its `share_token` in plaintext with
+  a unique index; no `token_hash` exists anywhere in the repo today): the
+  shared-nights pattern contributes only "unguessable high-entropy bearer,
+  no enumeration path"; hashing at rest is new here because crew tokens
+  gate membership, not one page. Accepting while signed in binds
+  `invitee_id` and flips status. Accepting signed-out routes through `/auth` with the
   validated same-origin `?next=` return path — **that return path is Phase B
   scope (`g-c8b26779` item 4); this packet depends on it and must not
   re-implement it.**
@@ -157,7 +161,7 @@ a test on real Staging (step 10).
 | crew_invitations | inviter + bound invitee only — **never listable by token** | inviter creates/revokes; invitee accepts via definer RPC |
 | night_outs | current members (`removed_at IS NULL`) only | owner only |
 | night_out_members | current members of that night | owner (add/remove/guest-invite); self-leave |
-| night_out_suggestions | current members | suggester inserts; owner or suggester deletes |
+| night_out_suggestions | current members | suggester inserts (open only); owner or suggester deletes (open only — lock freezes deletion) |
 | night_out_votes | current members | voter inserts/deletes own vote only |
 
 Cross-cutting rules:
@@ -180,22 +184,44 @@ Cross-cutting rules:
 - **Lifecycle enforcement lives in the authorization layer, not app code**
   (santa: Kimi): the `open→locked→closed` machine is enforced by (a) a DB
   trigger refusing skips and regressions and (b) `night_outs.status`
-  checks inside the mutation policies / definer RPCs themselves — so
-  vote-after-lock and roster-edit-after-lock are impossible for ANY code
-  path, not merely unimplemented in the current client. Locking also
-  freezes suggestion DELETION, and `winner_suggestion_id` carries
-  `ON DELETE SET NULL` as belt-and-braces; the winner and final tallies
-  are **materialized at lock** so later roster changes or retention purges
-  can never rewrite the recorded outcome (santa: DeepSeek).
+  checks inside the mutation policies / definer RPCs themselves. **The
+  freeze is precisely scoped** (santa round-2: Codex + DeepSeek caught
+  the earlier absolute contradicting close and Block): what lock freezes
+  is *member-initiated* mutation — votes, suggestions, suggestion
+  deletion, roster ADDITIONS. Privileged, privacy-TIGHTENING definer
+  operations — moderation removals (incl. v1 Block's compound removal)
+  and close's guest termination — are permitted in every state, and the
+  trigger encodes exactly that exception; a rule that blocked removals
+  after lock would leave a blocked member authorized, which is the worse
+  failure.
+- **The recorded outcome is denormalized at lock, in the model** (santa
+  round-2: Codex + DeepSeek + Kimi, independently): the lock transaction
+  takes `FOR UPDATE` on the `night_outs` row, counts votes under that
+  lock, and writes `winner_bar_id` (plain bar reference) and
+  `locked_tally` (frozen per-suggestion counts + suggester identities)
+  onto `night_outs` — THEN flips status. Every mutating RPC's status
+  predicate is evaluated under the same row lock, closing the
+  vote-lands-during-lock race (Kimi's highest residual risk).
+  `winner_suggestion_id` stays as a soft pointer with `ON DELETE SET
+  NULL`; retention may purge suggestion rows without erasing what was
+  decided, and a NULLed pointer leaks nothing because the outcome lives
+  in the denormalized columns. The acceptance CTE's roster INSERT
+  **selects from the CAS UPDATE's RETURNING set** — never from raw
+  parameters — so a failed CAS cannot commit a roster row (santa
+  round-2: Kimi).
 - **Crew removal does not propagate into open nights** (santa: Kimi —
   named as the deliberate consequence of the snapshot, with its lever):
   removing someone from a crew leaves them on nights already started;
   the moderation UI's compound action "remove from crew AND open nights"
   is the operator-facing lever, executing per-night roster removals.
-- **Close sets guests' `removed_at`** (consult: DeepSeek): closing a night
-  terminates `source='guest_invite'` rows (or the RLS predicate carries
-  `source='crew' OR night_outs.status='open'`), so a later re-open cannot
-  silently re-admit expired guests.
+- **Close sets guests' `removed_at` — decided, one behavior** (consult:
+  DeepSeek; fork resolved santa round-2: Fable): closing a night stamps
+  `removed_at` on every `source='guest_invite'` row, which fully revokes
+  guest access — a later re-open cannot silently re-admit expired guests,
+  and a former guest reads nothing after close. Whether guests should
+  instead retain read access to the closed night's OUTCOME (the frozen
+  winner/tally, nothing live) is a product call — promoted to operator
+  question 7; the v1 default is full revocation.
 - **Followers get nothing (step 6):** no policy may reference `follows` —
   the deliberate inversion of `get_circle_suggestions`. A follower who is
   not a member sees zero rows from all seven tables.
@@ -274,7 +300,9 @@ only defines *what* may notify:
   `push_subscriptions` rows of **current** members only — the fan-out query
   carries the same `removed_at IS NULL` predicate as the RLS policies, or
   removed members keep receiving the night's activity through the side
-  channel the policies just closed.
+  channel the policies just closed. The membership predicate is written
+  ONCE as a SQL function both the policies and the fan-out call — copied
+  predicates drift (santa round-2: Kimi).
 - **The channel is OFF today and this packet does not turn it on** (santa:
   GLM): push is preflight-disabled and native APNs is absent — the policy
   above activates only after the platform packet's APNs work
@@ -319,12 +347,21 @@ post-close).
    night-scoped transitively — there is no cross-night collision; santa:
    Kimi's contrary reading checked and refuted.) Alternative: single-choice
    via a `(night_out_id, voter_id)` unique key. Proposed: approval for
-   beta. **Tie rule at lock** must be stated either way — proposed:
-   earliest-created suggestion wins ties; the owner may pick any
-   suggestion manually before locking.
+   beta. **Tie rule at lock** must be stated either way. Note (santa
+   round-2: Kimi): earliest-created tie-break + the 3-cap incentivizes
+   dumping low-effort suggestions at night creation to bank priority —
+   so the options are (a) earliest-created (simple, gameable), (b)
+   random seeded by night id (ungameable, verifiable), (c) owner picks
+   manually from the tied set before locking. Proposed: (c) with (b) as
+   the no-show fallback.
 6. **Follows↔Crew bridge** (santa: Kimi, strategic): the design gives a
    follower no route into a crew except an out-of-band invite. Leaving
    the two graphs unbridged is a conscious product decision — decide
    whether crew invite surfaces suggest from the follows graph, or the
    surfaces stay fully separate for beta (proposed: separate; revisit
    after real usage).
+7. **Guest access to a closed night's outcome** (santa round-2: Fable):
+   v1 fully revokes guests at close. Should former guests instead keep
+   read access to the frozen winner/tally (a growth-friendly artifact,
+   also a privacy expansion)? Proposed: full revocation for beta; the
+   share-loop question returns with group-night sharing later.
