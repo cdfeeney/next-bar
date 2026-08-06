@@ -261,7 +261,7 @@ export default function OnboardingPage(): JSX.Element {
                 </p>
               ) : null}
 
-              <div className="flex items-center gap-4 flex-wrap">
+              <div className="grid grid-cols-2 gap-3 items-stretch">
                 <button
                   type="submit"
                   disabled={
@@ -269,7 +269,7 @@ export default function OnboardingPage(): JSX.Element {
                     !isValidHandle(desired) ||
                     !isValidDisplayName(name)
                   }
-                  className="bg-accent text-bg font-display text-sm px-6 py-2.5 rounded-full min-h-[56px] touch-manipulation disabled:opacity-50"
+                  className="w-full bg-accent text-bg font-display text-sm px-4 py-2.5 rounded-full min-h-[56px] touch-manipulation disabled:opacity-50 flex items-center justify-center text-center"
                 >
                   {status.kind === 'submitting' ? 'Setting up…' : "Let's go →"}
                 </button>
@@ -277,7 +277,7 @@ export default function OnboardingPage(): JSX.Element {
                   type="button"
                   onClick={skip}
                   disabled={status.kind === 'submitting'}
-                  className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                  className="w-full border border-border text-muted text-sm rounded-full px-4 min-h-[56px] touch-manipulation hover:text-text flex items-center justify-center text-center"
                 >
                   Skip for now
                 </button>

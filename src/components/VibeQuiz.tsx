@@ -1,14 +1,24 @@
 'use client';
 
 import { useState } from 'react';
+import dynamic from 'next/dynamic';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { STEP_TRANSITION } from '@/lib/motionTokens';
 import { quiz, deriveArchetype } from '@/lib/quiz';
 import type { QuizOption } from '@/lib/quiz';
-import NeighborhoodPicker from '@/components/NeighborhoodPicker';
 import type { ManhattanNeighborhood, VibeProfile, VibeTag } from '@/types';
 
 type VibeQuizProps = { onComplete: (profile: VibeProfile) => void };
+
+const NeighborhoodMapPicker = dynamic(
+  () => import('@/components/NeighborhoodMapPicker'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="max-w-2xl mx-auto h-80 rounded-3xl border border-border bg-surface animate-pulse" />
+    ),
+  },
+);
 
 export default function VibeQuiz({ onComplete }: VibeQuizProps) {
   const [step, setStep] = useState(0);
@@ -108,13 +118,13 @@ export default function VibeQuiz({ onComplete }: VibeQuizProps) {
         const hasSelection = preferredNeighborhoods.length > 0;
         return (
           <>
-            <NeighborhoodPicker
-              multi
+            <NeighborhoodMapPicker
               selected={preferredNeighborhoods}
               onChange={setPreferredNeighborhoods}
               title={question.prompt}
+              options={question.options}
             />
-            <div className="max-w-2xl mx-auto px-6 mt-8 flex flex-col md:flex-row gap-3 md:gap-4">
+            <div className="max-w-2xl mx-auto px-6 mt-5 sticky bottom-[max(1rem,env(safe-area-inset-bottom))] z-[500] flex gap-3 md:gap-4">
               <button
                 type="button"
                 onClick={handleSkip}

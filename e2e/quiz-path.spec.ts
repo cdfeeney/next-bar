@@ -20,8 +20,12 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { grantGeolocation } from './helpers/geo';
 
-async function completeQuiz(page: Page): Promise<void> {
+async function completeQuiz(
+  page: Page,
+  neighborhood: 'anywhere' | 'Inwood' = 'anywhere',
+): Promise<void> {
   await expect(page.getByText('Friday, 11pm. What sounds good?')).toBeVisible({ timeout: 30_000 });
   await page.getByRole('button', { name: 'A hidden cocktail spot' }).click();
 
@@ -44,7 +48,33 @@ async function completeQuiz(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Treating myself' }).click();
 
   await expect(page.getByText('Any neighborhoods you love?')).toBeVisible();
-  await page.getByRole('button', { name: 'Anywhere works' }).click();
+  await expect(page.getByTestId('neighborhood-map-picker')).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+
+  if (neighborhood === 'anywhere') {
+    await page.getByRole('button', { name: 'Anywhere works' }).click();
+    return;
+  }
+
+  await page.getByText('Prefer a list?').click();
+  const neighborhoodButton = page.getByRole('button', {
+    name: neighborhood,
+    exact: true,
+  });
+  await neighborhoodButton.click();
+  await expect(page.getByText('Your picks').locator('..')).toContainText(
+    neighborhood,
+  );
+  await expect(neighborhoodButton).toHaveAttribute('aria-pressed', 'true');
+
+  const done = page.getByRole('button', { name: 'Done', exact: true });
+  await expect(done).toBeVisible();
+  const doneBox = await done.boundingBox();
+  expect(doneBox).not.toBeNull();
+  expect(doneBox!.y + doneBox!.height).toBeLessThanOrEqual(
+    page.viewportSize()!.height,
+  );
+  await done.click();
 }
 
 async function reachQuizResults(page: Page): Promise<void> {
@@ -144,5 +174,31 @@ test.describe('Quiz path', () => {
       window.localStorage.getItem('next-bar:install-nudge-dismissed:v1'),
     );
     expect(dismissed).toBe('1');
+  });
+
+  test('a neighborhood with no matches offers one-tap recovery to the best matches anywhere', async ({
+    page,
+    context,
+  }) => {
+    await grantGeolocation(context, {
+      latitude: 40.758,
+      longitude: -73.9855,
+    });
+    await page.goto('/quiz');
+    await completeQuiz(page, 'Inwood');
+
+    await expect(
+      page.getByText('No matches in your picked neighborhoods.'),
+    ).toBeVisible();
+
+    await page
+      .getByRole('button', { name: 'Show best matches anywhere' })
+      .click();
+    await expect(
+      page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+    ).toBeVisible();
+    await expect(
+      page.getByText('No matches in your picked neighborhoods.'),
+    ).toHaveCount(0);
   });
 });

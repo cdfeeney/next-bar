@@ -73,6 +73,9 @@ export default function ResultsView({
   seenIds,
   hasSavedVibe,
 }: ResultsViewProps) {
+  const [widenedNeighborhoodContext, setWidenedNeighborhoodContext] = useState<
+    string | null
+  >(null);
   const userCoords: Coords =
     location.kind === 'coords'
       ? location.coords
@@ -82,12 +85,20 @@ export default function ResultsView({
   // dep) and from there into the onRanked effect — an unstable identity
   // turned that into an infinite render loop (caught by rating-and-nav
   // e2e when MED-11 landed).
+  const neighborhoodContext =
+    location.kind === 'neighborhood'
+      ? `location:${location.neighborhood}`
+      : `profile:${profile.preferredNeighborhoods.join('|')}`;
+  const showAnywhere = widenedNeighborhoodContext === neighborhoodContext;
+
   const preferredNeighborhoods = useMemo(
     () =>
-      location.kind === 'neighborhood'
+      showAnywhere
+        ? []
+        : location.kind === 'neighborhood'
         ? [location.neighborhood]
         : profile.preferredNeighborhoods,
-    [location, profile.preferredNeighborhoods],
+    [location, profile.preferredNeighborhoods, showAnywhere],
   );
 
   const { ratings, setRating, clearRating } = useRatings();
@@ -342,11 +353,28 @@ export default function ResultsView({
         </h2>
 
         {ranked.length === 0 ? (
-          <p className="text-muted text-center">
-            No matches found nearby.
-            <br />
-            Try a different neighborhood or widen your radius.
-          </p>
+          <div className="text-center max-w-md mx-auto">
+            <p className="text-muted">
+              {preferredNeighborhoods.length > 0
+                ? 'No matches in your picked neighborhoods.'
+                : 'No matches found nearby.'}
+            </p>
+            {preferredNeighborhoods.length > 0 ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setWidenedNeighborhoodContext(neighborhoodContext)
+                }
+                className="mt-4 min-h-[48px] rounded-full bg-accent text-bg px-6 py-3 font-display touch-manipulation"
+              >
+                Show best matches anywhere
+              </button>
+            ) : (
+              <p className="text-muted text-sm mt-2">
+                Try changing your location or preferences.
+              </p>
+            )}
+          </div>
         ) : (
           <div className="flex flex-col gap-4">
             {ranked.map((bar, idx) => {

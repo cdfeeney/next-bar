@@ -60,6 +60,8 @@ export default function BottomNav(): JSX.Element | null {
     pathname === '/install' ||
     pathname === '/join' ||
     pathname === '/auth' ||
+    pathname === '/onboarding' ||
+    pathname === '/quiz' ||
     pathname.startsWith('/share') ||
     pathname.startsWith('/api')
   ) {

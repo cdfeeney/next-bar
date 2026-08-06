@@ -190,6 +190,19 @@ test.describe('identity onboarding (signed in)', () => {
     ).toBeVisible();
     await expect(nameInput(page)).toBeVisible();
     await expect(usernameInput(page)).toBeVisible();
+    await expect(
+      page.getByRole('navigation', { name: 'Primary' }),
+    ).toHaveCount(0);
+
+    const primaryBox = await submitButton(page).boundingBox();
+    const skipBox = await page
+      .getByRole('button', { name: /skip for now/i })
+      .boundingBox();
+    expect(primaryBox).not.toBeNull();
+    expect(skipBox).not.toBeNull();
+    expect(Math.abs(primaryBox!.width - skipBox!.width)).toBeLessThanOrEqual(2);
+    expect(Math.abs(primaryBox!.y - skipBox!.y)).toBeLessThanOrEqual(2);
+    expect(primaryBox!.x + primaryBox!.width).toBeLessThan(skipBox!.x);
   });
 
   test('gate leaves an onboarded account alone; Settings shows name + @handle, never the email', async ({

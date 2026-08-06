@@ -134,7 +134,7 @@ export default defineConfig({
       // caught BY mobile-controls on this exact viewport, so its regression
       // pin runs here too.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|quiz-path|onboarding-identity)\.spec\.ts/,
       dependencies: ['warmup'],
     },
   ],
