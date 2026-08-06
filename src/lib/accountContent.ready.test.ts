@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   ensureAccountContentReady,
   __resetAccountContentReadyForTests,
@@ -154,6 +154,51 @@ describe('barrier verdicts', () => {
     // Same epoch: memoized ready. After a wipe bump: re-evaluated.
     clearAccountCache();
     expect(ensureAccountContentReady()).toEqual({ status: 'ready' });
+  });
+});
+
+describe('santa round-1 hardening', () => {
+  test('an owner-stamp write failure fails CLOSED instead of leaving content unattributable', async () => {
+    const { ACCOUNT_CONTENT_OWNER_KEY: OWNER_KEY } = await import(
+      '@/lib/accountContent.local'
+    );
+    window.localStorage.setItem(ARCHIVE_KEY, JSON.stringify(ARCHIVE));
+    setAccountContentAuthContext({ kind: 'signed-in', userId: USER_A });
+    const original = Storage.prototype.setItem;
+    const spy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(function (this: Storage, key: string, value: string) {
+        if (key === OWNER_KEY) {
+          throw new DOMException('quota', 'QuotaExceededError');
+        }
+        original.call(this, key, value);
+      });
+    try {
+      expect(ensureAccountContentReady()).toEqual({
+        status: 'blocked',
+        reason: 'resolution-required',
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('WRITERS are barred while blocked — no clobbering of unresolved residue', async () => {
+    const { archiveNight } = await import('@/lib/nightArchive');
+    const { createList } = await import('@/lib/lists');
+    seedOwnedContent(USER_A);
+    // Auth unknown + owner marker: blocked. A write burst in this window
+    // must not touch the foreign residue.
+    expect(ensureAccountContentReady().status).toBe('blocked');
+    archiveNight({
+      nightKey: '2026-08-05',
+      visits: [{ barId: 'mr-purple', at: '2026-08-06T01:00:00.000Z' }],
+    });
+    expect(createList('My new list')).toBeNull();
+    expect(window.localStorage.getItem(ARCHIVE_KEY)).toBe(
+      JSON.stringify(ARCHIVE),
+    );
+    expect(window.localStorage.getItem(LISTS_KEY)).toBe(JSON.stringify(LISTS));
   });
 });
 

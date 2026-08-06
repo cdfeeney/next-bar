@@ -37,6 +37,12 @@ import {
   updateQuarantinedEnvelope,
 } from '@/lib/accountContent.quarantine';
 import {
+  listAccountContentTooLargeKeys,
+  resetAccountContentCapability,
+  wasAccountContentClockRejected,
+} from '@/lib/accountContent.capability';
+import { retryableOutcome } from '@/lib/accountContent.retry';
+import {
   reconcileQuarantinedAccountContent,
   resolveAccountContentConflict,
   syncAccountContent,
@@ -73,6 +79,7 @@ function seedLocal(value: LocalAccountContent): void {
 beforeEach(() => {
   window.localStorage.clear();
   vi.clearAllMocks();
+  resetAccountContentCapability();
   fetchAll.mockResolvedValue({ kind: 'ok', content: new Map() });
   fetchKey.mockResolvedValue(ok('absent'));
   upsert.mockResolvedValue({ kind: 'ok' });
@@ -292,6 +299,114 @@ describe('server read-back confirmation (v2.1)', () => {
       status: 'present',
       value: lists(T2, ['server']),
     });
+  });
+});
+
+describe('santa round-1 hardening', () => {
+  it('a same-clock DIFFERENT-data mid-flight edit is never overwritten by the read-back', async () => {
+    seedLocal(lists(T2, ['captured']));
+    fetchKey
+      .mockResolvedValueOnce(ok('absent'))
+      .mockResolvedValueOnce(ok(lists(T2, ['captured'])));
+    upsert.mockImplementation(async () => {
+      // Same clock, different data (a non-stamping writer slipped in).
+      window.localStorage.setItem(
+        storageKeyForAccountContent('lists'),
+        JSON.stringify(lists(T2, ['replaced-no-bump']).data),
+      );
+      return { kind: 'ok' };
+    });
+    const outcome = await syncAccountContentKey({
+      supabase: client,
+      userId: USER,
+      key: 'lists',
+      stillCurrent: () => true,
+    });
+    expect(outcome).toBe('uploaded-unconfirmed');
+    expect(readLocalAccountContent('lists')).toEqual({
+      status: 'present',
+      value: lists(T2, ['replaced-no-bump']),
+    });
+  });
+
+  it('a STALE same-digest confirmation never releases an envelope whose upload failed', async () => {
+    // Envelope T2; confirmed-meta carries the same digest but clock T1
+    // (recorded long ago). The upload fails — the fresh-confirmation check
+    // must keep the envelope.
+    const value = lists(T2, ['device']);
+    const id = contentIdentity(value.data);
+    updateQuarantinedEnvelope(USER, 'lists', {
+      data: value.data,
+      clientUpdatedAt: T2,
+      digest: id.digest,
+      byteLength: id.byteLength,
+      quarantinedAt: T2,
+      status: 'quarantined',
+      confirmedAtCapture: null,
+    });
+    window.localStorage.setItem(
+      'next-bar:account-content:confirmed:v2',
+      JSON.stringify({
+        lists: {
+          version: 2,
+          userId: USER,
+          clock: T1,
+          digest: id.digest,
+          byteLength: id.byteLength,
+          confirmedAt: T1,
+        },
+      }),
+    );
+    fetchKey.mockResolvedValue(ok('absent'));
+    upsert.mockResolvedValue({ kind: 'failed' });
+
+    const outcomes = await reconcileQuarantinedAccountContent({
+      supabase: client,
+      userId: USER,
+      stillCurrent: () => true,
+    });
+    expect(outcomes.lists).toBe('kept-pending');
+    expect(readQuarantinedAccountContent(USER).lists?.data).toEqual(value.data);
+  });
+
+  it('too-large is NOTED per key for the visible-failure surface and cleared on success', async () => {
+    seedLocal(lists(T2, ['big']));
+    fetchKey.mockResolvedValue(ok('absent'));
+    upsert.mockResolvedValue({ kind: 'too-large' });
+    await syncAccountContentKey({
+      supabase: client,
+      userId: USER,
+      key: 'lists',
+      stillCurrent: () => true,
+    });
+    expect(listAccountContentTooLargeKeys()).toContain('lists');
+
+    upsert.mockResolvedValue({ kind: 'ok' });
+    fetchKey
+      .mockResolvedValueOnce(ok('absent'))
+      .mockResolvedValueOnce(ok(lists(T2, ['big'])));
+    await syncAccountContentKey({
+      supabase: client,
+      userId: USER,
+      key: 'lists',
+      stillCurrent: () => true,
+    });
+    expect(listAccountContentTooLargeKeys()).not.toContain('lists');
+  });
+
+  it('invalid-clock (22023) propagates as its own non-retryable surfaced outcome', async () => {
+    seedLocal(lists(T2, ['skewed']));
+    fetchKey.mockResolvedValue(ok('absent'));
+    upsert.mockResolvedValue({ kind: 'invalid-clock' });
+    const outcome = await syncAccountContentKey({
+      supabase: client,
+      userId: USER,
+      key: 'lists',
+      stillCurrent: () => true,
+    });
+    expect(outcome).toBe('invalid-clock');
+    expect(wasAccountContentClockRejected()).toBe(true);
+    expect(retryableOutcome(outcome)).toBe(false);
   });
 });
 

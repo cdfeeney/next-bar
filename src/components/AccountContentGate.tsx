@@ -20,7 +20,11 @@ import {
   invalidateAccountContentReadiness,
 } from '@/lib/accountContent.ready';
 import { subscribeAccountContentContext } from '@/lib/accountContent.context';
-import { wasAccountContentAuthRejected } from '@/lib/accountContent.capability';
+import {
+  listAccountContentTooLargeKeys,
+  wasAccountContentAuthRejected,
+  wasAccountContentClockRejected,
+} from '@/lib/accountContent.capability';
 import {
   resolveAccountContentConflict,
   type ConflictChoice,
@@ -130,8 +134,23 @@ export default function AccountContentGate(): JSX.Element | null {
 
   const resolutionRequired = listResolutionRequired().length > 0;
   const authRejected = signedIn && wasAccountContentAuthRejected();
+  const clockRejected = signedIn && wasAccountContentClockRejected();
+  const tooLargeLabels = signedIn
+    ? listAccountContentTooLargeKeys()
+        .filter((key): key is AccountContentKey =>
+          (ACCOUNT_CONTENT_KEYS as readonly string[]).includes(key),
+        )
+        .map((key) => ACCOUNT_CONTENT_LABELS[key])
+    : [];
 
-  if (!showForeignDialog && !activeConflict && !resolutionRequired && !authRejected) {
+  if (
+    !showForeignDialog &&
+    !activeConflict &&
+    !resolutionRequired &&
+    !authRejected &&
+    !clockRejected &&
+    tooLargeLabels.length === 0
+  ) {
     return null;
   }
 
@@ -238,6 +257,31 @@ export default function AccountContentGate(): JSX.Element | null {
           className="fixed bottom-[calc(72px+env(safe-area-inset-bottom))] inset-x-4 z-[60] bg-surface border border-border rounded-2xl px-4 py-3 text-xs text-muted text-center"
         >
           Account sync was rejected — try signing out and back in.
+        </p>
+      ) : null}
+
+      {clockRejected && !resolutionRequired && !authRejected ? (
+        <p
+          role="status"
+          data-testid="content-clock-rejected-banner"
+          className="fixed bottom-[calc(72px+env(safe-area-inset-bottom))] inset-x-4 z-[60] bg-surface border border-border rounded-2xl px-4 py-3 text-xs text-muted text-center"
+        >
+          This device&apos;s clock looks wrong — content can&apos;t sync until
+          it&apos;s corrected. Nothing has been lost.
+        </p>
+      ) : null}
+
+      {tooLargeLabels.length > 0 &&
+      !resolutionRequired &&
+      !authRejected &&
+      !clockRejected ? (
+        <p
+          role="status"
+          data-testid="content-too-large-banner"
+          className="fixed bottom-[calc(72px+env(safe-area-inset-bottom))] inset-x-4 z-[60] bg-surface border border-border rounded-2xl px-4 py-3 text-xs text-muted text-center"
+        >
+          Too large to sync: {tooLargeLabels.join(', ')}. It stays safe on this
+          device.
         </p>
       ) : null}
     </>

@@ -9,7 +9,10 @@
  * writes it through to the signed-in account for reinstall/device recovery.
  */
 
-import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
+import {
+  accountContentReadAllowed,
+  accountContentWriteAllowed,
+} from '@/lib/accountContent.readGuard';
 
 export type BarList = {
   id: string;
@@ -68,6 +71,9 @@ function notifyChange(): void {
  */
 function writeAll(items: BarList[]): boolean {
   if (typeof window === 'undefined') return false;
+  // Write barrier (v2.1): while ownership is unresolved, live storage may
+  // still hold another account's unquarantined residue — never overwrite it.
+  if (!accountContentWriteAllowed()) return false;
   try {
     window.localStorage.setItem(KEY, JSON.stringify(items));
     return true;

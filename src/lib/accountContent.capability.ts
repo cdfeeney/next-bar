@@ -30,6 +30,7 @@ export function noteAccountContentServerResult(
   if (kind === 'ok') {
     capability = 'available';
     authRejected = false;
+    invalidClock = false;
     return;
   }
   if (kind === 'unavailable') {
@@ -40,12 +41,18 @@ export function noteAccountContentServerResult(
     authRejected = true;
     return;
   }
+  if (kind === 'invalid-clock') {
+    invalidClock = true;
+    return;
+  }
   // failed (network) keeps the current verdict: an outage does not un-deploy
   // a table, and an unknown surface stays unknown/retryable.
   // too-large says nothing about the table's existence.
 }
 
 let authRejected = false;
+let invalidClock = false;
+const tooLargeKeys = new Set<string>();
 
 /** Auth/RLS rejections are SURFACED (banner), never blindly retried. */
 export function wasAccountContentAuthRejected(): boolean {
@@ -56,8 +63,29 @@ export function noteAccountContentAuthRejection(rejected: boolean): void {
   authRejected = rejected;
 }
 
+/** 22023 from the clock-range guard: this device's clock is wrong. Surfaced,
+ *  never retried — retries cannot fix a skewed clock. */
+export function wasAccountContentClockRejected(): boolean {
+  return invalidClock;
+}
+
+/** Per-key 200KB budget refusals — the spec requires VISIBLE failure. */
+export function noteAccountContentKeyTooLarge(
+  key: string,
+  isTooLarge: boolean,
+): void {
+  if (isTooLarge) tooLargeKeys.add(key);
+  else tooLargeKeys.delete(key);
+}
+
+export function listAccountContentTooLargeKeys(): string[] {
+  return [...tooLargeKeys];
+}
+
 /** New auth session or page lifecycle: re-probe once. */
 export function resetAccountContentCapability(): void {
   capability = 'unknown';
   authRejected = false;
+  invalidClock = false;
+  tooLargeKeys.clear();
 }

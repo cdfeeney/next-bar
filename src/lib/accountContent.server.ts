@@ -33,6 +33,7 @@ export type ServerContentErrorKind =
   | 'unavailable'
   | 'auth-rejected'
   | 'too-large'
+  | 'invalid-clock'
   | 'failed';
 
 export type ServerFetchAllResult =
@@ -55,6 +56,11 @@ export type ServerAccountContent = Map<AccountContentKey, LocalAccountContent>;
 
 const UNAVAILABLE_CODES = new Set(['42P01', 'PGRST205']);
 const AUTH_CODES = new Set(['42501', 'PGRST301', 'PGRST302']);
+// Migration 0042's clock-range guard raises 22023 (invalid_parameter_value)
+// for an out-of-range client_updated_at. A skewed device clock does not heal
+// by retrying — the state is surfaced ("check this device's clock"), never
+// fed to the retry ladder.
+const INVALID_CLOCK_CODES = new Set(['22023']);
 
 function classifyError(
   error: { code?: unknown; message?: unknown } | null,
@@ -62,6 +68,7 @@ function classifyError(
 ): ServerContentErrorKind {
   const code = typeof error?.code === 'string' ? error.code : '';
   if (UNAVAILABLE_CODES.has(code)) return 'unavailable';
+  if (INVALID_CLOCK_CODES.has(code)) return 'invalid-clock';
   if (AUTH_CODES.has(code) || status === 401 || status === 403) {
     return 'auth-rejected';
   }

@@ -6,11 +6,19 @@ vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: vi.fn() }));
 vi.mock('@/lib/accountContentSync', () => ({
   syncAccountContent: vi.fn(() => Promise.resolve({})),
   syncAccountContentKey: vi.fn(() => Promise.resolve('in-sync')),
+  // v2.1: the component runs restore reconciliation after the full pull —
+  // omitting this from the mock made that call an unhandled rejection that
+  // vitest reported but did not fail on (santa round-1, Claude/FABLE lane).
+  reconcileQuarantinedAccountContent: vi.fn(() => Promise.resolve({})),
 }));
 
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { syncAccountContent, syncAccountContentKey } from '@/lib/accountContentSync';
+import {
+  reconcileQuarantinedAccountContent,
+  syncAccountContent,
+  syncAccountContentKey,
+} from '@/lib/accountContentSync';
 import { ACCOUNT_CONTENT_META_KEY, storageKeyForAccountContent } from '@/lib/accountContent.local';
 import AccountContentSync from './AccountContentSync';
 
@@ -64,6 +72,12 @@ describe('AccountContentSync wiring', () => {
     useAuthMock.mockReturnValue(signedIn());
     render(<AccountContentSync />);
     expect(syncAllMock).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-a' }));
+    // Restore reconciliation runs AFTER the full pull, same user.
+    await waitFor(() => {
+      expect(
+        vi.mocked(reconcileQuarantinedAccountContent),
+      ).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-a' }));
+    });
 
     window.localStorage.setItem(storageKeyForAccountContent('lists'), '[]');
     act(() => {

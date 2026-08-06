@@ -1,6 +1,9 @@
 import type { NightVisit } from '@/lib/nightLog';
 import type { BarRating } from '@/types/ratings';
-import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
+import {
+  accountContentReadAllowed,
+  accountContentWriteAllowed,
+} from '@/lib/accountContent.readGuard';
 
 /**
  * nightArchive — the persistent history behind /nights (goal g-919dae84).
@@ -92,6 +95,8 @@ function read(): ArchivedNight[] {
 
 function write(nights: ArchivedNight[]): void {
   if (typeof window === 'undefined') return;
+  // Write barrier (v2.1): unresolved ownership → never overwrite residue.
+  if (!accountContentWriteAllowed()) return;
   try {
     window.localStorage.setItem(
       NIGHT_ARCHIVE_STORAGE_KEY,

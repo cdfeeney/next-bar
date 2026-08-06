@@ -1,5 +1,8 @@
 import { isShareToken } from '@/lib/nights.server';
-import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
+import {
+  accountContentReadAllowed,
+  accountContentWriteAllowed,
+} from '@/lib/accountContent.readGuard';
 
 /**
  * sharedNightsLocal — the device's record of WHICH nights this account has
@@ -61,6 +64,8 @@ function read(): SharedNightStore {
 
 function write(store: SharedNightStore): void {
   if (typeof window === 'undefined') return;
+  // Write barrier (v2.1): unresolved ownership → never overwrite residue.
+  if (!accountContentWriteAllowed()) return;
   try {
     window.localStorage.setItem(
       SHARED_NIGHTS_STORAGE_KEY,

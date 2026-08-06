@@ -80,6 +80,15 @@ describe('capability classification', () => {
     expect((await fetchServerAccountContent(client, USER)).kind).toBe(kind);
   });
 
+  test('clock-guard rejection (22023) → invalid-clock, surfaced and never retried', async () => {
+    const { client } = fakeClient({
+      error: { code: '22023', message: 'client_updated_at out of range' },
+    });
+    expect((await fetchServerAccountContent(client, USER)).kind).toBe(
+      'invalid-clock',
+    );
+  });
+
   test('RLS rejection (42501) → auth-rejected, never silently retried as network', async () => {
     const { client } = fakeClient({
       error: { code: '42501', message: 'permission denied' },

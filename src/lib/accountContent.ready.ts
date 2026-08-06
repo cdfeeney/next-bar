@@ -96,6 +96,12 @@ function computeSignedIn(userId: string): AccountContentReadiness {
     // Adopting anonymous data into the signing-in account is the intended
     // first-sign-in merge behavior — the stamp just makes it explicit.
     writeAccountContentOwner(userId);
+    if (readAccountContentOwner() !== userId) {
+      // The stamp did not land (quota). Unattributable content written from
+      // here would later be adopted by the NEXT account — fail closed for
+      // account-content features until storage recovers.
+      return { status: 'blocked', reason: 'resolution-required' };
+    }
   }
   return READY;
 }

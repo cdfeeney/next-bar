@@ -5,6 +5,7 @@ import {
   ACCOUNT_CONTENT_QUARANTINE_KEY,
   getPendingForeign,
   quarantineAccountContent,
+  quarantineRawInvalidContent,
   readQuarantineStore,
   readQuarantinedAccountContent,
   recoverQuarantineJournal,
@@ -376,6 +377,132 @@ describe('crash recovery — resumes only after revalidation', () => {
     expect(store.resolutionRequired).toHaveLength(1);
     expect(store.resolutionRequired[0].ownerUserId).toBe(USER_A);
     expect(window.localStorage.getItem(ACCOUNT_CONTENT_JOURNAL_KEY)).toBeNull();
+  });
+});
+
+describe('santa round-1 hardening (Codex lane findings)', () => {
+  test('recovery of a stale P3 journal PRESERVES live content that changed after the commit', () => {
+    // Crash left a committed journal for OLD; a concurrent tab then wrote
+    // NEW into the live key. Recovery must not delete the only copy of NEW.
+    const OLD = LISTS;
+    const NEW = [{ ...LISTS[0], barIds: ['attaboy', 'death-and-co'] }];
+    const idOld = contentIdentity(OLD);
+    window.localStorage.setItem(LISTS_KEY, JSON.stringify(NEW));
+    window.localStorage.setItem(ACCOUNT_CONTENT_OWNER_KEY, USER_A);
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_QUARANTINE_KEY,
+      JSON.stringify({
+        version: 2,
+        accounts: {
+          [USER_A]: {
+            lists: {
+              data: OLD,
+              clientUpdatedAt: '2026-08-02T00:00:00.000Z',
+              digest: idOld.digest,
+              byteLength: idOld.byteLength,
+              quarantinedAt: '2026-08-05T00:00:00.000Z',
+              status: 'quarantined',
+            },
+          },
+        },
+        rawInvalid: {},
+        pendingForeign: null,
+        resolutionRequired: [],
+      }),
+    );
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_JOURNAL_KEY,
+      JSON.stringify({
+        version: 1,
+        ownerUserId: USER_A,
+        phase: 'P3',
+        startedAt: '2026-08-05T00:00:00.000Z',
+        pending: {
+          lists: {
+            data: OLD,
+            clientUpdatedAt: '2026-08-02T00:00:00.000Z',
+            digest: idOld.digest,
+            byteLength: idOld.byteLength,
+            quarantinedAt: '2026-08-05T00:00:00.000Z',
+            status: 'quarantined',
+          },
+        },
+        pendingRaw: {},
+      }),
+    );
+
+    recoverQuarantineJournal();
+
+    // BOTH copies survive: NEW stays live, OLD stays enveloped.
+    expect(window.localStorage.getItem(LISTS_KEY)).toBe(JSON.stringify(NEW));
+    expect(readQuarantinedAccountContent(USER_A).lists?.data).toEqual(OLD);
+    // The owner marker must NOT have been removed (residue stays owned).
+    expect(window.localStorage.getItem(ACCOUNT_CONTENT_OWNER_KEY)).toBe(USER_A);
+    const store = readQuarantineStore();
+    expect(
+      store.resolutionRequired.some((e) => e.key === 'lists'),
+    ).toBe(true);
+  });
+
+  test('a content-key removal failure keeps the OWNER MARKER (residue never turns anonymous)', () => {
+    seedLiveContent();
+    const original = Storage.prototype.removeItem;
+    const spy = vi
+      .spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(function (this: Storage, key: string) {
+        if (key === LISTS_KEY) throw new DOMException('denied', 'SecurityError');
+        original.call(this, key);
+      });
+    try {
+      quarantineAccountContent(USER_A);
+    } finally {
+      spy.mockRestore();
+    }
+    // The lists key could not be removed — the owner marker must survive so
+    // the surviving residue can never be adopted as anonymous data.
+    expect(window.localStorage.getItem(LISTS_KEY)).toBe(JSON.stringify(LISTS));
+    expect(window.localStorage.getItem(ACCOUNT_CONTENT_OWNER_KEY)).toBe(USER_A);
+    // The preserved copy still exists for when removal becomes possible.
+    expect(readQuarantinedAccountContent(USER_A).lists?.data).toEqual(LISTS);
+  });
+
+  test('an unrecognized store VERSION is never clobbered by a later write', () => {
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_QUARANTINE_KEY,
+      JSON.stringify({ version: 1, accounts: { [USER_A]: { lists: { data: LISTS } } } }),
+    );
+    expect(setPendingForeign(USER_B)).toBe(false);
+    // Original bytes intact.
+    expect(
+      (JSON.parse(
+        window.localStorage.getItem(ACCOUNT_CONTENT_QUARANTINE_KEY) ?? '{}',
+      ) as { version?: number }).version,
+    ).toBe(1);
+  });
+
+  test('raw-invalid capture re-checks the live key and spares a concurrent correction', () => {
+    window.localStorage.setItem(LISTS_KEY, '{broken');
+    const original = Storage.prototype.getItem;
+    let contentReads = 0;
+    const spy = vi
+      .spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(function (this: Storage, key: string) {
+        if (key === LISTS_KEY) {
+          contentReads += 1;
+          // First read captures the invalid text; by the pre-removal
+          // re-check a concurrent tab has corrected the value.
+          if (contentReads > 1) return JSON.stringify(LISTS);
+          return '{broken';
+        }
+        return original.call(this, key);
+      });
+    try {
+      expect(quarantineRawInvalidContent(USER_A, 'lists')).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    // The corrected value was never removed.
+    expect(window.localStorage.getItem(LISTS_KEY)).toBe('{broken');
   });
 });
 

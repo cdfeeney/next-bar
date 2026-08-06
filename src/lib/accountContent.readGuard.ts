@@ -48,6 +48,18 @@ export function accountContentReadAllowed(): boolean {
   }
 }
 
+/**
+ * Writers of the four content domains consult this before setItem. While the
+ * barrier is unresolved or blocked, live storage may still hold ANOTHER
+ * account's residue that has not been quarantined yet — a write in that
+ * window (readers having returned empty, so callers think the store is
+ * fresh) would overwrite the only copy. Same verdict as reads; same bypass
+ * scope for the preservation machinery and hydration.
+ */
+export function accountContentWriteAllowed(): boolean {
+  return accountContentReadAllowed();
+}
+
 export function __resetAccountContentReadGuardForTests(): void {
   guard = () => true;
   bypassDepth = 0;

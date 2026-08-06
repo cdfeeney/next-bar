@@ -163,7 +163,16 @@ function storeIsReadable(): boolean {
     const raw = window.localStorage.getItem(ACCOUNT_CONTENT_QUARANTINE_KEY);
     if (!raw) return true;
     const parsed: unknown = JSON.parse(raw);
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+    // Must be the SAME schema the reader accepts. A parseable object of an
+    // unrecognized version reads as empty, and writing "on top" of an empty
+    // view would replace bytes holding envelopes this build cannot see —
+    // exactly the silent deletion the store exists to prevent.
+    return (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>).version === 2
+    );
   } catch {
     return false;
   }
@@ -333,6 +342,13 @@ export function quarantineRawInvalidContent(
   // Validate the preserved copy byte-for-byte before removing the original.
   if (readQuarantineStore().rawInvalid[userId]?.[key]?.raw !== raw) return false;
   try {
+    // Re-read immediately before removal: a concurrent tab may have replaced
+    // the invalid text with a valid correction, which must not be deleted.
+    // (localStorage offers no atomic compare-and-delete; this shrinks the
+    // race to the minimum the platform allows.)
+    if (window.localStorage.getItem(storageKeyForAccountContent(key)) !== raw) {
+      return false;
+    }
     window.localStorage.removeItem(storageKeyForAccountContent(key));
   } catch {
     // Both copies remain — safe, just untidy; the next pass retries.
@@ -414,17 +430,54 @@ function commit(journal: QuarantineJournal): boolean {
   return commitIsValid(journal);
 }
 
-function removeLiveKeys(journal: QuarantineJournal): void {
+/**
+ * P4. Remove a journaled key's live copy ONLY when the live bytes still
+ * digest to what the journal preserved — a mutation that landed after the
+ * commit (crashed tab's stale journal, concurrent tab) may be the user's
+ * only current copy and must survive; it is flagged for resolution instead.
+ * Returns true when every journaled key is verifiably out of live storage.
+ */
+function removeLiveKeys(journal: QuarantineJournal): boolean {
+  let allClear = true;
   for (const key of ACCOUNT_CONTENT_KEYS) {
-    if (journal.pending[key] === undefined && journal.pendingRaw[key] === undefined) {
-      continue;
-    }
+    const envelope = journal.pending[key];
+    const rawEnvelope = journal.pendingRaw[key];
+    if (envelope === undefined && rawEnvelope === undefined) continue;
+    const storageKey = storageKeyForAccountContent(key);
     try {
-      window.localStorage.removeItem(storageKeyForAccountContent(key));
+      const live = window.localStorage.getItem(storageKey);
+      if (live === null) continue; // already gone
+      let matches = false;
+      if (rawEnvelope) {
+        matches = live === rawEnvelope.raw;
+      } else if (envelope) {
+        try {
+          const data = parseAccountContentData(key, JSON.parse(live) as unknown);
+          matches =
+            data !== null && contentIdentity(data).digest === envelope.digest;
+        } catch {
+          matches = false;
+        }
+      }
+      if (!matches) {
+        // Newer live content than the preserved copy: keep BOTH, flag it.
+        recordResolutionRequired({
+          reason: `live ${key} diverged from journaled envelope; both copies preserved`,
+          at: nowIso(),
+          ownerUserId: journal.ownerUserId,
+          key,
+        });
+        allClear = false;
+        continue;
+      }
+      window.localStorage.removeItem(storageKey);
     } catch {
-      // Removal failure leaves residue the next recovery pass re-attempts.
+      // Removal failure leaves residue; the owner marker must then stay so
+      // it can never be adopted as anonymous data.
+      allClear = false;
     }
   }
+  return allClear;
 }
 
 function removeMeta(journal: QuarantineJournal): void {
@@ -459,22 +512,37 @@ function removeMeta(journal: QuarantineJournal): void {
 
 function recordResolutionRequired(entry: ResolutionRequiredEntry): void {
   const store = readQuarantineStore();
+  // Dedup on (reason, owner, key): recovery retries re-report the same
+  // condition every pass, and an append-only list would grow unbounded.
+  const exists = store.resolutionRequired.some(
+    (e) =>
+      e.reason === entry.reason &&
+      e.ownerUserId === entry.ownerUserId &&
+      e.key === entry.key,
+  );
+  if (exists) return;
   writeStore({
     ...store,
     resolutionRequired: [...store.resolutionRequired, entry],
   });
 }
 
-/** P4→P6 tail, shared by the live run and recovery. Owner marker goes last. */
+/** P4→P6 tail, shared by the live run and recovery. Owner marker goes last —
+ *  and ONLY once every journaled live key is verifiably out of live storage.
+ *  Surviving live content without an owner marker would read as anonymous
+ *  data and be adopted by the next account (the one unrecoverable leak). */
 function completeFromCommitted(journal: QuarantineJournal): boolean {
-  if (journal.phase === 'P3') {
-    removeLiveKeys(journal);
-    if (!writeJournal({ ...journal, phase: 'P4' })) {
-      // The journal update failing is survivable: recovery re-runs P4
-      // idempotently (removals are idempotent).
+  if (
+    journal.phase === 'P3' ||
+    journal.phase === 'P4' // resume re-runs the digest-guarded removals
+  ) {
+    const allClear = removeLiveKeys(journal);
+    void writeJournal({ ...journal, phase: 'P4' });
+    if (!allClear) {
+      // Keep meta, owner marker, and the journal: the residue stays OWNED
+      // and unrendered (barrier), and the next recovery pass retries.
+      return false;
     }
-  }
-  if (journal.phase === 'P3' || journal.phase === 'P4') {
     removeMeta(journal);
     void writeJournal({ ...journal, phase: 'P5' });
   }

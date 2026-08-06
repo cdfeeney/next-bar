@@ -19,7 +19,10 @@ import {
   upsertServerAccountContent,
   type ServerContentErrorKind,
 } from '@/lib/accountContent.server';
-import { noteAccountContentServerResult } from '@/lib/accountContent.capability';
+import {
+  noteAccountContentKeyTooLarge,
+  noteAccountContentServerResult,
+} from '@/lib/accountContent.capability';
 import {
   quarantineRawInvalidContent,
   readQuarantinedAccountContent,
@@ -53,6 +56,7 @@ export type AccountContentSyncOutcome =
   | 'too-large'
   | 'unavailable'
   | 'auth-rejected'
+  | 'invalid-clock'
   | 'aborted';
 
 export type AccountContentSyncReport = Record<
@@ -78,6 +82,8 @@ function errorOutcome(kind: ServerContentErrorKind): AccountContentSyncOutcome {
       return 'auth-rejected';
     case 'too-large':
       return 'too-large';
+    case 'invalid-clock':
+      return 'invalid-clock';
     case 'failed':
       return 'fetch-failed';
   }
@@ -88,7 +94,12 @@ function compareUpdatedAt(a: LocalAccountContent, b: LocalAccountContent): numbe
 }
 
 function sameValue(a: LocalAccountContent, b: LocalAccountContent): boolean {
-  return contentIdentity(a.data).digest === contentIdentity(b.data).digest;
+  // Digest AND byte length — the same predicate classifyAccountContent uses.
+  // Two verdict systems disagreeing on "same" (however unlikely a 64-bit
+  // collision) would oscillate a key between clean and dirty forever.
+  const idA = contentIdentity(a.data);
+  const idB = contentIdentity(b.data);
+  return idA.digest === idB.digest && idA.byteLength === idB.byteLength;
 }
 
 function emptyReport(outcome: AccountContentSyncOutcome): AccountContentSyncReport {
@@ -263,6 +274,9 @@ async function uploadAndConfirm({
 }): Promise<AccountContentSyncOutcome> {
   const upsert = await upsertServerAccountContent(supabase, userId, key, local);
   noteAccountContentServerResult(upsert.kind);
+  // The 200KB budget refusal must be VISIBLE (locked spec) — per-key flag
+  // the gate surfaces; cleared the moment an upload for this key succeeds.
+  noteAccountContentKeyTooLarge(key, upsert.kind === 'too-large');
   if (upsert.kind !== 'ok') {
     return upsert.kind === 'failed' ? 'upload-failed' : errorOutcome(upsert.kind);
   }
@@ -294,8 +308,15 @@ async function uploadAndConfirm({
   }
   const order = compareUpdatedAt(current.value, readBack.value);
   if (order > 0) return matches ? 'uploaded' : 'uploaded-unconfirmed';
-  if (order === 0 && sameValue(current.value, readBack.value)) {
-    return matches ? 'uploaded' : 'in-sync';
+  if (order === 0) {
+    if (sameValue(current.value, readBack.value)) {
+      return matches ? 'uploaded' : 'in-sync';
+    }
+    // Same clock, DIFFERENT data: a local change slipped in without a clock
+    // bump (only non-stamping writers can do that). Never overwrite it with
+    // the captured read-back — leave it dirty for the next fetch-first
+    // reconcile to order properly.
+    return 'uploaded-unconfirmed';
   }
   // Read-back is newer than local (LWW rejected our write, or another device
   // landed first): the server value is authoritative — hydrate it.
@@ -384,17 +405,28 @@ export async function reconcileQuarantinedAccountContent({
         hydrate,
       });
       // Success = the CONFIRMED metadata now carries this envelope's digest
-      // for this user (a matching read-back landed) — not the outcome label,
-      // which reads 'hydrated' when live state was empty and the read-back
-      // was hydrated into it.
+      // AND clock for this user — i.e. the confirmation is FRESH, from THIS
+      // upload's read-back. A digest-only check would accept a stale
+      // confirmation from long before (same content confirmed at an earlier
+      // clock) and release the envelope even though this upload failed.
       const confirmedNow = readConfirmedAccountContentMeta(key);
-      if (
+      const freshlyConfirmed =
         confirmedNow?.userId === userId &&
-        confirmedNow.digest === envelope.digest
-      ) {
-        if (outcome !== 'hydrated') hydrate(key, deviceValue);
-        releaseQuarantinedEnvelope(userId, key);
-        outcomes[key] = 'restored-uploaded';
+        confirmedNow.digest === envelope.digest &&
+        Date.parse(confirmedNow.clock) ===
+          Date.parse(deviceValue.clientUpdatedAt);
+      if (freshlyConfirmed) {
+        // Only release once a live copy provably exists (hydrate true, or
+        // the read-back already hydrated it). Envelope release must never
+        // orphan the only copy behind a failed quota write.
+        const liveLanded =
+          outcome === 'hydrated' || hydrate(key, deviceValue);
+        if (liveLanded) {
+          releaseQuarantinedEnvelope(userId, key);
+          outcomes[key] = 'restored-uploaded';
+        } else {
+          outcomes[key] = 'kept-pending';
+        }
       } else if (outcome === 'hydrated') {
         // A different server value won mid-flight: same losing rules below.
         if (envelope.confirmedAtCapture) {
@@ -481,13 +513,16 @@ export async function resolveAccountContentConflict({
     hydrate,
   });
   const confirmedNow = readConfirmedAccountContentMeta(key);
-  if (
+  const freshlyConfirmed =
     confirmedNow?.userId === userId &&
-    confirmedNow.digest === contentIdentity(deviceValue.data).digest
-  ) {
-    if (outcome !== 'hydrated') hydrate(key, deviceValue);
-    releaseQuarantinedEnvelope(userId, key);
-    return 'used-device';
+    confirmedNow.digest === contentIdentity(deviceValue.data).digest &&
+    Date.parse(confirmedNow.clock) === Date.parse(deviceValue.clientUpdatedAt);
+  if (freshlyConfirmed) {
+    const liveLanded = outcome === 'hydrated' || hydrate(key, deviceValue);
+    if (liveLanded) {
+      releaseQuarantinedEnvelope(userId, key);
+      return 'used-device';
+    }
   }
   return 'failed';
 }

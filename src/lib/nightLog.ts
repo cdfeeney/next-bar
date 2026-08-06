@@ -1,7 +1,10 @@
 import { nycNightKey } from '@/lib/nightKey';
 import { archiveNight } from '@/lib/nightArchive';
 import { loadRatings } from '@/lib/ratings';
-import { accountContentReadAllowed } from '@/lib/accountContent.readGuard';
+import {
+  accountContentReadAllowed,
+  accountContentWriteAllowed,
+} from '@/lib/accountContent.readGuard';
 import type { BarRating } from '@/types/ratings';
 
 /**
@@ -78,6 +81,8 @@ function readLog(): StoredNightLog | null {
 
 function writeLog(log: StoredNightLog): void {
   if (typeof window === 'undefined') return;
+  // Write barrier (v2.1): unresolved ownership → never overwrite residue.
+  if (!accountContentWriteAllowed()) return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(log));
   } catch {
