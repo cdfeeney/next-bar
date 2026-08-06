@@ -59,9 +59,12 @@ src) — one entire scaling dimension is absent by design.**
    5-min revalidation throttle caps steady-state; cold-open bursts are
    UNKNOWN and measured by the harness's session-open scenario.
 5. **Vercel serverless/edge.** The app surface is mostly static/client;
-   only 4 API routes exist (account deletion, waitlist, OG/icon image
-   routes — the ADR §3 enumeration) plus `auth/callback`. None is on the
-   20k hot path; OG images are edge-runtime and CDN-cached. Cold-start
+   only 4 API routes exist — `api/account/delete`, `api/event`,
+   `api/health`, `api/waitlist` (the ADR §3 enumeration, verified against
+   src/app/api; santa: Fable + Codex both caught the earlier muddled
+   inventory) — plus `auth/callback` and the SEPARATE edge-runtime
+   metadata routes (icon, apple-icon, five opengraph-image files). None
+   is on the 20k hot path; OG images are edge-runtime and CDN-cached. Cold-start
    impact: negligible for the read path (no server round-trip to render
    the picker — the static bundled catalog is the synchronous fallback).
 6. **What does NOT exist to scale:** no websockets, no realtime broadcast,
@@ -105,19 +108,32 @@ ships tonight), no external SaaS, no new production code paths:
 
 - **Target lock, fail-closed:** the harness constructor parses its target
   URL and **refuses to construct** unless the resolved hostname is
-  `localhost`, `127.0.0.1`, or `::1` — same allowlist shape as the e2e
-  fence (`e2e/tools/fence-proxy.mjs` precedent). The check is in the
+  `localhost`, `127.0.0.1`, or `::1` — a superset of the e2e fence allowlist
+  (`localhost,127.0.0.1` in playwright.config.ts, plus `::1` here for
+  IPv6-default systems — santa: Fable). The check is in the
   constructor, not the call site, so no scenario file can point it at
   Staging/Production even by typo; a unit test asserts construction throws
-  for every non-loopback shape (hostname, IP, redirect). Additionally the
+  for every non-loopback shape (hostname, IP). **Redirects are a request-
+  layer concern the constructor cannot see** (santa: Codex): the harness
+  disables redirect following entirely — any 30x is recorded as a
+  response, never followed — so a loopback endpoint answering with a
+  non-loopback Location cannot pull traffic off-box. Additionally the
   harness process sets the fence proxy env (the dev-server pattern from
   `playwright.config.ts`) so even accidental absolute URLs in app
   responses cannot escape loopback.
 - **Scenarios derived from the load model:** `open-burst` (N sessions/sec
   executing the catalog page sequence), `social-steady` (mixed authed
   reads/writes against seeded fixture accounts via the loopback fixtures),
-  `auth-burst` (sign-in + revalidation churn). Mix ratios come from the
-  read/write model above and are config, not code.
+  `auth-burst` (sign-in + revalidation churn), and
+  `notification-viral-open` (santa: DeepSeek — the cadence send itself
+  DRIVES correlated opens: every recipient taps the same shared venue
+  near-simultaneously, so this scenario runs pre-warmed pages with COLD
+  `/_next/image` optimization routes and gates on a MEASURED CDN
+  cache-hit ratio, because image-optimization cold fan-out multiplies the
+  read amplification the model ranks first). Mix ratios come from the
+  read/write model above and are config, not code. The shaped local-stack
+  run exercises ALL enumerated surfaces — the four API routes and the
+  edge OG/image routes included, not only the catalog path (santa: GLM).
 - **Local target:** `next start` (production build) + either the loopback
   catalog fixtures or a local Supabase stack; NEVER a shared environment.
   Measuring PostgREST/RLS ceilings specifically requires a local Supabase

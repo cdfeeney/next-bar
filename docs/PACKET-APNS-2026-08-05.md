@@ -65,6 +65,13 @@ apns_tokens   user_id → profiles ON DELETE CASCADE, token text,
                               -- RPC transfers ownership explicitly
 ```
 
+Migration numbering (santa: Fable — sibling-packet parity): this DDL takes
+the next free number at authoring time behind the standing reservations
+(0038 pins draft / 0039 Phase B / 0040 photos / 0041 census applied
+Staging-only / 0042 claimed by the account-sync branch / 0043+ targeted by
+Crews) — re-verify the ledger and every worktree then; never renumber a
+reservation.
+
 - **Register:** on `registration` event after opt-in, definer RPC upserts
   the token bound to the calling user (RLS: no direct table writes — the
   0009 pattern verbatim). Per-user token cap in the RPC (proposal: 10
@@ -91,8 +98,11 @@ apns_tokens   user_id → profiles ON DELETE CASCADE, token text,
   shared-device correctness fix, carried over.
 - **Environment is per-token, never per-user** (consult: DeepSeek): the
   sender routes each token to the APNs host its `environment` column
-  names; a BadDeviceToken/environment-mismatch response corrects the
-  column rather than deleting the row. `(token)` uniqueness already
+  names; a BadDeviceToken response is disambiguated ONCE:
+  retry against the other environment; success corrects the column,
+  failure deletes the row — BadDeviceToken also covers genuinely dead
+  tokens, and treating every one as an environment mix-up would never
+  garbage-collect them (santa: Fable). `(token)` uniqueness already
   prevents one string carrying two environments simultaneously.
 
 ## Sender architecture (server-side; env NAMES only, no values)
@@ -108,11 +118,12 @@ apns_tokens   user_id → profiles ON DELETE CASCADE, token text,
 - Rate limits + hygiene: batch sends; exponential backoff on 429/`TooMany
   Requests`; **410/`Unregistered` deletes the token row** (the lifecycle's
   garbage collector); JWT reuse within Apple's validity window rather than
-  per-request signing — **capped at ~20 minutes, and the compromise story
-  is key revocation in the Apple Developer portal** (consult: DeepSeek —
-  there is no per-batch JWT scoping in APNs; a leaked signing key's blast
-  radius ends at portal revocation, so the p8 lives only in the secret
-  manager and every JWT issuance is logged).
+  per-request signing — **Apple accepts provider JWTs up to 1 HOUR old;
+  refresh at ~50–55 minutes** (santa: Fable corrected the earlier ~20-min
+  claim — no shorter cap exists in Apple's contract). The compromise
+  story is key revocation in the Apple Developer portal (there is no
+  per-batch JWT scoping in APNs); the p8 lives only in the secret manager
+  and every JWT issuance is logged.
 - **Retries are idempotent per (send-window, token)** (consult: DeepSeek):
   ambiguous outcomes (5xx, connection reset) must not re-notify tokens
   that already succeeded — the sender records per-token confirmation
@@ -124,16 +135,24 @@ apns_tokens   user_id → profiles ON DELETE CASCADE, token text,
   one window. Token fetch is cursor-paginated (never one giant SELECT
   holding a connection), and users are hash-sharded across a 5–10 minute
   stagger so neither APNs nor the DB sees one synchronized spike.
-- Event set + opt-in policy are OWNED by the Crews packet's notification
-  section (weekly nudge today; crews events later) — this packet is the
-  transport, not the policy. Both stay dark until the operator enables.
+- **Policy ownership, stated precisely** (santa: Fable + GLM converged on
+  the earlier ambiguity): the WEEKLY-NUDGE policy is owned by the shipped,
+  dark `src/lib/cadence.ts` + `src/lib/push.ts` pair — not by any packet;
+  the CREWS-EVENT policy is owned by the Crews packet's notification
+  section. This packet is the transport for both. Precedence when a user
+  is in both cohorts: the native Apple authorization prompt is ONE
+  app-level switch, requested at the cadence-gated opt-in moment;
+  per-category enablement (nudge vs crews events) is a policy-layer
+  setting governed by each category's owning surface, and no category may
+  send without both the app-level authorization AND its own opt-in. All
+  of it stays dark until the operator enables.
 
 ## Deep-link routing
 
 Notification payload carries `{ route: "/nights/<key>" | "/friends/…" }`.
 The shell's `pushNotificationActionPerformed` handler navigates the webview
 to that route **through the same same-origin validation Phase B specifies
-for `?next=`** (`g-c8b26779` item 4): relative path only, reject external/
+for `?next=`** (the Phase B goal `g-c8b26779` auth-return scope): relative path only, reject external/
 malformed/privilege-sensitive destinations. **Deep links are additionally
 read-only by contract** (consult: DeepSeek — a same-origin link to a
 mutating flow would let a push payload trigger an action): the route
@@ -148,15 +167,24 @@ packet's lock-screen policy.
 1. ADR-C staging binary installed on a physical device (build 5 is
    unusable for this: wrong origin AND no push entitlement).
 2. Opt in on-device on a weekend night (or with the cadence gate stubbed in
-   a dev build); capture the sandbox device token from the registration
-   event log.
+   a dev build); read the sandbox device token from a **sandbox-build-only
+   on-screen debug surface** — NOT from logs: production builds never log
+   token strings, and the runbook must not create the captured-token
+   artifact the lifecycle section's secrecy rule exists to prevent (santa:
+   Codex caught the contradiction).
 3. From the operator's machine (p8 from the secret manager, never the
    repo): send one sandbox push via a one-off script; verify device
    receipt, lock-screen content policy, and that tapping deep-links to the
    right route.
-4. Negative checks: push to a signed-out device's stale token → expect 410
-   and row deletion; second account on same device → ownership transfer
-   (the 0009 shared-device scenario, now for APNs).
+4. Negative checks (santa: Codex corrected the impossible original):
+   (a) **uninstall the app** — the token is invalidated at Apple while its
+   row REMAINS; send to it → expect 410 and row deletion (this, not
+   sign-out, is the 410 garbage-collection path — sign-out already
+   removed its row via the RPC, leaving nothing to 410);
+   (b) sign out → verify THIS device's row is gone and another signed-in
+   device's row survives;
+   (c) second account on the same device → ownership transfer (the 0009
+   shared-device scenario, now for APNs).
 
 ## Physical-device matrix (ATTENDED)
 
