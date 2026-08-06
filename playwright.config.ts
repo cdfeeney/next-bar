@@ -134,9 +134,10 @@ export default defineConfig({
       // caught BY mobile-controls on this exact viewport, so its regression
       // pin runs here too.
       // mobile-shell-pack added 2026-08-05 (goal g-b07c73bc): web-layer pins
-      // for the operator's TestFlight shell feedback (top-region size,
-      // background/resume, overlay idempotency). The safe-area geometry it
-      // pins differs per device, so current hardware must run it.
+      // for the operator's TestFlight shell feedback. The resume-scroll pin
+      // is the viewport-sensitive one (this project's geometry is what
+      // exposed the smooth-scroll settle race); the header/meta pins ride
+      // along because the goal's acceptance names all three devices.
       testMatch:
         /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|mobile-shell-pack)\.spec\.ts/,
       dependencies: ['warmup'],
