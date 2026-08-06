@@ -2,10 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Bar } from '@/types';
-import { resolveFallbackMedia, resolveMedia } from '@/lib/mediaPolicy';
+import { resolveMedia } from '@/lib/mediaPolicy';
 import { hoursProvenanceNote, weekHoursRows } from '@/lib/openNow';
 import GoogleAttribution from '@/components/GoogleAttribution';
-import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 import { displayHood } from '@/lib/hoodDisplay';
 import OpenNowBadge from '@/components/OpenNowBadge';
 import WantToGoToggle from '@/components/WantToGoToggle';
@@ -32,24 +31,6 @@ import WantToGoToggle from '@/components/WantToGoToggle';
  * activeElement) — unmounting a focused node otherwise drops focus to
  * <body> and strands keyboard users at the top of the page.
  */
-/** Failure fallback for the google-live media slot, derived through the ONE
- *  fallback policy (both Google tiers forced off): owned media or nothing.
- *  Never a /bar-photos/ legacy URL — that would relocate the compliance
- *  liability into the failure branch. */
-function LightboxMediaFallback({ bar }: { bar: Bar }): JSX.Element | null {
-  const fallback = resolveFallbackMedia(bar);
-  if (!('urls' in fallback) || fallback.urls.length === 0) return null;
-  return (
-    // eslint-disable-next-line @next/next/no-img-element -- owned media
-    <img
-      src={fallback.urls[0]}
-      alt={`${bar.name} photo`}
-      data-testid="owned-media-fallback"
-      className="w-full aspect-[21/9] object-cover"
-    />
-  );
-}
-
 export default function BarLightbox({
   bar,
   onClose,
@@ -339,21 +320,13 @@ export default function BarLightbox({
           </button>
         </div>
 
-        {decision.source === 'google-live' ? (
-          // Compliant live media: the widget renders photos AND attribution
-          // itself (lightbox-preferred handles expansion). Nothing overlays
-          // it — obscuring the widget's attribution is a policy violation.
-          // Failure derives through the ONE fallback policy: owned media if
-          // any, else the lightbox's photoless layout (identity is already
-          // in the header) — never a /bar-photos/ legacy file.
-          <figure className="rounded-3xl overflow-hidden border border-border">
-            <GooglePlacePhotoLazy
-              placeId={decision.placeId}
-              surface="bar-lightbox"
-              fallback={<LightboxMediaFallback bar={bar} />}
-            />
-          </figure>
-        ) : null}
+        {/* google-live deliberately renders NO media here (santa BLOCK,
+            2026-08-06): ResultCard's widget is the app's ONLY billable
+            Google surface, and it already carries lightbox-preferred —
+            Google's own lightbox handles photo expansion. This dialog is
+            the hours/details/actions surface and must issue zero Google
+            widget requests; a second widget per bar would double the bill
+            for the same content. */}
         {photoUrls.length > 0 ? (
           <figure className="rounded-3xl overflow-hidden border border-border">
             {/* U2-2 carousel (photos-multi ingest): CSS scroll-snap — swipe

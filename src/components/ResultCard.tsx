@@ -6,11 +6,12 @@ import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
 import {
   needsGoogleAttribution,
-  resolveFallbackMedia,
   resolveMedia,
 } from '@/lib/mediaPolicy';
+import { barVisual } from '@/lib/barVisual';
 import GoogleAttribution from '@/components/GoogleAttribution';
 import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
+import { reportGoogleMediaRequest } from '@/lib/mediaMetric';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { displayHood } from '@/lib/hoodDisplay';
 import ShareButton from '@/components/ShareButton';
@@ -54,25 +55,25 @@ type ResultCardProps = {
  * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
 /**
- * What a failed/blocked google-live widget degrades to. Derived through
- * resolveFallbackMedia — the ONE policy that forces both Google tiers off —
- * so a failure can only ever show media we own, or nothing (the body row's
- * glyph tile already carries the bar's identity). It can NEVER emit a
- * /bar-photos/ legacy URL: that would move the compliance liability into
- * the failure branch (see GooglePlacePhoto's fallback contract).
+ * What a failed/blocked google-live widget degrades to: the bar's
+ * DETERMINISTIC glyph visual at the same reserved 21/9 height, so the card
+ * never collapses or shifts when Google media is disabled, blocked, or
+ * broken (santa BLOCK, 2026-08-06 — a null fallback dropped the reserved
+ * box). Same visual system as BarVisualTile, strip-shaped. By construction
+ * it can NEVER reference /bar-photos/ — no owned-photo data is passed into
+ * this card, so the glyph is the only permitted degradation.
  */
-function CardMediaFallback({ bar }: { bar: Bar }): JSX.Element | null {
-  const fallback = resolveFallbackMedia(bar);
-  if (!('urls' in fallback) || fallback.urls.length === 0) return null;
+function CardMediaFallback({ bar }: { bar: Bar }): JSX.Element {
+  const visual = barVisual(bar);
   return (
-    // eslint-disable-next-line @next/next/no-img-element -- owned media
-    <img
-      src={fallback.urls[0]}
-      alt=""
-      data-testid="owned-media-fallback"
-      loading="lazy"
-      className="w-full aspect-[21/9] object-cover"
-    />
+    <div
+      data-testid="google-fallback-glyph"
+      aria-hidden="true"
+      className="w-full aspect-[21/9] flex items-center justify-center select-none"
+      style={{ backgroundColor: visual.bg, color: visual.fg }}
+    >
+      <span className="font-display leading-none text-4xl">{visual.glyph}</span>
+    </div>
   );
 }
 
@@ -113,6 +114,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
           placeId={decision.placeId}
           surface="result-card"
           fallback={<CardMediaFallback bar={bar} />}
+          onBillableRequest={reportGoogleMediaRequest}
         />
       ) : null}
       {showHero ? (

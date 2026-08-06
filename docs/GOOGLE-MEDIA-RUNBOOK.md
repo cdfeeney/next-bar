@@ -1,8 +1,24 @@
 # Google-live media — cost control and key runbook
 
-Written 2026-08-06 alongside the google-live wiring (ResultCard +
-BarLightbox). Companion to `docs/UI-KIT-BUILD-PLAN.md`; this file corrects
-one operational premise and records the runbooks that depend on it.
+Written 2026-08-06 alongside the google-live wiring. Companion to
+`docs/UI-KIT-BUILD-PLAN.md`; this file corrects one operational premise and
+records the runbooks that depend on it.
+
+## Billing surfaces in this release
+
+**ResultCard is the SOLE live-Google billing surface.** Its widget carries
+`lightbox-preferred`, so photo expansion happens inside Google's own
+lightbox — BarLightbox (the app's hours/details/actions dialog) renders no
+Google widget and must stay that way: a second widget per bar would bill
+twice for the same content (independent review BLOCK, 2026-08-06; pinned by
+`BarLightbox.noGoogle.test.tsx`).
+
+**Google Cloud's SKU metrics are the authoritative usage and cost meter.**
+The in-app signals — the session meter in `placesUiKit` and the advisory
+`/api/media-metric` log lines (surface enum only, same-origin,
+rate-limited) — exist for fast operator visibility in Vercel logs and can
+undercount (dropped beacons, ad-blockers). Reconcile spend against the
+Google console, never against the app's own numbers.
 
 ## The control model — what stops spend, and how fast
 

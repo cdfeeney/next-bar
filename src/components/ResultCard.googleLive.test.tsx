@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import type { Bar } from '@/types';
 
 /**
@@ -15,11 +15,22 @@ let captured: {
   placeId?: string;
   surface?: string;
   fallback?: ReactNode;
+  onBillableRequest?: (placeId: string) => void;
 } | null = null;
+let widgetMounts = 0;
 
 vi.mock('@/components/GooglePlacePhotoLazy', () => ({
-  default: (props: { placeId: string; surface?: string; fallback?: ReactNode }) => {
+  default: (props: {
+    placeId: string;
+    surface?: string;
+    fallback?: ReactNode;
+    onBillableRequest?: (placeId: string) => void;
+  }) => {
     captured = props;
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useEffect(() => {
+      widgetMounts += 1;
+    }, []);
     return <div data-testid="google-place-photo-mock" />;
   },
 }));
@@ -63,7 +74,9 @@ function renderCard(bar: Bar = BAR): ReturnType<typeof render> {
 
 afterEach(() => {
   captured = null;
+  widgetMounts = 0;
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe('google-live wiring', () => {
@@ -75,14 +88,65 @@ describe('google-live wiring', () => {
     expect(captured?.surface).toBe('result-card');
   });
 
-  test('the failure fallback NEVER contains a /bar-photos/ legacy file — even for a bar that has them', () => {
+  test('the failure fallback is a stable 21/9 glyph surface — never null, never a /bar-photos/ file', () => {
     vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
-    // Legacy eligibility ON deliberately: the fallback policy must force it
-    // off regardless, or the compliance migration only LOOKS complete.
+    // Legacy eligibility ON deliberately: even then, the fallback must not
+    // reach for legacy files, or the compliance migration only LOOKS done.
     vi.stubEnv('NEXT_PUBLIC_LEGACY_PHOTOS', '1');
     renderCard();
     const { container } = render(<>{captured?.fallback}</>);
+    const glyph = container.querySelector('[data-testid="google-fallback-glyph"]');
+    expect(glyph).not.toBeNull();
+    // The reserved hero height survives the degradation — no layout shift.
+    expect(glyph?.className).toContain('aspect-[21/9]');
     expect(container.querySelector('img[src*="/bar-photos/"]')).toBeNull();
+    expect(container.querySelector('img')).toBeNull(); // glyph only — no owned-photo claims
+  });
+
+  test('ordinary rerenders create AT MOST ONE widget for a bar', () => {
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    const view = renderCard();
+    for (let i = 0; i < 4; i += 1) {
+      view.rerender(
+        <ResultCard
+          bar={BAR}
+          rank={1}
+          miles={0.4 + i * 0.01} // unrelated prop churn
+          userTags={[]}
+          showShare={false}
+          hasSavedVibe={false}
+        />,
+      );
+    }
+    expect(widgetMounts).toBe(1);
+  });
+
+  test('telemetry: one surface-only, non-blocking beacon per billable creation', () => {
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    const beacon = vi.fn(() => true);
+    vi.stubGlobal('navigator', { ...navigator, sendBeacon: beacon });
+    renderCard();
+    // GooglePlacePhoto invokes this exactly once per widget creation (its
+    // own suite pins that); here we pin what the wiring SENDS.
+    captured?.onBillableRequest?.('ChIJattaboy123');
+    expect(beacon).toHaveBeenCalledTimes(1);
+    const [url, body] = beacon.mock.calls[0] as unknown as [string, string];
+    expect(url).toBe('/api/media-metric');
+    expect(JSON.parse(body)).toEqual({ surface: 'result-card' }); // enum ONLY
+    expect(body).not.toContain('ChIJ'); // the reported placeId is dropped
+  });
+
+  test('telemetry failure never disturbs the photo path', () => {
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      sendBeacon: () => {
+        throw new Error('beacon blocked');
+      },
+    });
+    renderCard();
+    expect(() => captured?.onBillableRequest?.('ChIJattaboy123')).not.toThrow();
+    expect(screen.getByTestId('google-place-photo-mock')).toBeTruthy();
   });
 
   test('nothing overlays the widget: no gradient/absolute chrome around it, and no app-side attribution line', () => {
