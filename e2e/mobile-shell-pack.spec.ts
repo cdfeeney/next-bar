@@ -53,6 +53,29 @@ import {
 const SEARCH = { name: 'Search bars' };
 
 /**
+ * Reach BarPicker deterministically. `/` is location-first: with denial
+ * installed the flow normally lands on the picker by itself, but when the
+ * Permissions API answers slower than WhereNextFlow's 400ms primer grace
+ * timer (real under parallel-worker CPU load), the primer renders and
+ * STAYS — the step-decision effect routes denied→picker only from the
+ * 'locating' step. A real user taps "Pick a bar instead"; so does this
+ * helper. (Observed as an iPhone-13-project flake before this existed.)
+ */
+async function openBarPicker(page: Page): Promise<void> {
+  const search = page.getByRole('textbox', SEARCH);
+  const pickInstead = page.getByRole('button', { name: /pick a bar instead/i });
+  // The primer can also self-route away (denied resolves while it shows),
+  // detaching the button mid-click — so the whole attempt retries as a
+  // unit rather than committing to one click that can strand on a
+  // detached element.
+  await expect(async () => {
+    if (await search.isVisible()) return;
+    await pickInstead.click({ timeout: 500 }).catch(() => {});
+    await expect(search).toBeVisible({ timeout: 1_500 });
+  }).toPass({ timeout: 20_000 });
+}
+
+/**
  * One-row header geometry on the configured 390–412px viewports measures
  * ~72px (px-6 py-4 + one line of text); 90px allows breathing room without
  * re-admitting the "oversized top region" class — a py-9 header (~112px)
@@ -111,7 +134,13 @@ async function cycleVisibility(page: Page): Promise<void> {
  * element map below is future-proofing for layouts that add real inner
  * scrollers: keys are structural paths, so a React remount at the same
  * position keeps its key, while membership changes cannot misalign an
- * index-based comparison (santa round-1: DeepSeek).
+ * index-based comparison (santa round-1: DeepSeek). Tradeoff, on purpose
+ * (santa round-2: DeepSeek): a sibling mounted ABOVE a scroller renames its
+ * key, which fails LOUDLY as "scroller disappeared" — a false alarm to fix
+ * in the test, never a silently masked jump, because a vanished before-key
+ * with scrollTop>0 can only fail. Scrollers at 0 that start scrolling on
+ * resume are outside this net; the window — the actual scroller on / — is
+ * always compared directly.
  */
 type Fingerprint = {
   url: string;
@@ -189,7 +218,7 @@ test.describe('/ top region stays compact (web layer of the safe-area report)', 
   test.beforeEach(async ({ page, context }) => {
     await denyGeolocation(context);
     await page.goto('/');
-    await expect(page.getByRole('textbox', SEARCH)).toBeVisible({ timeout: 15_000 });
+    await openBarPicker(page);
   });
 
   test('header starts at the very top with no padding creep above it', async ({ page }) => {
@@ -239,7 +268,7 @@ test.describe('/ background/resume keeps the surface (web analog of the backgrou
   }) => {
     await denyGeolocation(context);
     await page.goto('/');
-    await expect(page.getByRole('textbox', SEARCH)).toBeVisible({ timeout: 15_000 });
+    await openBarPicker(page);
 
     await scrollMidListAndSettle(page);
     const before = await readFingerprint(page);
@@ -265,15 +294,32 @@ test.describe('/ background/resume keeps the surface (web analog of the backgrou
     await expect(search).toHaveValue('a');
   });
 
-  test('signed in: resume revalidation leaves the surface alone', async ({ page, context }) => {
+  test('signed in: an installed-app resume leaves the surface alone', async ({
+    page,
+    context,
+  }) => {
     // useAuth's visibilitychange handler early-returns unless signed in, so
     // the signed-out test above never reaches it (santa round-1: Codex).
-    await installLoopbackFixtures(page);
+    // SCOPE (santa round-2: Codex + DeepSeek): the immediate cycle takes
+    // useAuth's THROTTLED branch — lastValidationAt is stamped at load and
+    // network revalidation is skipped for REVALIDATE_MIN_INTERVAL_MS
+    // (5 min), which is exactly the path a user re-opening within minutes
+    // hits. The past-interval revalidation (including deleted-account
+    // sign-out) is unit-covered in useAuth.test.tsx and is not re-simulated
+    // here. The installed-app context is what makes the no-gate assertion
+    // meaningful: in a plain browser the gate never renders regardless.
+    // No loopback fixture install: fakeSignedIn's catch-all /rest/v1/**
+    // stub fulfills locally and registers later, so a fixture would be
+    // LIFO-shadowed into a no-op (santa round-2: Fable) — CatalogRefresh's
+    // small-set guard keeps the static catalog either way.
+    await asInstalledApp(context);
     const ok = await fakeSignedIn(context, page);
     test.skip(!ok, 'no Supabase URL configured');
     await denyGeolocation(context);
     await page.goto('/');
-    await expect(page.getByRole('textbox', SEARCH)).toBeVisible({ timeout: 15_000 });
+    await openBarPicker(page);
+    // Signed in: the gate must not be up before the cycle either.
+    await expect(page.getByRole('dialog', { name: /sign in to next bar/i })).toHaveCount(0);
 
     await scrollMidListAndSettle(page);
     const before = await readFingerprint(page);
@@ -284,7 +330,7 @@ test.describe('/ background/resume keeps the surface (web analog of the backgrou
     expectSamePlace(before, await readFingerprint(page));
     await page.waitForTimeout(RESUME_SETTLE_MS);
     expectSamePlace(before, await readFingerprint(page));
-    // And the resume revalidation must not have surfaced a sign-in gate.
+    // And resume must not have surfaced a sign-in gate for a signed-in user.
     await expect(page.getByRole('dialog', { name: /sign in to next bar/i })).toHaveCount(0);
   });
 
@@ -315,16 +361,32 @@ test.describe('/ background/resume keeps the surface (web analog of the backgrou
 
     await denyGeolocation(context);
     await page.goto('/');
-    await expect(page.getByRole('textbox', SEARCH)).toBeVisible({ timeout: 15_000 });
+    await openBarPicker(page);
+    const search = page.getByRole('textbox', SEARCH);
     await expect(page.locator('html')).not.toHaveAttribute('data-catalog-swapped', '1');
+    // Pre-swap catalog check: the sentinel must NOT be findable yet — this
+    // is what makes the post-resume positive assertion discriminate the
+    // swap rather than the search box (santa round-2: DeepSeek).
+    await search.fill('deferred swap sentinel');
+    await expect(page.getByRole('button', { name: new RegExp(sentinelName, 'i') })).toHaveCount(0);
+    await search.fill('');
 
     // Get scrolled (> SAFE_SCROLL_PX = 4) BEFORE the catalog arrives.
     await scrollMidListAndSettle(page);
+    const catalogResponse = page.waitForResponse((r) => /\/rest\/v1\/bars/.test(r.url()), {
+      timeout: 15_000,
+    });
     release();
-
-    // The fetch completes but the swap must DEFER while we sit scrolled:
-    // the commit marker stays absent across a generous async window.
-    await page.waitForTimeout(1_000);
+    // Sequencing, not sleeping (santa round-2: Codex + DeepSeek): wait for
+    // the catalog response to COMPLETE, give parse + deferUntilSafe a
+    // bounded beat, and only then assert the swap is still deferred — this
+    // proves "fetch done, still deferred", not "fetch slow". A commit
+    // scheduled on an independent timer between here and the hidden
+    // dispatch cannot be fully excluded by any bounded wait; the RED proof
+    // (no-op'ing the onHidden commit fails the positive assertion below)
+    // is what shows the hidden path is load-bearing.
+    await catalogResponse;
+    await page.waitForTimeout(500);
     await expect(page.locator('html')).not.toHaveAttribute('data-catalog-swapped', '1');
 
     // Backgrounding is a safe point: the swap commits while hidden…
@@ -336,7 +398,6 @@ test.describe('/ background/resume keeps the surface (web analog of the backgrou
     // …and the resumed page serves the NEW catalog.
     await goVisible(page);
     await page.evaluate(() => window.scrollTo(0, 0));
-    const search = page.getByRole('textbox', SEARCH);
     await expect(search).toHaveCSS('pointer-events', 'auto', { timeout: 5_000 });
     await search.fill('deferred swap sentinel');
     await expect(page.getByRole('button', { name: new RegExp(sentinelName, 'i') })).toBeVisible({
@@ -358,6 +419,9 @@ test.describe('installed-app resume keeps overlays idempotent', () => {
     await page.goto('/');
     const dialogs = page.getByRole('dialog', { name: /sign in to next bar/i });
     await expect(dialogs.first()).toBeVisible({ timeout: 15_000 });
+    // Baseline BEFORE the cycles, so the post-cycle count discriminates the
+    // cycles' contribution (santa round-2: DeepSeek).
+    await expect(dialogs).toHaveCount(1);
 
     await cycleVisibility(page);
     await cycleVisibility(page);
