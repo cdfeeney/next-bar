@@ -1,5 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { mediaMetricRateLimited } from '@/lib/mediaMetric.server';
+import {
+  contentLengthExceeds,
+  mediaMetricRateLimited,
+  readBoundedBody,
+  requestPublicHost,
+} from '@/lib/mediaMetric.server';
 
 /**
  * Advisory Google-media request counter → structured Vercel log lines.
@@ -10,26 +15,33 @@ import { mediaMetricRateLimited } from '@/lib/mediaMetric.server';
  * Google Cloud's SKU metrics remain the AUTHORITATIVE usage/billing meter
  * (docs/GOOGLE-MEDIA-RUNBOOK.md) — this is a smoke detector, not the bill.
  *
- * Hard bounds (santa BLOCK, 2026-08-06 — no fake observability, no abuse
- * surface): same-origin only, tiny body, enum-validated, per-instance
- * rate-limited. Rejections are cheap and terminal; the client never
- * retries. No database, no migration, no product-analytics reuse.
+ * Hard bounds, each matching its implementation exactly:
+ * - Same-origin only: Origin's host must equal the request's PUBLIC host —
+ *   x-forwarded-host (first entry of a forwarding chain) when present,
+ *   else Host — compared case-insensitively. Absent, malformed, or
+ *   mismatched origins → 403 before any body handling.
+ * - Body capped at 64 actual UTF-8 BYTES: an honest oversized
+ *   Content-Length is rejected before reading; a missing, chunked, or
+ *   dishonest Content-Length is caught by an incremental bounded stream
+ *   read that cancels the moment the cap is crossed. Decoding happens only
+ *   after the bounded read. Raw request bodies are NEVER logged.
+ * - Surface must be a known enum value; per-instance rate window (429).
+ * Rejections are cheap and terminal; the client never retries. No
+ * database, no migration, no product-analytics reuse.
  */
 
 /** The only billing surface in this release. */
 const SURFACES = new Set(['result-card']);
 
-const MAX_BODY_BYTES = 64;
-
-/** Same-origin check: the Origin header must match the host this function
- *  is serving. Beacons/fetches from our own pages always satisfy this;
- *  cross-site posts are rejected before any parsing. */
 function sameOrigin(req: NextRequest): boolean {
   const origin = req.headers.get('origin');
-  const host = req.headers.get('host');
+  const host = requestPublicHost(
+    req.headers.get('x-forwarded-host'),
+    req.headers.get('host'),
+  );
   if (!origin || !host) return false;
   try {
-    return new URL(origin).host === host;
+    return new URL(origin).host.toLowerCase() === host;
   } catch {
     return false;
   }
@@ -43,12 +55,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return new NextResponse(null, { status: 429 });
   }
 
+  // Honest oversize declared up front: refuse before reading a byte.
+  if (contentLengthExceeds(req.headers.get('content-length'))) {
+    return new NextResponse(null, { status: 413 });
+  }
+  // Everything else: enforce on actual bytes, incrementally.
+  const read = await readBoundedBody(req.body);
+  if (read.kind === 'too-large') {
+    return new NextResponse(null, { status: 413 });
+  }
+
   let surface: string;
   try {
-    const raw = await req.text();
-    if (raw.length > MAX_BODY_BYTES) {
-      return new NextResponse(null, { status: 413 });
-    }
+    const raw = new TextDecoder().decode(read.bytes);
     const parsed: unknown = JSON.parse(raw);
     if (
       parsed === null ||
@@ -66,7 +85,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // The structured line Vercel captures. Surface enum + timestamp — nothing
-  // else is accepted, so nothing else can leak into logs.
+  // else is accepted, so nothing else can reach the logs; the raw body is
+  // never logged on any path.
   console.log(
     JSON.stringify({
       type: 'google-media-request',
