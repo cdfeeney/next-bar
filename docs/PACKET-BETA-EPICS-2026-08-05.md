@@ -42,7 +42,7 @@ arise for that surface.
 |---|---|---|---|---|---|
 | E0.1 tagDisplay | ✔ | ✔ | read-only ✔ | in 6ec5e5d ✔ | unit per tag; enforcement grep test |
 | E0.2 vibeAxes | ✔ | ✔ | read-only ✔ | ✔ | exhaustiveness unit |
-| E0.3 nightPhase | ✔ | ✔ | — | ✔ (pre-fork shape) | rollover/override units. **Note:** RC composition reverted the pin commit's 6am boundary; personal features roll at 5am, `nightKey` 6am NY (continuation §2) |
+| E0.3 nightPhase | ✔ | ✔ | — | ✔ (pre-fork shape) | rollover/override units. **Scope note (santa: Fable):** THIS branch has a single 6am rollover (`socialNight.ts`, `NIGHT_ROLLOVER_HOUR = 6`); the 5am-personal/6am-nightKey split exists ONLY in the `release/beta1-rc` worktree, whose composition reverted the pin commit's unification (continuation §2). Nothing on this branch rolls at 5am |
 | E0.4 DESIGN-SYSTEM | ✔ | n/a (doc) | n/a | n/a | file present |
 
 States: happy/empty/error ✓ (units); offline/unauthorized/stale/concurrent
@@ -55,7 +55,7 @@ n/a (pure functions). No gaps beyond deployment.
 | E1.1 Night object create (date+invitees) | ✘ (group Night Out object absent; personal nightLog exists) | — | — | — | matrix "Crews/Invited Night Outs: NOT built" |
 | E1.2 Invite link + OG, no account | partial: `/join` is a **zero-server-state** link (not a night-scoped invite) | ✔ for `/join` | — | `/join` in 6ec5e5d ✔ | matrix; handoff block B |
 | E1.3 RSVP "I'm in" | ✔ (bar_rsvps 0012–0014) | ✔ | ✘ write-path never run | ✔ | `suggestions.spec.ts` rsvp paths; `rsvps.server.test.ts` |
-| E1.4 nominate→vote→lock | partial: suggestions votable (#28); **persistent async server votes, poll register, LOCK step remain unbuilt** | ✔ for shipped part | ✘ | shipped part ✔ | matrix Consensus/Suggestions rows |
+| E1.4 nominate→vote→lock | partial: suggestions votable (#28); **persistent async server votes, poll register, LOCK step remain unbuilt** | ✔ for shipped part | ✘ | shipped part ✔ | matrix Consensus/Suggestions rows. **Precision (santa: Fable):** "backing" a suggestion IS persistent server-side today (`suggest_bar`, capped, counts only) — what's absent is voting on someone else's pick without spending the cap, voter-name registers, and lock. **The remainder is expected to land AS the Crews night-vote/lock design** (`PACKET-CREWS-ARCHITECTURE-2026-08-05.md`), not as a widening of the followed-circle surface (santa: GLM) |
 | E1.5 planning home phase | ✔ (chip only; no plan card — QA5-S1 keeps Plan Night Out on Friends tab) | ✔ | — | chip ✔ | `home-phase.spec.ts`; page.tsx comments |
 
 States (shipped subset): happy/empty/error/mobile ✓; unauthorized ✓ (suggestion

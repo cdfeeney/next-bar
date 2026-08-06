@@ -114,6 +114,12 @@ Design commitments the model encodes:
   expires_at>now() AND invitee_id IS NULL RETURNING …` — rows-affected is
   the verdict. Two sessions racing one token cannot both bind, and there is
   no window in which a second caller learns "someone just accepted."
+- **The same RPC statement inserts the roster row** (santa: Codex + Fable,
+  independently): the CAS above and `INSERT INTO crew_members (crew_id,
+  user_id, role) … 'member'` execute as one CTE in the definer RPC —
+  step 2's "appear in the reusable roster" is the insert, not the status
+  flip. An implementation that ships only the invitation-flip has built
+  nothing; the acceptance test is a crew page the invitee can now read.
 - **Failure indistinguishability is a hard requirement** (consult:
   DeepSeek): expired, revoked, already-used, and never-existed tokens must
   produce the identical error code, message, and response timing —
@@ -167,7 +173,25 @@ Cross-cutting rules:
   roster snapshot re-verifies the caller's live crew membership and copies
   `crew_members` rows in one statement (CTE), so a concurrently-removed
   member can neither snapshot themselves in nor harvest a roster they can
-  no longer see; failure surfaces no crew-size side channel.
+  no longer see; failure surfaces no crew-size side channel. **v1 caller =
+  the crew owner only** (santa: Codex — contract step 3 says the owner
+  starts; a member-start relaxation is a later operator decision, not a
+  default).
+- **Lifecycle enforcement lives in the authorization layer, not app code**
+  (santa: Kimi): the `open→locked→closed` machine is enforced by (a) a DB
+  trigger refusing skips and regressions and (b) `night_outs.status`
+  checks inside the mutation policies / definer RPCs themselves — so
+  vote-after-lock and roster-edit-after-lock are impossible for ANY code
+  path, not merely unimplemented in the current client. Locking also
+  freezes suggestion DELETION, and `winner_suggestion_id` carries
+  `ON DELETE SET NULL` as belt-and-braces; the winner and final tallies
+  are **materialized at lock** so later roster changes or retention purges
+  can never rewrite the recorded outcome (santa: DeepSeek).
+- **Crew removal does not propagate into open nights** (santa: Kimi —
+  named as the deliberate consequence of the snapshot, with its lever):
+  removing someone from a crew leaves them on nights already started;
+  the moderation UI's compound action "remove from crew AND open nights"
+  is the operator-facing lever, executing per-night roster removals.
 - **Close sets guests' `removed_at`** (consult: DeepSeek): closing a night
   terminates `source='guest_invite'` rows (or the RLS predicate carries
   `source='crew' OR night_outs.status='open'`), so a later re-open cannot
@@ -188,13 +212,27 @@ Cross-cutting rules:
   wants block-propagation into Crews, that is new scope.
 - **Anti-abuse parity:** invitation creation gets an attempts table or rate
   limit consistent with `handle_claim_attempts` / `follow_attempts`
-  precedent.
+  precedent; and **suggestions carry the same 3-live-per-member-per-night
+  cap `suggest_bar` (0011) already enforces** (santa: Codex + Fable + GLM,
+  independently) — the closed roster lowers the abuse surface but does not
+  justify silently dropping the repo's own precedent.
+- **Bearer share links have no path into these tables** (santa: GLM): the
+  existing `shared_nights` tokens expose the personal-night share surface
+  only; no policy on the seven Crews tables honors any bearer token, and
+  group-night sharing is out of scope for v1. Pre-burn forwarding of a
+  crew/guest invite link grants the seat to the first acceptor only —
+  the burn is the containment (santa: Kimi).
 
 ## Expiry, retention, closure (step 9)
 
-- A Night Out closes at `closes_at` (default proposal: the 5am personal
-  rollover following its `night_key`) or when the owner closes it. Closed =
-  read-only for suggestions/votes.
+- A Night Out closes at `closes_at` (default proposal: the **6am NY
+  rollover** following its `night_key` — `NIGHT_ROLLOVER_HOUR = 6` in
+  `src/lib/socialNight.ts` is this branch's single rollover; the 5am/6am
+  split exists only in the `release/beta1-rc` composition, NOT here —
+  santa: Fable) or when the owner closes it. `night_key` is computed by
+  the existing `nycNightKey` convention at the explicit start action; the
+  roster snapshot happens at that same event, not at a midnight boundary
+  (santa: GLM). Closed = read-only for suggestions/votes.
 - **Retention policy — OPERATOR DECISION, options proposed, not decided:**
   - **A (minimal):** purge `night_out_suggestions`/`votes` N days after
     close (proposal N=30); keep `night_outs` + roster as history; recap
@@ -214,9 +252,13 @@ Cross-cutting rules:
 ## Moderation
 
 Owner removes members (crew or night); removed members lose access
-immediately via the `removed_at` predicate (step 7). Guests expire with the
-night. Ownership transfer, reporting, and a durable block system are named
-non-goals of v1 — each is an operator decision if wanted.
+immediately via the `removed_at` predicate (step 7). **In v1, "Block" IS
+the compound removal** (santa: Codex — step 7 names blocked members, so
+the trace must be explicit): the moderation UI's Block action performs
+removal from the crew and all open nights; there is no independent block
+state or table. Guests expire with the night. Ownership transfer,
+reporting, and a durable block system are named non-goals of v1 — each is
+an operator decision if wanted.
 
 ## Notification policy — OPERATOR DECISION, options proposed
 
@@ -233,6 +275,11 @@ only defines *what* may notify:
   carries the same `removed_at IS NULL` predicate as the RLS policies, or
   removed members keep receiving the night's activity through the side
   channel the policies just closed.
+- **The channel is OFF today and this packet does not turn it on** (santa:
+  GLM): push is preflight-disabled and native APNs is absent — the policy
+  above activates only after the platform packet's APNs work
+  (`g-9b97c22d`) and an explicit operator enable. No Crews implementation
+  work implies enabling push.
 - **Opt-in default options:** (i) all off until the user enables per-crew
   (privacy-first, recommended for beta); (ii) invitation+night-start on by
   default, activity off; (iii) all on. No notification may leak content to
@@ -242,7 +289,7 @@ only defines *what* may notify:
 
 | Number | State |
 |---|---|
-| 0038 | RESERVED venue pins (draft exists, never applied) |
+| 0038 | RESERVED venue pins (draft at `supabase/migrations/drafts/0038_venue_pins.sql` — NOT in the top-level migrations dir; santa: Codex misread exactly this) |
 | 0039 | RESERVED social Phase B (no file) |
 | 0040 | RESERVED night photos (no file) |
 | 0041 | census source widening — applied to Staging only |
@@ -266,3 +313,18 @@ post-close).
    removal sufficient for beta? (Proposed: removal only; block table later.)
 4. May a Night Out exist without a Crew (ad-hoc night with guests only)?
    The model permits it (`crew_id NULL`); product call.
+5. **Voting model** (santa: DeepSeek): the PK `(suggestion_id, voter_id)`
+   is approval voting — a member may up-vote several suggestions.
+   (Suggestion rows belong to exactly one night, so the key is
+   night-scoped transitively — there is no cross-night collision; santa:
+   Kimi's contrary reading checked and refuted.) Alternative: single-choice
+   via a `(night_out_id, voter_id)` unique key. Proposed: approval for
+   beta. **Tie rule at lock** must be stated either way — proposed:
+   earliest-created suggestion wins ties; the owner may pick any
+   suggestion manually before locking.
+6. **Follows↔Crew bridge** (santa: Kimi, strategic): the design gives a
+   follower no route into a crew except an out-of-band invite. Leaving
+   the two graphs unbridged is a conscious product decision — decide
+   whether crew invite surfaces suggest from the follows graph, or the
+   surfaces stay fully separate for beta (proposed: separate; revisit
+   after real usage).
