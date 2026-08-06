@@ -133,8 +133,14 @@ export default defineConfig({
       // bar's hide-on-scroll behavior — the covered-card defect it guards was
       // caught BY mobile-controls on this exact viewport, so its regression
       // pin runs here too.
+      // account-content-conflict added 2026-08-06: a bottom-anchored dialog
+      // (pb-24, above the fixed nav) stacking THREE controls, the lowest of
+      // which — "Decide later" — is the 44px text button. That is the same
+      // bottom-crowded shape as every spec above, and the choice sitting
+      // closest to the nav is the non-destructive one, so a covered control
+      // would push users toward the two irreversible buttons instead.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|account-content-conflict)\.spec\.ts/,
       dependencies: ['warmup'],
     },
   ],
