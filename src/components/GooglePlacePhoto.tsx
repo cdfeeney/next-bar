@@ -141,10 +141,11 @@ export default function GooglePlacePhoto({
         if (!cancelled) setStatus('unavailable');
       }, MAX_LOAD_MS);
 
-      // Runtime kill switch (D1) — consulted per widget CREATION, before the
-      // SDK is even loaded, so an operator cut-off stops NEW billable
-      // requests within the flag's TTL even in sessions where the SDK is
-      // already resident. Fail-closed: unreachable flags mean no request.
+      // Server permission gate — consulted per widget CREATION, before the
+      // SDK is even loaded. Fail-closed: unreachable flags mean no request.
+      // Note the gate's VALUE is per-deployment on Vercel (env changes need
+      // a new deployment); the immediate spend stop is the Google-side
+      // quota cap, not this flag. See docs/GOOGLE-MEDIA-RUNBOOK.md.
       const runtimeOk = await isRuntimeGoogleMediaEnabled();
       if (cancelled) return;
       if (!runtimeOk) {

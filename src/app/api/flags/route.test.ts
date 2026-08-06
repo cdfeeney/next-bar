@@ -32,14 +32,14 @@ describe('/api/flags — runtime google-media kill switch', () => {
     expect(await GET().json()).toEqual({ googleMedia: true });
   });
 
-  test('read at request time, not import time — a flip changes the next response', async () => {
+  test('read at request time, not import time — a NEW deployment with a flipped value changes the response', async () => {
     vi.stubEnv('GOOGLE_MEDIA_RUNTIME_ENABLED', '1');
     expect(await GET().json()).toEqual({ googleMedia: true });
     vi.stubEnv('GOOGLE_MEDIA_RUNTIME_ENABLED', '0');
     expect(await GET().json()).toEqual({ googleMedia: false });
   });
 
-  test('carries the short shared-cache header that bounds kill propagation', () => {
+  test('carries the short shared-cache header that keeps scroll bursts off the function', () => {
     vi.stubEnv('GOOGLE_MEDIA_RUNTIME_ENABLED', '1');
     expect(GET().headers.get('Cache-Control')).toContain('s-maxage=60');
   });

@@ -120,13 +120,16 @@ export function __resetRequested(): void {
 }
 
 /**
- * Runtime kill switch (D1): /api/flags decides SERVER-SIDE whether google-live
- * media may issue requests, so cost can be cut off in ~TTL seconds without a
- * redeploy — the build-time NEXT_PUBLIC_GOOGLE_MEDIA flag is eligibility, this
- * is permission. FAIL-CLOSED: any error, timeout, non-200, or malformed body
- * reads as disabled. A confirmed verdict is cached briefly so a scroll burst
- * does not turn the flag route into a per-card request; a FAILED check is
- * never cached, so the next widget creation retries.
+ * Server-decided permission gate: /api/flags decides whether google-live
+ * media may issue requests — the build-time NEXT_PUBLIC_GOOGLE_MEDIA flag is
+ * eligibility, this is permission. On Vercel the flag's VALUE is fixed per
+ * deployment (env changes apply only to new deployments), so this is NOT a
+ * no-redeploy kill switch; the immediate hard spending stop is Google
+ * Cloud's SKU quota cap (see docs/GOOGLE-MEDIA-RUNBOOK.md). FAIL-CLOSED:
+ * any error, timeout, non-200, or malformed body reads as disabled. A
+ * confirmed verdict is cached briefly so a scroll burst does not turn the
+ * flag route into a per-card request; a FAILED check is never cached, so
+ * the next widget creation retries.
  */
 export const RUNTIME_FLAG_TTL_MS = 60_000;
 export const RUNTIME_FLAG_TIMEOUT_MS = 3_000;
