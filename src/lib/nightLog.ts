@@ -123,11 +123,16 @@ export function recordVisit(barId: string, now: Date = new Date()): void {
   // show previous nights instead of the app forgetting them. The ratings
   // snapshot rides along (see nightArchive's module doc for why).
   if (stored && stored.night !== tonight && stored.visits.length > 0) {
-    archiveNight({
+    const archived = archiveNight({
       nightKey: stored.night,
       visits: stored.visits,
       ratings: nightRatings(stored.night),
     });
+    // The displaced night's ONLY copy is this live log — never overwrite
+    // it until the archive copy provably landed. Tonight's visit is the
+    // sacrifice (thinner record), not last night's history (santa: FABLE,
+    // r3 — quota never consents to deletion).
+    if (!archived) return;
   }
   const log: StoredNightLog =
     stored && stored.night === tonight ? stored : { night: tonight, visits: [] };

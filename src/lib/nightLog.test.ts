@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assembleNight,
   clearNightLog,
@@ -45,6 +45,30 @@ describe('nightLog (E4.1)', () => {
       'mister-paradise',
       'attaboy',
     ]);
+  });
+
+  it('rollover NEVER destroys the displaced night when the archive write fails (quota)', () => {
+    // santa round 3 (FABLE): if the archive write is refused at the rollover
+    // boundary, overwriting the log would delete the displaced night's ONLY
+    // copy — quota never consents to deletion.
+    recordVisit('attaboy', friday11pm);
+    const original = Storage.prototype.setItem;
+    const spy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(function (this: Storage, key: string, value: string) {
+        if (key === 'next-bar:night-archive:v1') {
+          throw new DOMException('quota', 'QuotaExceededError');
+        }
+        original.call(this, key, value);
+      });
+    try {
+      recordVisit('sisters', saturday11pm);
+    } finally {
+      spy.mockRestore();
+    }
+    // Friday's record survives in the live log; Saturday's visit is the
+    // sacrifice (thinner record), not last night's history.
+    expect(loadNightVisits(FRI_NIGHT).map((v) => v.barId)).toEqual(['attaboy']);
   });
 
   it("tonight's first visit replaces last night's log; yesterday reads empty after that", () => {

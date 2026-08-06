@@ -303,6 +303,14 @@ async function uploadAndConfirm({
   // value while this write was in flight; never overwrite it with the
   // captured pre-await snapshot or the read-back.
   const current = readLocal(key);
+  if (current.status === 'invalid') {
+    // Corrupted bytes that appeared mid-flight are preserved verbatim
+    // before the read-back may land over them (santa: FABLE, r3).
+    const captured = runWithAccountContentReadBypass(() =>
+      quarantineRawInvalidContent(userId, key),
+    );
+    if (!captured) return 'uploaded-unconfirmed';
+  }
   if (current.status !== 'present') {
     return hydrate(key, readBack.value) ? 'hydrated' : 'uploaded-unconfirmed';
   }
@@ -385,7 +393,7 @@ export async function reconcileQuarantinedAccountContent({
       contentIdentity(server.value.data).digest === envelope.digest
     ) {
       // Server provably holds this content — the envelope is redundant.
-      releaseQuarantinedEnvelope(userId, key);
+      releaseQuarantinedEnvelope(userId, key, envelope.digest);
       outcomes[key] = 'released-equal';
       continue;
     }
@@ -424,6 +432,17 @@ export async function reconcileQuarantinedAccountContent({
         // exactly that overwrite, and the envelope's bytes are already
         // proven on the server by the fresh read-back (santa: Codex, r2).
         const current = readLocal(key);
+        if (current.status === 'invalid') {
+          // Unparseable live bytes never consent to deletion — capture them
+          // verbatim before any hydrate can land over them (santa: FABLE, r3).
+          const captured = runWithAccountContentReadBypass(() =>
+            quarantineRawInvalidContent(userId, key),
+          );
+          if (!captured) {
+            outcomes[key] = 'kept-pending';
+            continue;
+          }
+        }
         const liveHoldsThisOrNewer =
           current.status === 'present' &&
           compareUpdatedAt(current.value, deviceValue) >= 0;
@@ -432,7 +451,7 @@ export async function reconcileQuarantinedAccountContent({
           liveHoldsThisOrNewer ||
           hydrate(key, deviceValue);
         if (liveLanded) {
-          releaseQuarantinedEnvelope(userId, key);
+          releaseQuarantinedEnvelope(userId, key, envelope.digest);
           outcomes[key] = 'restored-uploaded';
         } else {
           outcomes[key] = 'kept-pending';
@@ -440,13 +459,15 @@ export async function reconcileQuarantinedAccountContent({
       } else if (outcome === 'hydrated') {
         // A different server value won mid-flight: same losing rules below.
         if (envelope.confirmedAtCapture) {
-          releaseQuarantinedEnvelope(userId, key);
+          releaseQuarantinedEnvelope(userId, key, envelope.digest);
           outcomes[key] = 'released-confirmed-stale';
         } else {
-          updateQuarantinedEnvelope(userId, key, {
-            ...envelope,
-            status: 'conflict',
-          });
+          updateQuarantinedEnvelope(
+            userId,
+            key,
+            { ...envelope, status: 'conflict' },
+            envelope.digest,
+          );
           outcomes[key] = 'conflict-retained';
         }
       } else {
@@ -459,13 +480,18 @@ export async function reconcileQuarantinedAccountContent({
     if (envelope.confirmedAtCapture) {
       // Server presence was PROVEN at capture; the server has simply moved
       // on. Releasing deletes nothing that was ever the only copy.
-      releaseQuarantinedEnvelope(userId, key);
+      releaseQuarantinedEnvelope(userId, key, envelope.digest);
       outcomes[key] = 'released-confirmed-stale';
       continue;
     }
     // Unconfirmed device content lost LWW: retain it as an explicit conflict
     // until the user chooses. The server value is (or will be) live.
-    updateQuarantinedEnvelope(userId, key, { ...envelope, status: 'conflict' });
+    updateQuarantinedEnvelope(
+      userId,
+      key,
+      { ...envelope, status: 'conflict' },
+      envelope.digest,
+    );
     outcomes[key] = 'conflict-retained';
   }
   return outcomes;
@@ -501,7 +527,7 @@ export async function resolveAccountContentConflict({
 
   if (choice === 'keep-account') {
     // Explicit, named discard of the device copy in favor of the account's.
-    releaseQuarantinedEnvelope(userId, key);
+    releaseQuarantinedEnvelope(userId, key, envelope.digest);
     return 'kept-account';
   }
 
@@ -532,6 +558,13 @@ export async function resolveAccountContentConflict({
     // mid-flight is never clobbered by the resolved device copy — the
     // device copy is already proven on the server (santa: Codex, r2).
     const current = readLocal(key);
+    if (current.status === 'invalid') {
+      // Unparseable live bytes never consent to deletion (santa: FABLE, r3).
+      const captured = runWithAccountContentReadBypass(() =>
+        quarantineRawInvalidContent(userId, key),
+      );
+      if (!captured) return 'failed';
+    }
     const liveHoldsThisOrNewer =
       current.status === 'present' &&
       compareUpdatedAt(current.value, deviceValue) >= 0;
@@ -540,7 +573,7 @@ export async function resolveAccountContentConflict({
       liveHoldsThisOrNewer ||
       hydrate(key, deviceValue);
     if (liveLanded) {
-      releaseQuarantinedEnvelope(userId, key);
+      releaseQuarantinedEnvelope(userId, key, envelope.digest);
       return 'used-device';
     }
   }

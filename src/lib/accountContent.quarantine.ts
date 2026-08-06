@@ -349,13 +349,34 @@ export function quarantineRawInvalidContent(
   }
   if (raw === null) return false;
   const store = readQuarantineStore();
+  // Same supersede rule as commit(): a prior divergent raw entry (and its
+  // chain) is preserved, never replaced wholesale (santa: Codex, round 3).
+  const existing = store.rawInvalid[userId]?.[key];
+  let superseded = existing?.superseded ?? [];
+  if (existing && existing.raw !== raw) {
+    superseded = [
+      {
+        raw: existing.raw,
+        capturedAt: existing.capturedAt,
+        supersededAt: nowIso(now),
+      },
+      ...superseded,
+    ];
+  }
+  superseded = superseded.filter(
+    (s, i, arr) =>
+      s.raw !== raw && arr.findIndex((o) => o.raw === s.raw) === i,
+  );
   const next: QuarantineStore = {
     ...store,
     rawInvalid: {
       ...store.rawInvalid,
       [userId]: {
         ...(store.rawInvalid[userId] ?? {}),
-        [key]: { raw, capturedAt: nowIso(now) },
+        [key]:
+          superseded.length > 0
+            ? { raw, capturedAt: nowIso(now), superseded }
+            : { raw, capturedAt: nowIso(now) },
       },
     },
   };
@@ -790,12 +811,21 @@ export function readQuarantinedAccountContent(
   return readQuarantineStore().accounts[userId] ?? {};
 }
 
+/** When `expectedDigest` is given, the write happens only if the slot still
+ *  holds that exact content — a stale async caller (concurrent tab) must
+ *  never overwrite a slot another resolution has since repopulated
+ *  (santa: Codex, round 3). */
 export function updateQuarantinedEnvelope(
   userId: string,
   key: AccountContentKey,
   envelope: QuarantineEnvelope,
+  expectedDigest?: string,
 ): boolean {
   const store = readQuarantineStore();
+  if (expectedDigest !== undefined) {
+    const current = store.accounts[userId]?.[key];
+    if (!current || current.digest !== expectedDigest) return false;
+  }
   return writeStore({
     ...store,
     accounts: {
@@ -807,13 +837,22 @@ export function updateQuarantinedEnvelope(
 
 /** Drop one envelope after explicit resolution or proven server presence.
  *  A superseded snapshot is content this release was NOT about — the newest
- *  one is promoted to an explicit retained conflict rather than deleted. */
+ *  one is promoted to an explicit retained conflict rather than deleted.
+ *  When `expectedDigest` is given, the release applies only if the slot
+ *  still holds that content: a stale concurrent-tab release must never
+ *  delete a snapshot promoted after its read (santa: Codex, round 3). */
 export function releaseQuarantinedEnvelope(
   userId: string,
   key: AccountContentKey,
+  expectedDigest?: string,
 ): boolean {
   const store = readQuarantineStore();
   const account = { ...(store.accounts[userId] ?? {}) };
+  const current = account[key];
+  if (current === undefined) return true; // already gone — idempotent
+  if (expectedDigest !== undefined && current.digest !== expectedDigest) {
+    return false;
+  }
   const [next, ...rest] = account[key]?.superseded ?? [];
   if (next) {
     account[key] = {

@@ -548,6 +548,98 @@ describe('quarantine restore reconciliation (v2.1)', () => {
     });
   });
 
+  it('restore release preserves INVALID live bytes verbatim before hydrating over them', async () => {
+    // santa round 3 (FABLE): unparseable live bytes never consent to
+    // deletion — they are captured verbatim before the restored value lands.
+    const device = lists(T2, ['device-restored']);
+    envelopeFor(device);
+    fetchKey
+      .mockResolvedValueOnce(ok('absent'))
+      .mockImplementationOnce(async () => {
+        window.localStorage.setItem(
+          storageKeyForAccountContent('lists'),
+          '{corrupt mid-flight',
+        );
+        return ok(device);
+      });
+
+    const outcomes = await reconcileQuarantinedAccountContent({
+      supabase: client,
+      userId: USER,
+      stillCurrent: () => true,
+    });
+
+    expect(readQuarantineStore().rawInvalid[USER]?.lists?.raw).toBe(
+      '{corrupt mid-flight',
+    );
+    expect(outcomes.lists).toBe('restored-uploaded');
+    expect(readQuarantinedAccountContent(USER)).toEqual({});
+    expect(readLocalAccountContent('lists')).toEqual({
+      status: 'present',
+      value: device,
+    });
+  });
+
+  it('use-device resolution preserves INVALID live bytes verbatim before hydrating', async () => {
+    const device = lists(T1, ['conflict-device']);
+    envelopeFor(device, { status: 'conflict' });
+    fetchKey.mockImplementationOnce(async () => {
+      window.localStorage.setItem(
+        storageKeyForAccountContent('lists'),
+        '{corrupt mid-flight',
+      );
+      return ok({ data: device.data, clientUpdatedAt: T3 });
+    });
+
+    const result = await resolveAccountContentConflict({
+      supabase: client,
+      userId: USER,
+      key: 'lists',
+      choice: 'use-device',
+      stillCurrent: () => true,
+      now: () => new Date(T3),
+    });
+
+    expect(result).toBe('used-device');
+    expect(readQuarantineStore().rawInvalid[USER]?.lists?.raw).toBe(
+      '{corrupt mid-flight',
+    );
+    expect(readLocalAccountContent('lists')).toEqual({
+      status: 'present',
+      value: { data: device.data, clientUpdatedAt: T3 },
+    });
+  });
+
+  it('forward sync preserves INVALID bytes that appear mid-upload before hydrating the read-back', async () => {
+    seedLocal(lists(T1, ['local']));
+    fetchKey
+      .mockResolvedValueOnce(ok('absent'))
+      .mockResolvedValueOnce(ok(lists(T2, ['server-won'])));
+    upsert.mockImplementation(async () => {
+      window.localStorage.setItem(
+        storageKeyForAccountContent('lists'),
+        '{corrupt mid-flight',
+      );
+      return { kind: 'ok' };
+    });
+
+    const outcome = await syncAccountContentKey({
+      supabase: client,
+      userId: USER,
+      key: 'lists',
+      stillCurrent: () => true,
+    });
+
+    expect(readQuarantineStore().rawInvalid[USER]?.lists?.raw).toBe(
+      '{corrupt mid-flight',
+    );
+    expect(outcome).toBe('hydrated');
+    expect(readLocalAccountContent('lists')).toEqual({
+      status: 'present',
+      value: lists(T2, ['server-won']),
+    });
+  });
+
   it('fetch failure keeps the envelope pending — retry later, no loss', async () => {
     envelopeFor(lists(T2, ['kept']));
     fetchKey.mockResolvedValue({ kind: 'failed' });

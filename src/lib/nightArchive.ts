@@ -126,10 +126,11 @@ function notifyChange(): void {
 /**
  * Add (or replace — one entry per nightKey) a night. Empty nights are
  * refused: an entry with no visits renders as a blank row and means the
- * caller archived a log that never existed.
+ * caller archived a log that never existed. Returns whether the entry
+ * provably landed — rollover callers must not discard their copy otherwise.
  */
-export function archiveNight(night: ArchivedNight): void {
-  if (night.visits.length === 0) return;
+export function archiveNight(night: ArchivedNight): boolean {
+  if (night.visits.length === 0) return false;
   const rest = read().filter((n) => n.nightKey !== night.nightKey);
   const entry: ArchivedNight = {
     nightKey: night.nightKey,
@@ -140,8 +141,9 @@ export function archiveNight(night: ArchivedNight): void {
     // Newest first; nightKeys are YYYY-MM-DD so string order is date order.
     .sort((a, b) => b.nightKey.localeCompare(a.nightKey))
     .slice(0, MAX_ARCHIVED_NIGHTS);
-  if (!write(next)) return;
+  if (!write(next)) return false;
   notifyChange();
+  return true;
 }
 
 /** All archived nights, newest first. */

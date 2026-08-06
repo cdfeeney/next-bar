@@ -526,6 +526,130 @@ describe('santa round-2 hardening (Codex lane findings)', () => {
     expect(envelope?.superseded ?? []).toEqual([]);
   });
 
+  test('a stale release naming a DIFFERENT digest is a no-op — a promoted snapshot is never deleted by it', () => {
+    // Two tabs raced: this slot now holds the promoted snapshot (digest S),
+    // but the stale tab still believes it is releasing envelope E.
+    const idOld = contentIdentity(OLD);
+    const idNew = contentIdentity(NEW);
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_QUARANTINE_KEY,
+      JSON.stringify({
+        version: 2,
+        accounts: {
+          [USER_A]: {
+            lists: {
+              data: OLD,
+              clientUpdatedAt: '2026-08-02T00:00:00.000Z',
+              digest: idOld.digest,
+              byteLength: idOld.byteLength,
+              quarantinedAt: '2026-08-04T00:00:00.000Z',
+              status: 'conflict',
+              confirmedAtCapture: null,
+            },
+          },
+        },
+        rawInvalid: {},
+        pendingForeign: null,
+        resolutionRequired: [],
+      }),
+    );
+
+    // The stale tab's release names envelope E's digest (NEW) — not what
+    // the slot holds now. It must refuse rather than delete.
+    expect(releaseQuarantinedEnvelope(USER_A, 'lists', idNew.digest)).toBe(
+      false,
+    );
+    expect(readQuarantinedAccountContent(USER_A).lists?.data).toEqual(OLD);
+
+    // A release naming the CURRENT digest still works.
+    expect(releaseQuarantinedEnvelope(USER_A, 'lists', idOld.digest)).toBe(
+      true,
+    );
+    expect(readQuarantinedAccountContent(USER_A).lists).toBeUndefined();
+  });
+
+  test('a stale update naming a DIFFERENT digest is a no-op — no resurrection over a changed slot', async () => {
+    const { updateQuarantinedEnvelope } = await import(
+      '@/lib/accountContent.quarantine'
+    );
+    const idOld = contentIdentity(OLD);
+    const idNew = contentIdentity(NEW);
+    const promoted = {
+      data: OLD,
+      clientUpdatedAt: '2026-08-02T00:00:00.000Z',
+      digest: idOld.digest,
+      byteLength: idOld.byteLength,
+      quarantinedAt: '2026-08-04T00:00:00.000Z',
+      status: 'conflict' as const,
+      confirmedAtCapture: null,
+    };
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_QUARANTINE_KEY,
+      JSON.stringify({
+        version: 2,
+        accounts: { [USER_A]: { lists: promoted } },
+        rawInvalid: {},
+        pendingForeign: null,
+        resolutionRequired: [],
+      }),
+    );
+    const staleEnvelope = {
+      data: NEW,
+      clientUpdatedAt: '2026-08-05T00:00:00.000Z',
+      digest: idNew.digest,
+      byteLength: idNew.byteLength,
+      quarantinedAt: '2026-08-05T00:00:00.000Z',
+      status: 'conflict' as const,
+      confirmedAtCapture: null,
+    };
+
+    expect(
+      updateQuarantinedEnvelope(USER_A, 'lists', staleEnvelope, idNew.digest),
+    ).toBe(false);
+    expect(readQuarantinedAccountContent(USER_A).lists?.data).toEqual(OLD);
+  });
+
+  test('single-key raw-invalid capture SUPERSEDES the prior raw entry instead of destroying it', () => {
+    const OLD_RAW = '{old corrupt bytes';
+    const OLDER_RAW = '{even older corrupt bytes';
+    const NEW_RAW = '{new corrupt bytes';
+    window.localStorage.setItem(LISTS_KEY, NEW_RAW);
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_QUARANTINE_KEY,
+      JSON.stringify({
+        version: 2,
+        accounts: {},
+        rawInvalid: {
+          [USER_A]: {
+            lists: {
+              raw: OLD_RAW,
+              capturedAt: '2026-08-04T00:00:00.000Z',
+              superseded: [
+                {
+                  raw: OLDER_RAW,
+                  capturedAt: '2026-08-03T00:00:00.000Z',
+                  supersededAt: '2026-08-04T00:00:00.000Z',
+                },
+              ],
+            },
+          },
+        },
+        pendingForeign: null,
+        resolutionRequired: [],
+      }),
+    );
+
+    expect(quarantineRawInvalidContent(USER_A, 'lists')).toBe(true);
+
+    const rawEnvelope = readQuarantineStore().rawInvalid[USER_A]?.lists;
+    expect(rawEnvelope?.raw).toBe(NEW_RAW);
+    // Both prior copies survive in the chain.
+    expect(rawEnvelope?.superseded?.some((s) => s.raw === OLD_RAW)).toBe(true);
+    expect(rawEnvelope?.superseded?.some((s) => s.raw === OLDER_RAW)).toBe(
+      true,
+    );
+  });
+
   test('divergent raw invalid text is superseded, never destroyed', () => {
     const OLD_RAW = '{old corrupt bytes';
     const NEW_RAW = '{new corrupt bytes';
