@@ -9,6 +9,7 @@ import {
   readQuarantineStore,
   readQuarantinedAccountContent,
   recoverQuarantineJournal,
+  releaseQuarantinedEnvelope,
   resolvePendingForeign,
   setPendingForeign,
   wipeAllQuarantineState,
@@ -377,6 +378,180 @@ describe('crash recovery — resumes only after revalidation', () => {
     expect(store.resolutionRequired).toHaveLength(1);
     expect(store.resolutionRequired[0].ownerUserId).toBe(USER_A);
     expect(window.localStorage.getItem(ACCOUNT_CONTENT_JOURNAL_KEY)).toBeNull();
+  });
+});
+
+describe('santa round-2 hardening (Codex lane findings)', () => {
+  const OLD = LISTS;
+  const NEW = [{ ...LISTS[0], barIds: ['attaboy', 'death-and-co'] }];
+
+  /** The exact state a digest-guard abort leaves behind: OLD committed under
+   *  A, live already holds NEW, divergence flagged, journal stuck at P4. */
+  function seedDivergenceAbort(options?: {
+    confirmedAtCapture?: { clock: string } | null;
+  }): void {
+    const idOld = contentIdentity(OLD);
+    const oldEnvelope = {
+      data: OLD,
+      clientUpdatedAt: '2026-08-02T00:00:00.000Z',
+      digest: idOld.digest,
+      byteLength: idOld.byteLength,
+      quarantinedAt: '2026-08-05T00:00:00.000Z',
+      status: 'quarantined',
+      confirmedAtCapture: options?.confirmedAtCapture ?? null,
+    };
+    window.localStorage.setItem(LISTS_KEY, JSON.stringify(NEW));
+    window.localStorage.setItem(ACCOUNT_CONTENT_OWNER_KEY, USER_A);
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_QUARANTINE_KEY,
+      JSON.stringify({
+        version: 2,
+        accounts: { [USER_A]: { lists: oldEnvelope } },
+        rawInvalid: {},
+        pendingForeign: null,
+        resolutionRequired: [
+          {
+            reason:
+              'live lists diverged from journaled envelope; both copies preserved',
+            at: '2026-08-05T00:00:00.000Z',
+            ownerUserId: USER_A,
+            key: 'lists',
+          },
+        ],
+      }),
+    );
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_JOURNAL_KEY,
+      JSON.stringify({
+        version: 1,
+        ownerUserId: USER_A,
+        phase: 'P4',
+        startedAt: '2026-08-05T00:00:00.000Z',
+        pending: { lists: oldEnvelope },
+        pendingRaw: {},
+      }),
+    );
+  }
+
+  test('re-quarantine after a divergence abort SUPERSEDES the old committed copy — never destroys it', () => {
+    seedDivergenceAbort();
+    const idOld = contentIdentity(OLD);
+
+    const result = quarantineAccountContent(USER_A);
+
+    expect(result.ok).toBe(true);
+    const envelope = readQuarantinedAccountContent(USER_A).lists;
+    // The current live value is the main preserved copy…
+    expect(envelope?.data).toEqual(NEW);
+    // …and the previously committed OLD copy survives as a snapshot.
+    expect(
+      envelope?.superseded?.some((s) => s.digest === idOld.digest),
+    ).toBe(true);
+    expect(
+      envelope?.superseded?.find((s) => s.digest === idOld.digest)?.data,
+    ).toEqual(OLD);
+    // With both copies durably preserved the move completes: live gone,
+    // owner marker gone.
+    expect(window.localStorage.getItem(LISTS_KEY)).toBeNull();
+    expect(window.localStorage.getItem(ACCOUNT_CONTENT_OWNER_KEY)).toBeNull();
+  });
+
+  test('the divergence resolution-required entry CLEARS once both copies are preserved in the store', () => {
+    seedDivergenceAbort();
+
+    quarantineAccountContent(USER_A);
+
+    const store = readQuarantineStore();
+    expect(
+      store.resolutionRequired.filter(
+        (e) => e.key === 'lists' && e.ownerUserId === USER_A,
+      ),
+    ).toEqual([]);
+  });
+
+  test('a committed copy whose server presence was PROVEN at capture is superseded without a snapshot', () => {
+    seedDivergenceAbort({
+      confirmedAtCapture: { clock: '2026-08-02T00:00:00.000Z' },
+    });
+
+    quarantineAccountContent(USER_A);
+
+    const envelope = readQuarantinedAccountContent(USER_A).lists;
+    expect(envelope?.data).toEqual(NEW);
+    expect(envelope?.superseded ?? []).toEqual([]);
+  });
+
+  test('releasing an envelope PROMOTES its superseded snapshot to an explicit conflict — silent deletion never', () => {
+    const idOld = contentIdentity(OLD);
+    const idNew = contentIdentity(NEW);
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_QUARANTINE_KEY,
+      JSON.stringify({
+        version: 2,
+        accounts: {
+          [USER_A]: {
+            lists: {
+              data: NEW,
+              clientUpdatedAt: '2026-08-05T00:00:00.000Z',
+              digest: idNew.digest,
+              byteLength: idNew.byteLength,
+              quarantinedAt: '2026-08-05T00:00:00.000Z',
+              status: 'quarantined',
+              confirmedAtCapture: null,
+              superseded: [
+                {
+                  data: OLD,
+                  clientUpdatedAt: '2026-08-02T00:00:00.000Z',
+                  digest: idOld.digest,
+                  byteLength: idOld.byteLength,
+                  quarantinedAt: '2026-08-04T00:00:00.000Z',
+                  supersededAt: '2026-08-05T00:00:00.000Z',
+                  confirmedAtCapture: null,
+                },
+              ],
+            },
+          },
+        },
+        rawInvalid: {},
+        pendingForeign: null,
+        resolutionRequired: [],
+      }),
+    );
+
+    expect(releaseQuarantinedEnvelope(USER_A, 'lists')).toBe(true);
+
+    const envelope = readQuarantinedAccountContent(USER_A).lists;
+    expect(envelope?.status).toBe('conflict');
+    expect(envelope?.data).toEqual(OLD);
+    expect(envelope?.superseded ?? []).toEqual([]);
+  });
+
+  test('divergent raw invalid text is superseded, never destroyed', () => {
+    const OLD_RAW = '{old corrupt bytes';
+    const NEW_RAW = '{new corrupt bytes';
+    window.localStorage.setItem(LISTS_KEY, NEW_RAW);
+    window.localStorage.setItem(ACCOUNT_CONTENT_OWNER_KEY, USER_A);
+    window.localStorage.setItem(
+      ACCOUNT_CONTENT_QUARANTINE_KEY,
+      JSON.stringify({
+        version: 2,
+        accounts: {},
+        rawInvalid: {
+          [USER_A]: {
+            lists: { raw: OLD_RAW, capturedAt: '2026-08-04T00:00:00.000Z' },
+          },
+        },
+        pendingForeign: null,
+        resolutionRequired: [],
+      }),
+    );
+
+    const result = quarantineAccountContent(USER_A);
+
+    expect(result.ok).toBe(true);
+    const rawEnvelope = readQuarantineStore().rawInvalid[USER_A]?.lists;
+    expect(rawEnvelope?.raw).toBe(NEW_RAW);
+    expect(rawEnvelope?.superseded?.some((s) => s.raw === OLD_RAW)).toBe(true);
   });
 });
 

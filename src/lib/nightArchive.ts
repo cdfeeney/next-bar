@@ -93,18 +93,22 @@ function read(): ArchivedNight[] {
   }
 }
 
-function write(nights: ArchivedNight[]): void {
-  if (typeof window === 'undefined') return;
+/** True only when the write actually landed — callers notify on that,
+ *  never on a refused/failed write (same convention as lists.writeAll). */
+function write(nights: ArchivedNight[]): boolean {
+  if (typeof window === 'undefined') return false;
   // Write barrier (v2.1): unresolved ownership → never overwrite residue.
-  if (!accountContentWriteAllowed()) return;
+  if (!accountContentWriteAllowed()) return false;
   try {
     window.localStorage.setItem(
       NIGHT_ARCHIVE_STORAGE_KEY,
       JSON.stringify(nights),
     );
+    return true;
   } catch {
     // Quota/private-mode failures degrade to "history is thinner" — same
     // stance as nightLog's writeLog.
+    return false;
   }
 }
 
@@ -136,7 +140,7 @@ export function archiveNight(night: ArchivedNight): void {
     // Newest first; nightKeys are YYYY-MM-DD so string order is date order.
     .sort((a, b) => b.nightKey.localeCompare(a.nightKey))
     .slice(0, MAX_ARCHIVED_NIGHTS);
-  write(next);
+  if (!write(next)) return;
   notifyChange();
 }
 

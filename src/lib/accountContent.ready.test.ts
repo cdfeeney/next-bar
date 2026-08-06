@@ -202,6 +202,59 @@ describe('santa round-1 hardening', () => {
   });
 });
 
+describe('santa round-2 hardening', () => {
+  test('a guard-blocked write never dispatches a change notification (no false "something changed")', async () => {
+    const { archiveNight } = await import('@/lib/nightArchive');
+    const { recordVisit } = await import('@/lib/nightLog');
+    const { recordSharedNight } = await import('@/lib/sharedNightsLocal');
+    seedOwnedContent(USER_A); // auth unknown + owner marker → blocked
+    expect(ensureAccountContentReady().status).toBe('blocked');
+
+    const seen: Array<string | null> = [];
+    const listener = (e: Event): void => {
+      seen.push((e as StorageEvent).key);
+    };
+    window.addEventListener('storage', listener);
+    try {
+      archiveNight({
+        nightKey: '2026-08-05',
+        visits: [{ barId: 'mr-purple', at: '2026-08-06T01:00:00.000Z' }],
+      });
+      recordVisit('attaboy');
+      recordSharedNight(
+        '2026-08-05',
+        '123e4567-e89b-42d3-a456-426614174001',
+      );
+    } finally {
+      window.removeEventListener('storage', listener);
+    }
+    expect(
+      seen.filter((k) => k === ARCHIVE_KEY || k === LOG_KEY || k === SHARED_KEY),
+    ).toEqual([]);
+  });
+
+  test('a permitted write still notifies its listeners', async () => {
+    const { recordSharedNight } = await import('@/lib/sharedNightsLocal');
+    setAccountContentAuthContext({ kind: 'signed-out' }); // pure anonymous → ready
+    expect(ensureAccountContentReady()).toEqual({ status: 'ready' });
+
+    const seen: Array<string | null> = [];
+    const listener = (e: Event): void => {
+      seen.push((e as StorageEvent).key);
+    };
+    window.addEventListener('storage', listener);
+    try {
+      recordSharedNight(
+        '2026-08-05',
+        '123e4567-e89b-42d3-a456-426614174001',
+      );
+    } finally {
+      window.removeEventListener('storage', listener);
+    }
+    expect(seen).toContain(SHARED_KEY);
+  });
+});
+
 describe('reader wiring — every account-content reader consults the barrier', () => {
   test('FIRST FRAME: foreign residue renders as EMPTY in every reader (negative render)', () => {
     seedOwnedContent(USER_A);

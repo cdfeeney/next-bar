@@ -418,9 +418,19 @@ export async function reconcileQuarantinedAccountContent({
       if (freshlyConfirmed) {
         // Only release once a live copy provably exists (hydrate true, or
         // the read-back already hydrated it). Envelope release must never
-        // orphan the only copy behind a failed quota write.
+        // orphan the only copy behind a failed quota write. But NEVER
+        // hydrate over a newer (or same-clock divergent) live edit that
+        // landed while the upload was in flight — uploadAndConfirm refused
+        // exactly that overwrite, and the envelope's bytes are already
+        // proven on the server by the fresh read-back (santa: Codex, r2).
+        const current = readLocal(key);
+        const liveHoldsThisOrNewer =
+          current.status === 'present' &&
+          compareUpdatedAt(current.value, deviceValue) >= 0;
         const liveLanded =
-          outcome === 'hydrated' || hydrate(key, deviceValue);
+          outcome === 'hydrated' ||
+          liveHoldsThisOrNewer ||
+          hydrate(key, deviceValue);
         if (liveLanded) {
           releaseQuarantinedEnvelope(userId, key);
           outcomes[key] = 'restored-uploaded';
@@ -518,7 +528,17 @@ export async function resolveAccountContentConflict({
     confirmedNow.digest === contentIdentity(deviceValue.data).digest &&
     Date.parse(confirmedNow.clock) === Date.parse(deviceValue.clientUpdatedAt);
   if (freshlyConfirmed) {
-    const liveLanded = outcome === 'hydrated' || hydrate(key, deviceValue);
+    // Same rule as the restore release: a newer live edit that landed
+    // mid-flight is never clobbered by the resolved device copy — the
+    // device copy is already proven on the server (santa: Codex, r2).
+    const current = readLocal(key);
+    const liveHoldsThisOrNewer =
+      current.status === 'present' &&
+      compareUpdatedAt(current.value, deviceValue) >= 0;
+    const liveLanded =
+      outcome === 'hydrated' ||
+      liveHoldsThisOrNewer ||
+      hydrate(key, deviceValue);
     if (liveLanded) {
       releaseQuarantinedEnvelope(userId, key);
       return 'used-device';

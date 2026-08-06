@@ -490,6 +490,64 @@ describe('quarantine restore reconciliation (v2.1)', () => {
     expect(envelope?.data).toEqual(lists(T1, ['device-unconfirmed']).data);
   });
 
+  it('release NEVER overwrites a newer live edit that landed while the restore upload was in flight', async () => {
+    // santa round 2 (Codex): uploadAndConfirm deliberately refuses to
+    // hydrate over a newer mid-flight edit — the release path must not
+    // undo that protection by hydrating the older envelope itself.
+    const device = lists(T2, ['device-restored']);
+    const newer = lists(T3, ['newer-mid-flight']);
+    envelopeFor(device);
+    fetchKey
+      .mockResolvedValueOnce(ok('absent')) // LWW fetch: envelope wins
+      .mockImplementationOnce(async () => {
+        // While the upload was in flight, a NEWER local edit landed.
+        seedLocal(newer);
+        return ok(device); // server read-back echoes the upload
+      });
+
+    const outcomes = await reconcileQuarantinedAccountContent({
+      supabase: client,
+      userId: USER,
+      stillCurrent: () => true,
+    });
+
+    // Envelope bytes are proven on the server → released…
+    expect(outcomes.lists).toBe('restored-uploaded');
+    expect(readQuarantinedAccountContent(USER)).toEqual({});
+    // …and the newer live edit is INTACT, not clobbered by the envelope.
+    expect(readLocalAccountContent('lists')).toEqual({
+      status: 'present',
+      value: newer,
+    });
+  });
+
+  it('use-device conflict resolution never clobbers an even-newer live edit landed mid-flight', async () => {
+    const T4 = '2026-08-04T20:00:00.000Z';
+    const device = lists(T1, ['conflict-device']);
+    const newer = lists(T4, ['even-newer']);
+    envelopeFor(device, { status: 'conflict' });
+    fetchKey.mockImplementationOnce(async () => {
+      seedLocal(newer);
+      return ok({ data: device.data, clientUpdatedAt: T3 }); // restamped echo
+    });
+
+    const result = await resolveAccountContentConflict({
+      supabase: client,
+      userId: USER,
+      key: 'lists',
+      choice: 'use-device',
+      stillCurrent: () => true,
+      now: () => new Date(T3),
+    });
+
+    expect(result).toBe('used-device');
+    expect(readQuarantinedAccountContent(USER)).toEqual({});
+    expect(readLocalAccountContent('lists')).toEqual({
+      status: 'present',
+      value: newer,
+    });
+  });
+
   it('fetch failure keeps the envelope pending — retry later, no loss', async () => {
     envelopeFor(lists(T2, ['kept']));
     fetchKey.mockResolvedValue({ kind: 'failed' });

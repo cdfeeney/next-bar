@@ -59,6 +59,24 @@ export type QuarantineEnvelope = {
    *  may release such an envelope when it merely lost LWW to a newer server
    *  write; an UNconfirmed envelope that loses becomes a retained conflict. */
   confirmedAtCapture?: { clock: string } | null;
+  /** Divergent unconfirmed committed copies displaced by later captures.
+   *  Deduped by digest; surfaced one at a time as retained conflicts when
+   *  the main envelope is released. */
+  superseded?: SupersededSnapshot[];
+};
+
+/** A committed copy displaced by a later capture of DIFFERENT content for
+ *  the same (owner, key). Overwriting it would be a crash-path deletion the
+ *  invariants forbid (santa: Codex, round 2); release promotes the newest
+ *  snapshot to an explicit retained conflict instead. */
+export type SupersededSnapshot = {
+  data: AccountContentData | null;
+  clientUpdatedAt: string;
+  digest: string;
+  byteLength: number;
+  quarantinedAt: string;
+  supersededAt: string;
+  confirmedAtCapture?: { clock: string } | null;
 };
 
 export type RawInvalidEnvelope = {
@@ -66,6 +84,9 @@ export type RawInvalidEnvelope = {
    *  never restored to a live key. */
   raw: string;
   capturedAt: string;
+  /** Earlier divergent invalid text displaced by a later capture — preserved
+   *  verbatim, deduped on the raw bytes. */
+  superseded?: Array<{ raw: string; capturedAt: string; supersededAt: string }>;
 };
 
 export type ResolutionRequiredEntry = {
@@ -411,20 +432,92 @@ function commitIsValid(journal: QuarantineJournal): boolean {
   return true;
 }
 
+function snapshotOf(
+  envelope: QuarantineEnvelope,
+  supersededAt: string,
+): SupersededSnapshot {
+  return {
+    data: envelope.data,
+    clientUpdatedAt: envelope.clientUpdatedAt,
+    digest: envelope.digest,
+    byteLength: envelope.byteLength,
+    quarantinedAt: envelope.quarantinedAt,
+    supersededAt,
+    confirmedAtCapture: envelope.confirmedAtCapture ?? null,
+  };
+}
+
 function commit(journal: QuarantineJournal): boolean {
   const store = readQuarantineStore();
   const account = { ...(store.accounts[journal.ownerUserId] ?? {}) };
-  for (const [key, envelope] of Object.entries(journal.pending)) {
-    account[key as AccountContentKey] = envelope;
+  const committedKeys: AccountContentKey[] = [];
+  for (const [k, envelope] of Object.entries(journal.pending)) {
+    const key = k as AccountContentKey;
+    const existing = account[key];
+    // A committed copy holding DIFFERENT unconfirmed content must not be
+    // overwritten — that is a crash-path deletion (santa: Codex, round 2).
+    // It survives as a superseded snapshot, deduped by digest so retries
+    // stay bounded; a confirmed-at-capture copy may be displaced because
+    // server presence was proven then (same rule as released-confirmed-
+    // stale). Chains already on the existing envelope carry forward.
+    let superseded = existing?.superseded ?? [];
+    if (
+      existing &&
+      existing.digest !== envelope.digest &&
+      !existing.confirmedAtCapture
+    ) {
+      superseded = [snapshotOf(existing, nowIso()), ...superseded];
+    }
+    superseded = superseded.filter(
+      (s, i, arr) =>
+        s.digest !== envelope.digest &&
+        arr.findIndex((o) => o.digest === s.digest) === i,
+    );
+    account[key] =
+      superseded.length > 0 ? { ...envelope, superseded } : envelope;
+    committedKeys.push(key);
   }
   const rawAccount = { ...(store.rawInvalid[journal.ownerUserId] ?? {}) };
-  for (const [key, envelope] of Object.entries(journal.pendingRaw)) {
-    rawAccount[key as AccountContentKey] = envelope;
+  for (const [k, envelope] of Object.entries(journal.pendingRaw)) {
+    const key = k as AccountContentKey;
+    const existing = rawAccount[key];
+    let superseded = existing?.superseded ?? [];
+    if (existing && existing.raw !== envelope.raw) {
+      superseded = [
+        {
+          raw: existing.raw,
+          capturedAt: existing.capturedAt,
+          supersededAt: nowIso(),
+        },
+        ...superseded,
+      ];
+    }
+    superseded = superseded.filter(
+      (s, i, arr) =>
+        s.raw !== envelope.raw &&
+        arr.findIndex((o) => o.raw === s.raw) === i,
+    );
+    rawAccount[key] =
+      superseded.length > 0 ? { ...envelope, superseded } : envelope;
+    committedKeys.push(key);
   }
+  // Both sides of any flagged divergence for these keys are now durably in
+  // the store (new capture as main, old copy as snapshot) — the banner
+  // entry the digest guard recorded is resolved by preservation.
+  const resolutionRequired = store.resolutionRequired.filter(
+    (e) =>
+      !(
+        e.ownerUserId === journal.ownerUserId &&
+        e.key !== undefined &&
+        committedKeys.includes(e.key) &&
+        e.reason.startsWith(`live ${e.key} diverged`)
+      ),
+  );
   const next: QuarantineStore = {
     ...store,
     accounts: { ...store.accounts, [journal.ownerUserId]: account },
     rawInvalid: { ...store.rawInvalid, [journal.ownerUserId]: rawAccount },
+    resolutionRequired,
   };
   if (!writeStore(next)) return false;
   return commitIsValid(journal);
@@ -712,14 +805,30 @@ export function updateQuarantinedEnvelope(
   });
 }
 
-/** Drop one envelope after explicit resolution or proven server presence. */
+/** Drop one envelope after explicit resolution or proven server presence.
+ *  A superseded snapshot is content this release was NOT about — the newest
+ *  one is promoted to an explicit retained conflict rather than deleted. */
 export function releaseQuarantinedEnvelope(
   userId: string,
   key: AccountContentKey,
 ): boolean {
   const store = readQuarantineStore();
   const account = { ...(store.accounts[userId] ?? {}) };
-  delete account[key];
+  const [next, ...rest] = account[key]?.superseded ?? [];
+  if (next) {
+    account[key] = {
+      data: next.data,
+      clientUpdatedAt: next.clientUpdatedAt,
+      digest: next.digest,
+      byteLength: next.byteLength,
+      quarantinedAt: next.quarantinedAt,
+      status: 'conflict',
+      confirmedAtCapture: next.confirmedAtCapture ?? null,
+      ...(rest.length > 0 ? { superseded: rest } : {}),
+    };
+  } else {
+    delete account[key];
+  }
   return writeStore({
     ...store,
     accounts: { ...store.accounts, [userId]: account },

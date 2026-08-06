@@ -79,15 +79,19 @@ function readLog(): StoredNightLog | null {
   }
 }
 
-function writeLog(log: StoredNightLog): void {
-  if (typeof window === 'undefined') return;
+/** True only when the write actually landed — callers notify on that,
+ *  never on a refused/failed write (same convention as lists.writeAll). */
+function writeLog(log: StoredNightLog): boolean {
+  if (typeof window === 'undefined') return false;
   // Write barrier (v2.1): unresolved ownership → never overwrite residue.
-  if (!accountContentWriteAllowed()) return;
+  if (!accountContentWriteAllowed()) return false;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(log));
+    return true;
   } catch {
     // Quota/private-mode failures degrade to "not recorded" — the night
     // just has a thinner record, which is the pre-E4 behavior.
+    return false;
   }
 }
 
@@ -130,10 +134,11 @@ export function recordVisit(barId: string, now: Date = new Date()): void {
   const last = log.visits[log.visits.length - 1];
   if (last && last.barId === barId) return;
   if (log.visits.length >= MAX_VISITS_PER_NIGHT) return;
-  writeLog({
+  const landed = writeLog({
     night: log.night,
     visits: [...log.visits, { barId, at: now.toISOString() }],
   });
+  if (!landed) return;
   notifyChange();
 }
 

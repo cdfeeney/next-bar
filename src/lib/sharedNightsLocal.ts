@@ -62,18 +62,22 @@ function read(): SharedNightStore {
   }
 }
 
-function write(store: SharedNightStore): void {
-  if (typeof window === 'undefined') return;
+/** True only when the write actually landed — callers notify on that,
+ *  never on a refused/failed write (same convention as lists.writeAll). */
+function write(store: SharedNightStore): boolean {
+  if (typeof window === 'undefined') return false;
   // Write barrier (v2.1): unresolved ownership → never overwrite residue.
-  if (!accountContentWriteAllowed()) return;
+  if (!accountContentWriteAllowed()) return false;
   try {
     window.localStorage.setItem(
       SHARED_NIGHTS_STORAGE_KEY,
       JSON.stringify(store),
     );
+    return true;
   } catch {
     // Quota/private mode — the night is still shared server-side; the
     // device just can't show it. Re-sharing re-records.
+    return false;
   }
 }
 
@@ -96,10 +100,11 @@ export function recordSharedNight(
 ): void {
   if (!isShareToken(token)) return;
   const store = read();
-  write({
+  const landed = write({
     ...store,
     [nightKey]: { token, sharedAt: now.toISOString() },
   });
+  if (!landed) return;
   notifyChange();
 }
 
@@ -124,6 +129,6 @@ export function forgetSharedNight(nightKey: string): void {
   const store = read();
   if (!(nightKey in store)) return;
   const { [nightKey]: _gone, ...rest } = store;
-  write(rest);
+  if (!write(rest)) return;
   notifyChange();
 }
