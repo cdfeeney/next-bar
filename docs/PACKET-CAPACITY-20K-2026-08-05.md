@@ -96,6 +96,13 @@ src) — one entire scaling dimension is absent by design.**
 - SLOs to certify at 20k-equivalent load: p95 catalog-path TTI unaffected
   by Supabase latency (static fallback guarantee), p95 social read <500ms,
   p95 write <800ms, error rate <1%, zero pooler exhaustion events.
+- **Image-path gates, with thresholds** (santa round-3: Codex — a gate
+  without a criterion is an observation): local optimizer under the
+  viral-open scenario: p95 cold-serve <1.5s at scenario concurrency with
+  zero optimizer errors; production ramp: CDN cache-hit ratio ≥90%
+  observed on the dashboard before any 20k claim is stamped. Both are
+  PROPOSED thresholds — the operator may tune them, but a run must name
+  the numbers it was judged against.
 - Sources: Supabase dashboard (connections, PostgREST latency, egress),
   Vercel analytics (route latency), harness-side percentiles. PostHog
   stays OFF (g-ee6c250d posture) — measurement is infra-side, not

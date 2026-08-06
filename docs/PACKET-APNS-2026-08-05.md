@@ -202,6 +202,16 @@ packet's lock-screen policy.
    device's row survives;
    (c) second account on the same device → ownership transfer (the 0009
    shared-device scenario, now for APNs).
+5. **Production-environment validation — the TestFlight half** (santa
+   round-3: Codex — the split in step 1 was promised but never executed
+   by the numbered steps): install the ADR-C staging binary via
+   TestFlight, opt in on-device; its token registers with
+   `environment='production'` (staging TestFlight builds keep the
+   on-screen debug surface; App Store builds never ship it); send ONE
+   low-volume production push through the real sender path to that row;
+   verify receipt, lock-screen policy, and deep-link routing. Only after
+   this step is the production entitlement + routing path considered
+   validated.
 
 ## Physical-device matrix (ATTENDED)
 
