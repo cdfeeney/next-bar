@@ -44,7 +44,11 @@ All ATTENDED, all outside this repo:
    create an **APNs Auth Key (p8)** — key id + team id; store the p8 in the
    operator's secret manager, NEVER in this repo or its env files.
 2. Xcode project (cloud Mac CI per the ADR): `aps-environment` entitlement
-   (`development` for TestFlight sandbox testing, `production` for release).
+   — `development` applies to DEVELOPMENT-SIGNED builds only; **TestFlight
+   builds always run against the PRODUCTION APNs environment** (santa
+   round-2: Codex — the earlier sandbox-via-TestFlight framing was
+   impossible), so sandbox validation needs a dev-signed device build and
+   the TestFlight binary is validated with low-volume production sends.
 3. App target: register plugin, request authorization ONLY from the same
    weekend-cadence opt-in moment `push.ts` already defines — the native
    prompt must not fire on first open (mirror of `getPushOptInPrompt`).
@@ -83,8 +87,11 @@ reservation.
   as alive.
 - **Sign-out:** the shell deletes the CALLING DEVICE's token only (RPC by
   token, not by user) — one device signing out must not silence the user's
-  other devices. This is the same device-vs-account boundary the
-  cross-device session revocation work (g-a345b6fc) established.
+  other devices. This is consistent with the multi-device session-correctness work
+  (g-a345b6fc), which owns the account-wide revocation side of the same
+  boundary (santa round-2: Fable — that goal established global
+  revocation on deletion, not per-device sign-out isolation; the
+  device-scoping here is this packet's own requirement).
 - **Account deletion:** `ON DELETE CASCADE` from profiles — token rows die
   with the account, mirroring 0009; the deletion flow needs no new code.
 - **Ownership-transfer posture, stated as accepted risk** (consult:
@@ -152,7 +159,11 @@ reservation.
 Notification payload carries `{ route: "/nights/<key>" | "/friends/…" }`.
 The shell's `pushNotificationActionPerformed` handler navigates the webview
 to that route **through the same same-origin validation Phase B specifies
-for `?next=`** (the Phase B goal `g-c8b26779` auth-return scope): relative path only, reject external/
+for `?next=`** (Phase B goal `g-c8b26779` — its STORED GOAL BODY, scope
+item 4: "validated same-origin `?next=` return path through `/auth` and
+callback; reject external, malformed, and privilege-sensitive
+destinations"; the scope lives in the goal store, not any doc — santa
+round-2: Fable could not source it from docs/ alone, correctly): relative path only, reject external/
 malformed/privilege-sensitive destinations. **Deep links are additionally
 read-only by contract** (consult: DeepSeek — a same-origin link to a
 mutating flow would let a push payload trigger an action): the route
@@ -164,8 +175,11 @@ packet's lock-screen policy.
 
 ## Manual test-push runbook (ATTENDED, sandbox)
 
-1. ADR-C staging binary installed on a physical device (build 5 is
-   unusable for this: wrong origin AND no push entitlement).
+1. Two build flavors, used for different steps (santa round-2: Codex):
+   a DEV-SIGNED device build for the sandbox steps below (TestFlight
+   binaries cannot reach the APNs sandbox), and the ADR-C staging binary
+   via TestFlight for a final low-volume PRODUCTION-environment send.
+   Build 5 is unusable for either: wrong origin AND no push entitlement.
 2. Opt in on-device on a weekend night (or with the cadence gate stubbed in
    a dev build); read the sandbox device token from a **sandbox-build-only
    on-screen debug surface** — NOT from logs: production builds never log
@@ -178,9 +192,12 @@ packet's lock-screen policy.
    right route.
 4. Negative checks (santa: Codex corrected the impossible original):
    (a) **uninstall the app** — the token is invalidated at Apple while its
-   row REMAINS; send to it → expect 410 and row deletion (this, not
-   sign-out, is the 410 garbage-collection path — sign-out already
-   removed its row via the RPC, leaving nothing to 410);
+   row REMAINS; send to it and **allow for propagation: retry over a
+   bounded window (a few attempts across ~15–30 min) before judging**
+   (santa round-2: Codex — invalidation is not instantaneous), then
+   expect 410 and row deletion (this, not sign-out, is the 410
+   garbage-collection path — sign-out already removed its row via the
+   RPC, leaving nothing to 410);
    (b) sign out → verify THIS device's row is gone and another signed-in
    device's row survives;
    (c) second account on the same device → ownership transfer (the 0009

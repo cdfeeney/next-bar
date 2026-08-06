@@ -115,9 +115,12 @@ ships tonight), no external SaaS, no new production code paths:
   Staging/Production even by typo; a unit test asserts construction throws
   for every non-loopback shape (hostname, IP). **Redirects are a request-
   layer concern the constructor cannot see** (santa: Codex): the harness
-  disables redirect following entirely — any 30x is recorded as a
-  response, never followed — so a loopback endpoint answering with a
-  non-loopback Location cannot pull traffic off-box. Additionally the
+  never follows a redirect AUTOMATICALLY — each 30x is recorded, its
+  Location validated against the same loopback allowlist, and only then
+  chained as an explicit next request (santa round-2: Codex — blanket-
+  terminal 30x would make the auth/callback flow untestable, and that
+  flow is in the shaped-run scope), so a non-loopback Location dead-ends
+  with a recorded violation instead of pulling traffic off-box. Additionally the
   harness process sets the fence proxy env (the dev-server pattern from
   `playwright.config.ts`) so even accidental absolute URLs in app
   responses cannot escape loopback.
@@ -128,9 +131,12 @@ ships tonight), no external SaaS, no new production code paths:
   `notification-viral-open` (santa: DeepSeek — the cadence send itself
   DRIVES correlated opens: every recipient taps the same shared venue
   near-simultaneously, so this scenario runs pre-warmed pages with COLD
-  `/_next/image` optimization routes and gates on a MEASURED CDN
-  cache-hit ratio, because image-optimization cold fan-out multiplies the
-  read amplification the model ranks first). Mix ratios come from the
+  `/_next/image` optimization routes and gates on the LOCAL optimizer's measured cold-serve latency and
+  concurrency cost — **the CDN cache-hit ratio itself is a
+  PRODUCTION-observation gate (dashboard, during a real ramp), not a
+  harness output; localhost has no CDN to measure** (santa round-2:
+  Codex) — because image-optimization cold fan-out multiplies the read
+  amplification the model ranks first). Mix ratios come from the
   read/write model above and are config, not code. The shaped local-stack
   run exercises ALL enumerated surfaces — the four API routes and the
   edge OG/image routes included, not only the catalog path (santa: GLM).
