@@ -34,7 +34,7 @@ deletes its branch). `env` = a `.env.local` is present (secret-risk, presence on
 | # | Worktree | Branch | HEAD | +/− main | pres | dirty | untr | env | Size | node_modules | artifacts | Class |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | `next-bar` | `feat/phase1-compliance-media` | `c02baf9` | +83/−6 | 13 | 0 | 0 | Y | 1646 MB | 398 MB | 587 MB | **KEEP** |
-| 2 | `…Temp\…\wf-fix` | *detached* | `15a4876` | +1/−1 | 2 | 0 | 0 | n | 198 MB | — | — | **UNKNOWN — BLOCKED** |
+| 2 | `…Temp\…\wf-fix` | *detached* | `15a4876` | +1/−1 | **1 (remote only)** | 0 | 0 | n | 198 MB | — | — | **UNKNOWN — BLOCKED** |
 | 3 | `nb-account-conflict-e2e` | `test/account-conflict-e2e` | `c60bc07` | +260/−0 | 1 | 0 | 0 | Y | 965 MB | 513 MB | 252 MB | ARCHIVE CANDIDATE |
 | 4 | `nb-account-sync` | `feat/beta1-account-sync` | `09a934d` | +259/−0 | 8 | 0 | 0 | Y | 1259 MB | 513 MB | 545 MB | **KEEP** |
 | 5 | `nb-beta1-rc` | `release/beta1-rc` | `415a486` | +252/−0 | 9 | 0 | 0 | n | 1365 MB | 513 MB | 651 MB | ARCHIVE CANDIDATE |
@@ -55,14 +55,29 @@ deletes its branch). `env` = a `.env.local` is present (secret-risk, presence on
 | 20 | `nb-qa5-lists` | `feat/qa5-lists` | `4c87289` | +1/−31 | 4 | 0 | 1 | Y | 580 MB | 398 MB | 71 MB | ARCHIVE CANDIDATE |
 | 21 | `nb-qa5-swipe` | `feat/qa5-discover` | `2660381` | +1/−31 | 4 | 0 | 1 | Y | 677 MB | 398 MB | 168 MB | ARCHIVE CANDIDATE |
 | 22 | `nb-release-migrations` | `release/prod-migrations-0033-0036` | `6e553fa` | +3/−0 | 10 | 0 | 0 | n | 198 MB | — | — | ARCHIVE CANDIDATE |
-| 23 | `nb-staging-deploy` | *detached* | `6ec5e5d` | +0/−0 | 14 | 1 | 0 | Y | 198 MB | — | — | **KEEP — PROTECTED** |
-| 24 | `nb-testflight-node22` | `fix/testflight-node22` | `7cc7fea` | +0/−4 | 18 | 1 | 0 | n | 198 MB | — | — | **KEEP — PROTECTED** |
+| 23 | `nb-staging-deploy` | *detached* | `6ec5e5d` | +0/−0 | **12** | 1 | 0 | Y | 198 MB | — | — | **KEEP — PROTECTED** |
+| 24 | `nb-testflight-node22` | `fix/testflight-node22` | `7cc7fea` | +0/−4 | **17** | 1 | 0 | n | 198 MB | — | — | **KEEP — PROTECTED** |
 | 25 | `next-bar-ceo` | `feat/ceo-v2` | `a0f165d` | +7/−30 | 2 | 0 | 0 | n | 480 MB | 368 MB | — | ARCHIVE CANDIDATE |
 | 26 | `next-bar-share` | `feat/share-loop-week1` | `bd501a5` | +14/−41 | 2 | 0 | 0 | n | 780 MB | 368 MB | 300 MB | ARCHIVE CANDIDATE |
 
 **Every one of the 26 has `pres ≥ 1`** — no worktree holds commits reachable only from its own
 working directory. Removing any worktree loses **no commit**. The risk is entirely in *uncommitted*
-work, catalogued in §3.
+work, catalogued in §3 — with the single caveat in the next paragraph.
+
+> **Methodology correction (independent review, 2026-08-07).** The `pres` column was first computed
+> with `git branch --all --contains`, which counts the worktree's **own** `* (HEAD detached at …)`
+> line as a preserving ref. That is circular: the pointer disappears the moment the worktree is
+> removed, so it preserves nothing. Recomputed with
+> `git for-each-ref --contains <sha>`, excluding the `refs/remotes/origin/HEAD` symbolic alias.
+> Three rows changed — `wf-fix` 2→**1**, `nb-staging-deploy` 14→**12**, `nb-testflight-node22`
+> 18→**17**. The other 23 were already correct, and no classification changed. Corrected figures are
+> in the table above.
+>
+> **`wf-fix` is the one genuinely fragile entry.** Its only containing ref is
+> `refs/remotes/origin/fix/ios-testflight-macos26` — a **remote-tracking ref with no local branch**.
+> If that branch is deleted upstream *and* this worktree is removed, commit `15a4876` becomes
+> unreachable locally. Before touching `wf-fix`, create a local ref:
+> `git branch preserve/wf-fix-15a4876 15a4876`.
 
 ## 2. Worktree-count reconciliation
 
@@ -127,10 +142,27 @@ loop-guard checkpoint has swept protected operator docs into a commit before; na
 | `C:\Users\cdfee\.claude` | 0.67 GB | harness + session data |
 | `…\AppData\Local\npm-cache` | 0.69 GB | regenerable via `npm cache clean --force` |
 
-**Scope limit, stated honestly:** the categories above total ≈ 40.6 GB of a 221.27 GB volume. The
+**These rows OVERLAP — do not add them naively.** `C:\Users\cdfee\projects` (20.68 GB) already
+contains 25 of the 26 worktrees, i.e. it subsumes almost all of the 17.17 GB worktree total from the
+previous table. `…\Temp\claude` (0.53 GB) is a subset of `…\Temp` (0.75 GB). Summing every printed
+figure gives ≈ 58.3 GB, which double-counts. The de-duplicated total is:
+
+```
+projects 20.68 + Downloads 15.76 + ms-playwright 2.10 + Temp 0.75 + .claude 0.67 + npm-cache 0.69
+  = 40.65 GB   (worktrees counted once, inside `projects`; Temp\claude counted once, inside Temp)
+```
+
+**Scope limit, stated honestly:** that de-duplicated ≈ 40.6 GB is of a 221.27 GB volume. The
 remaining ≈ 180 GB is outside the Next Bar surface (OS, other applications, other user data) and was
 not inventoried. **Freeing Next Bar space will unblock the queue but will not by itself explain why a
 221 GB disk is full.** A full-volume audit is a separate attended task.
+
+**Artifact coverage — what was searched and found empty.** Every worktree was probed for all of:
+`.next`, `coverage`, `playwright-report`, `test-results`, `blob-report`, `.turbo`, `dist`, `build`,
+`.vercel`, `traces`, `screenshots`. Only four types exist anywhere in the inventory (`.next`,
+`playwright-report`, `test-results`, `.vercel`); the rest — **including `coverage`, `traces`, and
+`screenshots`** — matched **zero** directories across all 26 worktrees. Their absence is a measured
+result, not an omission, so the 5.03 GB artifact figure is not undercounted on those categories.
 
 ### Safely recoverable, ranked by risk
 
@@ -160,6 +192,14 @@ Steps 1–3 alone recover **7.80 GB** and are sufficient to unblock the queue.
 1. clean state (no tracked-dirty, no untracked)  2. no active lease  3. commits preserved by a
 branch or ref  4. untracked content inventoried  5. no unique release / native / migration / user
 evidence  6. a written recovery procedure  7. **future explicit operator approval**
+
+> **Condition 2 is asserted, not yet demonstrated.** What was actually checked: no entry in
+> `git worktree list --porcelain` is `locked` or `prunable`, and the harness write-lease store shows
+> this run holding the only lease. That is **not** a proof of "no active lease" — it does not detect
+> a peer editor, an open file handle, or a live agent session in another worktree. It costs nothing
+> today because **zero worktrees are REMOVE CANDIDATE**, so the condition is never exercised. Before
+> the first real removal, verify with `worktree-guard.mjs check` from the target worktree **and** an
+> open-handle check, and record the result. Do not treat the current table as satisfying condition 2.
 
 **Result: ZERO worktrees are classified REMOVE CANDIDATE today.**
 
@@ -239,20 +279,43 @@ sequence. None of them is required to recover space, and each can destroy the un
 
 Archive **before** removal, and prove the archive before trusting it.
 
-```powershell
-# CREATE — include untracked; exclude regenerable trees.
-$src='C:\Users\cdfee\projects\nb-qa1'; $dst='D:\archive\nb-qa1-2026-08-07.zip'
-Get-ChildItem $src -Force -Recurse |
-  Where-Object { $_.FullName -notmatch '\\(node_modules|\.next|test-results|playwright-report)\\' } |
-  Compress-Archive -DestinationPath $dst
+> **Do NOT use `Get-ChildItem -Recurse | Compress-Archive`.** That pattern was in the first draft of
+> this document and is broken. Reproduced 2026-08-07: two files named `index.ts` in different
+> subdirectories produced a **4-entry** zip containing `a\index.ts`, `b\index.ts`, **and two
+> colliding root-level `index.ts` entries** — directory structure partially discarded, duplicate
+> names, and **no error raised**. In a Next.js tree full of repeated `page.tsx` / `route.ts` /
+> `index.ts` leaf names, that silently yields an archive you cannot trust or restore from. Stage a
+> filtered copy first, then compress the *directory*.
 
-# VALIDATE — the archive must open AND contain the untracked files that exist nowhere else.
+```powershell
+$src='C:\Users\cdfee\projects\nb-qa1'
+$stage='C:\archive-stage\nb-qa1'
+$dst='D:\archive\nb-qa1-2026-08-07.zip'
+
+# CREATE — stage with robocopy (preserves structure, excludes regenerable trees),
+#          then compress the DIRECTORY so paths are retained.
+robocopy $src $stage /E /XD node_modules .next test-results playwright-report .turbo /R:0 /W:0
+Compress-Archive -Path $stage -DestinationPath $dst -CompressionLevel Optimal
+
+# VALIDATE — archive opens, preserves paths, and carries the files that exist nowhere else.
 Add-Type -A System.IO.Compression.FileSystem
 $z=[IO.Compression.ZipFile]::OpenRead($dst)
-$z.Entries.Count
-$z.Entries | Where-Object { $_.Name -in @('playwright.local.config.ts','.env.local') } | Select FullName,Length
+"entries: $($z.Entries.Count)"
+# every entry must carry a directory component — a bare leaf name means flattening happened
+$flat = @($z.Entries | Where-Object { $_.FullName -notmatch '[\\/]' -and $_.Name })
+"flattened entries (MUST be 0): $($flat.Count)"
+# duplicate FullName means collision — MUST be 0
+"duplicate paths (MUST be 0): $((($z.Entries.FullName | Group-Object | Where-Object Count -gt 1)).Count)"
+$z.Entries | Where-Object { $_.Name -in @('playwright.local.config.ts','.env.local') } |
+  Select-Object FullName,Length
 $z.Dispose()
+
+# compare against source count — they must match
+(Get-ChildItem $stage -Recurse -File -Force).Count
 ```
+
+The archive is valid only when **flattened entries = 0**, **duplicate paths = 0**, the entry count
+matches the staged file count, and both irreplaceable files appear with a full path.
 
 Recovery of a removed worktree needs **no archive at all** for committed work, because every branch
 survives:
