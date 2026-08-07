@@ -426,6 +426,46 @@ export function outstandingCells(state) {
     .sort((a, b) => a.depth - b.depth || a.cellId.localeCompare(b.cellId));
 }
 
+/**
+ * Whether a cell may legitimately be waived.
+ *
+ * A waiver permanently removes a cell's venues from the results, so it must be
+ * reachable ONLY for work the sweep has actually tried and cannot finish. The
+ * id existing in the manifest is not evidence of anything: a never-attempted
+ * cell is "missing", and waiving it would report COMPLETE over a geography
+ * nobody ever searched — indistinguishable, afterwards, from a clean run.
+ *
+ * Returns `{ eligible, reason }` so the caller can explain a refusal.
+ */
+export function ackEligibility(state, cellId) {
+  const cell = state?.cells?.get(cellId);
+  if (!cell) return { eligible: false, reason: 'no such cell in this manifest' };
+  if (cell.terminalStatus === 'ack_terminal' && cell.acked) {
+    return { eligible: false, reason: 'already acknowledged' };
+  }
+  const unfinishedChildren = (cell.children ?? []).filter((childId) => {
+    const child = state.cells.get(childId);
+    return !child || !COMPLETING_STATUSES.includes(child.terminalStatus);
+  });
+  if (unfinishedChildren.length > 0) {
+    return {
+      eligible: false,
+      reason:
+        `its subdivision is unfinished (${unfinishedChildren.length} of ${cell.children.length} children outstanding) — ` +
+        'acknowledge those children instead, or resume to finish them',
+    };
+  }
+  if (cell.terminalStatus === SATURATED_AT_FLOOR) return { eligible: true, reason: 'saturated at the floor' };
+  if (cell.attempts.length === 0) {
+    return { eligible: false, reason: 'it has never been attempted; run or resume the sweep first' };
+  }
+  const last = cell.attempts[cell.attempts.length - 1];
+  if (last.ok) {
+    return { eligible: false, reason: 'its most recent attempt succeeded, so it is not stuck' };
+  }
+  return { eligible: true, reason: `last attempt failed (${last.errorClass ?? 'unknown'})` };
+}
+
 /** Refuse to resume onto a manifest planned under different configuration. */
 export function assertResumable(state, expectedHash) {
   if (!state?.plan) throw new Error('manifest has no PLAN record; cannot resume');

@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 // @ts-ignore -- the operator scripts intentionally remain native ESM.
 import { SweepInterrupted, runSweep } from './coverage-sweep-engine.mjs';
 // @ts-ignore
-import { completeness, configHash, loadManifest, openManifest } from './coverage-manifest.mjs';
+import {
+  SATURATED_AT_FLOOR,
+  completeness,
+  configHash,
+  loadManifest,
+  openManifest,
+} from './coverage-manifest.mjs';
 // @ts-ignore
 import { planCells } from './coverage-subdivide.mjs';
 
@@ -432,6 +438,75 @@ describe('resume', () => {
     resumeWriter.close();
     expect(result.interrupted).toBe(true);
     expect(emitted).toEqual(['a', 'b']);
+  });
+
+  it.each([
+    ['at the saturation floor', SATURATED_AT_FLOOR],
+    ['capped and still subdividable', null],
+  ])('honours an acknowledgement across a later resume (%s)', async (_label, priorStatus: any) => {
+    // Regression: the cap-recovery guard ran before the completing-status path,
+    // so an acknowledged cell was re-subdivided — its ack_terminal overwritten
+    // and, when subdivision was still possible, four unconsented API calls
+    // spent on children the operator had explicitly excluded.
+    const plan = [cells()[0]];
+    const file = path.join(dir, `ack-${String(priorStatus)}.jsonl`);
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: _label }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(plan[0].id, [{ id: 'p' }]);
+    if (priorStatus) writer.done(plan[0].id, priorStatus, {});
+    writer.ackTerminal(plan[0].id, 'permanent rejection', 'operator');
+    writer.done(plan[0].id, 'ack_terminal', {});
+    writer.close();
+    expect(completeness(loadManifest(file)).complete).toBe(true);
+
+    const called: string[] = [];
+    const resumeWriter = openManifest(file);
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async (cell: any) => {
+        called.push(cell.id);
+        return { places: [] };
+      },
+    });
+    resumeWriter.close();
+    expect(called).toEqual([]);
+    const after = loadManifest(file)!;
+    expect(after.cells.get(plan[0].id).terminalStatus).toBe('ack_terminal');
+    expect(completeness(after).complete).toBe(true);
+  });
+
+  it('re-queries a capped cell whose RESULT was never written', async () => {
+    // Regression: a crash between the capped ATTEMPT and its RESULT left
+    // `capped` true with no page on record. Subdividing from that skipped the
+    // parent's own results entirely — the very venues subdivision exists to
+    // reach past.
+    const plan = [cells()[0]];
+    const file = path.join(dir, 'capped-no-result.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'nores' }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.close();
+
+    const called: string[] = [];
+    const resumeWriter = openManifest(file);
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async (cell: any) => {
+        called.push(cell.id);
+        return { places: [] };
+      },
+    });
+    resumeWriter.close();
+    expect(called[0]).toBe(plan[0].id); // the parent is queried first, not skipped
   });
 
   it('does not double-count a place the re-query returns again', async () => {

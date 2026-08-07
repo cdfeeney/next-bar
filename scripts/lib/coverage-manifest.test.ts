@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 // @ts-ignore -- the operator scripts intentionally remain native ESM.
 import {
   SATURATED_AT_FLOOR,
+  ackEligibility,
   completeness,
   completionReport,
   configHash,
@@ -343,6 +344,61 @@ describe('operator acknowledgement', () => {
     const report = completeness(loadManifest(file)!);
     expect(report.complete).toBe(true);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('acknowledgement eligibility', () => {
+  const plan = { type: 'PLAN', configHash: 'a', cells: [{ id: 'x', depth: 0 }] };
+
+  it('refuses a cell that was never attempted', () => {
+    // A never-attempted cell is "missing", so existence alone is no evidence.
+    // Waiving it would report COMPLETE over a geography nobody searched.
+    const result = ackEligibility(build([plan]), 'x');
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toMatch(/never been attempted/);
+  });
+
+  it('refuses a cell whose latest attempt succeeded', () => {
+    const state = build([plan, ok('x', 3, false), { type: 'DONE', cellId: 'x', terminalStatus: 'unsaturated' }]);
+    expect(ackEligibility(state, 'x')).toMatchObject({ eligible: false });
+  });
+
+  it('refuses a parent whose subdivision is unfinished', () => {
+    // Waiving the parent would strand the children: nothing revisits them.
+    const children = [0, 1].map((index) => ({ id: `x/${index}`, depth: 1 }));
+    const state = build([
+      plan,
+      ok('x', 20, true),
+      { type: 'SUBDIVIDE', parentId: 'x', childIds: children.map((c) => c.id), childCells: children },
+      ok('x/0', 1, false),
+      { type: 'DONE', cellId: 'x/0', terminalStatus: 'unsaturated' },
+    ]);
+    const result = ackEligibility(state, 'x');
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toMatch(/subdivision is unfinished/);
+  });
+
+  it('allows a cell whose latest attempt failed', () => {
+    const state = build([
+      plan,
+      { type: 'ATTEMPT', cellId: 'x', attemptN: 1, ok: false, errorClass: 'http4xx' },
+    ]);
+    expect(ackEligibility(state, 'x')).toMatchObject({ eligible: true });
+  });
+
+  it('allows a cell stuck at the saturation floor', () => {
+    const state = build([plan, ok('x', 20, true), { type: 'DONE', cellId: 'x', terminalStatus: SATURATED_AT_FLOOR }]);
+    expect(ackEligibility(state, 'x')).toMatchObject({ eligible: true });
+  });
+
+  it('refuses to acknowledge the same cell twice', () => {
+    const state = build([
+      plan,
+      { type: 'ATTEMPT', cellId: 'x', attemptN: 1, ok: false, errorClass: 'http4xx' },
+      { type: 'ACK_TERMINAL', cellId: 'x', reason: 'permanent 400' },
+      { type: 'DONE', cellId: 'x', terminalStatus: 'ack_terminal' },
+    ]);
+    expect(ackEligibility(state, 'x')).toMatchObject({ eligible: false, reason: 'already acknowledged' });
   });
 });
 

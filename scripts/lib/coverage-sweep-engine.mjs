@@ -230,14 +230,28 @@ async function processCell(cell, ctx) {
     return SATURATED_AT_FLOOR;
   }
 
+  // An operator waiver outranks the cap-recovery path below. Without this, an
+  // acknowledged cell was re-subdivided on the next ordinary resume: its
+  // ack_terminal DONE was overwritten and, for a cell that could still
+  // subdivide, four unconsented API calls were spent on children the operator
+  // had explicitly excluded.
+  if (known?.terminalStatus === 'ack_terminal' && known.acked) {
+    replaySubtree(cell.id, cell, ctx);
+    return 'ack_terminal';
+  }
+
   // A cell recorded as capped but never subdivided still OWES that work,
-  // whatever its DONE record claims. This check must precede the
-  // completing-status fast path below: a manifest written before saturation
-  // became sticky can carry `capped` alongside a stale 'unsaturated' DONE, and
-  // returning early there left the run permanently unable to finish — no calls,
-  // no records, `unclearedCap` forever.
-  if (known?.capped && !known.children?.length) {
-    if (known.places?.length) ctx.onPlaces(known.places, cell);
+  // whatever its DONE record claims. This precedes the completing-status fast
+  // path because a manifest can carry `capped` alongside a stale 'unsaturated'
+  // DONE, and returning early there left the run permanently unable to finish.
+  //
+  // It requires a recorded page: a crash between the capped ATTEMPT and its
+  // RESULT leaves `capped` true with nothing to show for it, and subdividing
+  // from that would silently skip the parent's own page — the very results the
+  // subdivision is supposed to be reaching past. With no page on record the
+  // cell falls through and is queried again.
+  if (known?.capped && !known.children?.length && known.places?.length) {
+    ctx.onPlaces(known.places, cell);
     return subdivideFrom(cell, ctx);
   }
 

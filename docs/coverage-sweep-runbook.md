@@ -86,12 +86,18 @@ Statuses:
 
 ## When a cell can never succeed
 
-Resume handles the transient cases: quota resets, network blips, an exhausted
-budget. But a cell Google will always reject — a permanent 400, a geometry it
-refuses — would otherwise hold the run at `incomplete_failed` forever, because
-the completeness gate is deliberately unwilling to look away from it.
+Resume handles the transient failures — quota resets, network blips, 5xx, an
+exhausted budget. Those are the ones that show as `incomplete_failed`, and they
+need no waiver.
 
-Acknowledge that cell explicitly:
+A cell Google will always reject is different. A permanent 400 or a geometry it
+refuses is an HTTP 4xx, which is **not** a transient class, so such a cell is
+reported under **`incomplete_missing_work`**, not `incomplete_failed`. Look
+there — the run will otherwise sit at that status forever, because the
+completeness gate is deliberately unwilling to look away from it. A cell stuck
+at `incomplete_saturated` on the floor is the other case a waiver can clear.
+
+Acknowledge the cell explicitly:
 
 ```bash
 node scripts/nearby-sweep.mjs \
@@ -101,8 +107,21 @@ node scripts/nearby-sweep.mjs \
 ```
 
 It writes the acknowledgement and a terminal record, reprints the manifest
-status, and exits. Repeat `--ack-cell` for several cells; `--ack-reason` is
-mandatory and applies to all of them in that invocation.
+status, and exits `0` if the manifest is now complete, `2` if other work is
+still outstanding, `1` if it refused. Repeat `--ack-cell` for several cells;
+`--ack-reason` is mandatory and applies to all of them in that invocation.
+
+**It refuses anything that is not genuinely stuck**, and says why:
+
+| Refusal | Meaning |
+|---|---|
+| never been attempted | run or resume the sweep first — waiving it would report COMPLETE over a geography nobody searched |
+| most recent attempt succeeded | the cell is not stuck |
+| subdivision is unfinished | acknowledge the outstanding children instead, or resume to finish them |
+| already acknowledged | no double-waivers |
+
+A waiver **survives resume**: an acknowledged cell is not re-queried and its
+status is not overwritten.
 
 This is a **waiver, not a fix**. The cell's venues are not in the results and
 the manifest says so permanently: every waiver is recorded against the cell id,

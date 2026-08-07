@@ -60,6 +60,7 @@ import {
   textQueries,
 } from './lib/coverage-search.mjs';
 import {
+  ackEligibility,
   assertResumable,
   completeness,
   MANIFEST_SCHEMA_VERSION,
@@ -179,9 +180,15 @@ if (options['ack-cell'].length > 0) {
     console.error(`no manifest at ${options.manifest}`);
     process.exit(1);
   }
-  const unknown = options['ack-cell'].filter((id) => !state.cells.has(id));
-  if (unknown.length > 0) {
-    console.error(`manifest has no such cell(s): ${unknown.join(', ')}`);
+  // Existing-id is not evidence of anything. A waiver may only touch work the
+  // sweep actually tried and cannot finish; anything else would let a typo
+  // report COMPLETE over a geography nobody searched.
+  const refusals = options['ack-cell']
+    .map((id) => ({ id, ...ackEligibility(state, id) }))
+    .filter((entry) => !entry.eligible);
+  if (refusals.length > 0) {
+    for (const entry of refusals) console.error(`refusing to acknowledge ${entry.id}: ${entry.reason}`);
+    console.error('no cells were acknowledged');
     process.exit(1);
   }
   const writer = openManifest(options.manifest);
