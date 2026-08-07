@@ -77,7 +77,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // picked up encoded whitespace in transit passed the blank check and then
   // failed upstream as `"abc "` — a valid confirmation lost to a stray space.
   const tokenHash = searchParams.get('token_hash')?.trim() ?? '';
-  const type = searchParams.get('type');
+  // `type` is trimmed for the SAME reason as the token: whatever mangles one in
+  // transit mangles the other, and an untrimmed `type` would fail the exact
+  // allowlist comparison below — rejecting a valid link and reporting it as a
+  // misconfigured template. Leaving these asymmetric fixed half the bug class.
+  const type = searchParams.get('type')?.trim() ?? null;
   const requestedNext = searchParams.get('next');
   const next =
     requestedNext && isSafeRedirect(requestedNext) ? requestedNext : DEFAULT_NEXT;
@@ -91,7 +95,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       stage: 'validation',
       outcome: CALLBACK_ERROR.invalidConfirmationLink,
       rawType: type,
-      hasTokenHash: tokenHash !== '',
+      tokenHashLength: tokenHash.length,
     });
     return NextResponse.redirect(
       `${origin}/auth?error=${CALLBACK_ERROR.invalidConfirmationLink}`,
@@ -104,7 +108,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       stage: 'unconfigured',
       outcome: CALLBACK_ERROR.unconfigured,
       rawType: type,
-      hasTokenHash: true,
+      tokenHashLength: tokenHash.length,
     });
     return NextResponse.redirect(`${origin}/auth?error=${CALLBACK_ERROR.unconfigured}`);
   }
@@ -124,7 +128,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       stage: 'verification',
       outcome,
       rawType: type,
-      hasTokenHash: true,
+      tokenHashLength: tokenHash.length,
       error,
     });
     return NextResponse.redirect(`${origin}/auth?error=${outcome}`);

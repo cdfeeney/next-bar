@@ -21,6 +21,8 @@
  * is pure precisely so that guarantee is testable without spying on console.
  */
 
+import { CALLBACK_ERROR } from './authCallbackErrors';
+
 /** Stable across wording changes — alert on this, not on a log line. */
 export const CONFIRM_FAILURE_EVENT = 'auth.confirm.failure';
 
@@ -82,6 +84,25 @@ export function boundedToken(value: unknown): string | undefined {
   return SAFE_TOKEN.test(normalized) ? normalized : 'unrecognized';
 }
 
+/**
+ * `outcome` is meant to be one of this app's own sentinels. Every shipped
+ * caller passes one, so copying it verbatim was safe in practice — but the
+ * guarantee belonged to the callers, not to this function, and a future caller
+ * could hand it user-derived text (santa round 1, Codex). Bounding it against
+ * the sentinel set moves the guarantee into the module.
+ */
+function boundedOutcome(value: string): string {
+  return (Object.values(CALLBACK_ERROR) as string[]).includes(value)
+    ? value
+    : 'unrecognized';
+}
+
+/** Length only — never a prefix, suffix, or hash of the credential itself. */
+function boundedLength(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return 0;
+  return value;
+}
+
 function boundedStatus(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isInteger(value)) return undefined;
   return value >= 100 && value <= 599 ? value : undefined;
@@ -98,8 +119,21 @@ export interface ConfirmFailureRecord {
   /** One of this app's own fixed sentinels — never SDK-derived. */
   outcome: string;
   typeCategory: OtpTypeCategory;
+  /**
+   * Emitted ONLY when the category is `allowed` or `known-supabase-type`, so it
+   * can be one of six literals and nothing else. With two templates in play,
+   * the category alone does not say which one produced the failing link.
+   */
+  typeValue?: string;
   /** Presence only. The value is a bearer credential and never appears. */
   hasTokenHash: boolean;
+  /**
+   * Length only. Without it a TRUNCATED token and a genuinely expired one are
+   * byte-identical records, which defeats the whole point of this module
+   * (santa round 1, GLM). For a fixed-format hash the length is constant, so it
+   * discloses nothing about the secret.
+   */
+  tokenHashLength: number;
   sdkCode?: string;
   sdkName?: string;
   sdkStatus?: number;
@@ -109,16 +143,25 @@ export function buildConfirmFailureRecord(input: {
   stage: ConfirmFailureStage;
   outcome: string;
   rawType: string | null | undefined;
-  hasTokenHash: boolean;
+  tokenHashLength: number;
   error?: unknown;
 }): ConfirmFailureRecord {
+  const typeCategory = classifyOtpType(input.rawType);
+  const tokenHashLength = boundedLength(input.tokenHashLength);
+
   const record: ConfirmFailureRecord = {
     event: CONFIRM_FAILURE_EVENT,
     stage: input.stage,
-    outcome: input.outcome,
-    typeCategory: classifyOtpType(input.rawType),
-    hasTokenHash: input.hasTokenHash,
+    outcome: boundedOutcome(input.outcome),
+    typeCategory,
+    hasTokenHash: tokenHashLength > 0,
+    tokenHashLength,
   };
+
+  // Safe precisely because it already matched a closed set — see the field doc.
+  if (typeCategory === 'allowed' || typeCategory === 'known-supabase-type') {
+    record.typeValue = input.rawType as string;
+  }
 
   // `error.message` is read NOWHERE in this function — that omission is the
   // point, and `authConfirmDiagnostics.test.ts` pins it with a leaky message.
@@ -139,7 +182,7 @@ export function logConfirmFailure(input: {
   stage: ConfirmFailureStage;
   outcome: string;
   rawType: string | null | undefined;
-  hasTokenHash: boolean;
+  tokenHashLength: number;
   error?: unknown;
 }): void {
   console.error('[auth/confirm] rejected', buildConfirmFailureRecord(input));

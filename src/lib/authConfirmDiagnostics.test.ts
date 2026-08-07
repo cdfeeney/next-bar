@@ -84,7 +84,7 @@ describe('buildConfirmFailureRecord — the redaction contract', () => {
       stage: 'validation',
       outcome: 'invalid_confirmation_link',
       rawType: 'signup',
-      hasTokenHash: true,
+      tokenHashLength: 64,
     });
 
     expect(record.event).toBe(CONFIRM_FAILURE_EVENT);
@@ -109,7 +109,7 @@ describe('buildConfirmFailureRecord — the redaction contract', () => {
       stage: 'verification',
       outcome: 'otp_expired',
       rawType: 'recovery',
-      hasTokenHash: true,
+      tokenHashLength: 64,
       error: leaky,
     });
     const dumped = serialise(record);
@@ -130,7 +130,7 @@ describe('buildConfirmFailureRecord — the redaction contract', () => {
       stage: 'validation',
       outcome: 'invalid_confirmation_link',
       rawType: 'recovery\r\nevent=auth.confirm.success',
-      hasTokenHash: true,
+      tokenHashLength: 64,
     });
     const dumped = serialise(record);
 
@@ -146,7 +146,7 @@ describe('buildConfirmFailureRecord — the redaction contract', () => {
       stage: 'verification',
       outcome: 'confirmation_failed',
       rawType: 'email',
-      hasTokenHash: true,
+      tokenHashLength: 64,
       error: { name: `Auth\r\n${SENTINEL_EMAIL}`, code: 'x'.repeat(500), status: 99999 },
     });
 
@@ -156,12 +156,127 @@ describe('buildConfirmFailureRecord — the redaction contract', () => {
     expect(serialise(record)).not.toContain(SENTINEL_EMAIL);
   });
 
+  /**
+   * Santa round 1, GLM (HIGH). `hasTokenHash` alone is a boolean, so a template
+   * that TRUNCATES the token and a link whose token genuinely expired produce
+   * byte-identical records — which is precisely the distinction this module
+   * exists to make. The length is a non-sensitive integer: for a fixed-format
+   * hash it is constant, so it reveals nothing about the secret while making
+   * "the template mangled it" obvious at a glance.
+   */
+  it('records the token length so a truncated token is distinguishable from an expired one', () => {
+    const truncated = buildConfirmFailureRecord({
+      stage: 'verification',
+      outcome: 'confirmation_failed',
+      rawType: 'recovery',
+      tokenHashLength: 40,
+    });
+    const wellFormed = buildConfirmFailureRecord({
+      stage: 'verification',
+      outcome: 'otp_expired',
+      rawType: 'recovery',
+      tokenHashLength: 64,
+    });
+
+    expect(truncated.tokenHashLength).toBe(40);
+    expect(wellFormed.tokenHashLength).toBe(64);
+    // Both still report presence; the length is what separates them.
+    expect(truncated.hasTokenHash).toBe(true);
+    expect(wellFormed.hasTokenHash).toBe(true);
+  });
+
+  it('derives hasTokenHash from the length and rejects a nonsense length', () => {
+    const absent = buildConfirmFailureRecord({
+      stage: 'validation',
+      outcome: 'invalid_confirmation_link',
+      rawType: null,
+      tokenHashLength: 0,
+    });
+    expect(absent.hasTokenHash).toBe(false);
+    expect(absent.tokenHashLength).toBe(0);
+
+    const bogus = buildConfirmFailureRecord({
+      stage: 'validation',
+      outcome: 'invalid_confirmation_link',
+      rawType: null,
+      tokenHashLength: -5 as number,
+    });
+    expect(bogus.tokenHashLength).toBe(0);
+  });
+
+  /**
+   * Santa round 1, GLM (MEDIUM). With two templates in play, `typeCategory:
+   * 'allowed'` does not say WHICH one produced the failing link. The value is
+   * safe to emit here precisely because it is only emitted when it already
+   * matched a closed set — it can be one of six literals and nothing else.
+   */
+  it('names the type only when it came from the closed set', () => {
+    const allowed = buildConfirmFailureRecord({
+      stage: 'verification',
+      outcome: 'otp_expired',
+      rawType: 'recovery',
+      tokenHashLength: 64,
+    });
+    expect(allowed.typeValue).toBe('recovery');
+
+    const known = buildConfirmFailureRecord({
+      stage: 'validation',
+      outcome: 'invalid_confirmation_link',
+      rawType: 'signup',
+      tokenHashLength: 64,
+    });
+    expect(known.typeValue).toBe('signup');
+  });
+
+  it('never names a hostile type, only its category', () => {
+    const record = buildConfirmFailureRecord({
+      stage: 'validation',
+      outcome: 'invalid_confirmation_link',
+      rawType: 'recovery\r\nevent=auth.confirm.success',
+      tokenHashLength: 64,
+    });
+
+    expect(record).not.toHaveProperty('typeValue');
+    expect(record.typeCategory).toBe('unrecognized');
+    expect(serialise(record)).not.toContain('auth.confirm.success');
+  });
+
+  /**
+   * Santa round 1, Codex (MEDIUM). `outcome` was copied verbatim, so the
+   * module's "structurally safe" claim held only because every SHIPPED caller
+   * happens to pass an app-owned constant. Bounding it against the sentinel set
+   * makes the guarantee true of the function rather than of its current callers.
+   */
+  it('bounds an outcome that is not one of our own sentinels', () => {
+    const record = buildConfirmFailureRecord({
+      stage: 'verification',
+      outcome: `leaked ${SENTINEL_EMAIL}`,
+      rawType: 'recovery',
+      tokenHashLength: 64,
+    });
+
+    expect(record.outcome).toBe('unrecognized');
+    expect(serialise(record)).not.toContain(SENTINEL_EMAIL);
+  });
+
+  it('passes each real sentinel through unchanged', () => {
+    for (const sentinel of ['invalid_confirmation_link', 'supabase_unconfigured', 'otp_expired', 'confirmation_failed']) {
+      const record = buildConfirmFailureRecord({
+        stage: 'verification',
+        outcome: sentinel,
+        rawType: 'recovery',
+        tokenHashLength: 64,
+      });
+      expect(record.outcome).toBe(sentinel);
+    }
+  });
+
   it('omits SDK fields entirely when there is no error object', () => {
     const record = buildConfirmFailureRecord({
       stage: 'validation',
       outcome: 'invalid_confirmation_link',
       rawType: null,
-      hasTokenHash: false,
+      tokenHashLength: 0,
     });
 
     expect(record).not.toHaveProperty('sdkCode');
@@ -179,7 +294,7 @@ describe('logConfirmFailure — emission', () => {
       stage: 'verification',
       outcome: 'confirmation_failed',
       rawType: 'recovery',
-      hasTokenHash: true,
+      tokenHashLength: 64,
       error: new AuthApiError(`fail ${SENTINEL_TOKEN} ${SENTINEL_EMAIL}`, 400, 'bad'),
     });
 

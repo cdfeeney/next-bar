@@ -145,6 +145,21 @@ describe('/auth/confirm — both email types complete', () => {
     expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: 'abc' });
   });
 
+  /**
+   * Santa round 1, Claude/FABLE (MEDIUM). Trimming only the token left the same
+   * bug class open for `type`: whatever introduces whitespace into one
+   * introduces it into the other, and an untrimmed `type` fails the exact
+   * allowlist comparison — so a VALID link is rejected and then reported as a
+   * misconfigured template, sending the operator after the wrong cause.
+   */
+  it('trims the type before the allowlist check, so a padded type still verifies', async () => {
+    const verifyOtp = stubClient({ error: null });
+    const response = await GET(request('?token_hash=hash-r&type=%20recovery%0A'));
+
+    expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: 'hash-r' });
+    expect(locationOf(response)).toBe('https://app.test/settings');
+  });
+
   it('rejects a whitespace-only token without calling Supabase', async () => {
     const verifyOtp = stubClient();
     const response = await GET(request('?token_hash=%09%20%20&type=recovery'));
