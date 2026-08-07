@@ -371,6 +371,69 @@ describe('resume', () => {
     expect(completeness(loadManifest(file)).complete).toBe(false);
   });
 
+  it('recovers a manifest that recorded a cap but never subdivided', async () => {
+    // Regression: such a manifest (written before saturation became sticky)
+    // carried `capped` alongside a stale 'unsaturated' DONE. The
+    // completing-status fast path returned first, so resume made zero calls,
+    // wrote zero records, and the run could never finish.
+    const plan = [cells()[0]];
+    const file = path.join(dir, 'stale-cap.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'stale' }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(plan[0].id, [{ id: 'recorded' }]);
+    writer.attempt({ cellId: plan[0].id, attemptN: 2, ok: true, count: 14, capped: false });
+    writer.done(plan[0].id, 'unsaturated');
+    writer.close();
+    expect(completeness(loadManifest(file)).unclearedCap).toContain(plan[0].id);
+
+    const called: string[] = [];
+    const resumeWriter = openManifest(file);
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async (cell: any) => {
+        called.push(cell.id);
+        return { places: [] };
+      },
+    });
+    resumeWriter.close();
+    expect(called.length).toBe(4); // the four children, not the parent again
+    const report = completeness(loadManifest(file));
+    expect(report.complete).toBe(true);
+    expect(report.unclearedCap).toEqual([]);
+  });
+
+  it('preserves recorded places when the run is interrupted', async () => {
+    const plan = [cells()[0]];
+    const file = path.join(dir, 'interrupt-replay.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'irep' }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: 2, capped: false });
+    writer.result(plan[0].id, [{ id: 'a' }, { id: 'b' }]);
+    writer.close();
+
+    const emitted: string[] = [];
+    const resumeWriter = openManifest(file);
+    const result = await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async () => {
+        throw new SweepInterrupted();
+      },
+      onPlaces: (places: any[]) => places.forEach((place) => emitted.push(place.id)),
+    });
+    resumeWriter.close();
+    expect(result.interrupted).toBe(true);
+    expect(emitted).toEqual(['a', 'b']);
+  });
+
   it('does not double-count a place the re-query returns again', async () => {
     // The other direction: replaying a recorded page and then emitting an
     // overlapping fresh response would count the same place twice for one cell,

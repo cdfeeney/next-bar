@@ -27,6 +27,12 @@
  *                       terminal state, never a silent stop
  *   --manifest <path>   Append-only JSONL run manifest (required for --resume)
  *   --resume            Continue an interrupted run from its manifest
+ *   --ack-cell <id>     Acknowledge a cell that can never succeed (repeatable);
+ *                       needs --manifest and --ack-reason, then exits. This is
+ *                       the only way to finish a run containing a permanently
+ *                       failing cell, and every waiver is recorded with its
+ *                       reason and an operator marker.
+ *   --ack-reason <why>  Required with --ack-cell
  *   --nearby-only       Skip diversified Text Search
  *   --text-only         Skip Nearby Search
  *   --no-sla            Skip NY SLA enrichment
@@ -77,6 +83,8 @@ import {
 import { resolveIdentity } from './lib/coverage-identity.mjs';
 
 const VALUE_OPTIONS = new Set([
+  '--ack-cell',
+  '--ack-reason',
   '--bbox',
   '--county',
   '--env',
@@ -117,14 +125,15 @@ const SLA_CANDIDATE_CLASSES = new Set([
 ]);
 
 function parseArgs(argv) {
-  const options = {};
+  const options = { 'ack-cell': [] };
   const positionals = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (VALUE_OPTIONS.has(arg)) {
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${arg} needs a value`);
-      options[arg.slice(2)] = value;
+      if (arg === '--ack-cell') options['ack-cell'].push(value);
+      else options[arg.slice(2)] = value;
       index += 1;
     } else if (BOOLEAN_OPTIONS.has(arg)) {
       options[arg.slice(2)] = true;
@@ -146,6 +155,47 @@ try {
 }
 
 const { options, positionals: hoods } = parsed;
+
+/**
+ * Acknowledge cells that can never succeed, then exit.
+ *
+ * Without this there is no way to reach `ack_terminal`: a cell Google will
+ * always reject leaves the run permanently `incomplete_failed`, with the
+ * completeness gate correctly refusing and the operator holding no lever. This
+ * is that lever, and it is deliberately explicit — it names each cell and
+ * records a reason, so a waiver is always attributable.
+ */
+if (options['ack-cell'].length > 0) {
+  if (!options.manifest) {
+    console.error('--ack-cell requires --manifest <path>');
+    process.exit(1);
+  }
+  if (!options['ack-reason']) {
+    console.error('--ack-cell requires --ack-reason "<why this cell can never succeed>"');
+    process.exit(1);
+  }
+  const state = loadManifest(options.manifest);
+  if (!state) {
+    console.error(`no manifest at ${options.manifest}`);
+    process.exit(1);
+  }
+  const unknown = options['ack-cell'].filter((id) => !state.cells.has(id));
+  if (unknown.length > 0) {
+    console.error(`manifest has no such cell(s): ${unknown.join(', ')}`);
+    process.exit(1);
+  }
+  const writer = openManifest(options.manifest);
+  for (const cellId of options['ack-cell']) {
+    writer.ackTerminal(cellId, options['ack-reason'], 'operator');
+    writer.done(cellId, 'ack_terminal', { reason: options['ack-reason'] });
+    console.log(`acknowledged ${cellId}: ${options['ack-reason']}`);
+  }
+  writer.close();
+  const report = completeness(loadManifest(options.manifest));
+  console.log(`manifest status: ${report.status.toUpperCase()} (complete=${report.complete})`);
+  process.exit(report.complete ? 0 : 2);
+}
+
 config({ path: options.env ?? '.env.local', quiet: true });
 
 const KEY = process.env.GOOGLE_MAPS_API_KEY;

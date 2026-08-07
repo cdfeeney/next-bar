@@ -312,6 +312,40 @@ describe('a new run may not append onto an existing plan', () => {
   });
 });
 
+describe('operator acknowledgement', () => {
+  it('lets a permanently failing cell be waived, but only with a real record', async () => {
+    // Without a reachable ack path a cell Google always rejects blocks the run
+    // forever. The waiver needs BOTH records: the acknowledgement and the DONE.
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    // @ts-ignore
+    const { openManifest, openNewManifest, loadManifest } = await import('./coverage-manifest.mjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-ack-'));
+    const file = path.join(dir, 'run.jsonl');
+
+    const writer = openNewManifest(file);
+    writer.plan({ configHash: 'a', cells: [{ id: 'n:0:0', depth: 0 }] });
+    writer.attempt({ cellId: 'n:0:0', attemptN: 1, ok: false, errorClass: 'http4xx' });
+    writer.close();
+    expect(completeness(loadManifest(file)!).complete).toBe(false);
+
+    // DONE alone is not enough — the word without the acknowledgement.
+    const half = openManifest(file);
+    half.done('n:0:0', 'ack_terminal');
+    half.close();
+    expect(completeness(loadManifest(file)!).complete).toBe(false);
+
+    const acked = openManifest(file);
+    acked.ackTerminal('n:0:0', 'Google returns a permanent 400 here', 'operator');
+    acked.done('n:0:0', 'ack_terminal');
+    acked.close();
+    const report = completeness(loadManifest(file)!);
+    expect(report.complete).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('resume work list', () => {
   it('returns exactly the cells that never finished', () => {
     const state = build([

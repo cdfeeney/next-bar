@@ -220,6 +220,27 @@ async function resumeChildren(cell, known, ctx) {
 
 async function processCell(cell, ctx) {
   const known = priorState(ctx, cell.id);
+
+  // A cell that already hit the floor stays at the floor; re-querying it costs
+  // money and cannot produce a different answer. Checked first because a floor
+  // cell is also capped-with-no-children, and must not be mistaken for one that
+  // still owes a subdivision.
+  if (known?.terminalStatus === SATURATED_AT_FLOOR) {
+    replaySubtree(cell.id, cell, ctx);
+    return SATURATED_AT_FLOOR;
+  }
+
+  // A cell recorded as capped but never subdivided still OWES that work,
+  // whatever its DONE record claims. This check must precede the
+  // completing-status fast path below: a manifest written before saturation
+  // became sticky can carry `capped` alongside a stale 'unsaturated' DONE, and
+  // returning early there left the run permanently unable to finish — no calls,
+  // no records, `unclearedCap` forever.
+  if (known?.capped && !known.children?.length) {
+    if (known.places?.length) ctx.onPlaces(known.places, cell);
+    return subdivideFrom(cell, ctx);
+  }
+
   if (known && COMPLETING_STATUSES.includes(known.terminalStatus)) {
     // Replay the whole SUBTREE. Skipping the CALL is the point of resume;
     // skipping the RESULTS hands the caller a short candidate list while the
@@ -228,12 +249,6 @@ async function processCell(cell, ctx) {
     // venue that subdivision was run to find.
     replaySubtree(cell.id, cell, ctx);
     return known.terminalStatus;
-  }
-  // A cell that already hit the floor stays at the floor; re-querying it costs
-  // money and cannot produce a different answer.
-  if (known?.terminalStatus === SATURATED_AT_FLOOR) {
-    replaySubtree(cell.id, cell, ctx);
-    return SATURATED_AT_FLOOR;
   }
 
   // A cell whose SUBDIVIDE is already recorded must NOT be re-queried. Doing so
@@ -246,16 +261,6 @@ async function processCell(cell, ctx) {
     // processCell, so each child replays its own subtree.
     if (known.places?.length) ctx.onPlaces(known.places, cell);
     return resumeChildren(cell, known, ctx);
-  }
-
-  // A cell already recorded as capped must NOT be re-queried. Google returns a
-  // different slice each time; a smaller second answer would flip `capped` to
-  // false, mark the cell 'unsaturated', and let the run report COMPLETE having
-  // never subdivided a cell it already knew was censored. Subdivide from the
-  // recorded result instead — it is the same work, minus a paid call.
-  if (known?.capped && !known.children?.length && known.terminalStatus === null) {
-    if (known.places?.length) ctx.onPlaces(known.places, cell);
-    return subdivideFrom(cell, ctx);
   }
 
   const attemptN = nextAttempt(ctx, cell.id, known);
@@ -279,7 +284,12 @@ async function processCell(cell, ctx) {
     response = await ctx.transport(cell, ctx.includedTypes);
     ctx.callsUsed += 1;
   } catch (error) {
-    if (error instanceof SweepInterrupted) throw error;
+    if (error instanceof SweepInterrupted) {
+      // The last exit that still lost data: an interruption must not discard
+      // what this cell already had on record.
+      replayRecordedOnce(known, cell, ctx, []);
+      throw error;
+    }
     ctx.callsUsed += 1;
 
     // Google rejects the whole request when one includedType is unrecognized.
