@@ -135,10 +135,12 @@ caller needs only `EXECUTE`, which 0034 does not touch.
 A `SECURITY DEFINER` → `SECURITY INVOKER` change on any of these functions **would** break them, but
 *what* breaks differs:
 
-| Caller role | Post-0034 `profiles` grant | What blocks an INVOKER-mode read |
+| Caller context | Post-0034 `profiles` grant | What blocks an INVOKER-mode read |
 |---|---|---|
-| `authenticated` | `select, insert` **re-granted** (0034:44) | **RLS** — `"profiles: owner can read own"`, `using (auth.uid() = id)` (`0001_v0.5.0_auth_and_ratings.sql:84-86`), **untouched by this packet**. These RPCs read *other users'* rows, which only a definer-owner RLS bypass permits. |
-| `anon` | **nothing** — `revoke all … from public, anon, authenticated` (0034:42) with no anon re-grant | **0034's revocation itself.** The table privilege is gone, so the read fails before RLS is reached. |
+| direct `authenticated` | `select, insert` **re-granted** (0034:44) | **RLS** — `"profiles: owner can read own"`, `using (auth.uid() = id)` (`0001_v0.5.0_auth_and_ratings.sql:84-86`), **untouched by this packet**. These RPCs read *other users'* rows, which only a definer-owner RLS bypass permits. |
+| direct `anon` | **nothing** — `revoke all … from public, anon, authenticated` (0034:42) with no anon re-grant | **0034's revocation itself.** The table privilege is gone, so the read fails before RLS is reached. |
+| **called from inside another `SECURITY DEFINER` function** | n/a — grants resolve against the *outer* function's owner | **Nothing.** The inner function inherits the outer definer's effective user, which bypasses RLS. The flip is a **silent no-op**: it does not break, and it does not restrict either. |
+| `service_role` | untouched by 0034 | **Nothing** — `BYPASSRLS` in Supabase. Unaffected in either mode. |
 
 The anon row is not hypothetical: **`get_shared_night` is granted `execute` to `anon`**
 (`0016_shared_nights.sql:200`). So for at least one function in the list above, 0034 *is* the
@@ -146,11 +148,15 @@ operative control.
 
 Practical advice, unchanged: treat a definer→invoker change on any profile-reading function as
 breaking. But **reverting 0034 would restore only the `anon` path** — an `authenticated`-path break
-is RLS and would survive the revert.
+is RLS and would survive the revert. And note the third row's trap: a flip that *appears* safe
+because nothing broke may simply be running inside a definer context and enforcing nothing at all.
 
-> *Corrected twice on 2026-08-07. The original said "0034's revocation" (wrong for `authenticated` —
-> 0034 re-grants that SELECT). The first correction said RLS (wrong for `anon` — 0034 grants anon
-> nothing back). Raised by the Claude/Sonnet lane, then narrowed by the Codex lane.*
+> *Corrected three times on 2026-08-07, each by a different reviewer. The original said "0034's
+> revocation" (wrong for `authenticated` — 0034 re-grants that SELECT). The Claude/Sonnet lane's
+> correction said RLS (wrong for `anon` — 0034 grants anon nothing back). The Codex lane split it by
+> role. The GLM lane then supplied the two non-obvious contexts: nested definer calls and
+> `service_role`. That three reviewers each found a different hole in the same four-line claim is
+> itself the argument for not trusting a single-lane read of a Production gate document.*
 
 **No application path is broken by 0034 on the candidate as analysed** — the three direct-access
 sites are all within the new grant, and the RPC surface is grant-independent.
@@ -250,12 +256,18 @@ Every item here is **unverified** and cannot be resolved locally:
    migration states repository search found no application path — that search covered the repository,
    not Production tooling, dashboards, or ad-hoc scripts.
 7. **The paired web candidate** (§2) is not settled.
-8. **How many Production rows already have `shares_list_publicly = true`** (§6, §12). **This is the
-   one item here that is NOT gated on the window — it is a live condition today.**
-   `get_public_ratings` is `SECURITY DEFINER` with `grant execute … to anon` from migration **0015**,
-   which is already applied, so any row already flagged `true` is publicly readable **now**, with no
-   product UI to review or revoke it. **Run this count immediately**, independently of the migration
-   decision. A non-zero result is a current privacy finding, not a scheduling input.
+8. **How many Production rows already have `shares_list_publicly = true`** (§6, §12), and **what the
+   three affected tables currently grant**. Two distinct unknowns:
+   - *The flag count.* The anon read path via `get_public_ratings` (0015, applied) is already live,
+     so a `true` row is exposed today. Expect zero — the write path was closed before 0034 — but a
+     `service_role`, dashboard, or direct-SQL edit could have set one. Cheap to check; check it.
+   - *The actual current grants.* **The whole analysis assumes Production's starting grant state
+     matches what the migration sources imply, and never verifies it.** Query
+     `information_schema.role_table_grants` for `anon`/`authenticated`/`public` on `profiles`,
+     `ratings` and `pairwise_comparisons` **before** the window. If the live baseline differs from
+     the assumed one, conclusions in §5, §6 and §7 change — 0034 could be *widening* rather than
+     narrowing. This is an unstated assumption rather than a flagged gap, which makes it more
+     dangerous than the limitations listed in §4. *(Raised by the GLM lane, 2026-08-07.)*
 
 ## 10. Backup and revert requirements
 
@@ -313,14 +325,23 @@ Each must be exercised against the migrated environment by a real account, not a
 - **Cross-container authentication** — the TestFlight WKWebView → Safari boundary. **This is the
   path the un-reviewed `76d610f` work addresses and it has never been tested against a deployed
   environment.**
-- **Public shared list** — **the exposure is not created by this packet; if it exists, it is already
-  live.** `get_public_ratings` is `SECURITY DEFINER` and already carries
-  `grant execute … to anon` from migration **0015** (`0015_public_shared_list.sql:63,67,88`). So any
-  Production row already holding `shares_list_publicly = true` is **publicly readable right now**,
-  today, with or without this migration. Run the §9.8 count **immediately, not at the window** — a
-  non-zero result is a current privacy fact to act on, not a migration risk to schedule.
-  What 0034 *does* change is that an authenticated owner can thereafter set the flag directly through
-  PostgREST. There is still no product UI to set, review, or revoke it.
+- **Public shared list** — **the READ path is pre-existing; the WRITE path is what this packet
+  opens.** Separate the two or the risk is misread in either direction:
+  - *Read (already live).* `get_public_ratings` is `SECURITY DEFINER` with
+    `grant execute … to anon` from migration **0015** (`0015_public_shared_list.sql:63,67,88`),
+    already applied. Any row holding `shares_list_publicly = true` is publicly readable **today**.
+  - *Write (closed until now).* Before 0034 that flag was **unreachable through the API**. 0006's
+    column-scoped grant excluded it, so an owner running
+    `update profiles set shares_list_publicly = true` got a **column-permission error** — 0034's own
+    F5 comment states `get_public_ratings` "could only ever be empty". Any currently-`true` row can
+    therefore only have come from `service_role`, a dashboard edit, or a direct SQL session.
+  - *What 0034 actually changes.* It adds `shares_list_publicly` to the update column grant, so
+    afterwards **any authenticated owner can self-expose their entire ratings list with a single
+    PATCH** — no confirmation step, and no product UI to set, review, or revoke it. That is a real
+    new capability, not merely a grant-layer formality.
+
+  Run the §9.8 count anyway (cheap, and it settles the read question), but the decision this bullet
+  gates is whether shipping a one-PATCH self-exposure with no revoke UI is acceptable for Beta.
 
 ## 13. What Staging approval does and does not authorize
 
