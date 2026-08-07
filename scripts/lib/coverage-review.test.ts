@@ -149,6 +149,39 @@ describe('borough-parameterized review', () => {
     expect(adversarialReview(manhattanLicenseLead, [], { county: 'New York' }).decision).toBe('lookup');
   });
 
+  it('keeps a lead whose county matches even when its locality is not listed', () => {
+    // NYC has far more postal localities than boroughs. Rejecting on an
+    // unlisted city name would throw away every valid Bayside / Elmhurst /
+    // Jackson Heights lead as "outside Queens County".
+    const bayside = {
+      name: 'Gadfly Bar',
+      placeId: null,
+      licenseMatches: [{ description: 'Food & Beverage Business', city: 'Bayside', county: 'Queens' }],
+    };
+    expect(adversarialReview(bayside, [], { borough: 'queens' }).decision).toBe('lookup');
+  });
+
+  it('does not treat a same-named venue with a different Place ID as a duplicate', () => {
+    // The multi-location rule has to hold in the review driver too, not only in
+    // the sweep: nameExact alone used to force a duplicate verdict here.
+    const review = adversarialReview(
+      { name: 'The Canuck', placeId: 'place-brooklyn', primaryType: 'bar', ratings: 90 },
+      [{ name: 'The Canuck', placeId: 'place-manhattan', distanceMeters: 40, nameSimilarity: 1, nameExact: true }],
+      { borough: 'brooklyn' },
+    );
+    expect(review.decision).not.toBe('duplicate');
+  });
+
+  it('still calls it a duplicate when the Place IDs actually match', () => {
+    expect(
+      adversarialReview(
+        { name: 'The Canuck', placeId: 'place-x', primaryType: 'bar', ratings: 90 },
+        [{ name: 'The Canuck', placeId: 'place-x', distanceMeters: 3, nameSimilarity: 1, nameExact: true, placeIdMatch: true }],
+        { borough: 'brooklyn' },
+      ).decision,
+    ).toBe('duplicate');
+  });
+
   it('rejects a lead that is outside the borough actually being reviewed', () => {
     const review = adversarialReview(brooklynLicenseLead, [], { borough: 'manhattan' });
     expect(review.decision).toBe('reject');

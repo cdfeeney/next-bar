@@ -69,21 +69,40 @@ describe('multi-location identity regression', () => {
 });
 
 describe('identity precedence', () => {
-  it('never calls two rows duplicates when both have distinct Place IDs', () => {
-    // Same name, four meters apart — but two Place IDs means two venues.
+  it('keeps two Place-ID-bearing rows distinct when they are at different addresses', () => {
     const identity = resolveIdentity(
-      { name: 'Sister Bar', placeId: 'place-a', address: '1 Same St, Brooklyn, NY', lat: 40.7, lng: -73.9 },
+      { name: 'Sister Bar', placeId: 'place-a', address: '12 Berry St, Brooklyn, NY', lat: 40.7, lng: -73.9 },
       [
         {
           name: 'Sister Bar',
           place_id: 'place-b',
-          address: '1 Same St, Brooklyn, NY',
+          address: '400 Union Ave, Brooklyn, NY',
           lat: 40.70003,
           lng: -73.9,
         },
       ],
     );
     expect(identity.verdict).not.toBe('duplicate');
+  });
+
+  it('catches one storefront listed twice after Google reissued its Place ID', () => {
+    // Google reissues a Place ID on owner re-claims and listing merges, so
+    // differing ids alone do not prove two venues. Same name at the same street
+    // number, metres apart, is one bar with two listings.
+    const identity = resolveIdentity(
+      { name: 'Keg & Lantern', placeId: 'place-new', address: '97 Nassau Ave, Brooklyn, NY', lat: 40.7, lng: -73.9 },
+      [
+        {
+          name: 'Keg & Lantern',
+          place_id: 'place-old',
+          address: '97 Nassau Avenue, Brooklyn, NY',
+          lat: 40.70003,
+          lng: -73.9,
+        },
+      ],
+    );
+    expect(identity.verdict).toBe('duplicate');
+    expect(identity.reason).toMatch(/reissues/);
   });
 
   it('matches a license-only row to production by name and street address', () => {

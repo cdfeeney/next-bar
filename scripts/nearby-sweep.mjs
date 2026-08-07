@@ -59,6 +59,7 @@ import {
   configHash,
   loadManifest,
   openManifest,
+  openNewManifest,
 } from './lib/coverage-manifest.mjs';
 import {
   DEFAULT_SUBDIVISION,
@@ -402,6 +403,16 @@ async function searchSeedNames(region, places, meter) {
   const bias = regionBias(region.bbox);
   for (const requestedName of seedNames) {
     let best;
+    // --max-calls is documented as a hard stop. It was previously enforced only
+    // inside the engine, so a seeded run could spend an unbounded number of
+    // paid calls after the budget was already gone.
+    if (meter.calls >= MAX_CALLS) {
+      console.error(
+        `call budget ${MAX_CALLS} exhausted before seed "${requestedName}"; ${seedNames.length} seeds were requested`,
+      );
+      meter.seedBudgetStopped = true;
+      return;
+    }
     // Generic names such as "Suite" and "Parlay Cafe" often resolve to a
     // hotel or unrelated business without an explicit bar-intent retry.
     for (const textQuery of [
@@ -617,7 +628,16 @@ if (!MANIFEST) {
   console.error('--manifest <path> is required: a run without one cannot report completeness');
   process.exit(1);
 }
-const manifest = openManifest(MANIFEST);
+let manifest;
+try {
+  // A fresh run must not append its plan onto an existing one: replay() honours
+  // the first PLAN, so the new run's cells would be invisible to the
+  // completeness check and could inherit the old run's "complete".
+  manifest = options.resume ? openManifest(MANIFEST) : openNewManifest(MANIFEST);
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
 if (!options.resume) {
   manifest.plan({
     configHash: hash,
@@ -852,11 +872,21 @@ console.log(
   `  ${report.summary.finished}/${report.summary.plannedCells} cells finished, ` +
     `${report.summary.subdivided} subdivided, ${report.summary.uniquePlaceIds} place ids recorded`,
 );
-if (report.complete) {
+// The manifest covers the Nearby and Text lanes. The seed lane is not planned
+// as cells, so its own truncation has to be carried into the verdict here or
+// "COMPLETE" would be claiming more than the invariant actually checked.
+if (meter.seedBudgetStopped) {
+  console.error('  status: INCOMPLETE_FAILED — the exact-name seed lane stopped on the call budget');
+  console.error(`  resume with: --manifest ${MANIFEST} --resume (and raise --max-calls)`);
+  process.exitCode = 2;
+} else if (report.complete) {
   const writer = openManifest(MANIFEST);
   writer.runDone(report);
   writer.close();
-  console.log('  status: COMPLETE — every planned cell reached a terminal state');
+  console.log(
+    `  status: COMPLETE — every planned Nearby/Text cell reached a terminal state` +
+      `${seedNames.length > 0 ? `, and all ${seedNames.length} seed names were searched` : ''}`,
+  );
 } else {
   console.error(`  status: ${report.status.toUpperCase()} — this run did NOT cover its plan`);
   if (report.missing.length > 0) {

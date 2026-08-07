@@ -214,6 +214,32 @@ describe('completeness invariant', () => {
   });
 });
 
+describe('a new run may not append onto an existing plan', () => {
+  it('refuses, because replay honours the first PLAN and would hide the new one', async () => {
+    // Regression: appending PLAN B to a completed PLAN A left every B cell
+    // planned:false, so B's quota failure was invisible and the run inherited
+    // A's "complete".
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    // @ts-ignore
+    const { openManifest, openNewManifest } = await import('./coverage-manifest.mjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-plan-'));
+    const file = path.join(dir, 'run.jsonl');
+
+    const first = openNewManifest(file);
+    first.plan({ configHash: 'aaa', cells: [{ id: 'n:0:0', depth: 0 }] });
+    first.close();
+
+    expect(() => openNewManifest(file)).toThrow(/already contains a run plan/);
+    // --resume still opens it, which is the supported way to continue.
+    const resumed = openManifest(file);
+    expect(resumed).toBeTruthy();
+    resumed.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe('resume work list', () => {
   it('returns exactly the cells that never finished', () => {
     const state = build([

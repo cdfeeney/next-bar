@@ -137,13 +137,27 @@ export function resolveIdentity(candidate, productionRows = []) {
     .sort((a, b) => a.distance - b.distance);
 
   for (const { row, distance } of nearby) {
-    // 2. Two rows that BOTH have a Place ID and disagree are two real venues.
-    //    This is the rule that lets a second location of a brand survive.
-    if (candidate.placeId && row.place_id && row.place_id !== candidate.placeId) continue;
-
     const sameName = candidateName && normalizeName(row.name) === candidateName;
     const rowStreet = streetKey(row.address);
     const sameStreet = candidateStreet && rowStreet && candidateStreet === rowStreet;
+
+    // 2. Two rows that BOTH have a Place ID and disagree are normally two real
+    //    venues — this is what lets a second location of a brand survive. But
+    //    Google reissues a Place ID on owner re-claims and listing merges, so
+    //    differing ids alone cannot prove two venues. Same name AND same street
+    //    number at this range is one storefront with two listings; a genuine
+    //    second location has a different address, which still falls through.
+    if (candidate.placeId && row.place_id && row.place_id !== candidate.placeId) {
+      if (sameName && sameStreet) {
+        return {
+          verdict: 'duplicate',
+          match: row,
+          reason: `same name and street address as production row ${row.name} (${distance}m) despite a different Place ID — Google reissues ids on re-claims`,
+        };
+      }
+      continue;
+    }
+
     const sameBorough =
       !candidateBorough || !boroughOf(row) || boroughOf(row) === candidateBorough;
 

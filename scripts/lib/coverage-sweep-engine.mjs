@@ -77,6 +77,7 @@ export async function runSweep({
     callsUsed: 0,
     droppedTypes: [],
     interrupted: false,
+    attemptsThisRun: new Map(),
   };
 
   for (const cell of cells) {
@@ -104,16 +105,80 @@ function priorState(ctx, cellId) {
   return ctx.state?.cells?.get(cellId) ?? null;
 }
 
+/**
+ * Attempt numbers must strictly increase, including across retries WITHIN a
+ * run. `ctx.state` is the replayed prior manifest and is deliberately not
+ * mutated mid-run, so deriving the number from it alone would emit two records
+ * with the same attemptN and let a later failure hide behind an earlier
+ * success in the completeness check.
+ */
+function nextAttempt(ctx, cellId, known) {
+  const base = known?.attempts?.length ?? 0;
+  const inRun = (ctx.attemptsThisRun.get(cellId) ?? 0) + 1;
+  ctx.attemptsThisRun.set(cellId, inRun);
+  return base + inRun;
+}
+
+/**
+ * Continue a subdivision that a previous run started, using the child cells
+ * recorded in the manifest. The parent's own search already happened; only its
+ * unfinished children still owe work.
+ */
+async function resumeChildren(cell, known, ctx) {
+  const outcomes = [];
+  for (const childId of known.children) {
+    const childState = ctx.state?.cells?.get(childId);
+    const childCell = childState?.cell;
+    if (!childCell) {
+      // The SUBDIVIDE record is unusable; fail loudly rather than reporting a
+      // clean run over a subdivision we cannot reconstruct.
+      ctx.manifest.attempt({
+        cellId: childId,
+        attemptN: 1,
+        ok: false,
+        errorClass: 'network',
+        message: 'manifest SUBDIVIDE record is missing this child cell geometry',
+      });
+      outcomes.push(null);
+      continue;
+    }
+    outcomes.push(await processCell({ ...childCell, kind: childCell.kind ?? cell.kind }, ctx));
+  }
+  const terminal = [...COMPLETING_STATUSES, SATURATED_AT_FLOOR];
+  if (outcomes.every((outcome) => terminal.includes(outcome))) {
+    ctx.manifest.done(cell.id, 'cleared', { children: known.children.length, resumed: true });
+    return 'cleared';
+  }
+  return null;
+}
+
 async function processCell(cell, ctx) {
   const known = priorState(ctx, cell.id);
   if (known && COMPLETING_STATUSES.includes(known.terminalStatus)) {
+    // Replay this cell's recorded places. Skipping the CALL is the point of
+    // resume; skipping the RESULTS would hand the caller a short candidate
+    // list while the manifest still says the cell was covered.
+    if (known.places?.length) ctx.onPlaces(known.places, cell);
     return known.terminalStatus;
   }
   // A cell that already hit the floor stays at the floor; re-querying it costs
   // money and cannot produce a different answer.
-  if (known?.terminalStatus === SATURATED_AT_FLOOR) return SATURATED_AT_FLOOR;
+  if (known?.terminalStatus === SATURATED_AT_FLOOR) {
+    if (known.places?.length) ctx.onPlaces(known.places, cell);
+    return SATURATED_AT_FLOOR;
+  }
 
-  const attemptN = (known?.attempts?.length ?? 0) + 1;
+  // A cell whose SUBDIVIDE is already recorded must NOT be re-queried. Doing so
+  // re-bills a call we already paid for, and — because the re-query can come
+  // back under the cap — can mark the parent 'unsaturated' and strand its
+  // children forever: runSweep only iterates depth-0 cells, so nothing would
+  // ever visit them again and the run could never converge.
+  if (known?.children?.length && known.terminalStatus === null) {
+    if (known.places?.length) ctx.onPlaces(known.places, cell);
+    return resumeChildren(cell, known, ctx);
+  }
+
+  const attemptN = nextAttempt(ctx, cell.id, known);
 
   if (ctx.callsUsed >= ctx.maxCalls) {
     ctx.manifest.attempt({
@@ -148,6 +213,20 @@ async function processCell(cell, ctx) {
         errorClass: 'unsupported_type',
         message: `dropped unsupported includedTypes: ${unsupported.join(', ')}`,
       });
+      // unsupportedTypeFromError only ever returns members of the list it was
+      // given, so the list strictly shrinks and this recursion is bounded by
+      // its length. Guard anyway: an empty list means we have nothing left to
+      // ask for and must stop rather than retry forever.
+      if (ctx.includedTypes.length === 0) {
+        ctx.manifest.attempt({
+          cellId: cell.id,
+          attemptN: nextAttempt(ctx, cell.id, known),
+          ok: false,
+          errorClass: 'network',
+          message: 'every includedType was rejected by Google; nothing left to request',
+        });
+        return null;
+      }
       return processCell(cell, ctx);
     }
 
@@ -170,10 +249,7 @@ async function processCell(cell, ctx) {
     count: places.length,
     capped,
   });
-  ctx.manifest.result(
-    cell.id,
-    places.map((place) => place.id).filter(Boolean),
-  );
+  ctx.manifest.result(cell.id, places);
   ctx.onPlaces(places, cell);
 
   if (!capped) {

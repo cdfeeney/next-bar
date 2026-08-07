@@ -15,7 +15,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const MANIFEST_SCHEMA_VERSION = 1;
+// v2: RESULT records carry full place payloads, not just ids, so a resumed run
+// can rebuild the candidate queue without re-querying. Bumping this changes the
+// config hash, so v1 manifests correctly refuse to resume onto v2 code.
+export const MANIFEST_SCHEMA_VERSION = 2;
 
 /** Terminal states that count toward a complete run. */
 export const COMPLETING_STATUSES = Object.freeze(['unsaturated', 'cleared', 'ack_terminal']);
@@ -102,8 +105,19 @@ class ManifestWriter {
     return this.append({ type: 'ATTEMPT', ...record });
   }
 
-  result(cellId, placeIds) {
-    return this.append({ type: 'RESULT', cellId, placeIds });
+  /**
+   * Records the full place payloads, not just their ids. The docstring at the
+   * top of this file claims the candidate file is reconstructable from the
+   * manifest alone; ids alone cannot do that, and a resume would silently
+   * rebuild a short queue from only the cells it re-queried.
+   */
+  result(cellId, places) {
+    return this.append({
+      type: 'RESULT',
+      cellId,
+      placeIds: places.map((place) => place.id).filter(Boolean),
+      places,
+    });
   }
 
   subdivide(parentId, childIds, childCells) {
@@ -136,6 +150,29 @@ class ManifestWriter {
 
 export function openManifest(file) {
   return new ManifestWriter(path.resolve(file));
+}
+
+/**
+ * Open a manifest for a NEW run, refusing to append onto an existing plan.
+ *
+ * replay() honours the first PLAN it finds, so a second PLAN appended to the
+ * same file makes every cell of the new plan `planned:false` — invisible to the
+ * completeness check. A quota-failed run could then inherit the previous run's
+ * "complete" and report success for work it never did.
+ */
+export function openNewManifest(file) {
+  const resolved = path.resolve(file);
+  if (fs.existsSync(resolved) && fs.statSync(resolved).size > 0) {
+    const existing = replay(parseManifest(fs.readFileSync(resolved, 'utf8')));
+    if (existing.plan) {
+      throw new Error(
+        `${resolved} already contains a run plan (configHash ${existing.plan.configHash}). ` +
+          'Pass --resume to continue it, or choose a new --manifest path. Appending a second ' +
+          'plan would hide the new run from the completeness check.',
+      );
+    }
+  }
+  return new ManifestWriter(resolved);
 }
 
 /**
@@ -178,6 +215,7 @@ export function replay({ records, tornTail = false }) {
       lastOk: null,
       capped: false,
       placeIds: [],
+      places: [],
       children: [],
       parentId: null,
       terminalStatus: null,
@@ -205,6 +243,9 @@ export function replay({ records, tornTail = false }) {
       case 'RESULT': {
         const cell = ensure(record.cellId);
         cell.placeIds = [...new Set([...cell.placeIds, ...(record.placeIds ?? [])])];
+        const byId = new Map(cell.places.map((place) => [place.id, place]));
+        for (const place of record.places ?? []) byId.set(place.id, place);
+        cell.places = [...byId.values()];
         break;
       }
       case 'SUBDIVIDE': {

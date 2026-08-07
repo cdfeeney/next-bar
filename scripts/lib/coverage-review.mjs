@@ -101,12 +101,15 @@ function licenseDescriptions(candidate) {
 export function adversarialReview(candidate, catalogMatches = [], options = {}) {
   const scope = resolveScope(options);
   const reasons = [];
-  const duplicate = catalogMatches.find(
-    (match) =>
-      match.placeIdMatch ||
-      match.nameExact ||
-      (match.distanceMeters <= 25 && match.nameSimilarity >= 0.5),
-  );
+  // Two rows that BOTH carry a Place ID and disagree are two venues, whatever
+  // their names say. Without this guard `nameExact` alone re-introduced the
+  // multi-location bug here, in the review driver, after it had been removed
+  // from the sweep.
+  const duplicate = catalogMatches.find((match) => {
+    if (match.placeIdMatch) return true;
+    if (candidate.placeId && match.placeId && match.placeId !== candidate.placeId) return false;
+    return match.nameExact || (match.distanceMeters <= 25 && match.nameSimilarity >= 0.5);
+  });
   if (duplicate) {
     return {
       decision: 'duplicate',
@@ -186,11 +189,17 @@ export function adversarialReview(candidate, catalogMatches = [], options = {}) 
     const licenseCounties = (candidate.licenseMatches ?? [])
       .map((match) => String(match.county ?? '').trim().toLowerCase())
       .filter(Boolean);
+    // County is authoritative and the city list is only a hint: NYC has far
+    // more postal localities than boroughs. Requiring BOTH to be out of scope
+    // stops a valid lead in an unlisted locality (Bayside, Elmhurst, Jackson
+    // Heights) from being rejected as "outside Queens County".
+    const cityOutOfScope =
+      licenseCities.length > 0 && licenseCities.every((city) => !scope.cities.includes(city));
+    const countyOutOfScope =
+      licenseCounties.length > 0 &&
+      licenseCounties.every((county) => county !== scope.county.toLowerCase());
     const outOfScope =
-      (licenseCities.length > 0 &&
-        licenseCities.every((city) => !scope.cities.includes(city))) ||
-      (licenseCounties.length > 0 &&
-        licenseCounties.every((county) => county !== scope.county.toLowerCase()));
+      licenseCounties.length > 0 ? countyOutOfScope : cityOutOfScope;
     if (outOfScope) {
       return {
         decision: 'reject',
