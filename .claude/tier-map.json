@@ -30,7 +30,30 @@
     "unprotected by the drop. But the intent must not be lost: the repository-owned",
     "classifier must carry a BAKED-IN T0 floor for file-deleting scripts, so that",
     "re-adding a photo-prune path here cannot land as T1. That is a required case for",
-    "the Item 1 classifier work — do not close Item 1 without it."
+    "the Item 1 classifier work — do not close Item 1 without it.",
+    "",
+    "KNOWN STRUCTURAL GAP — read before trusting this file. Independent review on",
+    "2026-08-07 (Claude/FABLE, GLM-5.2 and DeepSeek-V4-Pro, converging) established",
+    "that EVERY T0 rule here is a PATH ENUMERATION. There is no pattern rule and no",
+    "behavioural catch-all. Therefore ANY NEW FILE AT AN UNLISTED PATH LANDS AT T1,",
+    "no matter how destructive. Confirmed evasions, none of which this file catches:",
+    "  - a new scripts/purge-photos.mjs calling fs.unlinkSync            -> T1",
+    "  - a new scripts/cleanup-accounts.mts with delete from auth.users  -> T1",
+    "  - a new src/app/api/admin/purge/route.ts with a DELETE handler    -> T1",
+    "  - supabase/functions/** (edge functions, service-role, raw SQL)   -> T1, uncovered",
+    "  - next.config.ts (CSP headers, rewrites past middleware)          -> T1, uncovered",
+    "  - a new service-role client in src/lib/**                         -> T1, uncovered",
+    "  - package.json / lockfile (supply chain)                          -> T1, uncovered",
+    "The auth.users-delete pattern was recognised in TWO specific files and never",
+    "generalised. Splitting dangerous work across two T1 files also yields an",
+    "aggregate T1: there is no transitive-impact rule, so a new dependency OF a T0",
+    "file is itself only T1.",
+    "",
+    "This is NOT fixed here, deliberately. The fix is a repository-owned classifier",
+    "with a BAKED-IN T0 FLOOR that fails closed on unknown paths — which is exactly",
+    "the Item 1 deliverable (goal g-134e4680). Patching more enumerated globs into",
+    "this file would be whack-a-mole and would give false confidence. Until Item 1",
+    "lands, treat a T1 result on a NEW file as UNVERIFIED, not as safe."
   ],
   "non_runtime_paths": [
     "docs/**",
@@ -88,6 +111,11 @@
       "glob": "scripts/refresh-places.mjs",
       "tier": "T1",
       "note": "Calls billable Google Places APIs across the catalog. Proposed as T0 and DEMOTED to T1 on adjudication: T0 in this map means irreversible destruction or takeover with no undo. A runaway bill is bounded, self-limiting (quotas, budget alerts) and recoverable; a dropped table with an unverified restore is not. Putting cost in the same tier devalues the label for the changes that can actually end the project. FOLLOW-UP, not fixed here: the script issues API requests BEFORE the --apply guard, so a dry run still spends. That is a one-line correctness bug and wants a MAX_CALLS cap — fixing it is the right control, not tier weight."
+    },
+    {
+      "glob": "scripts/seed-test-friend.local.mts",
+      "tier": "T1",
+      "note": "Runs `update auth.users set email_confirmed_at = now() where email = $1` against DATABASE_URL (line 63) — the same primitive that made rpc-smoke.mts and nights-smoke.mts T0. Deliberately held at T1, recorded so nobody has to re-derive it: the target is a HARDCODED literal (nextbar.test.sam@example.com, line 24), not a runtime-computed id; the operation is a reversible UPDATE rather than a DELETE; and the script self-guards with `if (process.env.LOOP_UNATTENDED === '1') exit` (line 16). Same adjudication as refresh-places.mjs below — T0 here means irreversible destruction or takeover with no undo, and diluting it devalues the label for changes that can actually end the project. Raised by the Claude/FABLE review lane 2026-08-07; made explicit rather than left to default_tier."
     },
     {
       "glob": "CLAUDE.md",

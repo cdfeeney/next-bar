@@ -312,26 +312,43 @@ if ($srcCount -ne $stageCount) { throw "STAGING INCOMPLETE: source $srcCount vs 
 
 Compress-Archive -Path $stage -DestinationPath $dst -CompressionLevel Optimal
 
-# VALIDATE — archive opens, preserves paths, and carries the files that exist nowhere else.
+# VALIDATE — every check THROWS. A printed warning is not a gate: an operator who
+# reads "script finished without error" as "archive is good" must be right.
 Add-Type -A System.IO.Compression.FileSystem
 $z=[IO.Compression.ZipFile]::OpenRead($dst)
-"entries: $($z.Entries.Count)"
-# every entry must carry a directory component — a bare leaf name means flattening happened
-$flat = @($z.Entries | Where-Object { $_.FullName -notmatch '[\\/]' -and $_.Name })
-"flattened entries (MUST be 0): $($flat.Count)"
-# duplicate FullName means collision — MUST be 0
-"duplicate paths (MUST be 0): $((($z.Entries.FullName | Group-Object | Where-Object Count -gt 1)).Count)"
-$z.Entries | Where-Object { $_.Name -in @('playwright.local.config.ts','.env.local') } |
-  Select-Object FullName,Length
-$z.Dispose()
+try {
+  # file entries only — directory entries have an empty Name
+  $files = @($z.Entries | Where-Object { $_.Name })
 
-# compare against source count — they must match
-(Get-ChildItem $stage -Recurse -File -Force).Count
+  # every entry must carry a directory component; a bare leaf name means flattening
+  $flat = @($files | Where-Object { $_.FullName -notmatch '[\\/]' })
+  if ($flat.Count -ne 0) { throw "FLATTENED: $($flat.Count) root-level entries — archive unusable" }
+
+  $dupes = @($files.FullName | Group-Object | Where-Object Count -gt 1)
+  if ($dupes.Count -ne 0) { throw "COLLISION: $($dupes.Count) duplicate paths — files were overwritten" }
+
+  if ($files.Count -ne $stageCount) { throw "INCOMPLETE ZIP: $($files.Count) entries vs $stageCount staged" }
+
+  # the two files that exist nowhere else must be present WITH a path
+  foreach ($must in @('.env.local','playwright.local.config.ts')) {
+    $hit = @($files | Where-Object { $_.Name -eq $must })
+    if ($hit.Count -eq 0) { Write-Warning "absent (may be legitimate): $must" }
+    else { $hit | Select-Object FullName,Length }
+  }
+} finally { $z.Dispose() }
+
+"ARCHIVE VALIDATED: $($files.Count) files, structure preserved"
 ```
 
 The archive is valid only when **all five** hold: robocopy exited `< 8`; **source file count equals
-staged file count**; **flattened entries = 0**; **duplicate paths = 0**; the zip entry count matches
-the staged file count; and both irreplaceable files appear with a full path.
+staged file count**; **flattened entries = 0**; **duplicate paths = 0**; the zip file-entry count
+matches the staged file count; and both irreplaceable files appear with a full path.
+
+> **All five now `throw`.** An earlier version of this block enforced only the first two and merely
+> *printed* the other three — so a flattened or colliding archive completed the script silently and
+> would have read as "validated" to anyone treating a clean exit as success. That is precisely the
+> failure this procedure exists to prevent, in the procedure itself. (Raised by the Claude/FABLE
+> review lane, 2026-08-07.)
 
 > **Why the source-count check is the load-bearing one.** `Compress-Archive -Path <dir>` roots every
 > entry under the staged directory's own name, so paths *are* retained — but zip-vs-stage equality
