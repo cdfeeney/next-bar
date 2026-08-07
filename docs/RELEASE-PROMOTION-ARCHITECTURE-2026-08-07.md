@@ -311,7 +311,12 @@ constraint the repository already states in two places **[V]** (`capacitor.confi
 | Distribution | internal group only | external / App Store |
 
 Rationale, in order of force: (1) both builds can then coexist on one device, so a tester is never
-*moved* between environments — the incident in A.4 becomes structurally impossible; (2) the
+*moved* between environments — which removes the **install-time** half of the A.4 mechanism. It does
+**not** make A.4 impossible outright, and an earlier draft claimed it did. Per D.1, `allowNavigation`
+always includes the canonical hosts **[V]** (`capacitor.config.ts:69-71`), so a Staging-baked internal
+build can still navigate mid-session to `next-bar.com` and land in the Production identity world
+inside one bundle. Closing that residual path needs the Staging web app to never link or redirect to
+a canonical host — worth an explicit check, and folded into G.2's environment-indicator work; (2) the
 environment is visible on the home screen instead of inferred; (3) the internal app can keep the
 remote-origin architecture the repo forbids externally while the public app uses a compliant one;
 (4) entitlements, deep-link domains, and push credentials stay scoped per environment.
@@ -352,7 +357,7 @@ public build points at Production and keeps bundle ID `com.nextbar.app` **[V]**.
 password are unchanged.
 
 **Their session is not.** An earlier draft said "password and session are unchanged" — wrong.
-Sessions ride in origin-scoped cookies **[V]** (`src/lib/supabase/server.ts:2,17`; `src/middleware.ts`),
+Sessions ride in cookies **[V]** (`src/lib/supabase/server.ts:2,17`; `src/middleware.ts`), and cookies are origin-scoped **[P]**,
 so a build reaching Production through a *different origin* arrives with no session and every user
 lands signed out. The account is fine; the login is not. Two consequences:
 
@@ -470,14 +475,28 @@ one uniform runbook, which would strand an operator mid-release. The dependencie
 
 | Step | Requires | Status |
 |---|---|---|
+| 6 | **G.15** rehearsed backup restore (E.8) | not done |
 | 7, 10 | **G.3** account-preservation gate (E.7) — tooling to snapshot ID sets and content aggregates | not built |
 | 7, 10 | **G.4** 0042 in Production **plus** the sync-coverage threshold (E.7) | not done |
-| 6 | **G.15** rehearsed backup restore (E.8) | not done |
+| 3, 9 | **G.13** build-time baked-host attestation (C.0) | not built |
 | 11 | **G.1** the second bundle ID and its ASC record | not created |
 | 13 | **D.3** steps 1–5 (native graduation) | not done |
 
-Until those land, the executable subset is steps 1–5, 8–9, and 12, using the **single** existing
-bundle. Do not improvise a substitute for a missing gate — a missing gate means the release stops.
+**Blocking is transitive, and an earlier version of this table got that dangerously wrong.** It
+listed the "executable subset" as steps 1–5, **8–9**, and 12 — which would have let an operator apply
+a migration to Production (step 8) and deploy to it (step 9) while steps 6 and 7, the backup and the
+preservation baseline that exist precisely to make 8 and 9 survivable, were themselves blocked. That
+is the exact hazard E.7 and E.8 were added to close, re-opened by the table meant to explain them.
+The document's own rule at the top of this section — *a failed gate stops the sequence* — applies to
+a **missing** gate too.
+
+**Therefore: steps 6–15 are all blocked today**, because step 6 is blocked and everything after it
+depends on it. The genuinely executable subset is **steps 1–5 and 12**, on the single existing
+bundle: freeze a candidate, verify it locally, deploy and rehearse against **Staging**, run the
+attended cross-container auth check, and confirm installed shells still work. Nothing touching
+Production is executable until G.15, G.3, G.4 and G.13 land.
+
+Do not improvise a substitute for a missing gate. A missing gate means the release stops.
 
 **Ordering that the architecture's own safety properties depend on**, and which no lane diagram
 conveys: rehearsed restore → 0042 to Production on the *current* origin → sync-coverage threshold met
@@ -492,7 +511,7 @@ not hold.
    `scripts/secret-scan.mjs`) — plus Playwright on both mobile projects. Prefer the script over
    re-itemising its steps by hand, so this document cannot drift from what CI actually enforces.
    *Gate: all green.*
-3. **Deploy the candidate to Staging web.** *Gate: deployment ID recorded and immutable.*
+3. **Build the candidate SHA with Staging configuration and deploy that build to Staging web.** Never reuse this artifact for Production (C.0). *Gate: deployment ID recorded; baked-host attestation (G.13) confirms the bundle carries the Staging host.*
 4. **Rehearse the migration on Staging.** Apply the packet with `npm run db:migrate`; confirm the
    ledger records it and reports no drift **[V]**. *Gate: clean apply + rehearsed rollback.*
 5. **Staging functional verification**, including the attended cross-container auth flow that has
@@ -500,9 +519,9 @@ not hold.
    signed in. *Gate: observed, not inferred.*
 6. **Record the Production revert point.** Current deployment ID, current migration head, and a fresh
    database backup. *Gate: backup verified restorable — an unverified backup is not a revert point.*
-7. **Record the Production account-preservation baseline** (E.4.4). *Gate: baseline captured.*
+7. **Record the Production account-preservation baseline** (E.7). *Gate: baseline captured — ID set and content aggregates, not a count and a sample.*
 8. **Apply the migration to Production** in a quiet window. *Gate: ledger clean; no drift.*
-9. **Deploy the candidate to Production web.** *Gate: health path fresher than the deploy.*
+9. **Build the SAME SHA with Production configuration and deploy that build to Production web** — a rebuild, never the Staging artifact (C.0). *Gate: baked-host attestation (G.13) confirms the Production host, and the health path is fresher than the deploy.*
 10. **Post-deploy smoke check — authoritative.** Load a real listing; sign in; confirm saved content.
     Re-check the account baseline from step 7. *Gate: pass, or roll back to step 6 first and diagnose
     second.*
@@ -531,7 +550,7 @@ by moving data between environments.
 |---|---|---|---|
 | G.1 | Separate internal bundle ID + ASC record (`com.nextbar.app.internal`) | **P0** | yes (Apple) |
 | G.2 | Visible Staging labeling — distinct icon, display name, in-app banner | **P0** | no (code) |
-| G.3 | Production account-preservation gate (E.4.4) wired into the release runbook | **P0** | partly |
+| G.3 | Production account-preservation gate (E.7) wired into the release runbook | **P0** | partly |
 | G.4 | Land 0042 on Staging, verify write-through, then Production — prerequisite for any origin change (D.4) | **P0** | yes |
 | G.5 | Native-shell graduation to bundled client assets + hosted API (D.3) | **P1** | partly |
 | G.6 | Local-cache export / origin-migration path for anything 0042 does not cover (E.5) | **P1** | no |
@@ -545,7 +564,7 @@ by moving data between environments.
 | G.14 | Add the target origin to Supabase's auth redirect allowlist, and ship the "we've moved — sign in again" state, **before** any cutover (E.1) | **P0** | yes |
 | G.15 | **Rehearsed backup restore** into a scratch project — an unverified backup is not a revert point (E.8) | **P0** | yes |
 | G.16 | Bundle-ID transition plan: a new bundle ID gives existing TestFlight testers **no auto-update**, so they must be told to install the new app and delete the old one; keep the old ID serving internal builds until all testers migrate | **P1** | yes |
-| G.17 | TLS certificate + DNS resolution verified for any target origin before it is deployed to (Capacitor requires a valid https origin **[V]** `capacitor.config.ts:38-42`) | **P1** | yes |
+| G.17 | TLS certificate + DNS resolution verified for any target origin before it is deployed to. Note the repo only validates the origin string *syntactically* — https, credential-free, origin-only **[V]** `capacitor.config.ts:38-47`; nothing here checks that DNS resolves or that the certificate is valid, and that gap is the point of this item | **P1** | yes |
 | G.18 | Split lane 5: auth **template content** is version-controlled and promoted; **SMTP endpoint/credentials** are per-environment and never promoted | **P2** | no |
 | G.19 | `MARKETING_VERSION` bump policy — today it is `1.0` in both configs **[V]** and only the build number varies per build, which is fine for TestFlight but not for successive App Store releases | **P2** | no |
 | G.20 | Deploy kill switch (maintenance page) + client/server version handshake, so one bad Production deploy cannot reach every installed remote-origin build instantly | **P2** | partly |
