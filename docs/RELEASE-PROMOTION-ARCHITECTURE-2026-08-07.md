@@ -13,6 +13,7 @@ none. Every action it describes is an **attended operator** action.
 | **[V]** | **Verified** this session by tool-result against the repository at `b6a7957`. Cited with file:line. |
 | **[A]** | **Operator-attested.** Supplied by the operator 2026-08-07. Plausible and used as input, but **not** checkable from this repository. |
 | **[U]** | **Unverified — remote.** Requires access this goal is forbidden to use (Apple, Vercel, Supabase dashboards, workflow run logs). Listed, never assumed. |
+| **[P]** | **Platform behavior.** A documented property of iOS/WebKit/Next.js/Capacitor, not of this repository — so there is no file:line to cite. Added in review: the taxonomy previously had no bucket for these, and one such fact had been mislabelled **[V]**. |
 
 A claim is never promoted from [A] or [U] to [V] by repetition. Where an older document asserts
 something as settled, it is re-checked against current code before being repeated here.
@@ -80,7 +81,7 @@ This is the crux of the account-visibility incident, and it is fully verifiable 
   `next-bar:pairwise:v1`, `next-bar:profile:v1`, and the `next-bar:account-content:*` family.
 
 Browser storage is partitioned **per origin**. A WKWebView pointed at origin X cannot read storage
-written at origin Y. That is a platform rule, not an app bug.
+written at origin Y. That is a platform rule, not an app bug. **[P]**
 
 - **Migration `0042_account_content_state.sql` exists** and is precisely the fix for this: it is the
   "durable, cross-device write-through copy" of stores "the browser keeps ... in its existing
@@ -98,7 +99,7 @@ tester moving from Build 5 to Build 6 experiences **two simultaneous switches**:
    An account that exists in Production does not exist in Staging. **[A]** that the affected
    tester's account is in Production and not Staging.
 2. **Local content switch** — a different origin means all 31 localStorage keys are a fresh,
-   empty partition. **[V]**
+   empty partition. The key count is **[V]**; the per-origin partitioning itself is **[P]**.
 
 **No user or row was deleted.** Nothing in the repository performs such a deletion as part of a build
 or deploy, and none was authorized **[A]**. The data became *unreachable from that build*, which is a
@@ -157,9 +158,41 @@ database, Staging `auth.users`, or any mutable Staging row into Production. Stag
 synthetic; Production rows are real people. Copying in either direction destroys real data or
 manufactures fake accounts. No script in this repository does this, and none should be written.
 
+### C.0 What is promoted is the COMMIT, never the built web artifact
+
+An earlier draft of this document said the web lane promotes "an immutable deployment built from one
+commit SHA" from Staging to Production. **That was wrong, and dangerously so.** Three independent
+reviewers caught it.
+
+`src/lib/supabase/client.ts` is a `'use client'` module that reads `process.env.NEXT_PUBLIC_SUPABASE_URL`
+and `NEXT_PUBLIC_SUPABASE_ANON_KEY` **[V]** (lines 1, 16-17). Next.js replaces `NEXT_PUBLIC_*`
+references in client code **at build time** — that is the entire purpose of the prefix. So the built
+web artifact has its Supabase project **baked into the JavaScript bundle**.
+
+**Consequence:** taking the Staging build output and deploying it to Production would point every
+Production user at the **Staging** Supabase project — reproducing the exact two-`auth.users`-tables
+failure from A.4, at full user scale, as a *designed release step*. A build is not environment-neutral
+and cannot be promoted between environments.
+
+**The corrected model.** Immutability belongs to the **commit**, not the artifact:
+
+1. Pin one commit SHA. That SHA is the release candidate identity.
+2. Build it **twice** — once with Staging configuration, once with Production configuration.
+3. Verify the Staging build in Staging.
+4. Deploy the **Production-built artifact of the same SHA** to Production. Never move a build across
+   the boundary.
+
+**Add a build-time attestation** (backlog G.13): after each build, assert the emitted bundle contains
+the Supabase host expected for that environment and **fail the build on mismatch**. It is a few lines
+of CI, and it mechanically prevents the entire class of error this section describes.
+
+This also means the "web code" and "environment configuration" lanes are **coupled at build time**,
+not independent. They remain listed separately because they have different *change* authorities and
+rollback methods — but a change to either requires a rebuild, and neither can be promoted alone.
+
 | Lane | What actually moves | Direction | Gate |
 |---|---|---|---|
-| **1. Web code / artifact** | an **immutable deployment** built from one commit SHA | Staging → Production | Staging green + release gate |
+| **1. Web code** | the **commit SHA**. Build **once per environment** from it — see C.0 | Staging → Production | Staging green + release gate + baked-host attestation |
 | **2. Database migrations** | forward-only SQL files, applied in lexical order | Staging → Production | rehearsed on Staging; backup taken |
 | **3. Native binary** | a new `.ipa` from a dispatched workflow run | build → TestFlight → App Store | **the only way to change origin or bundle ID** |
 | **4. Environment configuration** | env vars and dashboard settings — **not in git** | set per environment, never copied | attended; see C.1 |
@@ -180,10 +213,14 @@ These two are constantly conflated, and the distinction is the whole answer to o
 
 - Promoting **web code** to an origin changes *what that origin serves*. It cannot change *which
   origin a binary loads*. **[V]** — see D.1.
-- Changing **environment configuration** at an origin — specifically `NEXT_PUBLIC_SUPABASE_URL` /
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY` on that Vercel project **[V]** (`src/lib/supabase/client.ts`,
-  `server.ts`) — **does** change which Supabase project every installed build pointed at that origin
-  talks to, with **no new binary and no App Store involvement**.
+- Changing **environment configuration** at an origin — `NEXT_PUBLIC_SUPABASE_URL` /
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` on that hosting project **[V]** (`src/lib/supabase/client.ts:16-17`)
+  — **does** change which Supabase project every installed build pointed at that origin talks to,
+  with **no new binary and no App Store involvement**.
+  **With one correction an earlier draft got wrong:** because those values are inlined at build time
+  (C.0), editing the variables alone changes nothing — it takes effect only after a **rebuild and
+  redeploy** of that origin. That is a smaller window than "one field", but it is still a
+  two-step change with production blast radius that never appears in a git diff.
 
 So: an installed Build 6 cannot be moved to Production by shipping web code, but it *could* be moved
 there by editing the Staging Vercel project's environment variables. That is a one-field change with
@@ -207,10 +244,30 @@ The chain is fully verifiable in this repository:
 4. That resolved origin is written into `server.url` **[V]** line 59, and `cap sync` copies it into
    the native iOS project, which is then compiled and signed into the `.ipa`.
 
-**Therefore the origin is a compile-time constant of the binary.** There is no runtime lookup, no
-remote config, and no over-the-air origin switch anywhere in the config **[V]**. Nothing a web
-deployment can do reaches it — a web deploy changes bytes served *at* an origin, while the origin
-itself is already frozen inside the installed app.
+**Therefore the LAUNCH origin is a compile-time constant of the binary.** There is no runtime lookup,
+no remote config, and no over-the-air setting that changes `server.url` **[V]**. Every cold start
+loads the baked origin.
+
+**But "the origin can never change" is too strong, and an earlier draft of this section said exactly
+that.** `capacitor.config.ts:69-71` **[V]** allows in-WebView navigation to
+`next-bar.com` and `www.next-bar.com` **in addition to** the baked host — and the comment above it
+states the intent outright: "The canonical hosts stay allowed even when an override is active so a
+DNS cutover mid-testing cannot strand an installed build" **[V]** `:67-68`. So a page served at the
+baked origin *can* redirect or navigate the WebView to a canonical host, and the session continues
+there, with **no new binary**.
+
+The precise statement, which is what the rest of this document relies on:
+
+| | Can web code change it? |
+|---|---|
+| The **launch** origin (`server.url`, every cold start) | **No** — new binary required **[V]** |
+| The **active** origin during a session | **Yes**, but only to `next-bar.com` / `www.next-bar.com` **[V]** |
+| The Supabase project the loaded page talks to | **Yes** — see C.1 (rebuild + redeploy of that origin) |
+
+This is a deliberate anti-stranding feature, not a hole, and it is genuinely useful for the DNS
+cutover in F. It is recorded here because a reader who believed the stronger claim would mis-plan the
+cutover — and because the navigation allowance means a cutover **logs every user out**, since cookies
+are origin-scoped (E.6, and Kimi's point in H).
 
 **Corollary:** retargeting Build 6 requires **a new native binary from a new workflow run, uploaded
 and installed** — or, as C.1 warns, an environment-configuration change at the origin it already
@@ -222,7 +279,7 @@ points to, which is a different and far more dangerous lever.
 |---|---|---|---|
 | Web updates without resubmission | yes | no | yes, for the bundled layer |
 | Works offline | fallback shell only **[V]** `capacitor.config.ts:55,64` | yes | partly |
-| App Review risk | **high** — see D.3 | low | medium |
+| App Review risk **[A]** — a reasoned estimate, not a repo fact; see D.3's **[U]** caveat | **high** — see D.3 | low | medium |
 | Rollback of web layer | instant (redeploy origin) | requires new binary | mixed |
 | Session/cookie behavior | ordinary web cookies on one origin | app-local | mixed |
 | Origin-scoped storage | **strands on origin change** **[V]** (31 keys) | stable | needs explicit migration |
@@ -291,10 +348,24 @@ real users.**
 ## E. Account and cache continuity
 
 **E.1 Existing Production users into the App Store build.** They need no migration *provided* the
-public build points at Production and keeps bundle ID `com.nextbar.app` **[V]**. Their identity lives
-in Production `auth.users`; their password and session are unchanged. What they *can* lose is
-origin-scoped local content if the public origin differs from the one they used — mitigated only by
-0042 (D.4).
+public build points at Production and keeps bundle ID `com.nextbar.app` **[V]**. Their identity and
+password are unchanged.
+
+**Their session is not.** An earlier draft said "password and session are unchanged" — wrong.
+Sessions ride in origin-scoped cookies **[V]** (`src/lib/supabase/server.ts:2,17`; `src/middleware.ts`),
+so a build reaching Production through a *different origin* arrives with no session and every user
+lands signed out. The account is fine; the login is not. Two consequences:
+
+- **Verify the new origin is in Supabase's auth redirect allowlist before cutting over.** A logged-out
+  user whose sign-in redirect targets an unlisted origin cannot get back in — and the account count
+  and content are untouched, so the gate in E.7 passes while users are locked out. Backlog G.14.
+- **Ship the "we've moved — please sign in again" state before the cutover**, not a bare login screen.
+  A silent mass logout on a consumer app is a support event.
+
+A **new bundle ID** is strictly worse than a new origin: iOS gives it a fresh container, so cookies
+*and* all 31 local keys are gone, and there is no way to read the old app's data from the new one.
+That is why 0042 and its sync-coverage threshold (E.7) gate the bundle split, not just the origin
+change.
 
 **E.2 Staging tester provisioning.** Create Staging accounts explicitly in the Staging project. Never
 copy Production users in. Testers install the *internal* bundle (D.3) and hold both apps at once.
@@ -311,10 +382,10 @@ Synchronizing them would mean copying credential material between a disposable s
 2. **Visible environment indicator** in-app and on the icon, so "my account is gone" is immediately
    legible as "this is the Staging app."
 3. **Never repoint an origin's Supabase configuration** (C.1).
-4. **A fail-closed account-preservation gate** before any Production deploy or migration: record the
-   Production account count and a saved-content sample beforehand, re-check after, and **stop and roll
-   back on any unexplained decrease**. Fail closed — an unavailable count blocks the release rather
-   than passing it.
+4. **A fail-closed account-preservation gate** — specified in E.7. An earlier draft specified it as
+   "record the account count and a content sample, re-check after, roll back on any unexplained
+   decrease." Two reviewers independently showed that version is **structurally incapable of
+   detecting the loss it exists to prevent**. E.7 is the corrected specification.
 5. **Never claim data loss without checking.** A.4's mechanism explains invisibility; it is not
    deletion, and the two must not be conflated in user communication.
 
@@ -323,6 +394,58 @@ an origin change reaches users: land 0042; confirm write-through covers the `nex
 `next-bar:night-log/archive:*`, `next-bar:pairwise:*`, and `next-bar:profile:*` families; and provide
 an export path for anything still local-only. Anything not server-backed at cutover is lost —
 say so plainly rather than discovering it afterwards.
+
+**E.7 The account-preservation gate — corrected specification.**
+
+The naive version (count accounts before, count after, roll back on a decrease) fails three ways,
+each found independently in review:
+
+1. **It measures the wrong store.** The content at risk during an origin change lives in 31
+   *origin-scoped localStorage* keys on devices **[V]**. A server-side count sees none of it. If
+   0042's sync is client-side — the client writes its local content up on next session — then before
+   the change the server table is near-empty, after the change the devices' storage is gone and the
+   table is still near-empty. **Empty to empty is not a decrease. The gate passes while every
+   unsynced user loses everything.** A gate that cannot observe the failure mode is an alarm on the
+   wrong door.
+2. **A sample is probabilistic.** A migration bug affecting 0.3% of accounts is very likely invisible
+   in a 50-account sample.
+3. **A raw count false-positives on churn.** Users deleting accounts during the release window look
+   identical to accounts destroyed by the migration, so the gate either blocks good releases or gets
+   waved through — and a waved-through gate is theater.
+
+**The corrected gate.** All four parts are required, and each fails closed — an unavailable
+measurement blocks the release rather than passing it:
+
+- **Sync-coverage precondition (the important one).** The precondition for an origin change is not
+  "0042 is deployed" but **"0042 is deployed to Production on the current origin, and the count of
+  active accounts with confirmed server-side content is above an agreed threshold."** Below the
+  threshold, the change does not proceed. Keep the old origin serving until it is met, and prompt
+  users in-app to open the app so their content syncs.
+- **Exercise the path, don't just read the output.** Take a device with known local content, run the
+  real sync, and confirm it appears server-side. A gate that only reads a counter has not tested that
+  anything writes to it. *(This repository has already been burned by a probe that passed without
+  exercising the capability it was probing.)*
+- **Compare identity sets and exhaustive aggregates, not samples and totals.** Snapshot the set of
+  account IDs before; afterwards, list which are missing. An account missing **with** a deletion
+  record is churn; missing **without** one is the migration. For content, use exhaustive
+  `COUNT(*) / COUNT(DISTINCT owner) / checksum` invariants rather than a sample.
+- **Detection is not recovery.** See E.8.
+
+**E.8 Rollback is not restoration — the gap that must be closed first.**
+
+The gate above detects loss. It does not undo it: rolling back a deploy, a DNS cutover, or a binary
+does **not** bring back data a migration destroyed. Detection without restoration is an alarm that
+watches the loss happen.
+
+Therefore, **before 0042 runs in Production and before any origin change**:
+
+1. Point-in-time recovery enabled on the Production project.
+2. A full logical export of `auth.users` and the content tables taken immediately before the change.
+3. **A rehearsed restore into a scratch project, proving those backups actually restore.** This is
+   the step everyone skips, and an unverified backup is not a revert point — F step 6 already says
+   so and this is where it bites.
+
+The rollback runbook must name the restore procedure, not just say "roll back."
 
 **E.6 Upgrade / downgrade / reinstall / build-switch expectations.**
 
@@ -341,10 +464,34 @@ Rows 3 and 4 are the user-visible cliffs, and both are only softened by 0042.
 
 Each step names its gate. A failed gate **stops the sequence**; it does not downgrade to a warning.
 
+**Preconditions — read before using this as a runbook.** This sequence is a mix of steps executable
+today and steps that require backlog items which do **not exist yet**. Review caught it reading as
+one uniform runbook, which would strand an operator mid-release. The dependencies:
+
+| Step | Requires | Status |
+|---|---|---|
+| 7, 10 | **G.3** account-preservation gate (E.7) — tooling to snapshot ID sets and content aggregates | not built |
+| 7, 10 | **G.4** 0042 in Production **plus** the sync-coverage threshold (E.7) | not done |
+| 6 | **G.15** rehearsed backup restore (E.8) | not done |
+| 11 | **G.1** the second bundle ID and its ASC record | not created |
+| 13 | **D.3** steps 1–5 (native graduation) | not done |
+
+Until those land, the executable subset is steps 1–5, 8–9, and 12, using the **single** existing
+bundle. Do not improvise a substitute for a missing gate — a missing gate means the release stops.
+
+**Ordering that the architecture's own safety properties depend on**, and which no lane diagram
+conveys: rehearsed restore → 0042 to Production on the *current* origin → sync-coverage threshold met
+→ per-environment builds from one SHA → origin cutover with the re-auth state shipped → public
+bundled build → retire the internal build. In any other order the guarantees in C.0, E.7 and E.8 do
+not hold.
+
 1. **Freeze an immutable candidate.** One commit SHA. Record it. Every later artifact refers to this
    SHA, never to "latest".
-2. **Local verification.** Typecheck, full unit suite, production build, secret scan, Playwright on
-   both mobile projects. *Gate: all green.*
+2. **Local verification.** Run the existing one-command preflight —
+   `node scripts/preflight-testflight.mjs` **[V]** (it already covers the static loop including
+   `scripts/secret-scan.mjs`) — plus Playwright on both mobile projects. Prefer the script over
+   re-itemising its steps by hand, so this document cannot drift from what CI actually enforces.
+   *Gate: all green.*
 3. **Deploy the candidate to Staging web.** *Gate: deployment ID recorded and immutable.*
 4. **Rehearse the migration on Staging.** Apply the packet with `npm run db:migrate`; confirm the
    ledger records it and reports no drift **[V]**. *Gate: clean apply + rehearsed rollback.*
@@ -394,6 +541,14 @@ by moving data between environments.
 | G.10 | Full Production release rehearsal against a restored copy | **P2** | yes |
 | G.11 | Confirm `next-bar.com` DNS before any build using the default origin (A.2) | **P2** | yes |
 | G.12 | Verify Production rows are intact (A.4 **[U]**) | **P2** | yes |
+| G.13 | **Build-time attestation** — assert the emitted bundle carries the expected Supabase host for its environment; fail the build on mismatch (C.0) | **P0** | no |
+| G.14 | Add the target origin to Supabase's auth redirect allowlist, and ship the "we've moved — sign in again" state, **before** any cutover (E.1) | **P0** | yes |
+| G.15 | **Rehearsed backup restore** into a scratch project — an unverified backup is not a revert point (E.8) | **P0** | yes |
+| G.16 | Bundle-ID transition plan: a new bundle ID gives existing TestFlight testers **no auto-update**, so they must be told to install the new app and delete the old one; keep the old ID serving internal builds until all testers migrate | **P1** | yes |
+| G.17 | TLS certificate + DNS resolution verified for any target origin before it is deployed to (Capacitor requires a valid https origin **[V]** `capacitor.config.ts:38-42`) | **P1** | yes |
+| G.18 | Split lane 5: auth **template content** is version-controlled and promoted; **SMTP endpoint/credentials** are per-environment and never promoted | **P2** | no |
+| G.19 | `MARKETING_VERSION` bump policy — today it is `1.0` in both configs **[V]** and only the build number varies per build, which is fine for TestFlight but not for successive App Store releases | **P2** | no |
+| G.20 | Deploy kill switch (maintenance page) + client/server version handshake, so one bad Production deploy cannot reach every installed remote-origin build instantly | **P2** | partly |
 
 ---
 
