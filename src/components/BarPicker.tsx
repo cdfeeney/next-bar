@@ -156,7 +156,19 @@ export default function BarPicker({
                         <span className="truncate">{bar.name}</span>
                         <RatingBadge barId={bar.id} />
                       </span>
-                      <span className="text-muted text-xs shrink-0">
+                      {/*
+                        `shrink-0` was actively wrong here: it pinned this span
+                        to its content width, so a long unbroken address
+                        measured 718px inside a 342px row. The row's ancestor
+                        uses `overflow-y-auto`, and CSS computes `overflow-x` to
+                        `auto` when only one axis is set — so that overflow
+                        became a real sideways-scrollable axis nested inside a
+                        modal meant to scroll vertically only, invisible to
+                        document- and dialog-level width assertions. Mirrors the
+                        name span above (`min-w-0 truncate`); capped at 45% so
+                        the address cannot crowd out the name beside it.
+                      */}
+                      <span className="text-muted text-xs min-w-0 max-w-[45%] truncate">
                         {bar.address}
                       </span>
                     </button>

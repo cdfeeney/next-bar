@@ -79,6 +79,50 @@ async function widths(
   }, selector);
 }
 
+/**
+ * The assertion that actually generalises.
+ *
+ * Document- and dialog-level width checks are NOT sufficient for this modal.
+ * CSS computes `overflow-x` to `auto` when only `overflow-y` is set, so every
+ * `overflow-y-auto` container inside the dialog silently absorbs horizontal
+ * overflow: the document and the dialog keep reporting scrollWidth ===
+ * clientWidth while a nested scroller pans sideways. That blind spot hid a
+ * 718px address inside a 342px row from the first version of this suite
+ * (santa round 1: Claude/FABLE, Codex, GLM and DeepSeek all reached it
+ * independently).
+ *
+ * So: walk every scroller in the dialog and prove each one has no horizontal
+ * axis at all — not merely that it happens to be at scrollLeft 0.
+ */
+async function expectNoNestedHorizontalScroll(page: Page, where: string): Promise<void> {
+  const offenders = await page.evaluate(() => {
+    const dialog = document.querySelector('div[role="dialog"][aria-label="Add a bar"]');
+    if (!dialog) throw new Error('modal not open');
+    const out: { cls: string; scrollWidth: number; clientWidth: number; scrollLeft: number }[] = [];
+    const all = [dialog, ...Array.from(dialog.querySelectorAll('*'))];
+    for (const el of all) {
+      const style = getComputedStyle(el as Element);
+      if (style.overflowX !== 'auto' && style.overflowX !== 'scroll') continue;
+      const node = el as HTMLElement;
+      // Try to move it: a container with no horizontal range cannot scroll.
+      node.scrollLeft = 999;
+      const moved = node.scrollLeft;
+      node.scrollLeft = 0;
+      if (node.scrollWidth > node.clientWidth || moved > 0) {
+        out.push({
+          cls: node.className?.toString().slice(0, 80) ?? '(no class)',
+          scrollWidth: node.scrollWidth,
+          clientWidth: node.clientWidth,
+          scrollLeft: moved,
+        });
+      }
+    }
+    return out;
+  });
+
+  expect(offenders, `nested horizontal scroll at ${where}: ${JSON.stringify(offenders)}`).toEqual([]);
+}
+
 async function openAddBarModal(page: Page): Promise<void> {
   // Empty state renders the "+ Add a bar" trigger.
   const trigger = page.getByRole('button', { name: '+ Add a bar' });
@@ -182,8 +226,90 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
     // spilling past the viewport where it would be unreachable.
     expect(box!.x + box!.width).toBeLessThanOrEqual(dialogBox!.x + dialogBox!.width + 1);
 
-    // And it is genuinely rendering the name, not an empty box.
-    await expect(heading).toContainText('How was');
+    // And it is genuinely rendering the NAME, not just the boilerplate:
+    // asserting only 'How was' would still pass if the name were dropped
+    // entirely (santa round 1, Codex).
+    await expect(heading).toContainText(LONG_NAME.slice(0, 40));
+  });
+
+  /**
+   * The picker stage, measured WHILE the long-address row is on screen. The
+   * first version of this suite only measured after clicking through to the
+   * tier stage, by which point the offending row had unmounted — which is
+   * exactly how a 718px address hid behind a green suite.
+   */
+  test('no nested scroller pans sideways while a long address row is visible', async ({
+    page,
+  }) => {
+    await gotoRankings(page);
+    await openAddBarModal(page);
+
+    const search = modal(page).getByLabel('Search bars');
+    await search.click();
+    await search.pressSequentially('Supercalifragilistic');
+
+    const match = modal(page).getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) });
+    await expect(match.first()).toBeVisible({ timeout: 10_000 });
+
+    // Row on screen — this is the moment that matters.
+    await expectNoNestedHorizontalScroll(page, 'pick-bar stage with long address');
+  });
+
+  /** The tier stage, including the named-list chips, measured the same way. */
+  test('no nested scroller pans sideways at the tier stage with a long list name', async ({
+    page,
+  }) => {
+    await gotoRankings(page);
+    // Seed a list whose name is one long unbreakable token: flex-wrap only
+    // wraps BETWEEN chips, so a single oversized chip still overflows.
+    await page.evaluate((name) => {
+      localStorage.setItem(
+        'next-bar:lists:v1',
+        JSON.stringify([{ id: 'overflow-list', name, barIds: [] }]),
+      );
+    }, 'ListNamed' + 'Wwwwwwwwwwwwwwwwwwww'.repeat(6));
+    await page.reload();
+
+    await openAddBarModal(page);
+    const search = modal(page).getByLabel('Search bars');
+    await search.click();
+    await search.pressSequentially('Supercalifragilistic');
+    const match = modal(page).getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) });
+    await expect(match.first()).toBeVisible({ timeout: 10_000 });
+    await match.first().click();
+
+    await expect(modal(page).getByRole('heading')).toContainText('How was');
+    await expectNoNestedHorizontalScroll(page, 'tier stage with long list name');
+  });
+
+  /**
+   * Criterion 6, made non-vacuous: the heading must not be allowed to grow
+   * without bound and squeeze the scrollable region to nothing on the
+   * shortest viewport.
+   */
+  test('a long name cannot crowd the scrollable region out of the modal', async ({ page }) => {
+    await gotoRankings(page);
+    await openAddBarModal(page);
+
+    const search = modal(page).getByLabel('Search bars');
+    await search.click();
+    await search.pressSequentially('Supercalifragilistic');
+    const match = modal(page).getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) });
+    await expect(match.first()).toBeVisible({ timeout: 10_000 });
+    await match.first().click();
+
+    const heading = modal(page).getByRole('heading').first();
+    const dialogBox = await modal(page).boundingBox();
+    const headingBox = await heading.boundingBox();
+    expect(headingBox).not.toBeNull();
+    expect(dialogBox).not.toBeNull();
+
+    // The heading may wrap, but it must not eat the modal: cap it at half the
+    // dialog height so the tier buttons below stay reachable.
+    expect(headingBox!.height).toBeLessThan(dialogBox!.height / 2);
+
+    // And the tier options are actually visible, not pushed off.
+    await expect(modal(page).getByRole('button', { name: /^Loved/ })).toBeVisible();
   });
 
   /** Criterion 11 + 12: the flow still works, and it does not navigate. */

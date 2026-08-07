@@ -270,7 +270,10 @@ export default function QuickAddBar({
                 whole question being asked, so it must stay readable rather
                 than becoming "How was Supercalifragilistic…?".
               */}
-              <h2 className="font-display text-2xl leading-tight min-w-0 break-words">
+              <h2
+                className="font-display text-2xl leading-tight min-w-0 break-words line-clamp-3"
+                title={stage === 'pick-bar' ? undefined : selectedBar?.name}
+              >
                 {stage === 'pick-bar'
                   ? 'Add a bar'
                   : `How was ${selectedBar?.name ?? 'it'}?`}
@@ -354,6 +357,13 @@ export default function QuickAddBar({
                               }}
                               className={[
                                 'min-h-[44px] touch-manipulation px-4 py-2 rounded-full',
+                                // List names are unrestricted user input, and
+                                // `flex-wrap` on the parent only wraps BETWEEN
+                                // chips — a single chip wider than the modal
+                                // still overflows, into the same nested
+                                // scroller that hides it from dialog-level
+                                // assertions (santa: Codex + GLM + DeepSeek).
+                                'min-w-0 max-w-full break-words',
                                 'font-display text-sm border transition-colors',
                                 on
                                   ? 'bg-accent text-bg border-accent'
