@@ -6,6 +6,14 @@ Documentation only. **Nothing here was applied, deployed, migrated, submitted, o
 Apple, Vercel, Supabase, DNS, SMTP, email, or account action was taken, and this document authorizes
 none. Every action it describes is an **attended operator** action.
 
+> **Post-review operator addendum â€” 2026-08-07:** Build 6 is intentionally
+> external-facing through the external TestFlight group `Beta Testers`, in
+> status **Testing**, and must remain connected to Staging. Build 5 was removed
+> from that group. This narrowly supersedes this document's blanket
+> internal-only distribution statements for Build 6; it does not authorize an
+> App Store production release or Production database access. See
+> `decisions/2026-08-07-build-6-external-testflight.md`.
+
 ## How to read the evidence labels
 
 | Label | Meaning |
