@@ -255,7 +255,22 @@ export default function QuickAddBar({
         >
           <div className="relative flex flex-1 flex-col max-w-2xl w-full mx-auto px-6 pt-8 pb-8 min-h-0">
             <header className="flex items-center justify-between gap-3 mb-4">
-              <h2 className="font-display text-2xl leading-tight">
+              {/*
+                `min-w-0` is load-bearing, not cosmetic. A flex child defaults
+                to `min-width: auto`, which refuses to shrink below its content
+                — so a long bar name in `How was {name}?` pushed this header
+                past the viewport and the whole modal panned sideways
+                (measured before the fix: modal scrollWidth 1746 vs clientWidth
+                390 on iPhone 13).
+
+                `break-words` is the deliberate wrapping decision that pairs
+                with it: bar names are user-facing data and can contain a long
+                unbroken token, which `min-w-0` alone would still let overflow.
+                Wrapping is chosen over truncation on purpose — the name is the
+                whole question being asked, so it must stay readable rather
+                than becoming "How was Supercalifragilistic…?".
+              */}
+              <h2 className="font-display text-2xl leading-tight min-w-0 break-words">
                 {stage === 'pick-bar'
                   ? 'Add a bar'
                   : `How was ${selectedBar?.name ?? 'it'}?`}

@@ -178,8 +178,15 @@ export default defineConfig({
       // bottom-crowded shape as every spec above, and the choice sitting
       // closest to the nav is the non-destructive one, so a covered control
       // would push users toward the two irreversible buttons instead.
+      // add-bar-overflow added 2026-08-07 (goal g-b9dc294e): the add-a-bar
+      // modal is a full-screen dialog whose inner list is the only scrollable
+      // region, and its acceptance criterion 6 is stated as "vertical
+      // scrolling remains available on short viewports". 402x681 is the
+      // shortest configured, so running it only on the taller two would test
+      // everywhere except where scroll-lock and a wrapped multi-line heading
+      // can actually squeeze the list out.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|quiz-path|onboarding-identity|account-content-conflict)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|quiz-path|onboarding-identity|account-content-conflict|add-bar-overflow)\.spec\.ts/,
       dependencies: ['warmup'],
     },
   ],
