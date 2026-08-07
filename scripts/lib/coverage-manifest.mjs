@@ -240,7 +240,14 @@ export function replay({ records, tornTail = false }) {
         cell.attempts.push(record);
         if (record.ok) {
           cell.lastOk = record;
-          cell.capped = Boolean(record.capped);
+          // Saturation is STICKY. Once a response for this cell came back at
+          // the cap we know the cell is censored, and no later, smaller answer
+          // makes that untrue — Google returns a different slice each time.
+          // Overwriting the flag let a second uncapped attempt erase the first
+          // one's evidence and certify a known-censored cell with no
+          // subdivision, which is exactly the recall loss this file exists to
+          // prevent.
+          cell.capped = cell.capped || Boolean(record.capped);
         }
         break;
       }
@@ -288,6 +295,16 @@ export function replay({ records, tornTail = false }) {
  * returns complete:true — see AC6. Deliberately returns the offending cell ids
  * so the summary can say what is outstanding instead of just refusing.
  */
+/**
+ * A waiver needs a real acknowledgement, not just a DONE claiming the word.
+ * Used by all three clauses of the invariant so a fabricated status cannot
+ * excuse missing work in one place while being caught in another — which also
+ * kept the operator-facing status from naming the real reason.
+ */
+function isAcknowledged(cell) {
+  return cell.terminalStatus === 'ack_terminal' && Boolean(cell.acked);
+}
+
 export function completeness(state) {
   const missing = [];
   const failed = [];
@@ -306,10 +323,8 @@ export function completeness(state) {
       missing.push(cell.cellId);
     } else if (cell.terminalStatus === 'ack_terminal') {
       // ack_terminal is the one status legitimately unsupported by a successful
-      // search — but it must be backed by an actual ACK_TERMINAL record. A bare
-      // DONE claiming it would otherwise waive every missing cell and every
-      // blocking failure on the strength of the word alone.
-      if (!cell.acked) missing.push(cell.cellId);
+      // search — but it must be backed by an actual ACK_TERMINAL record.
+      if (!isAcknowledged(cell)) missing.push(cell.cellId);
     } else if (!cell.lastOk) {
       // A DONE record is a claim, not evidence. 'unsaturated' and 'cleared'
       // both require a search to have actually succeeded. Without this, a
@@ -332,7 +347,7 @@ export function completeness(state) {
             (COMPLETING_STATUSES.includes(child.terminalStatus) ||
               child.terminalStatus === SATURATED_AT_FLOOR),
         );
-      if (!finishedByChildren && cell.terminalStatus !== 'ack_terminal') {
+      if (!finishedByChildren && !isAcknowledged(cell)) {
         unclearedCap.push(cell.cellId);
       }
     }
@@ -344,7 +359,7 @@ export function completeness(state) {
     if (blocking.length > 0) {
       const recoveredAt = cell.lastOk?.attemptN ?? -1;
       const unrecovered = blocking.some((attempt) => (attempt.attemptN ?? 0) > recoveredAt);
-      if (unrecovered && cell.terminalStatus !== 'ack_terminal') {
+      if (unrecovered && !isAcknowledged(cell)) {
         failed.push(cell.cellId);
       }
     }

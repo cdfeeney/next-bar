@@ -337,6 +337,40 @@ describe('resume', () => {
     expect(replayed).toEqual(live);
   });
 
+  it.each([
+    ['every includedType rejected', { includedTypes: ['bad_type'] }],
+    ['call budget exhausted', { maxCalls: 0 }],
+  ])('still emits recorded places when the cell exits early (%s)', async (_label, extra: any) => {
+    // Regression: moving the replay to after the transport left two early exits
+    // without one, so a resumed run silently dropped places the manifest still
+    // held. Every exit from processCell must preserve recorded data.
+    const plan = [cells()[0]];
+    const file = path.join(dir, `early-${_label.replace(/\W+/g, '-')}.jsonl`);
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: _label }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: 1, capped: false });
+    writer.result(plan[0].id, [{ id: 'previously-found' }]);
+    writer.close();
+
+    const emitted: string[] = [];
+    const resumeWriter = openManifest(file);
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async () => {
+        throw new Error('Invalid value at included_types[0] (TYPE_ENUM), "bad_type"');
+      },
+      onPlaces: (places: any[]) => places.forEach((place) => emitted.push(place.id)),
+      ...extra,
+    });
+    resumeWriter.close();
+    expect(emitted).toEqual(['previously-found']);
+    expect(completeness(loadManifest(file)).complete).toBe(false);
+  });
+
   it('does not double-count a place the re-query returns again', async () => {
     // The other direction: replaying a recorded page and then emitting an
     // overlapping fresh response would count the same place twice for one cell,

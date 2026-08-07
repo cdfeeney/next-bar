@@ -146,6 +146,40 @@ describe('completeness invariant', () => {
     expect(completeness(state).complete).toBe(true);
   });
 
+  it('keeps saturation sticky when a later attempt comes back under the cap', () => {
+    // Regression: replay overwrote `capped` on every ok attempt, so a second,
+    // smaller answer erased the first one's evidence and let a cell KNOWN to
+    // have been censored be certified with no subdivision at all.
+    const state = build([
+      PLAN,
+      ok('n:0:0', 20, true, 1),
+      ok('n:0:0', 14, false, 2),
+      { type: 'DONE', cellId: 'n:0:0', terminalStatus: 'unsaturated' },
+      ok('n:0:1', 1, false),
+      { type: 'DONE', cellId: 'n:0:1', terminalStatus: 'unsaturated' },
+    ]);
+    expect(state.cells.get('n:0:0').capped).toBe(true);
+    const report = completeness(state);
+    expect(report.complete).toBe(false);
+    expect(report.unclearedCap).toContain('n:0:0');
+  });
+
+  it('reports a faked ack_terminal over a quota block as a FAILURE, not vague missing work', () => {
+    // The waiver was removed from clause (1) but left in the blocking-failure
+    // clause, so the operator-facing status hid the real reason.
+    const state = build([
+      PLAN,
+      { type: 'ATTEMPT', cellId: 'n:0:0', attemptN: 1, ok: false, errorClass: 'quota' },
+      { type: 'DONE', cellId: 'n:0:0', terminalStatus: 'ack_terminal' },
+      ok('n:0:1', 1, false),
+      { type: 'DONE', cellId: 'n:0:1', terminalStatus: 'unsaturated' },
+    ]);
+    const report = completeness(state);
+    expect(report.complete).toBe(false);
+    expect(report.failed).toContain('n:0:0');
+    expect(report.status).toBe('incomplete_failed');
+  });
+
   it('rejects an ack_terminal status with no acknowledgement behind it', () => {
     // The word alone must not waive a quota block: without a real ACK_TERMINAL
     // record, a bare DONE claiming ack_terminal would forgive every missing

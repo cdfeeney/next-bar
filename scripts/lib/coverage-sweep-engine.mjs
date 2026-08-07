@@ -268,6 +268,9 @@ async function processCell(cell, ctx) {
       errorClass: 'budget_exhausted',
       message: `stopped before call ${ctx.callsUsed + 1}; budget is ${ctx.maxCalls}`,
     });
+    // The budget stops the CALL, not the data we already hold. Without this the
+    // resumed queue silently loses places the manifest still records.
+    replayRecordedOnce(known, cell, ctx, []);
     throw new BudgetExhausted(ctx.maxCalls);
   }
 
@@ -305,6 +308,10 @@ async function processCell(cell, ctx) {
           errorClass: 'network',
           message: 'every includedType was rejected by Google; nothing left to request',
         });
+        // Same rule as every other exit from this function: the cell is
+        // unfinished, but whatever it already recorded still belongs in the
+        // rebuilt queue.
+        replayRecordedOnce(known, cell, ctx, []);
         return null;
       }
       return processCell(cell, ctx);

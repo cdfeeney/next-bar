@@ -126,14 +126,21 @@ export function adversarialReview(candidate, catalogMatches = [], options = {}) 
     // rows to be close enough that a different storefront is implausible. This
     // is what resolveIdentity does; the two must not diverge, because a wrong
     // duplicate here silently deletes a real bar.
-    // Address availability decides how much distance is allowed to say, and it
-    // must be read the same way resolveIdentity reads it:
+    // Address availability decides how much distance is allowed to say, read
+    // the same way resolveIdentity reads it:
     //   both parse    -> the addresses decide; proximity cannot override them
     //   neither parses-> distance is the only evidence there is
     //   one parses    -> asymmetric, so nothing is comparable; not a duplicate
     // The asymmetric case is the one that matters: a candidate with no address
     // beside a catalog row that has one used to fall through to a bare distance
     // test and suppress a real venue.
+    //
+    // The two functions agree on this branching but are NOT identical, on
+    // purpose: resolveIdentity requires an exact normalized name, while this
+    // path also accepts a close alias ("Allure Cocktail Lounge" vs "Allure
+    // Lounge") when neither side has an address. That makes this the stricter
+    // duplicate-catcher of the two, never the looser one, so it can only
+    // produce the visible/correctable error, never a silent drop.
     const candidateStreet = streetKey(candidate.address);
     const matchStreet = streetKey(match.address);
     if (candidateStreet && matchStreet) {
