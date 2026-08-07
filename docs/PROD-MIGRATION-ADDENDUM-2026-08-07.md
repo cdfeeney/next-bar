@@ -80,6 +80,22 @@ as establishing:
    Production database at an unknown migration point was not simulated.
 5. **Nothing was executed.** No dry run, no shadow database, no `EXPLAIN`. This is reading, not
    testing.
+6. **Write paths to `profiles` other than the application were not traced** — triggers (a
+   `handle_new_user`-style row initialiser), seed scripts, backfill migrations, and any
+   `SECURITY DEFINER` function that *writes* rather than reads. §5 enumerates read paths and direct
+   application access; it does not claim to enumerate every writer.
+
+### Considered and rejected: the revoke-then-re-grant "privilege gap"
+
+A reviewer raised that `revoke all` (0034:42) precedes the re-grants (0034:44, :64), so a failure
+between them could strand `authenticated` with **zero** privileges on `profiles` — a user-facing
+outage. **Rejected on evidence.** PostgreSQL has fully transactional DDL, and this repo's runner
+wraps each migration in an explicit transaction with its ledger row:
+`scripts/apply-migrations.ts:281` `begin` → `:320` `commit` → `:322` `rollback` on error, documented
+at `:19` and `:44`, with `:352` noting that the GRANT and REVOKE "commit atomically". No other
+session can observe an intermediate state; a mid-migration failure rolls back to the pre-0034 grants
+in full. The concern would be valid on MySQL, where DDL causes an implicit commit. It does not apply
+here. Recorded so it is not re-raised at the window.
 
 A static "no destructive statement" result is **necessary but nowhere near sufficient** for a
 Production window.
@@ -330,11 +346,20 @@ Each must be exercised against the migrated environment by a real account, not a
   - *Read (already live).* `get_public_ratings` is `SECURITY DEFINER` with
     `grant execute … to anon` from migration **0015** (`0015_public_shared_list.sql:63,67,88`),
     already applied. Any row holding `shares_list_publicly = true` is publicly readable **today**.
-  - *Write (closed until now).* Before 0034 that flag was **unreachable through the API**. 0006's
-    column-scoped grant excluded it, so an owner running
-    `update profiles set shares_list_publicly = true` got a **column-permission error** — 0034's own
-    F5 comment states `get_public_ratings` "could only ever be empty". Any currently-`true` row can
-    therefore only have come from `service_role`, a dashboard edit, or a direct SQL session.
+  - *Write (closed only on the UPDATE path — **not** closed overall).* 0006's column-scoped grant
+    excluded the flag, so `update profiles set shares_list_publicly = true` returned a
+    **column-permission error**, and 0034's F5 comment concludes `get_public_ratings` "could only
+    ever be empty". **That conclusion is not airtight, and this document previously repeated it
+    uncritically.** 0034's own F3 comment records that before this migration `profiles` "revoked only
+    UPDATE (0006:82) — everything else leaned on Supabase's default
+    `grant all on all tables in schema public to anon, authenticated`." A PostgreSQL column
+    restriction on **UPDATE does not constrain INSERT**, and `authenticated` held INSERT through that
+    default grant. So an owner could plausibly have set the flag on their **own** row via an
+    insert/upsert path (PostgREST `Prefer: resolution=merge-duplicates`), never touching the
+    restricted UPDATE. Other unaudited write paths exist too: a `handle_new_user`-style trigger, a
+    seed script, a backfill migration, or any `SECURITY DEFINER` function that writes `profiles` —
+    none of which is UI, and none of which this analysis traced.
+    **Treat "expect zero" as an assumption to test, not a finding.** *(Raised by the DeepSeek lane.)*
   - *What 0034 actually changes.* It adds `shares_list_publicly` to the update column grant, so
     afterwards **any authenticated owner can self-expose their entire ratings list with a single
     PATCH** — no confirmation step, and no product UI to set, review, or revoke it. That is a real
