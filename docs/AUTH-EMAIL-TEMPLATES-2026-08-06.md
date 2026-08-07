@@ -25,9 +25,20 @@ verifier, so it completes in whatever browser opens it. The route now exists
 at `src/app/auth/confirm/route.ts`. **It is inert until the templates below
 point at it.**
 
-**Both templates must change together.** The boundary breaks password
-recovery *and* signup confirmation. Repointing only recovery would leave new
-users on the TestFlight build unable to activate an account.
+**Both templates must change together — in one sitting, and verify both before
+you walk away.** The boundary breaks password recovery *and* signup
+confirmation. Repointing only recovery would leave new users on the TestFlight
+build unable to activate an account, and the half-migrated state is
+indistinguishable from a regression: recovery links work, signup links fail, and
+nothing in the UI says why. If you must stop midway, roll the changed template
+back rather than leaving the pair split.
+
+**Leave the password-change notification email ENABLED** (Authentication →
+Email Templates). `/auth/confirm` completes in whatever browser opens the link,
+by design — that is the whole point of the token-hash flow. The trade is that a
+forwarded or scanner-prefetched link is a usable bearer credential, so that
+notification is the only out-of-band signal a user gets that their password
+changed. Do not disable it to reduce email volume.
 
 ## The two template edits
 
@@ -68,7 +79,14 @@ Dashboard → **Authentication → URL Configuration**:
 | Setting | Required value | Why |
 |---|---|---|
 | **Site URL** | `https://next-bar-staging.vercel.app` | `{{ .SiteURL }}` interpolates this literally into both templates. If it still points at localhost or a stale host, every link in both emails is wrong. **Verify before editing the templates.** |
-| **Redirect URLs** | `https://next-bar-staging.vercel.app/**` | The `next` parameter redirect must match the allowlist. |
+| **Redirect URLs** | `https://next-bar-staging.vercel.app/**` | Governs the **legacy** `/auth/callback` path, whose `redirectTo` / `emailRedirectTo` Supabase validates against this list. It does **not** govern `next` — see below. |
+
+**`next` is not validated by Supabase.** `/auth/confirm` checks it itself: a
+single leading slash, no `//`, no backslash, no whitespace — anything else falls
+back to `/settings`. The dashboard allowlist is never consulted for it. Do not
+troubleshoot a rejected `next` as an allowlist problem, and do not widen the
+allowlist hoping to affect it; the two are unrelated. The allowlist still
+matters because `/auth/callback` remains live for links already in flight.
 
 Production keeps its **own** Site URL and allowlist — the staging host must
 never appear in Production's list, and no Vercel preview wildcard belongs

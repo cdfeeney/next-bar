@@ -190,9 +190,37 @@ test.describe('/auth/confirm — token-hash route validation', () => {
     ).toBeVisible();
   });
 
-  test('the redirect never echoes the token hash', async ({ page }) => {
-    await page.goto('/auth/confirm?type=email');
+  /**
+   * The token hash is a bearer credential: whoever reads it can complete the
+   * flow. This asserts it survives nowhere the browser can reach after a
+   * rejected confirmation — not the URL, not the DOM, not the browser console.
+   *
+   * It sends a REAL sentinel. The previous version requested `/auth/confirm`
+   * with no token at all and asserted the URL lacked `token_hash`, which could
+   * not fail however the route behaved (santa round 1, Codex). The rejected
+   * type keeps the request server-local: the allowlist refuses it before any
+   * Supabase call, so this stays loopback-only with the fence up.
+   *
+   * SERVER-side log redaction is not observable from here — Playwright sees the
+   * browser console, not the dev server's stdout. That half is pinned by
+   * src/lib/authConfirmDiagnostics.test.ts and the route unit tests.
+   */
+  test('a rejected confirmation leaks the token hash nowhere', async ({ page }) => {
+    const SENTINEL = 'e2e-sentinel-token-hash-9f3a2b';
+    const consoleText: string[] = [];
+    page.on('console', (message) => consoleText.push(message.text()));
+    page.on('pageerror', (error) => consoleText.push(error.message));
 
+    await page.goto(`/auth/confirm?token_hash=${SENTINEL}&type=magiclink`);
+    await expect(page).toHaveURL(/\/auth(\?|$)/);
+
+    const banner = page.locator('div[role="alert"]').filter({ hasText: /\S/ });
+    await expect(banner).toBeVisible();
+
+    expect(page.url()).not.toContain(SENTINEL);
     expect(page.url()).not.toContain('token_hash');
+    expect(await page.content()).not.toContain(SENTINEL);
+    await expect(banner).not.toContainText(SENTINEL);
+    expect(consoleText.join('\n')).not.toContain(SENTINEL);
   });
 });

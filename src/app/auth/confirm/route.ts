@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getServerSupabase } from '@/lib/supabase/server';
 import { CALLBACK_ERROR, confirmErrorCode } from '@/lib/authCallbackErrors';
+import { logConfirmFailure } from '@/lib/authConfirmDiagnostics';
 
 /**
  * /auth/confirm — the token-hash email confirmation route.
@@ -35,8 +36,14 @@ import { CALLBACK_ERROR, confirmErrorCode } from '@/lib/authCallbackErrors';
  *     a session here.
  *   - `next` is restricted to a same-origin absolute path.
  *   - Failures redirect with a fixed sentinel. The token hash is a bearer
- *     credential and the SDK message is untrusted prose — neither is logged
- *     and neither reaches the URL.
+ *     credential and the SDK message is untrusted prose — neither reaches the
+ *     URL, the page, or a log.
+ *   - Failures DO emit a redacted server-side record (see
+ *     `lib/authConfirmDiagnostics`). The route originally logged nothing, which
+ *     made a misconfigured email template indistinguishable from an expired
+ *     token and visible only through support reports. The record carries
+ *     bounded categories — never the token, an email, the query string, the
+ *     URL, or SDK prose.
  */
 
 /**
@@ -65,13 +72,27 @@ const DEFAULT_NEXT = '/settings';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams, origin } = new URL(request.url);
-  const tokenHash = searchParams.get('token_hash');
+  // Trimmed ONCE, so the value that is validated is the value that is sent.
+  // Validating `trim()` while forwarding the raw string meant a token that
+  // picked up encoded whitespace in transit passed the blank check and then
+  // failed upstream as `"abc "` — a valid confirmation lost to a stray space.
+  const tokenHash = searchParams.get('token_hash')?.trim() ?? '';
   const type = searchParams.get('type');
   const requestedNext = searchParams.get('next');
   const next =
     requestedNext && isSafeRedirect(requestedNext) ? requestedNext : DEFAULT_NEXT;
 
-  if (!tokenHash || tokenHash.trim() === '' || !isAllowedType(type)) {
+  if (!tokenHash || !isAllowedType(type)) {
+    // The misconfigured-template signal: a link built with the wrong `type`
+    // lands here and is otherwise indistinguishable to the user from a
+    // genuinely expired one. Categories only — see authConfirmDiagnostics for
+    // what this must never carry.
+    logConfirmFailure({
+      stage: 'validation',
+      outcome: CALLBACK_ERROR.invalidConfirmationLink,
+      rawType: type,
+      hasTokenHash: tokenHash !== '',
+    });
     return NextResponse.redirect(
       `${origin}/auth?error=${CALLBACK_ERROR.invalidConfirmationLink}`,
     );
@@ -79,6 +100,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const supabase = getServerSupabase();
   if (!supabase) {
+    logConfirmFailure({
+      stage: 'unconfigured',
+      outcome: CALLBACK_ERROR.unconfigured,
+      rawType: type,
+      hasTokenHash: true,
+    });
     return NextResponse.redirect(`${origin}/auth?error=${CALLBACK_ERROR.unconfigured}`);
   }
 
@@ -92,7 +119,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   });
 
   if (error) {
-    return NextResponse.redirect(`${origin}/auth?error=${confirmErrorCode(error)}`);
+    const outcome = confirmErrorCode(error);
+    logConfirmFailure({
+      stage: 'verification',
+      outcome,
+      rawType: type,
+      hasTokenHash: true,
+      error,
+    });
+    return NextResponse.redirect(`${origin}/auth?error=${outcome}`);
   }
 
   return NextResponse.redirect(`${origin}${next}`);

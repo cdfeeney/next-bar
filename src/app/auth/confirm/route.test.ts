@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthApiError } from '@supabase/supabase-js';
 
 vi.mock('@/lib/supabase/server', () => ({ getServerSupabase: vi.fn() }));
@@ -41,10 +41,27 @@ function locationOf(response: { headers: Headers }): string {
   return response.headers.get('location') ?? '';
 }
 
+/**
+ * The route now emits a redacted diagnostic on every failure path. Captured
+ * rather than silenced, so the assertions below can prove the token never
+ * reaches a log sink — the same guarantee the e2e spec asserts from outside.
+ */
+let errorSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
   vi.clearAllMocks();
   cookieWrites.length = 0;
+  errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
+
+afterEach(() => {
+  errorSpy.mockRestore();
+});
+
+/** Everything the route wrote to console during one test, as one string. */
+function loggedText(): string {
+  return JSON.stringify(errorSpy.mock.calls);
+}
 
 describe('/auth/confirm — parameter validation', () => {
   it('rejects a missing token_hash without calling Supabase', async () => {
@@ -112,6 +129,30 @@ describe('/auth/confirm — both email types complete', () => {
     expect(locationOf(response)).toBe('https://app.test/settings');
   });
 
+  /**
+   * Normalisation, pinned on the EXACT argument.
+   *
+   * Before this, validation tested `tokenHash.trim()` but `verifyOtp` received
+   * the raw value, so a link whose token picked up encoded whitespace (mail
+   * clients and copy-paste both do this) passed the blank check and then failed
+   * upstream against `"abc "` — a valid confirmation lost to a stray space,
+   * surfacing as the generic failure banner.
+   */
+  it('trims surrounding whitespace before calling verifyOtp', async () => {
+    const verifyOtp = stubClient({ error: null });
+    await GET(request('?token_hash=%20abc%20&type=recovery'));
+
+    expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: 'abc' });
+  });
+
+  it('rejects a whitespace-only token without calling Supabase', async () => {
+    const verifyOtp = stubClient();
+    const response = await GET(request('?token_hash=%09%20%20&type=recovery'));
+
+    expect(locationOf(response)).toContain(CALLBACK_ERROR.invalidConfirmationLink);
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
   it('writes the session cookie BEFORE returning the redirect', async () => {
     stubClient({ error: null });
     const response = await GET(request('?token_hash=hash-r&type=recovery'));
@@ -162,6 +203,35 @@ describe('/auth/confirm — failure sentinels leak nothing', () => {
     expect(locationOf(response)).toBe(
       `https://app.test/auth?error=${CALLBACK_ERROR.confirmationFailed}`,
     );
+  });
+
+  /**
+   * The operator-visibility half of the contract: a template pointed at the
+   * wrong verification type must be diagnosable from logs, not only from a wave
+   * of "my link expired" reports. Asserts the category, and that the token and
+   * raw prose stay out of the record.
+   */
+  it('emits a redacted diagnostic naming the wrong-type category', async () => {
+    stubClient();
+    await GET(request('?token_hash=super-secret-token-hash&type=signup'));
+
+    const logged = loggedText();
+    expect(logged).toContain('auth.confirm.failure');
+    expect(logged).toContain('known-supabase-type');
+    expect(logged).not.toContain('super-secret-token-hash');
+  });
+
+  it('keeps the token and SDK prose out of the verification-failure log', async () => {
+    stubClient({
+      error: new AuthApiError('connect ECONNREFUSED 10.0.0.7:5432', 500, undefined),
+    });
+    await GET(request('?token_hash=super-secret-token-hash&type=recovery'));
+
+    const logged = loggedText();
+    expect(logged).toContain('auth.confirm.failure');
+    expect(logged).not.toContain('super-secret-token-hash');
+    expect(logged).not.toContain('ECONNREFUSED');
+    expect(logged).not.toContain('10.0.0.7');
   });
 
   it('never puts the token hash or the raw error in the redirect', async () => {
