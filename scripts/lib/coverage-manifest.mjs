@@ -304,6 +304,12 @@ export function completeness(state) {
       saturated.push(cell.cellId);
     } else if (!COMPLETING_STATUSES.includes(cell.terminalStatus)) {
       missing.push(cell.cellId);
+    } else if (cell.terminalStatus !== 'ack_terminal' && !cell.lastOk) {
+      // A DONE record is a claim, not evidence. 'unsaturated' and 'cleared'
+      // both require a search to have actually succeeded; only 'ack_terminal'
+      // is legitimately unsupported by one. Without this, a truncated or
+      // hand-edited manifest could assert completeness for work never done.
+      missing.push(cell.cellId);
     }
 
     // (2) a capped cell must have been subdivided, and its children finished.

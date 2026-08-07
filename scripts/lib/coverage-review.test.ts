@@ -172,10 +172,10 @@ describe('borough-parameterized review', () => {
     expect(review.decision).not.toBe('duplicate');
   });
 
-  it('catches a reissued Place ID here too, matching resolveIdentity', () => {
-    // The reissue rule lived only in resolveIdentity, while THIS is the live
-    // duplicate gate the review driver runs against a freshly fetched catalog.
-    // The two disagreed, so a reissued duplicate was accepted as a new venue.
+  it('routes a reissued Place ID to lookup, agreeing with resolveIdentity', () => {
+    // Both identity paths must reach the same verdict on this input, and that
+    // verdict is "ask a human": a differing Place ID is uninformative, and
+    // guessing duplicate would silently drop a real bar.
     const review = adversarialReview(
       {
         name: 'Keg & Lantern',
@@ -196,7 +196,47 @@ describe('borough-parameterized review', () => {
       ],
       { borough: 'brooklyn' },
     );
-    expect(review.decision).toBe('duplicate');
+    expect(review.decision).toBe('lookup');
+  });
+
+  it('does not call an exact name a duplicate across a different address', () => {
+    // catalogMatches admits rows up to 60m away — a whole block. An exact name
+    // alone used to force duplicate there, disagreeing with resolveIdentity
+    // and silently deleting a real second location.
+    const review = adversarialReview(
+      { name: 'Acme', placeId: 'new', address: '10 Main St, Brooklyn, NY', primaryType: 'bar', ratings: 90 },
+      [
+        {
+          name: 'Acme',
+          placeId: null,
+          address: '58 Main St, Brooklyn, NY',
+          distanceMeters: 55,
+          nameSimilarity: 1,
+          nameExact: true,
+        },
+      ],
+      { borough: 'brooklyn' },
+    );
+    expect(review.decision).not.toBe('duplicate');
+  });
+
+  it('still calls an exact name a duplicate at the same address', () => {
+    expect(
+      adversarialReview(
+        { name: 'Acme', placeId: null, address: '10 Main St, Brooklyn, NY', primaryType: 'bar', ratings: 90 },
+        [
+          {
+            name: 'Acme',
+            placeId: null,
+            address: '10 Main Street, Brooklyn, NY',
+            distanceMeters: 40,
+            nameSimilarity: 1,
+            nameExact: true,
+          },
+        ],
+        { borough: 'brooklyn' },
+      ).decision,
+    ).toBe('duplicate');
   });
 
   it('still calls it a duplicate when the Place IDs actually match', () => {

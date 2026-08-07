@@ -85,10 +85,13 @@ describe('identity precedence', () => {
     expect(identity.verdict).not.toBe('duplicate');
   });
 
-  it('catches one storefront listed twice after Google reissued its Place ID', () => {
-    // Google reissues a Place ID on owner re-claims and listing merges, so
-    // differing ids alone do not prove two venues. Same name at the same street
-    // number, metres apart, is one bar with two listings.
+  it('sends a reissued-Place-ID collision to a human instead of suppressing it', () => {
+    // Google reissues a Place ID on owner re-claims and listing merges, so a
+    // differing id is uninformative — not proof of two venues, and not proof of
+    // one. Deciding it automatically would either drop a real bar (invisible)
+    // or add a duplicate row (visible, correctable); this refuses to guess.
+    // Note street and distance are not independent: any two venues in one
+    // building satisfy both, leaving only the name to discriminate.
     const identity = resolveIdentity(
       { name: 'Keg & Lantern', placeId: 'place-new', address: '97 Nassau Ave, Brooklyn, NY', lat: 40.7, lng: -73.9 },
       [
@@ -101,8 +104,29 @@ describe('identity precedence', () => {
         },
       ],
     );
-    expect(identity.verdict).toBe('duplicate');
-    expect(identity.reason).toMatch(/reissues/);
+    expect(identity.verdict).toBe('ambiguous');
+    expect(identity.verdict).not.toBe('duplicate');
+  });
+
+  it('never suppresses two same-named bars in one building', () => {
+    // A hotel lobby bar and its rooftop, or two stalls of one brand in a food
+    // hall, share a street key and sit well within 50m. streetKey discards
+    // floor/suite, so the old auto-duplicate would have deleted the second one.
+    const rooftop = {
+      name: 'The Lounge',
+      placeId: 'place-rooftop',
+      address: '105 W 29th St, New York, NY',
+      lat: 40.7465,
+      lng: -73.991,
+    };
+    const lobby = {
+      name: 'The Lounge',
+      place_id: 'place-lobby',
+      address: '105 W 29th Street, New York, NY',
+      lat: 40.74652,
+      lng: -73.991,
+    };
+    expect(resolveIdentity(rooftop, [lobby]).verdict).not.toBe('duplicate');
   });
 
   it('matches a license-only row to production by name and street address', () => {
@@ -137,6 +161,14 @@ describe('identity precedence', () => {
 describe('address and borough normalization', () => {
   it('agrees across abbreviated and spelled-out street names', () => {
     expect(streetKey('331 W 4th St, New York, NY')).toBe(streetKey('331 West 4th Street, New York, NY'));
+  });
+
+  it('handles an alphanumeric house number regardless of its casing', () => {
+    // Regression: the number was lowercased and then located in the original
+    // case-sensitive string, so "12A Main St" keyed as "12a:amain" — the
+    // stranded "A" silently defeated every address comparison.
+    expect(streetKey('12A Main St, Brooklyn, NY')).toBe(streetKey('12a Main Street, Brooklyn, NY'));
+    expect(streetKey('12A Main St, Brooklyn, NY')).toBe('12a:main');
   });
 
   it('returns null when there is no house number to anchor on', () => {

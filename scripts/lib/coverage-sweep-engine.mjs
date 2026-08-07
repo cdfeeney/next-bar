@@ -127,14 +127,23 @@ function nextAttempt(ctx, cellId, known) {
  * found underneath it. Duplicate ids across the subtree are harmless — the
  * caller merges by place id.
  */
-function replaySubtree(cellId, cell, ctx, seen = new Set()) {
+function replaySubtree(cellId, cell, ctx, seen = new Set(), emitted = new Set()) {
   if (seen.has(cellId)) return;
   seen.add(cellId);
   const state = ctx.state?.cells?.get(cellId);
   if (!state) return;
-  if (state.places?.length) ctx.onPlaces(state.places, state.cell ?? cell);
+  // A place recorded in both a capped parent and one of its children must be
+  // emitted ONCE. The caller merges by place id but counts each emission as a
+  // query hit, and queryHits is a scoring signal — replaying a subtree would
+  // otherwise inflate a candidate's score purely because the run was resumed.
+  const fresh = (state.places ?? []).filter((place) => {
+    if (!place.id || emitted.has(place.id)) return false;
+    emitted.add(place.id);
+    return true;
+  });
+  if (fresh.length > 0) ctx.onPlaces(fresh, state.cell ?? cell);
   for (const childId of state.children ?? []) {
-    replaySubtree(childId, state.cell ?? cell, ctx, seen);
+    replaySubtree(childId, state.cell ?? cell, ctx, seen, emitted);
   }
 }
 
@@ -235,6 +244,13 @@ async function processCell(cell, ctx) {
     if (known.places?.length) ctx.onPlaces(known.places, cell);
     return subdivideFrom(cell, ctx);
   }
+
+  // A cell whose RESULT was flushed but whose DONE was interrupted gets
+  // re-queried below. Google returns a different slice each time, so replay
+  // what was already recorded first: the manifest unions both pages, and
+  // without this the rebuilt queue would hold only the newer one while the
+  // manifest claimed both.
+  if (known?.places?.length) ctx.onPlaces(known.places, cell);
 
   const attemptN = nextAttempt(ctx, cell.id, known);
 

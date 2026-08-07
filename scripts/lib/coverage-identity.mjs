@@ -53,10 +53,14 @@ const STREET_SUFFIX = new Set([
 export function streetKey(address) {
   const text = String(address ?? '').split(',')[0]?.trim() ?? '';
   if (!text) return null;
-  const number = text.match(/^(\d+[a-z]?)\b/i)?.[1]?.toLowerCase() ?? null;
-  if (!number) return null;
+  const raw = text.match(/^(\d+[a-z]?)\b/i)?.[1] ?? null;
+  if (!raw) return null;
+  const number = raw.toLowerCase();
+  // Slice by the RAW match length, not by searching for the lowercased form:
+  // "12A Main St" would otherwise fail to locate "12a" and leave the uppercase
+  // suffix glued to the street ("12a:amain" vs "12a:main").
   const rest = text
-    .slice(text.indexOf(number) + number.length)
+    .slice(raw.length)
     .toLowerCase()
     .replace(/\bwest\b/g, 'w')
     .replace(/\beast\b/g, 'e')
@@ -142,17 +146,26 @@ export function resolveIdentity(candidate, productionRows = []) {
     const sameStreet = candidateStreet && rowStreet && candidateStreet === rowStreet;
 
     // 2. Two rows that BOTH have a Place ID and disagree are normally two real
-    //    venues — this is what lets a second location of a brand survive. But
-    //    Google reissues a Place ID on owner re-claims and listing merges, so
-    //    differing ids alone cannot prove two venues. Same name AND same street
-    //    number at this range is one storefront with two listings; a genuine
-    //    second location has a different address, which still falls through.
+    //    venues — this is what lets a second location of a brand survive.
+    //
+    //    Google reissues a Place ID on owner re-claims and listing merges, so a
+    //    differing id is not proof of two venues either. It is simply
+    //    UNINFORMATIVE, and uninformative evidence must not resolve to the
+    //    costliest verdict available. Suppressing as a duplicate drops a real
+    //    bar with nothing left to audit; accepting a false one is a visible row
+    //    someone can delete. So this case goes to a human instead of being
+    //    decided automatically in either direction.
+    //
+    //    Note that street and distance are NOT independent signals here: any
+    //    two venues in one building satisfy both, which leaves the whole
+    //    decision resting on a name match — and names collide exactly in the
+    //    co-located cases (hotel bars, food-hall stalls) this would hit.
     if (candidate.placeId && row.place_id && row.place_id !== candidate.placeId) {
       if (sameName && sameStreet) {
         return {
-          verdict: 'duplicate',
+          verdict: 'ambiguous',
           match: row,
-          reason: `same name and street address as production row ${row.name} (${distance}m) despite a different Place ID — Google reissues ids on re-claims`,
+          reason: `same name and street address as production row ${row.name} (${distance}m) but a different Place ID — Google reissues ids on re-claims, so this needs a human to confirm one venue or two`,
         };
       }
       continue;

@@ -265,6 +265,71 @@ describe('resume', () => {
     expect(replayed.size).toBe(first.size);
   });
 
+  it('replays a recorded result whose DONE was interrupted, then re-queries', async () => {
+    // Regression: an uncapped RESULT flushed before an interrupted DONE was
+    // re-queried without replaying what was already recorded. Google returns a
+    // different slice each time, so the manifest unioned both pages while the
+    // rebuilt queue held only the newer one.
+    const plan = [cells()[0]];
+    const file = path.join(dir, 'interrupted-done.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'idone' }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: 1, capped: false });
+    writer.result(plan[0].id, [{ id: 'old-result' }]);
+    writer.close();
+
+    const resumeWriter = openManifest(file);
+    const emitted = new Set<string>();
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async () => ({ places: [{ id: 'new-result' }] }),
+      onPlaces: (places: any[]) => places.forEach((place) => emitted.add(place.id)),
+    });
+    resumeWriter.close();
+    const report = completeness(loadManifest(file));
+    expect(emitted).toContain('old-result');
+    expect(emitted).toContain('new-result');
+    expect(emitted.size).toBe(report.summary.uniquePlaceIds);
+  });
+
+  it('emits a place recorded in both a parent and its child only once', async () => {
+    // queryHits is a scoring signal counted per emission, so replaying a
+    // subtree must not inflate a candidate's score just because a run resumed.
+    const plan = [cells()[0]];
+    const file = path.join(dir, 'dedupe.jsonl');
+    const writer = openManifest(file);
+    const child = { id: `${plan[0].id}/0`, depth: 1, sideMeters: 180 };
+    writer.plan({ configHash: configHash({ t: 'dedupe' }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(plan[0].id, [{ id: 'shared' }]);
+    writer.subdivide(plan[0].id, [child.id], [child]);
+    writer.attempt({ cellId: child.id, attemptN: 1, ok: true, count: 1, capped: false });
+    writer.result(child.id, [{ id: 'shared' }]);
+    writer.done(child.id, 'unsaturated');
+    writer.done(plan[0].id, 'cleared');
+    writer.close();
+
+    const emissions: string[] = [];
+    const resumeWriter = openManifest(file);
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async () => {
+        throw new Error('no calls expected');
+      },
+      onPlaces: (places: any[]) => places.forEach((place) => emissions.push(place.id)),
+    });
+    resumeWriter.close();
+    expect(emissions).toEqual(['shared']);
+  });
+
   it('does not re-query cells that already finished', async () => {
     const field = venues(12, 340);
     const plan = cells();

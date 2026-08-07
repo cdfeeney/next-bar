@@ -728,13 +728,24 @@ for (const place of places.values()) {
     ),
   ];
   let ranking = candidateScore(place, matches);
-  if (ranking.score < 2 && requestedNames.length === 0) continue;
+  const needsHumanIdentityCall = identity.verdict === 'ambiguous';
+  // An ambiguous identity is a promise that a human will look at this row. The
+  // ordinary score gate would drop it instead, which turns "ask someone" back
+  // into the silent suppression this whole path exists to avoid.
+  if (ranking.score < 2 && requestedNames.length === 0 && !needsHumanIdentityCall) continue;
   if (ranking.score < 2) {
     ranking = {
       score: 2,
       tier: 'review',
-      reasons: [...ranking.reasons, 'explicit external bar seed requires review'],
+      reasons: [
+        ...ranking.reasons,
+        needsHumanIdentityCall
+          ? identity.reason
+          : 'explicit external bar seed requires review',
+      ],
     };
+  } else if (needsHumanIdentityCall) {
+    ranking = { ...ranking, tier: 'review', reasons: [...ranking.reasons, identity.reason] };
   }
   const possibleCatalogMatches = catalog
     .map((bar) => ({ id: bar.id, name: bar.name, similarity: nameSimilarity(name, bar.name) }))

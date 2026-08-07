@@ -115,25 +115,53 @@ export function adversarialReview(candidate, catalogMatches = [], options = {}) 
   // from the sweep.
   const duplicate = catalogMatches.find((match) => {
     if (match.placeIdMatch) return true;
-    if (candidate.placeId && match.placeId && match.placeId !== candidate.placeId) {
-      // Differing Place IDs normally mean two venues — that is what lets a
-      // second location of a brand survive. But Google reissues ids on owner
-      // re-claims and listing merges, so the same name at the same street
-      // number, metres apart, is still one storefront. This must agree with
-      // resolveIdentity(); the two used to disagree, and this path is the live
-      // gate the review driver actually runs.
-      return (
-        match.nameExact &&
-        match.distanceMeters <= SAME_LOCATION_METERS &&
-        sameStreet(candidate.address, match.address)
-      );
+    // Differing Place IDs never force a duplicate here. Google reissues ids on
+    // re-claims, so the signal is uninformative rather than negative, and a
+    // wrong duplicate silently deletes a real bar. The reissue case is routed
+    // to lookup below instead of being decided automatically — this must agree
+    // with resolveIdentity(), which returns 'ambiguous' for the same input.
+    if (candidate.placeId && match.placeId && match.placeId !== candidate.placeId) return false;
+    // An exact name alone is not identity — catalogMatches admits rows up to
+    // 60m away, which spans a whole block. Require the address to agree, or the
+    // rows to be close enough that a different storefront is implausible. This
+    // is what resolveIdentity does; the two must not diverge, because a wrong
+    // duplicate here silently deletes a real bar.
+    if (match.nameExact) {
+      // When both addresses are known, the ADDRESS decides — same rule as
+      // resolveIdentity. Two same-named rows at different house numbers are two
+      // storefronts even when they are metres apart, and proximity must not
+      // override that. Distance is the fallback only when an address is missing
+      // or unparseable, where it is the sole evidence available.
+      const known = streetKey(candidate.address) && streetKey(match.address);
+      return known ? sameStreet(candidate.address, match.address) : match.distanceMeters <= 25;
     }
-    return match.nameExact || (match.distanceMeters <= 25 && match.nameSimilarity >= 0.5);
+    return match.distanceMeters <= 25 && match.nameSimilarity >= 0.5;
   });
   if (duplicate) {
     return {
       decision: 'duplicate',
       reasons: [`probable production match: ${duplicate.name} (${duplicate.distanceMeters}m)`],
+    };
+  }
+
+  // Same name, same street, metres apart, but a different Place ID. One venue
+  // re-listed, or two venues in one building — Google's id cannot tell us, so
+  // a human decides rather than the sweep guessing toward silent suppression.
+  const reissueCandidate = catalogMatches.find(
+    (match) =>
+      candidate.placeId &&
+      match.placeId &&
+      match.placeId !== candidate.placeId &&
+      match.nameExact &&
+      match.distanceMeters <= SAME_LOCATION_METERS &&
+      sameStreet(candidate.address, match.address),
+  );
+  if (reissueCandidate) {
+    return {
+      decision: 'lookup',
+      reasons: [
+        `same name and street as production row ${reissueCandidate.name} (${reissueCandidate.distanceMeters}m) but a different Place ID — confirm one venue or two`,
+      ],
     };
   }
 

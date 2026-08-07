@@ -201,6 +201,20 @@ describe('completeness invariant', () => {
     expect(report.failed).toEqual(['n:0:0']);
   });
 
+  it('treats a completing DONE with no successful attempt as unfinished', () => {
+    // A DONE record is a claim, not evidence. A truncated or hand-edited
+    // manifest could otherwise assert completeness for work never performed.
+    const state = build([
+      PLAN,
+      { type: 'DONE', cellId: 'n:0:0', terminalStatus: 'unsaturated' },
+      ok('n:0:1', 1, false),
+      { type: 'DONE', cellId: 'n:0:1', terminalStatus: 'unsaturated' },
+    ]);
+    const report = completeness(state);
+    expect(report.complete).toBe(false);
+    expect(report.missing).toContain('n:0:0');
+  });
+
   it('names a DONE-bearing manifest whose invariant fails as inconsistent, not complete', () => {
     const state = build([
       PLAN,
