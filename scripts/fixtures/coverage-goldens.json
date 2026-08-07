@@ -1,0 +1,160 @@
+[
+  {
+    "name": "Book Club Bar",
+    "placeId": "gold-book-club-bar",
+    "borough": "manhattan",
+    "primaryType": "book_store",
+    "source": "nearby",
+    "label": "bar",
+    "note": "hybrid primary type; the five-type Nearby list never requested book_store"
+  },
+  {
+    "name": "Liz's Book Bar",
+    "placeId": "gold-lizs-book-bar",
+    "borough": "brooklyn",
+    "primaryType": "book_store",
+    "source": "nearby",
+    "label": "bar",
+    "note": "same hybrid class as Book Club Bar, Kings County"
+  },
+  {
+    "name": "Gran Torino",
+    "placeId": "gold-gran-torino",
+    "borough": "manhattan",
+    "primaryType": "restaurant",
+    "source": "seed",
+    "label": "bar",
+    "note": "explicit trusted seed with a restaurant primary type"
+  },
+  {
+    "name": "Beco",
+    "placeId": "gold-beco",
+    "borough": "brooklyn",
+    "primaryType": "restaurant",
+    "source": "seed",
+    "label": "bar"
+  },
+  {
+    "name": "Zum Schneider",
+    "placeId": "gold-zum-schneider",
+    "borough": "manhattan",
+    "primaryType": "restaurant",
+    "source": "text",
+    "label": "bar",
+    "note": "biergarten reached through the beer-garden text family"
+  },
+  {
+    "name": "Damballa",
+    "placeId": "gold-damballa",
+    "borough": "brooklyn",
+    "primaryType": "bar",
+    "source": "nearby",
+    "label": "bar"
+  },
+  {
+    "name": "Fornino Pier 6",
+    "placeId": "gold-fornino-pier-6",
+    "borough": "brooklyn",
+    "primaryType": "pizza_restaurant",
+    "source": "nearby",
+    "label": "bar",
+    "note": "no house number in the address; identity must fall back to coordinates"
+  },
+  {
+    "name": "Taqueria St. Marks",
+    "placeId": "gold-taqueria-st-marks",
+    "borough": "manhattan",
+    "primaryType": "restaurant",
+    "source": "seed",
+    "label": "bar"
+  },
+  {
+    "name": "Westlight",
+    "placeId": "gold-westlight",
+    "borough": "brooklyn",
+    "primaryType": "hotel",
+    "source": "text",
+    "label": "bar",
+    "note": "rooftop hotel bar"
+  },
+  {
+    "name": "The Canuck",
+    "placeId": "gold-canuck-brooklyn",
+    "borough": "brooklyn",
+    "primaryType": "bar",
+    "source": "nearby",
+    "label": "bar",
+    "note": "second location of a brand already in production; the global name gate deleted this"
+  },
+  {
+    "name": "The Canuck",
+    "placeId": "gold-canuck-manhattan",
+    "borough": "manhattan",
+    "primaryType": "bar",
+    "source": "nearby",
+    "label": "duplicate",
+    "note": "the location production already has; must still be caught"
+  },
+  {
+    "name": "Attaboy",
+    "placeId": "gold-attaboy",
+    "borough": "manhattan",
+    "primaryType": "bar",
+    "source": "sla",
+    "label": "duplicate",
+    "note": "license-only lead that resolves onto an existing production venue"
+  },
+  {
+    "name": "Noho Juice Bar",
+    "placeId": "gold-noho-juice-bar",
+    "borough": "manhattan",
+    "primaryType": "juice_shop",
+    "source": "nearby",
+    "label": "not_bar",
+    "note": "semantic false positive on the word bar"
+  },
+  {
+    "name": "Healthy Deli Salad Bar Inc.",
+    "placeId": "gold-healthy-deli",
+    "borough": "manhattan",
+    "primaryType": "deli",
+    "source": "sla",
+    "label": "not_bar"
+  },
+  {
+    "name": "Manhattan Wine Merchants",
+    "placeId": "gold-wine-merchants",
+    "borough": "manhattan",
+    "primaryType": "liquor_store",
+    "source": "sla",
+    "label": "not_bar",
+    "note": "off-premises license class"
+  },
+  {
+    "name": "The Harmonie Club",
+    "placeId": "gold-harmonie-club",
+    "borough": "manhattan",
+    "primaryType": "event_venue",
+    "source": "sla",
+    "label": "not_bar",
+    "note": "private member club, not a public bar"
+  },
+  {
+    "name": "Brooklyn Bridge Park Tennis Club",
+    "placeId": "gold-bbp-tennis",
+    "borough": "brooklyn",
+    "primaryType": "sports_club",
+    "source": "sla",
+    "label": "not_bar",
+    "note": "Kings County private club; the Manhattan-only review rejected it for the wrong reason"
+  },
+  {
+    "name": "ATTABOY COCKTAILS LLC",
+    "placeId": null,
+    "borough": "manhattan",
+    "primaryType": "",
+    "source": "sla",
+    "label": "not_bar",
+    "note": "license-only legal name with no public venue identity; must never auto-accept"
+  }
+]
