@@ -103,6 +103,19 @@ describe('google-live wiring', () => {
     expect(container.querySelector('img')).toBeNull(); // glyph only — no owned-photo claims
   });
 
+  test('the fallback still NAMES the bar — a failed widget must not leave a nameless card', () => {
+    // Caught by screenshot, not by assertion: with our identity row removed
+    // for google-live and the widget rendering nothing when unavailable, the
+    // card showed a glyph, a walk time and no bar name at all.
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    renderCard();
+    const { container } = render(<>{captured?.fallback}</>);
+    expect(container.textContent).toContain('Attaboy');
+    // …but NOT the rank: that renders in the meta line in both states, and
+    // duplicating it here printed "1." twice on the card.
+    expect(container.textContent).not.toContain('1.');
+  });
+
   test('ordinary rerenders create AT MOST ONE widget for a bar', () => {
     vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
     const view = renderCard();
@@ -168,10 +181,54 @@ describe('google-live wiring', () => {
     expect(widget.closest('button')).toBeNull();
   });
 
-  test('the glyph body row still renders the bar identity alongside the widget', () => {
+  test('NO BarVisualTile and NO duplicate name/neighborhood chrome on a google-live card', () => {
+    // Live 390x844 review: the card showed Google's name AND ours, plus a
+    // 56px glyph tile beside a photo of the same bar. The widget owns
+    // name/photo/attribution now; our copies are gone.
     vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
     renderCard();
+    expect(screen.queryByTestId('bar-visual')).toBeNull();
+    expect(screen.queryByText(/1\. Attaboy/)).toBeNull();
+    // Rank survives — Google has no notion of our ranking.
+    expect(screen.getByText('1.')).toBeTruthy();
+  });
+
+  test('exactly ONE Maps action: ours is removed so the widget’s is the only one', () => {
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    const { container } = renderCard();
+    expect(screen.queryByText(/Maps →/)).toBeNull();
+    // No app-rendered Google links at all on a google-live card: the
+    // attribution credit link belongs to the legacy tier, and the Maps
+    // action now comes from the compact widget.
+    expect(
+      container.querySelectorAll('a[href*="google.com/maps"]').length,
+    ).toBe(0);
+  });
+
+  test('the app’s own content stays reachable: one Hours entry to the lightbox', () => {
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    renderCard();
+    expect(screen.getByRole('button', { name: /See hours for Attaboy/i })).toBeTruthy();
+  });
+
+  test('distance/vibe, open-now, rating and Want-to-go remain below the widget', () => {
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    renderCard();
+    expect(screen.getByText(/Vibe match/i)).toBeTruthy();
+  });
+
+  test('the NON-google-live card is untouched: identity row, Maps action and attribution credit all remain', () => {
+    vi.stubEnv('NEXT_PUBLIC_LEGACY_PHOTOS', '1');
+    const { container } = renderCard();
     expect(screen.getByText(/1\. Attaboy/)).toBeTruthy();
+    // The app's Maps ACTION survives on the legacy tier — exactly one.
+    expect(screen.getAllByText(/Maps →/)).toHaveLength(1);
+    // …alongside GoogleAttribution's separate credit link, which is a
+    // REQUIREMENT of the legacy tier and must never be counted as a
+    // duplicate action or removed.
+    expect(
+      container.querySelectorAll('a[href*="maps/place/?q=place_id:"]').length,
+    ).toBe(1);
   });
 
   test('with google-live OFF the widget never mounts and legacy behavior is unchanged', () => {

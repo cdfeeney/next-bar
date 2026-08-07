@@ -162,7 +162,14 @@ export default function GooglePlacePhoto({
         return;
       }
 
-      const details = document.createElement('gmp-place-details');
+      // COMPACT, not the full element. Live Staging measurement at 390x844
+      // (2026-08-06): the full <gmp-place-details> laid out at 340x365 inside
+      // a 145.7px host, so everything below Google's header — the media AND
+      // the attribution — was clipped away. Clipping Google's attribution is
+      // a policy violation, not a cosmetic bug. The compact variant is sized
+      // for a card and renders photo + attribution + one Maps action in the
+      // space a result card actually has.
+      const details = document.createElement('gmp-place-details-compact');
 
       const request = document.createElement('gmp-place-details-place-request');
       request.setAttribute('place', placeId);
@@ -248,10 +255,21 @@ export default function GooglePlacePhoto({
       ref={hostRef}
       data-testid="google-place-photo"
       data-status={status}
-      // The 21/9 box is reserved from first paint, before the SDK has loaded,
-      // so degrading to the glyph shifts nothing. CLS is the reason this is an
-      // aspect-ratio container and not a height that grows with its content.
-      className={className ?? 'w-full aspect-[21/9] overflow-hidden'}
+      // NEVER clip, and never impose a fixed height on a loaded widget.
+      //
+      // This used to be `aspect-[21/9] overflow-hidden`, which reserved a
+      // tidy box and then CUT OFF everything Google rendered past it —
+      // including the attribution (measured live: 365px of content in a
+      // 145.7px box). A reservation that truncates the provider's required
+      // credit is worse than a little layout shift.
+      //
+      // So: while PENDING, reserve a minimum height so first paint is stable;
+      // once the widget is READY, the container takes its natural height and
+      // the content decides. `min-height` reserves without ever truncating.
+      className={
+        className ??
+        (status === 'pending' ? 'w-full min-h-[146px]' : 'w-full')
+      }
     />
   );
 }

@@ -66,13 +66,39 @@ type ResultCardProps = {
 function CardMediaFallback({ bar }: { bar: Bar }): JSX.Element {
   const visual = barVisual(bar);
   return (
-    <div
-      data-testid="google-fallback-glyph"
-      aria-hidden="true"
-      className="w-full aspect-[21/9] flex items-center justify-center select-none"
-      style={{ backgroundColor: visual.bg, color: visual.fg }}
-    >
-      <span className="font-display leading-none text-4xl">{visual.glyph}</span>
+    <div className="relative">
+      <div
+        data-testid="google-fallback-glyph"
+        aria-hidden="true"
+        className="w-full aspect-[21/9] flex items-center justify-center select-none"
+        style={{ backgroundColor: visual.bg, color: visual.fg }}
+      >
+        <span className="font-display leading-none text-4xl">{visual.glyph}</span>
+      </div>
+      {/* The bar's IDENTITY lives here, not in the card body.
+       *
+       * A google-live card deliberately drops our name row because the
+       * widget renders the name — but when the widget is unavailable it
+       * renders NOTHING, and the first screenshot of this state showed a
+       * nameless card: a glyph, a walk time and no way to tell which bar it
+       * was. Putting identity inside the FALLBACK gives it exactly when
+       * Google is not providing it, and never duplicates it when Google is.
+       */}
+      <span
+        aria-hidden="true"
+        className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/85 via-black/40 to-transparent"
+      />
+      <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pointer-events-none flex flex-col gap-0.5">
+        {/* Name only — the rank lives in the meta line below, which renders
+            in BOTH the loaded and fallback states. Repeating it here showed
+            "1." twice on the first screenshot of this layout. */}
+        <h3 className="font-display text-lg leading-snug text-white drop-shadow-sm">
+          {bar.name}
+        </h3>
+        <p className="text-[11px] uppercase tracking-wider text-white/85">
+          {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
+        </p>
+      </div>
     </div>
   );
 }
@@ -99,6 +125,16 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
       ? []
       : decision.urls;
   const showHero = photos.length > 0 && !heroFailed;
+  /**
+   * On a google-live card the compact widget already renders the bar's
+   * NAME, its PHOTO, the required ATTRIBUTION and a Maps action. Repeating
+   * any of those below it was the duplication the live 390x844 review
+   * caught: two names, two Maps links, and a 56px glyph tile beside a photo
+   * of the same bar. So this flag suppresses OUR copies — it never touches
+   * Google's rendering, which is closed-shadow and must not be styled,
+   * moved or hidden.
+   */
+  const isGoogleLive = decision.source === 'google-live';
 
   return (
     <article className="bg-surface border border-border rounded-3xl overflow-hidden flex flex-col">
@@ -172,7 +208,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
       ) : null}
 
       <div className="p-4 pt-3 flex flex-col gap-2">
-        {!showHero ? (
+        {!showHero && !isGoogleLive ? (
           <div className="flex items-start gap-3">
             <button
               type="button"
@@ -202,6 +238,11 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
             on proximity and ignores the saved quiz profile (the quiz/tweak
             surfaces pass real tags and get the numeric badge). */}
         <p className="text-sm">
+          {/* Rank survives the removal of our identity row — Google's widget
+              renders the name but has no notion of OUR ranking. */}
+          {isGoogleLive ? (
+            <span className="font-display text-muted mr-1">{rank}.</span>
+          ) : null}
           <span className="font-display text-accent">{lead.text}</span>
           <span className="text-muted">
             {userTags.length === 0
@@ -220,6 +261,20 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
             <OpenNowBadge bar={bar} />
             <RatingBadge barId={bar.id} />
             <WantToGoToggle barId={bar.id} barName={bar.name} />
+            {/* Removing the glyph tile removed the lightbox opener with it,
+                and the lightbox is where the app's OWN content lives (full
+                weekly hours). This restores that one entry point without
+                reintroducing any name/photo/Maps duplication. */}
+            {isGoogleLive ? (
+              <button
+                type="button"
+                onClick={() => setLightboxOpen(true)}
+                aria-label={`See hours for ${bar.name}`}
+                className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
+              >
+                Hours
+              </button>
+            ) : null}
           </div>
           {showShare ? (
             <ShareButton
@@ -229,16 +284,22 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
               ariaLabel={`Send ${bar.name} to friends`}
             />
           ) : null}
-          <a
-            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-              `${bar.name} ${bar.address}`,
-            )}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4 shrink-0"
-          >
-            Maps →
-          </a>
+          {/* ONE Maps action per card. On a google-live card the compact
+              widget supplies Google's own supported Maps action, so ours
+              would be the second one — removed here rather than by hiding
+              Google's, which we must never do. */}
+          {!isGoogleLive ? (
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                `${bar.name} ${bar.address}`,
+              )}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4 shrink-0"
+            >
+              Maps →
+            </a>
+          ) : null}
         </div>
       </div>
 
