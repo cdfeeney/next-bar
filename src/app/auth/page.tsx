@@ -4,6 +4,11 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { AUTH_COPY, authErrorMessage } from '@/lib/authErrors';
+import {
+  classifyCallbackError,
+  type CallbackErrorKind,
+} from '@/lib/authCallbackErrors';
 
 /**
  * /auth — conventional email + password sign-in (operator call 2026-07-23:
@@ -51,27 +56,11 @@ function isEmail(value: string): boolean {
 }
 
 /**
- * /auth/callback redirects failures here as `?error=...` — either one of
- * its own sentinels (`missing_code`, `supabase_unconfigured`) or the
- * URL-encoded Supabase exchange error. Classify the raw value so the
- * banner can offer the right recovery path.
+ * `/auth/callback` and `/auth/confirm` redirect failures here as `?error=...`
+ * carrying a stable sentinel. Classification lives in `@/lib/authCallbackErrors`
+ * so it is unit-testable independently of this component — the PKCE-vs-expired
+ * ordering it encodes is a P0 fix, not an implementation detail.
  */
-type CallbackErrorKind = 'expired-link' | 'unconfigured' | 'generic';
-
-function classifyCallbackError(raw: string): CallbackErrorKind {
-  if (raw === 'supabase_unconfigured') return 'unconfigured';
-  // One-shot confirm/recovery links fail the code exchange with messages
-  // like "Email link is invalid or has expired" / "flow state not found".
-  // `missing_code` lands here too: when a link is expired or already used,
-  // Supabase redirects without a `code` param at all.
-  if (
-    raw === 'missing_code' ||
-    /expired|invalid|otp|flow.?state|not.?found|already|used/i.test(raw)
-  ) {
-    return 'expired-link';
-  }
-  return 'generic';
-}
 
 export default function AuthPage() {
   const router = useRouter();
@@ -108,7 +97,7 @@ export default function AuthPage() {
       redirectTo: callbackUrl(),
     });
     if (error) {
-      setStatus({ kind: 'error', message: error.message });
+      setStatus({ kind: 'error', message: authErrorMessage(error, 'reset') });
       return;
     }
     setStatus({ kind: 'reset-sent', email: email.trim() });
@@ -136,16 +125,13 @@ export default function AuthPage() {
         options: { emailRedirectTo: callbackUrl() },
       });
       if (error) {
-        setStatus({ kind: 'error', message: error.message });
+        setStatus({ kind: 'error', message: authErrorMessage(error, 'signup') });
         return;
       }
       // With email confirmation on, Supabase signals "this email already
       // has an account" via an obfuscated user with zero identities.
       if (data.user && (data.user.identities?.length ?? 0) === 0) {
-        setStatus({
-          kind: 'error',
-          message: 'That email already has an account — sign in instead.',
-        });
+        setStatus({ kind: 'error', message: AUTH_COPY.emailExists });
         setIntent('signin');
         return;
       }
@@ -158,15 +144,11 @@ export default function AuthPage() {
       password,
     });
     if (error) {
-      // Account-existence hints are an accepted UX tradeoff (signup
-      // already says when an email is taken); what we DON'T do is surface
-      // raw Supabase errors for the common cases.
-      const friendly = /email not confirmed/i.test(error.message)
-        ? 'Almost there — tap the verification link we emailed you, then sign in.'
-        : /invalid login credentials/i.test(error.message)
-          ? 'Wrong email or password. No password yet? Use "Forgot your password?" below.'
-          : error.message;
-      setStatus({ kind: 'error', message: friendly });
+      // Account-existence hints are an accepted UX tradeoff (signup already
+      // says when an email is taken). What we never do is surface a raw
+      // Supabase message — including the fallback branch, which is how
+      // "Load failed" reached users before the 2026-08-06 audit.
+      setStatus({ kind: 'error', message: authErrorMessage(error, 'signin') });
       return;
     }
     // Full navigation (not router.push) so every useAuth consumer boots
@@ -228,7 +210,37 @@ export default function AuthPage() {
               role="alert"
               className="bg-surface border border-border rounded-2xl p-4 mb-6 text-center"
             >
-              {callbackError === 'expired-link' ? (
+              {callbackError === 'pkce-mismatch' ? (
+                <>
+                  {/*
+                    The link is FINE — it was opened somewhere other than
+                    where it was requested (TestFlight WebView → Safari, or
+                    phone → laptop). Telling these users the link "expired"
+                    sent them to request another one, which failed the same
+                    way; the resend button here works because finishing in
+                    THIS window satisfies the same-browser requirement.
+                  */}
+                  <p className="text-sm mb-1">
+                    Finish on the same device and browser you started from.
+                  </p>
+                  <p className="text-muted text-xs mb-1 leading-relaxed">
+                    For your security, that link only completes where it was
+                    requested. Ask for a fresh one here and it will work in
+                    this window.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCallbackError(null);
+                      setStatus({ kind: 'idle' });
+                      setView('forgot');
+                    }}
+                    className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                  >
+                    Send a new link
+                  </button>
+                </>
+              ) : callbackError === 'expired-link' ? (
                 <>
                   <p className="text-sm mb-1">
                     That link has expired or was already used.

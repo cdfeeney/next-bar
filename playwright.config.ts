@@ -1,9 +1,48 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 // Single source for the fence address — a split-coverage edit (browser fenced,
 // server not) is exactly the gap the fence exists to close. The proxy's own
 // default port in e2e/tools/fence-proxy.mjs must match.
 const FENCE_PROXY = 'http://127.0.0.1:39555';
+
+/**
+ * Stub Supabase credentials for worktrees with no `.env.local`.
+ *
+ * The signed-OUT auth specs (auth-page, auth-cross-context, and the
+ * app-shell-smoke /settings case) stub `**​/auth/v1/**` at the route layer,
+ * which only works if a browser client was constructed at all —
+ * `getBrowserSupabase()` returns null when the two NEXT_PUBLIC vars are
+ * missing, and every form then renders "Supabase env vars are missing"
+ * instead of the state under test. Without this, those specs cannot pass in
+ * a fresh git worktree, which is where most of this repo's work happens.
+ *
+ * Signed-IN specs are unaffected: `e2e/helpers/fakeAuth.ts` and its inline
+ * twins read `.env.local` FROM DISK, not from process.env, and already
+ * `test.skip()` when it is absent.
+ *
+ * FALLBACK ONLY — deliberately not applied when `.env.local` exists, so a
+ * developer whose fakeAuth specs derive a project ref from that file keeps
+ * the dev server and the cookie stubs agreed on one host.
+ *
+ * The host is unresolvable by construction and every auth call is
+ * intercepted, so no spec can reach a real project. The key is a
+ * syntactically valid but meaningless JWT — it is never verified by anything,
+ * because nothing on the other end exists.
+ */
+const HAS_ENV_LOCAL = existsSync(path.join(__dirname, '.env.local'));
+
+const STUB_SUPABASE_ENV: Record<string, string> = HAS_ENV_LOCAL
+  ? {}
+  : {
+      NEXT_PUBLIC_SUPABASE_URL: 'https://e2e-stub-project.supabase.co',
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: [
+        Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url'),
+        Buffer.from('{"role":"anon","ref":"e2e-stub-project"}').toString('base64url'),
+        'e2e-stub-signature-not-a-credential',
+      ].join('.'),
+    };
 
 export default defineConfig({
   testDir: './e2e',
@@ -167,6 +206,8 @@ export default defineConfig({
       no_proxy: 'localhost,127.0.0.1',
       NODE_USE_ENV_PROXY: '1',
       NEXT_TELEMETRY_DISABLED: '1',
+      // Empty object when .env.local exists — see STUB_SUPABASE_ENV above.
+      ...STUB_SUPABASE_ENV,
     },
   },
 });

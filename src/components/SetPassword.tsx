@@ -16,6 +16,7 @@
 
 import { useState } from 'react';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { authErrorMessage } from '@/lib/authErrors';
 
 // Matches the /auth client check and Supabase's server default.
 const MIN_PASSWORD_LENGTH = 6;
@@ -48,10 +49,12 @@ export default function SetPassword(): JSX.Element {
     setStatus({ kind: 'saving' });
     const { error } = await supabase.auth.updateUser({ password });
     if (error) {
-      const friendly = /same.*password|different from the old/i.test(error.message)
-        ? 'That is already your password.'
-        : error.message;
-      setStatus({ kind: 'error', message: friendly });
+      // This is the step that runs AFTER a recovery link lands, so a
+      // transport failure here reads as "the reset is broken". The shared
+      // classifier keeps the same-password distinction and gives every
+      // other failure app-owned copy — never `error.message`, which is how
+      // "Load failed" reached users before the 2026-08-06 audit.
+      setStatus({ kind: 'error', message: authErrorMessage(error, 'update') });
       return;
     }
     setPassword('');

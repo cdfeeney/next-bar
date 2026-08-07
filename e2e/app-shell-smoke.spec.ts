@@ -155,4 +155,14 @@ test.describe('App-shell smoke', () => {
     await expect(page.getByRole('button', { name: /forgot your password/i })).toBeVisible();
     await expectNoConsoleErrors(page, '/auth');
   });
+
+  test('/auth/confirm redirects to /auth when the link is unusable', async ({ page }) => {
+    // A route handler, so "renders" means "redirects somewhere sane". Only
+    // the pre-client validation path is visited — it returns before a
+    // Supabase client exists, so this smoke test contacts no project.
+    await page.goto('/auth/confirm');
+    await expect(page).toHaveURL(/\/auth(\?|$)/);
+    await expect(page.getByRole('heading', { name: /Sign in to Next Bar/i })).toBeVisible();
+    await expectNoConsoleErrors(page, '/auth/confirm');
+  });
 });
