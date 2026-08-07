@@ -396,6 +396,68 @@ migration, Production deployment, or TestFlight modification is authorized by th
 4. Resolution of the paired web candidate (§2).
 5. Answers to every unknown in §9.
 
+## 14b. Claim ledger — read this instead of trusting the prose
+
+Five review rounds each found a real defect in this document, and **rounds 2–5 each found a defect
+introduced or missed by the previous round's fix.** One four-line claim about `SECURITY DEFINER`
+semantics produced four mutually incompatible causal models from four expert reviewers. That is not a
+document converging on truth; it is subject matter that resists reliable modelling by inspection.
+
+So do not judge this document by whether the latest round found nothing. Judge it by the table below.
+**Trustworthiness is a property of these warrant types, not of the prose.**
+
+| # | Claim | Warrant type | Falsifier |
+|---|---|---|---|
+| 1 | No migration deletes/truncates/drops `auth.users` | `derived-from-explicit-DDL` (text scan of 5 files) | A function/trigger body that deletes; not audited (§4.1) |
+| 2 | 0034 breaks no application path | `derived-from-explicit-DDL` + repo enumeration | An untraced writer or a definer→invoker flip (§5) |
+| 3 | Public-list **read** path is pre-existing | `derived-from-explicit-DDL` (0015 anon EXECUTE) | — solid |
+| 4 | `shares_list_publicly` had no reachable writer before 0034 | ~~`author-asserted`~~ **FALSIFIED** | Column grants restrict UPDATE, not INSERT; default `grant all` supplied INSERT |
+| 5 | Expect zero currently-`true` rows | **`assumed`** | `select count(*) from profiles where shares_list_publicly` — **run it** |
+| 6 | Production's current grants match the assumed baseline | **`assumed`, never stated until now** | `information_schema.role_table_grants` — **run it** |
+| 7 | Production's applied migration set is 0000–0032 | **`assumed`** | Query the ledger table |
+| 8 | Restore capability exists | **`assumed`, explicitly UNVERIFIED** | Restore a backup into a scratch project |
+| 9 | 0042 is additive | `derived-from-explicit-DDL` | — solid |
+| 10 | Revoke/re-grant is atomic | `verified-in-repo` (`apply-migrations.ts:281/320/322`) | — solid |
+
+**Claims 5–8 are assumptions, not findings.** Four of the ten load-bearing claims cannot be settled
+by any amount of further reading.
+
+### Three classes of in-repo assertion this analysis should never have cited as evidence
+
+Claim 4 failed because a **migration comment written by the migration's own author** was promoted
+from *intent* ("the author believed X") to *state* ("X is true"). Forbidden as evidence going forward:
+
+1. **Assertions by the artifact under review about its own effects** — migration comments, commit
+   messages, PR text. Quote them for intent; never for state.
+2. **Universal negatives** — "could only ever be empty" is a claim over all possible write paths and
+   all history. No comment can carry that. It needs an enumeration or a query.
+3. **Claims resting on external platform defaults** — "Supabase's default `grant all`" was the
+   actually-load-bearing fact here, and it lives outside the DDL anyone reviewed. Pin the version, or
+   make the default explicit in-repo so it is diffable.
+
+### The structural fix this exercise points at
+
+The safety argument rests on three mechanisms (table grants, column grants, RLS) × four roles
+(`anon`, `authenticated`, `service_role`, function owner) × two security contexts (definer/invoker,
+including nested), accumulated over ~40 migration files, where the authoritative statement of current
+state is "whatever the DDL produced". No one computes that reliably — four experts and one line is
+the proof.
+
+**Highest-leverage change: make effective privileges a computed, versioned artifact.** A CI step that
+applies all migrations to a scratch Postgres and commits the *derived* state — `role_table_grants`,
+`column_privileges`, effective RLS policies, each function's security context — or better, a
+policy-as-code suite asserting things like "`anon` cannot read column X by any path". Future
+migrations are then reviewed as a **diff of effective state**, not as prose reasoning over
+accumulated DDL. That converts claims 5–8 from assumptions into CI output, and makes all three
+forbidden evidence classes checkable by construction.
+
+**The cheapest oracle available today was never used:** apply this packet to a throwaway database and
+observe. Five review rounds happened instead of one experiment. For this packet, the honest posture
+is that the safety argument is **unverifiable by the means used**, and the irreversible step should
+wait for the empirical check rather than another round of reading.
+
+*(§14b synthesised from the Kimi K3 lane, 2026-08-07.)*
+
 ## 15. Provenance of this analysis
 
 | Check | Result |
