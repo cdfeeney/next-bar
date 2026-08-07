@@ -63,6 +63,14 @@ type ResultCardProps = {
  * it can NEVER reference /bar-photos/ — no owned-photo data is passed into
  * this card, so the glyph is the only permitted degradation.
  */
+/** The one Google Maps destination for a bar. Shared so the fallback's
+ *  "Open in Maps" and the non-google-live "Maps →" can never drift apart. */
+function mapsSearchHref(bar: Bar): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    `${bar.name} ${bar.address}`,
+  )}`;
+}
+
 function CardMediaFallback({ bar }: { bar: Bar }): JSX.Element {
   const visual = barVisual(bar);
   return (
@@ -88,16 +96,36 @@ function CardMediaFallback({ bar }: { bar: Bar }): JSX.Element {
         aria-hidden="true"
         className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/85 via-black/40 to-transparent"
       />
-      <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pointer-events-none flex flex-col gap-0.5">
-        {/* Name only — the rank lives in the meta line below, which renders
-            in BOTH the loaded and fallback states. Repeating it here showed
-            "1." twice on the first screenshot of this layout. */}
-        <h3 className="font-display text-lg leading-snug text-white drop-shadow-sm">
-          {bar.name}
-        </h3>
-        <p className="text-[11px] uppercase tracking-wider text-white/85">
-          {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
-        </p>
+      <div className="absolute inset-x-0 bottom-0 px-4 pb-3 flex items-end justify-between gap-3">
+        <div className="pointer-events-none min-w-0 flex flex-col gap-0.5">
+          {/* Name only — the rank lives in the meta line below, which renders
+              in BOTH the loaded and fallback states. Repeating it here showed
+              "1." twice on the first screenshot of this layout. */}
+          <h3 className="font-display text-lg leading-snug text-white drop-shadow-sm">
+            {bar.name}
+          </h3>
+          <p className="text-[11px] uppercase tracking-wider text-white/85">
+            {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
+          </p>
+        </div>
+        {/* THE card's only Maps action in this state.
+         *
+         * google-live suppresses our Maps link because the widget supplies
+         * Google's own — but when the widget fails the widget is GONE, and
+         * the card was left with no Maps action at all (verified blocker;
+         * the previous test asserted zero and blessed it). This lives
+         * inside the fallback rather than behind a status callback, so it
+         * is present exactly when the fallback is and absent whenever the
+         * widget loaded. */}
+        <a
+          href={mapsSearchHref(bar)}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Open ${bar.name} in Google Maps`}
+          className="shrink-0 min-h-[44px] inline-flex items-center text-xs font-display text-white drop-shadow-sm touch-manipulation hover:underline underline-offset-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Open in Maps
+        </a>
       </div>
     </div>
   );
@@ -290,9 +318,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
               Google's, which we must never do. */}
           {!isGoogleLive ? (
             <a
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                `${bar.name} ${bar.address}`,
-              )}`}
+              href={mapsSearchHref(bar)}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4 shrink-0"

@@ -105,9 +105,12 @@ test.describe('google-live card layout', () => {
     // No legacy photo requests may occur on this path.
     expect(await page.locator('img[src*="/bar-photos/"]').count()).toBe(0);
 
+    // Scoped to ONE card: the surface renders five, so a document-wide
+    // count says nothing about what a single card carries.
     const dims = await page.evaluate(() => {
       const a = document.querySelector('article');
-      const g = document.querySelector('[data-testid="google-fallback-glyph"]');
+      if (!a) return null;
+      const g = a.querySelector('[data-testid="google-fallback-glyph"]');
       const r = (el: Element | null) => {
         if (!el) return null;
         const b = el.getBoundingClientRect();
@@ -116,20 +119,26 @@ test.describe('google-live card layout', () => {
       return {
         article: r(a),
         glyph: r(g),
-        tiles: document.querySelectorAll('[data-testid="bar-visual"]').length,
-        mapsActions: [...document.querySelectorAll('a')].filter((x) =>
-          /Maps →/.test(x.textContent || ''),
-        ).length,
+        tiles: a.querySelectorAll('[data-testid="bar-visual"]').length,
+        // Every app-rendered Google Maps link on THIS card, by label.
+        appMapsLinks: [...a.querySelectorAll('a[href*="google.com/maps"]')]
+          .map((x) => (x.textContent || '').trim()),
+        cardsOnPage: document.querySelectorAll('article').length,
       };
     });
+    expect(dims).not.toBeNull();
     console.log(`MEASURE fallback ${JSON.stringify(dims)}`);
 
     // The reserved 21/9 strip survives the failure…
-    expect(dims.glyph).not.toBeNull();
-    expect(Math.abs(dims.glyph!.w / dims.glyph!.h - 21 / 9)).toBeLessThan(0.2);
-    // …and the google-live card carries no glyph tile and no app Maps action.
-    expect(dims.tiles).toBe(0);
-    expect(dims.mapsActions).toBe(0);
+    expect(dims!.glyph).not.toBeNull();
+    expect(Math.abs(dims!.glyph!.w / dims!.glyph!.h - 21 / 9)).toBeLessThan(0.2);
+    // …and the google-live card carries no glyph tile.
+    expect(dims!.tiles).toBe(0);
+    // EXACTLY ONE Maps action in the blocked state, not zero: the widget
+    // that would have supplied Google's action is gone, so the fallback
+    // provides the card's only one. Asserting zero here previously blessed
+    // a card with no way to open the bar in Maps at all.
+    expect(dims!.appMapsLinks).toEqual(['Open in Maps']);
 
     // Written to a stable, gitignored path so a reviewer can open them
     // without unpacking the HTML report.

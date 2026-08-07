@@ -18,6 +18,14 @@ let captured: {
   onBillableRequest?: (placeId: string) => void;
 } | null = null;
 let widgetMounts = 0;
+/**
+ * Which state the widget is in for a given test. 'loaded' stands in for a
+ * rendered Google widget; 'failed' renders the caller's fallback exactly as
+ * GooglePlacePhoto does when it gives up — which is the state that hid a
+ * real defect (a card with no Maps action at all) behind an assertion that
+ * only ever exercised the loaded path.
+ */
+let widgetState: 'loaded' | 'failed' = 'loaded';
 
 vi.mock('@/components/GooglePlacePhotoLazy', () => ({
   default: (props: {
@@ -31,6 +39,7 @@ vi.mock('@/components/GooglePlacePhotoLazy', () => ({
     useEffect(() => {
       widgetMounts += 1;
     }, []);
+    if (widgetState === 'failed') return <>{props.fallback}</>;
     return <div data-testid="google-place-photo-mock" />;
   },
 }));
@@ -48,6 +57,7 @@ import ResultCard from './ResultCard';
 const BAR: Bar = {
   id: 'attaboy',
   name: 'Attaboy',
+  address: '134 Eldridge St',
   lat: 40.719,
   lng: -73.99,
   tags: ['classy'],
@@ -75,9 +85,12 @@ function renderCard(bar: Bar = BAR): ReturnType<typeof render> {
 afterEach(() => {
   captured = null;
   widgetMounts = 0;
+  widgetState = 'loaded';
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
+
+const MAPS_LINKS = 'a[href*="google.com/maps"]';
 
 describe('google-live wiring', () => {
   test('the bar googlePlaceId and the result-card surface reach GooglePlacePhoto', () => {
@@ -193,16 +206,60 @@ describe('google-live wiring', () => {
     expect(screen.getByText('1.')).toBeTruthy();
   });
 
-  test('exactly ONE Maps action: ours is removed so the widget’s is the only one', () => {
+  test('LOADED widget: zero app-provided Maps links — Google’s action is the only one', () => {
+    widgetState = 'loaded';
     vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
     const { container } = renderCard();
+    expect(screen.getByTestId('google-place-photo-mock')).toBeTruthy();
     expect(screen.queryByText(/Maps →/)).toBeNull();
-    // No app-rendered Google links at all on a google-live card: the
-    // attribution credit link belongs to the legacy tier, and the Maps
-    // action now comes from the compact widget.
-    expect(
-      container.querySelectorAll('a[href*="google.com/maps"]').length,
-    ).toBe(0);
+    expect(screen.queryByText(/Open in Maps/)).toBeNull();
+    expect(container.querySelectorAll(MAPS_LINKS).length).toBe(0);
+  });
+
+  test('FAILED widget: exactly ONE Maps link, labelled “Open in Maps”', () => {
+    // The verified blocker: with the widget gone and our link suppressed,
+    // the card had zero Maps actions and the old test asserted zero.
+    widgetState = 'failed';
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    const { container } = renderCard();
+    expect(screen.queryByTestId('google-place-photo-mock')).toBeNull();
+    const links = container.querySelectorAll(MAPS_LINKS);
+    expect(links.length).toBe(1);
+    expect(links[0].textContent).toContain('Open in Maps');
+  });
+
+  test('FAILED widget: the Maps link points at this bar’s name and address', () => {
+    widgetState = 'failed';
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    const { container } = renderCard();
+    const href = container.querySelector(MAPS_LINKS)?.getAttribute('href') ?? '';
+    expect(href).toContain('google.com/maps/search/?api=1&query=');
+    expect(decodeURIComponent(href)).toContain('Attaboy');
+    expect(decodeURIComponent(href)).toContain('134 Eldridge');
+  });
+
+  test('FAILED widget: the Maps link is accessible with a 44px touch target', () => {
+    widgetState = 'failed';
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    const { container } = renderCard();
+    const link = container.querySelector(MAPS_LINKS) as HTMLElement;
+    expect(link.getAttribute('aria-label')).toBe('Open Attaboy in Google Maps');
+    expect(link.className).toContain('min-h-[44px]');
+    expect(link.getAttribute('rel')).toContain('noopener');
+  });
+
+  test('FAILED widget keeps the rest of the fallback contract intact', () => {
+    widgetState = 'failed';
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    // Legacy eligibility ON: the fallback must still never reach for one.
+    vi.stubEnv('NEXT_PUBLIC_LEGACY_PHOTOS', '1');
+    const { container } = renderCard();
+    const glyph = container.querySelector('[data-testid="google-fallback-glyph"]');
+    expect(glyph).not.toBeNull();
+    expect(glyph?.className).toContain('aspect-[21/9]'); // geometry held
+    expect(container.textContent).toContain('Attaboy'); // identity preserved
+    expect(screen.queryByTestId('bar-visual')).toBeNull(); // no tile duplication
+    expect(container.querySelector('img[src*="/bar-photos/"]')).toBeNull();
   });
 
   test('the app’s own content stays reachable: one Hours entry to the lightbox', () => {
