@@ -70,6 +70,21 @@
       "note": "Sets ANY user's password via the Supabase admin API and confirms their email, bypassing the email flow entirely. That is account takeover as a supported operator tool."
     },
     {
+      "glob": "scripts/rpc-smoke.mts",
+      "tier": "T0",
+      "note": "Executes `delete from auth.users where id = $1` against DATABASE_URL (line 136). It is meant to clean up a user it just created, but the id is computed at runtime and DATABASE_URL is whatever the environment points at — a regression in that id, or a misaimed env, deletes a REAL user and cascades through every table they own. Same blast radius as src/app/api/account/delete/**, which is already T0. Found 2026-08-07 by the Codex review lane; the ported map classified it T1 with no escalation."
+    },
+    {
+      "glob": "scripts/nights-smoke.mts",
+      "tier": "T0",
+      "note": "Second script executing `delete from auth.users where id = $1` against DATABASE_URL (line 151). Same reasoning as rpc-smoke.mts. Two independent scripts holding an unguarded auth.users delete is exactly the 'glob the code that PERFORMS the destructive act' rule this file already states."
+    },
+    {
+      "glob": "scripts/photos-to-webp.mjs",
+      "tier": "T0",
+      "note": "`fs.unlinkSync(src)` in a loop over produced files (line 87) — deletes the ORIGINAL JPEGs after conversion. This is the surviving instance of the photo-deletion surface that prune-orphan-photos.mjs and scripts/lib/photoFiles.mjs used to cover; those two do not exist on this base, but this one does and was unprotected. An over-broad `produced` set destroys source media with no undo."
+    },
+    {
       "glob": "scripts/refresh-places.mjs",
       "tier": "T1",
       "note": "Calls billable Google Places APIs across the catalog. Proposed as T0 and DEMOTED to T1 on adjudication: T0 in this map means irreversible destruction or takeover with no undo. A runaway bill is bounded, self-limiting (quotas, budget alerts) and recoverable; a dropped table with an unverified restore is not. Putting cost in the same tier devalues the label for the changes that can actually end the project. FOLLOW-UP, not fixed here: the script issues API requests BEFORE the --apply guard, so a dry run still spends. That is a one-line correctness bug and wants a MAX_CALLS cap — fixing it is the right control, not tier weight."

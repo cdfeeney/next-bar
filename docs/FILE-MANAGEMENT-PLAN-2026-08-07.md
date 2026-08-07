@@ -294,7 +294,22 @@ $dst='D:\archive\nb-qa1-2026-08-07.zip'
 
 # CREATE — stage with robocopy (preserves structure, excludes regenerable trees),
 #          then compress the DIRECTORY so paths are retained.
-robocopy $src $stage /E /XD node_modules .next test-results playwright-report .turbo /R:0 /W:0
+$excl = @('node_modules','.next','test-results','playwright-report','.turbo')
+robocopy $src $stage /E /XD @excl /R:0 /W:0 | Out-Null
+
+# robocopy exit codes: 0-7 = success (bit 3+ = failures). 8 or above MUST abort.
+# Without this, a half-staged tree still compresses cleanly and passes every check below.
+if ($LASTEXITCODE -ge 8) { throw "robocopy FAILED with $LASTEXITCODE — do not archive, do not delete" }
+
+# Source-completeness baseline, computed with the SAME exclusions. Entry-count
+# equality against the stage proves only that zip==stage; it says nothing about
+# whether the stage captured the source. This is the check that does.
+$srcCount = (Get-ChildItem $src -Recurse -File -Force |
+  Where-Object { $p = $_.FullName.Substring($src.Length)
+                 -not ($excl | Where-Object { $p -match "\\$([regex]::Escape($_))\\" }) }).Count
+$stageCount = (Get-ChildItem $stage -Recurse -File -Force).Count
+if ($srcCount -ne $stageCount) { throw "STAGING INCOMPLETE: source $srcCount vs stage $stageCount" }
+
 Compress-Archive -Path $stage -DestinationPath $dst -CompressionLevel Optimal
 
 # VALIDATE — archive opens, preserves paths, and carries the files that exist nowhere else.
@@ -314,8 +329,19 @@ $z.Dispose()
 (Get-ChildItem $stage -Recurse -File -Force).Count
 ```
 
-The archive is valid only when **flattened entries = 0**, **duplicate paths = 0**, the entry count
-matches the staged file count, and both irreplaceable files appear with a full path.
+The archive is valid only when **all five** hold: robocopy exited `< 8`; **source file count equals
+staged file count**; **flattened entries = 0**; **duplicate paths = 0**; the zip entry count matches
+the staged file count; and both irreplaceable files appear with a full path.
+
+> **Why the source-count check is the load-bearing one.** `Compress-Archive -Path <dir>` roots every
+> entry under the staged directory's own name, so paths *are* retained — but zip-vs-stage equality
+> only proves the compression step was faithful. If robocopy silently staged a partial tree, the zip
+> matches the stage perfectly and every other assertion passes while the archive is missing files.
+> Checking robocopy's exit code and the source count is what closes that hole. (Raised by the Codex
+> review lane, 2026-08-07; the first version of this procedure asserted only zip-vs-stage.)
+
+**Do not delete a worktree unless all five checks pass.** Any throw above means stop and investigate
+— never proceed to removal on a failed or unverified archive.
 
 Recovery of a removed worktree needs **no archive at all** for committed work, because every branch
 survives:
