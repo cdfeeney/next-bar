@@ -183,7 +183,10 @@ if (options['ack-cell'].length > 0) {
   // Existing-id is not evidence of anything. A waiver may only touch work the
   // sweep actually tried and cannot finish; anything else would let a typo
   // report COMPLETE over a geography nobody searched.
-  const refusals = options['ack-cell']
+  // Deduplicate first: every id is checked against the same pre-write state, so
+  // a repeated id would pass twice and append two waivers for one cell.
+  const ackCells = [...new Set(options['ack-cell'])];
+  const refusals = ackCells
     .map((id) => ({ id, ...ackEligibility(state, id) }))
     .filter((entry) => !entry.eligible);
   if (refusals.length > 0) {
@@ -192,7 +195,7 @@ if (options['ack-cell'].length > 0) {
     process.exit(1);
   }
   const writer = openManifest(options.manifest);
-  for (const cellId of options['ack-cell']) {
+  for (const cellId of ackCells) {
     writer.ackTerminal(cellId, options['ack-reason'], 'operator');
     writer.done(cellId, 'ack_terminal', { reason: options['ack-reason'] });
     console.log(`acknowledged ${cellId}: ${options['ack-reason']}`);

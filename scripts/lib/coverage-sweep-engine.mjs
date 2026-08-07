@@ -240,19 +240,37 @@ async function processCell(cell, ctx) {
     return 'ack_terminal';
   }
 
-  // A cell recorded as capped but never subdivided still OWES that work,
-  // whatever its DONE record claims. This precedes the completing-status fast
-  // path because a manifest can carry `capped` alongside a stale 'unsaturated'
-  // DONE, and returning early there left the run permanently unable to finish.
-  //
-  // It requires a recorded page: a crash between the capped ATTEMPT and its
-  // RESULT leaves `capped` true with nothing to show for it, and subdividing
-  // from that would silently skip the parent's own page — the very results the
-  // subdivision is supposed to be reaching past. With no page on record the
-  // cell falls through and is queried again.
-  if (known?.capped && !known.children?.length && known.places?.length) {
-    ctx.onPlaces(known.places, cell);
-    return subdivideFrom(cell, ctx);
+  // What this cell still OWES, decided from the records rather than from a DONE
+  // status. A DONE can be stale: `subdivideFrom` appends SUBDIVIDE without
+  // clearing an earlier 'unsaturated', and sticky saturation can surface a cap
+  // recorded after one. Every outstanding case is settled here, ahead of the
+  // completing-status fast path, so an ordering accident cannot strand work.
+  if (known) {
+    const unfinishedChildren =
+      known.children?.length > 0 &&
+      known.children.some((childId) => {
+        const child = ctx.state?.cells?.get(childId);
+        return !child || !COMPLETING_STATUSES.includes(child.terminalStatus);
+      });
+    if (unfinishedChildren) {
+      // Only this cell's own page: resumeChildren recurses through processCell,
+      // so each child replays its own subtree.
+      if (known.places?.length) ctx.onPlaces(known.places, cell);
+      return resumeChildren(cell, known, ctx);
+    }
+    // Capped and never subdivided. If the capped attempt's own page reached the
+    // disk we can subdivide from it; otherwise there is nothing to subdivide
+    // from and the cell must be asked again. "Has any places" cannot answer
+    // this — an earlier attempt's page would say yes, and a legitimately empty
+    // page would say no — so the record order decides.
+    if (known.capped && !known.children?.length) {
+      if (known.lastOkHasResult) {
+        if (known.places?.length) ctx.onPlaces(known.places, cell);
+        return subdivideFrom(cell, ctx);
+      }
+      // Fall through to a fresh query below, past the completing-status path.
+      return queryCell(cell, ctx, known);
+    }
   }
 
   if (known && COMPLETING_STATUSES.includes(known.terminalStatus)) {
@@ -265,18 +283,11 @@ async function processCell(cell, ctx) {
     return known.terminalStatus;
   }
 
-  // A cell whose SUBDIVIDE is already recorded must NOT be re-queried. Doing so
-  // re-bills a call we already paid for, and — because the re-query can come
-  // back under the cap — can mark the parent 'unsaturated' and strand its
-  // children forever: runSweep only iterates depth-0 cells, so nothing would
-  // ever visit them again and the run could never converge.
-  if (known?.children?.length && known.terminalStatus === null) {
-    // Only this cell's own page here: resumeChildren recurses through
-    // processCell, so each child replays its own subtree.
-    if (known.places?.length) ctx.onPlaces(known.places, cell);
-    return resumeChildren(cell, known, ctx);
-  }
+  return queryCell(cell, ctx, known);
+}
 
+/** Ask the API about this cell, record the outcome, and subdivide if censored. */
+async function queryCell(cell, ctx, known) {
   const attemptN = nextAttempt(ctx, cell.id, known);
 
   if (ctx.callsUsed >= ctx.maxCalls) {
@@ -338,7 +349,9 @@ async function processCell(cell, ctx) {
         replayRecordedOnce(known, cell, ctx, []);
         return null;
       }
-      return processCell(cell, ctx);
+      // Retry the QUERY, not the whole guard chain: nothing about the cell's
+      // recorded state changed, only the type list we are willing to ask for.
+      return queryCell(cell, ctx, known);
     }
 
     ctx.manifest.attempt({
@@ -356,14 +369,20 @@ async function processCell(cell, ctx) {
   }
 
   const places = response?.places ?? [];
-  const capped = isSaturated(places.length, ctx.maxResultCount);
+  // Record what THIS response actually was...
+  const cappedNow = isSaturated(places.length, ctx.maxResultCount);
   ctx.manifest.attempt({
     cellId: cell.id,
     attemptN,
     ok: true,
     count: places.length,
-    capped,
+    capped: cappedNow,
   });
+  // ...but decide from the sticky fact. A cell known to have been censored
+  // earlier still owes a subdivision even if this page came back short;
+  // otherwise the completeness check flags it and the next resume has to do the
+  // work this one should have.
+  const capped = cappedNow || Boolean(known?.capped);
   ctx.manifest.result(cell.id, places);
   ctx.onPlaces(places, cell);
   // A cell whose RESULT was flushed but whose DONE was interrupted was just

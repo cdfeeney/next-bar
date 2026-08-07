@@ -388,7 +388,6 @@ describe('resume', () => {
     writer.plan({ configHash: configHash({ t: 'stale' }), cells: plan });
     writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: CAP, capped: true });
     writer.result(plan[0].id, [{ id: 'recorded' }]);
-    writer.attempt({ cellId: plan[0].id, attemptN: 2, ok: true, count: 14, capped: false });
     writer.done(plan[0].id, 'unsaturated');
     writer.close();
     expect(completeness(loadManifest(file)).unclearedCap).toContain(plan[0].id);
@@ -407,10 +406,45 @@ describe('resume', () => {
       },
     });
     resumeWriter.close();
-    expect(called.length).toBe(4); // the four children, not the parent again
+    // The capped page IS on record, so the parent is not re-queried — only its
+    // four children are.
+    expect(called).toHaveLength(4);
+    expect(called).not.toContain(plan[0].id);
     const report = completeness(loadManifest(file));
     expect(report.complete).toBe(true);
     expect(report.unclearedCap).toEqual([]);
+  });
+
+  it('re-queries when the LATEST successful attempt lost its page', async () => {
+    // "Does the cell have any places" cannot answer this: an earlier attempt's
+    // page says yes while the newest answer is unknown, and a legitimately
+    // empty page says no. Only the record order decides.
+    const plan = [cells()[0]];
+    const file = path.join(dir, 'stale-page.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'stalepage' }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: 1, capped: false });
+    writer.result(plan[0].id, [{ id: 'old' }]);
+    writer.done(plan[0].id, 'unsaturated');
+    writer.attempt({ cellId: plan[0].id, attemptN: 2, ok: true, count: CAP, capped: true });
+    writer.close(); // capped page never persisted
+
+    const called: string[] = [];
+    const resumeWriter = openManifest(file);
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async (cell: any) => {
+        called.push(cell.id);
+        return { places: [] };
+      },
+    });
+    resumeWriter.close();
+    expect(called[0]).toBe(plan[0].id); // asked again rather than trusting a stale page
+    expect(completeness(loadManifest(file)).complete).toBe(true);
   });
 
   it('preserves recorded places when the run is interrupted', async () => {

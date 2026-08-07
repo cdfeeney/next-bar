@@ -218,6 +218,7 @@ export function replay({ records, tornTail = false }) {
       attempts: [],
       lastOk: null,
       capped: false,
+      lastOkHasResult: false,
       placeIds: [],
       places: [],
       children: [],
@@ -240,6 +241,12 @@ export function replay({ records, tornTail = false }) {
         cell.attempts.push(record);
         if (record.ok) {
           cell.lastOk = record;
+          // The page for THIS attempt has not been seen yet. "Does the cell
+          // have any places" is not a usable proxy: a page from an earlier
+          // attempt would answer yes, and a legitimate empty page would answer
+          // no. Only the record order can say whether this attempt's result
+          // reached the disk.
+          cell.lastOkHasResult = false;
           // Saturation is STICKY. Once a response for this cell came back at
           // the cap we know the cell is censored, and no later, smaller answer
           // makes that untrue — Google returns a different slice each time.
@@ -257,6 +264,7 @@ export function replay({ records, tornTail = false }) {
         const byId = new Map(cell.places.map((place) => [place.id, place]));
         for (const place of record.places ?? []) byId.set(place.id, place);
         cell.places = [...byId.values()];
+        if (cell.lastOk) cell.lastOkHasResult = true;
         break;
       }
       case 'SUBDIVIDE': {
@@ -463,7 +471,20 @@ export function ackEligibility(state, cellId) {
   if (last.ok) {
     return { eligible: false, reason: 'its most recent attempt succeeded, so it is not stuck' };
   }
-  return { eligible: true, reason: `last attempt failed (${last.errorClass ?? 'unknown'})` };
+  // The transient classes are the ones a resume is FOR — quota windows reopen,
+  // networks recover, budgets get raised. Waiving one permanently discards
+  // geography that a retry would have covered, and `budget_exhausted` is
+  // written before any call is made, so allowing it would also defeat the
+  // never-attempted guard above.
+  if (BLOCKING_ERROR_CLASSES.includes(last.errorClass)) {
+    return {
+      eligible: false,
+      reason:
+        `its last failure was transient (${last.errorClass}) — resume handles that; ` +
+        'raise --max-calls or wait for the quota window rather than waiving real geography',
+    };
+  }
+  return { eligible: true, reason: `last attempt failed permanently (${last.errorClass ?? 'unknown'})` };
 }
 
 /** Refuse to resume onto a manifest planned under different configuration. */

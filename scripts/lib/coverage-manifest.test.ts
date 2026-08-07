@@ -378,13 +378,30 @@ describe('acknowledgement eligibility', () => {
     expect(result.reason).toMatch(/subdivision is unfinished/);
   });
 
-  it('allows a cell whose latest attempt failed', () => {
+  it('allows a cell whose latest attempt failed permanently', () => {
     const state = build([
       plan,
       { type: 'ATTEMPT', cellId: 'x', attemptN: 1, ok: false, errorClass: 'http4xx' },
     ]);
     expect(ackEligibility(state, 'x')).toMatchObject({ eligible: true });
   });
+
+  it.each([['quota'], ['http5xx'], ['network'], ['budget_exhausted']])(
+    'refuses a cell whose last failure was transient (%s)',
+    (errorClass) => {
+      // These are exactly what resume is for, and the runbook says so. Waiving
+      // one permanently discards geography a retry would have covered.
+      // budget_exhausted is written BEFORE any call, so allowing it would also
+      // defeat the never-attempted guard.
+      const state = build([
+        plan,
+        { type: 'ATTEMPT', cellId: 'x', attemptN: 1, ok: false, errorClass },
+      ]);
+      const result = ackEligibility(state, 'x');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toMatch(/transient/);
+    },
+  );
 
   it('allows a cell stuck at the saturation floor', () => {
     const state = build([plan, ok('x', 20, true), { type: 'DONE', cellId: 'x', terminalStatus: SATURATED_AT_FLOOR }]);
