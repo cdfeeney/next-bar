@@ -56,6 +56,7 @@ import {
 import {
   assertResumable,
   completeness,
+  MANIFEST_SCHEMA_VERSION,
   configHash,
   loadManifest,
   openManifest,
@@ -403,22 +404,21 @@ async function searchSeedNames(region, places, meter) {
   const bias = regionBias(region.bbox);
   for (const requestedName of seedNames) {
     let best;
-    // --max-calls is documented as a hard stop. It was previously enforced only
-    // inside the engine, so a seeded run could spend an unbounded number of
-    // paid calls after the budget was already gone.
-    if (meter.calls >= MAX_CALLS) {
-      console.error(
-        `call budget ${MAX_CALLS} exhausted before seed "${requestedName}"; ${seedNames.length} seeds were requested`,
-      );
-      meter.seedBudgetStopped = true;
-      return;
-    }
     // Generic names such as "Suite" and "Parlay Cafe" often resolve to a
     // hotel or unrelated business without an explicit bar-intent retry.
     for (const textQuery of [
       `${requestedName} ${region.label}`,
       `${requestedName} bar ${region.label}`,
     ]) {
+      // Gate every CALL, not every seed: each seed issues up to two searches,
+      // so a per-seed check overshoots the documented hard stop.
+      if (meter.calls >= MAX_CALLS) {
+        console.error(
+          `call budget ${MAX_CALLS} exhausted during seed "${requestedName}"; remaining seeds were not searched`,
+        );
+        meter.seedBudgetStopped = true;
+        return;
+      }
       const json = await fetchJson(
         'https://places.googleapis.com/v1/places:searchText',
         {
@@ -641,7 +641,7 @@ try {
 if (!options.resume) {
   manifest.plan({
     configHash: hash,
-    schemaVersion: 1,
+    schemaVersion: MANIFEST_SCHEMA_VERSION,
     maxCalls: MAX_CALLS === Infinity ? null : MAX_CALLS,
     includedTypes: NEARBY_INCLUDED_TYPES,
     textOnlyTypes: Object.keys(TEXT_ONLY_TYPE_COVERAGE),

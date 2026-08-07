@@ -120,6 +120,50 @@ function nextAttempt(ctx, cellId, known) {
 }
 
 /**
+ * Emit every place recorded for a cell AND all of its descendants.
+ *
+ * The candidate file is rebuilt purely from these callbacks, so a resume that
+ * replays only the cell it skipped would silently drop everything subdivision
+ * found underneath it. Duplicate ids across the subtree are harmless — the
+ * caller merges by place id.
+ */
+function replaySubtree(cellId, cell, ctx, seen = new Set()) {
+  if (seen.has(cellId)) return;
+  seen.add(cellId);
+  const state = ctx.state?.cells?.get(cellId);
+  if (!state) return;
+  if (state.places?.length) ctx.onPlaces(state.places, state.cell ?? cell);
+  for (const childId of state.children ?? []) {
+    replaySubtree(childId, state.cell ?? cell, ctx, seen);
+  }
+}
+
+/**
+ * Run the subdivision half of processCell for a cell whose capped result is
+ * already on record, without spending another call on the parent.
+ */
+async function subdivideFrom(cell, ctx) {
+  const children = subdivideCell(cell, ctx.subdivision);
+  if (!children) {
+    ctx.manifest.done(cell.id, SATURATED_AT_FLOOR, {
+      sideMeters: cell.sideMeters,
+      depth: cell.depth,
+      reason: 'minimum cell size reached (resumed from a recorded capped result)',
+    });
+    return SATURATED_AT_FLOOR;
+  }
+  ctx.manifest.subdivide(cell.id, children.map((child) => child.id), children);
+  const outcomes = [];
+  for (const child of children) outcomes.push(await processCell(child, ctx));
+  const terminal = [...COMPLETING_STATUSES, SATURATED_AT_FLOOR];
+  if (outcomes.every((outcome) => terminal.includes(outcome))) {
+    ctx.manifest.done(cell.id, 'cleared', { children: children.length, resumed: true });
+    return 'cleared';
+  }
+  return null;
+}
+
+/**
  * Continue a subdivision that a previous run started, using the child cells
  * recorded in the manifest. The parent's own search already happened; only its
  * unfinished children still owe work.
@@ -155,16 +199,18 @@ async function resumeChildren(cell, known, ctx) {
 async function processCell(cell, ctx) {
   const known = priorState(ctx, cell.id);
   if (known && COMPLETING_STATUSES.includes(known.terminalStatus)) {
-    // Replay this cell's recorded places. Skipping the CALL is the point of
-    // resume; skipping the RESULTS would hand the caller a short candidate
-    // list while the manifest still says the cell was covered.
-    if (known.places?.length) ctx.onPlaces(known.places, cell);
+    // Replay the whole SUBTREE. Skipping the CALL is the point of resume;
+    // skipping the RESULTS hands the caller a short candidate list while the
+    // manifest still says the cell was covered. A 'cleared' cell's venues live
+    // in its children — replaying only its own capped page would drop every
+    // venue that subdivision was run to find.
+    replaySubtree(cell.id, cell, ctx);
     return known.terminalStatus;
   }
   // A cell that already hit the floor stays at the floor; re-querying it costs
   // money and cannot produce a different answer.
   if (known?.terminalStatus === SATURATED_AT_FLOOR) {
-    if (known.places?.length) ctx.onPlaces(known.places, cell);
+    replaySubtree(cell.id, cell, ctx);
     return SATURATED_AT_FLOOR;
   }
 
@@ -174,8 +220,20 @@ async function processCell(cell, ctx) {
   // children forever: runSweep only iterates depth-0 cells, so nothing would
   // ever visit them again and the run could never converge.
   if (known?.children?.length && known.terminalStatus === null) {
+    // Only this cell's own page here: resumeChildren recurses through
+    // processCell, so each child replays its own subtree.
     if (known.places?.length) ctx.onPlaces(known.places, cell);
     return resumeChildren(cell, known, ctx);
+  }
+
+  // A cell already recorded as capped must NOT be re-queried. Google returns a
+  // different slice each time; a smaller second answer would flip `capped` to
+  // false, mark the cell 'unsaturated', and let the run report COMPLETE having
+  // never subdivided a cell it already knew was censored. Subdivide from the
+  // recorded result instead — it is the same work, minus a paid call.
+  if (known?.capped && !known.children?.length && known.terminalStatus === null) {
+    if (known.places?.length) ctx.onPlaces(known.places, cell);
+    return subdivideFrom(cell, ctx);
   }
 
   const attemptN = nextAttempt(ctx, cell.id, known);

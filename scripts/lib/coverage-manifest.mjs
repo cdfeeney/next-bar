@@ -162,15 +162,19 @@ export function openManifest(file) {
  */
 export function openNewManifest(file) {
   const resolved = path.resolve(file);
+  // Any existing content is a refusal, not just a parseable plan. A file whose
+  // single record was torn by a kill has no PLAN to find, and appending to it
+  // would concatenate onto the partial line and leave the manifest permanently
+  // unparsable — after the run had already spent its calls.
   if (fs.existsSync(resolved) && fs.statSync(resolved).size > 0) {
     const existing = replay(parseManifest(fs.readFileSync(resolved, 'utf8')));
-    if (existing.plan) {
-      throw new Error(
-        `${resolved} already contains a run plan (configHash ${existing.plan.configHash}). ` +
-          'Pass --resume to continue it, or choose a new --manifest path. Appending a second ' +
-          'plan would hide the new run from the completeness check.',
-      );
-    }
+    const detail = existing.plan
+      ? `already contains a run plan (configHash ${existing.plan.configHash})`
+      : 'already contains data (possibly a truncated record from a killed run)';
+    throw new Error(
+      `${resolved} ${detail}. Pass --resume to continue it, or choose a new --manifest path. ` +
+        'Appending a second plan would hide the new run from the completeness check.',
+    );
   }
   return new ManifestWriter(resolved);
 }

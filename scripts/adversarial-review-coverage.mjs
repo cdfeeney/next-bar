@@ -152,6 +152,8 @@ function catalogMatches(candidate, catalog) {
         // Carried so the review can tell "same brand, different venue" from
         // "same venue": without it, an exact name match alone forces duplicate.
         placeId: bar.place_id ?? null,
+        // Needed by the Place-ID-reissue check in adversarialReview().
+        address: bar.address ?? '',
         distanceMeters: distance,
         nameSimilarity: reviewNameSimilarity(candidate.name, bar.name),
         nameExact: normalizeName(candidate.name) === normalizeName(bar.name),

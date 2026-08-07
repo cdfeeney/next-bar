@@ -172,6 +172,33 @@ describe('borough-parameterized review', () => {
     expect(review.decision).not.toBe('duplicate');
   });
 
+  it('catches a reissued Place ID here too, matching resolveIdentity', () => {
+    // The reissue rule lived only in resolveIdentity, while THIS is the live
+    // duplicate gate the review driver runs against a freshly fetched catalog.
+    // The two disagreed, so a reissued duplicate was accepted as a new venue.
+    const review = adversarialReview(
+      {
+        name: 'Keg & Lantern',
+        placeId: 'place-new',
+        address: '97 Nassau Ave, Brooklyn, NY',
+        primaryType: 'bar',
+        ratings: 200,
+      },
+      [
+        {
+          name: 'Keg & Lantern',
+          placeId: 'place-old',
+          address: '97 Nassau Avenue, Brooklyn, NY',
+          distanceMeters: 3,
+          nameSimilarity: 1,
+          nameExact: true,
+        },
+      ],
+      { borough: 'brooklyn' },
+    );
+    expect(review.decision).toBe('duplicate');
+  });
+
   it('still calls it a duplicate when the Place IDs actually match', () => {
     expect(
       adversarialReview(

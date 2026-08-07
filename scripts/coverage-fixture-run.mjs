@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  MANIFEST_SCHEMA_VERSION,
   completeness,
   completionReport,
   configHash,
@@ -125,7 +126,7 @@ function newManifest(name) {
   const writer = openManifest(file);
   writer.plan({
     configHash: hash,
-    schemaVersion: 1,
+    schemaVersion: MANIFEST_SCHEMA_VERSION,
     maxCalls: null,
     includedTypes: NEARBY_INCLUDED_TYPES,
     subdivision: SUBDIVISION,

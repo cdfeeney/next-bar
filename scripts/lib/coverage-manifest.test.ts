@@ -232,6 +232,14 @@ describe('a new run may not append onto an existing plan', () => {
     first.close();
 
     expect(() => openNewManifest(file)).toThrow(/already contains a run plan/);
+
+    // A file whose only record was torn by a kill has no PLAN to find. Opening
+    // it would append onto the partial line and leave the manifest permanently
+    // unparsable — after the run had already spent its calls.
+    const torn = path.join(dir, 'torn.jsonl');
+    fs.writeFileSync(torn, '{"type":"PLAN","configHash":"tor');
+    expect(() => openNewManifest(torn)).toThrow(/truncated record/);
+
     // --resume still opens it, which is the supported way to continue.
     const resumed = openManifest(file);
     expect(resumed).toBeTruthy();

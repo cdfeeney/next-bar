@@ -186,6 +186,85 @@ describe('resume', () => {
     expect(resumed.size).toBe(report.summary.uniquePlaceIds);
   });
 
+  it('subdivides a known-capped cell from its record instead of re-querying it', async () => {
+    // Regression: a crash between the RESULT flush and the SUBDIVIDE flush left
+    // a cell recorded as capped with no children. Resume re-queried it; a
+    // smaller second answer flipped capped to false, marked it 'unsaturated',
+    // and the run reported COMPLETE having never subdivided a censored cell.
+    const plan = cells();
+    const target = plan[0];
+    const file = path.join(dir, 'torn.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'torn' }), cells: plan });
+    writer.attempt({ cellId: target.id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(
+      target.id,
+      Array.from({ length: CAP }, (_, index) => ({ id: `orig-${index}` })),
+    );
+    writer.close();
+
+    const resumeWriter = openManifest(file);
+    const emitted = new Set<string>();
+    const queried: string[] = [];
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async (cell: any) => {
+        queried.push(cell.id);
+        return { places: [] };
+      },
+      onPlaces: (places: any[]) => places.forEach((place) => emitted.add(place.id)),
+    });
+    resumeWriter.close();
+
+    expect(queried).not.toContain(target.id);
+    const state = loadManifest(file);
+    expect(state?.cells.get(target.id).children.length).toBe(4);
+    expect(state?.cells.get(target.id).terminalStatus).toBe('cleared');
+    expect([...emitted].some((id) => id.startsWith('orig-'))).toBe(true);
+  });
+
+  it('replays a cleared parent as its whole subtree, not just its own page', async () => {
+    // Regression: resuming an already-COMPLETE manifest emitted only the root's
+    // capped page, dropping every venue subdivision had been run to find, while
+    // still reporting COMPLETE.
+    const field = venues(60, 340);
+    const plan = cells();
+    const { writer, file } = manifestFor('subtree.jsonl', plan);
+    const first = new Set<string>();
+    await sweep({
+      cells: plan,
+      manifest: writer,
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: transportFor(field).transport,
+      onPlaces: (places: any[]) => places.forEach((place) => first.add(place.id)),
+    });
+    writer.close();
+    const report = completeness(loadManifest(file));
+    expect(report.complete).toBe(true);
+
+    const resumeWriter = openManifest(file);
+    const replayed = new Set<string>();
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async () => {
+        throw new Error('resuming a complete manifest must make no calls');
+      },
+      onPlaces: (places: any[]) => places.forEach((place) => replayed.add(place.id)),
+    });
+    resumeWriter.close();
+    expect(replayed.size).toBe(report.summary.uniquePlaceIds);
+    expect(replayed.size).toBe(first.size);
+  });
+
   it('does not re-query cells that already finished', async () => {
     const field = venues(12, 340);
     const plan = cells();

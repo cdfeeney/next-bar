@@ -1,4 +1,12 @@
 import { BAR_TYPES } from './coverage-search.mjs';
+import { SAME_LOCATION_METERS, streetKey } from './coverage-identity.mjs';
+
+/** Same house number and street, tolerating abbreviation differences. */
+function sameStreet(left, right) {
+  const a = streetKey(left);
+  const b = streetKey(right);
+  return Boolean(a && b && a === b);
+}
 
 /**
  * Review scope per borough. The review used to hardcode Manhattan's city list
@@ -107,7 +115,19 @@ export function adversarialReview(candidate, catalogMatches = [], options = {}) 
   // from the sweep.
   const duplicate = catalogMatches.find((match) => {
     if (match.placeIdMatch) return true;
-    if (candidate.placeId && match.placeId && match.placeId !== candidate.placeId) return false;
+    if (candidate.placeId && match.placeId && match.placeId !== candidate.placeId) {
+      // Differing Place IDs normally mean two venues — that is what lets a
+      // second location of a brand survive. But Google reissues ids on owner
+      // re-claims and listing merges, so the same name at the same street
+      // number, metres apart, is still one storefront. This must agree with
+      // resolveIdentity(); the two used to disagree, and this path is the live
+      // gate the review driver actually runs.
+      return (
+        match.nameExact &&
+        match.distanceMeters <= SAME_LOCATION_METERS &&
+        sameStreet(candidate.address, match.address)
+      );
+    }
     return match.nameExact || (match.distanceMeters <= 25 && match.nameSimilarity >= 0.5);
   });
   if (duplicate) {
