@@ -126,16 +126,21 @@ export function adversarialReview(candidate, catalogMatches = [], options = {}) 
     // rows to be close enough that a different storefront is implausible. This
     // is what resolveIdentity does; the two must not diverge, because a wrong
     // duplicate here silently deletes a real bar.
-    if (match.nameExact) {
-      // When both addresses are known, the ADDRESS decides — same rule as
-      // resolveIdentity. Two same-named rows at different house numbers are two
-      // storefronts even when they are metres apart, and proximity must not
-      // override that. Distance is the fallback only when an address is missing
-      // or unparseable, where it is the sole evidence available.
-      const known = streetKey(candidate.address) && streetKey(match.address);
-      return known ? sameStreet(candidate.address, match.address) : match.distanceMeters <= 25;
+    // Address availability decides how much distance is allowed to say, and it
+    // must be read the same way resolveIdentity reads it:
+    //   both parse    -> the addresses decide; proximity cannot override them
+    //   neither parses-> distance is the only evidence there is
+    //   one parses    -> asymmetric, so nothing is comparable; not a duplicate
+    // The asymmetric case is the one that matters: a candidate with no address
+    // beside a catalog row that has one used to fall through to a bare distance
+    // test and suppress a real venue.
+    const candidateStreet = streetKey(candidate.address);
+    const matchStreet = streetKey(match.address);
+    if (candidateStreet && matchStreet) {
+      return candidateStreet === matchStreet && (match.nameExact || match.nameSimilarity >= 0.5);
     }
-    return match.distanceMeters <= 25 && match.nameSimilarity >= 0.5;
+    if (candidateStreet || matchStreet) return false;
+    return match.distanceMeters <= 25 && (match.nameExact || match.nameSimilarity >= 0.5);
   });
   if (duplicate) {
     return {

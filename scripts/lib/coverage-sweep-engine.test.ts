@@ -296,21 +296,57 @@ describe('resume', () => {
     expect(emitted.size).toBe(report.summary.uniquePlaceIds);
   });
 
-  it('emits a place recorded in both a parent and its child only once', async () => {
-    // queryHits is a scoring signal counted per emission, so replaying a
-    // subtree must not inflate a candidate's score just because a run resumed.
+  it('emits a place found by both a parent and its child exactly as a live run does', async () => {
+    // The invariant is resume == live, NOT "emit once". onPlaces callbacks are
+    // counted as queryHits, which feeds the score gate, so collapsing repeats
+    // on resume makes a resumed run DROP candidates an uninterrupted run keeps.
+    // A previous fix deduplicated across the subtree and broke exactly that.
+    const shared = { id: 'shared' };
     const plan = [cells()[0]];
-    const file = path.join(dir, 'dedupe.jsonl');
+
+    const live: string[] = [];
+    const liveRun = manifestFor('live.jsonl', plan);
+    await sweep({
+      cells: plan,
+      manifest: liveRun.writer,
+      subdivision: { maxDepth: 1, minCellMeters: 90, branching: 4 },
+      maxResultCount: 1, // every response caps, forcing subdivision
+      transport: async () => ({ places: [shared] }),
+      onPlaces: (places: any[]) => places.forEach((place) => live.push(place.id)),
+    });
+    liveRun.writer.close();
+    // Every response caps here, so the children reach the floor and the run is
+    // legitimately incomplete — irrelevant to this test, which is about what
+    // the two runs EMIT.
+    expect(live.length).toBeGreaterThan(1); // parent AND each child emitted it
+
+    const replayed: string[] = [];
+    const resumeWriter = openManifest(liveRun.file);
+    await sweep({
+      cells: plan,
+      manifest: resumeWriter,
+      state: loadManifest(liveRun.file),
+      subdivision: { maxDepth: 1, minCellMeters: 90, branching: 4 },
+      maxResultCount: 1,
+      transport: async () => {
+        throw new Error('resuming a complete manifest must make no calls');
+      },
+      onPlaces: (places: any[]) => places.forEach((place) => replayed.push(place.id)),
+    });
+    resumeWriter.close();
+    expect(replayed).toEqual(live);
+  });
+
+  it('does not double-count a place the re-query returns again', async () => {
+    // The other direction: replaying a recorded page and then emitting an
+    // overlapping fresh response would count the same place twice for one cell,
+    // which a live single-query run never does.
+    const plan = [cells()[0]];
+    const file = path.join(dir, 'overlap.jsonl');
     const writer = openManifest(file);
-    const child = { id: `${plan[0].id}/0`, depth: 1, sideMeters: 180 };
-    writer.plan({ configHash: configHash({ t: 'dedupe' }), cells: plan });
-    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: CAP, capped: true });
-    writer.result(plan[0].id, [{ id: 'shared' }]);
-    writer.subdivide(plan[0].id, [child.id], [child]);
-    writer.attempt({ cellId: child.id, attemptN: 1, ok: true, count: 1, capped: false });
-    writer.result(child.id, [{ id: 'shared' }]);
-    writer.done(child.id, 'unsaturated');
-    writer.done(plan[0].id, 'cleared');
+    writer.plan({ configHash: configHash({ t: 'overlap' }), cells: plan });
+    writer.attempt({ cellId: plan[0].id, attemptN: 1, ok: true, count: 1, capped: false });
+    writer.result(plan[0].id, [{ id: 'p' }]);
     writer.close();
 
     const emissions: string[] = [];
@@ -321,13 +357,11 @@ describe('resume', () => {
       state: loadManifest(file),
       subdivision: SUBDIVISION,
       maxResultCount: CAP,
-      transport: async () => {
-        throw new Error('no calls expected');
-      },
+      transport: async () => ({ places: [{ id: 'p' }] }),
       onPlaces: (places: any[]) => places.forEach((place) => emissions.push(place.id)),
     });
     resumeWriter.close();
-    expect(emissions).toEqual(['shared']);
+    expect(emissions).toEqual(['p']);
   });
 
   it('does not re-query cells that already finished', async () => {

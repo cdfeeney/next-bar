@@ -304,11 +304,17 @@ export function completeness(state) {
       saturated.push(cell.cellId);
     } else if (!COMPLETING_STATUSES.includes(cell.terminalStatus)) {
       missing.push(cell.cellId);
-    } else if (cell.terminalStatus !== 'ack_terminal' && !cell.lastOk) {
+    } else if (cell.terminalStatus === 'ack_terminal') {
+      // ack_terminal is the one status legitimately unsupported by a successful
+      // search — but it must be backed by an actual ACK_TERMINAL record. A bare
+      // DONE claiming it would otherwise waive every missing cell and every
+      // blocking failure on the strength of the word alone.
+      if (!cell.acked) missing.push(cell.cellId);
+    } else if (!cell.lastOk) {
       // A DONE record is a claim, not evidence. 'unsaturated' and 'cleared'
-      // both require a search to have actually succeeded; only 'ack_terminal'
-      // is legitimately unsupported by one. Without this, a truncated or
-      // hand-edited manifest could assert completeness for work never done.
+      // both require a search to have actually succeeded. Without this, a
+      // truncated or hand-edited manifest could assert completeness for work
+      // that was never done.
       missing.push(cell.cellId);
     }
 

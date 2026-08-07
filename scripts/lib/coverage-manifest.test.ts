@@ -146,6 +146,22 @@ describe('completeness invariant', () => {
     expect(completeness(state).complete).toBe(true);
   });
 
+  it('rejects an ack_terminal status with no acknowledgement behind it', () => {
+    // The word alone must not waive a quota block: without a real ACK_TERMINAL
+    // record, a bare DONE claiming ack_terminal would forgive every missing
+    // cell and every blocking failure.
+    const state = build([
+      PLAN,
+      { type: 'ATTEMPT', cellId: 'n:0:0', attemptN: 1, ok: false, errorClass: 'quota' },
+      { type: 'DONE', cellId: 'n:0:0', terminalStatus: 'ack_terminal' },
+      ok('n:0:1', 1, false),
+      { type: 'DONE', cellId: 'n:0:1', terminalStatus: 'unsaturated' },
+    ]);
+    const report = completeness(state);
+    expect(report.complete).toBe(false);
+    expect(report.missing).toContain('n:0:0');
+  });
+
   it('accepts an explicitly acknowledged terminal failure', () => {
     const state = build([
       PLAN,

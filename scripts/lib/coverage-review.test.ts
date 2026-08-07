@@ -199,6 +199,45 @@ describe('borough-parameterized review', () => {
     expect(review.decision).toBe('lookup');
   });
 
+  it('does not suppress a candidate that has no address against a row that does', () => {
+    // Asymmetric address availability: nothing is comparable, so distance alone
+    // must not decide. resolveIdentity returns distinct here; this path used to
+    // return duplicate and silently drop the venue.
+    const review = adversarialReview(
+      { name: 'The Anchor Bar', placeId: null, address: '', primaryType: 'bar', ratings: 90 },
+      [
+        {
+          name: 'The Anchor Bar',
+          placeId: 'prod-1',
+          address: '123 Main St, New York, NY',
+          distanceMeters: 7,
+          nameSimilarity: 1,
+          nameExact: true,
+        },
+      ],
+      { borough: 'manhattan' },
+    );
+    expect(review.decision).not.toBe('duplicate');
+  });
+
+  it('does not suppress a fuzzy name match at a different street address', () => {
+    const review = adversarialReview(
+      { name: 'Allure Cocktail Lounge', placeId: 'google-new', address: '10 Main St, New York, NY', primaryType: 'bar', ratings: 90 },
+      [
+        {
+          name: 'Allure Lounge',
+          placeId: null,
+          address: '12 Main St, New York, NY',
+          distanceMeters: 4,
+          nameSimilarity: 0.667,
+          nameExact: false,
+        },
+      ],
+      { borough: 'manhattan' },
+    );
+    expect(review.decision).not.toBe('duplicate');
+  });
+
   it('does not call an exact name a duplicate across a different address', () => {
     // catalogMatches admits rows up to 60m away — a whole block. An exact name
     // alone used to force duplicate there, disagreeing with resolveIdentity

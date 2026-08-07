@@ -78,6 +78,7 @@ export async function runSweep({
     droppedTypes: [],
     interrupted: false,
     attemptsThisRun: new Map(),
+    replayedCells: new Set(),
   };
 
   for (const cell of cells) {
@@ -127,24 +128,36 @@ function nextAttempt(ctx, cellId, known) {
  * found underneath it. Duplicate ids across the subtree are harmless — the
  * caller merges by place id.
  */
-function replaySubtree(cellId, cell, ctx, seen = new Set(), emitted = new Set()) {
+function replaySubtree(cellId, cell, ctx, seen = new Set()) {
   if (seen.has(cellId)) return;
   seen.add(cellId);
   const state = ctx.state?.cells?.get(cellId);
   if (!state) return;
-  // A place recorded in both a capped parent and one of its children must be
-  // emitted ONCE. The caller merges by place id but counts each emission as a
-  // query hit, and queryHits is a scoring signal — replaying a subtree would
-  // otherwise inflate a candidate's score purely because the run was resumed.
-  const fresh = (state.places ?? []).filter((place) => {
-    if (!place.id || emitted.has(place.id)) return false;
-    emitted.add(place.id);
-    return true;
-  });
-  if (fresh.length > 0) ctx.onPlaces(fresh, state.cell ?? cell);
+  // Emit once per NODE, exactly as a live run does — a place found by both a
+  // capped parent and one of its children is emitted twice there too. Do not
+  // "deduplicate" across the subtree: queryHits counts callbacks and feeds the
+  // score gate, so collapsing them makes a resumed run drop candidates an
+  // uninterrupted run keeps. Resume must reproduce the live result, not a
+  // tidier one. (`seen` guards cell revisits, not place repeats.)
+  if (state.places?.length) ctx.onPlaces(state.places, state.cell ?? cell);
   for (const childId of state.children ?? []) {
-    replaySubtree(childId, state.cell ?? cell, ctx, seen, emitted);
+    replaySubtree(childId, state.cell ?? cell, ctx, seen);
   }
+}
+
+/**
+ * Emit a re-queried cell's previously recorded places, minus anything the new
+ * response already returned, and at most once per cell per run. The
+ * unsupported-type path re-enters processCell for the same cell, so without the
+ * guard a retry would emit the recorded page twice and inflate its score.
+ */
+function replayRecordedOnce(known, cell, ctx, freshPlaces) {
+  if (!known?.places?.length) return;
+  if (ctx.replayedCells.has(cell.id)) return;
+  ctx.replayedCells.add(cell.id);
+  const fresh = new Set(freshPlaces.map((place) => place.id));
+  const missing = known.places.filter((place) => !fresh.has(place.id));
+  if (missing.length > 0) ctx.onPlaces(missing, cell);
 }
 
 /**
@@ -245,13 +258,6 @@ async function processCell(cell, ctx) {
     return subdivideFrom(cell, ctx);
   }
 
-  // A cell whose RESULT was flushed but whose DONE was interrupted gets
-  // re-queried below. Google returns a different slice each time, so replay
-  // what was already recorded first: the manifest unions both pages, and
-  // without this the rebuilt queue would hold only the newer one while the
-  // manifest claimed both.
-  if (known?.places?.length) ctx.onPlaces(known.places, cell);
-
   const attemptN = nextAttempt(ctx, cell.id, known);
 
   if (ctx.callsUsed >= ctx.maxCalls) {
@@ -311,6 +317,10 @@ async function processCell(cell, ctx) {
       errorClass: classifyError(error, error.status),
       message: error.message,
     });
+    // The re-query failed, so the recorded page is all this cell has. Emit it
+    // to keep the rebuilt queue consistent with the manifest; the cell stays
+    // outstanding either way, so the run still reports incomplete.
+    replayRecordedOnce(known, cell, ctx, []);
     return null;
   }
 
@@ -325,6 +335,12 @@ async function processCell(cell, ctx) {
   });
   ctx.manifest.result(cell.id, places);
   ctx.onPlaces(places, cell);
+  // A cell whose RESULT was flushed but whose DONE was interrupted was just
+  // re-queried, and Google returns a different slice each time. Emit only the
+  // recorded places the new page did NOT return: together with the line above
+  // that is exactly one emission per unique place for this cell — what a live
+  // run produces — while still keeping the queue as complete as the manifest.
+  replayRecordedOnce(known, cell, ctx, places);
 
   if (!capped) {
     ctx.manifest.done(cell.id, 'unsaturated', { count: places.length });
