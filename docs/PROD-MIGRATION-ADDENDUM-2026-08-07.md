@@ -130,21 +130,27 @@ They survive 0034 **because they are `SECURITY DEFINER`, not because they avoid 
 function executes with its owner's privileges, so the caller's table grant is never consulted; the
 caller needs only `EXECUTE`, which 0034 does not touch.
 
-**Corollary — with the mechanism stated correctly.** A `SECURITY DEFINER` → `SECURITY INVOKER` change
-on any of those functions **would** break them, but **not** through 0034's revocation. 0034 line 44
-*re-grants* `select, insert on public.profiles to authenticated`, so table-level SELECT survives the
-migration intact. What would actually break the query is the **pre-existing owner-scoped RLS policy**
-`"profiles: owner can read own"` — `using (auth.uid() = id)`, created in
-`0001_v0.5.0_auth_and_ratings.sql:84-86` and **untouched by this packet**. These RPCs read *other
-users'* profile rows, which only a definer-owner RLS bypass permits.
+**Corollary — the controlling layer depends on the caller's role. Do not state it as one rule.**
 
-The practical advice is unchanged — treat a definer→invoker change on any profile-reading function as
-breaking — but the controlling layer is RLS from 0001, not a grant this migration alters. **Reverting
-0034 would not fix such a break.**
+A `SECURITY DEFINER` → `SECURITY INVOKER` change on any of these functions **would** break them, but
+*what* breaks differs:
 
-> *Mechanism corrected 2026-08-07 by the Claude/Sonnet review lane. The prior wording attributed the
-> break to "0034's revocation", which is wrong: 0034 re-grants the SELECT it revokes. Naming the wrong
-> control in a Production gate document could send a future engineer to revert the wrong migration.*
+| Caller role | Post-0034 `profiles` grant | What blocks an INVOKER-mode read |
+|---|---|---|
+| `authenticated` | `select, insert` **re-granted** (0034:44) | **RLS** — `"profiles: owner can read own"`, `using (auth.uid() = id)` (`0001_v0.5.0_auth_and_ratings.sql:84-86`), **untouched by this packet**. These RPCs read *other users'* rows, which only a definer-owner RLS bypass permits. |
+| `anon` | **nothing** — `revoke all … from public, anon, authenticated` (0034:42) with no anon re-grant | **0034's revocation itself.** The table privilege is gone, so the read fails before RLS is reached. |
+
+The anon row is not hypothetical: **`get_shared_night` is granted `execute` to `anon`**
+(`0016_shared_nights.sql:200`). So for at least one function in the list above, 0034 *is* the
+operative control.
+
+Practical advice, unchanged: treat a definer→invoker change on any profile-reading function as
+breaking. But **reverting 0034 would restore only the `anon` path** — an `authenticated`-path break
+is RLS and would survive the revert.
+
+> *Corrected twice on 2026-08-07. The original said "0034's revocation" (wrong for `authenticated` —
+> 0034 re-grants that SELECT). The first correction said RLS (wrong for `anon` — 0034 grants anon
+> nothing back). Raised by the Claude/Sonnet lane, then narrowed by the Codex lane.*
 
 **No application path is broken by 0034 on the candidate as analysed** — the three direct-access
 sites are all within the new grant, and the RPC surface is grant-independent.
@@ -244,10 +250,12 @@ Every item here is **unverified** and cannot be resolved locally:
    migration states repository search found no application path — that search covered the repository,
    not Production tooling, dashboards, or ad-hoc scripts.
 7. **The paired web candidate** (§2) is not settled.
-8. **How many Production rows already have `shares_list_publicly = true`** (§6). If any do, those
-   users' rating lists become publicly readable through `get_public_ratings` once the packet applies
-   — with no product UI to review or revoke the setting. **Query this count before the window** and
-   decide deliberately; do not discover it afterwards.
+8. **How many Production rows already have `shares_list_publicly = true`** (§6, §12). **This is the
+   one item here that is NOT gated on the window — it is a live condition today.**
+   `get_public_ratings` is `SECURITY DEFINER` with `grant execute … to anon` from migration **0015**,
+   which is already applied, so any row already flagged `true` is publicly readable **now**, with no
+   product UI to review or revoke it. **Run this count immediately**, independently of the migration
+   decision. A non-zero result is a current privacy finding, not a scheduling input.
 
 ## 10. Backup and revert requirements
 
@@ -305,12 +313,14 @@ Each must be exercised against the migrated environment by a real account, not a
 - **Cross-container authentication** — the TestFlight WKWebView → Safari boundary. **This is the
   path the un-reviewed `76d610f` work addresses and it has never been tested against a deployed
   environment.**
-- **Public shared list** — **do not assume it stays non-functional.** Run the §9.8 pre-window query
-  first: count rows where `shares_list_publicly = true`. If any exist, those users' rating lists
-  become publicly readable through `get_public_ratings` the moment this packet applies, and there is
-  no product UI to review or revoke that. Separately, after 0034 an authenticated owner *can* set the
-  flag directly through PostgREST. Confirm the actual count and decide deliberately — the product
-  simply has no UI writer, which is not the same as the feature being inert.
+- **Public shared list** — **the exposure is not created by this packet; if it exists, it is already
+  live.** `get_public_ratings` is `SECURITY DEFINER` and already carries
+  `grant execute … to anon` from migration **0015** (`0015_public_shared_list.sql:63,67,88`). So any
+  Production row already holding `shares_list_publicly = true` is **publicly readable right now**,
+  today, with or without this migration. Run the §9.8 count **immediately, not at the window** — a
+  non-zero result is a current privacy fact to act on, not a migration risk to schedule.
+  What 0034 *does* change is that an authenticated owner can thereafter set the flag directly through
+  PostgREST. There is still no product UI to set, review, or revoke it.
 
 ## 13. What Staging approval does and does not authorize
 
