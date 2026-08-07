@@ -130,8 +130,13 @@ export interface ConfirmFailureRecord {
   /**
    * Length only. Without it a TRUNCATED token and a genuinely expired one are
    * byte-identical records, which defeats the whole point of this module
-   * (santa round 1, GLM). For a fixed-format hash the length is constant, so it
-   * discloses nothing about the secret.
+   * (santa round 1, GLM).
+   *
+   * A count is not a preimage: it discloses nothing about the secret's content.
+   * It is only USEFUL against a known-good baseline, and this repo deliberately
+   * does not hard-code one — Supabase owns the token format and may change it.
+   * The runbook tells operators to read the normal length off healthy traffic
+   * instead (docs/AUTH-EMAIL-TEMPLATES-2026-08-06.md, "Reading the server logs").
    */
   tokenHashLength: number;
   sdkCode?: string;

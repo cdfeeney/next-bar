@@ -110,6 +110,38 @@ it would be misread as the bug we just fixed.
   reset-testing session. Configure the separate non-production SMTP account
   the environment design already calls for before running the attended matrix.
 
+## Reading the server logs when something fails
+
+`/auth/confirm` emits one redacted record per failure, under the stable event
+name `auth.confirm.failure`, prefixed `[auth/confirm] rejected`. Alert on the
+event name, not on the wording. It deliberately carries **no** token, email,
+query string, URL, or raw Supabase message — only categories.
+
+| Field | Meaning |
+|---|---|
+| `stage` | `validation` (rejected before Supabase was called), `unconfigured` (env vars missing), `verification` (Supabase rejected it) |
+| `typeCategory` | `allowed` / `known-supabase-type` / `unrecognized` / `absent` |
+| `typeValue` | present only when the type came from the closed set — tells you **which** template sent the link |
+| `hasTokenHash`, `tokenHashLength` | whether a token arrived, and how long it was — never the value |
+| `sdkCode`, `sdkName`, `sdkStatus` | bounded identifiers from the Supabase error |
+
+What to conclude:
+
+- `stage: validation` + `typeCategory: known-supabase-type` → **the template has the
+  wrong `type`.** `typeValue` names it (e.g. `signup`, which should be `email`).
+  This is the mistake this runbook warns about, and it is the one to check first.
+- `stage: validation` + `hasTokenHash: false` → **the template lost `{{ .TokenHash }}`.**
+- `stage: verification` + a short `tokenHashLength` → **the template is mangling or
+  truncating the token.** Establish the normal length from healthy traffic first
+  (send yourself one working link and read the value off that record) — this repo
+  does not hard-code an expected length, and Supabase may change its format.
+  Anything materially shorter than that observed baseline is truncation, not expiry.
+- `stage: verification` + `sdkCode: otp_expired` at the **normal** length → a
+  genuinely expired or already-used link. If you see a wave of these on links
+  users say they never clicked, re-read the link-tracking section above.
+- `stage: unconfigured` → the deployment is missing its Supabase env vars; this is
+  not a template problem.
+
 ## Rollback
 
 Single step per template — no deploy, no migration, no code change. Restore
