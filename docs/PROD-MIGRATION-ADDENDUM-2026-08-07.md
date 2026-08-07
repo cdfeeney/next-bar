@@ -99,8 +99,15 @@ DEFINER` function are unaffected by construction.
 
 ### Enumerated application paths (candidate `99ff7b3`, `src/**`)
 
-`profiles` is touched at **exactly three** sites — all in `src/lib/profile.server.ts`, all
-authenticated and own-row:
+**Two distinct access classes. Only one of them is governed by the grants 0034 changes.**
+
+| Class | Governed by table grants? | Affected by 0034? |
+|---|---|---|
+| **Direct PostgREST table access** (`.from('profiles')` etc.) | **Yes** — the caller's own `anon`/`authenticated` grant applies | **Yes** — enumerated below |
+| **`SECURITY DEFINER` RPC** (`.rpc(...)`) | **No** — the function executes as its owner, so the caller's table grant is irrelevant; only `EXECUTE` on the function matters, which 0034 never touches | **No** |
+
+`profiles` is reached through **both**. The direct-access sites are the ones 0034 can break, and there
+are **exactly three**, all in `src/lib/profile.server.ts`, all authenticated and own-row:
 
 | Site | Verb | Columns | Covered by 0034? |
 |---|---|---|---|
@@ -111,10 +118,27 @@ authenticated and own-row:
 `pairwise_comparisons` is touched at four sites in `src/lib/pairwise.server.ts` — `select` (:41),
 `insert` (:55, :100), `delete` (:118). **No `update` anywhere**, matching the deliberate omission.
 
-Handle operations (`claim_handle`, `search_handles`) go through **RPCs**, not direct table access, so
-they are unaffected by the table grant change.
+**The RPC surface is substantially larger than those three sites.** Beyond `claim_handle` and
+`search_handles`, the candidate reaches profile data through `get_profile_by_handle`, `get_following`,
+`follow_user`, the follow-request/follower RPCs, `get_circle_suggestions`, `get_circle_rsvps`,
+`get_shared_night` and `get_circle_vibe_votes` — called from `follows.server.ts`,
+`suggestions.server.ts`, `rsvps.server.ts`, `nights.server.ts` and `vibeVotes.server.ts`. Several of
+those function bodies read `from public.profiles p` directly (verified in the `supabase/migrations`
+sources at `99ff7b3`).
 
-**No application path is broken by 0034 on the candidate as analysed.**
+They survive 0034 **because they are `SECURITY DEFINER`, not because they avoid `profiles`.** That is
+the actual load-bearing reason, and it carries a corollary: **if any of those functions were ever
+changed to `SECURITY INVOKER`, 0034's revocation would break it immediately.** Treat a
+definer→invoker change on any profile-reading function as a breaking change against this packet.
+
+**No application path is broken by 0034 on the candidate as analysed** — the three direct-access
+sites are all within the new grant, and the RPC surface is grant-independent.
+
+> **Correction (independent review, 2026-08-07).** An earlier draft said `profiles` is "touched at
+> exactly three sites". That was true only of *direct table access* and overstated exhaustiveness in a
+> document gating a Production migration. Raised by the Codex lane; the Claude lane read the same
+> claim as scoped to direct access and passed it. Repository evidence settled it in Codex's favour,
+> so the claim is now split by access class above.
 
 ## 6. Do public profile / shared-list reads require `anon` profile access?
 
@@ -134,12 +158,28 @@ turn their public list on. **But a repository search of the candidate finds no a
 ever writes that column** — the only occurrences of `shares_list_publicly` in `src/**` are in
 `src/lib/migration0034.test.ts`, which asserts the grant text.
 
-So after this packet applies, the grant layer permits the opt-in, RLS permits it, and **nothing in
-the product can set it**. `get_public_ratings` will continue to return empty for every user.
+So after this packet applies, the grant layer permits the opt-in, RLS permits it, and **no UI or
+server route in the candidate sets it.**
 
-This is **not a migration defect and not a Production blocker** — the packet is strictly better than
-today. It is a **feature-completeness gap**: shipping 0034 does not make public shared lists work.
-It should not be described to anyone as enabling that feature.
+**What that does and does not license as a conclusion.** It is a statement about the candidate's
+code, nothing more. It specifically does **not** establish that `get_public_ratings` returns empty
+for every user, because:
+
+- the flag may **already be `true`** for some Production rows, set previously through service-role
+  access, a manual dashboard edit, or an earlier build; Production state is unverified (§9), and
+- after 0034 an authenticated owner **can** set it directly through PostgREST — that is exactly what
+  the new column grant permits. "No writer in the product" is not "cannot be written."
+
+So the honest statement is: **shipping 0034 does not, by itself, make public shared lists usable
+through the product, and it should not be described to anyone as enabling that feature.** Whether
+any Production user's list actually becomes publicly readable is an **open question for the attended
+window** (added to §9), not something this analysis can settle.
+
+This is **not a migration defect.** Whether it is a release blocker is **not this document's call** —
+it depends on whether public shared lists are in the release criteria, and §13/§14 are explicit that
+this document carries no approval authority. An earlier draft asserted "not a Production blocker";
+that disposition is withdrawn as outside its remit. *(Both corrections raised by the Codex lane,
+2026-08-07.)*
 
 ## 7. Does any authenticated path require profile deletion or broader grants?
 
@@ -189,6 +229,10 @@ Every item here is **unverified** and cannot be resolved locally:
    migration states repository search found no application path — that search covered the repository,
    not Production tooling, dashboards, or ad-hoc scripts.
 7. **The paired web candidate** (§2) is not settled.
+8. **How many Production rows already have `shares_list_publicly = true`** (§6). If any do, those
+   users' rating lists become publicly readable through `get_public_ratings` once the packet applies
+   — with no product UI to review or revoke the setting. **Query this count before the window** and
+   decide deliberately; do not discover it afterwards.
 
 ## 10. Backup and revert requirements
 
