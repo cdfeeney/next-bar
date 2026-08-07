@@ -84,6 +84,32 @@ Statuses:
 | `incomplete_saturated` | Subdivision hit the 90 m floor and the cell still caps — recall is knowably short there |
 | `manifest_inconsistent` | A completion record exists but the invariant fails — treat as corrupt |
 
+## When a cell can never succeed
+
+Resume handles the transient cases: quota resets, network blips, an exhausted
+budget. But a cell Google will always reject — a permanent 400, a geometry it
+refuses — would otherwise hold the run at `incomplete_failed` forever, because
+the completeness gate is deliberately unwilling to look away from it.
+
+Acknowledge that cell explicitly:
+
+```bash
+node scripts/nearby-sweep.mjs \
+  --manifest data/coverage/brooklyn.jsonl \
+  --ack-cell n:1:37:12 \
+  --ack-reason "Google returns a permanent 400 for this cell"
+```
+
+It writes the acknowledgement and a terminal record, reprints the manifest
+status, and exits. Repeat `--ack-cell` for several cells; `--ack-reason` is
+mandatory and applies to all of them in that invocation.
+
+This is a **waiver, not a fix**. The cell's venues are not in the results and
+the manifest says so permanently: every waiver is recorded against the cell id,
+attributed to the operator, and carries its reason. Reach for it only when a
+resume genuinely cannot clear the cell — never to make a red run go green
+before a sweep.
+
 ## Review, then score
 
 ```bash
