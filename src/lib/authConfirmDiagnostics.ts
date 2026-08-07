@@ -146,7 +146,12 @@ export function buildConfirmFailureRecord(input: {
   tokenHashLength: number;
   error?: unknown;
 }): ConfirmFailureRecord {
-  const typeCategory = classifyOtpType(input.rawType);
+  // Snapshot ONCE. Reading `input.rawType` again below would let a getter or
+  // Proxy return one value to the classifier and a different one to the record
+  // — verified: a two-read getter produced `typeCategory: 'allowed'` with an
+  // email in `typeValue` (santa round 2, Codex).
+  const rawType = input.rawType;
+  const typeCategory = classifyOtpType(rawType);
   const tokenHashLength = boundedLength(input.tokenHashLength);
 
   const record: ConfirmFailureRecord = {
@@ -160,7 +165,7 @@ export function buildConfirmFailureRecord(input: {
 
   // Safe precisely because it already matched a closed set — see the field doc.
   if (typeCategory === 'allowed' || typeCategory === 'known-supabase-type') {
-    record.typeValue = input.rawType as string;
+    record.typeValue = rawType as string;
   }
 
   // `error.message` is read NOWHERE in this function — that omission is the

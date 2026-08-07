@@ -205,6 +205,29 @@ describe('buildConfirmFailureRecord — the redaction contract', () => {
   });
 
   /**
+   * Santa round 2, Codex (MEDIUM). The negative branch was covered but the
+   * `typeof` and `!Number.isInteger` clauses were not, so a runtime value that
+   * bypassed the type system would have reached an untested path.
+   */
+  it.each([
+    ['fractional', 1.5],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['a string that got past the types', '64' as unknown as number],
+    ['undefined', undefined as unknown as number],
+  ])('reports length 0 for a %s length', (_label, value) => {
+    const record = buildConfirmFailureRecord({
+      stage: 'validation',
+      outcome: 'invalid_confirmation_link',
+      rawType: null,
+      tokenHashLength: value,
+    });
+
+    expect(record.tokenHashLength).toBe(0);
+    expect(record.hasTokenHash).toBe(false);
+  });
+
+  /**
    * Santa round 1, GLM (MEDIUM). With two templates in play, `typeCategory:
    * 'allowed'` does not say WHICH one produced the failing link. The value is
    * safe to emit here precisely because it is only emitted when it already
@@ -247,6 +270,33 @@ describe('buildConfirmFailureRecord — the redaction contract', () => {
    * happens to pass an app-owned constant. Bounding it against the sentinel set
    * makes the guarantee true of the function rather than of its current callers.
    */
+  /**
+   * Santa round 2, Codex (MEDIUM). `rawType` was read twice — once to classify,
+   * once to assign `typeValue` — so a getter returning different values on each
+   * read passed the closed-set check and then supplied something else. Verified
+   * before the fix: the record came back `typeCategory: 'allowed'` with
+   * `typeValue: 'victim@example.com'`.
+   *
+   * The shipped route hands in a plain string from `searchParams`, so this was
+   * never reachable in production. It is fixed anyway because the module claims
+   * the redaction is structural, and a guarantee that depends on callers being
+   * well-behaved is a guarantee the callers own, not this module.
+   */
+  it('classifies and reports the SAME value even if the input mutates between reads', () => {
+    let reads = 0;
+    const record = buildConfirmFailureRecord({
+      stage: 'validation',
+      outcome: 'invalid_confirmation_link',
+      get rawType() {
+        return reads++ === 0 ? 'recovery' : SENTINEL_EMAIL;
+      },
+      tokenHashLength: 64,
+    });
+
+    expect(serialise(record)).not.toContain(SENTINEL_EMAIL);
+    expect(record.typeValue).toBe('recovery');
+  });
+
   it('bounds an outcome that is not one of our own sentinels', () => {
     const record = buildConfirmFailureRecord({
       stage: 'verification',
