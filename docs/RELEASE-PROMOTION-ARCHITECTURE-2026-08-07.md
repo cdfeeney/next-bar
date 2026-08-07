@@ -283,7 +283,7 @@ points to, which is a different and far more dangerous lever.
 | Rollback of web layer | instant (redeploy origin) | requires new binary | mixed |
 | Session/cookie behavior | ordinary web cookies on one origin | app-local | mixed |
 | Origin-scoped storage | **strands on origin change** **[V]** (31 keys) | stable | needs explicit migration |
-| Deep links | must match the baked origin **[V]** `capacitor.config.ts:69-71` | app-controlled | app-controlled |
+| Deep links | **no deep-link support exists today** — the iOS project has no associated-domains entitlement and no `CFBundleURLTypes` **[V]** (searched `ios/App/`). `capacitor.config.ts:69-71` governs in-WebView *navigation*, which is a different thing; an earlier draft conflated them | must be built per bundle ID | must be built per bundle ID |
 
 **A constraint that rules out the simple version of "bundle everything."** This app cannot be
 statically exported: there are **8 server route handlers** under `src/app` **[V]**, an active
@@ -478,7 +478,7 @@ one uniform runbook, which would strand an operator mid-release. The dependencie
 | 6 | **G.15** rehearsed backup restore (E.8) | not done |
 | 7, 10 | **G.3** account-preservation gate (E.7) — tooling to snapshot ID sets and content aggregates | not built |
 | 7, 10 | **G.4** 0042 in Production **plus** the sync-coverage threshold (E.7) | not done |
-| 3, 9 | **G.13** build-time baked-host attestation (C.0) | not built |
+| 9 | **G.13** build-time baked-host attestation (C.0) — see the note below on step 3 | not built |
 | 11 | **G.1** the second bundle ID and its ASC record | not created |
 | 13 | **D.3** steps 1–5 (native graduation) | not done |
 
@@ -495,6 +495,13 @@ depends on it. The genuinely executable subset is **steps 1–5 and 12**, on the
 bundle: freeze a candidate, verify it locally, deploy and rehearse against **Staging**, run the
 attended cross-container auth check, and confirm installed shells still work. Nothing touching
 Production is executable until G.15, G.3, G.4 and G.13 land.
+
+**Step 3 and G.13.** Step 3's gate names the attestation, and G.13 does not exist yet. That is not a
+contradiction with step 3 being executable: on **Staging** the baked host can be confirmed by hand
+once, and being wrong there is cheap. G.13 blocks step **9**, where the same mistake ships Staging
+credentials to real users. Until it lands, verify the Staging bundle's Supabase host manually at step
+3 and record what you saw — that is a *substitute check*, not a substitute for the Production gate,
+which has none.
 
 Do not improvise a substitute for a missing gate. A missing gate means the release stops.
 
