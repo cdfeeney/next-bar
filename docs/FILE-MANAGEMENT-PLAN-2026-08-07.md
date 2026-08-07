@@ -119,10 +119,36 @@ loop-guard checkpoint has swept protected operator docs into a commit before; na
 
 ### Registered worktrees
 
+> ## ⚠️ CORRECTION — 2026-08-07, after the first cleanup was executed
+>
+> **The `node_modules` figures below were inflated by 3.11 GB and the recovery estimate was wrong.**
+> All eight `nb-qa*` worktrees hold `node_modules` as a **junction to
+> `C:\Users\cdfee\projects\next-bar\node_modules`** — the main checkout's install. `robocopy /L`
+> follows junctions, so the same 398 MB directory was counted eight times as if it were eight
+> separate installs.
+>
+> | Figure | As first reported | **Actual** |
+> |---|---|---|
+> | `node_modules` across worktrees | 7.56 GB | **4.45 GB** (12 real, 8 junctions) |
+> | All 26 worktrees total | 17.17 GB | **14.06 GB** |
+> | §8 steps 1–3 recovery | 7.80 GB | **4.69 GB** |
+>
+> **The safety consequence is more important than the arithmetic.** A `Remove-Item -Recurse -Force`
+> on any `nb-qa*/node_modules` follows the junction and **destroys the main checkout's
+> dependencies** — the exact failure this machine has suffered twice. The reparse-point guard in §8
+> step 3 is not a formality; it is the only thing standing between this plan and that outcome. It
+> fired correctly when the cleanup was run: all eight were detected as junctions and skipped, and
+> `next-bar/node_modules` was verified intact (204 entries) afterwards.
+>
+> **Deleting those eight junctions would free ~0 bytes** (a junction is a few hundred bytes) while
+> risking the main checkout. Do not include them in any cleanup. Only the eight `.next` directories
+> in those worktrees are real, and they were cleared for **1.11 GB**.
+
 | Category | Size | Regenerable? |
 |---|---|---|
-| All 26 worktrees, total | **17.17 GB** | partly |
-| `node_modules` (18 worktrees) | **7.56 GB** | **yes** — `npm ci` |
+| All 26 worktrees, total | **14.06 GB** (corrected) | partly |
+| `node_modules` — **12 real** installs | **4.45 GB** | **yes** — `npm ci` |
+| `node_modules` — 8 junctions to `next-bar` | ~0 bytes | n/a — **never delete these** |
 | Build/test artifacts | **5.03 GB** | **yes** |
 | — of which `.next` | 5141 MB | yes |
 | — `playwright-report` | 6 MB | yes |
@@ -170,8 +196,8 @@ result, not an omission, so the 5.03 GB artifact figure is not undercounted on t
 |---|---|---|---|
 | 1 | Delete `.next` in the 16 non-protected worktrees | **2.28 GB** | **none** — pure build output |
 | 2 | `npm cache clean --force` | 0.69 GB | none — re-downloads |
-| 3 | Delete `node_modules` in the 16 non-protected worktrees | **4.83 GB** | none — `npm ci` restores |
-| | *subtotal, steps 1–3* | **7.80 GB** | |
+| 3 | Delete **real** `node_modules` in non-protected worktrees — **junctions excluded** | **1.72 GB** | none — `npm ci` restores |
+| | *subtotal, steps 1–3* | **4.69 GB** (corrected from 7.80) | |
 | 4 | Delete `.next` + `node_modules` in the 10 KEEP/protected worktrees (attended, one at a time) | ≈ 5.5 GB | low — but these hold the dirty work in §3; touch nothing else |
 | 5 | Remove `ms-playwright` browsers | 2.10 GB | low — one `npx playwright install` to restore |
 | **Total without removing any worktree** | | **≈ 15.4 GB** | |
