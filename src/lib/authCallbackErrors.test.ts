@@ -57,6 +57,34 @@ describe('callbackErrorCode — emits sentinels, never SDK prose', () => {
     );
   });
 
+  /**
+   * ROUTE-side branch ORDER, the twin of the client-side pin above.
+   *
+   * The client assertion passes on the REAL PKCE message, which contains
+   * "not found" but no "expired"/"invalid" — so it does not constrain the
+   * route function at all. Verified by mutation (santa round 1, Codex):
+   * hoisting the expired-link branch above `looksLikePkce` in
+   * `callbackErrorCode` left all 47 tests green.
+   *
+   * The shape below is GoTrue's real overlapping case, not a synthetic one:
+   * code `validation_failed` (present in `@supabase/auth-js` `ErrorCode`;
+   * `validation_failed_pkce` is NOT, so pinning that would prove nothing) with
+   * the server's own verifier wording. It matches the PKCE branch only via the
+   * message fallback, while "invalid request" simultaneously satisfies the
+   * expired rule — so this input is decided purely by which branch runs first.
+   * Swap them and a cross-context user is told the link expired, which sends
+   * them to request another that fails identically: the exact P0 loop this
+   * file exists to end.
+   */
+  it('classifies by the PKCE message fallback BEFORE the broad expired rule', () => {
+    const both = new AuthApiError(
+      'invalid request: both auth code and code verifier should be non-empty',
+      400,
+      'validation_failed',
+    );
+    expect(callbackErrorCode(both)).toBe(CALLBACK_ERROR.pkceMismatch);
+  });
+
   it('never returns a value containing the original message', () => {
     const leaky = new AuthApiError(
       'connect ECONNREFUSED 10.0.0.7:5432 while reading user_secrets',

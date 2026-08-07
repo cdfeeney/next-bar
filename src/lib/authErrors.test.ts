@@ -137,6 +137,24 @@ describe('authErrorMessage — never leaks SDK wording', () => {
     expect(authErrorMessage(limit, 'signin')).toMatch(/rate limit/i);
   });
 
+  /**
+   * Pins the EXACT constant per context, not just the shared "rate limit"
+   * substring. Both copies contain that phrase, so the assertion above stays
+   * green even with the `emailBearing` conditional reversed — verified by
+   * mutation (santa round 1, Codex): a reset told "too many attempts" and a
+   * sign-in told "too many emails requested" passed the whole suite. The
+   * distinction is user-facing guidance, so it needs the constant, not a regex.
+   */
+  it.each([
+    ['reset', AUTH_COPY.rateLimitedEmail],
+    ['signup', AUTH_COPY.rateLimitedEmail],
+    ['signin', AUTH_COPY.rateLimitedAttempts],
+    ['update', AUTH_COPY.rateLimitedAttempts],
+  ] as const)('maps a rate limit in %s context to its own constant', (context, expected) => {
+    const limit = new AuthApiError('x', 429, 'over_email_send_rate_limit');
+    expect(authErrorMessage(limit, context)).toBe(expected);
+  });
+
   it('points a signed-in user at the right recovery for same-password', () => {
     expect(authErrorMessage(new AuthApiError('x', 422, 'same_password'), 'update')).toBe(
       AUTH_COPY.samePassword,
