@@ -126,10 +126,25 @@ are **exactly three**, all in `src/lib/profile.server.ts`, all authenticated and
 those function bodies read `from public.profiles p` directly (verified in the `supabase/migrations`
 sources at `99ff7b3`).
 
-They survive 0034 **because they are `SECURITY DEFINER`, not because they avoid `profiles`.** That is
-the actual load-bearing reason, and it carries a corollary: **if any of those functions were ever
-changed to `SECURITY INVOKER`, 0034's revocation would break it immediately.** Treat a
-definer→invoker change on any profile-reading function as a breaking change against this packet.
+They survive 0034 **because they are `SECURITY DEFINER`, not because they avoid `profiles`.** The
+function executes with its owner's privileges, so the caller's table grant is never consulted; the
+caller needs only `EXECUTE`, which 0034 does not touch.
+
+**Corollary — with the mechanism stated correctly.** A `SECURITY DEFINER` → `SECURITY INVOKER` change
+on any of those functions **would** break them, but **not** through 0034's revocation. 0034 line 44
+*re-grants* `select, insert on public.profiles to authenticated`, so table-level SELECT survives the
+migration intact. What would actually break the query is the **pre-existing owner-scoped RLS policy**
+`"profiles: owner can read own"` — `using (auth.uid() = id)`, created in
+`0001_v0.5.0_auth_and_ratings.sql:84-86` and **untouched by this packet**. These RPCs read *other
+users'* profile rows, which only a definer-owner RLS bypass permits.
+
+The practical advice is unchanged — treat a definer→invoker change on any profile-reading function as
+breaking — but the controlling layer is RLS from 0001, not a grant this migration alters. **Reverting
+0034 would not fix such a break.**
+
+> *Mechanism corrected 2026-08-07 by the Claude/Sonnet review lane. The prior wording attributed the
+> break to "0034's revocation", which is wrong: 0034 re-grants the SELECT it revokes. Naming the wrong
+> control in a Production gate document could send a future engineer to revert the wrong migration.*
 
 **No application path is broken by 0034 on the candidate as analysed** — the three direct-access
 sites are all within the new grant, and the RPC surface is grant-independent.
@@ -290,8 +305,12 @@ Each must be exercised against the migrated environment by a real account, not a
 - **Cross-container authentication** — the TestFlight WKWebView → Safari boundary. **This is the
   path the un-reviewed `76d610f` work addresses and it has never been tested against a deployed
   environment.**
-- **Public shared list** — expect it to remain non-functional (§6). Confirm that is understood, not
-  discovered.
+- **Public shared list** — **do not assume it stays non-functional.** Run the §9.8 pre-window query
+  first: count rows where `shares_list_publicly = true`. If any exist, those users' rating lists
+  become publicly readable through `get_public_ratings` the moment this packet applies, and there is
+  no product UI to review or revoke that. Separately, after 0034 an authenticated owner *can* set the
+  flag directly through PostgREST. Confirm the actual count and decide deliberately — the product
+  simply has no UI writer, which is not the same as the feature being inert.
 
 ## 13. What Staging approval does and does not authorize
 

@@ -129,7 +129,7 @@ loop-guard checkpoint has swept protected operator docs into a commit before; na
 >
 > | Figure | As first reported | **Actual** |
 > |---|---|---|
-> | `node_modules` across worktrees | 7.56 GB | **4.45 GB** (12 real, 8 junctions) |
+> | `node_modules` across worktrees | 7.56 GB | **4.45 GB** (10 real, 8 junctions = the 18 worktrees first reported) |
 > | All 26 worktrees total | 17.17 GB | **14.06 GB** |
 > | §8 steps 1–3 recovery | 7.80 GB | **4.69 GB** |
 >
@@ -147,7 +147,7 @@ loop-guard checkpoint has swept protected operator docs into a commit before; na
 | Category | Size | Regenerable? |
 |---|---|---|
 | All 26 worktrees, total | **14.06 GB** (corrected) | partly |
-| `node_modules` — **12 real** installs | **4.45 GB** | **yes** — `npm ci` |
+| `node_modules` — **10 real** installs (of the 18 worktrees originally counted) | **4.45 GB** | **yes** — `npm ci` |
 | `node_modules` — 8 junctions to `next-bar` | ~0 bytes | n/a — **never delete these** |
 | Build/test artifacts | **5.03 GB** | **yes** |
 | — of which `.next` | 5141 MB | yes |
@@ -202,7 +202,8 @@ result, not an omission, so the 5.03 GB artifact figure is not undercounted on t
 | 5 | Remove `ms-playwright` browsers | 2.10 GB | low — one `npx playwright install` to restore |
 | **Total without removing any worktree** | | **≈ 15.4 GB** | |
 
-Steps 1–3 alone recover **7.80 GB** and are sufficient to unblock the queue.
+Steps 1–3 alone recover **4.69 GB** (corrected — see the junction note above) and are sufficient to
+unblock the queue.
 
 ## 6. Classification rules applied
 
@@ -410,8 +411,10 @@ archive is not a recovery procedure.
 
 ## 11. Operator decisions required
 
-1. **Approve the §8 sequence** (steps 1–3 recover **7.80 GB** with no worktree removal, no branch
-   deletion, and no commit loss). This is what unblocks the overnight queue.
+1. **Approve the §8 sequence** (steps 1–3 recover **4.69 GB** — corrected from 7.80 GB, see the
+   junction note in §5 — with no worktree removal, no branch deletion, and no commit loss). This is
+   what unblocks the overnight queue. **Step 3 must skip the eight `nb-qa*` junctions**; deleting
+   through them destroys `next-bar`'s dependencies.
 2. **`wf-fix`** — disposable scratch, or relocate out of `Temp`?
 3. **The 8 `nb-qa*` worktrees** — preserve or discard `playwright.local.config.ts` and `.env.local`
    per worktree? Answering promotes 5216 MB from ARCHIVE to REMOVE eligibility.
