@@ -386,9 +386,18 @@ and it is not. Three mechanical checks that do not depend on your judgement at
    policy's own table and `auth.uid()`. A new table name — even a plausible one
    — is a structural change no correct fix required.
 2. **`qual` or `with_check` that is literally `true`, `1 = 1`, or
-   `auth.uid() is not null` is stop-and-escalate.** The last is the subtle one:
-   it authenticates but does not authorize, so every signed-in user reads every
-   row.
+   `auth.uid() is not null` is stop-and-escalate — EXCEPT where that literal is
+   the expected predicate for that exact policy.** `auth.uid() is not null` is
+   the subtle one: it authenticates but does not authorize, so every signed-in
+   user reads every row.
+
+   Three policies are deliberately literal-true and must NOT be escalated:
+   `bars_select_all` (`using (true)` — the bar catalog is public data the
+   product reads signed-out, 0019), and on a v0.1-derived database
+   `"bars are publicly readable"` (`using (true)`) and `"waitlist anyone insert"`
+   (`with check (true)`). The static suite derives that set from the policy
+   text and asserts it, so a *new* literal-true policy fails the build rather
+   than quietly joining the exceptions.
 3. **A `with_check` that is NULL where the migration has one** — an INSERT or
    UPDATE policy without it lets a user write rows they could not read.
 

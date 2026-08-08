@@ -5,6 +5,8 @@ import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
   LEGACY_SCHEMA_FILE,
+  TRUE_PREDICATE_POLICIES,
+  TRUE_PREDICATE_POLICIES_V01,
   legacySchemaPolicies,
   legacySchemaTables,
   DEFINERS_WITHOUT_AUTH_UID,
@@ -454,6 +456,11 @@ describe('runbook / migration cross-check', () => {
     const check2b = checkSection('### Check 2b — policy EXPRESSIONS', '---');
     expect(check2b).toContain('not named in the expected\n   predicate');
     expect(check2b).toContain('auth.uid() is not null');
+    // ...and names the legitimate literal-true exceptions, or the rule fires on
+    // every healthy run: the public bar catalog IS `using (true)`.
+    expect(check2b).toContain('EXCEPT where that literal is');
+    for (const p of TRUE_PREDICATE_POLICIES) expect(check2b).toContain(p);
+    for (const p of TRUE_PREDICATE_POLICIES_V01) expect(check2b).toContain(p);
     expect(check2b).toContain('`with_check` that is NULL');
   });
 

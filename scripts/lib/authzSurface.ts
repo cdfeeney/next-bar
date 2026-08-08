@@ -206,6 +206,37 @@ export const V01_LEGACY_TABLES = [
 ];
 
 /**
+ * Policies whose predicate is deliberately the literal `true`.
+ *
+ * "A policy whose qual is `true` is stop-and-escalate" is a tempting mechanical
+ * rule and it is WRONG unconditionally: public data legitimately has one.
+ * `bars_select_all` is the bar catalog the product reads signed-out, and on a
+ * v0.1-derived database two legacy policies are literal-true as well. Stating
+ * the rule without this exception makes it fire on every healthy run — the
+ * exact false-mismatch class this whole document exists to avoid.
+ *
+ * Derived from the policy statements and asserted against this declaration, so
+ * a NEW literal-true policy fails the build and has to be justified.
+ */
+export function policiesWithTruePredicate(
+  defs: { table: string; policy: string; sql: string }[],
+): string[] {
+  return defs
+    .filter((d) => /\b(?:using|with\s+check)\s*\(\s*true\s*\)/i.test(d.sql))
+    .map((d) => d.policy)
+    .sort();
+}
+
+/** Migration-lineage policies that are legitimately `using (true)`. */
+export const TRUE_PREDICATE_POLICIES = ['bars_select_all'];
+
+/** v0.1-lineage policies that are legitimately literal-true. */
+export const TRUE_PREDICATE_POLICIES_V01 = [
+  'bars are publicly readable',
+  'waitlist anyone insert',
+];
+
+/**
  * Column-scoped grants across the whole corpus, as
  * `table -> role -> columns`. Declared so the runbook's "exactly three rows
  * and nothing else" for the column-ACL query is guarded corpus-wide, not just

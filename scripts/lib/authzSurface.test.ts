@@ -5,7 +5,10 @@ import {
   ANON_READABLE_TABLES,
   COLUMN_SCOPED_GRANTS,
   LEGACY_SCHEMA_FILE,
+  TRUE_PREDICATE_POLICIES,
+  TRUE_PREDICATE_POLICIES_V01,
   V01_LEGACY_TABLES,
+  policiesWithTruePredicate,
   legacyRenames,
   legacySchemaPolicies,
   legacySchemaTables,
@@ -730,6 +733,42 @@ describe('column-scoped grants, corpus-wide', () => {
     }
     expect(derived).not.toEqual(COLUMN_SCOPED_GRANTS);
     expect(derived.widgets.authenticated).toEqual(['secret_col']);
+  });
+});
+
+describe('policies with a literal-true predicate', () => {
+  it('derives the migration-lineage set and matches the declaration', () => {
+    // "qual = true is stop-and-escalate" is wrong unconditionally: public data
+    // legitimately has one. Asserting the exception set means a NEW literal-true
+    // policy fails the build instead of hiding among the documented ones.
+    expect(policiesWithTruePredicate(policyDefinitions(files))).toEqual(
+      [...TRUE_PREDICATE_POLICIES].sort(),
+    );
+  });
+
+  it('derives the v0.1-lineage set and matches the declaration', () => {
+    const schemaSql = readFileSync(LEGACY_SCHEMA_FILE, 'utf8');
+    const legacyDefs = policyDefinitions([
+      { prefix: '0000', name: 'schema.sql', sql: schemaSql },
+    ]);
+    expect(policiesWithTruePredicate(legacyDefs)).toEqual(
+      [...TRUE_PREDICATE_POLICIES_V01].sort(),
+    );
+  });
+
+  it('FLAGS a new literal-true policy', () => {
+    const broken = fake(`
+      create policy wide_open on public.widgets for select using (true);
+      create policy scoped on public.widgets for select using (auth.uid() = user_id);
+    `);
+    expect(policiesWithTruePredicate(policyDefinitions(broken))).toEqual(['wide_open']);
+  });
+
+  it('catches a literal-true with_check as well as a using', () => {
+    const broken = fake(
+      'create policy anyone_writes on public.widgets for insert with check ( true );',
+    );
+    expect(policiesWithTruePredicate(policyDefinitions(broken))).toEqual(['anyone_writes']);
   });
 });
 
