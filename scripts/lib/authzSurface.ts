@@ -221,8 +221,15 @@ export const V01_LEGACY_TABLES = [
 export function policiesWithTruePredicate(
   defs: { table: string; policy: string; sql: string }[],
 ): string[] {
+  // Match every form the runbook's red flag names, not just the literal `true`
+  // token. Naming `1 = 1` and `auth.uid() is not null` as equally dangerous
+  // while the guard only saw `true` would let the subtlest of the three ship
+  // unjustified — and the "except where expected" clause would then tell the
+  // operator that wide-open predicate is expected.
+  const wideOpen =
+    /\b(?:using|with\s+check)\s*\(\s*(?:\(\s*)*(?:true|1\s*=\s*1|auth\.uid\s*\(\s*\)\s+is\s+not\s+null)\s*(?:\)\s*)*\)/i;
   return defs
-    .filter((d) => /\b(?:using|with\s+check)\s*\(\s*true\s*\)/i.test(d.sql))
+    .filter((d) => wideOpen.test(d.sql))
     .map((d) => d.policy)
     .sort();
 }

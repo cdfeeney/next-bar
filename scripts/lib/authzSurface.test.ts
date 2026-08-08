@@ -770,6 +770,31 @@ describe('policies with a literal-true predicate', () => {
     );
     expect(policiesWithTruePredicate(policyDefinitions(broken))).toEqual(['anyone_writes']);
   });
+
+  it('catches the true-EQUIVALENT forms the runbook names, not just the token', () => {
+    // The doc calls `1 = 1` and `auth.uid() is not null` as dangerous as
+    // `true`. A guard that only saw `true` would let the subtlest one ship
+    // unjustified — and the "except where expected" clause would then tell the
+    // operator that wide-open predicate is expected.
+    const broken = fake(`
+      create policy tautology on public.widgets for select using (1 = 1);
+      create policy authed_only on public.gadgets for select using (auth.uid() is not null);
+      create policy parenthesised on public.doodads for select using ((true));
+      create policy scoped on public.things for select using (auth.uid() = user_id);
+    `);
+    expect(policiesWithTruePredicate(policyDefinitions(broken))).toEqual([
+      'authed_only',
+      'parenthesised',
+      'tautology',
+    ]);
+  });
+
+  it('does not flag a predicate that merely MENTIONS auth.uid()', () => {
+    const scoped = fake(
+      'create policy fine on public.widgets for select using (auth.uid() = owner_id);',
+    );
+    expect(policiesWithTruePredicate(policyDefinitions(scoped))).toEqual([]);
+  });
 });
 
 describe('policy definitions', () => {
