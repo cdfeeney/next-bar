@@ -36,6 +36,9 @@ const LONG_ADDRESS =
  * The `id` is required by the fixture's row shape (it pages on id order), so
  * the return type carries it explicitly rather than a bare index signature.
  */
+/** The synthetic row carrying the unbreakable name and address. */
+const LONG_ROW_ID = 'aaa-overflow-fixture';
+
 function rowsWithLongEntry(): (Record<string, unknown> & { id: string })[] {
   const base = loadBundledRows();
   const seed = base[0];
@@ -43,7 +46,7 @@ function rowsWithLongEntry(): (Record<string, unknown> & { id: string })[] {
     ...base,
     {
       ...seed,
-      id: 'aaa-overflow-fixture',
+      id: LONG_ROW_ID,
       name: LONG_NAME,
       address: LONG_ADDRESS,
       neighborhood: seed.neighborhood,
@@ -78,15 +81,27 @@ async function gotoRankings(page: Page): Promise<void> {
  */
 async function gotoRankingsWithExistingRating(page: Page): Promise<void> {
   await gotoRankings(page);
-  const ratedBarId = loadBundledRows()[0].id;
-  await page.evaluate((barId) => {
+  // Rate the LONG synthetic row, not just an ordinary one. Seeding only an
+  // ordinary bar leaves every row the guard actually measures badge-less,
+  // because the search query matches only the synthetic row and
+  // RatingBadgeView returns null for an unrated bar — so the `shrink-0` badge
+  // span, one of the three classes this fix adds, would be measured empty and
+  // that third of the row composition would go unexercised (santa: Claude
+  // FABLE). An ordinary bar is seeded alongside it so the returning-user list
+  // is not composed solely of the synthetic fixture.
+  const ratedBarIds = [LONG_ROW_ID, loadBundledRows()[0].id];
+  await page.evaluate((barIds) => {
     localStorage.setItem(
       'next-bar:ratings:v1',
-      JSON.stringify([
-        { barId, rating: 'loved', ratedAt: new Date(0).toISOString() },
-      ]),
+      JSON.stringify(
+        barIds.map((barId) => ({
+          barId,
+          rating: 'loved',
+          ratedAt: new Date(0).toISOString(),
+        })),
+      ),
     );
-  }, ratedBarId);
+  }, ratedBarIds);
   await page.reload();
 }
 
@@ -173,7 +188,15 @@ async function expectNoHorizontalOverflowWithin(
         // The real distinction is the AFFORDANCE — an ellipsis (or a clamp)
         // tells the user text was shortened; bare overflow-x:hidden hides it
         // silently, which is the workaround the goal bans.
-        const hasEllipsis = style.textOverflow === 'ellipsis';
+        // `text-overflow: ellipsis` only actually PAINTS an ellipsis on a
+        // single-line box. With `white-space: normal` the text wraps and the
+        // ellipsis never renders, so accepting the property on its own would
+        // exempt an element that is still clipping silently — the same hole
+        // the line-clamp rule closed in round 3 (santa: DeepSeek). Tailwind's
+        // `truncate` always sets nowrap, so requiring it costs nothing here.
+        const hasEllipsis =
+          style.textOverflow === 'ellipsis' &&
+          (style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre');
         // A line-clamp is a VERTICAL affordance: it wraps, then caps the line
         // count. It says nothing about the horizontal axis, so exempting a
         // clamped element outright let a real regression through — drop
@@ -458,16 +481,31 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
     await gotoRankings(page);
     await openAddBarModal(page);
 
-    const moved = await modal(page).evaluate((el) => {
-      const scroller = el.querySelector('.overflow-y-auto') as HTMLElement | null;
-      if (!scroller) return null;
-      if (scroller.scrollHeight <= scroller.clientHeight) return 'no-overflow';
+    const result = await modal(page).evaluate((el) => {
+      // Find the scroller by COMPUTED overflow-y, not by the `.overflow-y-auto`
+      // class. Matching on a class string only proves the class is present.
+      const scroller = (Array.from(el.querySelectorAll('*')) as HTMLElement[]).find(
+        (n) => {
+          const oy = getComputedStyle(n).overflowY;
+          return oy === 'auto' || oy === 'scroll';
+        },
+      );
+      if (!scroller) return { found: false, overflows: false, moved: false };
+      const overflows = scroller.scrollHeight > scroller.clientHeight;
       scroller.scrollTop = 150;
-      return scroller.scrollTop > 0 ? 'scrolled' : 'stuck';
+      const moved = scroller.scrollTop > 0;
+      scroller.scrollTop = 0;
+      return { found: true, overflows, moved };
     });
 
-    expect(moved).not.toBe('stuck');
-    expect(moved).not.toBeNull();
+    expect(result.found).toBe(true);
+    // The list must GENUINELY overflow. The previous version returned
+    // 'no-overflow' and still passed, so on any run where the list happened to
+    // fit, "vertical scrolling still works" asserted nothing at all — and
+    // criterion 6 is the one criterion a containment fix is most likely to
+    // break (santa: Codex).
+    expect(result.overflows).toBe(true);
+    expect(result.moved).toBe(true);
   });
 
   /**
@@ -500,13 +538,28 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
       list.getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) }).first(),
     ).toBeVisible({ timeout: 10_000 });
 
+    // Non-vacuity, part 3: the row really carries a rating badge. Without
+    // this, the seed could regress to an unrated bar, RatingBadgeView would
+    // return null, and the `shrink-0` span would be measured empty — the
+    // long-name-BESIDE-other-content case would silently stop being tested.
+    await expect(
+      list.getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) }).first(),
+    ).toContainText('Loved');
+
     await expectNoHorizontalOverflowWithin(
       page,
       INLINE_MATCH_LIST_SELECTOR,
       'inline rankings search match list',
     );
 
-    // The page itself must not pan either.
+    // The page itself must not pan either. NOTE for whoever extends this:
+    // this document-level check does NOT cover the ranked rows. The seeded
+    // synthetic bar never renders as a ranked row — verified by asserting the
+    // heading and watching it fail — because the ranked list resolves each
+    // rating through the catalog and the fixture id does not resolve there.
+    // GLM flagged those rows (their <h2> is a flex child with no min-w-0) as a
+    // still-unguarded surface; reaching them needs a long-named bar that the
+    // catalog can resolve, which this fixture cannot provide.
     const doc = await widths(page, ':root');
     expect(doc.scrollWidth).toBe(doc.clientWidth);
     expect(await page.evaluate(() => window.scrollX)).toBe(0);
