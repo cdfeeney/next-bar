@@ -133,7 +133,18 @@ async function expectNoNestedHorizontalScroll(page: Page, where: string): Promis
         // tells the user text was shortened; bare overflow-x:hidden hides it
         // silently, which is the workaround the goal bans.
         const hasEllipsis = style.textOverflow === 'ellipsis';
-        const hasClamp = style.webkitLineClamp !== 'none' && style.webkitLineClamp !== '';
+        // A line-clamp is a VERTICAL affordance: it wraps, then caps the line
+        // count. It says nothing about the horizontal axis, so exempting a
+        // clamped element outright let a real regression through — drop
+        // `break-words` while keeping `line-clamp-3` and an unbreakable name is
+        // clipped sideways on one line with no visible ellipsis, yet the clamp
+        // exempted it. Verified: that mutation passed 4/4 before this existed
+        // (santa round 3, Codex). A correctly wrapping clamped element has no
+        // horizontal overflow, so requiring that costs nothing.
+        const hasClamp =
+          style.webkitLineClamp !== 'none' &&
+          style.webkitLineClamp !== '' &&
+          node.scrollWidth <= node.clientWidth;
         if (!hasEllipsis && !hasClamp && node.scrollWidth > node.clientWidth) {
           out.push({
             cls: `[${style.overflowX}, no affordance] ` + (node.className?.toString().slice(0, 60) ?? ''),
