@@ -102,6 +102,28 @@ Statuses:
 | `incomplete_saturated` | Subdivision hit the 90 m floor and the cell still caps — recall is knowably short there |
 | `manifest_inconsistent` | A completion record exists but the invariant fails — treat as corrupt |
 
+### Reading the counts
+
+The resume banner prints `finished / plannedCells`, `outstanding`, and `failed`.
+They are not four disjoint buckets, so **do not expect them to sum to
+`plannedCells`**:
+
+- `finished` counts cells that finished **and** that no clause reported against.
+  A cell carrying a completing status word is *not* counted while it still owes
+  a subdivision, or still holds an unrecovered failure. This is stricter than
+  the status word alone, so a manifest can show fewer finished cells than its
+  DONE records suggest — that is the count being honest, not work being lost.
+- `outstanding` counts **distinct** cells that owe work. A capped cell with no
+  DONE is both "missing" and "capped-but-uncleared"; it is one outstanding cell,
+  not two.
+- `failed` is a **diagnostic overlay**, not a bucket. A quota-blocked cell with
+  no terminal record is counted once in `outstanding` and *also* named in
+  `failed`, so `finished + outstanding + failed` can exceed `plannedCells`. The
+  overlap is telling you *why* a cell is outstanding.
+
+To judge a run, read `status` and `outstanding`. Use `failed` and
+`saturatedAtFloor` to decide what to do about it, not to check arithmetic.
+
 ### What a terminal status attests to
 
 Per-cell `DONE` records carry a `detail` object, and for `cleared` it is the
