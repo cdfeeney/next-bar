@@ -15,6 +15,7 @@ import {
   isTerminalStatus,
   MANIFEST_CORRUPT,
   SATURATED_AT_FLOOR,
+  TYPES_EXHAUSTED,
 } from './coverage-manifest.mjs';
 import {
   DEFAULT_SUBDIVISION,
@@ -498,7 +499,14 @@ async function queryCell(cell, ctx, known) {
           cellId: cell.id,
           attemptN: nextAttempt(ctx, cell.id, known),
           ok: false,
-          errorClass: 'network',
+          // TYPES_EXHAUSTED, not `network`. The same mistake the
+          // missing-geometry sentinel made: a blocking class promises a retry
+          // will help, so `ackEligibility` refuses the waiver — but the type
+          // list is rebuilt from configuration every run, so a resume asks the
+          // identical question and gets the identical rejection. Reproduced at
+          // 3 -> 6 -> 9 records over three resumes, re-buying the rejected
+          // calls each time, with no lever in either direction.
+          errorClass: TYPES_EXHAUSTED,
           message: 'every includedType was rejected by Google; nothing left to request',
         });
         // Same rule as every other exit from this function: the cell is

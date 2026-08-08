@@ -7,6 +7,7 @@ import { SweepInterrupted, runSweep } from './coverage-sweep-engine.mjs';
 // @ts-ignore
 import {
   MANIFEST_CORRUPT,
+  TYPES_EXHAUSTED as MANIFEST_TYPES_EXHAUSTED,
   SATURATED_AT_FLOOR,
   ackEligibility,
   completeness,
@@ -827,7 +828,7 @@ describe('every stuck cell keeps a lever', () => {
     writer.close();
   }
 
-  const resume = async (file: string, transport: any = async () => ({ places: [] })) => {
+  const resumeWithTypes = async (file: string, transport: any, includedTypes: string[] = []) => {
     const writer = openManifest(file);
     await sweep({
       cells: [ROOT],
@@ -835,11 +836,15 @@ describe('every stuck cell keeps a lever', () => {
       manifest: writer,
       subdivision: SUBDIVISION,
       maxResultCount: CAP,
+      includedTypes,
       transport,
     });
     writer.close();
     return loadManifest(file)!;
   };
+
+  const resume = (file: string, transport: any = async () => ({ places: [] })) =>
+    resumeWithTypes(file, transport, []);
 
   it('records missing geometry as permanent, so the operator can waive it', async () => {
     const file = path.join(dir, 'corrupt.jsonl');
@@ -887,6 +892,73 @@ describe('every stuck cell keeps a lever', () => {
     // so a second record reusing 1 is a record that sorts before its own
     // predecessor.
     expect(numbers[1]).toBeGreaterThan(numbers[0]);
+  });
+
+  it('counts a named-but-geometry-less child as planned work', async () => {
+    // It used to be invisible. `replay` planned children only from `childCells`,
+    // so a child named in `childIds` alone was skipped by completeness — neither
+    // outstanding nor finished nor counted. Waiving it then let the parent
+    // settle and the whole run report COMPLETE with "1/1 cells finished", over a
+    // quadrant nobody had searched.
+    const file = path.join(dir, 'unplanned-child.jsonl');
+    seedMissingChildGeometry(file);
+    const after = await resume(file);
+
+    expect(after.cells.get('q/0')?.planned).toBe(true);
+    const report = completeness(after);
+    expect(report.summary.plannedCells).toBe(2);
+    expect(report.complete).toBe(false);
+    // Visible as outstanding rather than absent.
+    expect([...report.missing, ...report.failed]).toContain('q/0');
+  });
+
+  it('keeps the waiver visible in the counts once it is granted', async () => {
+    // A waived child is legitimately complete — ack_terminal is a completing
+    // status by design. The defect was never that the run completes; it was
+    // that it completed while reporting 1/1, hiding the waived geography.
+    const file = path.join(dir, 'unplanned-child-ack.jsonl');
+    seedMissingChildGeometry(file);
+    await resume(file);
+
+    const writer = openManifest(file);
+    writer.ackTerminal('q/0', 'SUBDIVIDE record lost this child geometry', 'operator');
+    writer.done('q/0', 'ack_terminal', { reason: 'geometry unrecoverable' });
+    writer.close();
+
+    const report = completeness(await resume(file));
+    expect(report.complete).toBe(true);
+    expect(report.summary.plannedCells).toBe(2);
+    expect(report.summary.finished).toBe(2);
+  });
+
+  it('leaves a lever when every includedType is rejected', async () => {
+    // The type list is rebuilt from configuration every run, so a resume asks
+    // the identical question and gets the identical rejection. Recording that
+    // as a blocking class made ackEligibility refuse it as transient while each
+    // resume re-bought the calls and appended three more records.
+    const file = path.join(dir, 'types-exhausted.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'types' }), cells: [ROOT] });
+    writer.close();
+
+    const types = ['bar', 'pub'];
+    const rejectEachType = () => {
+      let n = 0;
+      return async () => {
+        const type = types[Math.min(n, types.length - 1)];
+        n += 1;
+        throw new Error(`Invalid value at included_types[0] (TYPE_ENUM), "${type}"`);
+      };
+    };
+
+    const first = await resumeWithTypes(file, rejectEachType(), types);
+    const classes = first.cells
+      .get(ROOT.id)
+      .attempts.map((attempt: any) => attempt.errorClass);
+    expect(classes).toContain(MANIFEST_TYPES_EXHAUSTED);
+    // Not transient: a retry asks the same rejected question.
+    expect(completeness(first).failed).not.toContain(ROOT.id);
+    expect(ackEligibility(first, ROOT.id)).toMatchObject({ eligible: true });
   });
 
   it('recovers a cell whose recorded attempt numbers are sparse', async () => {

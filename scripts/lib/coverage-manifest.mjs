@@ -54,6 +54,22 @@ export const BLOCKING_ERROR_CLASSES = Object.freeze([
 export const MANIFEST_CORRUPT = 'manifest_corrupt';
 
 /**
+ * Google rejected every `includedType` we know how to ask for, so there is
+ * nothing left to request for this cell.
+ *
+ * Non-blocking for the same reason as MANIFEST_CORRUPT: a retry cannot help.
+ * The type list is rebuilt from configuration at the start of every run, so a
+ * resume asks the identical question and gets the identical rejection — this
+ * was recorded as `network`, which made `ackEligibility` refuse the waiver as
+ * transient while each resume re-bought the same rejected calls and appended
+ * three more records. Reproduced at 3 -> 6 -> 9 records over three resumes,
+ * permanently `incomplete_failed`, with no lever in any direction. Taxonomy
+ * drift is fixed by changing the configured types (a new configHash and a new
+ * run) or by waiving the cell; it is never fixed by resuming.
+ */
+export const TYPES_EXHAUSTED = 'types_exhausted';
+
+/**
  * One past the HIGHEST attempt number on record — not one past the COUNT.
  *
  * `unrecoveredBlocking` decides recovery by comparing `attemptN` values, so
@@ -305,13 +321,35 @@ export function replay({ records, tornTail = false }) {
       case 'SUBDIVIDE': {
         const parent = ensure(record.parentId);
         parent.children = [...new Set([...parent.children, ...record.childIds])];
+        // Every named child is PLANNED work, whether or not this record carried
+        // its geometry. Planning it only from `childCells` made a child named in
+        // `childIds` but missing from `childCells` invisible: `completeness`
+        // skips unplanned cells, so it was neither outstanding nor finished nor
+        // counted. Once such a child became waivable, acknowledging it let the
+        // parent settle to 'cleared' and the whole run report COMPLETE with
+        // `1/1 cells finished` — over a quadrant nobody had searched, and with
+        // no trace of it in the summary. Reproduced end to end.
+        //
+        // Planned-without-geometry is the honest state: the invariant reports
+        // it outstanding, `outstandingCells` still declines to offer it for
+        // resume (it filters on `cell.cell`, which cannot be reconstructed), and
+        // the operator's waiver is recorded and counted like any other.
+        for (const childId of record.childIds ?? []) {
+          ensure(childId, { planned: true, depth: parent.depth + 1, parentId: record.parentId });
+        }
         for (const child of record.childCells ?? []) {
-          ensure(child.id, {
+          const known = ensure(child.id, {
             planned: true,
             depth: child.depth ?? parent.depth + 1,
             parentId: record.parentId,
             cell: child,
           });
+          // Overlay geometry when a later record supplies what an earlier one
+          // omitted; `ensure` returns the existing cell rather than reseeding.
+          known.planned = true;
+          known.depth = child.depth ?? parent.depth + 1;
+          known.parentId = record.parentId;
+          known.cell = child;
         }
         break;
       }
