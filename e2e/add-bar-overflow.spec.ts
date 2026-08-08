@@ -90,14 +90,22 @@ async function gotoRankingsWithExistingRating(page: Page): Promise<void> {
   // FABLE). An ordinary bar is seeded alongside it so the returning-user list
   // is not composed solely of the synthetic fixture.
   // READ THIS BEFORE COUNTING ANYTHING IN A FUTURE TEST. These two ratings are
-  // NOT symmetric. The ordinary bundled row resolves through the catalog and
-  // renders as a ranked row; LONG_ROW_ID is a fixture-only id that the ranked
-  // list cannot resolve, so it is a GHOST — real to the inline search list
-  // (which reads useBars, i.e. the swapped catalog) and absent from the ranked
-  // rows. The page therefore shows TWO ratings in storage but ONE ranked row.
-  // That is deliberate, not a bug: any future assertion of the form "one ranked
-  // row per stored rating" will be off by one and must exclude LONG_ROW_ID
-  // (santa round 2: GLM).
+  // NOT symmetric: storage holds TWO, but only ONE ranked row renders.
+  //
+  // The reason is a STALE MEMO, not an unresolvable id. Both surfaces read the
+  // same catalog store, so once CatalogRefresh swaps the fixture rows in,
+  // getBarById(LONG_ROW_ID) resolves perfectly well. But the ranked list builds
+  // its entries in a useMemo keyed on [ratings] alone (src/app/rankings/
+  // page.tsx), so it resolved ids BEFORE the swap and never recomputes while
+  // ratings stay unchanged — the stale-reader case catalog.ts's SWAP-DAY
+  // CHECKLIST warns about. The inline search list reads useBars() live, which
+  // is why the synthetic row appears there.
+  //
+  // So the ghost holds ONLY while ratings are untouched after the swap. Change
+  // a rating through the UI after mount, or add the catalog to that memo's
+  // deps, and the row appears for real. Do not write "one ranked row per stored
+  // rating" against this helper without accounting for that
+  // (santa round 2: GLM; mechanism corrected in round 3 by Claude/FABLE + GLM).
   const ratedBarIds = [LONG_ROW_ID, loadBundledRows()[0].id];
   await page.evaluate((barIds) => {
     localStorage.setItem(
@@ -579,12 +587,15 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
 
     // The page itself must not pan either. NOTE for whoever extends this:
     // this document-level check does NOT cover the ranked rows. The seeded
-    // synthetic bar never renders as a ranked row — verified by asserting the
-    // heading and watching it fail — because the ranked list resolves each
-    // rating through the catalog and the fixture id does not resolve there.
-    // GLM flagged those rows (their <h2> is a flex child with no min-w-0) as a
-    // still-unguarded surface; reaching them needs a long-named bar that the
-    // catalog can resolve, which this fixture cannot provide.
+    // synthetic bar does not render as a ranked row here — verified by
+    // asserting its heading and watching it fail — because the ranked list's
+    // useMemo is keyed on [ratings] alone and resolved ids before the catalog
+    // swap, NOT because the id is unresolvable (see
+    // gotoRankingsWithExistingRating). GLM and Codex both flagged those rows
+    // (their <h2> is a flex child with no min-w-0) as a still-unguarded
+    // surface. Reaching them means perturbing ratings after the swap, or
+    // giving the catalog to that memo — app-side changes, which is why this
+    // is tracked as a separate item rather than folded in here.
     const doc = await widths(page, ':root');
     expect(doc.scrollWidth).toBe(doc.clientWidth);
     expect(await page.evaluate(() => window.scrollX)).toBe(0);
