@@ -1,3 +1,76 @@
+# Overnight run 3 — 2026-08-08 02:47 EDT
+
+## Run status: BLOCKED — implemented, verified, reviewed by 5/5 families, Santa rounds exhausted
+
+The operator resolved the AC5 design question in the goal body (attended
+decision, capability-based fail-closed) and re-invoked `/code`. Item 1 was
+implemented, verified, and taken through **three** Santa review rounds. It is
+**not** complete, for one precise reason: round 3's gating reviewer returned
+*"Not approved as-is"* on a HIGH finding, that finding was fixed, and the
+three-round budget is spent — so the **final** diff has not been independently
+reviewed, and an implementer does not get to self-certify its own fix.
+
+| | |
+| --- | --- |
+| Goal | `g-134e4680-…f43f` → **`blocked`** (rev 20), lease released |
+| Branch | `harness/nb-20260807/foundation` |
+| Commits | `1cf6fab`, `c21ec45`, `ca03aa9`, `bbb7387`, `da6c816` (local only) |
+| Tier | **T0** — upgraded from the goal's tentative T1 by the classifier's own verdict |
+| Quorum | **5/5 every round** — Claude/FABLE, Codex `gpt-5.6-sol`, GLM-5.2, DeepSeek-V4-Pro, Kimi K3 (deep) |
+
+### Final verification (verbatim)
+
+- `npm run verify:full` → **exit 0**, 105,644 ms: check-env, `tsc --noEmit`,
+  **1004 tests / 69 files**, `next build`, `tier-validate` OK across 3,865
+  tracked files
+- `npm run tier-redproof` → **exit 0**, 28 of 40 cases classified wrong by the
+  pre-change classifier; every new-capability case fails before the change
+- Full-repo sweep: T0 69 · T1 305 · T2 3,491 · ambiguous 0 · degraded false;
+  **zero** ordinary UI components at T0
+- Both workflow files parsed with the `yaml` library; CI never executed remotely
+
+### The three findings that mattered most
+
+1. **The gate inspected nothing after a commit, and could never run in CI.**
+   The changed-path feeder unioned only working-tree sources, which both go
+   empty once work is committed and in a fresh checkout. Found independently by
+   the Claude/FABLE and GLM lanes.
+2. **Three warnings claimed "failing closed to T0" while returning T1/T2.**
+   Kimi named the structural cause — the safety *claim* lived in a string and
+   the safety *fact* in a separately-computed value, so nothing forced them to
+   agree. Degradation is now one value with all messages derived from it, and
+   the property test that pins the invariant immediately found a **fourth**
+   instance nobody had reported.
+3. **The feeder's loud failure was inert at every call site.** A shell pipeline
+   exits with its *last* command's status, so `exit 1` was discarded and became
+   "no changed paths" + T1 + exit 0. Fixed by removing the pipe entirely.
+
+Two regressions were introduced and caught by this run's own checks: an
+unanchored `TRUNCATE` pattern matched Tailwind's `truncate` class and put five
+real React components at T0; and a test fixture at a fixed `tmpdir` path raced
+the sibling worktrees and made the suite flaky.
+
+### Human decisions needed
+
+1. **One review round on the final diff** (`da6c816`) — the only thing standing
+   between this and complete:
+   `/santa-loop g-134e4680-da31-4a53-a44e-8d02f237f43f`
+2. **Two known Mediums, deliberately not fixed** (recorded in goal evidence):
+   the async `fs/promises` deletion signature only matches within 200
+   characters of the import; and deleting any runtime file classifies
+   ambiguous → T0 + escalated, a continuous false-positive channel.
+3. **A genuine design disagreement for you, not for an agent.** Kimi argues the
+   "prose is not capability" exemption is unsound in a repository whose primary
+   contributor is a document-following agent, and that carving `AGENTS.md` /
+   `CLAUDE.md` back in by path re-enumerates dangerous prose paths by hand —
+   the very policy this work replaced. DeepSeek judged the carve-out sufficient.
+   Unresolved.
+
+Nothing was pushed, deployed, migrated, installed, or deleted. No branch was
+switched. Local commits only.
+
+---
+
 # Overnight run 2 — 2026-08-08 02:38 EDT
 
 ## Run status: BLOCKED (preflight, before any coding)
