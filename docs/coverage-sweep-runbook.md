@@ -71,6 +71,24 @@ config hash covers the bbox, step, depth/floor, the effective `includedTypes`,
 and the verbatim text queries. Change one and you get a new manifest, not a
 silent merge of two different universes.
 
+### What a resume costs
+
+**The table at the top does not bound a resume.** Those numbers are for a run
+starting from nothing. A resume only pays for cells whose records are genuinely
+missing, and some outstanding cells cost **zero** calls:
+
+- A cell whose capped page is already on record is subdivided *from that record*
+  — the children cost calls, the parent does not.
+- A parent whose children all finished but whose own terminal record was lost
+  (a kill in the one-record window between the last child's `DONE` and the
+  parent's) is settled from the records: the run writes its `DONE` and spends
+  nothing.
+
+So a resume that reports progress with `callsUsed: 0` for a cell is working
+correctly, not stalling. The one exception is a cell carrying an unrecovered
+transient failure — that is retried with a real call, because a waiver must
+never be the answer to something a retry can fix.
+
 ## Reading the result
 
 The run exits **non-zero** unless every planned cell reached a terminal state.
@@ -83,6 +101,22 @@ Statuses:
 | `incomplete_missing_work` | A cell never finished, or a saturated cell was not subdivided |
 | `incomplete_saturated` | Subdivision hit the 90 m floor and the cell still caps — recall is knowably short there |
 | `manifest_inconsistent` | A completion record exists but the invariant fails — treat as corrupt |
+
+### What a terminal status attests to
+
+Per-cell `DONE` records carry a `detail` object, and for `cleared` it is the
+only way to tell how the cell was finished:
+
+| `DONE` record | What actually happened |
+|---|---|
+| `unsaturated`, `detail.count` | The cell was searched and came back under the cap |
+| `cleared`, `detail.children` | The cell capped, was subdivided, and every child finished |
+| `cleared`, `detail.resumed: true` | **No search happened on this resume.** The children's records already showed the subtree was covered, so the run recorded the parent's status and moved on |
+| `saturated_at_floor`, `detail.reason` | Still capping at the floor — recall is knowably short here |
+| `ack_terminal`, `detail.reason` | An operator waiver. Backed by a matching `ACK_TERMINAL` record; a `DONE` claiming this word without one is treated as unfinished |
+
+A `cleared` parent's venues live in its **children**, not in its own page, so do
+not read a settled parent's own place count as the coverage of that geography.
 
 ## When a cell can never succeed
 
