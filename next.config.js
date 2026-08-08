@@ -110,10 +110,18 @@ const nextConfig = {
    * route first won, so the same suite passed or failed depending on
    * ordering and on whether `.next` was warm.
    *
-   * Unset in normal development and in CI builds, so the default is
-   * unchanged; playwright.config.ts sets it for the google-live server only.
+   * Deliberately a BOOLEAN opt-in, not a path. Taking a raw path from the
+   * environment would let a stray `NEXT_DIST_DIR` in a deploy environment
+   * send `next build` output somewhere `next start` (or the standalone
+   * server) does not look — serving a stale build or crashing on missing
+   * chunks, and only once traffic reaches an affected asset. A flag can
+   * only ever select between these two known-good values.
+   * (santa: DeepSeek finding; GLM independently suggested the same gate.)
+   *
+   * Unset in normal development, CI, and production, so the default is
+   * byte-identical to the previous hardcoded '.next'.
    */
-  distDir: process.env.NEXT_DIST_DIR || '.next',
+  distDir: process.env.NEXT_E2E_DIST === '1' ? '.next-e2e-google' : '.next',
 
   async headers() {
     return [{ source: '/:path*', headers: SECURITY_HEADERS }];

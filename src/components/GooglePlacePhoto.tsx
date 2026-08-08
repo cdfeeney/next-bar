@@ -84,8 +84,10 @@ export default function GooglePlacePhoto({
   onBillableRequest,
   surface,
 }: GooglePlacePhotoProps) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const builtRef = useRef(false);
+  /** Identity inputs of the attempt currently represented by `builtRef`. */
+  const inputsRef = useRef<string | null>(null);
   const [status, setStatus] = useState<Status>('pending');
 
   /**
@@ -106,21 +108,73 @@ export default function GooglePlacePhoto({
   });
 
   useEffect(() => {
-    // A genuine placeId/allowed change must be able to rebuild, so the guard is
-    // reset here rather than latched for the component's whole lifetime.
-    builtRef.current = false;
-    setStatus('pending');
-    hostRef.current?.replaceChildren();
+    /**
+     * Reset ONLY when the identity inputs actually changed.
+     *
+     * `hostEl` is an effect dependency (see the bottom of this effect), so
+     * this body also re-runs purely because the host div attached or
+     * detached. Resetting `builtRef` on those runs would let the SAME card
+     * build a second widget — a duplicated billable event.
+     */
+    const inputs = `${placeId}|${allowed}|${surface ?? ''}`;
+    if (inputsRef.current !== inputs) {
+      inputsRef.current = inputs;
+      builtRef.current = false;
+      setStatus('pending');
+      hostEl?.replaceChildren();
+    }
 
     if (!allowed || !placeId || !isPlacesUiKitConfigured()) {
       setStatus('unavailable');
       return;
     }
 
-    const host = hostRef.current;
+    /**
+     * The host is tracked in STATE, not just a ref, so this effect re-runs
+     * when the div actually attaches.
+     *
+     * With a plain ref this was a permanent dead end (santa: Codex, High):
+     * once an attempt gave up, the fallback rendered and the host unmounted.
+     * A later `placeId` change — ordinary here, because re-ranking reuses
+     * card positions and React reconciles by index — re-ran this effect
+     * while `hostRef.current` was still null, so it returned before
+     * installing an observer, a timer, or a build. `setStatus('pending')`
+     * then mounted the host on the NEXT render, but the dependencies had not
+     * changed again, so nothing ever ran: an empty pending box with no
+     * widget, no fallback, no name and no Maps link, forever. Depending on
+     * the node makes the attach itself the trigger.
+     */
+    const host = hostEl;
     if (!host) return;
 
+    // Already built for these inputs — an attach/detach re-run must not
+    // start a second attempt.
+    if (builtRef.current) return;
+
     let cancelled = false;
+    /**
+     * Latches once a timeout has given up on this attempt.
+     *
+     * `cancelled` is set ONLY by effect cleanup, so nothing used to mark an
+     * attempt abandoned. Two ways that stranded the card (santa: Claude/FABLE
+     * H-1):
+     *
+     *  - A late `gmp-load`. The widget is appended, the 4s budget expires and
+     *    the fallback renders — then Google's element, still alive in the
+     *    listener closure, finishes at 5-10s and fires. The listener saw
+     *    `cancelled === false` and set 'ready', which re-rendered an EMPTY
+     *    host: zero children, zero height. On a google-live card that is a
+     *    nameless card with no Maps action, because both are suppressed
+     *    outside the fallback — the exact collapse criterion 4 forbids,
+     *    replacing a working fallback.
+     *  - A late build. If the flag check plus the SDK load together outlast
+     *    MAX_LOAD_MS, the first timer already rendered the fallback and
+     *    unmounted the host, but `build()` only checked `cancelled`, so it
+     *    appended to a DETACHED node and still called `markRequested` +
+     *    `onBillableRequest` — billing telemetry recording a creation that
+     *    could never render.
+     */
+    let gaveUp = false;
     let timer: number | undefined;
 
     const build = async () => {
@@ -138,7 +192,9 @@ export default function GooglePlacePhoto({
       // timing for its own liveness: whatever happens below, this guarantees the
       // user sees something. (santa-loop round 3.)
       timer = window.setTimeout(() => {
-        if (!cancelled) setStatus('unavailable');
+        if (cancelled) return;
+        gaveUp = true;
+        setStatus('unavailable');
       }, MAX_LOAD_MS);
 
       // Server permission gate — consulted per widget CREATION, before the
@@ -147,7 +203,7 @@ export default function GooglePlacePhoto({
       // a new deployment); the immediate spend stop is the Google-side
       // quota cap, not this flag. See docs/GOOGLE-MEDIA-RUNBOOK.md.
       const runtimeOk = await isRuntimeGoogleMediaEnabled();
-      if (cancelled) return;
+      if (cancelled || gaveUp) return;
       if (!runtimeOk) {
         window.clearTimeout(timer);
         setStatus('unavailable');
@@ -155,7 +211,7 @@ export default function GooglePlacePhoto({
       }
 
       const ok = await loadPlacesUiKit();
-      if (cancelled) return;
+      if (cancelled || gaveUp) return;
       if (!ok) {
         window.clearTimeout(timer);
         setStatus('unavailable');
@@ -190,7 +246,9 @@ export default function GooglePlacePhoto({
       details.append(request, config);
 
       details.addEventListener('gmp-load', () => {
-        if (cancelled) return;
+        // gaveUp: a widget that arrives after the fallback already rendered
+        // must NOT flip the card back to an empty host.
+        if (cancelled || gaveUp) return;
         window.clearTimeout(timer);
         setStatus('ready');
       });
@@ -199,7 +257,9 @@ export default function GooglePlacePhoto({
       // pre-await timer above has done its job once we get here.
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
-        if (!cancelled) setStatus('unavailable');
+        if (cancelled) return;
+        gaveUp = true;
+        setStatus('unavailable');
       }, WIDGET_LOAD_TIMEOUT_MS);
 
       // Appending is the billable moment — record it here and nowhere else.
@@ -246,13 +306,13 @@ export default function GooglePlacePhoto({
     // — see the stuck-'pending' bug documented on onBillableRequestRef above.
     // `surface` is static per callsite; if it ever genuinely changed, the
     // widget belongs to a different billing context and SHOULD rebuild.
-  }, [placeId, allowed, surface]);
+  }, [placeId, allowed, surface, hostEl]);
 
   if (status === 'unavailable') return <>{fallback}</>;
 
   return (
     <div
-      ref={hostRef}
+      ref={setHostEl}
       data-testid="google-place-photo"
       data-status={status}
       // NEVER clip, and never impose a fixed height on a loaded widget.

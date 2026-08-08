@@ -121,11 +121,16 @@ async function installWidget(page: Page, scenario: Scenario): Promise<void> {
           window.setTimeout(
             () => {
               if (mode !== 'zero') {
-                const media = document.createElement('div');
-                media.setAttribute('data-e2e-widget-photo', '');
-                media.style.height = '160px';
-                media.style.background = '#334';
-                this.appendChild(media);
+                // THREE photos, not one: the "multi-photo lightbox handoff"
+                // scenario cannot mean anything if the widget only ever
+                // renders a single photo. (santa: Claude/FABLE M-1.)
+                for (let i = 0; i < 3; i += 1) {
+                  const media = document.createElement('div');
+                  media.setAttribute('data-e2e-widget-photo', String(i));
+                  media.style.height = '160px';
+                  media.style.background = '#334';
+                  this.appendChild(media);
+                }
               }
               // Stand-ins for the two things Google's own card supplies and
               // that ours must therefore NOT duplicate.
@@ -407,8 +412,22 @@ test.describe('supported Google card', () => {
     // Photo expansion is delegated to Google's own lightbox, not re-implemented.
     const d = await inspectCard(page);
     expect(d!.mediaEls, 'lightbox-preferred must remain set').toBe(1);
+    // The widget really is rendering MULTIPLE photos in this scenario.
+    const widgetPhotos = card(page).locator('[data-e2e-widget-photo]');
+    await expect(widgetPhotos).toHaveCount(3);
 
     const before = page.url();
+
+    // Tapping Google's OWN photo must stay with Google: no app dialog, no
+    // navigation. Previously this scenario never clicked the widget at all,
+    // so an overlay or a wrapping click handler that hijacked the handoff
+    // would have passed it. (santa: Claude/FABLE M-1.)
+    await widgetPhotos.first().click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(page.url()).toBe(before);
+    const afterWidgetTap = await inspectCard(page);
+    expect(afterWidgetTap!.ownedTiles, 'app gallery appeared on widget tap').toBe(0);
+    expect(afterWidgetTap!.legacyImgs).toBe(0);
     await card(page).getByRole('button', { name: /See hours for/i }).click();
 
     // Our lightbox carries the app's OWN content (weekly hours)…
@@ -545,14 +564,26 @@ test.describe('supported Google card', () => {
     // Every app-owned control on the card that is not a real link.
     const buttons = card(page).locator('button');
     const count = await buttons.count();
+    // Without this the loop degenerates silently: a selector drift or an
+    // overlay swallowing every click would leave the test asserting nothing
+    // while still reporting "interactions never change the URL".
+    // (santa: Claude/FABLE M-2.)
+    expect(count, 'no app-owned buttons found on the card').toBeGreaterThan(0);
+
+    let clicked = 0;
     for (let i = 0; i < count; i += 1) {
       const b = buttons.nth(i);
       if (!(await b.isVisible().catch(() => false))) continue;
-      await b.click({ trial: false }).catch(() => undefined);
+      // Not swallowed: a control that cannot be clicked is a real failure,
+      // not something to skip past.
+      await b.click({ timeout: 5_000 });
+      clicked += 1;
       expect(page.url(), `button ${i} navigated`).toBe(before);
       // Close anything that opened so the next control is reachable.
       await page.keyboard.press('Escape').catch(() => undefined);
     }
+    // A google-live card always carries at least Want-to-go and Hours.
+    expect(clicked, 'no card button was actually clicked').toBeGreaterThanOrEqual(2);
 
     await expectUniversalInvariants(page, probe, 'interactions');
   });

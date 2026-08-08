@@ -24,7 +24,11 @@ vi.mock('@/lib/placesUiKit', async () => {
 });
 
 import GooglePlacePhoto from './GooglePlacePhoto';
-import { __resetRequested, billableEventCountForSurface } from '@/lib/placesUiKit';
+import {
+  WIDGET_LOAD_TIMEOUT_MS,
+  __resetRequested,
+  billableEventCountForSurface,
+} from '@/lib/placesUiKit';
 
 const FALLBACK = <span data-testid="glyph-fallback">glyph</span>;
 
@@ -74,6 +78,105 @@ describe('compact element construction', () => {
   test('one billable creation per widget, attributed to its surface', async () => {
     await mountWidget();
     expect(billableEventCountForSurface('result-card')).toBe(1);
+  });
+});
+
+/**
+ * Giving up must be FINAL.
+ *
+ * Once the widget budget expires the fallback renders and the host div is
+ * unmounted. Google's element is still alive inside the `gmp-load` listener
+ * closure, so a slow place/photo fetch completing afterwards used to fire
+ * into a listener that only checked `cancelled` (set by effect cleanup) —
+ * flipping status back to 'ready' and re-rendering an EMPTY host: no
+ * children, no height. On a google-live card our name and Maps link are
+ * suppressed outside the fallback, so that is a nameless card with no Maps
+ * action — replacing a perfectly good fallback. (santa: Claude/FABLE H-1.)
+ */
+describe('a late widget must not un-do the fallback', () => {
+  test('a gmp-load arriving after the timeout leaves the fallback in place', async () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <GooglePlacePhoto placeId="ChIJlate" surface="result-card" fallback={FALLBACK} />,
+      );
+
+      const host = await vi.waitFor(() => screen.getByTestId('google-place-photo'));
+      const compact = await vi.waitFor(() => {
+        const el = host.querySelector('gmp-place-details-compact');
+        expect(el).not.toBeNull();
+        return el as Element;
+      });
+
+      // Burn the whole widget budget without ever signalling readiness.
+      await vi.advanceTimersByTimeAsync(WIDGET_LOAD_TIMEOUT_MS + 1_000);
+      expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
+      expect(screen.queryByTestId('google-place-photo')).toBeNull();
+
+      // Google finally answers, far too late.
+      compact.dispatchEvent(new Event('gmp-load'));
+      await vi.advanceTimersByTimeAsync(50);
+
+      // The fallback STANDS. Before the `gaveUp` latch this re-rendered an
+      // empty host and the assertions below both failed.
+      expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
+      expect(screen.queryByTestId('google-place-photo')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * A card that gave up must still be able to start over.
+ *
+ * Once the fallback renders the host div is unmounted. A later placeId change
+ * is ordinary here — re-ranking reuses card positions and React reconciles by
+ * index — and the effect used to re-run while the ref was still null, return
+ * before installing anything, and never re-run again once the host mounted.
+ * The card was then stuck on an empty pending box with no widget, no
+ * fallback, no name and no Maps link. (santa: Codex, High.)
+ */
+describe('a new placeId after a fallback still builds', () => {
+  test('recovers instead of stranding on an empty pending box', async () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <GooglePlacePhoto placeId="ChIJfirst" surface="result-card" fallback={FALLBACK} />,
+      );
+      await vi.waitFor(() => expect(screen.getByTestId('google-place-photo')).toBeTruthy());
+
+      // Let the first attempt give up so the fallback replaces the host.
+      await vi.advanceTimersByTimeAsync(WIDGET_LOAD_TIMEOUT_MS + 1_000);
+      expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
+      expect(screen.queryByTestId('google-place-photo')).toBeNull();
+
+      // A different bar now occupies this card position.
+      rerender(
+        <GooglePlacePhoto placeId="ChIJsecond" surface="result-card" fallback={FALLBACK} />,
+      );
+
+      // The replacement attempt must actually run: host back, widget built
+      // for the NEW place. Previously this hung on 'pending' forever with an
+      // empty host and no widget.
+      const host = await vi.waitFor(() => screen.getByTestId('google-place-photo'));
+      const compact = await vi.waitFor(() => {
+        const el = host.querySelector('gmp-place-details-compact');
+        expect(el).not.toBeNull();
+        return el as Element;
+      });
+      expect(
+        compact
+          .querySelector('gmp-place-details-place-request')
+          ?.getAttribute('place'),
+      ).toBe('ChIJsecond');
+
+      // Exactly one billable creation per attempt — the recovery must not
+      // double-bill the card it just rebuilt.
+      expect(billableEventCountForSurface('result-card')).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

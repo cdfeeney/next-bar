@@ -297,6 +297,13 @@ export default defineConfig({
       NEXT_TELEMETRY_DISABLED: '1',
       // Empty object when .env.local exists — see STUB_SUPABASE_ENV above.
       ...STUB_SUPABASE_ENV,
+      // PINNED OFF, not merely unset. webServer.env merges with the parent
+      // process env, so an exported NEXT_E2E_DIST=1 in the invoking shell
+      // (easy to leave behind while debugging the google server) would put
+      // BOTH servers back in .next-e2e-google with different
+      // NEXT_PUBLIC_GOOGLE_MEDIA values — reviving the shared-chunk bug this
+      // split exists to fix. (santa: Claude/FABLE M-3.)
+      NEXT_E2E_DIST: '0',
     },
   },
   {
@@ -333,7 +340,11 @@ export default defineConfig({
       // silently degraded to the ordinary card and the widget host never
       // rendered. Whichever server compiled a route first won, which is why
       // it looked like flake. See next.config.js `distDir`.
-      NEXT_DIST_DIR: '.next-e2e-google',
+      //
+      // A boolean flag, not a path: next.config.js selects between two
+      // known-good directories, so no environment can inject an arbitrary
+      // build path into a real deploy.
+      NEXT_E2E_DIST: '1',
     },
   }],
 });
