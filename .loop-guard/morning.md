@@ -315,15 +315,19 @@ and version-scoping came ONLY from GLM; the unmodelable-grant fail-open came
 ONLY from DeepSeek. Codex independently corroborated the definer counts and the
 auth.uid() exception set.
 
-WHAT REMAINS — three doc-only fixes, none in the parser. Est. 15 attended min:
+WHAT REMAINS — five doc-only fixes, none in the parser. Est. 20 attended min:
 1. HIGH. Check 5 says "Expected: exactly 2 rows, both anon" and then, 13 lines
    later, that PUBLIC rows are expected for 8 trigger functions. The doc's own
    healthy result is 10 rows, not 2. I introduced this in round 2 by fixing the
    paragraph and not the Expected line. Also: Supabase's bootstrap grants anon
    EXECUTE on functions by default, so those 8 likely show anon rows too, which
-   the current rule calls stop-and-escalate. Fix: enumerate the real healthy
-   result, or add `and p.prorettype <> 'trigger'::regtype` and keep the strict
-   2-row expectation for callable functions.
+   the current rule calls stop-and-escalate.
+   PREFERRED FIX (two lanes converged on it independently): add
+   `and p.prorettype <> 'trigger'::regtype` to the query plus one sentence
+   saying trigger functions cannot be invoked directly and are therefore inert.
+   With that filter "exactly 2" becomes TRUE under either Supabase ACL regime,
+   because every CALLABLE function in the corpus is revoke-first — which is the
+   cleaner outcome than enumerating a 10-row expected result.
 2. MED. Check 3 uses information_schema.role_table_grants, which shows nothing
    to a role that is not an enabled role for the grantee - and step 2 of the
    runbook explicitly sanctions running as a read-only role. That turns a
@@ -333,6 +337,27 @@ WHAT REMAINS — three doc-only fixes, none in the parser. Est. 15 attended min:
    future migration stays listed in Checks 1/4 with green tests. The
    "Functions parsed | 41" literal and the numeral in "exactly these 8
    functions" are also unbound.
+4. MED. WRONG CROSS-REFERENCE, verified live at line 160: Check 1's mismatch
+   guidance says "Compare against Check 6 before concluding anything" for a
+   table missing because migrations were not fully applied. Ledger parity is
+   Check 7; Check 6 is definer bodies. A 2am operator chasing a missing table
+   is routed to the wrong procedure. Fix: s/Check 6/Check 7/ on line 160.
+5. MED. Check 2 still defines no outcome for a SAME-COUNT policy rename. Its
+   query already string_aggs policyname, but the Expected is counts only, so a
+   policy replaced by a differently-named one with unchanged count passes.
+   Check 2b (expressions) partially mitigates this, since the operator diffs
+   per-policy expressions, but the explicit rule is absent. Fix: one sentence —
+   the query's policy names must equal the regenerated report's per-table list,
+   and a name mismatch with a matching count is stop-and-escalate.
+
+PROVENANCE OF 4 AND 5: the round-1 Claude/FABLE lane that I mis-dispatched as a
+named background agent finally reported at 07:10, ~2 hours late, reviewing
+274c32a (two commits stale). Three of its five findings were already fixed by
+rounds 1-2; I re-verified each against HEAD rather than taking either side on
+trust. Items 4 and 5 above are its genuinely new, still-live contributions, and
+neither round 2 nor round 3 caught item 4. NOT APPLIED: the 3-round Santa cap
+was already exhausted and the item is terminal-blocked, so a stale review of an
+old commit cannot reopen the gate; these are handoff notes, not shipped edits.
 
 Deployed RLS parity remains **UNVERIFIED**. This item builds the means to check
 it and was not finished; running it is attended work that has not happened.
