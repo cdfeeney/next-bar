@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
+import { APP_ORIGIN, APP_PORT } from './e2e/tools/appOrigin';
 
 // Single source for the fence address — a split-coverage edit (browser fenced,
 // server not) is exactly the gap the fence exists to close. The proxy's own
@@ -62,7 +63,10 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:3000',
+    // Port is per-worktree via NB_E2E_PORT (default 3000) — see
+    // e2e/tools/appOrigin.ts for why a shared :3000 is a correctness hazard
+    // when several leased worktrees run at once.
+    baseURL: APP_ORIGIN,
     // Network fence (overnight scope 2026-08-05): every non-loopback request
     // from a test browser is sent to the local refuse-all logging proxy
     // (e2e/tools/fence-proxy.mjs); loopback bypasses it. Tests must pass with
@@ -81,7 +85,10 @@ export default defineConfig({
       cookies: [],
       origins: [
         {
-          origin: 'http://localhost:3000',
+          // MUST track baseURL: localStorage is origin-keyed, so a mismatched
+          // origin here leaves the 21+ age gate un-acknowledged and its
+          // overlay intercepts the first click of every spec.
+          origin: APP_ORIGIN,
           localStorage: [{ name: 'next-bar:age-ack:v1', value: '1' }],
         },
       ],
@@ -191,8 +198,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
+    command: `npm run dev -- --port ${APP_PORT}`,
+    url: APP_ORIGIN,
     reuseExistingServer: true,
     timeout: 120_000,
     // Server-side half of the network fence: the dev server's own outbound

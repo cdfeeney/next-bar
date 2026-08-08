@@ -18,6 +18,9 @@
 import { spawn } from 'node:child_process';
 import { createConnection } from 'node:net';
 import path from 'node:path';
+// The canary must interrogate the SAME server the specs will drive, so it
+// tracks playwright.config.ts's app port rather than assuming :3000.
+import { APP_ORIGIN, APP_PORT } from './appOrigin';
 
 // Single source of truth: the proxy module exports its own contract.
 // Importing does NOT start the server (main-module guard in the .mjs).
@@ -81,7 +84,7 @@ function probe(PORT: number, BANNER: string): Promise<ProbeResult> {
  * Server-side canary (santa round-2, Fable HIGH): with reuseExistingServer,
  * a dev server started WITHOUT the proxy env is silently unfenced —
  * webServer.env is never applied to a reused server. If a server already
- * answers on :3000, hit /api/health: its handler performs a SERVER-SIDE fetch
+ * answers on the app port, hit /api/health: its handler performs a SERVER-SIDE fetch
  * to the Supabase auth health URL. supabase:'ok' is affirmative proof that a
  * live call left the box → abort. 'unreachable'/'unconfigured' pass — that IS
  * the fenced outcome (indistinguishable from Supabase-down, which also means
@@ -92,7 +95,7 @@ function probe(PORT: number, BANNER: string): Promise<ProbeResult> {
 async function assertReusedServerFenced(attempt = 0): Promise<void> {
   let res: Response;
   try {
-    res = await fetch('http://localhost:3000/api/health', {
+    res = await fetch(`${APP_ORIGIN}/api/health`, {
       cache: 'no-store',
       redirect: 'manual', // a redirecting impostor must not steer this fetch
       // Generous: a reused dev server may cold-compile /api/health.
@@ -116,7 +119,7 @@ async function assertReusedServerFenced(attempt = 0): Promise<void> {
       return assertReusedServerFenced(attempt + 1);
     }
     throw new Error(
-      `reused dev server on :3000 did not answer the fence canary (${code ?? String(e)}) — ` +
+      `reused dev server on :${APP_PORT} did not answer the fence canary (${code ?? String(e)}) — ` +
         'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
     );
   }
@@ -129,13 +132,13 @@ async function assertReusedServerFenced(attempt = 0): Promise<void> {
     // or impostor server: fail CLOSED (round-5 Codex MEDIUM — fetch resolves
     // at headers, so body errors must not be swallowed).
     throw new Error(
-      `reused server on :3000 answered the canary with an unreadable body (${String(e)}) — ` +
+      `reused server on :${APP_PORT} answered the canary with an unreadable body (${String(e)}) — ` +
         'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
     );
   }
   if (body.supabase === 'ok') {
     throw new Error(
-      'reused dev server on :3000 reached live Supabase server-side — it ' +
+      `reused dev server on :${APP_PORT} reached live Supabase server-side — it ` +
         'is NOT fenced (started without the proxy env). Kill it and let ' +
         'Playwright spawn the fenced one.',
     );

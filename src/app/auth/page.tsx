@@ -171,8 +171,17 @@ export default function AuthPage() {
     status.kind === 'confirm' || status.kind === 'reset-sent' ? status : null;
 
   return (
-    <main className="min-h-screen flex flex-col">
-      <header className="px-6 py-4 flex items-center justify-between border-b border-border">
+    /*
+     * LAYOUT NOTE (g-4e72a0c5, visual only). `dvh` not `vh`: under collapsing
+     * mobile browser chrome `100vh` is the LARGE viewport, so a `100vh` box is
+     * taller than what the user can actually see and the submit button sits
+     * below the fold on first paint. `min-h-dvh` tracks the live viewport.
+     * Heights stay `min-h-*` rather than `h-*` so nothing here can ever
+     * suppress the vertical scrolling a keyboard, a short screen, or enlarged
+     * accessibility text requires.
+     */
+    <main className="min-h-dvh flex flex-col">
+      <header className="px-6 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 flex items-center justify-between border-b border-border">
         <Link
           href="/"
           className="font-display text-accent text-sm uppercase tracking-[0.3em] min-h-[44px] inline-flex items-center touch-manipulation"
@@ -187,19 +196,23 @@ export default function AuthPage() {
         </Link>
       </header>
 
-      <section className="flex-1 flex items-center justify-center px-6 py-12">
+      {/* Phone gutters are the minimum, not the look: `items-center` already
+          supplies breathing room whenever the form is shorter than the
+          viewport, so the old `py-12` bought nothing but 96px of scroll on a
+          390x664 screen. Desktop keeps the generous spacing. */}
+      <section className="flex-1 flex items-center justify-center px-6 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:py-12">
         <div className="max-w-md w-full">
-          <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3 text-center">
+          <p className="text-accent uppercase tracking-[0.25em] text-xs mb-2 text-center">
             Save your nights
           </p>
-          <h1 className="font-display text-4xl md:text-5xl text-center leading-tight mb-4">
+          <h1 className="font-display text-3xl md:text-5xl text-center leading-tight mb-3">
             {view === 'forgot'
               ? 'Reset your password.'
               : intent === 'signup'
                 ? 'Create your account.'
                 : 'Sign in to Next Bar.'}
           </h1>
-          <p className="text-muted text-sm text-center mb-8 leading-relaxed">
+          <p className="text-muted text-sm text-center mb-6 leading-relaxed">
             {view === 'forgot'
               ? "Enter your email and we'll send a reset link."
               : 'Your ratings, lists, and profile follow you to any device.'}
@@ -306,7 +319,7 @@ export default function AuthPage() {
             </div>
           ) : (
             <>
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleSubmit} className="space-y-3">
                 <label className="block">
                   <span className="sr-only">Email</span>
                   <input
@@ -317,7 +330,7 @@ export default function AuthPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
-                    className="w-full bg-surface border border-border focus:border-accent outline-none rounded-2xl px-5 py-4 text-base min-h-[44px]"
+                    className="w-full bg-surface border border-border focus:border-accent outline-none rounded-2xl px-5 py-3 text-base min-h-[44px]"
                     disabled={isBusy}
                   />
                 </label>
@@ -341,7 +354,7 @@ export default function AuthPage() {
                           ? `Choose a password (${MIN_PASSWORD_LENGTH}+ characters)`
                           : 'Password'
                       }
-                      className="w-full bg-surface border border-border focus:border-accent outline-none rounded-2xl px-5 py-4 text-base min-h-[44px]"
+                      className="w-full bg-surface border border-border focus:border-accent outline-none rounded-2xl px-5 py-3 text-base min-h-[44px]"
                       disabled={isBusy}
                     />
                   </label>
@@ -356,7 +369,7 @@ export default function AuthPage() {
                 <button
                   type="submit"
                   disabled={isBusy}
-                  className="w-full bg-accent text-bg hover:bg-accentDim transition-colors font-display text-lg px-6 py-4 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-accent text-bg hover:bg-accentDim transition-colors font-display text-lg px-6 py-3 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isBusy
                     ? 'One sec…'
@@ -368,7 +381,7 @@ export default function AuthPage() {
                 </button>
               </form>
 
-              <div className="mt-4 space-y-1 text-center">
+              <div className="mt-3 space-y-1 text-center">
                 {view === 'form' ? (
                   <>
                     <button
@@ -414,7 +427,7 @@ export default function AuthPage() {
             </>
           )}
 
-          <p className="text-muted text-xs text-center mt-8 leading-relaxed">
+          <p className="text-muted text-xs text-center mt-6 leading-relaxed">
             Signed in, your ratings sync across devices. Signed out, they
             stay on this one.
           </p>
