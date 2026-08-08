@@ -43,6 +43,15 @@ const ROUTES = [
   '/where-next',
 ];
 
+// API routes the CLIENT calls during a normal page render. A page-only
+// warm-up leaves these to compile on their first in-test request, and
+// `/api/flags` is consulted by placesUiKit.isRuntimeGoogleMediaEnabled()
+// behind a 3s FAIL-CLOSED timeout — so a cold compile that overran it read
+// as "google media disabled" and silently degraded the google-live card to
+// its fallback mid-test. That presented as intermittent scenario failures,
+// not as a flag error. (goal g-65ba768e.)
+const API_ROUTES = ['/api/flags'];
+
 // Dynamic routes: a concrete param compiles the route module; the probe
 // may legitimately 404 for an unknown entity, so only 5xx (compile
 // failure) is fatal here.
@@ -58,6 +67,10 @@ test('warm every route once', async ({ request }) => {
     const res = await request.get(route);
     // 2xx/3xx only — a route that 500s on compile should fail loudly here,
     // not as a mystery mid-suite.
+    expect(res.status(), `${route} status`).toBeLessThan(400);
+  }
+  for (const route of API_ROUTES) {
+    const res = await request.get(route);
     expect(res.status(), `${route} status`).toBeLessThan(400);
   }
   for (const route of DYNAMIC_ROUTES) {

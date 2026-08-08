@@ -97,6 +97,24 @@ const SECURITY_HEADERS = [
 const nextConfig = {
   reactStrictMode: true,
 
+  /**
+   * Build directory, overridable so two dev servers can run the SAME project
+   * with DIFFERENT `NEXT_PUBLIC_*` values.
+   *
+   * `NEXT_PUBLIC_*` is inlined at COMPILE time, and every dev server started
+   * in this directory shares `.next`. So the e2e google-live server (which
+   * sets NEXT_PUBLIC_GOOGLE_MEDIA=1) was serving chunks the MAIN server had
+   * already compiled with the flag OFF — the google-live card silently
+   * degraded to the ordinary hero/glyph card and the widget host never
+   * rendered. It presented as intermittent: whichever server compiled a
+   * route first won, so the same suite passed or failed depending on
+   * ordering and on whether `.next` was warm.
+   *
+   * Unset in normal development and in CI builds, so the default is
+   * unchanged; playwright.config.ts sets it for the google-live server only.
+   */
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+
   async headers() {
     return [{ source: '/:path*', headers: SECURITY_HEADERS }];
   },

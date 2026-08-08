@@ -20,3 +20,4 @@ scripts/data/
 .site-cache/
 .osm-cache/
 scripts/census/out/
+.next-e2e-google

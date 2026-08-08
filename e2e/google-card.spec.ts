@@ -193,16 +193,31 @@ async function openResults(page: Page): Promise<void> {
   // appears. That is the single cause of every `locator.fill` timeout seen
   // on this spec — the page snapshot showed "Pick a bar instead" sitting
   // there, unclicked.
-  await expect(pick.or(search).first()).toBeVisible({ timeout: 30_000 });
-  if (await pick.isVisible().catch(() => false)) await pick.click();
+  // Retry the whole choose-then-search step as ONE unit.
+  //
+  // Checking `pick.isVisible()` once and clicking is not enough even after
+  // waiting for it: the location-first screen can re-render between the
+  // check and the click (the button detaches, the click is skipped), and the
+  // following fill() then waits out the entire test budget for a search box
+  // that never appears. `toPass` re-runs the block until the search box is
+  // actually there, which is the condition we care about.
+  await expect(async () => {
+    if (await pick.isVisible().catch(() => false)) {
+      await pick.click().catch(() => undefined);
+    }
+    await expect(search).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 45_000 });
 
   await search.fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).first().click();
+  // Bounded on purpose: an unbounded waitFor() is limited only by the test
+  // timeout, which turned every slow render into a 120s hang instead of a
+  // fast, diagnosable failure.
   await page
     .locator('article')
     .filter({ hasText: /Vibe match/i })
     .first()
-    .waitFor();
+    .waitFor({ timeout: 30_000 });
 }
 
 const card = (page: Page) =>

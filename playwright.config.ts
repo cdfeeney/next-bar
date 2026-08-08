@@ -326,6 +326,14 @@ export default defineConfig({
       NEXT_TELEMETRY_DISABLED: '1',
       ...STUB_SUPABASE_ENV,
       ...GOOGLE_LIVE_ENV,
+      // Its OWN build directory. Both dev servers run in this one project
+      // directory and `NEXT_PUBLIC_*` is inlined at COMPILE time, so sharing
+      // `.next` meant this server served chunks the MAIN server had already
+      // compiled with NEXT_PUBLIC_GOOGLE_MEDIA unset — the google-live card
+      // silently degraded to the ordinary card and the widget host never
+      // rendered. Whichever server compiled a route first won, which is why
+      // it looked like flake. See next.config.js `distDir`.
+      NEXT_DIST_DIR: '.next-e2e-google',
     },
   }],
 });
