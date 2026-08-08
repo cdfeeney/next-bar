@@ -50,6 +50,50 @@ const AUTH_COPY = {
   emailExists: 'That email already has an account — sign in instead.',
 } as const;
 
+/** App-owned page copy, mirrored verbatim from src/app/auth/page.tsx.
+ *
+ *  Criterion 17 is "the exact app-owned copy still renders", and until santa
+ *  round-5 only the three error-path tests below discharged it: the eight
+ *  state tests matched headings with PARTIAL, case-insensitive regexes, and
+ *  the signin and keyboard states asserted no page copy at all — so silently
+ *  rewording the signin heading or subheading shipped green against an
+ *  explicit acceptance criterion. (santa round-5: Codex and GLM found the
+ *  gap independently; Kimi gated on it.)
+ *
+ *  Mirrored rather than imported ON PURPOSE. Importing the strings the page
+ *  renders would make these assertions tautological — they would follow any
+ *  reword instead of failing on it, which is the entire job here. The cost is
+ *  that an INTENDED copy change must be made in two places; that is the
+ *  intended friction, and the mismatch is what fails the test. */
+const PAGE_COPY = {
+  eyebrow: 'Save your nights',
+  signinHeading: 'Sign in to Next Bar.',
+  signupHeading: 'Create your account.',
+  forgotHeading: 'Reset your password.',
+  formBody: 'Your ratings, lists, and profile follow you to any device.',
+  forgotBody: "Enter your email and we'll send a reset link.",
+  footer:
+    'Signed in, your ratings sync across devices. Signed out, they stay on this one.',
+  inboxHeading: 'Check your inbox.',
+  callbackError: "Sign-in didn't complete. Please try again.",
+  pkceGuidance: 'Finish on the same device and browser you started from.',
+} as const;
+
+/** Criterion 17 for the page chrome: the eyebrow, heading and subheading are
+ *  asserted with `toHaveText` (exact, whitespace-normalised) rather than a
+ *  substring regex, so a reword fails rather than passing on a fragment. */
+async function expectExactPageCopy(
+  page: Page,
+  heading: string,
+  body: string,
+): Promise<void> {
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(heading);
+  await expect(page.getByText(PAGE_COPY.eyebrow, { exact: true })).toBeVisible();
+  await expect(
+    page.locator('main section p').filter({ hasText: body }).first(),
+  ).toHaveText(body);
+}
+
 /** WebKit controlled-input note — see the header of auth-page.spec.ts. */
 async function typeInto(input: Locator, value: string): Promise<void> {
   await input.click();
@@ -188,6 +232,12 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     await page.goto('/auth');
     await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
 
+    await expectExactPageCopy(
+      page,
+      PAGE_COPY.signinHeading,
+      PAGE_COPY.formBody,
+    );
+
     const g = await geometry(page);
     expectNoClipping(g);
     expectNoHorizontalOverflow(g);
@@ -202,6 +252,11 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     await expect(
       page.getByRole('heading', { name: /create your account/i }),
     ).toBeVisible();
+    await expectExactPageCopy(
+      page,
+      PAGE_COPY.signupHeading,
+      PAGE_COPY.formBody,
+    );
 
     const g = await geometry(page);
     expectNoClipping(g);
@@ -216,6 +271,11 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     await expect(
       page.getByRole('heading', { name: /reset your password/i }),
     ).toBeVisible();
+    await expectExactPageCopy(
+      page,
+      PAGE_COPY.forgotHeading,
+      PAGE_COPY.forgotBody,
+    );
 
     const g = await geometry(page);
     expectNoClipping(g);
@@ -233,7 +293,16 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     await page.getByRole('button', { name: /send reset link/i }).click();
 
     await expect(page.getByText(/check your inbox/i)).toBeVisible();
-    await expect(page.getByText(/We sent a reset link/i)).toBeVisible();
+    // Criterion 17, exactly: the inbox heading verbatim, and the reset-link
+    // sentence in full including the address it was sent to.
+    await expect(
+      page.getByText(PAGE_COPY.inboxHeading, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/We sent a reset link/i).first(),
+    ).toHaveText(
+      "We sent a reset link to connor@example.com. Tap it and you'll be signed in — then set your new password from Settings.",
+    );
 
     const g = await geometry(page);
     expectNoClipping(g);
@@ -246,7 +315,8 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     await page.goto('/auth?error=server_error');
 
     const banner = page.locator('div[role="alert"]').filter({ hasText: /\S/ });
-    await expect(banner).toContainText(/didn't complete/i);
+    // Exact, not a fragment (criterion 17). (santa round-5: Codex + GLM.)
+    await expect(banner.locator('p')).toHaveText(PAGE_COPY.callbackError);
 
     const g = await geometry(page);
     expectNoClipping(g);
@@ -258,10 +328,9 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     await page.goto('/auth?error=pkce_code_verifier_not_found');
 
     const banner = page.locator('div[role="alert"]').filter({ hasText: /\S/ });
-    // The P0 distinction: same-device guidance, NOT "expired".
-    await expect(banner).toContainText(
-      /Finish on the same device and browser you started from/i,
-    );
+    // The P0 distinction: same-device guidance, NOT "expired". Pinned exactly
+    // rather than as a fragment (criterion 17). (santa round-5: Codex + GLM.)
+    await expect(banner.locator('p').first()).toHaveText(PAGE_COPY.pkceGuidance);
     await expect(banner).not.toContainText(/expired or was already used/i);
     await expect(
       banner.getByRole('button', { name: /send a new link/i }),
@@ -283,10 +352,18 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     expectNoHorizontalOverflow(g);
     await expectVerticallyScrollable(page);
 
+    await expectExactPageCopy(
+      page,
+      PAGE_COPY.signinHeading,
+      PAGE_COPY.formBody,
+    );
+
     // The lowest control must actually be reachable, not merely present.
     const footerNote = page.getByText(/Signed in, your ratings sync across devices/i);
     await footerNote.scrollIntoViewIfNeeded();
     await expect(footerNote).toBeInViewport();
+    // ...and it must still say what it says (criterion 17, exact).
+    await expect(footerNote).toHaveText(PAGE_COPY.footer);
     await expectAuthSurfaceIntact(page);
   });
 
@@ -303,6 +380,12 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     await expectVerticallyScrollable(page);
+
+    await expectExactPageCopy(
+      page,
+      PAGE_COPY.signinHeading,
+      PAGE_COPY.formBody,
+    );
 
     const submit = page.getByRole('button', { name: /^Sign in →$/ });
     await submit.scrollIntoViewIfNeeded();
@@ -389,6 +472,22 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     // cascade back to 100vh while the early copy still supplies a small
     // `min`, so the assertion stayed green on a page that had regressed.
     // (santa round-4: Claude/FABLE + Codex, independently.)
+    //
+    // KNOWN LIMIT, stated so nobody reads more into a red or a green here
+    // than it carries: this models SOURCE ORDER ONLY, which is the last tier
+    // of the cascade. It is exactly right for the rules that exist — both
+    // competitors are single-class Tailwind utilities of specificity (0,1,0),
+    // where order decides — but it is blind to the two tiers above it. A
+    // later LOWER-specificity rule (`main { min-height:100vh }`) would fail
+    // this assertion while the class-based dvh rule still wins: a false red.
+    // An earlier HIGHER-specificity or `!important` 100vh rule would win the
+    // cascade while this stays green: a missed regression. Neither shape
+    // exists anywhere in this repository, which is why the cheap model is
+    // kept; if one ever appears, model specificity here rather than deleting
+    // the pin. Round-4's own commit message claimed a probe injecting
+    // `main { min-height:100vh }` proved the page "really computes 100vh" —
+    // it does not, that probe was a false red, and this note is the
+    // correction. (santa round-5: Codex, DeepSeek and Claude/FABLE.)
     expect(
       Math.max(...fallback.map((d) => d.order)),
       detail,
@@ -586,8 +685,12 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     //
     // MEASURED, santa round-4, iPhone 13: with the page mutated back to the
     // pre-item spelling — `items-center justify-center` on the section and
-    // `mx-auto` on the card — the ENTIRE 18-test auth-layout spec passes,
-    // this block included. So NOTHING in this file currently detects a revert
+    // `mx-auto` on the card — EVERY test in this file passes, this block
+    // included. (The run reported "18 passed": the 17 tests declared here
+    // plus the shared warmup setup dependency, which exercises nothing about
+    // the mutation. Round-4 wrote "18-test spec" here and in its commit
+    // message; that was an off-by-one, corrected in round 5 by Claude/FABLE
+    // and Codex.) So NOTHING in this file currently detects a revert
     // of `m-auto`. That is a known, accepted gap, not a covered case: while
     // the section keeps `min-height: auto` growth, `items-center` and
     // `m-auto` lay out identically in every state this page can reach, so
