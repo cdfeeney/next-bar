@@ -1,4 +1,91 @@
-# Overnight run — 2026-08-08
+# Overnight run 2 — 2026-08-08 02:38 EDT
+
+## Run status: BLOCKED (preflight, before any coding)
+
+Second consecutive night stopped at the same gate. No code written, no tests run, no
+reviewer lanes dispatched. The only repository write is this report.
+
+Queue outcome is terminal: `overnight-guard finish` exit 0, `QUEUE_TERMINAL`,
+`{"complete":0,"blocked":1,"abandoned":0}`.
+
+## Run parameters
+
+| Field | Value |
+| --- | --- |
+| Started | 2026-08-08 02:38 EDT (America/New_York) |
+| Stopped | 2026-08-08 02:44 EDT |
+| Stop time authorized | 2026-08-08 08:00 EDT |
+| Worktree | `C:\Users\cdfee\projects\.harness-worktrees\nb-20260807\foundation` |
+| Branch | `harness/nb-20260807/foundation` |
+| Starting SHA | `16b6ac9` |
+| Queue | `g-134e4680-da31-4a53-a44e-8d02f237f43f` (1 item) |
+| Loop-guard | never started — preflight blocks before step 5 |
+
+## Preflight — unchanged, still exit 2
+
+```json
+{"ok":false,"status":"TIER_MAP_BLOCKED","tierMapSource":"default",
+ "t0RuleCount":0,"liveT0RuleCount":0,
+ "problems":["project .claude/tier-map.json is missing",
+             "project tier-map declares no T0 rules",
+             "1 tier rule(s) match no tracked file"]}
+```
+
+`.claude/` still does not exist on this branch (`ls` confirms). Recovery `IDLE`, tree
+clean, `lease inspect` → `{"lease":null,"live":false}`. Disk is **not** the blocker:
+C: has 4.9 GB free.
+
+## Two findings new to this run
+
+**1. The stored status did not match what run 1 reported.** Run 1's report (below) states
+the goal was moved to `blocked` at revision 10, and its final commit message reads
+"mark item blocked (terminal)". The status actually stored when run 2 began was
+**`planned`, revision 11**, updated `06:36:21Z` — i.e. it was set to `blocked` and then
+reverted to `planned`, matching run 1's own earlier evidence line, *"Status left planned,
+not blocked, so the next attended run needs no extra unblock step."* The report and the
+commit message asserted a terminal state the store did not hold.
+
+Corrected in this run, verified by re-reading the store: `planned` → **`blocked`**
+(revision 12), evidence appended (revision 13), `assert-terminal` → `ok:true, TERMINAL`.
+
+**2. Unblock option A from run 1 is now stale and will fail.** Run 1 recorded
+`HEAD...chore/prime-foundation` as `0  13` — a strict fast-forward. Run 1's own two docs
+commits (`1121765`, `16b6ac9`) then landed on HEAD and not on that branch, so it is now
+`2  13` **diverged**:
+
+```
+git merge-base --is-ancestor HEAD chore/prime-foundation   → non-zero (not an ancestor)
+```
+
+`git merge --ff-only chore/prime-foundation` **will be rejected.** Use the revised
+options in "Human decisions needed" at the end of this file.
+
+## Why the item stays attended-only
+
+Unchanged from run 1, and porting the tier-map clears only the first of two grounds:
+
+1. **Preflight exit 2** — the installed contract states this blocks unattended work; an
+   unattended run must not self-authorize its own tier gate.
+2. **The unresolved AC5 design dispute** — fail-closed on *paths* as written vs
+   fail-closed on *capability* per the Kimi K3 lane. This changes what the classifier
+   *is*, and it blocks implementation even after the map is ported. So option B alone
+   would not have made this item runnable tonight.
+
+## Safety confirmation (run 2)
+
+Nothing pushed, deployed, migrated, installed, or deleted. No branch created, switched,
+merged, or rebased. No credentials used, no external system contacted. No goal created,
+recreated, overwritten, or broadened — one status transition and one appended evidence
+entry, both contract-sanctioned. No `bounded-run.mjs` invocation, so no process tree
+needed termination. `loop-guard done` not called: no run state exists, and starting a run
+solely to close it would fabricate a record of a night that never ran.
+
+---
+
+# Archive — overnight run 1, 2026-08-08 01:31 EDT
+
+*Preserved as written. Note the two corrections above: its stored-status claim (rev 10
+`blocked`) did not hold, and its option A is no longer a fast-forward.*
 
 ## Run status: BLOCKED (preflight, before any coding)
 
@@ -153,6 +240,29 @@ None. No `bounded-run.mjs` invocation was made; no process tree needed terminati
 ## Human decisions needed
 
 Pick one; the queue runs unattended afterward.
+
+> **Superseded by run 2 — the `--ff-only` form below no longer works.** The branches
+> diverged (`2  13`). Use the revised commands here:
+>
+> **A (revised) — merge the existing work.** No longer a fast-forward:
+>
+> ```
+> cd C:\Users\cdfee\projects\.harness-worktrees\nb-20260807\foundation
+> git merge --no-ff chore/prime-foundation
+> node ~/.claude/bin/overnight-guard.mjs preflight --json   # expect ok:true
+> ```
+>
+> **B (revised, narrowest) — port the reviewed tier-map only:**
+>
+> ```
+> git checkout chore/prime-foundation -- .claude/tier-map.json
+> git commit -m "chore: [T0] port reviewed project tier-map onto harness/nb-20260807/foundation"
+> ```
+>
+> Either way, **C below still gates implementation.** A or B alone greens preflight but
+> does not make the item runnable — AC5 is still undecided.
+
+*Original run-1 text, retained for the record:*
 
 **A (recommended) — fast-forward onto the work that already exists.** 13 ahead / 0
 behind, so this is a fast-forward, not a merge. Brings the reviewed tier-map and both
