@@ -123,6 +123,28 @@ describe('determinism and repo-root resolution', () => {
     expect(result.t0FileCount).toBe(1);
   });
 
+  it('omitting the tier map loads the PROJECT map, not the rule-less fallback', () => {
+    // Fail-open found by the Codex lane: passing undefined selected the
+    // fallback and discarded every project escalation, so the documented
+    // default gave a quieter answer than the repository's own policy.
+    const result = classifyPaths(['src/lib/waitlistGuard.ts'], undefined, { repoRoot: REPO_ROOT });
+    expect(result.warnings).not.toContain('tier-map missing or not an object; using fallback');
+    expect(result.perPath[0].matchedGlob).toBe('src/lib/waitlistGuard.ts');
+  });
+
+  it('an unusable path entry fails closed instead of vanishing', () => {
+    // ['docs/readme.md', null] previously returned T2 + skippable:true — a
+    // confident verdict on a partial input.
+    const result = classifyPaths(['docs/readme.md', null, ''], PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      contents: { 'docs/readme.md': '# hi\n' },
+    });
+    expect(result.tier).toBe('T0');
+    expect(result.skippable).toBe(false);
+    expect(result.escalated).toBe(true);
+    expect(result.warnings.join(' ')).toMatch(/unusable path entr/);
+  });
+
   it('reports no changed paths without crashing', () => {
     const result = classifyPaths([], PROJECT_MAP, { repoRoot: REPO_ROOT });
     expect(result.tier).toBe('T1');

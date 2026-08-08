@@ -275,10 +275,38 @@ export function classifyOnePath(rawPath, map, opts = {}) {
  */
 export function classifyPaths(changedPaths, tierMap, opts = {}) {
   const warnings = [];
-  const map = normalizeMap(tierMap, warnings);
-  const paths = Array.isArray(changedPaths)
-    ? [...new Set(changedPaths.filter((p) => typeof p === 'string' && p.length > 0).map(normalizePath))]
-    : [];
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+
+  // Omitting the map must NOT silently mean "no project policy". Passing
+  // `undefined` straight to normalizeMap selected the rule-less fallback and
+  // discarded every project escalation, so a caller using the documented
+  // default got a quieter answer than the repository's own policy — a fail-open
+  // in the one function everything else routes through.
+  let resolved = tierMap;
+  if (resolved === undefined || resolved === null) {
+    const loaded = loadTierMap(repoRoot);
+    resolved = loaded.map;
+    if (loaded.source === 'error') {
+      warnings.push(`tier-map unreadable (${loaded.error}); failing closed`);
+    } else if (loaded.source === 'default') {
+      warnings.push('no project tier-map found; using fallback (no project rules)');
+    }
+  }
+  const map = normalizeMap(resolved, warnings);
+
+  // An entry we cannot interpret means the change set is INCOMPLETE. Dropping
+  // it quietly let a mixed array like ['docs/readme.md', null] return T2 and
+  // skippable:true, reporting a confident verdict on a partial input.
+  const rawEntries = Array.isArray(changedPaths) ? changedPaths : [];
+  const usable = rawEntries.filter((p) => typeof p === 'string' && p.trim().length > 0);
+  const unusableCount = rawEntries.length - usable.length;
+  if (unusableCount > 0) {
+    warnings.push(
+      `${unusableCount} unusable path entr${unusableCount === 1 ? 'y' : 'ies'} ignored — ` +
+        'classification is incomplete, failing closed to T0',
+    );
+  }
+  const paths = [...new Set(usable.map(normalizePath))];
 
   if (paths.length === 0) {
     warnings.push('no changed paths given');
@@ -293,10 +321,10 @@ export function classifyPaths(changedPaths, tierMap, opts = {}) {
     };
   }
 
-  const perPath = paths.map((p) => classifyOnePath(p, map, opts));
+  const perPath = paths.map((p) => classifyOnePath(p, map, { ...opts, repoRoot }));
   const t0FileCount = perPath.filter((r) => r.tier === 'T0').length;
-  const ambiguousCount = perPath.filter((r) => r.ambiguous).length;
-  const tier = perPath.reduce((acc, r) => maxTier(acc, r.tier), 'T2');
+  const ambiguousCount = perPath.filter((r) => r.ambiguous).length + unusableCount;
+  const tier = unusableCount > 0 ? 'T0' : perPath.reduce((acc, r) => maxTier(acc, r.tier), 'T2');
 
   return {
     tier,
@@ -305,7 +333,7 @@ export function classifyPaths(changedPaths, tierMap, opts = {}) {
     // Ambiguity always escalates: an unanalyzable change is exactly the case a
     // human must look at, regardless of how many files are involved.
     escalated: t0FileCount >= map.escalate_min_t0_files || ambiguousCount > 0,
-    skippable: perPath.every((r) => r.nonRuntime) && tier !== 'T0',
+    skippable: unusableCount === 0 && perPath.every((r) => r.nonRuntime) && tier !== 'T0',
     ambiguousCount,
     warnings,
   };
