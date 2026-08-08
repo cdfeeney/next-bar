@@ -299,93 +299,20 @@ export function replay({ records, tornTail = false }) {
 }
 
 /**
- * The completeness invariant. A run may claim "complete" only when this
- * returns complete:true — see AC6. Deliberately returns the offending cell ids
- * so the summary can say what is outstanding instead of just refusing.
+ * Every status word that ends a cell's participation in the run — the whole
+ * terminal vocabulary, in one place. The engine judges `processCell`'s RETURN
+ * value against the same list it judges recorded cells against, because a
+ * second copy of the vocabulary is a second chance for the two to disagree.
  */
-/**
- * A waiver needs a real acknowledgement, not just a DONE claiming the word.
- * Used by all three clauses of the invariant so a fabricated status cannot
- * excuse missing work in one place while being caught in another — which also
- * kept the operator-facing status from naming the real reason.
- */
-function isAcknowledged(cell) {
-  return cell.terminalStatus === 'ack_terminal' && Boolean(cell.acked);
+export const TERMINAL_STATUSES = Object.freeze([...COMPLETING_STATUSES, SATURATED_AT_FLOOR]);
+
+/** Is this status word a terminal claim at all? Operates on the WORD, not a cell. */
+export function isTerminalStatus(status) {
+  return TERMINAL_STATUSES.includes(status);
 }
 
-/**
- * Is this cell finished, for every judge that asks?
- *
- * `processCell` and `completeness()` both decide "does this cell still owe
- * work", and they must not answer differently. They used to: each tested
- * `COMPLETING_STATUSES.includes(terminalStatus)` directly, so a DONE claiming
- * `ack_terminal` with no ACK_TERMINAL behind it read as finished to the engine
- * and as outstanding to the invariant. The cell was then unreachable — the
- * engine skipped it, completeness refused to pass it, and `ackEligibility`
- * declined to waive it because its last attempt had succeeded. One definition,
- * used by both, is what keeps that from recurring.
- */
-export function isCompleting(cell) {
-  if (!cell) return false;
-  if (cell.terminalStatus === 'ack_terminal') return isAcknowledged(cell);
-  if (!COMPLETING_STATUSES.includes(cell.terminalStatus)) return false;
-  // A DONE is a claim; a successful ATTEMPT is the evidence for it. The
-  // invariant has always demanded this and the engine never did, so a DONE
-  // saying 'unsaturated' with no attempt behind it was finished to one judge
-  // and outstanding to the other — the same deadlock the ack_terminal case
-  // had, and just as unwaivable, since a never-attempted cell is not eligible.
-  return Boolean(cell.lastOk);
-}
-
-/**
- * Terminal: this cell owes no further SUBDIVISION, whatever that means for the
- * run's verdict. The floor belongs here and not in `isCompleting`, because a
- * cell still capping at the minimum size is finished as work and knowably short
- * as coverage — two different questions with two different answers.
- *
- * This is the predicate `completeness` needs for "did this cell's children
- * finish", and it is deliberately NOT `isSettledForResume`: completeness must
- * not consult the blocking check here, because a blocked child is already
- * reported against ITSELF by clause 3. It was previously hand-spelled at that
- * call site, one omitted disjunct away from silently letting a floor-saturated
- * child count toward a clean report.
- */
-export function isTerminal(cell) {
-  if (!cell) return false;
-  // The floor arm carries the SAME evidence demand as the rest. Writing it as a
-  // bare disjunction made `saturated_at_floor` the one status accepted on the
-  // word alone — and since a floor cell is waivable, a fabricated floor DONE
-  // could be acknowledged and counted toward a COMPLETE run over geography
-  // nobody ever searched. Nothing legitimate is lost: a floor status is only
-  // ever written after a capped response, and a capped response IS a successful
-  // attempt, so a real floor cell always carries `lastOk`.
-  if (cell.terminalStatus === SATURATED_AT_FLOOR) return Boolean(cell.lastOk);
-  return isCompleting(cell);
-}
-
-/**
- * Finished for the purpose of not working this cell again on a resume.
- *
- * `isTerminal` plus one thing: a terminal status does NOT survive a blocking
- * failure recorded after it. The run must retry, and nothing else can clear it
- * — `ackEligibility` deliberately refuses to waive a transient class — so
- * treating such a cell as finished strands it with no lever at all.
- *
- * The three questions now have three names. `isCompleting`: may the run report
- * this cell as done? `isTerminal`: does it owe more subdivision? This: does a
- * resume still owe it work? Picking the wrong one used to be an omitted
- * disjunct at a call site; now it is a visible choice of verb.
- */
-export function isSettledForResume(cell) {
-  return isTerminal(cell) && !hasUnrecoveredBlocking(cell);
-}
-
-/**
- * A blocking failure with no later success and no waiver. Shared for the same
- * reason as `isCompleting`: the engine must not write a terminal status over a
- * transient failure that `completeness()` will still count against the run.
- */
-export function hasUnrecoveredBlocking(cell) {
+/** The raw blocking-failure scan. `classify` is the only caller; use `Verdict.blocked`. */
+function unrecoveredBlocking(cell) {
   const blocking = (cell?.attempts ?? []).filter(
     (attempt) => !attempt.ok && BLOCKING_ERROR_CLASSES.includes(attempt.errorClass),
   );
@@ -394,6 +321,136 @@ export function hasUnrecoveredBlocking(cell) {
   return blocking.some((attempt) => (attempt.attemptN ?? 0) > recoveredAt);
 }
 
+/**
+ * @typedef {object} Verdict
+ * @property {'unfinished'|'unbacked'|'floor'|'complete'} kind what this cell IS
+ * @property {string|null} status the raw DONE word — for messages, never for decisions
+ * @property {boolean} hasEvidence a successful ATTEMPT is on record
+ * @property {boolean} acknowledged an `ack_terminal` DONE with a real ACK_TERMINAL behind it
+ * @property {boolean} blocked an unrecovered blocking failure
+ * @property {boolean} completing may the run report this cell as done?
+ * @property {boolean} terminal does it owe any further subdivision?
+ * @property {boolean} settledForResume does a resume still owe it work?
+ * @property {boolean} atFloor searched, and still capped at the minimum cell size
+ * @property {string} why one line naming the reason for `kind`
+ */
+
+/**
+ * Classify a cell ONCE. Every judge in this codebase is a view over this.
+ *
+ * This function exists because the judges used to be written out by hand, one
+ * per question, and they drifted apart every single time the rules changed.
+ * The engine, the completeness invariant, the summary printer and the waiver
+ * check each decided "is this cell finished" from the raw `terminalStatus`
+ * word, and each of the seven defects found in review was one of those copies
+ * lagging the others: a forged `ack_terminal` that was finished to the engine
+ * and outstanding to the invariant; an evidence-less `cleared` counted in
+ * `summary.finished` while the same cell sat in `missing` in the same object; a
+ * fabricated `saturated_at_floor` waived on the word alone and reported
+ * COMPLETE over geography nobody had searched. Every one of those was a cell
+ * two judges classified differently.
+ *
+ * So there is one classification, and disagreement is no longer expressible:
+ *
+ *   `unfinished` — no DONE, or a word that is not a terminal claim at all.
+ *   `unbacked`   — a terminal claim with nothing behind it. A DONE is a CLAIM;
+ *                  a successful ATTEMPT is the evidence. `ack_terminal` is the
+ *                  one status legitimately unsupported by a search, and its
+ *                  evidence is the operator's ACK_TERMINAL record instead.
+ *   `floor`      — searched, and still capped at the minimum cell size. Finished
+ *                  as work, knowably short as coverage: two different questions,
+ *                  which is exactly why `terminal` and `completing` differ.
+ *   `complete`   — a terminal claim with its evidence.
+ *
+ * `blocked` is orthogonal to `kind`: a cell can hold a real, evidenced terminal
+ * status AND a blocking failure recorded after it. That is why `settledForResume`
+ * is not `terminal` — the run still owes the retry, and nothing else can clear
+ * it, since `ackEligibility` refuses to waive a transient class.
+ */
+export function classify(cell) {
+  const status = cell?.terminalStatus ?? null;
+  const hasEvidence = Boolean(cell?.lastOk);
+  const acknowledged = status === 'ack_terminal' && Boolean(cell?.acked);
+
+  let kind;
+  let why;
+  if (!cell || !isTerminalStatus(status)) {
+    kind = 'unfinished';
+    why = status === null ? 'no DONE record' : `'${status}' is not a terminal status`;
+  } else if (status === 'ack_terminal') {
+    // The one status a search cannot back. Its evidence is the operator's
+    // explicit waiver record instead — and it must actually be there.
+    kind = acknowledged ? 'complete' : 'unbacked';
+    why = acknowledged
+      ? 'acknowledged by the operator'
+      : "claims 'ack_terminal' with no ACK_TERMINAL record behind it";
+  } else if (!hasEvidence) {
+    kind = 'unbacked';
+    why = `claims '${status}' with no successful attempt behind it`;
+  } else if (status === SATURATED_AT_FLOOR) {
+    kind = 'floor';
+    why = 'searched, and still saturated at the minimum cell size';
+  } else {
+    kind = 'complete';
+    why = `'${status}', backed by a successful attempt`;
+  }
+
+  const terminal = kind === 'complete' || kind === 'floor';
+  return Object.freeze({
+    kind,
+    status,
+    hasEvidence,
+    acknowledged,
+    blocked: unrecoveredBlocking(cell),
+    completing: kind === 'complete',
+    terminal,
+    settledForResume: terminal && !unrecoveredBlocking(cell),
+    atFloor: kind === 'floor',
+    why,
+  });
+}
+
+/**
+ * May the run report this cell as done? A view over `classify`.
+ *
+ * Note this is deliberately NOT `terminal`: a cell still capping at the floor
+ * is finished as work and knowably short as coverage.
+ */
+export function isCompleting(cell) {
+  return classify(cell).completing;
+}
+
+/**
+ * Does this cell owe any further SUBDIVISION? A view over `classify`.
+ *
+ * This is the predicate `completeness` needs for "did this cell's children
+ * finish", and it is deliberately NOT `isSettledForResume`: completeness must
+ * not consult the blocking check here, because a blocked child is already
+ * reported against ITSELF by clause 3.
+ */
+export function isTerminal(cell) {
+  return classify(cell).terminal;
+}
+
+/** Does a resume still owe this cell work? A view over `classify`. */
+export function isSettledForResume(cell) {
+  return classify(cell).settledForResume;
+}
+
+/** An unrecovered blocking failure. A view over `classify`. */
+export function hasUnrecoveredBlocking(cell) {
+  return classify(cell).blocked;
+}
+
+/**
+ * The completeness invariant. A run may claim "complete" only when this
+ * returns complete:true — see AC6. Deliberately returns the offending cell ids
+ * so the summary can say what is outstanding instead of just refusing.
+ *
+ * Every clause reads a `Verdict`, never a raw status word. The three buckets
+ * are the three `kind`s that are not `complete`, so a cell cannot be finished
+ * to this function and outstanding to the engine, or vice versa.
+ */
 export function completeness(state) {
   const missing = [];
   const failed = [];
@@ -402,45 +459,32 @@ export function completeness(state) {
 
   for (const cell of state.cells.values()) {
     if (!cell.planned) continue;
+    const verdict = classify(cell);
 
-    // (1) every planned cell and every subdivision child reaches a terminal state
-    if (cell.terminalStatus === null) {
-      missing.push(cell.cellId);
-    } else if (cell.terminalStatus === SATURATED_AT_FLOOR) {
-      // Only a floor status with evidence behind it means "recall is knowably
-      // short HERE". Without a successful attempt the cell was never searched
-      // at all, and reporting it as saturated tells the operator the opposite
-      // of the truth — that the geography was covered as far as it can be.
-      if (cell.lastOk) saturated.push(cell.cellId);
-      else missing.push(cell.cellId);
-    } else if (!COMPLETING_STATUSES.includes(cell.terminalStatus)) {
-      missing.push(cell.cellId);
-    } else if (cell.terminalStatus === 'ack_terminal') {
-      // ack_terminal is the one status legitimately unsupported by a successful
-      // search — but it must be backed by an actual ACK_TERMINAL record.
-      if (!isAcknowledged(cell)) missing.push(cell.cellId);
-    } else if (!cell.lastOk) {
-      // A DONE record is a claim, not evidence. 'unsaturated' and 'cleared'
-      // both require a search to have actually succeeded. Without this, a
-      // truncated or hand-edited manifest could assert completeness for work
-      // that was never done.
-      missing.push(cell.cellId);
-    }
+    // (1) every planned cell and every subdivision child reaches a terminal
+    //     state. `floor` is terminal but not complete — recall is knowably
+    //     short there, and only a floor claim WITH evidence means that; without
+    //     a successful attempt the cell was never searched at all, and calling
+    //     it saturated tells the operator the opposite of the truth.
+    if (verdict.atFloor) saturated.push(cell.cellId);
+    else if (!verdict.completing) missing.push(cell.cellId);
 
     // (2) a capped cell must have been subdivided, and its children finished.
     //     A child at the floor counts as finished here — its own
     //     SATURATED_AT_FLOOR entry is what blocks completion, so the residual
     //     is reported once, against the cell that has it.
-    if (cell.capped && cell.terminalStatus !== SATURATED_AT_FLOOR) {
+    //     `verdict.atFloor`, not the status word: a capped cell whose floor
+    //     claim has no evidence has NOT subdivided and still owes one.
+    if (cell.capped && !verdict.atFloor) {
       const children = cell.children.map((id) => state.cells.get(id));
       const finishedByChildren = children.length > 0 && children.every(isTerminal);
-      if (!finishedByChildren && !isAcknowledged(cell)) {
+      if (!finishedByChildren && !verdict.acknowledged) {
         unclearedCap.push(cell.cellId);
       }
     }
 
     // (3) no blocking error survives without a retry that worked, or an ack
-    if (hasUnrecoveredBlocking(cell) && !isAcknowledged(cell)) {
+    if (verdict.blocked && !verdict.acknowledged) {
       failed.push(cell.cellId);
     }
   }
@@ -475,12 +519,12 @@ export function completeness(state) {
     unclearedCap,
     summary: {
       plannedCells: plannedCells.length,
-      // `isCompleting`, not raw status membership. The summary was the last
+      // The same `Verdict` the invariant judged by. The summary was the last
       // judge still reading the bare word, so an evidence-less DONE was counted
       // as finished while the same cell sat in `missing` in the same object —
       // and that object is what RUN_DONE persists for the operator.
       finished: plannedCells.filter(
-        (cell) => isCompleting(cell) && !outstandingIds.has(cell.cellId),
+        (cell) => classify(cell).completing && !outstandingIds.has(cell.cellId),
       ).length,
       subdivided: plannedCells.filter((cell) => cell.children.length > 0).length,
       saturatedAtFloor: saturated.length,
@@ -544,10 +588,11 @@ function descendantIds(state, cellId, seen = new Set()) {
 export function ackEligibility(state, cellId) {
   const cell = state?.cells?.get(cellId);
   if (!cell) return { eligible: false, reason: 'no such cell in this manifest' };
-  if (cell.terminalStatus === 'ack_terminal' && cell.acked) {
+  const verdict = classify(cell);
+  if (verdict.acknowledged) {
     return { eligible: false, reason: 'already acknowledged' };
   }
-  // The same definition the engine resumes by. Testing raw status membership
+  // The same `Verdict` the engine resumes by. Testing raw status membership
   // here made this a THIRD judge with its own answer: a forged ack_terminal
   // child read as finished, the "acknowledge those children instead" refusal
   // went dead, and a parent could be waived while its child stayed outstanding.
@@ -558,7 +603,7 @@ export function ackEligibility(state, cellId) {
   // only direct children let a grandchild's unrecovered retry be waived away
   // by acknowledging its grandparent.
   const unfinishedChildren = descendantIds(state, cellId).filter(
-    (descendantId) => !isSettledForResume(state.cells.get(descendantId)),
+    (descendantId) => !classify(state.cells.get(descendantId)).settledForResume,
   );
   if (unfinishedChildren.length > 0) {
     return {
@@ -579,15 +624,16 @@ export function ackEligibility(state, cellId) {
   if (cell.attempts.length === 0) {
     return { eligible: false, reason: 'it has never been attempted; run or resume the sweep first' };
   }
-  // `cell.lastOk`, not merely "has attempts". The never-attempted guard above
-  // closes the zero-attempt forgery; this closes the attempted-and-FAILED one,
-  // where a fabricated floor DONE sat over nothing but errors and was waived
-  // with the reassuring reason below — reaching COMPLETE with no successful
-  // query ever made. It must stay ABOVE the two refusals that follow: a real
-  // floor cell is legitimately waivable whether its last attempt succeeded or
-  // later failed transiently, because at the floor there is nothing left to
-  // subdivide and nothing for a retry to reach.
-  if (cell.terminalStatus === SATURATED_AT_FLOOR && cell.lastOk) {
+  // `verdict.atFloor`, which already demands the evidence. The never-attempted
+  // guard above closes the zero-attempt forgery; the evidence half of `atFloor`
+  // closes the attempted-and-FAILED one, where a fabricated floor DONE sat over
+  // nothing but errors and was waived with the reassuring reason below —
+  // reaching COMPLETE with no successful query ever made. It must stay ABOVE
+  // the two refusals that follow: a real floor cell is legitimately waivable
+  // whether its last attempt succeeded or later failed transiently, because at
+  // the floor there is nothing left to subdivide and nothing for a retry to
+  // reach.
+  if (verdict.atFloor) {
     return { eligible: true, reason: 'saturated at the floor' };
   }
   const last = cell.attempts[cell.attempts.length - 1];
