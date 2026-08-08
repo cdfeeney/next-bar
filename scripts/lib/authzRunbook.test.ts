@@ -4,8 +4,11 @@ import { describe, expect, it } from 'vitest';
 import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
+  DEFINERS_WITHOUT_AUTH_UID,
   expectedPublicTables,
   functionsDefined,
+  netColumnPrivileges,
+  netTablePrivileges,
   policiesByTable,
   policyLessTables,
   readMigrations,
@@ -37,6 +40,39 @@ const RUNBOOK = path.resolve(
 
 const doc = readFileSync(RUNBOOK, 'utf8');
 const files = readMigrations();
+
+/**
+ * Find the Check 3 matrix row for a table and return its three role cells.
+ *
+ * The matrix is `| \`table\` | anon | authenticated | service_role |`. Parsing
+ * it — rather than substring-matching a rendered row — is what lets the test
+ * catch a cell that claims a privilege the derivation does not, which is the
+ * defect that shipped.
+ */
+function checkSection(heading: string, nextHeading: string): string {
+  const from = doc.indexOf(heading);
+  if (from === -1) throw new Error(`runbook is missing section: ${heading}`);
+  const to = doc.indexOf(nextHeading, from + heading.length);
+  return doc.slice(from, to === -1 ? undefined : to);
+}
+
+/** Only the Check 3 grant matrix — other checks also have per-table tables. */
+const CHECK3 = checkSection(
+  '## Check 3 — Grants match the design',
+  '### Check 3b',
+);
+
+function docRow(table: string): { cells: string[] } | null {
+  const line = CHECK3
+    .split('\n')
+    .find((l) => l.trimStart().startsWith(`| \`${table}\` |`));
+  if (!line) return null;
+  const cells = line
+    .split('|')
+    .slice(2, 5)
+    .map((c) => c.trim().replace(/\*\*/g, ''));
+  return { cells };
+}
 
 describe('runbook / migration cross-check', () => {
   it('reads the runbook at all', () => {
@@ -125,8 +161,94 @@ describe('runbook / migration cross-check', () => {
       `**\`anon\` appears exactly ${ANON_READABLE_TABLES.length} times`,
     );
     expect(doc).toContain(
-      `**Expected:** exactly ${ANON_EXECUTABLE_FUNCTIONS.length} functions`,
+      `**Expected:** exactly ${ANON_EXECUTABLE_FUNCTIONS.length} rows, both \`anon\``,
     );
+  });
+
+  it('binds the Check 3 grant matrix to the derivation, row by row', () => {
+    // This binding did not exist, and its absence let a hand-transcribed row
+    // ship: the doc claimed `bar_rsvps | — | delete | —` when 0014 revoked that
+    // grant, so a healthy database produced a false mismatch AND a database
+    // missing 0014 passed silently. The matrix is the largest transcribed table
+    // in the document; it needs the tightest binding.
+    const net = netTablePrivileges(files);
+    expect(net.size).toBeGreaterThan(10);
+
+    const ROLE_ORDER = ['anon', 'authenticated', 'service_role'];
+    for (const [table, byRole] of net) {
+      const cells = ROLE_ORDER.map((role) => {
+        const privs = byRole.get(role);
+        if (!privs) return '—';
+        // The doc writes privileges in SQL verb order, not alphabetical.
+        return [...privs].sort().join('|');
+      });
+      // Assert the row exists and its non-empty cells name exactly the derived
+      // privileges — order-insensitively, so prose formatting stays free.
+      const row = docRow(table);
+      expect(row, `Check 3 has no row for ${table}`).toBeTruthy();
+      ROLE_ORDER.forEach((role, i) => {
+        const privs = byRole.get(role);
+        const cell = row!.cells[i] ?? '';
+        if (!privs) {
+          expect(
+            cell.replace(/[\s—-]/g, ''),
+            `${table}/${role} should be empty in the doc`,
+          ).toBe('');
+        } else {
+          for (const p of privs) {
+            expect(cell, `${table}/${role} missing ${p}`).toContain(p);
+          }
+          const claimed = cell.split(',').map((c) => c.trim()).filter(Boolean).length;
+          expect(claimed, `${table}/${role} lists extra privileges`).toBe(privs.length);
+        }
+      });
+      void cells;
+    }
+  });
+
+  it('lists every table with NO net grant, and puts none of them in the matrix', () => {
+    // The other direction: a table that grants nothing must be named in the
+    // grants-nothing sentence and must NOT appear as a matrix row, or the
+    // operator expects a row their query will never return.
+    const net = netTablePrivileges(files);
+    const noGrant = expectedPublicTables(files).filter((t) => !net.has(t)).sort();
+    expect(noGrant).toContain('bar_rsvps');
+    for (const table of noGrant) {
+      expect(doc).toContain(`\`${table}\``);
+      expect(docRow(table), `${table} grants nothing but has a Check 3 row`).toBeFalsy();
+    }
+  });
+
+  it('sends column-scoped grants to role_column_grants, not role_table_grants', () => {
+    // profiles' UPDATE is column-scoped, so `role_table_grants` cannot return
+    // it. Promising it in Check 3 guarantees a false mismatch on every healthy
+    // database.
+    const cols = netColumnPrivileges(files);
+    const profileCols = cols.get('profiles')?.get('authenticated') ?? [];
+    expect(profileCols).toEqual(['display_name', 'is_private', 'shares_list_publicly']);
+    expect(doc).toContain('role_column_grants');
+    for (const column of profileCols) expect(doc).toContain(column);
+    // And the table-level row must NOT claim update.
+    const row = docRow('profiles');
+    expect(row?.cells[1]).not.toContain('update');
+  });
+
+  it('names the definer functions that legitimately lack an auth.uid() gate', () => {
+    const derived = [
+      ...new Set(
+        functionsDefined(files)
+          .filter((f) => f.isSecurityDefiner && !f.usesAuthUid)
+          .map((f) => f.name),
+      ),
+    ].sort();
+    expect(derived).toEqual([...DEFINERS_WITHOUT_AUTH_UID].sort());
+    for (const name of derived) expect(doc).toContain(`\`${name}\``);
+  });
+
+  it('tells the operator to run the ledger check before the others', () => {
+    // Without this, a legitimately-behind Staging reports every not-yet-applied
+    // migration's tables and policies as drift.
+    expect(doc).toContain('Run Check 7 (ledger parity) FIRST');
   });
 
   it('states the migration count used by the ledger check', () => {

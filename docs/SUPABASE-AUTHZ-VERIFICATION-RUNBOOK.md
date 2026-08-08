@@ -90,6 +90,14 @@ show them as unknown-to-the-repo rather than as drift.
    environment-variable name only (`DATABASE_URL`,
    `SUPABASE_SERVICE_ROLE_KEY`, `RATE_LIMIT_KEY_SALT`).
 4. Record results in a scratch file, not in this document.
+5. **Run Check 7 (ledger parity) FIRST, before Checks 1–6.** Everything below is
+   derived from all 39 local migrations and therefore describes a database with
+   all 39 applied. If the environment is legitimately behind — 0043 is currently
+   unapplied by design — then tables, policies and grants introduced by the
+   unapplied files are *absent on purpose*, and reading that as drift means this
+   document cries wolf on a healthy deployment. Establish which migrations are
+   actually applied, then treat expectations from later files as not-yet-in-force
+   rather than as findings.
 
 ---
 
@@ -116,6 +124,29 @@ push_subscriptions     rate_limits            ratings           schema_migration
 shared_nights          vibe_profiles          vibe_votes
 ```
 
+**`rls_forced` is expected to be `false` everywhere.** No migration issues
+`force row level security`, and that is deliberate, not an omission: `FORCE`
+additionally subjects the table's OWNER to its policies. Its absence means the
+owner and any `BYPASSRLS` role are not filtered by RLS — which is what makes
+Check 1b necessary. `rls_forced = true` somewhere is not dangerous, but it is
+undocumented drift: record it.
+
+**This query lists ordinary tables only** (`relkind = 'r'`). A **view** over an
+RLS-protected table runs with the view owner's privileges unless it was created
+`with (security_invoker = on)`, so a view is a way to serve rows that RLS would
+otherwise withhold. No migration in this repository creates one, so the expected
+result is none:
+
+```sql
+select c.relname, c.relkind, c.reloptions
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind in ('v', 'm');
+```
+
+**Expected:** zero rows. Any view here was created outside the migrations —
+capture its definition and treat it as **stop-and-escalate** until someone
+confirms it is `security_invoker` and intended.
+
 **On mismatch:**
 
 - `rls_enabled = false` on any table is **stop-and-escalate**. Any role holding
@@ -127,6 +158,31 @@ shared_nights          vibe_profiles          vibe_votes
   else; an unmanaged table is unmanaged in both directions.
 - A table in the list above but **absent from the database** means migrations
   were not fully applied. Compare against Check 6 before concluding anything.
+
+---
+
+## Check 1b — No unexpected role can bypass RLS
+
+Everything Checks 1–3 establish is void for a role with `BYPASSRLS`: it ignores
+every policy, on every table, silently.
+
+```sql
+select rolname, rolsuper, rolbypassrls, rolcanlogin
+from pg_roles
+where rolsuper or rolbypassrls
+order by rolname;
+```
+
+**Expected:** only Supabase's own managed roles — `postgres`,
+`supabase_admin`, `supabase_auth_admin`, `supabase_storage_admin`,
+`service_role` and similar internals. Exact membership varies by Supabase
+platform version, so record the list on the first run and **compare against
+that baseline** on later runs rather than against a list in this document.
+
+**On mismatch:** `anon` or `authenticated` holding `rolsuper` or `rolbypassrls`
+is **stop-and-escalate** and makes every other check in this document
+meaningless. A new named role with `rolbypassrls` and `rolcanlogin` is also
+stop-and-escalate until someone identifies who created it and why.
 
 ---
 
@@ -191,6 +247,44 @@ exists, so default-deny applies to every client role and only the service role
 `bar_rsvps` is the trap. It is the one table whose policy was created and then
 deliberately removed, so "it had a policy once" is true and irrelevant.
 
+### Check 2b — policy EXPRESSIONS, not just names
+
+**Counting policies proves almost nothing on its own.** A deployed policy can
+carry the expected name, on the expected table, for the expected command — and
+have had its `using` clause edited to `using (true)` in the dashboard. Check 2
+passes, the count matches, and the table is readable by every authenticated
+user. Matching names give *positive assurance* about a layer this document has
+not looked at, which is worse than saying nothing.
+
+```sql
+select tablename, policyname, cmd, roles, qual, with_check
+from pg_policies
+where schemaname = 'public'
+order by tablename, policyname;
+```
+
+**Expected:** each row's `qual` / `with_check` is semantically the same
+predicate as the corresponding `create policy` in the migrations. Print the
+expected expressions and diff them by eye:
+
+```bash
+npx tsx scripts/lib/authzSurface.report.mts   # see "expected policy EXPRESSIONS"
+```
+
+Postgres normalises what you wrote (it will re-print `auth.uid() = user_id` as
+`(auth.uid() = user_id)`, expand `select auth.uid()` into a subquery form, and
+schema-qualify functions), so **compare meaning, not text**. What you are
+looking for is a predicate that is *weaker* than the migration's:
+
+- `true` where the migration scoped to a user — **stop-and-escalate**;
+- a missing `with_check` on an INSERT/UPDATE policy where the migration has one
+  (a user could write rows they cannot read) — **stop-and-escalate**;
+- `roles` widened to `public`/`anon` where the migration named `authenticated` —
+  **stop-and-escalate**.
+
+A predicate that is *stricter* than the migration breaks a feature and fails
+safe: record it as a bug.
+
 ---
 
 ## Check 3 — Grants match the design
@@ -218,24 +312,55 @@ lower bound:
 | `analytics_events` | — | — | select, insert, update |
 | `bar_change_queue` | — | select, insert | — |
 | `bar_photos` | **select** | select | — |
-| `bar_rsvps` | — | delete | — |
 | `bar_suggestions` | — | delete | — |
 | `bars` | **select** | select | select, insert, update, delete |
 | `follow_requests` | — | select | — |
 | `follows` | — | select | — |
 | `pairwise_comparisons` | — | select, insert, delete | — |
-| `profiles` | — | select, insert, update *(update is column-scoped: `display_name`, `is_private`, `shares_list_publicly`)* | — |
+| `profiles` | — | select, insert | — |
 | `push_subscriptions` | — | select | — |
 | `rate_limits` | — | — | select, insert, update, delete |
 | `ratings` | — | select, insert, update, delete | — |
 | `vibe_profiles` | — | select, insert, update, delete | — |
 | `vibe_votes` | — | delete | — |
 
-Tables not listed (`follow_attempts`, `handle_claim_attempts`,
-`handle_search_attempts`, `photo_permissions`, `shared_nights`,
-`schema_migrations`) grant **nothing** to any of the three roles. They are
-reached only by the table owner or by `service_role`, which bypasses both
-layers.
+These seven tables grant **nothing** to any of the three roles and must return
+no row at all: `bar_rsvps`, `follow_attempts`, `handle_claim_attempts`,
+`handle_search_attempts`, `photo_permissions`, `schema_migrations`,
+`shared_nights`. They are reached only by the table owner or by `service_role`,
+which bypasses both layers.
+
+> **`bar_rsvps` is the one to read carefully.** 0012 granted `delete` to
+> `authenticated`; **0014 revoked it**, so the net is nothing. A deployed
+> `delete` grant on `bar_rsvps` therefore does not mean "extra privilege" — it
+> means **0014 was never applied**, which is precisely the state 0014 exists to
+> eliminate. Treat it as stop-and-escalate and check Check 7's ledger for 0014.
+
+### Check 3b — column-scoped grants
+
+`information_schema.role_table_grants` shows only TABLE-level privileges.
+`profiles` deliberately has none for `update`; its update grant is
+**column-scoped** and lives in a different view, so the table above correctly
+shows no `update` for it. Run this too or you will "discover" a missing grant
+that was never supposed to be there:
+
+```sql
+select table_name, column_name, grantee, privilege_type
+from information_schema.role_column_grants
+where table_schema = 'public' and grantee in ('anon', 'authenticated')
+order by table_name, column_name, grantee;
+```
+
+**Expected:** exactly three rows, all `profiles` / `authenticated` / `UPDATE`,
+on `display_name`, `is_private` and `shares_list_publicly` — and nothing else.
+
+`handle` is absent **on purpose**: 0006 removed table-level UPDATE so handles
+could not be PATCHed around `claim_handle`'s rate cap and no-renames rule.
+`handle`, `id`, `created_at`, `updated_at` or `handle_normalized` appearing here
+is **stop-and-escalate**. A table-level `UPDATE` on `profiles` in Check 3 is
+also stop-and-escalate: the owner-update policy limits which ROWS a user can
+touch, not which COLUMNS, so table-level update would let a user rewrite their
+own `handle` directly.
 
 **`anon` appears exactly 2 times in that table, `select` only — on `bars` and
 `bar_photos`.** That is the product working signed-out: the bar catalog and its
@@ -250,6 +375,13 @@ approved photos are public data (0019, 0020).
 - An `anon` or `authenticated` row on a table listed as granting nothing is
   **stop-and-escalate** — most likely the revoke never ran, leaving Supabase's
   default `grant all` in place.
+- `authenticated` holding **more** than the table lists is **stop-and-escalate**,
+  for the same reason: the expectation is exact, so a surplus means either a
+  revoke never ran or someone granted outside the migrations. Two concrete
+  cases that look harmless and are not — `update` on `pairwise_comparisons`
+  (comparisons are immutable by design; only the grant layer and the missing
+  UPDATE policy enforce it) and table-level `update` on `profiles` (lets a user
+  rewrite their own `handle`, bypassing `claim_handle`).
 - A **missing** grant that the table above lists breaks a feature and fails
   safe. Record it as a bug.
 - `service_role` holding more than listed is expected and not drift:
@@ -318,25 +450,37 @@ own function as the vehicle. This is the single highest-value check here.
 **Query**
 
 ```sql
-select p.proname, r.rolname as grantee
+select p.proname,
+       coalesce(r.rolname, 'PUBLIC') as grantee
 from pg_proc p
 join pg_namespace n on n.oid = p.pronamespace
 cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
-join pg_roles r on r.oid = a.grantee
-where n.nspname = 'public' and a.privilege_type = 'EXECUTE' and r.rolname = 'anon'
-order by p.proname;
+left join pg_roles r on r.oid = a.grantee
+where n.nspname = 'public'
+  and a.privilege_type = 'EXECUTE'
+  and (r.rolname = 'anon' or a.grantee = 0)
+order by p.proname, grantee;
 ```
 
-**Expected:** exactly 2 functions — `get_public_ratings` and
+**Expected:** exactly 2 rows, both `anon` — `get_public_ratings` and
 `get_shared_night`. Both are `SECURITY DEFINER` read paths that gate
 internally: `get_public_ratings` returns rows only where the owner set
 `shares_list_publicly` (0015), and `get_shared_night` is keyed by an opaque
 share id (0016).
 
-**On mismatch:** a third name is a new anonymous entry point into the database
-and is **stop-and-escalate** — a definer function granted to `anon` reaches
-past RLS by design, so its internal gate is the only thing standing between an
-anonymous caller and the data.
+**`PUBLIC` must not appear at all**, and that is why the query goes to the
+trouble of the left join. `aclexplode` reports the pseudo-role `PUBLIC` as
+grantee OID `0`, which has no row in `pg_roles`; an inner join silently drops
+it. Postgres grants `EXECUTE` **to `PUBLIC` by default** on every new function,
+so a function whose migration forgot its `revoke all ... from public` is
+anonymously callable — and it is the single most likely way an accidental
+anonymous entry point appears. Every function in this corpus is revoked from
+`public`, so any `PUBLIC` row is a real finding.
+
+**On mismatch:** a third name, or any `PUBLIC` row, is a new anonymous entry
+point into the database and is **stop-and-escalate** — a definer function
+reachable anonymously bypasses RLS by design, so its internal gate is the only
+thing standing between an anonymous caller and the data.
 
 ---
 
@@ -351,6 +495,21 @@ where n.nspname = 'public' and p.proname = '<function name>';
 **Expected:** the deployed body is identical to the definition in
 `supabase/migrations/`. Functions acting on behalf of a user must derive that
 user from `auth.uid()` — never from a parameter.
+
+**25 of the 29 definer functions reference `auth.uid()` in their body. Exactly
+four do not, and each is a reviewed exception** — do not "fix" them:
+
+| Function | Why it has no `auth.uid()` gate |
+| --- | --- |
+| `handle_new_user` | `AFTER INSERT` trigger on `auth.users`; the row *is* the identity and there is no caller to check |
+| `get_public_ratings` | anon-executable; gated on the owner's `shares_list_publicly` opt-in instead (0015) |
+| `get_shared_night` | anon-executable; gated on an opaque share id (0016) |
+| `pending_change_count` | returns a COUNT over moderation-queue rows; exposes no per-user data |
+
+A **fifth** definer function without `auth.uid()` is **stop-and-escalate**: it
+runs with the owner's privileges, past RLS, with no caller check. (The static
+suite asserts this list, so a new one fails the build before it ever reaches a
+database.)
 
 **On mismatch:** a deployed body that differs from the migration means someone
 edited it in the dashboard. **Stop-and-escalate** and capture the deployed
@@ -405,3 +564,26 @@ diverge independently.
 This runbook covers what is on **this base** (through `0043`). Migrations
 living only on release branches are out of scope and are the open question
 recorded above.
+
+**It covers the `public` schema only.** Named explicitly, because a silent
+omission reads as coverage:
+
+- **`auth`, `storage`, `realtime`, `vault`** are managed by Supabase and are not
+  created by these migrations, so nothing here can derive an expectation for
+  them. This app does not use Supabase Storage — no migration references
+  `storage.*` and no application code calls it — so `storage.objects` policies
+  are not a live exposure channel today. **If file upload is ever added, that
+  changes and this document must grow a check for it.**
+- **`alter default privileges`** is not modelled. It would grant privileges on
+  tables created *in the future*, which no per-table parser can see. No
+  migration uses it (the static suite fails the build if one appears), but a
+  dashboard-issued one would be invisible to Check 3 for any table created
+  afterwards.
+- **Table and function OWNERSHIP** is not checked. Ownership decides whose
+  privileges a `SECURITY DEFINER` function runs with, and an owner is not
+  filtered by RLS unless `FORCE` is set (Check 1). A follow-up item should add
+  it.
+- **Triggers** are not enumerated. A `SECURITY DEFINER` trigger function can
+  write rows a policy would refuse.
+
+These are the known blind spots, not an argument that they do not matter.

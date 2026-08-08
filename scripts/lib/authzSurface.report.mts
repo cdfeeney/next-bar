@@ -9,6 +9,7 @@
 import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
+  DEFINERS_WITHOUT_AUTH_UID,
   POLICY_LESS_BY_DESIGN,
   RUNNER_MANAGED_TABLES,
   SERVICE_ROLE_ONLY_TABLES,
@@ -16,13 +17,16 @@ import {
   expectedPublicTables,
   functionGrants,
   functionsDefined,
+  netColumnPrivileges,
   netTablePrivileges,
   policiesByTable,
+  policyDefinitions,
   policyLessTables,
   readMigrations,
   tableGrants,
   tablesCreated,
   tablesRelyingOnDefaultGrants,
+  unmodelableGrantStatements,
   tablesWithRlsEnabled,
 } from './authzSurface';
 
@@ -78,9 +82,51 @@ for (const t of tables) {
   console.log(`  ${rls.has(t) ? 'RLS ' : 'NO  '} ${String(count).padStart(2)} policy  ${t}`);
 }
 
-console.log('\n-- net table privileges from the migrations --');
+console.log('\n-- net TABLE-level privileges (what role_table_grants will show) --');
 for (const [table, byRole] of netTablePrivileges(files)) {
   for (const [role, privs] of byRole) console.log(`  ${table} -> ${role}: ${privs.join(', ')}`);
+}
+
+console.log('\n-- tables with NO net grant to anon/authenticated/service_role --');
+{
+  const granted = new Set(netTablePrivileges(files).keys());
+  console.log(`  ${tables.filter((t) => !granted.has(t)).join(', ') || '(none)'}`);
+}
+
+console.log('\n-- net COLUMN-level privileges (role_column_grants, NOT role_table_grants) --');
+{
+  const cols = netColumnPrivileges(files);
+  if (![...cols.values()].some((byRole) => byRole.size)) console.log('  (none)');
+  for (const [table, byRole] of cols) {
+    for (const [role, columns] of byRole) {
+      console.log(`  ${table} -> ${role}: update (${columns.join(', ')})`);
+    }
+  }
+}
+
+console.log('\n-- unmodelable grant forms in LIVE sql (must be empty) --');
+{
+  const bad = unmodelableGrantStatements(files);
+  console.log(`  ${bad.length ? bad.map((b) => `${b.file}: ${b.statement}`).join('\n  ') : '(none)'}`);
+}
+
+console.log('\n-- SECURITY DEFINER functions whose body does NOT use auth.uid() --');
+{
+  const derived = [
+    ...new Set(
+      fns.filter((f) => f.isSecurityDefiner && !f.usesAuthUid).map((f) => f.name),
+    ),
+  ].sort();
+  console.log(`  derived:  ${derived.join(', ') || '(none)'}`);
+  console.log(`  declared: ${DEFINERS_WITHOUT_AUTH_UID.join(', ')}`);
+  console.log(
+    `  agree:    ${JSON.stringify(derived) === JSON.stringify([...DEFINERS_WITHOUT_AUTH_UID].sort())}`,
+  );
+}
+
+console.log('\n-- expected policy EXPRESSIONS (diff against pg_policies.qual / with_check) --');
+for (const p of policyDefinitions(files)) {
+  console.log(`  [${p.table}] ${p.policy}\n      ${p.sql}`);
 }
 
 console.log('\n-- policies per table --');

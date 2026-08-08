@@ -54,6 +54,17 @@ export type FunctionDef = {
   pinsSearchPath: boolean;
   /** The attribute text of THIS function: header plus its own post-body tail. */
   header: string;
+  /**
+   * Whether the function's BODY references `auth.uid()`.
+   *
+   * A SECURITY DEFINER function reaches past RLS by design, so the body's own
+   * caller check is the only remaining gate. Most derive the acting user from
+   * `auth.uid()`; a few legitimately do not (a trigger, an opt-in-gated public
+   * read, an opaque-id lookup). The runbook needs the distinction per function,
+   * because telling an operator "every definer must use auth.uid()" makes the
+   * legitimate exceptions look like defects.
+   */
+  usesAuthUid: boolean;
 };
 
 export type TableDef = {
@@ -83,6 +94,17 @@ export const TABLE_PRIVILEGES = [
 export type PrivilegeStatement = {
   action: 'grant' | 'revoke';
   privileges: string[];
+  /**
+   * Columns named in a column-scoped grant, e.g.
+   * `grant update (display_name, is_private) on table public.profiles`.
+   * Empty for an ordinary table-level statement.
+   *
+   * This distinction is not cosmetic. Column-level privileges live in
+   * `pg_attribute.attacl` and surface in `information_schema.role_column_grants`
+   * — NOT in `role_table_grants`. Folding them into the table-level set makes
+   * the runbook promise an operator a row that their query can never return.
+   */
+  columns: string[];
   table: string;
   roles: string[];
   file: string;
@@ -190,11 +212,13 @@ export function functionsDefined(files: MigrationFile[]): FunctionDef[] {
       const segment = sql.slice(from, to);
       const bodyOpen = /\bas\s+(\$[a-z0-9_]*\$)/i.exec(segment);
       let attributeText: string;
+      let bodyText = '';
       if (bodyOpen) {
         const delimiter = bodyOpen[1];
         const openAt = (bodyOpen.index ?? 0) + bodyOpen[0].length;
         const closeAt = segment.indexOf(delimiter, openAt);
         const tail = closeAt === -1 ? '' : segment.slice(closeAt + delimiter.length);
+        bodyText = closeAt === -1 ? segment.slice(openAt) : segment.slice(openAt, closeAt);
         attributeText = segment.slice(0, bodyOpen.index) + endOfStatement(tail);
       } else {
         // No dollar-quoted body found; bound at the statement terminator so a
@@ -207,6 +231,7 @@ export function functionsDefined(files: MigrationFile[]): FunctionDef[] {
         header: attributeText,
         isSecurityDefiner: /security\s+definer/i.test(attributeText),
         pinsSearchPath: /set\s+search_path\s*(?:=|to)/i.test(attributeText),
+        usesAuthUid: /\bauth\.uid\s*\(/i.test(bodyText),
       });
     }
   }
@@ -369,11 +394,9 @@ export function privilegeStatements(files: MigrationFile[]): PrivilegeStatement[
       out.push({
         action: m[1].toLowerCase() as 'grant' | 'revoke',
         privileges: parsePrivileges(m[2]),
+        columns: parseGrantedColumns(m[2]),
         table: m[3].toLowerCase(),
-        roles: m[4]
-          .split(',')
-          .map((r) => r.trim().toLowerCase())
-          .filter(Boolean),
+        roles: parseRoles(m[4]),
         file: file.name,
       });
     }
@@ -394,6 +417,32 @@ function parsePrivileges(raw: string): string[] {
   return parts.map((p) => p.split(/\s+/)[0]).filter(Boolean);
 }
 
+/** The column names inside any `(...)` of a column-scoped grant. */
+function parseGrantedColumns(raw: string): string[] {
+  return [...raw.matchAll(/\(([^)]*)\)/g)]
+    .flatMap((m) => m[1].split(','))
+    .map((c) => c.trim().toLowerCase().replace(/^"|"$/g, ''))
+    .filter(Boolean);
+}
+
+/**
+ * Role list of a grant/revoke.
+ *
+ * Strips `with grant option` / `with admin option` and surrounding double
+ * quotes. Without this, `to anon with grant option` parses as a role literally
+ * named `anon with grant option` and `to "anon"` as `"anon"` — in both cases a
+ * real grant to `anon` is recorded under a name nothing matches, so the
+ * anon-grant assertion passes while anonymous access was widened. That is a
+ * fail-OPEN, which is the only kind that matters here.
+ */
+function parseRoles(raw: string): string[] {
+  return raw
+    .replace(/\bwith\s+(?:grant|admin)\s+option\b/gi, ' ')
+    .split(',')
+    .map((r) => r.trim().toLowerCase().replace(/^"|"$/g, ''))
+    .filter(Boolean);
+}
+
 /**
  * Replay every grant/revoke to get the net privileges each role holds on each
  * table ACCORDING TO THE MIGRATIONS.
@@ -407,19 +456,62 @@ function parsePrivileges(raw: string): string[] {
 export function netTablePrivileges(
   files: MigrationFile[],
 ): Map<string, Map<string, string[]>> {
+  return replayTablePrivileges(files);
+}
+
+/**
+ * The same replay for COLUMN-scoped grants, which `role_table_grants` cannot
+ * show. Kept separate so the runbook can point the operator at
+ * `role_column_grants` for these instead of promising a row that will never
+ * appear.
+ */
+export function netColumnPrivileges(
+  files: MigrationFile[],
+): Map<string, Map<string, string[]>> {
+  const state = new Map<string, Map<string, Set<string>>>();
+  for (const st of privilegeStatements(files)) {
+    const byRole = state.get(st.table) ?? new Map<string, Set<string>>();
+    for (const role of st.roles) {
+      const held = byRole.get(role) ?? new Set<string>();
+      if (st.action === 'grant') {
+        for (const column of st.columns) held.add(column);
+      } else {
+        // `revoke all on table` also removes column-level privileges.
+        if (st.columns.length === 0) held.clear();
+        else for (const column of st.columns) held.delete(column);
+      }
+      byRole.set(role, held);
+    }
+    state.set(st.table, byRole);
+  }
+  return sortPrivilegeState(state);
+}
+
+function replayTablePrivileges(
+  files: MigrationFile[],
+): Map<string, Map<string, string[]>> {
   const state = new Map<string, Map<string, Set<string>>>();
   for (const st of privilegeStatements(files)) {
     const byRole = state.get(st.table) ?? new Map<string, Set<string>>();
     for (const role of st.roles) {
       const held = byRole.get(role) ?? new Set<string>();
       for (const priv of st.privileges) {
-        if (st.action === 'grant') held.add(priv);
-        else held.delete(priv);
+        // A column-scoped GRANT confers no table-level privilege, so it must
+        // not enter this set; a REVOKE of any shape does clear table-level.
+        if (st.action === 'grant') {
+          if (st.columns.length === 0) held.add(priv);
+        } else held.delete(priv);
       }
       byRole.set(role, held);
     }
     state.set(st.table, byRole);
   }
+  return sortPrivilegeState(state);
+}
+
+function sortPrivilegeState(
+  state: Map<string, Map<string, Set<string>>>,
+): Map<string, Map<string, string[]>> {
   return new Map(
     [...state.entries()]
       .map(
@@ -434,6 +526,10 @@ export function netTablePrivileges(
             ),
           ] as [string, Map<string, string[]>],
       )
+      // Drop tables left holding nothing, so "is this table in the map" means
+      // "does any role hold a privilege on it". `bar_rsvps` is exactly this
+      // case: 0012 grants delete, 0014 revokes it, net nothing.
+      .filter(([, byRole]) => byRole.size > 0)
       .sort(([a], [b]) => a.localeCompare(b)),
   );
 }
@@ -466,17 +562,65 @@ export const ANON_READABLE_TABLES = ['bar_photos', 'bars'];
  * revoke-first table it is.
  */
 export function tablesRelyingOnDefaultGrants(files: MigrationFile[]): string[] {
-  const revoked = new Set(
-    privilegeStatements(files)
-      .filter((s) => s.action === 'revoke')
-      .filter((s) => s.roles.some((r) => r === 'anon' || r === 'authenticated' || r === 'public'))
-      .map((s) => s.table),
-  );
+  // A PARTIAL revoke does not clear Supabase's default `grant all`, so it must
+  // not count. `revoke update on table public.profiles from public, anon,
+  // authenticated` (0006:82) leaves every other default privilege in place;
+  // treating it as revoke-first would certify a table that still relies on the
+  // defaults, and the runbook would then present its grant matrix as an exact
+  // expectation when the deployed state can legitimately hold much more.
+  // Both anon and authenticated must be covered: revoking from one leaves the
+  // other's defaults intact.
+  const revokedAll = new Map<string, Set<string>>();
+  for (const st of privilegeStatements(files)) {
+    if (st.action !== 'revoke') continue;
+    if (st.columns.length > 0) continue;
+    const isAllPrivileges = TABLE_PRIVILEGES.every((p) => st.privileges.includes(p));
+    if (!isAllPrivileges) continue;
+    const roles = revokedAll.get(st.table) ?? new Set<string>();
+    for (const role of st.roles) roles.add(role);
+    revokedAll.set(st.table, roles);
+  }
   return tablesCreated(files)
     .map((t) => t.name)
     .filter((t, i, all) => all.indexOf(t) === i)
-    .filter((t) => !revoked.has(t))
+    .filter((t) => {
+      const roles = revokedAll.get(t);
+      return !(roles?.has('anon') && roles.has('authenticated'));
+    })
     .sort();
+}
+
+/**
+ * Grant forms this module CANNOT model, found in live (non-comment) SQL.
+ *
+ * `grant ... on all tables in schema public to anon` and
+ * `alter default privileges ... grant ... to anon` widen anonymous access
+ * without naming a table, so every table-level parser here is blind to them.
+ * Being blind fails OPEN — the suite would report `anon` reaching two tables
+ * while it reaches all of them — so their presence must break the build rather
+ * than be silently skipped.
+ *
+ * Both appear in this repository today ONLY inside explanatory comments
+ * (0034:13, 0019:79), which `stripSqlComments` removes before this runs.
+ */
+export function unmodelableGrantStatements(
+  files: MigrationFile[],
+): { file: string; statement: string }[] {
+  const out: { file: string; statement: string }[] = [];
+  const patterns = [
+    /\b(?:grant|revoke)\b[^;]*\bon\s+all\s+(?:tables|sequences|routines|functions)\s+in\s+schema\b[^;]*/gi,
+    /\balter\s+default\s+privileges\b[^;]*/gi,
+  ];
+  for (const file of files) {
+    const sql = stripSqlComments(file.sql);
+    for (const re of patterns) {
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(sql)) !== null) {
+        out.push({ file: file.name, statement: m[0].replace(/\s+/g, ' ').trim() });
+      }
+    }
+  }
+  return out;
 }
 
 /** Grants of the form `grant execute on function public.<name>(...) to <role>`. */
@@ -513,3 +657,75 @@ export function functionGrants(
  * database and is stop-and-escalate.
  */
 export const ANON_EXECUTABLE_FUNCTIONS = ['get_public_ratings', 'get_shared_night'];
+
+/**
+ * `SECURITY DEFINER` functions whose body does NOT reference `auth.uid()`.
+ *
+ * Each is a reviewed exception, not an oversight. A definer function bypasses
+ * RLS, so if it neither derives the acting user from `auth.uid()` nor is gated
+ * some other way, it is an unauthenticated door into the data:
+ *   handle_new_user        AFTER INSERT trigger on auth.users; the row IS the
+ *                          identity, and no caller exists to check
+ *   get_public_ratings     anon-executable; gated on the owner's
+ *                          `shares_list_publicly` opt-in instead
+ *   get_shared_night       anon-executable; gated on an opaque share id
+ *   pending_change_count   returns a COUNT over moderation queue rows, no
+ *                          per-user data
+ * The test asserts derived == declared, so a NEW definer function without a
+ * caller check fails the suite and has to be justified here before it ships.
+ */
+export const DEFINERS_WITHOUT_AUTH_UID = [
+  'get_public_ratings',
+  'get_shared_night',
+  'handle_new_user',
+  'pending_change_count',
+];
+
+/**
+ * The full text of every net-live `create policy` statement.
+ *
+ * Policy NAMES and COUNTS are metadata; what a policy actually permits lives in
+ * its `using` / `with check` expressions. A deployed policy can carry the
+ * expected name and count while its `using` clause has been edited to
+ * `using (true)` — every name-and-count check passes and the table is wide
+ * open. That is worse than no check, because the runbook then supplies
+ * positive assurance at a layer it never inspected. Emitting the expected
+ * expressions gives the operator something concrete to diff against
+ * `pg_policies.qual` / `.with_check`.
+ */
+export function policyDefinitions(
+  files: MigrationFile[],
+): { table: string; policy: string; file: string; sql: string }[] {
+  const live = policiesByTable(files);
+  const out: { table: string; policy: string; file: string; sql: string }[] = [];
+  for (const file of files) {
+    const sql = stripSqlComments(file.sql);
+    const re =
+      /\bcreate\s+policy\s+("[^"]*"|[a-z0-9_]+)\s+on\s+(?:public\.)?([a-z0-9_]+)/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(sql)) !== null) {
+      const raw = m[1];
+      const policy = raw.startsWith('"') ? raw.slice(1, -1) : raw.toLowerCase();
+      const table = m[2].toLowerCase();
+      // Only policies that survive every later `drop policy`.
+      if (!live.get(table)?.includes(policy)) continue;
+      const from = m.index ?? 0;
+      const statement = endOfStatement(sql.slice(from));
+      out.push({
+        table,
+        policy,
+        file: file.name,
+        sql: statement.replace(/\s+/g, ' ').trim(),
+      });
+    }
+  }
+  // A policy can be created, dropped and re-created across migrations
+  // (0020 then 0021 for bar_change_queue_insert_own). Only the LAST create is
+  // what a deployed database holds; emitting both would hand the operator two
+  // conflicting "expected" expressions for one policy.
+  const lastWins = new Map<string, (typeof out)[number]>();
+  for (const p of out) lastWins.set(`${p.table} ${p.policy}`, p);
+  return [...lastWins.values()].sort(
+    (a, b) => a.table.localeCompare(b.table) || a.policy.localeCompare(b.policy),
+  );
+}

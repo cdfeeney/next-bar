@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
+  DEFINERS_WITHOUT_AUTH_UID,
   POLICY_LESS_BY_DESIGN,
   RUNNER_MANAGED_TABLES,
   SERVICE_ROLE_ONLY_TABLES,
@@ -9,8 +10,10 @@ import {
   expectedPublicTables,
   functionGrants,
   functionsDefined,
+  netColumnPrivileges,
   netTablePrivileges,
   policiesByTable,
+  policyDefinitions,
   policyLessTables,
   policyStatements,
   privilegeStatements,
@@ -20,6 +23,7 @@ import {
   tablesCreated,
   tablesRelyingOnDefaultGrants,
   tablesWithRlsEnabled,
+  unmodelableGrantStatements,
   type MigrationFile,
 } from './authzSurface';
 
@@ -403,6 +407,167 @@ describe('table grants', () => {
       alter table public.inherited enable row level security;
     `);
     expect(tablesRelyingOnDefaultGrants(lazy)).toEqual(['inherited']);
+  });
+
+  it('does NOT accept a PARTIAL revoke as revoke-first', () => {
+    // `revoke update ... ` leaves every other Supabase default privilege in
+    // place, so the table still relies on the defaults. Accepting it would
+    // certify the table and let the runbook present its grant matrix as an
+    // exact expectation when the deployed state can hold far more.
+    // This is the shape of 0006:82 on `profiles`, before 0034 added the full
+    // revoke.
+    const partial = fake(`
+      create table if not exists public.halfway (id uuid);
+      alter table public.halfway enable row level security;
+      revoke update on table public.halfway from public, anon, authenticated;
+      grant update (label) on table public.halfway to authenticated;
+    `);
+    expect(tablesRelyingOnDefaultGrants(partial)).toEqual(['halfway']);
+  });
+
+  it('does NOT accept a revoke that misses one client role', () => {
+    // Revoking from anon alone leaves `authenticated`'s defaults intact.
+    const oneRole = fake(`
+      create table if not exists public.lopsided (id uuid);
+      alter table public.lopsided enable row level security;
+      revoke all on table public.lopsided from anon;
+    `);
+    expect(tablesRelyingOnDefaultGrants(oneRole)).toEqual(['lopsided']);
+  });
+
+  it('reads a role through "with grant option" and through quotes', () => {
+    // Both forms are valid SQL. Parsed naively they produce roles named
+    // `anon with grant option` and `"anon"`, neither of which matches `anon`,
+    // so a real widening of anonymous access records under a name nothing
+    // checks. That failure is silent and fails OPEN.
+    const awkward = fake(`
+      revoke all on table public.widgets from public, anon, authenticated;
+      grant select on table public.widgets to anon with grant option;
+      grant insert on table public.gadgets to "anon";
+    `);
+    const net = netTablePrivileges(awkward);
+    expect(net.get('widgets')?.get('anon')).toEqual(['select']);
+    expect(net.get('gadgets')?.get('anon')).toEqual(['insert']);
+  });
+
+  it('separates COLUMN-scoped grants from table-level ones', () => {
+    // A column-scoped grant confers no table-level privilege and does not
+    // appear in role_table_grants, so folding it in makes the runbook promise
+    // a row the operator's query can never return.
+    const scoped = fake(`
+      revoke all on table public.profiles from public, anon, authenticated;
+      grant select on table public.profiles to authenticated;
+      grant update (display_name) on table public.profiles to authenticated;
+    `);
+    expect(netTablePrivileges(scoped).get('profiles')?.get('authenticated')).toEqual([
+      'select',
+    ]);
+    expect(netColumnPrivileges(scoped).get('profiles')?.get('authenticated')).toEqual([
+      'display_name',
+    ]);
+  });
+
+  it('the corpus contains NO grant form this module cannot model', () => {
+    // `grant ... on all tables in schema public to anon` and
+    // `alter default privileges` widen anonymous access without naming a
+    // table, so every parser here is blind to them — and being blind fails
+    // OPEN. Today both appear only inside comments (0034:13, 0019:79), which
+    // stripSqlComments removes. If one ever lands in live SQL this fails
+    // rather than silently under-reporting.
+    expect(unmodelableGrantStatements(files)).toEqual([]);
+  });
+
+  it('FLAGS an unmodelable grant when one appears in live sql', () => {
+    const blind = fake('grant select on all tables in schema public to anon;');
+    expect(unmodelableGrantStatements(blind)).toHaveLength(1);
+    expect(unmodelableGrantStatements(blind)[0].statement).toContain('all tables in schema');
+  });
+
+  it('ignores an unmodelable grant that is only mentioned in a comment', () => {
+    const commented = fake(`
+      -- Supabase's default is: grant all on all tables in schema public to anon;
+      revoke all on table public.widgets from public, anon, authenticated;
+    `);
+    expect(unmodelableGrantStatements(commented)).toEqual([]);
+  });
+});
+
+describe('SECURITY DEFINER caller checks', () => {
+  it('the DERIVED set of definers without auth.uid() matches the declaration', () => {
+    // A definer function bypasses RLS, so its body IS the last gate. Four
+    // legitimately have no auth.uid() (a trigger, two anon-gated readers, a
+    // count). A FIFTH is an unauthenticated door and must be justified before
+    // it ships.
+    const derived = [
+      ...new Set(
+        functionsDefined(files)
+          .filter((f) => f.isSecurityDefiner && !f.usesAuthUid)
+          .map((f) => f.name),
+      ),
+    ].sort();
+    expect(derived).toEqual([...DEFINERS_WITHOUT_AUTH_UID].sort());
+  });
+
+  it('detects auth.uid() in a body and its absence', () => {
+    const pair = fake(`
+      create or replace function public.gated(p int)
+      returns void language plpgsql security definer set search_path = public
+      as $$ begin if auth.uid() is null then raise exception 'no'; end if; end; $$;
+
+      create or replace function public.ungated(p int)
+      returns void language plpgsql security definer set search_path = public
+      as $$ begin perform 1; end; $$;
+    `);
+    const parsed = functionsDefined(pair);
+    expect(parsed.find((f) => f.name === 'gated')?.usesAuthUid).toBe(true);
+    expect(parsed.find((f) => f.name === 'ungated')?.usesAuthUid).toBe(false);
+  });
+
+  it('does not credit an auth.uid() that sits OUTSIDE the body', () => {
+    // Attribute text is not body text; a comment or a neighbouring statement
+    // mentioning auth.uid() must not count as a caller check.
+    const outside = fake(`
+      create or replace function public.sneaky(p int)
+      returns void language plpgsql security definer set search_path = public
+      as $$ begin perform 1; end; $$;
+      -- auth.uid() is checked by the caller, honest
+    `);
+    expect(functionsDefined(outside)[0].usesAuthUid).toBe(false);
+  });
+});
+
+describe('policy definitions', () => {
+  it('emits one expected expression per live policy', () => {
+    // The operator diffs these against pg_policies.qual/.with_check. Name and
+    // count matching proves nothing about what a policy PERMITS.
+    const defs = policyDefinitions(files);
+    const live = [...policiesByTable(files).values()].flat();
+    expect(defs.length).toBe(live.length);
+    const keys = defs.map((d) => `${d.table} ${d.policy}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('keeps only the LAST create when a policy is re-created', () => {
+    // 0020 creates bar_change_queue_insert_own and 0021 drops and re-creates it
+    // with a different predicate. Emitting both would hand the operator two
+    // conflicting "expected" expressions for one deployed policy.
+    const recreated = fake(`
+      create policy p on public.widgets for select using (old_predicate);
+      drop policy if exists p on public.widgets;
+      create policy p on public.widgets for select using (new_predicate);
+    `);
+    const defs = policyDefinitions(recreated);
+    expect(defs).toHaveLength(1);
+    expect(defs[0].sql).toContain('new_predicate');
+    expect(defs[0].sql).not.toContain('old_predicate');
+  });
+
+  it('omits a policy that was dropped and never re-created', () => {
+    const dropped = fake(`
+      create policy gone on public.widgets for select using (true);
+      drop policy if exists gone on public.widgets;
+    `);
+    expect(policyDefinitions(dropped)).toEqual([]);
   });
 });
 
