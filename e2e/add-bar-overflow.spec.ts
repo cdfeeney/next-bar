@@ -89,6 +89,15 @@ async function gotoRankingsWithExistingRating(page: Page): Promise<void> {
   // that third of the row composition would go unexercised (santa: Claude
   // FABLE). An ordinary bar is seeded alongside it so the returning-user list
   // is not composed solely of the synthetic fixture.
+  // READ THIS BEFORE COUNTING ANYTHING IN A FUTURE TEST. These two ratings are
+  // NOT symmetric. The ordinary bundled row resolves through the catalog and
+  // renders as a ranked row; LONG_ROW_ID is a fixture-only id that the ranked
+  // list cannot resolve, so it is a GHOST — real to the inline search list
+  // (which reads useBars, i.e. the swapped catalog) and absent from the ranked
+  // rows. The page therefore shows TWO ratings in storage but ONE ranked row.
+  // That is deliberate, not a bug: any future assertion of the form "one ranked
+  // row per stored rating" will be off by one and must exclude LONG_ROW_ID
+  // (santa round 2: GLM).
   const ratedBarIds = [LONG_ROW_ID, loadBundledRows()[0].id];
   await page.evaluate((barIds) => {
     localStorage.setItem(
@@ -484,18 +493,28 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
     const result = await modal(page).evaluate((el) => {
       // Find the scroller by COMPUTED overflow-y, not by the `.overflow-y-auto`
       // class. Matching on a class string only proves the class is present.
-      const scroller = (Array.from(el.querySelectorAll('*')) as HTMLElement[]).find(
+      const candidates = (Array.from(el.querySelectorAll('*')) as HTMLElement[]).filter(
         (n) => {
           const oy = getComputedStyle(n).overflowY;
           return oy === 'auto' || oy === 'scroll';
         },
       );
-      if (!scroller) return { found: false, overflows: false, moved: false };
+      // Pin WHICH scroller this is. Taking the first computed match is not
+      // enough: CSS computes overflow-y to `auto` on any element whose author
+      // set only overflow-x, so a future `overflow-x-auto` utility placed
+      // earlier in the dialog would silently retarget this assertion at an
+      // element that has nothing to do with the list (santa round 2: DeepSeek
+      // and Codex; Claude/FABLE raised the same risk as an advisory). The
+      // scroller that matters is the one actually holding the picker rows.
+      const scroller = candidates.find((n) => n.querySelector('li button'));
+      if (!scroller) {
+        return { found: false, overflows: false, moved: false, clientHeight: 0 };
+      }
       const overflows = scroller.scrollHeight > scroller.clientHeight;
       scroller.scrollTop = 150;
       const moved = scroller.scrollTop > 0;
       scroller.scrollTop = 0;
-      return { found: true, overflows, moved };
+      return { found: true, overflows, moved, clientHeight: scroller.clientHeight };
     });
 
     expect(result.found).toBe(true);
@@ -506,6 +525,12 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
     // break (santa: Codex).
     expect(result.overflows).toBe(true);
     expect(result.moved).toBe(true);
+    // A scrollport the user can actually see. scrollHeight > clientHeight plus
+    // a writable scrollTop is satisfied by a collapsed container too: shrink
+    // the scroller to a few pixels and the content still "scrolls"
+    // programmatically while the user sees a slit (santa round 2: Codex, with
+    // DeepSeek giving the same shape as a max-height collapse).
+    expect(result.clientHeight).toBeGreaterThan(100);
   });
 
   /**
