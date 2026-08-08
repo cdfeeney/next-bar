@@ -379,8 +379,18 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     // ORDER is the load-bearing part: @supports adds no specificity, so the
     // gated rule only wins because it comes later. Emitting it first would
     // silently hand the page back to 100vh with both rules still present.
+    //
+    // Compare LAST fallback against LAST gated rule, not first-against-last.
+    // Among same-specificity declarations the cascade winner is the one that
+    // appears last, so `max(fallback) < max(gated)` is the actual winning
+    // condition. `min(fallback) < max(gated)` was weaker: a SECOND ungated
+    // `100vh` rule emitted after the @supports block — a later-loaded global
+    // sheet, or a dev-mode chunk that re-emits `.min-h-screen` — takes the
+    // cascade back to 100vh while the early copy still supplies a small
+    // `min`, so the assertion stayed green on a page that had regressed.
+    // (santa round-4: Claude/FABLE + Codex, independently.)
     expect(
-      Math.min(...fallback.map((d) => d.order)),
+      Math.max(...fallback.map((d) => d.order)),
       detail,
     ).toBeLessThan(Math.max(...gatedDvh.map((d) => d.order)));
   });
@@ -546,23 +556,20 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     expect(gaps.above, JSON.stringify(gaps)).toBeGreaterThan(0);
     expect(Math.abs(gaps.above - gaps.below), JSON.stringify(gaps)).toBeLessThanOrEqual(2);
 
-    // A reviewer asked for an assertion that pins the OVERFLOW-safety property
-    // `m-auto` was chosen for, by forcing a tall card and checking its top is
-    // not pushed into unreachable space. That assertion was written, and then
-    // MEASURED NOT TO WORK: mutating the page back to `items-center` +
-    // `mx-auto` left it green. The reason is structural — the section is a
-    // flex item with `min-height: auto`, so it always grows to contain the
-    // card, and a card that never overflows its section can never be centred
-    // into negative space. In this structure the trap simply cannot fire, so
-    // no assertion about it can go red, and shipping one would be the same
-    // coverage theater this file already removed once.
+    // THE LIVE TRIPWIRE. A reviewer asked for an assertion pinning the
+    // OVERFLOW-safety property `m-auto` was chosen for: force a tall card and
+    // check its top is not pushed into unreachable space. It was written and
+    // MEASURED NOT TO FIRE in this structure — the section is a flex item
+    // whose `min-height: auto` floor always grows it to contain the card, so
+    // nothing ever overflows and the card's top never goes negative.
     //
-    // What IS load-bearing is the precondition: that automatic minimum size
-    // disappears the moment the section gains an `overflow-*` class, which is
-    // the ordinary way someone clips a decoration. So assert THAT — it can
-    // fail, and it is the thing that would arm the trap.
+    // That automatic minimum size disappears the moment the section gains an
+    // `overflow-*` class — the ordinary way someone clips a decoration. So
+    // this guard asserts the PRECONDITION, and unlike the block below it does
+    // go red (proven: adding `overflow-hidden` to the section fails it with
+    // {x:'hidden',y:'hidden'}).
     // (santa: Codex + Kimi asked for the overflow case; the mutation result
-    // is why this guards the precondition instead.)
+    // is why the precondition is what carries the weight.)
     const sectionOverflow = await page.evaluate(() => {
       const section = document.querySelector('main section') as HTMLElement;
       const s = getComputedStyle(section);
@@ -571,8 +578,35 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     expect(sectionOverflow.y, JSON.stringify(sectionOverflow)).toBe('visible');
     expect(sectionOverflow.x, JSON.stringify(sectionOverflow)).toBe('visible');
 
-    // With that precondition holding, confirm the card still starts at the
-    // padded top rather than above it once content exceeds the viewport.
+    // DORMANT CANARY — READ THIS BEFORE TRUSTING IT.
+    //
+    // The block below is NOT a live regression test for the `m-auto` choice,
+    // and an earlier version of this comment wrongly implied it had been
+    // dropped for that reason. It shipped. Say plainly what it is:
+    //
+    // MEASURED, santa round-4, iPhone 13: with the page mutated back to the
+    // pre-item spelling — `items-center justify-center` on the section and
+    // `mx-auto` on the card — the ENTIRE 18-test auth-layout spec passes,
+    // this block included. So NOTHING in this file currently detects a revert
+    // of `m-auto`. That is a known, accepted gap, not a covered case: while
+    // the section keeps `min-height: auto` growth, `items-center` and
+    // `m-auto` lay out identically in every state this page can reach, so
+    // there is no observable difference for any assertion to catch.
+    //
+    // Why keep it, then: it becomes LIVE the moment the section's sizing
+    // contract changes in a way the guard above does not already catch —
+    // notably a fixed height (`h-*`/`max-h-*`) with overflow still visible.
+    // The section can then no longer grow, the card really does overflow, and
+    // under `items-center` its top goes negative into unreachable space while
+    // under `m-auto` it stays at the padded top. Treat a red here as "someone
+    // constrained the section AND the centring primitive is now wrong."
+    //
+    // If a future change makes the card fit 390x320, the `cardOverflows`
+    // arming check below fails for a NON-defect. Re-arm it (shrink further)
+    // rather than deleting the invariant.
+    // (santa round-4: Claude/FABLE, Codex, DeepSeek and Kimi all flagged the
+    // original framing; Kimi's adjudication was keep-and-relabel over delete,
+    // because the fixed-height case is real dormant value.)
     await page.setViewportSize({ width: 390, height: 320 });
     await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
 
