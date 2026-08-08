@@ -16,9 +16,12 @@ they are named here rather than buried in the body:
 - **R1 — the lazy-mount observer may never fire.** No timer is armed until `build()` runs, so a card
   that never intersects sits on an empty pending host forever, with no fallback. App-owned, local,
   and matching the symptom exactly. See §4–5.
-- **R2 — the runtime gate can fail for ONE card.** A *failed* `/api/flags` check is deliberately not
-  cached, so a single 3s timeout suppresses that one widget while a later card succeeds and shows a
-  photo. This is the one deployment gate that does **not** apply uniformly to every bar. See §3 row 6.
+- **R2 — the runtime gate can fail for ONE card.** The gate is consulted per widget creation, and a
+  *failed* check is deliberately not cached, so a creation that follows a failure retries. A card
+  whose check times out at 3s renders the glyph while a card created later, in a fresh window,
+  succeeds and shows a photo. This is the one deployment gate that does **not** apply uniformly to
+  every bar. See §3 row 6 for the exact conditions — it is narrower than "every fetch is
+  independent".
 - **R3 — geometry and the provider's own rendering are unverified.** jsdom performs no layout, so the
   local tests prove class strings, not boxes; and Google's content is closed-shadow and was never
   rendered here. See §4–5.
@@ -92,7 +95,7 @@ citation below lands somewhere unexpected, trust the named symbol, not the numbe
 | 3 | **Eligibility — legacy tier** | `src/lib/mediaPolicy.ts:127` (`NEXT_PUBLIC_LEGACY_PHOTOS === '1'`) | fail-closed; deliberately OFF for compliance |
 | 4 | **Eligibility — terminal** | `src/lib/mediaPolicy.ts:132` | with both flags off returns `glyph` → **no photos, by design** |
 | 5 | **Eligibility — API key** | read at MODULE SCOPE `src/lib/placesUiKit.ts:22`; checked at `:46` | fail-closed if `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` absent. **Also `NEXT_PUBLIC_*`, so also build-inlined** — a bundle built without the key stays unconfigured no matter how the environment is edited afterwards. (santa: Codex.) |
-| 6 | **Eligibility — runtime gate** | `src/lib/placesUiKit.ts:140` → `src/app/api/flags/route.ts:39` (`GOOGLE_MEDIA_RUNTIME_ENABLED === '1'`) | fail-closed on any error/timeout/non-200. **NOT uniform across cards — this is residual R2.** The route itself takes no bar input, but the *fetch* happens per widget creation and a FAILED check is deliberately never cached (`placesUiKit.ts:131-133`, and only the success branch assigns `runtimeFlag`). So one card whose fetch exceeds the 3s budget renders the glyph while the very next card, fetching after the failure, succeeds and shows a photo. That is a single-bar mechanism inside the app. (santa: DeepSeek — lane-unique.) |
+| 6 | **Eligibility — runtime gate** | `src/lib/placesUiKit.ts:140` → `src/app/api/flags/route.ts:39` (`GOOGLE_MEDIA_RUNTIME_ENABLED === '1'`) | fail-closed on any error/timeout/non-200. **NOT uniform across cards — this is residual R2.** The route takes no bar input, but the gate is *consulted per widget creation* and a FAILED check is deliberately never cached (`placesUiKit.ts:131-133`; only the success branch assigns `runtimeFlag`), so a creation after a completed failure retries. **The precise conditions matter (santa: Codex round 2):** a success is cached for `RUNTIME_FLAG_TTL_MS` (60s) and concurrent checks share `runtimeFlagInFlight`, so two widgets created together, or a second created inside the 60s success window, issue no second fetch and CANNOT diverge. Divergence needs the two creations in different windows — card A's check times out at 3s and glyphs; card B, created afterwards, fetches afresh and shows a photo. Narrow, but real, and it is a single-bar mechanism inside the app. (santa: DeepSeek — lane-unique; conditions corrected by Codex.) |
 | 7 | **Rendering — branch** | `src/components/ResultCard.tsx:227` (`resolveMedia`), `:242` (`isGoogleLive`), `:246` | takes the google-live branch iff (1)+(2) hold |
 | 8 | **Rendering — widget host** | `src/components/ResultCard.tsx:254` (`GooglePlacePhotoLazy`) | `next/dynamic`, `ssr:false` |
 | 9 | **Mounting — lazy** | `src/components/GooglePlacePhoto.tsx:322,333` (`IntersectionObserver`, `rootMargin:200px`) | builds only once the card nears the viewport |
