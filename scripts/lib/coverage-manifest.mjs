@@ -352,7 +352,15 @@ export function isCompleting(cell) {
  */
 export function isTerminal(cell) {
   if (!cell) return false;
-  return isCompleting(cell) || cell.terminalStatus === SATURATED_AT_FLOOR;
+  // The floor arm carries the SAME evidence demand as the rest. Writing it as a
+  // bare disjunction made `saturated_at_floor` the one status accepted on the
+  // word alone — and since a floor cell is waivable, a fabricated floor DONE
+  // could be acknowledged and counted toward a COMPLETE run over geography
+  // nobody ever searched. Nothing legitimate is lost: a floor status is only
+  // ever written after a capped response, and a capped response IS a successful
+  // attempt, so a real floor cell always carries `lastOk`.
+  if (cell.terminalStatus === SATURATED_AT_FLOOR) return Boolean(cell.lastOk);
+  return isCompleting(cell);
 }
 
 /**
@@ -448,6 +456,11 @@ export function completeness(state) {
   else status = 'incomplete_saturated';
 
   const plannedCells = [...state.cells.values()].filter((cell) => cell.planned);
+  // A cell that any clause reported against is not "finished", whatever its
+  // status word says. Counting them separately let the same cell appear in
+  // `finished` and in `outstanding` in one summary — the object RUN_DONE
+  // persists for the operator.
+  const outstandingIds = new Set([...missing, ...failed, ...unclearedCap]);
   return {
     complete,
     status,
@@ -461,11 +474,16 @@ export function completeness(state) {
       // judge still reading the bare word, so an evidence-less DONE was counted
       // as finished while the same cell sat in `missing` in the same object —
       // and that object is what RUN_DONE persists for the operator.
-      finished: plannedCells.filter(isCompleting).length,
+      finished: plannedCells.filter(
+        (cell) => isCompleting(cell) && !outstandingIds.has(cell.cellId),
+      ).length,
       subdivided: plannedCells.filter((cell) => cell.children.length > 0).length,
       saturatedAtFloor: saturated.length,
       failed: failed.length,
-      outstanding: missing.length + unclearedCap.length,
+      // Distinct CELLS, not the sum of two lists. A capped cell with no DONE is
+      // both `missing` and `unclearedCap`, so adding the lengths reported two
+      // outstanding cells where only one planned cell existed.
+      outstanding: new Set([...missing, ...unclearedCap]).size,
       uniquePlaceIds: new Set(plannedCells.flatMap((cell) => cell.placeIds)).size,
       tornTail: Boolean(state.tornTail),
     },
@@ -528,10 +546,15 @@ export function ackEligibility(state, cellId) {
         'acknowledge those children instead, or resume to finish them',
     };
   }
-  if (cell.terminalStatus === SATURATED_AT_FLOOR) return { eligible: true, reason: 'saturated at the floor' };
+  // The never-attempted refusal comes FIRST. It used to sit below the floor
+  // check, so a fabricated `saturated_at_floor` DONE was waived on the word
+  // alone — granted with the reassuring reason "saturated at the floor" — and
+  // the run then reported complete over a cell nobody had searched. That is
+  // exactly what this guard's docstring promises cannot happen.
   if (cell.attempts.length === 0) {
     return { eligible: false, reason: 'it has never been attempted; run or resume the sweep first' };
   }
+  if (cell.terminalStatus === SATURATED_AT_FLOOR) return { eligible: true, reason: 'saturated at the floor' };
   const last = cell.attempts[cell.attempts.length - 1];
   if (last.ok) {
     return { eligible: false, reason: 'its most recent attempt succeeded, so it is not stuck' };

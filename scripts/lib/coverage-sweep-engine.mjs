@@ -111,6 +111,18 @@ function priorState(ctx, cellId) {
   return ctx.state?.cells?.get(cellId) ?? null;
 }
 
+/**
+ * Did a child finish, as reported by `processCell`'s RETURN value?
+ *
+ * This is about outcomes, not recorded state — `null` means the child is still
+ * unfinished, and a parent must never record 'cleared' over one. The list used
+ * to be spelled out at three call sites; the copy nothing tested was free to
+ * drift, which is the same failure the three judges had.
+ */
+function isTerminalOutcome(outcome) {
+  return outcome === SATURATED_AT_FLOOR || COMPLETING_STATUSES.includes(outcome);
+}
+
 /** The two exits that stop a run early rather than failing a single cell. */
 function isAbort(error) {
   return error instanceof SweepInterrupted || error instanceof BudgetExhausted;
@@ -228,8 +240,7 @@ async function subdivideFrom(cell, ctx) {
       throw error;
     }
   }
-  const terminal = [...COMPLETING_STATUSES, SATURATED_AT_FLOOR];
-  if (outcomes.every((outcome) => terminal.includes(outcome))) {
+  if (outcomes.every(isTerminalOutcome)) {
     ctx.manifest.done(cell.id, 'cleared', { children: children.length, resumed: true });
     return 'cleared';
   }
@@ -266,11 +277,10 @@ async function resumeChildren(cell, known, ctx) {
       throw error;
     }
   }
-  const terminal = [...COMPLETING_STATUSES, SATURATED_AT_FLOOR];
   // Same evidence rule as the settle branch: a 'cleared' attests that THIS cell
   // was searched and censored, so it needs an ok ATTEMPT of its own. Without
   // one, leave the parent outstanding and let it be queried.
-  if (known.lastOk && outcomes.every((outcome) => terminal.includes(outcome))) {
+  if (known.lastOk && outcomes.every(isTerminalOutcome)) {
     ctx.manifest.done(cell.id, 'cleared', { children: known.children.length, resumed: true });
     return 'cleared';
   }
@@ -284,7 +294,12 @@ async function processCell(cell, ctx) {
   // money and cannot produce a different answer. Checked first because a floor
   // cell is also capped-with-no-children, and must not be mistaken for one that
   // still owes a subdivision.
-  if (known?.terminalStatus === SATURATED_AT_FLOOR) {
+  // `known.lastOk` for the same reason `isTerminal` demands it: a floor status
+  // is only ever written after a capped response, so a real floor cell always
+  // carries the successful attempt that proves it. Trusting the bare word here
+  // meant a fabricated floor DONE was skipped forever — never searched, never
+  // convergent, and (before the waiver was reordered) acknowledgeable.
+  if (known?.terminalStatus === SATURATED_AT_FLOOR && known.lastOk) {
     replaySubtree(cell.id, cell, ctx);
     return SATURATED_AT_FLOOR;
   }
@@ -356,7 +371,12 @@ async function processCell(cell, ctx) {
     // from and the cell must be asked again. "Has any places" cannot answer
     // this — an earlier attempt's page would say yes, and a legitimately empty
     // page would say no — so the record order decides.
-    if (known.capped && !known.children?.length) {
+    // `!hasUnrecoveredBlocking` for the same reason the settle branch has it:
+    // cap recovery writes a terminal status for this cell, and writing one over
+    // an unrecovered transient failure persists a manifest that says 'cleared'
+    // while completeness says incomplete_failed. Stand aside and let the retry
+    // that resume exists for happen first.
+    if (known.capped && !known.children?.length && !hasUnrecoveredBlocking(known)) {
       if (known.lastOkHasResult) {
         if (known.places?.length) ctx.onPlaces(known.places, cell);
         return subdivideFrom(cell, ctx);
@@ -525,8 +545,7 @@ async function queryCell(cell, ctx, known) {
   // subdivision it was asked to do. The residual saturation belongs to the
   // floor cell that actually has it — attributing it to every ancestor too
   // would report "missing work" at depth 0 and hide where recall is short.
-  const terminal = [...COMPLETING_STATUSES, SATURATED_AT_FLOOR];
-  if (outcomes.every((outcome) => terminal.includes(outcome))) {
+  if (outcomes.every(isTerminalOutcome)) {
     ctx.manifest.done(cell.id, 'cleared', {
       children: children.length,
       residualSaturation: outcomes.filter((outcome) => outcome === SATURATED_AT_FLOOR).length,
