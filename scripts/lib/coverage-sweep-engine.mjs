@@ -10,6 +10,8 @@
 import {
   classifyError,
   COMPLETING_STATUSES,
+  hasUnrecoveredBlocking,
+  isCompleting,
   SATURATED_AT_FLOOR,
 } from './coverage-manifest.mjs';
 import {
@@ -161,6 +163,25 @@ function replayRecordedOnce(known, cell, ctx, freshPlaces) {
 }
 
 /**
+ * The terminal-exit form of `replayRecordedOnce`.
+ *
+ * These exits end this cell's participation in the run, so everything its
+ * SUBDIVISION already found has to reach the rebuilt queue too — replaying only
+ * the cell's own page hands back a short candidate list while the manifest
+ * still records the children's venues. A cell with children reaches `queryCell`
+ * whenever a blocking failure was recorded after its subdivision finished, so
+ * this is not a hypothetical shape.
+ *
+ * The SUCCESS path deliberately does not use this: it is about to walk the
+ * children itself, and replaying them here would emit each place twice and
+ * inflate the score gate.
+ */
+function replayRecordedAndSubtree(known, cell, ctx, freshPlaces) {
+  replayRecordedOnce(known, cell, ctx, freshPlaces);
+  for (const childId of known?.children ?? []) replaySubtree(childId, cell, ctx);
+}
+
+/**
  * Run the subdivision half of processCell for a cell whose capped result is
  * already on record, without spending another call on the parent.
  */
@@ -248,10 +269,7 @@ async function processCell(cell, ctx) {
   if (known) {
     const unfinishedChildren =
       known.children?.length > 0 &&
-      known.children.some((childId) => {
-        const child = ctx.state?.cells?.get(childId);
-        return !child || !COMPLETING_STATUSES.includes(child.terminalStatus);
-      });
+      known.children.some((childId) => !isCompleting(ctx.state?.cells?.get(childId)));
     if (unfinishedChildren) {
       // Only this cell's own page: resumeChildren recurses through processCell,
       // so each child replays its own subtree.
@@ -265,7 +283,19 @@ async function processCell(cell, ctx) {
     // instead re-bought the parent's page, and if the budget or an interrupt
     // stopped that call, the exit replayed only the parent's own page and
     // silently dropped every venue the subdivision had found.
-    if (known.children?.length > 0 && !COMPLETING_STATUSES.includes(known.terminalStatus)) {
+    // `hasUnrecoveredBlocking` is what keeps this from laundering a failure.
+    // A parent could hold a transient failure recorded AFTER its children
+    // finished — the pre-fix engine re-queried exactly this state, so an
+    // in-flight manifest already contains it. Writing 'cleared' over that made
+    // the cell unreachable in both directions: completeness kept reporting
+    // incomplete_failed, the completing-status path above meant no later resume
+    // ever retried it, and ackEligibility refused to waive a transient class.
+    // Fall through instead and let the retry that resume exists for happen.
+    if (
+      known.children?.length > 0 &&
+      !isCompleting(known) &&
+      !hasUnrecoveredBlocking(known)
+    ) {
       replaySubtree(cell.id, cell, ctx);
       ctx.manifest.done(cell.id, 'cleared', { children: known.children.length, resumed: true });
       return 'cleared';
@@ -285,7 +315,7 @@ async function processCell(cell, ctx) {
     }
   }
 
-  if (known && COMPLETING_STATUSES.includes(known.terminalStatus)) {
+  if (known && isCompleting(known)) {
     // Replay the whole SUBTREE. Skipping the CALL is the point of resume;
     // skipping the RESULTS hands the caller a short candidate list while the
     // manifest still says the cell was covered. A 'cleared' cell's venues live
@@ -312,7 +342,7 @@ async function queryCell(cell, ctx, known) {
     });
     // The budget stops the CALL, not the data we already hold. Without this the
     // resumed queue silently loses places the manifest still records.
-    replayRecordedOnce(known, cell, ctx, []);
+    replayRecordedAndSubtree(known, cell, ctx, []);
     throw new BudgetExhausted(ctx.maxCalls);
   }
 
@@ -324,7 +354,7 @@ async function queryCell(cell, ctx, known) {
     if (error instanceof SweepInterrupted) {
       // The last exit that still lost data: an interruption must not discard
       // what this cell already had on record.
-      replayRecordedOnce(known, cell, ctx, []);
+      replayRecordedAndSubtree(known, cell, ctx, []);
       throw error;
     }
     ctx.callsUsed += 1;
@@ -358,7 +388,7 @@ async function queryCell(cell, ctx, known) {
         // Same rule as every other exit from this function: the cell is
         // unfinished, but whatever it already recorded still belongs in the
         // rebuilt queue.
-        replayRecordedOnce(known, cell, ctx, []);
+        replayRecordedAndSubtree(known, cell, ctx, []);
         return null;
       }
       // Retry the QUERY, not the whole guard chain: nothing about the cell's
@@ -376,7 +406,7 @@ async function queryCell(cell, ctx, known) {
     // The re-query failed, so the recorded page is all this cell has. Emit it
     // to keep the rebuilt queue consistent with the manifest; the cell stays
     // outstanding either way, so the run still reports incomplete.
-    replayRecordedOnce(known, cell, ctx, []);
+    replayRecordedAndSubtree(known, cell, ctx, []);
     return null;
   }
 

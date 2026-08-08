@@ -14,7 +14,7 @@ import {
   openManifest,
 } from './coverage-manifest.mjs';
 // @ts-ignore
-import { planCells } from './coverage-subdivide.mjs';
+import { planCells, subdivideCell } from './coverage-subdivide.mjs';
 
 /**
  * Exhaustive resume-state matrix.
@@ -56,6 +56,15 @@ function baseCell(): any {
 
 const page = (n: number, tag: string) =>
   Array.from({ length: n }, (_, index) => ({ id: `${tag}-${index}` }));
+
+/**
+ * The children a real SUBDIVIDE records: full geometry, not just ids. Fixtures
+ * used to hand-roll `{ id, depth, sideMeters }`, which is only survivable while
+ * no child ever has to subdivide — `subdivideCell` destructures `cell.bbox` and
+ * throws on a child seeded without one. Any fixture with a CAPPED child needs
+ * the real thing, so all of them use it.
+ */
+const realKids = () => subdivideCell(baseCell(), SUBDIVISION) as any[];
 
 /** The reachable shapes a cell can be in when a run is resumed. */
 const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: string) => void }> = [
@@ -110,7 +119,7 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
   {
     name: 'subdivided, children unfinished',
     write: (w, id) => {
-      const kids = [0, 1, 2, 3].map((i) => ({ id: `${id}/${i}`, depth: 1, sideMeters: 180 }));
+      const kids = realKids();
       w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
       w.result(id, page(CAP, 'f'));
       w.subdivide(id, kids.map((k) => k.id), kids);
@@ -122,7 +131,7 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
   {
     name: 'subdivided, children unfinished, stale parent DONE',
     write: (w, id) => {
-      const kids = [0, 1, 2, 3].map((i) => ({ id: `${id}/${i}`, depth: 1, sideMeters: 180 }));
+      const kids = realKids();
       w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
       w.result(id, page(CAP, 'h'));
       w.done(id, 'unsaturated');
@@ -178,7 +187,7 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
     // produces, and the one where the engine must write 'cleared' itself.
     name: 'subdivided, all children done, parent DONE lost',
     write: (w, id) => {
-      const kids = [0, 1, 2, 3].map((i) => ({ id: `${id}/${i}`, depth: 1, sideMeters: 180 }));
+      const kids = realKids();
       w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
       w.result(id, page(CAP, 'k'));
       w.subdivide(id, kids.map((k) => k.id), kids);
@@ -195,7 +204,7 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
     name: 'subdivided and cleared',
     settled: true,
     write: (w, id) => {
-      const kids = [0, 1, 2, 3].map((i) => ({ id: `${id}/${i}`, depth: 1, sideMeters: 180 }));
+      const kids = realKids();
       w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
       w.result(id, page(CAP, 'l'));
       w.subdivide(id, kids.map((k) => k.id), kids);
@@ -230,6 +239,73 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
       w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
       w.result(id, page(CAP, 'm'));
       w.done(id, 'ack_terminal');
+    },
+  },
+  {
+    // The state the PREVIOUS engine wrote and this one must not launder. Its
+    // children are all finished, so the settle branch wants to fire — but the
+    // parent also carries a transient failure recorded after them, which the
+    // old code produced by re-querying exactly this shape. Writing 'cleared'
+    // over it made the cell unreachable from both directions: completeness kept
+    // saying incomplete_failed, no resume ever retried it, and ackEligibility
+    // refuses to waive a transient class. Resume must retry instead.
+    name: 'subdivided and finished, but a transient failure came after',
+    write: (w, id) => {
+      const kids = realKids();
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, page(CAP, 'p'));
+      w.subdivide(id, kids.map((k) => k.id), kids);
+      for (const kid of kids) {
+        w.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+        w.result(kid.id, [{ id: `p-${kid.id}` }]);
+        w.done(kid.id, 'unsaturated');
+      }
+      w.attempt({ cellId: id, attemptN: 2, ok: false, errorClass: 'quota' });
+    },
+  },
+  {
+    // The forged waiver one level DOWN. The root-level version above escapes
+    // through cap recovery, so it cannot tell whether the child-finished
+    // predicate checks `acked` — this one can: if the predicate trusts the
+    // status alone, the parent is cleared over a child that was never really
+    // waived, and that child stays outstanding with no lever forever.
+    name: 'child DONE claims ack_terminal, no ACK record',
+    write: (w, id) => {
+      const kids = realKids();
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, page(CAP, 'q'));
+      w.subdivide(id, kids.map((k) => k.id), kids);
+      for (const kid of kids.slice(0, 3)) {
+        w.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+        w.result(kid.id, [{ id: `q-${kid.id}` }]);
+        w.done(kid.id, 'unsaturated');
+      }
+      const forged = kids[3];
+      w.attempt({ cellId: forged.id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(forged.id, page(CAP, 'r'));
+      w.done(forged.id, 'ack_terminal');
+    },
+  },
+  {
+    // A place recorded by BOTH a capped parent and one of its children — which
+    // is the normal case, since a child re-searches ground the parent already
+    // covered. Every other fixture keeps parent and child ids disjoint, so
+    // nothing pinned the emission COUNT across nodes. A live run emits such a
+    // place twice, once per node, and queryHits feeds the score gate: collapse
+    // it and a resumed run drops candidates an uninterrupted one keeps.
+    name: 'subdivided and cleared, parent and child share a place',
+    settled: true,
+    write: (w, id) => {
+      const kids = realKids();
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, [...page(CAP - 1, 't'), { id: 'shared-place' }]);
+      w.subdivide(id, kids.map((k) => k.id), kids);
+      for (const [index, kid] of kids.entries()) {
+        w.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+        w.result(kid.id, index === 0 ? [{ id: 'shared-place' }] : [{ id: `t-${kid.id}` }]);
+        w.done(kid.id, 'unsaturated');
+      }
+      w.done(id, 'cleared');
     },
   },
 ];
@@ -767,6 +843,70 @@ describe('resume state matrix', () => {
     expect(called.length, 'the subdivision never ran').toBeGreaterThan(0);
   });
 
+  it.each(STATES.map((state) => [state.name, state] as const))(
+    'invariant 14 — "%s" records cleared, not unsaturated, when its children did the work',
+    async (_name, state) => {
+      // Survived: the literal 'cleared' in the settle branch and in
+      // resumeChildren could both become 'unsaturated' with the whole suite
+      // green — completeness accepts either, and no case pinned the word. The
+      // manifest would then say a censored, subdivided cell came back short,
+      // which is the opposite of what happened.
+      const { cell, file } = build(state);
+      const writer = openManifest(file);
+      await sweep({
+        cells: [cell],
+        manifest: writer,
+        state: loadManifest(file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: healthyTransport([]),
+      });
+      writer.close();
+
+      const after = loadManifest(file)!;
+      const recorded = after.cells.get(cell.id);
+      if (!completeness(after).complete) return;
+      if (recorded.children.length === 0) return;
+      expect(
+        recorded.terminalStatus,
+        `${state.name}: a subdivided parent recorded '${recorded.terminalStatus}'`,
+      ).toBe('cleared');
+    },
+  );
+
+  it('invariant 15 — a place held by both a parent and a child is emitted once per node', async () => {
+    // Survived: making replaySubtree suppress place ids already seen elsewhere
+    // in the subtree. Every other fixture keeps parent and child ids disjoint,
+    // so nothing observed the count. A live run emits such a place twice — once
+    // per node — and queryHits feeds the score gate, so collapsing it makes a
+    // resumed run drop candidates an uninterrupted run keeps. This is the exact
+    // regression commit 10036d6 was written to undo.
+    const state = STATES.find(
+      (candidate) => candidate.name === 'subdivided and cleared, parent and child share a place',
+    );
+    expect(state, 'fixture missing — a rename must not silently drop this case').toBeDefined();
+
+    const { cell, file } = build(state!);
+    const emitted: string[] = [];
+    const writer = openManifest(file);
+    await sweep({
+      cells: [cell],
+      manifest: writer,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async () => {
+        throw new Error('a settled subtree must make no calls');
+      },
+      onPlaces: (places: any[]) => places.forEach((place) => emitted.push(place.id)),
+    });
+    writer.close();
+    expect(
+      emitted.filter((id) => id === 'shared-place').length,
+      'resume collapsed a place that a live run emits once per node',
+    ).toBe(2);
+  });
+
   it('the matrix registers every state it claims, and invariant 5 is not a no-op', () => {
     // The count is NOT the signal — a previous edit deleted three invariants
     // while the total went up. Pin the shape instead: unique names, both
@@ -775,9 +915,9 @@ describe('resume state matrix', () => {
     expect(new Set(STATES.map((state) => state.name)).size, 'duplicate state name').toBe(
       STATES.length,
     );
-    expect(STATES.length, 'a state was dropped').toBe(19);
-    expect(SETTLED_STATES.length, 'the settled partition shrank').toBe(4);
-    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(15);
+    expect(STATES.length, 'a state was dropped').toBe(22);
+    expect(SETTLED_STATES.length, 'the settled partition shrank').toBe(5);
+    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(17);
 
     const withRecords = STATES.filter((state) => {
       const { cell, file } = build(state);

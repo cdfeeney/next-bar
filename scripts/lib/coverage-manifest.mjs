@@ -313,6 +313,38 @@ function isAcknowledged(cell) {
   return cell.terminalStatus === 'ack_terminal' && Boolean(cell.acked);
 }
 
+/**
+ * Is this cell finished, for every judge that asks?
+ *
+ * `processCell` and `completeness()` both decide "does this cell still owe
+ * work", and they must not answer differently. They used to: each tested
+ * `COMPLETING_STATUSES.includes(terminalStatus)` directly, so a DONE claiming
+ * `ack_terminal` with no ACK_TERMINAL behind it read as finished to the engine
+ * and as outstanding to the invariant. The cell was then unreachable — the
+ * engine skipped it, completeness refused to pass it, and `ackEligibility`
+ * declined to waive it because its last attempt had succeeded. One definition,
+ * used by both, is what keeps that from recurring.
+ */
+export function isCompleting(cell) {
+  if (!cell) return false;
+  if (cell.terminalStatus === 'ack_terminal') return isAcknowledged(cell);
+  return COMPLETING_STATUSES.includes(cell.terminalStatus);
+}
+
+/**
+ * A blocking failure with no later success and no waiver. Shared for the same
+ * reason as `isCompleting`: the engine must not write a terminal status over a
+ * transient failure that `completeness()` will still count against the run.
+ */
+export function hasUnrecoveredBlocking(cell) {
+  const blocking = (cell?.attempts ?? []).filter(
+    (attempt) => !attempt.ok && BLOCKING_ERROR_CLASSES.includes(attempt.errorClass),
+  );
+  if (blocking.length === 0) return false;
+  const recoveredAt = cell.lastOk?.attemptN ?? -1;
+  return blocking.some((attempt) => (attempt.attemptN ?? 0) > recoveredAt);
+}
+
 export function completeness(state) {
   const missing = [];
   const failed = [];
@@ -350,10 +382,7 @@ export function completeness(state) {
       const finishedByChildren =
         children.length > 0 &&
         children.every(
-          (child) =>
-            child &&
-            (COMPLETING_STATUSES.includes(child.terminalStatus) ||
-              child.terminalStatus === SATURATED_AT_FLOOR),
+          (child) => isCompleting(child) || child?.terminalStatus === SATURATED_AT_FLOOR,
         );
       if (!finishedByChildren && !isAcknowledged(cell)) {
         unclearedCap.push(cell.cellId);
@@ -361,15 +390,8 @@ export function completeness(state) {
     }
 
     // (3) no blocking error survives without a retry that worked, or an ack
-    const blocking = cell.attempts.filter(
-      (attempt) => !attempt.ok && BLOCKING_ERROR_CLASSES.includes(attempt.errorClass),
-    );
-    if (blocking.length > 0) {
-      const recoveredAt = cell.lastOk?.attemptN ?? -1;
-      const unrecovered = blocking.some((attempt) => (attempt.attemptN ?? 0) > recoveredAt);
-      if (unrecovered && !isAcknowledged(cell)) {
-        failed.push(cell.cellId);
-      }
+    if (hasUnrecoveredBlocking(cell) && !isAcknowledged(cell)) {
+      failed.push(cell.cellId);
     }
   }
 
