@@ -37,6 +37,41 @@ export const BLOCKING_ERROR_CLASSES = Object.freeze([
   'budget_exhausted',
 ]);
 
+/**
+ * The manifest itself is unusable for this cell — a SUBDIVIDE that names a
+ * child but carries no geometry for it, so there is nothing to search.
+ *
+ * Deliberately NOT in BLOCKING_ERROR_CLASSES. Every blocking class means "a
+ * retry might work", and `ackEligibility` refuses to waive one for exactly that
+ * reason: quota windows reopen, networks recover. Absent geometry recovers from
+ * nothing. Recording it as `network` told the operator to resume and wait,
+ * while no resume could ever supply the missing cell — the cell was
+ * unfinishable by the engine and unwaivable by the operator at once, and every
+ * resume appended another identical failure. As a non-blocking class it falls
+ * to the permanent-failure grant, which is the honest description and restores
+ * the lever.
+ */
+export const MANIFEST_CORRUPT = 'manifest_corrupt';
+
+/**
+ * One past the HIGHEST attempt number on record — not one past the COUNT.
+ *
+ * `unrecoveredBlocking` decides recovery by comparing `attemptN` values, so
+ * whatever mints those numbers has to agree with it about what they mean.
+ * Counting instead of maximising let any manifest whose numbers are sparse or
+ * non-monotonic — a merge, a hand edit, a sentinel written with a fixed number
+ * — mint a SUCCESS numbered below an earlier failure. The cell then held a
+ * terminal DONE and real evidence while the invariant still reported it
+ * `failed`: the manifest and the invariant contradicting each other, which is
+ * the defect family this module exists to make impossible.
+ */
+export function highestAttemptNumber(cell) {
+  return (cell?.attempts ?? []).reduce(
+    (highest, attempt) => Math.max(highest, attempt.attemptN ?? 0),
+    0,
+  );
+}
+
 /** Canonical JSON so key insertion order cannot change the hash. */
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);

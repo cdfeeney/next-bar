@@ -479,5 +479,14 @@ describe('the construction cannot be quietly undone', () => {
     // rather than silently reading `undefined`.
     expect(stripped).not.toMatch(/verdict\s*\.\s*status\b/);
     expect(stripped).not.toMatch(/\{[^}]*\bstatus\b[^}]*\}\s*=\s*(verdict|classify)/);
+
+    // The OTHER half of the verdict has the same exposure. `hasEvidence` and
+    // `blocked` are computed from `attempts`, so `known.attempts.some(a => a.ok)`
+    // is a second judge just as surely as reading the status word is — and the
+    // guard above says nothing about it. The engine no longer touches the array
+    // at all: attempt numbering moved to `highestAttemptNumber` in the manifest
+    // module, beside the predicate that consumes those numbers. Zero, not one,
+    // because there is no longer a sanctioned reader here.
+    expect(stripped.match(/\battempts\b/g)).toBeNull();
   });
 });

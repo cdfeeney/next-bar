@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SweepInterrupted, runSweep } from './coverage-sweep-engine.mjs';
 // @ts-ignore
 import {
+  MANIFEST_CORRUPT,
   SATURATED_AT_FLOOR,
+  ackEligibility,
   completeness,
   configHash,
   loadManifest,
@@ -797,5 +799,117 @@ describe('no terminal writer may contradict the invariant', () => {
     );
     // Converged, not looping: it settles and does not append a DONE per resume.
     expect(parentDones.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('every stuck cell keeps a lever', () => {
+  const ROOT = {
+    id: 'q',
+    kind: 'nearby',
+    depth: 0,
+    sideMeters: 360,
+    bbox: BBOX,
+    center: { latitude: 40.7215, longitude: -73.988 },
+    radiusMeters: 255,
+  };
+
+  /**
+   * A SUBDIVIDE that names a child but carries no geometry for it. The engine
+   * cannot reconstruct the cell, so it records a failure against the child —
+   * and the CLASS of that failure decides whether anyone can ever clear it.
+   */
+  function seedMissingChildGeometry(file: string) {
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'corrupt-subdivide' }), cells: [ROOT] });
+    writer.attempt({ cellId: ROOT.id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(ROOT.id, [{ id: 'v-root' }]);
+    writer.subdivide(ROOT.id, ['q/0'], []);
+    writer.close();
+  }
+
+  const resume = async (file: string, transport: any = async () => ({ places: [] })) => {
+    const writer = openManifest(file);
+    await sweep({
+      cells: [ROOT],
+      state: loadManifest(file),
+      manifest: writer,
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport,
+    });
+    writer.close();
+    return loadManifest(file)!;
+  };
+
+  it('records missing geometry as permanent, so the operator can waive it', async () => {
+    const file = path.join(dir, 'corrupt.jsonl');
+    seedMissingChildGeometry(file);
+    const after = await resume(file);
+
+    const sentinel = after.records.filter(
+      (record: any) => record.type === 'ATTEMPT' && record.cellId === 'q/0',
+    );
+    expect(sentinel).toHaveLength(1);
+    // Not a blocking class: no resume can fetch geometry that is not there, so
+    // promising the operator a retry would help is false and leaves no lever.
+    expect(sentinel[0].errorClass).toBe(MANIFEST_CORRUPT);
+    expect(completeness(after).complete).toBe(false);
+
+    // The lever the blocking class used to deny.
+    expect(ackEligibility(after, 'q/0')).toMatchObject({ eligible: true });
+  });
+
+  it('converges once the unreconstructable child is waived', async () => {
+    const file = path.join(dir, 'corrupt-ack.jsonl');
+    seedMissingChildGeometry(file);
+    await resume(file);
+
+    const writer = openManifest(file);
+    writer.ackTerminal('q/0', 'SUBDIVIDE record lost this child geometry', 'operator');
+    writer.done('q/0', 'ack_terminal', { reason: 'geometry unrecoverable' });
+    writer.close();
+
+    const after = await resume(file);
+    expect(completeness(after).complete).toBe(true);
+  });
+
+  it('numbers repeated sentinels upward instead of rewriting attempt 1', async () => {
+    const file = path.join(dir, 'corrupt-twice.jsonl');
+    seedMissingChildGeometry(file);
+    await resume(file);
+    const after = await resume(file);
+
+    const numbers = after.records
+      .filter((record: any) => record.type === 'ATTEMPT' && record.cellId === 'q/0')
+      .map((record: any) => record.attemptN);
+    expect(numbers).toHaveLength(2);
+    // `unrecoveredBlocking` and `ackEligibility` both compare attempt NUMBERS,
+    // so a second record reusing 1 is a record that sorts before its own
+    // predecessor.
+    expect(numbers[1]).toBeGreaterThan(numbers[0]);
+  });
+
+  it('recovers a cell whose recorded attempt numbers are sparse', async () => {
+    // A merged or hand-edited manifest can carry a failure numbered far above
+    // the record COUNT. Minting the next number from the count produced a
+    // success that sorted BELOW that failure, so the cell ended up holding a
+    // terminal DONE while the invariant still reported it failed.
+    const file = path.join(dir, 'sparse-attempts.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'sparse' }), cells: [ROOT] });
+    writer.attempt({ cellId: ROOT.id, attemptN: 100, ok: false, errorClass: 'network' });
+    writer.close();
+
+    const after = await resume(file, async () => ({ places: [{ id: 'v-1' }] }));
+    const report = completeness(after);
+    const dones = after.records.filter(
+      (record: any) => record.type === 'DONE' && record.cellId === ROOT.id,
+    );
+
+    // Stated as the contradiction: a terminal DONE and a `failed` verdict may
+    // not describe the same cell.
+    expect(dones.length).toBeGreaterThan(0);
+    expect(report.failed).not.toContain(ROOT.id);
+    expect(report.complete).toBe(true);
   });
 });

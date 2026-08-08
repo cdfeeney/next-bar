@@ -10,8 +10,10 @@
 import {
   classify,
   classifyError,
+  highestAttemptNumber,
   isSettledForResume,
   isTerminalStatus,
+  MANIFEST_CORRUPT,
   SATURATED_AT_FLOOR,
 } from './coverage-manifest.mjs';
 import {
@@ -145,9 +147,17 @@ function replayUnreached(cellIds, cell, ctx) {
  * mutated mid-run, so deriving the number from it alone would emit two records
  * with the same attemptN and let a later failure hide behind an earlier
  * success in the completeness check.
+ *
+ * The base is the HIGHEST recorded number, not the count — see
+ * `highestAttemptNumber`. Counting made the sequence depend on how many records
+ * exist rather than on what they say, so a manifest with sparse or
+ * non-monotonic numbers could mint a success that sorted BELOW an earlier
+ * failure, leaving the cell terminal to the manifest and failed to the
+ * invariant. The engine does not read `attempts` itself: the record semantics
+ * live in the manifest module, next to the predicate that consumes them.
  */
 function nextAttempt(ctx, cellId, known) {
-  const base = known?.attempts?.length ?? 0;
+  const base = highestAttemptNumber(known);
   const inRun = (ctx.attemptsThisRun.get(cellId) ?? 0) + 1;
   ctx.attemptsThisRun.set(cellId, inRun);
   return base + inRun;
@@ -258,11 +268,24 @@ async function resumeChildren(cell, known, ctx) {
     if (!childCell) {
       // The SUBDIVIDE record is unusable; fail loudly rather than reporting a
       // clean run over a subdivision we cannot reconstruct.
+      //
+      // MANIFEST_CORRUPT, not `network`. A blocking class promises a retry will
+      // help, and `ackEligibility` refuses to waive one on that promise — but
+      // absent geometry is not something a resume can fetch. The cell was
+      // therefore unfinishable by the engine AND unwaivable by the operator,
+      // with a fresh identical failure appended on every resume forever. The
+      // non-blocking class routes it to the permanent-failure grant, which is
+      // both true and a lever.
+      //
+      // The number comes from the same minter as every other attempt. It was
+      // hardcoded to 1, so a child that had already failed this way got a
+      // second record numbered below its first, and `unrecoveredBlocking`
+      // compares numbers.
       ctx.manifest.attempt({
         cellId: childId,
-        attemptN: 1,
+        attemptN: nextAttempt(ctx, childId, childState),
         ok: false,
-        errorClass: 'network',
+        errorClass: MANIFEST_CORRUPT,
         message: 'manifest SUBDIVIDE record is missing this child cell geometry',
       });
       outcomes.push(null);
