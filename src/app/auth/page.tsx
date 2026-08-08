@@ -179,8 +179,18 @@ export default function AuthPage() {
      * Heights stay `min-h-*` rather than `h-*` so nothing here can ever
      * suppress the vertical scrolling a keyboard, a short screen, or enlarged
      * accessibility text requires.
+     *
+     * The `min-h-screen` underneath is a real fallback, not redundancy: on an
+     * engine without `dvh` (iOS Safari < 15.4, Chrome < 108) the `dvh`
+     * declaration is dropped at parse time and `main` would lose its
+     * min-height entirely, collapsing the short states to content height. The
+     * override is gated on `@supports` rather than written as a bare
+     * `min-h-screen min-h-dvh` pair because that pair depends on the ORDER
+     * Tailwind happens to emit two same-specificity utilities in, which is a
+     * build artifact and not a contract. (santa: GLM + DeepSeek, adjudicated
+     * by Kimi.)
      */
-    <main className="min-h-dvh flex flex-col">
+    <main className="min-h-screen supports-[min-height:100dvh]:min-h-dvh flex flex-col">
       <header className="px-6 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 flex items-center justify-between border-b border-border">
         <Link
           href="/"
@@ -196,23 +206,34 @@ export default function AuthPage() {
         </Link>
       </header>
 
-      {/* Phone gutters are the minimum, not the look: `items-center` already
-          supplies breathing room whenever the form is shorter than the
-          viewport, so the old `py-12` bought nothing but 96px of scroll on a
-          390x664 screen. Desktop keeps the generous spacing. */}
-      <section className="flex-1 flex items-center justify-center px-6 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:py-12">
-        <div className="max-w-md w-full">
-          <p className="text-accent uppercase tracking-[0.25em] text-xs mb-2 text-center">
+      {/* Phone gutters are the minimum, not the look: centring already supplies
+          breathing room whenever the form is shorter than the viewport, so the
+          old `py-12` bought nothing but 96px of scroll on a 390x664 screen.
+          Desktop keeps the generous spacing.
+
+          Centring is `m-auto` on the card rather than `items-center` here on
+          purpose. With `items-center`, content taller than the section
+          overflows SYMMETRICALLY and the top half scrolls into unreachable
+          negative space. Today that never fires, because a flex item's
+          automatic minimum size keeps this section at least content-tall — but
+          that protection silently disappears the moment anyone adds an
+          `overflow-*` class here, which is the ordinary way people clip a
+          decoration. Auto margins are specified to resolve to zero when free
+          space is negative, so overflow can only ever go downward, where it
+          stays scrollable. (santa: GLM + DeepSeek, endorsed by Kimi.) */}
+      <section className="flex-1 flex px-6 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:py-12">
+        <div className="max-w-md w-full m-auto">
+          <p className="text-accent uppercase tracking-[0.25em] text-xs mb-2 md:mb-3 text-center">
             Save your nights
           </p>
-          <h1 className="font-display text-3xl md:text-5xl text-center leading-tight mb-3">
+          <h1 className="font-display text-3xl md:text-5xl text-center leading-tight mb-3 md:mb-4">
             {view === 'forgot'
               ? 'Reset your password.'
               : intent === 'signup'
                 ? 'Create your account.'
                 : 'Sign in to Next Bar.'}
           </h1>
-          <p className="text-muted text-sm text-center mb-6 leading-relaxed">
+          <p className="text-muted text-sm text-center mb-6 md:mb-8 leading-relaxed">
             {view === 'forgot'
               ? "Enter your email and we'll send a reset link."
               : 'Your ratings, lists, and profile follow you to any device.'}
@@ -319,7 +340,7 @@ export default function AuthPage() {
             </div>
           ) : (
             <>
-              <form onSubmit={handleSubmit} className="space-y-3">
+              <form onSubmit={handleSubmit} className="space-y-3 md:space-y-4">
                 <label className="block">
                   <span className="sr-only">Email</span>
                   <input
@@ -330,7 +351,7 @@ export default function AuthPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
-                    className="w-full bg-surface border border-border focus:border-accent outline-none rounded-2xl px-5 py-3 text-base min-h-[44px]"
+                    className="w-full bg-surface border border-border focus:border-accent outline-none rounded-2xl px-5 py-3 md:py-4 text-base min-h-[44px]"
                     disabled={isBusy}
                   />
                 </label>
@@ -354,7 +375,7 @@ export default function AuthPage() {
                           ? `Choose a password (${MIN_PASSWORD_LENGTH}+ characters)`
                           : 'Password'
                       }
-                      className="w-full bg-surface border border-border focus:border-accent outline-none rounded-2xl px-5 py-3 text-base min-h-[44px]"
+                      className="w-full bg-surface border border-border focus:border-accent outline-none rounded-2xl px-5 py-3 md:py-4 text-base min-h-[44px]"
                       disabled={isBusy}
                     />
                   </label>
@@ -369,7 +390,7 @@ export default function AuthPage() {
                 <button
                   type="submit"
                   disabled={isBusy}
-                  className="w-full bg-accent text-bg hover:bg-accentDim transition-colors font-display text-lg px-6 py-3 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-accent text-bg hover:bg-accentDim transition-colors font-display text-lg px-6 py-3 md:py-4 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isBusy
                     ? 'One sec…'
@@ -381,7 +402,7 @@ export default function AuthPage() {
                 </button>
               </form>
 
-              <div className="mt-3 space-y-1 text-center">
+              <div className="mt-3 md:mt-4 space-y-1 text-center">
                 {view === 'form' ? (
                   <>
                     <button
@@ -427,7 +448,7 @@ export default function AuthPage() {
             </>
           )}
 
-          <p className="text-muted text-xs text-center mt-6 leading-relaxed">
+          <p className="text-muted text-xs text-center mt-6 md:mt-8 leading-relaxed">
             Signed in, your ratings sync across devices. Signed out, they
             stay on this one.
           </p>

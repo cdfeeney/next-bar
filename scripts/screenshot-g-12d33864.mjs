@@ -18,7 +18,12 @@ import { chromium, devices } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-const BASE = process.env.SCREENSHOT_BASE_URL ?? 'http://localhost:3000';
+// Follows NB_E2E_PORT for the same reason playwright.config.ts does: with a
+// bare :3000 default, running this from one worktree screenshots whichever
+// worktree happens to own that port. SCREENSHOT_BASE_URL still wins outright.
+const BASE =
+  process.env.SCREENSHOT_BASE_URL ??
+  `http://localhost:${process.env.NB_E2E_PORT ?? 3000}`;
 const OUT = path.join(process.cwd(), 'docs', 'screenshots', 'g-12d33864');
 const VIEWPORT = { width: 402, height: 681 };
 

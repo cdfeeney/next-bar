@@ -1,20 +1,31 @@
 /**
  * auth-layout.spec.ts — Item 5 (g-4e72a0c5): compact /auth layout, VISUAL ONLY.
  *
- * The defect: `/auth` renders `<main class="min-h-screen">` (100vh) inside a
- * `<body>` that unconditionally reserves `64px + env(safe-area-inset-bottom)`
- * for the fixed BottomNav — a nav that `BottomNav.tsx` explicitly returns
- * `null` for on `/auth`. So every auth state carried a ~64px strip of empty,
- * un-navigable scroll below the form, on top of a `100vh` box that is the
- * wrong unit under mobile browser chrome.
+ * The defect, as MEASURED (an earlier draft of this header asserted a
+ * different one and was wrong — see the correction below): `/auth` needed
+ * 772px of document height in a 390x664 iPhone 13 viewport, so the sign-in
+ * form scrolled on the smallest configured phone, and it asked for its
+ * full-height box in `100vh`, which is the LARGE viewport under collapsing
+ * mobile browser chrome.
+ *
+ * CORRECTION, kept deliberately. The first draft blamed a ~64px strip of dead
+ * scroll from the `body`'s unconditional
+ * `pb-[calc(64px+env(safe-area-inset-bottom))]` nav reserve, and asserted that
+ * gap was 64px pre-fix. Direct measurement refuted it: the gap between the
+ * bottom of `<main>` and the end of the document was 0.5px BEFORE the change
+ * and ~0px after. `<main>` overflows the `body`'s `height:100%` border box
+ * rather than stacking after its padding, so that reserve never becomes
+ * scrollable space on this route. The assertion built on that story could not
+ * fail, and has been removed rather than left as coverage theater.
+ * (santa: caught independently by Codex and by the Claude/FABLE lane.)
  *
  * WHAT IS MEASURABLE HERE, AND WHAT IS NOT — stated plainly so nobody reads
  * more assurance out of this file than it contains:
  *
- *   - MEASURABLE (the load-bearing tests): the dead tail below <main>, total
- *     document height vs viewport, horizontal overflow, that scrolling still
- *     works when content genuinely exceeds the viewport, and that no auth
- *     behaviour, copy, or URL moved.
+ *   - MEASURABLE (the load-bearing tests): the height the content actually
+ *     needs vs the viewport, that nothing is clipped to achieve that fit,
+ *     horizontal overflow, that scrolling still works when content genuinely
+ *     exceeds the viewport, and that no auth behaviour, copy, or URL moved.
  *   - NOT MEASURABLE IN PLAYWRIGHT: `100dvh` differs from `100vh` only while
  *     mobile browser chrome is collapsing, and `env(safe-area-inset-*)`
  *     resolves to 0 on every configured project because Playwright emulates
@@ -57,9 +68,11 @@ function fulfillJson(status: number, body: unknown) {
 }
 
 type Geometry = {
-  /** Empty, un-navigable space between the bottom of <main> and the end of
-   *  the scrollable document. */
-  deadTail: number;
+  /** True when the form card is taller than the box it was given — i.e. the
+   *  page "fits" only because content was clipped. Without this, a card with a
+   *  constrained height and hidden overflow would satisfy every other
+   *  assertion here while hiding controls. (santa: Codex.) */
+  cardClipped: boolean;
   /**
    * Height the layout actually NEEDS: header + the form card + the section's
    * own gutters. Measured separately from `scrollHeight` on purpose —
@@ -92,9 +105,8 @@ async function geometry(page: Page): Promise<Geometry> {
       parseFloat(sectionStyle.paddingBottom);
 
     const doc = document.documentElement;
-    const mainBottom = main.getBoundingClientRect().bottom + window.scrollY;
     return {
-      deadTail: doc.scrollHeight - mainBottom,
+      cardClipped: (card as HTMLElement).scrollHeight > (card as HTMLElement).clientHeight + 1,
       contentHeight,
       scrollHeight: doc.scrollHeight,
       innerHeight: window.innerHeight,
@@ -131,16 +143,10 @@ function expectFitsOneScreen(g: Geometry): void {
   expect(g.contentHeight, why(g)).toBeLessThanOrEqual(g.innerHeight);
 }
 
-/**
- * Criterion 3, stated as an invariant rather than a magic pixel budget: the
- * document may be taller than the viewport when the CONTENT is taller, but it
- * may never end in empty space. Sub-pixel layout rounding gets 2px.
- *
- * Pre-fix this is 64px on both projects (`env(safe-area-inset-bottom)` is 0
- * under emulation), which is what makes this assertion RED before the change.
- */
-function expectNoDeadTail(g: Geometry): void {
-  expect(g.deadTail, why(g)).toBeLessThanOrEqual(2);
+/** Applies to every state, including the ones that legitimately scroll: the
+ *  form card must never be taller than the box it renders into. */
+function expectNoClipping(g: Geometry): void {
+  expect(g.cardClipped, why(g)).toBe(false);
 }
 
 /** Criteria 15+17 — the layout work moved neither the URL nor the copy.
@@ -177,20 +183,20 @@ async function expectVerticallyScrollable(page: Page): Promise<void> {
     .toBeGreaterThan(0);
 }
 
-test.describe('/auth layout — no dead height, no horizontal overflow', () => {
-  test('signin state fits one screen with no empty tail', async ({ page }) => {
+test.describe('/auth layout — one-screen fit, no clipping, no horizontal overflow', () => {
+  test('signin state fits one screen unclipped', async ({ page }) => {
     await page.goto('/auth');
     await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     // The whole point of the item: the default auth surface is one screen.
     expectFitsOneScreen(g);
     await expectAuthSurfaceIntact(page);
   });
 
-  test('signup state fits one screen with no empty tail', async ({ page }) => {
+  test('signup state fits one screen unclipped', async ({ page }) => {
     await page.goto('/auth');
     await page.getByRole('button', { name: /create an account/i }).click();
     await expect(
@@ -198,13 +204,13 @@ test.describe('/auth layout — no dead height, no horizontal overflow', () => {
     ).toBeVisible();
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     expectFitsOneScreen(g);
     await expectAuthSurfaceIntact(page);
   });
 
-  test('forgot-password state fits one screen with no empty tail', async ({ page }) => {
+  test('forgot-password state fits one screen unclipped', async ({ page }) => {
     await page.goto('/auth');
     await page.getByRole('button', { name: /forgot your password/i }).click();
     await expect(
@@ -212,13 +218,13 @@ test.describe('/auth layout — no dead height, no horizontal overflow', () => {
     ).toBeVisible();
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     expectFitsOneScreen(g);
     await expectAuthSurfaceIntact(page);
   });
 
-  test('reset-sent inbox state has no empty tail and keeps its copy', async ({ page }) => {
+  test('reset-sent inbox state fits one screen and keeps its copy', async ({ page }) => {
     await page.route('**/auth/v1/recover**', fulfillJson(200, {}));
     await page.goto('/auth');
 
@@ -230,25 +236,25 @@ test.describe('/auth layout — no dead height, no horizontal overflow', () => {
     await expect(page.getByText(/We sent a reset link/i)).toBeVisible();
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     expectFitsOneScreen(g);
     await expectAuthSurfaceIntact(page);
   });
 
-  test('callback-error banner state has no empty tail and stays scrollable', async ({ page }) => {
+  test('callback-error banner state stays unclipped and scrollable', async ({ page }) => {
     await page.goto('/auth?error=server_error');
 
     const banner = page.locator('div[role="alert"]').filter({ hasText: /\S/ });
     await expect(banner).toContainText(/didn't complete/i);
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     await expectAuthSurfaceIntact(page);
   });
 
-  test('PKCE-mismatch banner state has no empty tail and keeps its exact guidance', async ({ page }) => {
+  test('PKCE-mismatch banner state stays unclipped and keeps its exact guidance', async ({ page }) => {
     await page.goto('/auth?error=pkce_code_verifier_not_found');
 
     const banner = page.locator('div[role="alert"]').filter({ hasText: /\S/ });
@@ -262,7 +268,7 @@ test.describe('/auth layout — no dead height, no horizontal overflow', () => {
     ).toBeVisible();
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     await expectAuthSurfaceIntact(page);
   });
@@ -273,7 +279,7 @@ test.describe('/auth layout — no dead height, no horizontal overflow', () => {
     await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     await expectVerticallyScrollable(page);
 
@@ -294,7 +300,7 @@ test.describe('/auth layout — no dead height, no horizontal overflow', () => {
     await page.setViewportSize({ width: 390, height: 340 });
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
     await expectVerticallyScrollable(page);
 
@@ -306,42 +312,59 @@ test.describe('/auth layout — no dead height, no horizontal overflow', () => {
 });
 
 test.describe('/auth layout — declaration pins for what emulation cannot show', () => {
-  test('main asks for dvh, never vh, for its full-height box', async ({ page }) => {
+  test('main asks for dvh behind an @supports gate, over a vh fallback', async ({ page }) => {
     await page.goto('/auth');
 
-    // Read the DECLARED value out of the CSSOM. A computed read would return
-    // px and could not tell 100dvh from 100vh under emulation.
+    // Read DECLARED values out of the CSSOM, and record whether each one sits
+    // inside an @supports block. A computed read would return px and could not
+    // tell 100dvh from 100vh under emulation; ignoring the @supports nesting
+    // would let a bare `min-h-screen min-h-dvh` pair pass, and that pair is
+    // exactly what we rejected — it depends on Tailwind's emitted order.
     const declared = await page.evaluate(() => {
       const main = document.querySelector('main');
       if (!main) throw new Error('no <main>');
-      const out: string[] = [];
-      for (const sheet of Array.from(document.styleSheets)) {
-        let rules: CSSRule[];
-        try {
-          rules = Array.from(sheet.cssRules);
-        } catch {
-          continue; // cross-origin sheet
-        }
-        for (const rule of rules) {
+      const out: { value: string; supports: string | null }[] = [];
+
+      const walk = (rules: CSSRuleList, supports: string | null): void => {
+        for (const rule of Array.from(rules)) {
+          const supportsRule = rule as CSSSupportsRule;
+          if (supportsRule.conditionText !== undefined && supportsRule.cssRules) {
+            walk(supportsRule.cssRules, supportsRule.conditionText);
+            continue;
+          }
           const styleRule = rule as CSSStyleRule;
           if (!styleRule.selectorText || !styleRule.style) continue;
-          const value =
-            styleRule.style.getPropertyValue('min-height') ||
-            styleRule.style.getPropertyValue('height');
+          const value = styleRule.style.getPropertyValue('min-height');
           if (!value) continue;
           try {
-            if (main.matches(styleRule.selectorText)) out.push(value);
+            if (main.matches(styleRule.selectorText)) out.push({ value, supports });
           } catch {
             /* unsupported selector text */
           }
+        }
+      };
+
+      for (const sheet of Array.from(document.styleSheets)) {
+        try {
+          walk(sheet.cssRules, null);
+        } catch {
+          continue; // cross-origin sheet
         }
       }
       return out;
     });
 
-    expect(declared.length).toBeGreaterThan(0);
-    expect(declared.some((v) => v.includes('dvh'))).toBe(true);
-    expect(declared.some((v) => /\b100vh\b/.test(v))).toBe(false);
+    const detail = JSON.stringify(declared);
+    // The dvh override exists AND is condition-gated, so its win does not
+    // depend on stylesheet order.
+    const gatedDvh = declared.filter((d) => d.value.includes('dvh') && d.supports);
+    expect(gatedDvh.length, detail).toBeGreaterThan(0);
+    expect(gatedDvh.some((d) => d.supports!.includes('dvh')), detail).toBe(true);
+    // And an ungated fallback still covers engines that drop `dvh` entirely.
+    expect(
+      declared.some((d) => !d.supports && /\b100vh\b/.test(d.value)),
+      detail,
+    ).toBe(true);
   });
 
   test('the auth header reserves the top safe-area inset', async ({ page }) => {
@@ -413,7 +436,7 @@ test.describe('/auth layout — behaviour is untouched (negative assertions)', (
     await expectAuthSurfaceIntact(page);
 
     const g = await geometry(page);
-    expectNoDeadTail(g);
+    expectNoClipping(g);
     expectNoHorizontalOverflow(g);
   });
 
