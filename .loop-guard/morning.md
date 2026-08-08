@@ -599,3 +599,100 @@ external lane and nothing else. Neither has an outstanding code defect, an unmet
 criterion, or missing evidence.
 
 Nothing was substituted for GLM and no intensity was lowered to manufacture a quorum.
+
+---
+
+## RESUMED 2026-08-08 11:19 ET — operator restored OpenRouter credits; both items now COMPLETE
+
+The 08:00 stop had been reached with both items `blocked` on the GLM lane alone. The operator added
+credits and a live probe returned `OK` at 11:19 ET, so both goals were returned to
+`ready_for_review` with the reason recorded in harness-state (no goal created, recreated or
+broadened; the only change was clearing a blocker that had lifted).
+
+**A correction to the overnight report.** It said "every other lane has reviewed the final code".
+That was wrong for both items: in each case the last three lanes reviewed the code and their
+findings were then fixed, so the FINAL commit had been reviewed by nobody. Both items therefore got
+a full fresh four-lane panel rather than a single catch-up GLM lane — and each panel found real
+defects, so the distinction mattered.
+
+### Item 6 — g-65ba768e — **COMPLETE**. Commits `c141586`, `1629ac0`.
+
+Round 4, first complete panel. quorumMet=TRUE (Claude/FABLE + Codex + GLM + DeepSeek).
+Codex's first attempt TIMED OUT at 540s on a broad packet and was re-run narrowed — a timeout was
+not counted as a clean lane. GLM's first packet hit exit 124; a lighter two-question packet
+returned a full review.
+
+| Lane | Verified findings |
+|---|---|
+| Codex | 1 Medium, **lane-unique**: the late-`gmp-load` regression test was **coverage theatre**. Proven by deleting the `gaveUp` half of the listener guard and watching the old test still pass — cleanup had already set `cancelled`, so `cancelled` alone caught it. Rewritten to fire the timeout and deliver `gmp-load` inside one `act()`; now proven RED against that same one-token revert. |
+| Claude/FABLE | 1 Medium lane-unique (`className` REPLACED the geometry classes instead of composing, so any future caller silently dropped both the 21/9 reservation and the no-clip ready state), 1 Medium (three comments contradicted by the code), 1 low (`aria-label` on a plain span is prohibited on role `generic` and was being discarded). |
+| GLM | 1 Medium lane-unique: the MAIN e2e server left the three Google gates merely UNSET while pinning `NEXT_E2E_DIST`. Now pinned empty. |
+| DeepSeek | 0 verified — both findings refuted against source (see below). |
+
+**Refuted with evidence, not acted on:** DeepSeek's High "unhandled rejection strands the card"
+(neither awaited call can reject — the runtime gate is wrapped in try/catch/finally returning false,
+and `buildLoad`'s executor only ever calls `resolve`); DeepSeek's Medium "stuck pending when the
+observer never fires" (that is the intended lazy design); GLM's High "only the widget failure path
+is tested" (the SDK is mocked and signals success); GLM's Medium "warmup targets the wrong server"
+(`google-warmup` already runs at `GOOGLE_BASE_URL`). GLM's two "Criticals" were downgraded after
+verification — the global browser proxy fence means neither was ever a billing exposure.
+
+**Verification:** tsc 0; vitest 166 files / 2494 tests; google-card e2e 9/9 on google-live
+iPhone 13 **and** 9/9 on Pixel 7; `next build` clean with a dynamic `/api/flags`;
+`git diff --check` clean.
+
+**Recorded, not hidden — e2e instability under cold caches.** With cold dev-server build caches
+under concurrent load the suite failed 1/9 then 2/9, on *different* scenarios each time, always the
+same signature: an EMPTY host stuck on `data-status="pending"`. With warm caches it passed 9/9
+twice and scenario 16 passed in isolation. The component's behaviour was unchanged across those
+runs, so this reads as cold-compile CPU starvation rather than a logic defect — **but that is not
+proven**, and the signature is worth chasing if it ever recurs on a warm machine.
+
+### Item 7 — g-bfb6937a — **COMPLETE**. Commits `03be30d`, `9249e51`.
+
+Round 2, first complete panel. quorumMet=TRUE. All four lanes independently reached the same
+verdict: the evidence was sound, the **conclusion overstated it**.
+
+- **DeepSeek, Critical, lane-unique — confirmed against source.** The diagnosis treated all three
+  gates as global, which made its own conclusion self-undermining for a one-bar symptom. But a
+  FAILED `/api/flags` check is deliberately never cached, so a card whose check times out at 3s
+  glyphs while a card created later succeeds. That is a **single-bar mechanism inside the app**,
+  matching the reported symptom, and the document had ruled it out.
+- **Codex, High, lane-unique.** "The boundary is crossed in exactly one place" was false as a
+  blanket claim — `cardFromTable` in the Open Graph route maps `price_tier` itself. It never touches
+  photo fields, so it cannot be implicated; the claim is now narrowed rather than dropped.
+- **Codex, High.** The tests asserted 27 characters on each source independently, so swapping either
+  for any other 27-char id would still pass while the card requested the wrong venue.
+- **Codex, Medium.** The "no network" claim was not *enforced*: the real success path fires a
+  telemetry beacon that swallows its own failure, so an attempted request could never have failed
+  the test. Now mocked and asserted.
+- **FABLE + Codex, Medium.** Every `ResultCard.tsx` anchor was stale by +14 lines — because Item 6
+  edited that file earlier the same day. All refreshed and each verified by script against the
+  symbol it cites.
+
+A delta review of the fixes caught R2 itself being imprecise (the *gate* is consulted per creation,
+but a success is cached 60s and concurrent checks share one promise, so widgets created together
+cannot diverge). Corrected in `9249e51`.
+
+**Verification:** tsc 0; vitest 166 files / 2494 tests; 8 anchors script-checked; `git diff --check`
+clean. Criterion 11 now **enforced** rather than asserted.
+
+### Final state
+
+`overnight-guard finish` reports `QUEUE_TERMINAL`, 2 complete, 0 blocked, 0 abandoned.
+Lease released, working tree clean, ports 3200/3201 free, peer worktrees untouched. Nothing pushed,
+deployed, migrated, or irreversibly applied; no credentials read or printed; no catalog data edited.
+
+### Residuals for the operator
+
+1. **`google-photo-layout.spec.ts`** is still collected by the main projects but structurally needs
+   google-live; it already fails at HEAD. Fix is to move it onto the google-live projects and repair
+   its one-shot `isVisible()` race — deliberately out of both items' scope.
+2. **Two catalogue names duplicate the hood line** ("White Horse Tavern (Financial District)",
+   "Stout NYC FiDi"). A data/product decision, not presentation — deliberately not made.
+3. **Item 7's live half remains `BLOCKED_ATTENDED`** — the six-step checklist in the diagnosis is
+   the hand-off. Step 1 (does any other card reach a `ready` widget host?) collapses the hypothesis
+   space fastest.
+4. **Commits sit on `harness/nb-20260808-expanded/google-card`**, not
+   `fix/nighttime-mobile-hardening`, because a live peer worktree holds that branch and writes were
+   scoped to this worktree.
