@@ -433,3 +433,68 @@ describe('resume work list', () => {
     ]);
   });
 });
+
+describe('the waiver distinguishes what a resume can fix from what it cannot', () => {
+  const subdivideWithoutGeometry = [
+    PLAN,
+    ok('n:0:0', 20, true),
+    { type: 'RESULT', cellId: 'n:0:0', placeIds: ['p'], places: [{ id: 'p' }] },
+    { type: 'SUBDIVIDE', parentId: 'n:0:0', childIds: ['n:0:0/0'], childCells: [] },
+  ];
+
+  it('waives a planned cell whose geometry the manifest lost, even unattempted', () => {
+    // Planning every named child is what makes it visible to the invariant, but
+    // visible-and-unsatisfiable is not an improvement on invisible: no resume
+    // can offer a cell it cannot reconstruct, so "never attempted" is the
+    // reason it must be waivable, not a reason to refuse.
+    const state = build(subdivideWithoutGeometry);
+    expect(state.cells.get('n:0:0/0')?.planned).toBe(true);
+    expect(state.cells.get('n:0:0/0')?.attempts).toHaveLength(0);
+    // Never offered for resume, because there is nothing to search.
+    expect(outstandingCells(state).map((cell: { cellId: string }) => cell.cellId)).not.toContain(
+      'n:0:0/0',
+    );
+    expect(ackEligibility(state, 'n:0:0/0')).toMatchObject({ eligible: true });
+  });
+
+  it('still refuses a never-attempted cell that DOES have geometry', () => {
+    // The narrow scope of the rule above: a cell planned from PLAN.cells always
+    // carries its geometry, and waiving one nobody searched is the exact abuse
+    // the never-attempted guard exists to stop.
+    expect(ackEligibility(build([PLAN]), 'n:0:1')).toMatchObject({
+      eligible: false,
+      reason: 'it has never been attempted; run or resume the sweep first',
+    });
+  });
+
+  it('refuses a rejected includedType, which a resume retries', () => {
+    // Non-blocking but NOT permanent: the engine drops the type and re-queries
+    // in the same run, so this is only ever the last attempt when the run ended
+    // mid-retry. It was granted as "failed permanently" and discarded geography
+    // the next resume would have covered.
+    const state = build([
+      PLAN,
+      {
+        type: 'ATTEMPT',
+        cellId: 'n:0:0',
+        attemptN: 1,
+        ok: false,
+        errorClass: 'unsupported_type',
+        message: 'dropped unsupported includedTypes: dance_hall',
+      },
+    ]);
+    const verdict = ackEligibility(state, 'n:0:0');
+    expect(verdict.eligible).toBe(false);
+    expect(verdict.reason).toMatch(/resume/i);
+  });
+
+  it('still waives a genuinely permanent failure', () => {
+    // The complement: refusing everything non-blocking would take the lever away
+    // from the classes that really cannot be retried.
+    const state = build([
+      PLAN,
+      { type: 'ATTEMPT', cellId: 'n:0:0', attemptN: 1, ok: false, errorClass: 'http4xx' },
+    ]);
+    expect(ackEligibility(state, 'n:0:0')).toMatchObject({ eligible: true });
+  });
+});

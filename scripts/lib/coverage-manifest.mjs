@@ -70,6 +70,19 @@ export const MANIFEST_CORRUPT = 'manifest_corrupt';
 export const TYPES_EXHAUSTED = 'types_exhausted';
 
 /**
+ * Google rejected ONE `includedType`; the engine drops it and re-queries the
+ * same cell in the same run.
+ *
+ * Non-blocking, because it is resolved mid-run and must not put a
+ * drop-and-retry cell into `failed`. But it is also NOT permanent, which is the
+ * distinction the waiver check has to make: it is only ever the last attempt
+ * when a run ended between the drop and its retry, and a resume rebuilds the
+ * type list and finishes the cell. Neither `MANIFEST_CORRUPT` nor
+ * `TYPES_EXHAUSTED` has a pending retry; this one always does.
+ */
+export const UNSUPPORTED_TYPE = 'unsupported_type';
+
+/**
  * One past the HIGHEST attempt number on record — not one past the COUNT.
  *
  * `unrecoveredBlocking` decides recovery by comparing `attemptN` values, so
@@ -708,11 +721,36 @@ export function ackEligibility(state, cellId) {
         'acknowledge those children instead, or resume to finish them',
     };
   }
-  // The never-attempted refusal comes FIRST. It used to sit below the floor
-  // check, so a fabricated `saturated_at_floor` DONE was waived on the word
-  // alone — granted with the reassuring reason "saturated at the floor" — and
-  // the run then reported complete over a cell nobody had searched. That is
-  // exactly what this guard's docstring promises cannot happen.
+  // A planned cell with no geometry can NEVER be attempted, so "never attempted"
+  // is not a reason to refuse it — it is the reason it must be waivable. This
+  // arises when a SUBDIVIDE names a childId but carries no `childCells` entry
+  // for it: replay plans the child (otherwise it is invisible to the invariant
+  // and a waiver of it silently completes the run), but no resume can offer it,
+  // because `outstandingCells` rightly declines a cell it cannot reconstruct.
+  //
+  // The engine normally writes a MANIFEST_CORRUPT sentinel on the first resume,
+  // which makes the cell waivable through the permanent-failure grant below.
+  // But that only happens if the resume reaches `resumeChildren` — and it does
+  // not when the PARENT is already acknowledged, because the waiver
+  // short-circuit returns before descending. Reproduced: attempts 0, reported
+  // `missing` forever, never offered by a resume, and the waiver refused as
+  // never-attempted. Visible and unsatisfiable is not an improvement on
+  // invisible; it needs the lever too.
+  //
+  // This sits ABOVE the never-attempted refusal and is deliberately narrow: a
+  // cell planned from `PLAN.cells` always carries its geometry, so only a
+  // subdivision child with a lost `childCells` entry can reach it.
+  if (cell.planned && !cell.cell) {
+    return {
+      eligible: true,
+      reason: 'its geometry is missing from the manifest, so no resume can reconstruct or search it',
+    };
+  }
+  // The never-attempted refusal comes FIRST (after the case above). It used to
+  // sit below the floor check, so a fabricated `saturated_at_floor` DONE was
+  // waived on the word alone — granted with the reassuring reason "saturated at
+  // the floor" — and the run then reported complete over a cell nobody had
+  // searched. That is exactly what this guard's docstring promises cannot happen.
   if (cell.attempts.length === 0) {
     return { eligible: false, reason: 'it has never been attempted; run or resume the sweep first' };
   }
@@ -743,6 +781,27 @@ export function ackEligibility(state, cellId) {
       reason:
         `its last failure was transient (${last.errorClass}) — resume handles that; ` +
         'raise --max-calls or wait for the quota window rather than waiving real geography',
+    };
+  }
+  // `unsupported_type` is not blocking and not permanent — it is the one class
+  // the engine resolves WITHIN a run, by dropping the rejected type and
+  // re-querying the same cell with what remains. It is only ever the LAST
+  // attempt when the run ended between the drop and its retry, and a resume
+  // rebuilds the type list and finishes the cell.
+  //
+  // It fell through to the grant below and was waived as "failed permanently",
+  // which was factually wrong and discarded geography the very next resume
+  // would have covered. Reproduced both halves: the waiver was granted, and a
+  // resume of the same manifest reported complete. It is deliberately NOT added
+  // to BLOCKING_ERROR_CLASSES — that would make `unrecoveredBlocking` true for
+  // a condition resolved mid-run and put every drop-and-retry cell into
+  // `failed`.
+  if (last.errorClass === UNSUPPORTED_TYPE) {
+    return {
+      eligible: false,
+      reason:
+        'its last failure was a rejected includedType, which a resume retries with the ' +
+        'remaining types — resume it rather than waiving geography that is still reachable',
     };
   }
   return { eligible: true, reason: `last attempt failed permanently (${last.errorClass ?? 'unknown'})` };

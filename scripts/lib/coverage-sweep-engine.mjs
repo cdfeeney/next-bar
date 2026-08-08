@@ -16,6 +16,7 @@ import {
   MANIFEST_CORRUPT,
   SATURATED_AT_FLOOR,
   TYPES_EXHAUSTED,
+  UNSUPPORTED_TYPE,
 } from './coverage-manifest.mjs';
 import {
   DEFAULT_SUBDIVISION,
@@ -487,7 +488,7 @@ async function queryCell(cell, ctx, known) {
         cellId: cell.id,
         attemptN,
         ok: false,
-        errorClass: 'unsupported_type',
+        errorClass: UNSUPPORTED_TYPE,
         message: `dropped unsupported includedTypes: ${unsupported.join(', ')}`,
       });
       // unsupportedTypeFromError only ever returns members of the list it was
