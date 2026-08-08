@@ -270,23 +270,41 @@ const IDENTIFIER = '[A-Za-z_$][A-Za-z0-9_$]*';
  * began with `/*` each caused a real deletion import below to be erased.
  *
  * So nothing is removed any more. Instead a candidate match is checked against
- * its OWN line, and skipped only when a `//` precedes it there. That is not a
- * heuristic — in JavaScript a `//` outside a string really does comment out the
- * rest of its line — and the blast radius of a misread is one line rather than
- * the remainder of the file.
+ * its OWN line, and skipped only when a `//` precedes it there. The blast radius
+ * of a misread is one line rather than the remainder of the file.
  *
- * BLOCK COMMENTS ARE DELIBERATELY NOT HANDLED. Deciding where `/* … *​/` begins
- * and ends is the ambiguity that produced all three failures. A block-commented
- * deletion import therefore still floors T0. That over-escalates, which is the
- * safe direction, and it is recorded in `docs/ENGINEERING-HARNESS.md` as an
- * accepted cost rather than left to be discovered.
+ * THE PREFIX ANALYSIS IS ITSELF FAIL-CLOSED, which is the round-8 correction.
+ * Three reviewers independently drove the previous one-line strip
+ * (`/'[^']*'|"[^"]*"|` + backtick + `[^` + backtick + `]*` + backtick + `/g`) into
+ * reporting a comment that was not there, which SKIPS a real deletion import:
  *
- * String literals are removed from the line prefix first, so `'https://x'` and
- * a URL in a template literal are not mistaken for a comment.
+ *   - `/* https://example.invalid *​/ import { rm } …` — the `//` belongs to a
+ *     URL inside a block comment, not to a line comment.
+ *   - `const label = 'it\'s // ok'; import { rm } …` — the escaped quote ended
+ *     the match early and exposed the `//` inside the string.
+ *   - `const s = 'oops // ; import { rm } …` — an unterminated quote strips
+ *     nothing at all.
+ *
+ * So complete block comments and escape-aware complete string literals are
+ * removed, and if anything ambiguous SURVIVES — an unpaired quote or an
+ * unclosed `/*` — the answer is `false`: do not skip the match. Every
+ * uncertainty therefore over-escalates rather than hiding capability, which is
+ * the only direction this function is allowed to fail in.
+ *
+ * A block-commented deletion import still floors T0 (the opener is on an earlier
+ * line, so it is never removed from this line's prefix). That over-escalation is
+ * recorded in `docs/ENGINEERING-HARNESS.md` as an accepted cost.
  */
 export function startsInLineComment(text, index) {
   const lineStart = text.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
-  const prefix = text.slice(lineStart, index).replace(/'[^']*'|"[^"]*"|`[^`]*`/g, '');
+  let prefix = text.slice(lineStart, index);
+  // A `//` inside a complete block comment is comment CONTENT, not a comment
+  // opener — most often a URL.
+  prefix = prefix.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  // Escape-aware, so `'it\'s // ok'` is consumed whole.
+  prefix = prefix.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, ' ');
+  // Anything unbalanced left over means we cannot tell code from content.
+  if (/['"`]/.test(prefix) || prefix.includes('/*')) return false;
   return prefix.includes('//');
 }
 
@@ -541,13 +559,28 @@ export const CAPABILITY_SIGNATURES = [
     // Same capability name as the entry above, so the two are one finding.
     name: 'destructive-filesystem',
     tier: 'T0',
-    // `git rm` is excluded: it stages a removal from the index and, with
-    // `--cached`, does not touch the working tree at all. The lookbehind allows
-    // repeated whitespace because `git  rm -r --cached` bypassed a single-space
-    // form. `Get-Command Remove-Item` is excluded for the same reason — naming a
-    // cmdlet is not invoking it.
+    // EXCLUSIONS USE HORIZONTAL WHITESPACE ONLY. `\s` matches a NEWLINE, so
+    // `(?<!\bgit\s{1,8})` suppressed any `rm -rf` whose PREVIOUS line merely
+    // ended in the word "git" — and a newline ends a shell command, so that `rm`
+    // is an entirely independent destructive statement. `cd /srv/app.git` above
+    // `rm -rf objects/old`, or a `# staged via git` comment, graded T1. Three
+    // reviewers found it independently; it is also a one-line deliberate
+    // evasion. `[ \t]` cannot cross a statement boundary.
+    //
+    // `git rm` is still excluded (it stages an index removal and with `--cached`
+    // never touches the working tree), as are the package managers, whose `rm`
+    // subcommand uninstalls a dependency rather than deleting a path.
+    //
+    // `remove-item` additionally requires a command position: the previous
+    // character must not be a word character, quote or hyphen, because
+    // `<button data-testid="remove-item">` put ordinary React components at T0.
+    // `Get-Command Remove-Item` merely names a cmdlet.
+    //
+    // A BARE `rm` with no flags still deletes. It is matched only when its first
+    // argument looks like a path or a variable, which keeps prose like
+    // "rm the old files" out while catching `rm "$target"` and `rm $TargetFile`.
     pattern:
-      /(?:(?<!\bgit\s{1,8})\brm\s+(?:-[a-z]{1,8}\s+)*-[a-z]{0,6}[rf][a-z]{0,6}\b|(?<!\bgit\s{1,8})\brm\s+[^\n]*--(?:recursive|force)\b|(?<!get-command\s{1,8})\bremove-item\b|\bri\s+(?:-(?:recurse|force)\b|\$)|\b(?:rd|rmdir)\s+\/[sq]\b|\bdel\s+\/[fsq]\b|\bfind\s+[^\n]*\s-delete\b)/i,
+      /(?:(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+(?:-[a-z]{1,8}[ \t]+)*-[a-z]{0,6}[rf][a-z]{0,6}\b|(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+[^\n]*--(?:recursive|force)\b|(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+(?:["'$~.\/]|[\w.-]+\/)|(?<!get-command[ \t]{1,8})(?<!["'\w-])remove-item\b|\bri[ \t]+(?:-(?:recurse|force)\b|\$)|\b(?:rd|rmdir)[ \t]+\/[sq]\b|\bdel[ \t]+\/[fsq]\b|\bfind[ \t]+[^\n]*[ \t]-delete\b)/i,
     note: 'deletes files with no undo',
   },
   {

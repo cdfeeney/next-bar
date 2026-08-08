@@ -263,6 +263,29 @@ export function resolveRecoveryRevisions(opts = {}) {
  * version must fail closed instead.
  */
 function readBlobAtRevision(repoRoot, rev, path) {
+  // EXISTENCE IS ESTABLISHED SEPARATELY FROM READABILITY, and the order matters.
+  // Deciding both with one `cat-file -t` conflated "the path did not exist at
+  // that revision" (nothing to grade, correctly skipped) with "the object cannot
+  // be read here" — which is the normal state of a partial clone, where a blob
+  // is promised but absent offline, and of a shallow clone whose merge base is
+  // below the graft boundary. Reviewers on three lanes pointed out that the
+  // second case was being skipped like the first, so a deleted file whose
+  // destructive version was unavailable could be graded on a surviving harmless
+  // version alone. `ls-tree` answers existence without needing the object.
+  let listing;
+  try {
+    listing = execFileSync('git', ['ls-tree', '--name-only', rev, '--', path], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch {
+    // The REVISION itself does not resolve (unfetched base, pruned ref). We
+    // cannot establish what the path held there, so this is unreadable, not
+    // absent.
+    return { status: 'unreadable' };
+  }
+  if (listing.trim().length === 0) return { status: 'absent' }; // genuinely not there
   let type;
   try {
     type = execFileSync('git', ['cat-file', '-t', `${rev}:${path}`], {
@@ -271,7 +294,8 @@ function readBlobAtRevision(repoRoot, rev, path) {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   } catch {
-    return { status: 'absent' }; // the path did not exist at that revision
+    // Listed in the tree but unreadable — a promised blob in a partial clone.
+    return { status: 'unreadable' };
   }
   // `git show HEAD:scripts` SUCCEEDS on a directory and prints a tree listing —
   // text with no capability signature in it, which would grade the removal of a

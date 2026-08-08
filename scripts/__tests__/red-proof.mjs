@@ -163,6 +163,17 @@ const ROUND_PROOFS = [
       'capitalised Git rm is still excluded',
       'naming a cmdlet is not invoking it',
       'an unlink on a graph is not a filesystem delete',
+      'an unreadable version among readable ones fails closed',
+    ]),
+  },
+  {
+    label: 'round-8',
+    rev: 'a17e99a',
+    cases: new Set([
+      'a destructive rm after a line ending in git is T0',
+      'Remove-Item after a comment mentioning Get-Command is T0',
+      'a bare rm with a path argument is T0',
+      'remove-item inside an HTML attribute is not a deletion',
     ]),
   },
 ];

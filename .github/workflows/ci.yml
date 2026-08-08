@@ -69,7 +69,11 @@ jobs:
             BASE="HEAD~1"
           fi
           echo "Classifying against base: $BASE"
-          node scripts/tier-classify.mjs --changed --base "$BASE"
+          # The canonical script, not a re-spelling of it. Inlining
+          # `node scripts/tier-classify.mjs --changed` duplicated `tier-changed`,
+          # so a future flag or path change would have silently split CI from
+          # what developers run locally.
+          npm run tier-changed -- --base "$BASE"
       - name: Verify (canonical repository gate)
         run: npm run verify:full
         env:

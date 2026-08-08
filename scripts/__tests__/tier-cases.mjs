@@ -648,6 +648,53 @@ export const TIER_CASES = [
     escalated: false,
     why: 'a bare .unlink( matched ordinary graph code',
   },
+  {
+    // A version list carrying an unreadable entry. Before a17e99a the array was
+    // coerced with String(), which produced one confident text and lost the
+    // unreadable version entirely — so this belongs to the a830823 stage.
+    name: 'an unreadable version among readable ones fails closed',
+    path: 'src/lib/partial.ts',
+    contents: [null, 'export const x = 1;\n'],
+    expect: 'T0',
+    escalated: true,
+    why: 'dropping a version that exists but cannot be read graded the path on the survivors alone',
+  },
+
+  // ---------------------------------------------------------------- Round-8
+  // The exclusion lookbehinds used `\s`, which matches a NEWLINE — so any
+  // destructive command whose PREVIOUS line ended in "git" was suppressed.
+  // Found independently by three lanes, and a one-line deliberate evasion.
+  {
+    name: 'a destructive rm after a line ending in git is T0',
+    // NOT `deploy*.sh` — that is a baked release floor, which would make this
+    // case pass on path alone and prove nothing about the content signature.
+    path: 'scripts/clean-objects.sh',
+    contents: '#!/usr/bin/env bash\ncd /srv/app.git\nrm -rf objects/old\n',
+    expect: 'T0',
+    why: 'a newline ends the shell command, so the git exclusion must not reach across it',
+  },
+  {
+    name: 'Remove-Item after a comment mentioning Get-Command is T0',
+    path: 'scripts/clean-cache.ps1',
+    contents: '# found with Get-Command\nRemove-Item $dir -Recurse\n',
+    expect: 'T0',
+    why: 'same newline-crossing exclusion, PowerShell side',
+  },
+  {
+    name: 'a bare rm with a path argument is T0',
+    path: 'scripts/drop-target.sh',
+    contents: '#!/bin/sh\nrm "$target"\n',
+    expect: 'T0',
+    why: 'rm needs no flags to delete irreversibly',
+  },
+  {
+    name: 'remove-item inside an HTML attribute is not a deletion',
+    path: 'src/components/Row.tsx',
+    contents: 'export const Row = () => <button data-testid="remove-item">x</button>;\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'a bare remove-item match put ordinary React components at T0',
+  },
 ];
 
 /**

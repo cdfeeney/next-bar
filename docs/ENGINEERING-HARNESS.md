@@ -160,16 +160,23 @@ policy rather than as a bug to be worked around:
   writing a JavaScript engine inside a zero-dependency gate that must run before
   `npm ci`. The stopping point is deliberate; treat the classifier as a floor,
   and raise the tier yourself when you know better.
-- **A block-commented deletion import still counts.** Only `//` line comments
-  are excluded, and only for a match on that same line. Three separate attempts
-  to strip comments properly were each broken by a reviewer in the same way:
-  `/` starts a regex literal as well as a comment, so `s.replace(/\/*$/, '')`,
-  an unterminated `/*`, and a template literal whose interior line began with
-  `/*` all caused a *real* deletion import below them to be erased. Anything
-  that rewrites the source before scanning it can only ever remove evidence, so
-  every misparse is a fail-open. Nothing is rewritten now. The cost is that
-  `/* … */` around an import over-escalates to T0 — the safe direction, and
-  cheap to work around by using `//`.
+- **An import inside a multi-line block comment still counts.** Only a `//` on
+  the match's own line excludes it. Three separate attempts to strip comments
+  properly were each broken by a reviewer the same way: `/` starts a regex
+  literal as well as a comment, so `s.replace(/\/*$/, '')`, an unterminated
+  `/*`, and a template literal whose interior line began with `/*` all caused a
+  *real* deletion import below them to be erased. Anything that rewrites the
+  source before scanning can only remove evidence, so every misparse is a
+  fail-open. Nothing is rewritten now.
+
+  The line prefix is analysed rather than the file, and that analysis is itself
+  fail-closed: complete block comments and escape-aware string literals are
+  removed, and if anything unbalanced survives — an unpaired quote, an unclosed
+  `/*` — the match is **not** excluded. So `/* https://x */ import { rm } …`,
+  `'it\'s // ok'`, and an unterminated quote all keep their capability, while a
+  genuine `// import { rm } …` does not. The residual cost is that a deletion
+  import wrapped in a *multi-line* `/* … */` over-escalates to T0 — the safe
+  direction, and cheap to avoid by using `//`.
 
 ### The tier map can escalate, never de-escalate
 
