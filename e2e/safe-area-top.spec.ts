@@ -285,9 +285,16 @@ test.describe('app-owned chrome respects the top safe area', () => {
     const primary = dialog.getByRole('link', { name: /View on Maps/i });
     await expect(primary).toHaveCount(1);
 
-    // Bring it into view the way a user would — scrolling the dialog, not the
-    // element's own programmatic offset — then assert it is actually in the
-    // viewport and hittable.
+    // USER-SCROLLABILITY FIRST. scrollIntoViewIfNeeded() will happily scroll an
+    // `overflow-y-hidden` ancestor, so on its own it proves only that Playwright
+    // can reveal the action — not that a person can reach it. Flip the dialog to
+    // overflow-y-hidden and every assertion below would still pass. So pin the
+    // computed overflow to a value that actually accepts a gesture, and only
+    // then measure.
+    const overflowY = await dialog.evaluate((el) => getComputedStyle(el).overflowY);
+    expect(['auto', 'scroll', 'overlay'], `dialog overflow-y was "${overflowY}"`)
+      .toContain(overflowY);
+
     await primary.scrollIntoViewIfNeeded();
     await expect(primary).toBeInViewport();
     await expect(primary).toBeEnabled();
