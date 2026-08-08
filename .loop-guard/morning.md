@@ -350,3 +350,68 @@ fix was kept on layout merit and the component comment that had claimed test evi
 that choice was corrected.
 
 NEXT ACTION: /santa-loop g-b9dc294e-06fa-4b9c-a1aa-e241bae3d6fa --unattended --intensity auto
+## Item 3 — g-b9dc294e — SANTA: NICE (complete)
+
+Tier T1 (t0FileCount 0, escalated false, skippable false). Intensity `both`.
+Rounds: 3 (the maximum). quorumMet TRUE in every round.
+
+Lanes, all four successful in all three rounds, no degraded lane:
+  Claude/FABLE — model `fable`, tier-routed. reviewer-model-preflight ok:true,
+    expected_model fable, override_present false. CLAUDE_CODE_SUBAGENT_MODEL absent.
+  Codex — family openai, gpt-5.6-sol, proofs 6c776331 / 6ba9f605 / 5880e7ba.
+  GLM and DeepSeek — via harness-consult, exit 0 with non-empty output each round.
+
+Commits (local only, nothing pushed):
+  013243f  fix   contain the inline rankings search row (the product fix)
+  f88adf2  docs  morning log
+  3bb6a89  test  close round-1 findings
+  ba06c2f  test  pin the criterion-6 scroller, disclose the ghost rating
+  6527089  docs  correct the ghost-rating mechanism
+Changed files overall: src/components/QuickAddBar.tsx, e2e/add-bar-overflow.spec.ts.
+
+FINDINGS FIXED, with the lane that caught each:
+  Claude/FABLE only — the badge span was measured EMPTY in every row: the seed rated an
+    ordinary bar while the query matches only the synthetic row, so RatingBadgeView returned
+    null and `shrink-0`, one of the three classes the fix adds, went unexercised. Now the long
+    row is rated and a toContainText('Loved') assertion pins it.
+  Codex only — the criterion-6 test accepted 'no-overflow' and so asserted nothing whenever
+    the list happened to fit. Its stated trigger was WRONG (swapping the class to
+    overflow-y-hidden made the old selector return null, which already failed), but the
+    vacuity was real.
+  DeepSeek only — the ellipsis carve-out did not require nowrap. Its headline claim was false
+    (that branch already sits inside the hidden/clip test); the narrowed case is real and was
+    proven BOTH ways: with the span mutated to `overflow-hidden text-ellipsis`, the old guard
+    PASSED 2/2 while clipping 964px into 206px; the hardened guard flags it.
+  Codex + DeepSeek + FABLE(advisory) — the scroller was selected by "first computed
+    overflow-y auto/scroll", which CSS also computes on overflow-x-only elements, and a
+    collapsed scroller satisfied every assertion. Now pinned by `li button` and clientHeight>100.
+  GLM only — the two seeded ratings are asymmetric (ghost rating); documented.
+  Claude/FABLE + GLM — that documentation named the WRONG mechanism. Confirmed by reading
+    source: sortedEntries memoizes on [ratings] alone, so the id IS resolvable post-swap and
+    the row is missing only because the memo never recomputes. Corrected.
+
+FINDINGS VERIFIED AND REJECTED (recorded so the reasoning is auditable): DeepSeek's ellipsis
+  exploit as stated; DeepSeek's 'li button' silent-pass (the helper returns found:false and
+  fails loudly); DeepSeek's clientHeight>100 flake (scroller ~550px at 402x681, all three
+  projects pass); DeepSeek's flex-collapse (badge is null for unrated bars, ~98px of chrome
+  against 340px).
+
+RESIDUAL RISKS — real, verified, deliberately NOT fixed because they are outside an
+"add-a-bar" item and the operator forbade broadening a stored goal. Each deserves its own item:
+  1. /rankings ranked-row <h2> (GLM r1+r2, Codex r2) — a flex child with no min-w-0 and no
+     truncation, the same criterion-4 trap. NOT proven safe: I asserted the long seeded bar
+     renders as a ranked row and it FAILED, so the surface is untested. GLM assessed every
+     route to reaching it and each touches app code or catalog data.
+  2. src/components/PairwiseSheet.tsx:183 (Claude/FABLE r1) — bar.name in a bare <p> inside a
+     fixed inset-0 sheet. Fixed-position overflow does not grow document.scrollWidth, so no
+     current guard can see it.
+  3. Criterion 6's keyboard-open and accessibility-text-size aspects are still not simulated
+     anywhere in the suite (pre-existing).
+
+ENVIRONMENT NOTES FOR THE NEXT RUN:
+  - `npm ci --offline` restored node_modules from the local cache with ZERO network egress.
+  - Playwright projects must be run SERIALLY with --workers=1. Running all three concurrently
+    collapses the single dev server on this machine — even page.reload times out.
+  - e2e/rankings-add-flow.spec.ts is FLAKY AT HEAD under load, not a regression from this
+    item: restoring QuickAddBar.tsx to its exact HEAD content failed the same test twice.
+    Every stall is Playwright's "visible, enabled and stable" actionability check.
