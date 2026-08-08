@@ -290,3 +290,114 @@ Queue (operator-supplied, in order): g-e82c72a8-023a-4b49-bcd1-2826556d5175
 Preflight: overnight-recovery IDLE; git status clean; lease null/live:false;
 overnight-guard preflight TIER_MAP_READY (project map, 10 T0 rules, 0 dead).
 Controller first action: /code g-e82c72a8-023a-4b49-bcd1-2826556d5175 (stored status: planned).
+
+## C3 ITEM RESULT — g-e82c72a8 (Item 8: production-migration & release-readiness addendum)
+
+Status: **COMPLETE**. Branch `harness/nb-20260808-expanded/release-addendum`.
+Tier T2 (docs-only, `skippable:true`, `t0FileCount:0`). Santa intensity **upgraded** to `full`.
+
+Commits (all local, all path-scoped by hand):
+- `8b35a25` re-verify the addendum against the real web candidate
+- `a357fef` santa round 7 — five lane-unique findings
+- `03ba884` santa round 8 — the escape hatch, and stop by rule
+- `8be7e1a` santa round 9 — conform the prose to the table, add the deletion gate
+- `7c4d274` C3 run header (this log)
+
+Changed file: `docs/PROD-MIGRATION-ADDENDUM-2026-08-07.md` only (900 lines).
+
+### What actually happened
+
+The deliverable already existed at `299473e` on `chore/prime-foundation`, unreachable from this
+worktree's HEAD, and the mission required it on the hardening lineage. It was reproduced
+byte-for-byte via `git show` (no checkout/merge/cherry-pick — two peer sessions held sibling
+worktrees) and then **four things a re-run of its own commands falsified** were corrected:
+
+1. **Stale facts.** The auth gate goal `g-3fc3789d` is now `complete`; `fix/auth-cross-context-email`
+   advanced to `b6a7957` (`76d610f` is its ancestor); `fix/nighttime-mobile-hardening` exists at
+   `689e564`. The doc's "un-reviewed auth base / branch could not be created" framing was false.
+2. **Wrong ref.** The application enumeration had run against `src` at `99ff7b3` — the *migration
+   packet* ref, not the web candidate (57 files / 7,014 insertions apart). Re-run at `689e564`:
+   byte-identical for all three tables 0034 narrows, so the conclusion survived but its warrant did
+   not.
+3. **Enumeration gap.** `ratings` was never enumerated despite being one of the three tables 0034
+   narrows. Six sites, four verbs, all granted.
+4. **New substantive finding (§8b).** The candidate carries a 39th migration,
+   `0043_rate_limits.sql`, absent from the frozen packet. `rateLimiter.durable.ts` calls
+   `consume_rate_limit()` from it. On production defaults an unapplied 0043 **denies account
+   deletion for every user** — via the fail-closed catch when the tier is armed, and via the
+   `requireDurable` refusal when it is not.
+
+### Reviewer lanes — 3 full panels, quorum met in all three
+
+| Round | Claude/Sonnet | Codex (gpt-5.6-sol) | GLM | DeepSeek | Kimi K3 deep |
+|---|---|---|---|---|---|
+| 7 | OK | OK `6304f92b` | OK | OK | OK |
+| 8 | OK | OK `ba166dd2` | OK | OK | OK |
+| 9 | OK | OK `51ede660` | OK | OK | OK |
+
+Claude lane = **sonnet**, correct for T2 (`reviewer-model-preflight` ok, no env override). Codex lane
+was pre-probed with a **repo read** (counted 39 `.sql` files via a real shell exec), not a text reply.
+
+**Every lane found something no other lane found.** Round 7: Claude — §12 still called `76d610f`
+"un-reviewed" after §2 retracted it; Codex — the corrected `apply-migrations.ts` lines
+(`:487`–`:503`; the doc cited `installBootstrapFixture`); GLM — §8b widened the migration set without
+propagating into §3's scan scope or §10's revert table; DeepSeek — the scratch-DB falsifier was not
+the cheapest, an existing test already covers the tier-layer half; Kimi — the quotability hazard and
+the scope-dissolution argument. Round 8: four lanes converged on §8b's Disposition still encoding the
+abandoned precondition, and Codex+DeepSeek found the missing table row —
+`REQUIRE_DURABLE_RATE_LIMIT=0`, the escape hatch named in 0043's own header and absent from the doc.
+Round 9: Claude+GLM — the sentence *introducing* the table still said "both configurations deny";
+Codex+DeepSeek — row 3's "completely unlimited" overstated risk (`rateLimiter.ts:371` keeps
+per-instance limiting); Codex — catch is `:420`, not `:422`; GLM — §12 never exercised account
+deletion at all.
+
+**Rejected on repository evidence (3):** DeepSeek's unset-salt claim (`:388` refuses); DeepSeek's
+`:407` unattributed short-circuit claim (`aggregateIp` returns any colon-free key unchanged, so a
+UUID never equals the `'unknown'` sentinel); GLM's prediction that §13 is a rollback runbook.
+
+**Material disagreement, adjudicated:** GLM argued the round-8 stopping rule was falsified. Kimi
+adjudicated against it — the table is correct, so the defect is stale prose adjacent to a correct
+edit, not a new class. Adopted; **both** positions recorded in §14b.
+
+### Timed-out command
+
+Codex round 7, first attempt: exit **124** at 542s on an oversized packet. `bounded-run` reported
+`terminated process tree rooted at pid 121280` — process-tree termination **confirmed** (not exit
+125). Retried with a tighter packet and it succeeded. No other timeouts.
+
+### Verification
+
+Behavioral gate **skipped, justified**: tier T2 / `skippable:true`, markdown-only, no runtime
+surface, and the item forbids executing SQL or contacting Production. Static loop
+(build/type/lint/test) not runnable — `node_modules` absent; not installed, as a markdown file
+cannot break the build. Static checks that did run and pass: `git diff --check` exit 0, no trailing
+whitespace, secret scan clean, claim ledger 1–15 contiguous and ordered, 17 level-2 headings,
+working tree clean. Frozen worktree `nb-prod-migrations-0042` re-verified **empty** at HEAD
+`99ff7b3` (read-only `git -C`).
+
+All 15 acceptance criteria audited **MET** by the round-7 Claude lane with independently reproduced
+evidence; rounds 8 and 9 confirmed no criterion regressed.
+
+### Carried risk — read before treating this as finished
+
+Round 9's four fixes are the last edits and **received no independent pass**: the three-round review
+budget was exhausted. This is disclosed inside the document (§14b) so a resumer verifies **that
+four-item diff only** — the intro sentence, row 3's wording, the `:420`/`:422` citation, and the new
+§12 gate — rather than re-reviewing 900 lines. All four are safety-monotone.
+
+### Human decisions still required
+
+1. The packet is **NOT APPROVED** and this item's completion does not change that. It is a reviewed
+   local document, nothing more.
+2. **The packet and candidate `689e564` must not ship as a pair as they stand** — decide 0043's
+   disposition, the paired application SHA, and the value of `REQUIRE_DURABLE_RATE_LIMIT`, together.
+3. Run the §14 requirement-6 checks in cost order: the unit test first (settles §8b's one unverified
+   link with no database), then read-only Production queries for claims 5–8, then a scratch database.
+4. Four assumptions (applied migration set, current grants, public-flag row count, restore
+   capability) remain unsettleable by any amount of review.
+
+Nothing was pushed, deployed, migrated, or irreversibly applied. No PR, no database connection, no
+environment/auth change, no external system contacted, no credentials used. No worktree, branch or
+stash was created, moved, removed, pruned, reset or cleaned; `chore/prime-foundation` and its
+2026-08-07 commit chain are untouched. The `loop-guard checkpoint` adopted a clean HEAD and swept
+nothing.
