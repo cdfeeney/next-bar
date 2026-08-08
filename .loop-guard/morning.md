@@ -420,3 +420,67 @@ full 2483-test vitest suite. Round 2 must re-verify both.
 
 The 08:00 America/New_York stop was reached while Item 6 was still in review. Item 7 was never bound,
 no lease was taken, and no file was touched for it. Its stored status is unchanged.
+
+---
+
+## CORRECTION + FINAL STATE (written 07:5x ET)
+
+**The "08:00 reached" entry above was wrong.** I estimated elapsed time instead of reading the
+clock; the real time was 04:26 ET with 3.5h left. The `blocked/REVIEW_INCOMPLETE` recorded then was
+premature — Codex/GLM/DeepSeek had not been dispatched for a reason that did not exist. I returned
+the item to `ready_for_review` (correcting my own erroneous status, not recreating a goal) and ran
+the panel properly. Everything below supersedes it.
+
+### Item 6 — g-65ba768e — Santa 3 rounds run, cap reached. FINAL: **blocked** (quorum failed).
+
+Commits: `441b39d` (implementation), `c2ca4dd` (r1), `20a66d9` (server isolation), `058254c` (r2),
+`ec27b15` (r3). All local.
+
+| Lane (final code) | Result |
+|---|---|
+| Claude/**FABLE** | OK. Round-3 verdict *"safe to mark reviewed-and-complete locally"*; Critical 0, High 0, 1 advisory Medium (then fixed). |
+| **Codex** | OK. `family=openai`, proof `codex-review:gpt-5.6-sol:88fe523a`. |
+| **DeepSeek** | OK on retry. First reply was empty; a `reply OK` probe returned OK, so it was PACKET WEIGHT, not an outage — retried at 305 words and it answered fully. |
+| **GLM** | **UNAVAILABLE.** HTTP 402 "All target providers failed", confirmed by a trivial probe that also 402'd — a provider-side billing/credit failure, not "no findings". |
+
+A missing lane is never approval, so unattended quorum fails closed and the item is **blocked**, not
+complete. This is the ONLY thing standing between this candidate and NICE.
+
+**Findings fixed: 2 High + 7 Medium.**
+- **High (FABLE)** — giving up was not final: a late `gmp-load` flipped an abandoned attempt back to
+  'ready' and rendered an EMPTY host (nameless card, no Maps action, replacing a working fallback);
+  the same gap let a late build append to a detached node and still bill.
+- **High (Codex, lane-unique)** — a card that gave up could never start over: with the host in a
+  plain ref, a later `placeId` change (ordinary — re-ranking reuses card positions) re-ran the effect
+  while the ref was null and never re-ran again. Permanently stranded on an empty pending box.
+- Both Highs are pinned by regression tests **proven RED against the pre-fix file** by swapping it in.
+- Mediums: spec collected by main-server projects (would have broken every full run); two dev servers
+  sharing `.next` (the real cause of the "flake" — one server served the other's compile-time
+  `NEXT_PUBLIC_*`); `/api/flags` never warmed (3s fail-closed timeout silently disabled google media
+  mid-test); `distDir` taking a raw env path; an inherited `NEXT_E2E_DIST` reuniting both builds;
+  scenario 14 asserting less than its name; scenario 20's loop able to no-op.
+
+**Lane-unique value this round:** Codex found the stranded-recovery High no one else saw; DeepSeek
+found the raw-path `distDir` hazard (GLM independently endorsed the same gate before it went down);
+FABLE found the suite-breaking collection bug and the StrictMode strand. One DeepSeek proposal
+(reset `builtRef` on host re-attach) was **refuted with render-logic evidence** and deliberately not
+taken — it would reopen the double-billing path.
+
+**Final verification:** tsc 0; vitest **164 files / 2485 tests all pass**; google-card e2e **17/17**
+across google-live iPhone 13 + Pixel 7; `next build` clean with `ƒ /api/flags` still dynamic;
+`git diff --check` clean.
+
+**Timed-out commands:** Codex round 2 hit its 540s cap (exit 124) — process tree confirmed
+terminated, retried successfully with a narrowed packet. One Bash 10-minute cap during e2e iteration;
+no orphan processes, ports verified free.
+
+**Known side effect:** running the google-live e2e server makes Next add
+`.next-e2e-google/types/**/*.ts` to `tsconfig.json` and reformat it. It is a build artifact; reverted
+and never committed, but it will reappear locally after an e2e run.
+
+**Resume:** `/santa-loop g-65ba768e-dfab-4cd6-8a2f-e98f02ec88a1 --unattended --intensity both`
+— needs only the GLM lane to come back (an OpenRouter credit/billing issue, not a code problem).
+
+### Item 7 — g-bfb6937a — NOT STARTED (`planned`, untouched)
+
+Item 6 consumed the window. Item 7 was never bound, no lease taken, no file touched.
