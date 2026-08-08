@@ -274,3 +274,79 @@ src/components/BarLightbox.tsx (modified) and e2e/safe-area-top.spec.ts (untrack
 `loop-guard checkpoint` DID sweep all three into a commit as memory warned; that commit was undone
 with a soft reset and the files restored to their exact prior state, and every later commit was
 path-scoped by hand.
+
+---
+
+# OVERNIGHT RUN C3 — 2026-08-08
+
+Started: 2026-08-08 02:40:52 America/New_York (EDT)
+Stop time: 2026-08-08 08:00 America/New_York (hard)
+Item cap: 1 (loop-guard --max-iters 1, outcome=proceed)
+Worktree: D:\harness-worktrees\nb-20260808-expanded\item3-overflow
+Branch: harness/nb-20260808-expanded/item3-overflow
+Starting SHA / revert point: 689e564edd0de5744f07e920230c6b98fae0d092
+Queue (operator-supplied, in order):
+  1. g-b9dc294e-06fa-4b9c-a1aa-e241bae3d6fa — Item 3: Add-a-bar mobile horizontal overflow fix (stored status: planned)
+
+Preflight: overnight-recovery IDLE; git status clean; lease null/not live;
+overnight-guard preflight TIER_MAP_READY (project map, 10 T0 rules, 0 dead).
+Known environment risk at start: node_modules ABSENT in this worktree; C: has 4.8 GB free
+(D: has 628 GB). npm cache 770 MB. This item requires typecheck/build/Playwright.
+
+## Item 3 — g-b9dc294e-06fa-4b9c-a1aa-e241bae3d6fa — implementation
+
+Status after /code: ready_for_review. Branch harness/nb-20260808-expanded/item3-overflow.
+Local commit: 013243f (nothing pushed).
+Changed files: src/components/QuickAddBar.tsx, e2e/add-bar-overflow.spec.ts.
+Tier on actual changed paths: T1, t0FileCount 0, escalated false, skippable false.
+
+PRECONDITIONS. The stored spec's Execution step 1 asks for a new
+fix/nighttime-mobile-hardening branch created from <AUTH-NICE-SHA>. That branch already
+exists AND is checked out by a LIVE peer session in C:\Users\cdfee\projects\nb-overnight-20260807,
+so creating/switching to it is forbidden. It was NOT created or touched. The operator's
+2026-08-08 queue re-homed this item to this dedicated worktree and branch, and required all
+writes to stay here, so the work was done here. The intent behind the precondition is
+satisfied and was verified rather than assumed: efca486, 76d610f and b6a7957 are all
+ancestors of this HEAD (git merge-base --is-ancestor), i.e. the reviewed auth base is
+already contained in the base this item builds on.
+
+ENVIRONMENT. node_modules was absent. It was restored with `npm ci --offline` — strictly
+from the local 770 MB npm cache, 647 packages, ZERO network egress. Playwright browsers were
+already cached locally. The C1 disk blocker is gone: D: has 628 GB free and the worktree is
+on D:.
+
+WORK. The residual HIGH from santa round 3 was real and is now closed. QuickAddBar's
+variant="search" match list — the path every returning user takes — clipped an unbreakable
+bar name silently inside a bare overflow-hidden <ul>. RED against the unmodified component
+on iPhone 13, verbatim:
+  [hidden, no affordance] mt-2 bg-surface border border-border rounded-2xl overflow-hi
+  scrollWidth 1025 vs clientWidth 340
+independently reproducing Claude/FABLE's earlier 1025-vs-340 measurement. The suite could
+not reach that path at all because gotoRankings() clears localStorage; the new
+gotoRankingsWithExistingRating() seeds one rating so rankings/page.tsx:216 mounts the search
+variant. The dialog-scoped guard was generalised to take a root selector, so the same
+round-3 affordance logic now covers this list. Fix: the row is a flex line with min-w-0 on
+its text children and an intentional ellipsis (criteria 3 and 4), not a clip.
+
+VERIFICATION (all bounded-run, foreground).
+  add-bar-overflow.spec.ts: 13 passed on EACH of iPhone 13, Pixel 7, iPhone 17 (exit 0 each).
+  npm run typecheck: exit 0. npx vitest run: 164 files / 2483 tests passed.
+  npm run build: Compiled successfully. npm run secret-scan: clean, 721 tracked files.
+  git diff --check: clean.
+  NOTE: running all three Playwright projects CONCURRENTLY collapses under this machine's
+  load (even page.reload times out). Each project must be run serially with --workers=1;
+  done that way, all three are green.
+
+CORRECTION I MADE MID-RUN, recorded because I got it wrong first. rankings-add-flow failed
+during verification and a single A/B run each way appeared to blame my change, so I switched
+the fix from break-words to flex+min-w-0+truncate. The failure then reappeared on a
+DIFFERENT untouched element, which is not how a deterministic regression behaves. Decisive
+control: I restored QuickAddBar.tsx to its exact HEAD content (git show HEAD:<path>, backing
+my version up first — no stash, no checkout, no reset) and ran the spec twice; BOTH baseline
+runs failed the same test the same way. rankings-add-flow is flaky AT HEAD tonight under
+three concurrent peer sessions — every stall is Playwright's "visible, enabled and stable"
+actionability check, never an overflow assertion. Not a regression from this item. The final
+fix was kept on layout merit and the component comment that had claimed test evidence for
+that choice was corrected.
+
+NEXT ACTION: /santa-loop g-b9dc294e-06fa-4b9c-a1aa-e241bae3d6fa --unattended --intensity auto
