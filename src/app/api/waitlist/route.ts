@@ -2,18 +2,23 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import {
   clientIpFromHeaders,
-  createRateLimiter,
   isValidWaitlistEmail,
   normalizeEmail,
   sanitizeNeighborhood,
 } from '@/lib/waitlistGuard';
 import { guardOrigin, readBoundedJson } from '@/lib/requestBoundary';
+import { createTieredLimiter } from '@/lib/rateLimiter';
+import {
+  durableCounterFromEnv,
+  rateLimitSaltFromEnv,
+} from '@/lib/rateLimiter.durable';
 import { parseWaitlistVibeProfile } from '@/lib/vibeProfileSchema';
 
 /**
  * POST /api/waitlist — hardened per audit MED-23 (H1):
  *   - email shape-validated + normalized; junk never reaches the DB
- *   - per-IP in-memory rate limit (module-scoped: per warm instance)
+ *   - per-IP rate limit — now shared across instances (Item 10), no longer
+ *     one window per warm serverless instance
  *   - GENERIC error responses — the previous error.message passthrough
  *     leaked Postgres/RLS internals to callers, and a unique-violation
  *     reply doubled as an email-existence oracle. A duplicate email now
@@ -33,10 +38,41 @@ type WaitlistPayload = {
   vibe_profile?: unknown;
 };
 
+/**
+ * DURABLE (Item 10). Per-instance counting meant the real cap was
+ * `10 x warm instances`; the shared counter makes it 10.
+ *
+ * FAIL-OPEN, and this is a RECORDED DEVIATION from Item 10's acceptance
+ * criterion, which said "fail-closed on the shared store, local limiter as
+ * backstop" for this route. Flagged in review; kept deliberately, with the
+ * reasoning corrected rather than the deviation hidden:
+ *
+ *  - The quota protects list quality, not an irreversible action, and the
+ *    local backstop still caps damage at the old `limit x instances` — so
+ *    fail-open is bounded, never unlimited (pinned by
+ *    `route.failopen.test.ts`).
+ *  - It is what makes the rollout safe. `RATE_LIMIT_KEY_SALT` is the
+ *    activation switch; if it is set before migration 0043 is applied, every
+ *    durable call errors. Under literal fail-closed that would 429 EVERY
+ *    signup for the length of that window.
+ *  - Honest limit on the benefit, which an earlier draft of this comment
+ *    overstated: the rate-limit store and the waitlist INSERT are the same
+ *    Supabase Postgres, so in a true database outage the insert fails anyway.
+ *    Fail-open genuinely helps only for RPC-specific failures — an unapplied
+ *    migration, the 1.5s timeout, a revoked grant — not for "the database is
+ *    down".
+ *
+ * The contrast to hold onto: `/api/account/delete` is fail-CLOSED and must
+ * stay that way. Uniformity between these two routes would be a bug.
+ */
 const RATE_LIMIT_PER_HOUR = 10;
-const limiter = createRateLimiter({
+const limiter = createTieredLimiter({
+  bucket: 'waitlist-ip',
   limit: RATE_LIMIT_PER_HOUR,
   windowMs: 60 * 60 * 1000,
+  durable: durableCounterFromEnv(),
+  salt: rateLimitSaltFromEnv(),
+  onDegraded: 'fail-open',
 });
 
 /**
@@ -66,7 +102,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   );
   if (blocked) return blocked;
 
-  if (!limiter.allow(clientIpFromHeaders(request.headers))) {
+  if (!(await limiter.consume(clientIpFromHeaders(request.headers))).allowed) {
     return NextResponse.json(
       { ok: false, error: 'rate_limited' },
       { status: 429 },

@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { clientIpFromHeaders, createRateLimiter } from '@/lib/waitlistGuard';
+import { clientIpFromHeaders } from '@/lib/waitlistGuard';
+import { createTieredLimiter } from '@/lib/rateLimiter';
+import {
+  durableCounterFromEnv,
+  rateLimitSaltFromEnv,
+} from '@/lib/rateLimiter.durable';
 import { guardOrigin, readBoundedJson } from '@/lib/requestBoundary';
 import { ANALYTICS_EVENTS } from '@/lib/analytics';
 import { nycNightKey } from '@/lib/nightKey';
@@ -20,8 +25,8 @@ import { nycNightKey } from '@/lib/nightKey';
  *    counter, poisoning ≠ compromise) but can never bloat storage.
  *  - The night key is computed SERVER-side (client clocks lie) and the
  *    body carries nothing but the name.
- *  - Per-instance IP token bucket as a flood damper (honest limitation:
- *    per-serverless-instance, not global).
+ *  - Shared per-IP flood damper (Item 10 made it global; it was previously
+ *    per-serverless-instance).
  *  - Cross-origin writes (review M4): a PRESENT Origin header must match
  *    the request host — blocks third-party pages poisoning counts from
  *    browsers. Origin-less clients (curl) are indistinguishable from
@@ -35,10 +40,20 @@ import { nycNightKey } from '@/lib/nightKey';
  *    bounded read → parse.
  */
 
+/**
+ * DURABLE (Item 10), FAIL-OPEN. This is a best-effort counter behind a dark
+ * launch flag; dropping analytics during a store outage is strictly better
+ * than erroring a page-load beacon. The local backstop still caps the blast
+ * radius, and the counter model bounds storage at 4 rows/night regardless.
+ */
 const RATE_LIMIT_PER_MINUTE = 60;
-const limiter = createRateLimiter({
+const limiter = createTieredLimiter({
+  bucket: 'event-ip',
   limit: RATE_LIMIT_PER_MINUTE,
   windowMs: 60 * 1000,
+  durable: durableCounterFromEnv(),
+  salt: rateLimitSaltFromEnv(),
+  onDegraded: 'fail-open',
 });
 
 /** The body is `{"name":"<enum member>"}` and nothing else. */
@@ -72,7 +87,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   );
   if (blocked) return blocked;
 
-  if (!limiter.allow(clientIpFromHeaders(request.headers))) {
+  if (!(await limiter.consume(clientIpFromHeaders(request.headers))).allowed) {
     return NextResponse.json({ ok: false }, { status: 429 });
   }
 

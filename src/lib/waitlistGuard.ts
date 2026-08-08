@@ -1,14 +1,10 @@
 /**
- * Waitlist input validation + in-memory IP rate limiting (H1 hardening,
- * audit MED-23). Pure functions + a factory so everything is unit-testable
- * without a route context.
+ * Waitlist input validation and client-IP attribution (H1 hardening, audit
+ * MED-23). Pure functions, unit-testable without a route context.
  *
- * The rate limiter is deliberately in-memory per the nightlog spec: on
- * serverless (Vercel) each warm instance keeps its own window, so the
- * effective global cap is limit × instances — fine for abuse-damping a
- * waitlist form (the goal is stopping dumb floods, not building a
- * distributed quota). If this ever guards something valuable, move it to a
- * durable store.
+ * The rate LIMITER that used to live here moved to `@/lib/rateLimiter` in
+ * Item 10. Its old doc comment said "if this ever guards something valuable,
+ * move it to a durable store" — it did (`/api/account/delete`), so it was.
  */
 
 /**
@@ -152,78 +148,13 @@ export function clientIpFromHeaders(headers: Headers): string {
   return 'unknown';
 }
 
-export type RateLimiter = {
-  /**
-   * True when this hit is within the key's budget; false = throttled.
-   * CONSUMES one unit of the budget.
-   */
-  allow: (key: string, now?: number) => boolean;
-  /**
-   * Non-consuming read of the same predicate: true when the next `allow`
-   * would be within budget. Lets a caller reject an already-exhausted key
-   * before doing expensive work WITHOUT charging the key for that
-   * rejection — see the two-stage guard in `api/account/delete`.
-   *
-   * Optimistic by design: it does not model the MAX_BUCKETS fail-closed
-   * path below, so a brand-new key can peek true and still be denied by
-   * `allow`. `allow` is the authoritative decision; `peek` is only ever a
-   * cheap early-out.
-   */
-  peek: (key: string, now?: number) => boolean;
-};
-
 /**
- * Fixed-window in-memory limiter. Windows reset `windowMs` after a
- * bucket's first hit. Memory is HARD-capped at MAX_BUCKETS (dual review):
- * when a prune of expired buckets can't make room — 10k+ distinct keys all
- * inside the live window — new keys are REJECTED rather than tracked. Under
- * that kind of spray the traffic is an attack by definition, so failing
- * closed both bounds memory and keeps limiting.
+ * `createRateLimiter` and its `RateLimiter` type MOVED to `@/lib/rateLimiter`
+ * (Item 10). There it sits behind the `RateLimiter` interface as
+ * `createInMemoryLimiter` — the L1 backstop beneath a shared, Postgres-backed
+ * counter, so the cap is no longer `limit x warm instances`.
  *
- * The key is an arbitrary string. Client IP is the common case, but
- * `api/account/delete` keys its real quota on the VERIFIED user id — an
- * identity the caller cannot rotate or spoof (C2 audit F3).
+ * Not left here as a re-export: two import paths for the same limiter is how
+ * a future route ends up on the per-instance one by accident and quietly
+ * loses the global bound.
  */
-export function createRateLimiter({
-  limit,
-  windowMs,
-}: {
-  limit: number;
-  windowMs: number;
-}): RateLimiter {
-  const buckets = new Map<string, { count: number; windowStart: number }>();
-  const MAX_BUCKETS = 10_000;
-
-  function prune(now: number): void {
-    for (const [key, bucket] of buckets) {
-      if (now - bucket.windowStart >= windowMs) buckets.delete(key);
-    }
-  }
-
-  return {
-    allow(key: string, now: number = Date.now()): boolean {
-      const bucket = buckets.get(key);
-      if (!bucket || now - bucket.windowStart >= windowMs) {
-        // Opportunistic prune on new-window creation keeps the hot path
-        // (existing bucket increment) allocation-free.
-        if (buckets.size >= MAX_BUCKETS) {
-          prune(now);
-          // Still full after pruning: every tracked bucket is live. Fail
-          // closed — an untracked new key must not become an untracked
-          // unlimited key, and the map must not grow unbounded.
-          if (buckets.size >= MAX_BUCKETS && !buckets.has(key)) return false;
-        }
-        buckets.set(key, { count: 1, windowStart: now });
-        return true;
-      }
-      bucket.count += 1;
-      return bucket.count <= limit;
-    },
-
-    peek(key: string, now: number = Date.now()): boolean {
-      const bucket = buckets.get(key);
-      if (!bucket || now - bucket.windowStart >= windowMs) return true;
-      return bucket.count < limit;
-    },
-  };
-}

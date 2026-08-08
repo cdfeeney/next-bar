@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   clientIpFromHeaders,
   ipAttributionStats,
-  createRateLimiter,
   isValidWaitlistEmail,
   normalizeEmail,
   sanitizeNeighborhood,
 } from '@/lib/waitlistGuard';
+// The limiter implementation MOVED to @/lib/rateLimiter in Item 10, where it
+// became the L1 backstop under the shared durable tier. These suites follow
+// it rather than being deleted: the spray-pruning and 10k-live-bucket cases
+// below are the hard-won ones, and re-proving them costs nothing.
+import { createInMemoryLimiter as createRateLimiter } from '@/lib/rateLimiter';
 
 describe('isValidWaitlistEmail', () => {
   it('accepts ordinary addresses', () => {

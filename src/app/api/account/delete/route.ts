@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { clientIpFromHeaders, createRateLimiter } from '@/lib/waitlistGuard';
+import { clientIpFromHeaders } from '@/lib/waitlistGuard';
+import { createInMemoryLimiter, createTieredLimiter } from '@/lib/rateLimiter';
+import {
+  durableCounterFromEnv,
+  rateLimitSaltFromEnv,
+} from '@/lib/rateLimiter.durable';
 
 /**
  * POST /api/account/delete — H2 (N3): delete the CALLER's auth user.
@@ -47,21 +52,75 @@ import { clientIpFromHeaders, createRateLimiter } from '@/lib/waitlistGuard';
 
 const HOUR_MS = 60 * 60 * 1000;
 
-/** Stage 2 — the real quota. One account, five deletions an hour. */
+/**
+ * Stage 2 — the real quota. One account, five deletions an hour.
+ *
+ * DURABLE (Item 10), and the first consumer migrated, because this is the
+ * only quota in the app guarding an irreversible action. Per-instance
+ * counting meant the true cap was `5 x warm instances` and a cold start
+ * reset it to zero, which is not a bound on account deletion in any useful
+ * sense.
+ *
+ * FAIL-CLOSED: if the shared counter cannot be reached, this route refuses.
+ * A store outage must never be the reason an unbounded number of deletions
+ * gets through — that is the one failure here that cannot be undone
+ * afterwards. Every other consumer in the app fails open; this one does not,
+ * and the asymmetry is the entire point of making the policy per-consumer.
+ *
+ * Keyed on the VERIFIED user id, an identity the caller cannot rotate.
+ */
 const DELETES_PER_USER_PER_HOUR = 5;
-const userLimiter = createRateLimiter({
+const userLimiter = createTieredLimiter({
+  bucket: 'account-delete-user',
   limit: DELETES_PER_USER_PER_HOUR,
   windowMs: HOUR_MS,
+  durable: durableCounterFromEnv(),
+  salt: rateLimitSaltFromEnv(),
+  onDegraded: 'fail-closed',
+  // The shared tier is MANDATORY for this route wherever it is armed: an
+  // unset RATE_LIMIT_KEY_SALT would otherwise leave the only
+  // irreversible-action quota in the app running per-instance, silently and
+  // indefinitely.
+  //
+  // Defaults to on in production and off elsewhere, so a laptop still works —
+  // but it is an EXPLICIT env knob rather than a bare NODE_ENV check, because
+  // behaviour that only exists in production makes staging a liar: the one
+  // consumer whose misconfiguration fails loudly would otherwise be the one
+  // configuration nobody can rehearse before shipping it. Set
+  // REQUIRE_DURABLE_RATE_LIMIT=1 in staging to exercise the real refusal path.
+  requireDurable: requireDurableRateLimit(),
 });
+
+function requireDurableRateLimit(): boolean {
+  const explicit = process.env.REQUIRE_DURABLE_RATE_LIMIT;
+  if (explicit === '1' || explicit === 'true') return true;
+  if (explicit === '0' || explicit === 'false') return false;
+  // VERCEL_ENV, not NODE_ENV, is what distinguishes a production deployment
+  // from a preview one: `next build` sets NODE_ENV=production for BOTH, so a
+  // bare NODE_ENV check would arm this on every preview deploy and 429 the
+  // deletion flow there — silently recreating the "configuration nobody can
+  // rehearse" problem the explicit knob exists to remove.
+  const vercelEnv = process.env.VERCEL_ENV;
+  if (vercelEnv) return vercelEnv === 'production';
+  return process.env.NODE_ENV === 'production';
+}
 
 /**
  * Stage 1 — coarse bound on attempts that never proved an identity. Set
  * well above the real quota because it is a flood damper for the
  * token-verification path, not a user-facing limit: no legitimate client
  * ever charges it.
+ *
+ * DELIBERATELY LEFT IN MEMORY. Making this durable would add a database
+ * round trip to every unauthenticated POST — handing an anonymous caller a
+ * lever that turns one cheap request into one database write, which is the
+ * amplification shape a previous audit removed from the middleware. Its job
+ * is to bound OUR outbound verification cost per instance, and a per-instance
+ * counter bounds a per-instance cost exactly right. It also keeps the
+ * non-consuming `peek` semantics that make the anti-lockout design work.
  */
 const UNVERIFIED_ATTEMPTS_PER_IP_PER_HOUR = 20;
-const unverifiedIpLimiter = createRateLimiter({
+const unverifiedIpLimiter = createInMemoryLimiter({
   limit: UNVERIFIED_ATTEMPTS_PER_IP_PER_HOUR,
   windowMs: HOUR_MS,
 });
@@ -148,7 +207,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     // Stage 2: the real quota, on an identity the caller cannot rotate.
-    if (!userLimiter.allow(userId)) return rateLimited();
+    const quota = await userLimiter.consume(userId);
+    if (!quota.allowed) {
+      if (quota.degraded) {
+        // Fail-closed refusal: the shared counter was unreachable, so we
+        // could not prove this deletion is within quota. Logged distinctly
+        // because it is an infrastructure problem wearing a 429, and it
+        // would otherwise be invisible among ordinary throttles.
+        console.error(
+          '[api/account/delete] refusing: shared rate-limit store unavailable',
+        );
+      }
+      return rateLimited();
+    }
 
     // Revoke EVERY refresh session BEFORE deleting (cross-device stale-session
     // fix, staging 2026-08-01): deleting an auth user does not invalidate

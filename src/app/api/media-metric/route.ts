@@ -3,8 +3,10 @@ import {
   contentLengthExceeds,
   mediaMetricRateLimited,
   readBoundedBody,
+  sharedLimiter,
 } from '@/lib/mediaMetric.server';
 import { guardOrigin } from '@/lib/requestBoundary';
+import { clientIpFromHeaders } from '@/lib/waitlistGuard';
 
 /**
  * Advisory Google-media request counter → structured Vercel log lines.
@@ -26,7 +28,8 @@ import { guardOrigin } from '@/lib/requestBoundary';
  *   dishonest Content-Length is caught by an incremental bounded stream
  *   read that cancels the moment the cap is crossed. Decoding happens only
  *   after the bounded read. Raw request bodies are NEVER logged.
- * - Surface must be a known enum value; per-instance rate window (429).
+ * - Surface must be a known enum value. Two rate windows (429): a global
+ *   per-instance ceiling, plus a per-IP window shared across instances.
  * Rejections are cheap and terminal; the client never retries. No
  * database, no migration, no product-analytics reuse.
  */
@@ -47,7 +50,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     new NextResponse(null, { status: 403 }),
   );
   if (blocked) return blocked;
+  // Local backstop: a global per-instance ceiling on how much this instance
+  // will log per minute.
   if (mediaMetricRateLimited(Date.now())) {
+    return new NextResponse(null, { status: 429 });
+  }
+  // Shared per-IP window (Item 10): one caller can no longer spread a flood
+  // across warm instances to stay under every local ceiling. Fail-open, so a
+  // store outage never blocks an advisory beacon.
+  if (!(await sharedLimiter.consume(clientIpFromHeaders(req.headers))).allowed) {
     return new NextResponse(null, { status: 429 });
   }
 
