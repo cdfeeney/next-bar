@@ -274,3 +274,19 @@ src/components/BarLightbox.tsx (modified) and e2e/safe-area-top.spec.ts (untrack
 `loop-guard checkpoint` DID sweep all three into a commit as memory warned; that commit was undone
 with a soft reset and the files restored to their exact prior state, and every later commit was
 path-scoped by hand.
+
+---
+
+# OVERNIGHT RUN C3 — 2026-08-08
+
+Launched: 2026-08-08 02:39 America/New_York
+Hard stop: 2026-08-08 08:00 America/New_York
+Item cap: 4 (loop-guard --lax)
+Worktree: D:\harness-worktrees\nb-20260808-expanded\release-addendum
+Branch: harness/nb-20260808-expanded/release-addendum
+Starting SHA / revert point: 689e564edd0de5744f07e920230c6b98fae0d092
+Queue (operator-supplied, in order): g-e82c72a8-023a-4b49-bcd1-2826556d5175
+
+Preflight: overnight-recovery IDLE; git status clean; lease null/live:false;
+overnight-guard preflight TIER_MAP_READY (project map, 10 T0 rules, 0 dead).
+Controller first action: /code g-e82c72a8-023a-4b49-bcd1-2826556d5175 (stored status: planned).
