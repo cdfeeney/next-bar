@@ -274,3 +274,70 @@ src/components/BarLightbox.tsx (modified) and e2e/safe-area-top.spec.ts (untrack
 `loop-guard checkpoint` DID sweep all three into a commit as memory warned; that commit was undone
 with a soft reset and the files restored to their exact prior state, and every later commit was
 path-scoped by hand.
+
+---
+
+# OVERNIGHT RUN C3 — 2026-08-08
+
+- Started: 2026-08-08 02:39 America/New_York
+- Stop time: 2026-08-08 08:00 America/New_York
+- Item limit: 1 (loop-guard --max-iters 1)
+- Starting SHA: 689e564edd0de5744f07e920230c6b98fae0d092
+- Worktree: D:\harness-worktrees\nb-20260808-expanded\authz-runbook
+- Branch: harness/nb-20260808-expanded/authz-runbook
+- Queue: g-e0fb31ba-d3b2-41a7-85db-1eaf7ab684a6 (status planned)
+- Preflight: recovery IDLE, tree clean, no lease, tier-map project/10 live T0 rules/0 dead
+- Controller first action: /code g-e0fb31ba-d3b2-41a7-85db-1eaf7ab684a6
+
+## C3 ITEM 11 — g-e0fb31ba — BLOCKED after 3 Santa rounds
+
+Status: **blocked** (terminal). Work preserved and committed; nothing is dirty.
+
+Commits (this run): 274c32a implementation, 7475378 round-1 fixes,
+de2c4ae round-2 fixes. Base 689e564.
+
+Tests: typecheck 0; 165 files / 2544 tests pass (was 164/2483 at the start of
+the night); secret-scan clean over 722 tracked files; git diff --check clean.
+The authz suite grew 14 -> 75 tests.
+
+Reviewer lanes, per round:
+- R1 Claude/FABLE + Codex + GLM + DeepSeek. QUORUM MET. BLOCK, 2 High + 7 Med.
+- R2 Claude/FABLE (fresh). BLOCK, 3 High + 2 Med.
+- R3 Claude/FABLE (fresh). BLOCK, 1 High + 2 Med. Codex timed out (124, tree
+  terminated); GLM/DeepSeek not dispatched once the round already had a
+  verified BLOCK and the fix budget was spent. R3 did NOT meet quorum, which
+  can only reinforce a BLOCK, never soften it.
+
+Lane-unique value: the two R1 Highs, the R2/R3 Highs and the Check-5 PUBLIC
+blindness came ONLY from Claude/FABLE; the partial-revoke false certification
+came ONLY from Codex; policy-body false confidence, force-vs-enable, BYPASSRLS
+and version-scoping came ONLY from GLM; the unmodelable-grant fail-open came
+ONLY from DeepSeek. Codex independently corroborated the definer counts and the
+auth.uid() exception set.
+
+WHAT REMAINS — three doc-only fixes, none in the parser. Est. 15 attended min:
+1. HIGH. Check 5 says "Expected: exactly 2 rows, both anon" and then, 13 lines
+   later, that PUBLIC rows are expected for 8 trigger functions. The doc's own
+   healthy result is 10 rows, not 2. I introduced this in round 2 by fixing the
+   paragraph and not the Expected line. Also: Supabase's bootstrap grants anon
+   EXECUTE on functions by default, so those 8 likely show anon rows too, which
+   the current rule calls stop-and-escalate. Fix: enumerate the real healthy
+   result, or add `and p.prorettype <> 'trigger'::regtype` and keep the strict
+   2-row expectation for callable functions.
+2. MED. Check 3 uses information_schema.role_table_grants, which shows nothing
+   to a role that is not an enabled role for the grantee - and step 2 of the
+   runbook explicitly sanctions running as a read-only role. That turns a
+   healthy database into 15 false "missing grant" bugs. Add the run-as-owner
+   warning Check 7 already has, or switch to pg_class.relacl + aclexplode.
+3. MED. The doc binding is one-directional: a table or function REMOVED by a
+   future migration stays listed in Checks 1/4 with green tests. The
+   "Functions parsed | 41" literal and the numeral in "exactly these 8
+   functions" are also unbound.
+
+Deployed RLS parity remains **UNVERIFIED**. This item builds the means to check
+it and was not finished; running it is attended work that has not happened.
+
+NO DATABASE WAS CONTACTED at any point - not Staging, not Production. Nothing
+pushed, deployed, migrated, or irreversibly applied. `npm ci` was run once in
+this worktree (node_modules was empty); D: had 628 GB free, so the stored
+ENOSPC precondition did not apply.
