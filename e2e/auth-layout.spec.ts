@@ -323,24 +323,37 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     const declared = await page.evaluate(() => {
       const main = document.querySelector('main');
       if (!main) throw new Error('no <main>');
-      const out: { value: string; supports: string | null }[] = [];
+      const out: { value: string; supports: string | null; order: number }[] = [];
+      let seen = 0;
 
       const walk = (rules: CSSRuleList, supports: string | null): void => {
         for (const rule of Array.from(rules)) {
-          const supportsRule = rule as CSSSupportsRule;
-          if (supportsRule.conditionText !== undefined && supportsRule.cssRules) {
+          // Type-checked, not duck-typed: @media also exposes conditionText,
+          // so a media rule could otherwise be mistaken for a supports gate.
+          if (rule.type === CSSRule.SUPPORTS_RULE) {
+            const supportsRule = rule as CSSSupportsRule;
             walk(supportsRule.cssRules, supportsRule.conditionText);
             continue;
           }
+          if (rule.type === CSSRule.MEDIA_RULE) {
+            walk((rule as CSSMediaRule).cssRules, supports);
+            continue;
+          }
+          if (rule.type !== CSSRule.STYLE_RULE) continue;
           const styleRule = rule as CSSStyleRule;
           if (!styleRule.selectorText || !styleRule.style) continue;
           const value = styleRule.style.getPropertyValue('min-height');
           if (!value) continue;
           try {
-            if (main.matches(styleRule.selectorText)) out.push({ value, supports });
+            // `order` is a document-wide counter, so it captures the source
+            // position that decides which same-specificity rule actually wins.
+            if (main.matches(styleRule.selectorText)) {
+              out.push({ value, supports, order: seen });
+            }
           } catch {
             /* unsupported selector text */
           }
+          seen += 1;
         }
       };
 
@@ -355,16 +368,21 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     });
 
     const detail = JSON.stringify(declared);
-    // The dvh override exists AND is condition-gated, so its win does not
-    // depend on stylesheet order.
-    const gatedDvh = declared.filter((d) => d.value.includes('dvh') && d.supports);
+    // The dvh override exists and is genuinely @supports-gated on dvh.
+    const gatedDvh = declared.filter(
+      (d) => d.value.includes('dvh') && d.supports?.includes('dvh'),
+    );
     expect(gatedDvh.length, detail).toBeGreaterThan(0);
-    expect(gatedDvh.some((d) => d.supports!.includes('dvh')), detail).toBe(true);
-    // And an ungated fallback still covers engines that drop `dvh` entirely.
+    // An ungated fallback covers engines that drop `dvh` entirely.
+    const fallback = declared.filter((d) => !d.supports && /\b100vh\b/.test(d.value));
+    expect(fallback.length, detail).toBeGreaterThan(0);
+    // ORDER is the load-bearing part: @supports adds no specificity, so the
+    // gated rule only wins because it comes later. Emitting it first would
+    // silently hand the page back to 100vh with both rules still present.
     expect(
-      declared.some((d) => !d.supports && /\b100vh\b/.test(d.value)),
+      Math.min(...fallback.map((d) => d.order)),
       detail,
-    ).toBe(true);
+    ).toBeLessThan(Math.max(...gatedDvh.map((d) => d.order)));
   });
 
   test('the auth header reserves the top safe-area inset', async ({ page }) => {
@@ -429,38 +447,54 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
         sectionPaddingBottom: px(section, 'padding-bottom'),
         headingFontSize: px(heading, 'font-size'),
         emailPaddingTop: px(email, 'padding-top'),
+        emailPaddingBottom: px(email, 'padding-bottom'),
         submitPaddingTop: px(submit, 'padding-top'),
+        submitPaddingBottom: px(submit, 'padding-bottom'),
       };
     });
 
-    // The original pre-item values: py-12, text-5xl, py-4, py-4.
+    // The original pre-item values: py-12, text-5xl, py-4, py-4. BOTH axes are
+    // asserted on the controls — checking only padding-top would let an
+    // `md:pt-4` with compact bottoms through. (santa: Codex.)
     expect(desktop.sectionPaddingTop).toBe(48);
     expect(desktop.sectionPaddingBottom).toBe(48);
     expect(desktop.headingFontSize).toBe(48);
     expect(desktop.emailPaddingTop).toBe(16);
+    expect(desktop.emailPaddingBottom).toBe(16);
     expect(desktop.submitPaddingTop).toBe(16);
+    expect(desktop.submitPaddingBottom).toBe(16);
 
     // ...and the desktop path must still RESERVE the bottom inset. A flat
     // `md:py-12` computes to the same 48px under emulation (insets are 0) while
     // silently dropping the safe-area term, so the computed value above cannot
     // catch it — only the declaration can. (santa: Kimi.)
+    // Scope matters, not just the count: an earlier version of this assertion
+    // merely counted inset-bearing declarations, which a duplicated dev-server
+    // stylesheet could inflate, and which could not tell WHICH media scope the
+    // inset lived in. Bind each declaration to its media condition instead.
+    // (santa: Codex + Kimi.)
     const declaredBottom = await page.evaluate(() => {
       const section = document.querySelector('main section');
       if (!section) throw new Error('no section');
-      const out: string[] = [];
-      const walk = (rules: CSSRuleList): void => {
+      const out: { value: string; media: string | null }[] = [];
+      const walk = (rules: CSSRuleList, media: string | null): void => {
         for (const rule of Array.from(rules)) {
-          const grouping = rule as CSSMediaRule;
-          if (grouping.cssRules && grouping.conditionText !== undefined) {
-            walk(grouping.cssRules);
+          if (rule.type === CSSRule.MEDIA_RULE) {
+            const mediaRule = rule as CSSMediaRule;
+            walk(mediaRule.cssRules, mediaRule.conditionText);
             continue;
           }
+          if (rule.type === CSSRule.SUPPORTS_RULE) {
+            walk((rule as CSSSupportsRule).cssRules, media);
+            continue;
+          }
+          if (rule.type !== CSSRule.STYLE_RULE) continue;
           const styleRule = rule as CSSStyleRule;
           if (!styleRule.selectorText || !styleRule.style) continue;
           const value = styleRule.style.getPropertyValue('padding-bottom');
           if (!value) continue;
           try {
-            if (section.matches(styleRule.selectorText)) out.push(value);
+            if (section.matches(styleRule.selectorText)) out.push({ value, media });
           } catch {
             /* unsupported selector text */
           }
@@ -468,7 +502,7 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
       };
       for (const sheet of Array.from(document.styleSheets)) {
         try {
-          walk(sheet.cssRules);
+          walk(sheet.cssRules, null);
         } catch {
           continue;
         }
@@ -476,9 +510,16 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
       return out;
     });
 
-    const withInset = declaredBottom.filter((v) => v.includes('safe-area-inset-bottom'));
-    // Both the mobile base and the md: override must carry the inset.
-    expect(withInset.length, JSON.stringify(declaredBottom)).toBeGreaterThanOrEqual(2);
+    const detail = JSON.stringify(declaredBottom);
+    const hasInset = (d: { value: string }) => d.value.includes('safe-area-inset-bottom');
+    // The mobile base rule carries the inset...
+    expect(declaredBottom.some((d) => !d.media && hasInset(d)), detail).toBe(true);
+    // ...and so does the desktop rule, IN a min-width scope. A flat `md:py-12`
+    // computes to the same 48px under emulation, so only this can catch it.
+    expect(
+      declaredBottom.some((d) => d.media?.includes('min-width') && hasInset(d)),
+      detail,
+    ).toBe(true);
   });
 
   test('the card stays vertically centred when it has room to be', async ({ page }) => {
@@ -504,6 +545,67 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     // Genuinely centred: real space on both sides, and symmetric within 2px.
     expect(gaps.above, JSON.stringify(gaps)).toBeGreaterThan(0);
     expect(Math.abs(gaps.above - gaps.below), JSON.stringify(gaps)).toBeLessThanOrEqual(2);
+
+    // A reviewer asked for an assertion that pins the OVERFLOW-safety property
+    // `m-auto` was chosen for, by forcing a tall card and checking its top is
+    // not pushed into unreachable space. That assertion was written, and then
+    // MEASURED NOT TO WORK: mutating the page back to `items-center` +
+    // `mx-auto` left it green. The reason is structural — the section is a
+    // flex item with `min-height: auto`, so it always grows to contain the
+    // card, and a card that never overflows its section can never be centred
+    // into negative space. In this structure the trap simply cannot fire, so
+    // no assertion about it can go red, and shipping one would be the same
+    // coverage theater this file already removed once.
+    //
+    // What IS load-bearing is the precondition: that automatic minimum size
+    // disappears the moment the section gains an `overflow-*` class, which is
+    // the ordinary way someone clips a decoration. So assert THAT — it can
+    // fail, and it is the thing that would arm the trap.
+    // (santa: Codex + Kimi asked for the overflow case; the mutation result
+    // is why this guards the precondition instead.)
+    const sectionOverflow = await page.evaluate(() => {
+      const section = document.querySelector('main section') as HTMLElement;
+      const s = getComputedStyle(section);
+      return { x: s.overflowX, y: s.overflowY };
+    });
+    expect(sectionOverflow.y, JSON.stringify(sectionOverflow)).toBe('visible');
+    expect(sectionOverflow.x, JSON.stringify(sectionOverflow)).toBe('visible');
+
+    // With that precondition holding, confirm the card still starts at the
+    // padded top rather than above it once content exceeds the viewport.
+    await page.setViewportSize({ width: 390, height: 320 });
+    await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
+
+    const overflow = await page.evaluate(() => {
+      const section = document.querySelector('main section') as HTMLElement;
+      const header = document.querySelector('main header') as HTMLElement;
+      const card = section.firstElementChild as HTMLElement;
+      const style = getComputedStyle(section);
+      // Compared against the space the viewport actually leaves the section —
+      // NOT against section.clientHeight, which is useless here because the
+      // section grows to contain the card (that `min-height: auto` growth is
+      // precisely the protection under test).
+      const available =
+        window.innerHeight -
+        header.offsetHeight -
+        parseFloat(style.paddingTop) -
+        parseFloat(style.paddingBottom);
+      return {
+        cardTopOffset:
+          card.getBoundingClientRect().top -
+          section.getBoundingClientRect().top -
+          parseFloat(style.paddingTop),
+        cardOverflows: card.offsetHeight > available,
+      };
+    });
+
+    // Precondition: this only tests anything if the card really does exceed
+    // the space available to it.
+    expect(overflow.cardOverflows, JSON.stringify(overflow)).toBe(true);
+    // Auto margins resolve to zero under negative free space, so the card
+    // starts at the padded top and all overflow goes downward, where it
+    // remains scrollable.
+    expect(overflow.cardTopOffset, JSON.stringify(overflow)).toBeGreaterThanOrEqual(-1);
   });
 
   test('compaction did not summon a bottom nav onto /auth', async ({ page }) => {
