@@ -585,3 +585,17 @@ outcome than an honest `blocked`. Nothing was substituted and no intensity was l
 **Operator action:** this is an OpenRouter routing/credit problem for the GLM (and Kimi) model
 routes, not a repository problem. Once `node ~/.claude/bin/harness-consult.mjs --route glm` answers,
 both items need only their GLM lane; every other lane has already reviewed the final code.
+
+## Stop condition reached — 08:00 America/New_York, 2026-08-08
+
+The run waited for the GLM lane from 06:19 until the operator's hard stop, probing every ~1.5–4
+minutes in the foreground. **~37 consecutive probes, every one HTTP 402**, last at 08:00:42 ET.
+DeepSeek answered `OK` on the same account at both the start and the end of that window, so the
+account stayed funded and reachable throughout — the GLM (and Kimi) model routes were down for the
+entire remaining window.
+
+**Terminal state: `QUEUE_TERMINAL` — 0 complete, 2 blocked.** Both items are blocked on that one
+external lane and nothing else. Neither has an outstanding code defect, an unmet acceptance
+criterion, or missing evidence.
+
+Nothing was substituted for GLM and no intensity was lowered to manufacture a quorum.
