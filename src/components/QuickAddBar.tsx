@@ -253,7 +253,12 @@ export default function QuickAddBar({
           aria-label="Add a bar"
           className="fixed inset-0 z-[1100] flex flex-col bg-bg/95 backdrop-blur-sm overscroll-contain"
         >
-          <div className="relative flex flex-1 flex-col max-w-2xl w-full mx-auto px-6 pt-8 pb-8 min-h-0">
+          {/* pt: max(2rem, safe-area-inset-top) — this is a `fixed inset-0`
+              overlay, so its first row (the header carrying Close) starts at
+              the very top of the viewport and would sit under the iPhone
+              status area. `max()` keeps the original 2rem on every device
+              without an inset and only grows where one exists. */}
+          <div className="relative flex flex-1 flex-col max-w-2xl w-full mx-auto px-6 pt-[max(2rem,env(safe-area-inset-top))] pb-8 min-h-0">
             <header className="flex items-center justify-between gap-3 mb-4">
               {/*
                 `min-w-0` is load-bearing, not cosmetic. A flex child defaults
@@ -282,7 +287,12 @@ export default function QuickAddBar({
                 ref={modalCloseRef}
                 type="button"
                 onClick={closeModal}
-                className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
+                // min-w matches min-h: the label "Close" is only ~35px wide at
+                // text-sm, so height alone left this a 35x44 target and
+                // criterion 8 asks for BOTH dimensions. BarLightbox's close
+                // already pairs them (min-h-[44px] min-w-[44px]); this brings
+                // the modal's close in line rather than inventing a rule.
+                className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] min-w-[44px] touch-manipulation shrink-0"
               >
                 Close
               </button>

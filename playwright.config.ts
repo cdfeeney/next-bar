@@ -8,6 +8,25 @@ import { defineConfig, devices } from '@playwright/test';
 const FENCE_PROXY = 'http://127.0.0.1:39555';
 
 /**
+ * App port for this run. Defaults to 3000, so nothing changes unless a run
+ * opts out.
+ *
+ * Why it is configurable at all (observed 2026-08-08, goal g-cb7cefd2): a
+ * dev server belonging to a DIFFERENT worktree
+ * (D:\harness-worktrees\...\item3-overflow) held :3000, and because
+ * `reuseExistingServer` is true, Playwright happily reused it — pointing
+ * every spec at another checkout's source. The failure is silent and deeply
+ * confusing: specs assert against markup this worktree never rendered, so a
+ * correct fix looks broken and a broken one can look fixed. Killing the other
+ * session's server is not this run's call, so the fix is to let a run take a
+ * port it owns:
+ *
+ *   NB_E2E_PORT=3200 npx playwright test
+ */
+const APP_PORT = process.env.NB_E2E_PORT ?? '3000';
+const APP_URL = `http://localhost:${APP_PORT}`;
+
+/**
  * Stub Supabase credentials for worktrees with no `.env.local`.
  *
  * The signed-OUT auth specs (auth-page, auth-cross-context, and the
@@ -62,7 +81,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: APP_URL,
     // Network fence (overnight scope 2026-08-05): every non-loopback request
     // from a test browser is sent to the local refuse-all logging proxy
     // (e2e/tools/fence-proxy.mjs); loopback bypasses it. Tests must pass with
@@ -81,7 +100,11 @@ export default defineConfig({
       cookies: [],
       origins: [
         {
-          origin: 'http://localhost:3000',
+          // Must track APP_URL: storageState is matched by ORIGIN, so a
+          // hardcoded :3000 would silently fail to seed the age-ack on any
+          // other port and the gate would intercept the first click of
+          // every flow.
+          origin: APP_URL,
           localStorage: [{ name: 'next-bar:age-ack:v1', value: '1' }],
         },
       ],
@@ -185,14 +208,20 @@ export default defineConfig({
       // shortest configured, so running it only on the taller two would test
       // everywhere except where scroll-lock and a wrapped multi-line heading
       // can actually squeeze the list out.
+      // safe-area-top added 2026-08-08 (goal g-cb7cefd2): its acceptance
+      // criteria name "iPhone 13, Pixel 7, and the shortest-viewport
+      // project" explicitly, and 402x681 is the shortest configured. It is
+      // also the viewport where top-inset padding competes hardest with the
+      // fixed bottom nav for vertical room, so a clearance that pushes the
+      // primary action out of reach would show here first.
       testMatch:
-        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|quiz-path|onboarding-identity|account-content-conflict|add-bar-overflow)\.spec\.ts/,
+        /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|quiz-path|onboarding-identity|account-content-conflict|add-bar-overflow|safe-area-top)\.spec\.ts/,
       dependencies: ['warmup'],
     },
   ],
   webServer: {
     command: 'npm run dev',
-    url: 'http://localhost:3000',
+    url: APP_URL,
     reuseExistingServer: true,
     timeout: 120_000,
     // Server-side half of the network fence: the dev server's own outbound
@@ -202,6 +231,8 @@ export default defineConfig({
     // without these vars, is NOT fenced server-side. Kill it first if the
     // egress guarantee matters for the run.
     env: {
+      // Keep the spawned dev server on the same port the specs target.
+      PORT: APP_PORT,
       // Both cases: Node's built-in env-proxy gives lowercase precedence, so
       // an inherited lowercase http_proxy/no_proxy would silently win over
       // uppercase-only injection (santa round-2, Codex).

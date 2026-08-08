@@ -272,7 +272,11 @@ export default function TonightSuggestions(): JSX.Element | null {
           aria-label="Suggest a bar"
           className="fixed inset-0 z-[1100] flex flex-col bg-bg/95 backdrop-blur-sm overscroll-contain"
         >
-          <div className="relative flex flex-1 flex-col max-w-2xl w-full mx-auto px-6 pt-8 pb-8 min-h-0">
+          {/* pt: max(2rem, safe-area-inset-top) — same shape as QuickAddBar.
+              A `fixed inset-0` overlay whose header row carries Close starts
+              flush with the top of the viewport, so it needs the inset; the
+              `max()` preserves the original 2rem where there is no inset. */}
+          <div className="relative flex flex-1 flex-col max-w-2xl w-full mx-auto px-6 pt-[max(2rem,env(safe-area-inset-top))] pb-8 min-h-0">
             <header className="flex items-center justify-between gap-3 mb-4">
               <h2 className="font-display text-2xl leading-tight">
                 Suggest a bar
@@ -280,7 +284,10 @@ export default function TonightSuggestions(): JSX.Element | null {
               <button
                 type="button"
                 onClick={() => setPickerOpen(false)}
-                className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
+                // min-w pairs with min-h for the same reason as QuickAddBar's
+                // close: "Close" is ~35px wide at text-sm, so height alone
+                // leaves a 35x44 target and criterion 8 asks for both.
+                className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] min-w-[44px] touch-manipulation shrink-0"
               >
                 Close
               </button>
