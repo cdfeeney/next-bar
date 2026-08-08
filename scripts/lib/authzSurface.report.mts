@@ -10,6 +10,7 @@ import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
   DEFINERS_WITHOUT_AUTH_UID,
+  FUNCTIONS_WITHOUT_PUBLIC_REVOKE,
   POLICY_LESS_BY_DESIGN,
   RUNNER_MANAGED_TABLES,
   SERVICE_ROLE_ONLY_TABLES,
@@ -17,6 +18,8 @@ import {
   expectedPublicTables,
   functionGrants,
   functionsDefined,
+  functionsWithoutPublicRevoke,
+  liveFunctions,
   netColumnPrivileges,
   netTablePrivileges,
   policiesByTable,
@@ -114,7 +117,9 @@ console.log('\n-- SECURITY DEFINER functions whose body does NOT use auth.uid() 
 {
   const derived = [
     ...new Set(
-      fns.filter((f) => f.isSecurityDefiner && !f.usesAuthUid).map((f) => f.name),
+      liveFunctions(files)
+        .filter((f) => f.isSecurityDefiner && !f.usesAuthUid)
+        .map((f) => f.name),
     ),
   ].sort();
   console.log(`  derived:  ${derived.join(', ') || '(none)'}`);
@@ -122,6 +127,21 @@ console.log('\n-- SECURITY DEFINER functions whose body does NOT use auth.uid() 
   console.log(
     `  agree:    ${JSON.stringify(derived) === JSON.stringify([...DEFINERS_WITHOUT_AUTH_UID].sort())}`,
   );
+}
+
+console.log('\n-- functions with NO revoke from PUBLIC (expect a PUBLIC row deployed) --');
+{
+  const derived = functionsWithoutPublicRevoke(files);
+  const live = liveFunctions(files);
+  console.log(`  derived:  ${derived.join(', ') || '(none)'}`);
+  console.log(`  declared: ${FUNCTIONS_WITHOUT_PUBLIC_REVOKE.join(', ')}`);
+  console.log(
+    `  agree:    ${JSON.stringify(derived) === JSON.stringify([...FUNCTIONS_WITHOUT_PUBLIC_REVOKE].sort())}`,
+  );
+  const nonTrigger = derived.filter(
+    (n) => !live.find((f) => f.name === n)?.returnsTrigger,
+  );
+  console.log(`  NON-trigger among them (must be none): ${nonTrigger.join(', ') || '(none)'}`);
 }
 
 console.log('\n-- expected policy EXPRESSIONS (diff against pg_policies.qual / with_check) --');

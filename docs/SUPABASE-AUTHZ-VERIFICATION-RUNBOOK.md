@@ -294,10 +294,18 @@ safe: record it as a bug.
 ```sql
 select table_name, grantee, string_agg(privilege_type, ', ' order by privilege_type) as privileges
 from information_schema.role_table_grants
-where table_schema = 'public' and grantee in ('anon', 'authenticated', 'service_role')
+where table_schema = 'public' and grantee in ('anon', 'authenticated')
 group by table_name, grantee
 order by table_name, grantee;
 ```
+
+**`service_role` is deliberately excluded from this query.** Supabase grants it
+everything on the `public` schema by default and every migration here revokes
+only from `public, anon, authenticated`, so `service_role` holds full
+privileges on all 22 tables on a healthy database. Including it would add 22
+rows that the matrix below does not list and turn a correct deployment into a
+wall of mismatches. `service_role` also has `BYPASSRLS`, so its privileges are
+not what constrains it — Check 1b is where that risk is actually addressed.
 
 **Expected — this is the complete set the migrations produce.** Every one of
 the 21 migration-created tables is *revoke-first* (`revoke all ... from public,
@@ -306,29 +314,28 @@ anon, authenticated` before any grant), so Supabase's default
 taken away everywhere. That means this table is an exact expectation, not a
 lower bound:
 
-| Table | `anon` | `authenticated` | `service_role` |
-| --- | --- | --- | --- |
-| `account_content_state` | — | select, insert, update, delete | — |
-| `analytics_events` | — | — | select, insert, update |
-| `bar_change_queue` | — | select, insert | — |
-| `bar_photos` | **select** | select | — |
-| `bar_suggestions` | — | delete | — |
-| `bars` | **select** | select | select, insert, update, delete |
-| `follow_requests` | — | select | — |
-| `follows` | — | select | — |
-| `pairwise_comparisons` | — | select, insert, delete | — |
-| `profiles` | — | select, insert | — |
-| `push_subscriptions` | — | select | — |
-| `rate_limits` | — | — | select, insert, update, delete |
-| `ratings` | — | select, insert, update, delete | — |
-| `vibe_profiles` | — | select, insert, update, delete | — |
-| `vibe_votes` | — | delete | — |
+| Table | `anon` | `authenticated` |
+| --- | --- | --- |
+| `account_content_state` | — | select, insert, update, delete |
+| `analytics_events` | — | — |
+| `bar_change_queue` | — | select, insert |
+| `bar_photos` | **select** | select |
+| `bar_suggestions` | — | delete |
+| `bars` | **select** | select |
+| `follow_requests` | — | select |
+| `follows` | — | select |
+| `pairwise_comparisons` | — | select, insert, delete |
+| `profiles` | — | select, insert |
+| `push_subscriptions` | — | select |
+| `rate_limits` | — | — |
+| `ratings` | — | select, insert, update, delete |
+| `vibe_profiles` | — | select, insert, update, delete |
+| `vibe_votes` | — | delete |
 
-These seven tables grant **nothing** to any of the three roles and must return
-no row at all: `bar_rsvps`, `follow_attempts`, `handle_claim_attempts`,
+These seven tables grant **nothing** to `anon` or `authenticated` and must
+return no row at all: `bar_rsvps`, `follow_attempts`, `handle_claim_attempts`,
 `handle_search_attempts`, `photo_permissions`, `schema_migrations`,
-`shared_nights`. They are reached only by the table owner or by `service_role`,
-which bypasses both layers.
+`shared_nights`. They are reached only by the table owner or by `service_role`.
 
 > **`bar_rsvps` is the one to read carefully.** 0012 granted `delete` to
 > `authenticated`; **0014 revoked it**, so the net is nothing. A deployed
@@ -344,15 +351,23 @@ which bypasses both layers.
 shows no `update` for it. Run this too or you will "discover" a missing grant
 that was never supposed to be there:
 
+**Do not use `information_schema.role_column_grants` for this.** That view is a
+UNION of genuine column ACLs *and* every table-level grant expanded to one row
+per column, so on a healthy database it returns hundreds of rows and every
+column of `profiles` appears. Read the column ACLs directly instead:
+
 ```sql
-select table_name, column_name, grantee, privilege_type
-from information_schema.role_column_grants
-where table_schema = 'public' and grantee in ('anon', 'authenticated')
-order by table_name, column_name, grantee;
+select c.relname as table_name, a.attname as column_name, a.attacl
+from pg_attribute a
+join pg_class c on c.oid = a.attrelid
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and a.attacl is not null
+order by c.relname, a.attname;
 ```
 
-**Expected:** exactly three rows, all `profiles` / `authenticated` / `UPDATE`,
-on `display_name`, `is_private` and `shares_list_publicly` — and nothing else.
+**Expected:** exactly three rows — `profiles` / `display_name`,
+`profiles` / `is_private`, `profiles` / `shares_list_publicly`, each `attacl`
+granting `UPDATE` to `authenticated` — and nothing else.
 
 `handle` is absent **on purpose**: 0006 removed table-level UPDATE so handles
 could not be PATCHed around `claim_handle`'s rate cap and no-renames rule.
@@ -384,8 +399,6 @@ approved photos are public data (0019, 0020).
   rewrite their own `handle`, bypassing `claim_handle`).
 - A **missing** grant that the table above lists breaks a feature and fails
   safe. Record it as a bug.
-- `service_role` holding more than listed is expected and not drift:
-  `service_role` bypasses RLS by design and Supabase manages its defaults.
 
 **Do not compare privileges to the policies and expect them to match.** They
 are two independent layers and the migrations deliberately keep the grant
@@ -468,19 +481,39 @@ internally: `get_public_ratings` returns rows only where the owner set
 `shares_list_publicly` (0015), and `get_shared_night` is keyed by an opaque
 share id (0016).
 
-**`PUBLIC` must not appear at all**, and that is why the query goes to the
-trouble of the left join. `aclexplode` reports the pseudo-role `PUBLIC` as
-grantee OID `0`, which has no row in `pg_roles`; an inner join silently drops
+The left join is deliberate: `aclexplode` reports the pseudo-role `PUBLIC` as
+grantee OID `0`, which has no row in `pg_roles`, so an inner join silently drops
 it. Postgres grants `EXECUTE` **to `PUBLIC` by default** on every new function,
-so a function whose migration forgot its `revoke all ... from public` is
-anonymously callable — and it is the single most likely way an accidental
-anonymous entry point appears. Every function in this corpus is revoked from
-`public`, so any `PUBLIC` row is a real finding.
+and a function whose migration forgot its `revoke all ... from public` is
+therefore callable by anyone — the single most likely way an accidental
+anonymous entry point appears.
 
-**On mismatch:** a third name, or any `PUBLIC` row, is a new anonymous entry
-point into the database and is **stop-and-escalate** — a definer function
-reachable anonymously bypasses RLS by design, so its internal gate is the only
-thing standing between an anonymous caller and the data.
+**`PUBLIC` rows are expected for exactly these 8 functions**, which have no
+`revoke ... from public` in the corpus:
+
+```
+account_content_state_clock_guard   account_content_state_lww_guard
+bars_touch_updated_at               handle_new_user
+photo_permissions_immutable         ratings_lww_guard
+touch_updated_at                    vibe_profiles_lww_guard
+```
+
+Every one of them `returns trigger`. A trigger function has no PostgREST route
+and cannot be invoked as an RPC, so the default `EXECUTE to PUBLIC` on them is
+not an anonymous entry point — which is why they were never revoked. The static
+suite asserts both this membership and that all 8 return `trigger`, so the list
+is generated rather than trusted.
+
+**On mismatch:**
+
+- a third `anon` name is a new anonymous entry point and is
+  **stop-and-escalate** — a definer function reachable anonymously bypasses RLS
+  by design, so its internal gate is the only thing between an anonymous caller
+  and the data;
+- a `PUBLIC` row for any function **not** in the list above is
+  **stop-and-escalate**, and doubly so if it does not return `trigger`;
+- a *missing* `PUBLIC` row for one of the 8 means someone added a revoke —
+  harmless, record it so this list can be regenerated.
 
 ---
 
@@ -496,20 +529,25 @@ where n.nspname = 'public' and p.proname = '<function name>';
 `supabase/migrations/`. Functions acting on behalf of a user must derive that
 user from `auth.uid()` — never from a parameter.
 
-**25 of the 29 definer functions reference `auth.uid()` in their body. Exactly
-four do not, and each is a reviewed exception** — do not "fix" them:
+**26 of the 29 definer functions reference `auth.uid()` in their body. Exactly
+three do not, and each is a reviewed exception** — do not "fix" them:
 
 | Function | Why it has no `auth.uid()` gate |
 | --- | --- |
 | `handle_new_user` | `AFTER INSERT` trigger on `auth.users`; the row *is* the identity and there is no caller to check |
 | `get_public_ratings` | anon-executable; gated on the owner's `shares_list_publicly` opt-in instead (0015) |
 | `get_shared_night` | anon-executable; gated on an opaque share id (0016) |
-| `pending_change_count` | returns a COUNT over moderation-queue rows; exposes no per-user data |
 
-A **fifth** definer function without `auth.uid()` is **stop-and-escalate**: it
+A **fourth** definer function without `auth.uid()` is **stop-and-escalate**: it
 runs with the owner's privileges, past RLS, with no caller check. (The static
 suite asserts this list, so a new one fails the build before it ever reaches a
 database.)
+
+> `pending_change_count` is **not** on this list and must not be added back.
+> 0020 defined an ungated `pending_change_count(p_user uuid)`; 0021 dropped it
+> and recreated `pending_change_count()` gated on `auth.uid()`. A deployed body
+> without that gate means the database is running the 0020 version — check
+> Check 7's ledger for 0021 and treat it as **stop-and-escalate**.
 
 **On mismatch:** a deployed body that differs from the migration means someone
 edited it in the dashboard. **Stop-and-escalate** and capture the deployed

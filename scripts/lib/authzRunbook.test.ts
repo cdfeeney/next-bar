@@ -5,8 +5,11 @@ import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
   DEFINERS_WITHOUT_AUTH_UID,
+  FUNCTIONS_WITHOUT_PUBLIC_REVOKE,
   expectedPublicTables,
   functionsDefined,
+  functionsWithoutPublicRevoke,
+  liveFunctions,
   netColumnPrivileges,
   netTablePrivileges,
   policiesByTable,
@@ -69,7 +72,7 @@ function docRow(table: string): { cells: string[] } | null {
   if (!line) return null;
   const cells = line
     .split('|')
-    .slice(2, 5)
+    .slice(2, 4)
     .map((c) => c.trim().replace(/\*\*/g, ''));
   return { cells };
 }
@@ -97,12 +100,20 @@ describe('runbook / migration cross-check', () => {
     expect(doc).toContain(`**Expected:** **${expected} rows**`);
   });
 
-  it('names every expected table in Check 1', () => {
+  it('names every expected table in Check 1 ITSELF', () => {
     // The check an operator actually runs lists table names; a table added by
     // a migration and never added here is a table they will not notice is
     // missing from the database either.
+    //
+    // Scoped to the Check 1 section on purpose: a doc-wide search passes even
+    // if a name is deleted from this list, because almost every table name also
+    // appears in Check 2 or Check 3.
+    const check1 = checkSection(
+      '## Check 1 — RLS is enabled on every table',
+      '## Check 1b',
+    );
     for (const table of expectedPublicTables(files)) {
-      expect(doc).toContain(table);
+      expect(check1, `Check 1 does not list ${table}`).toContain(table);
     }
   });
 
@@ -142,12 +153,42 @@ describe('runbook / migration cross-check', () => {
     expect(definers.size).toBe(29);
     expect(doc).toContain(`**Expected:** ${definers.size} distinct definer function names`);
 
-    // And names every one of them: an operator comparing the deployed list to
-    // this document can only spot an EXTRA definer function if the expected
-    // list is complete. The count alone would not catch a swap.
+    // And names every one of them, IN CHECK 4 ITSELF: an operator comparing the
+    // deployed list to this document can only spot an EXTRA definer function if
+    // the expected list is complete. A doc-wide search would pass with a name
+    // deleted from the list, since most also appear in Checks 5 and 6.
+    const check4 = checkSection(
+      '## Check 4 — `SECURITY DEFINER` functions pin `search_path`',
+      '## Check 5',
+    );
     for (const name of definers) {
-      expect(doc).toContain(name);
+      expect(check4, `Check 4 does not list ${name}`).toContain(name);
     }
+  });
+
+  it('names the functions expected to carry a PUBLIC execute grant', () => {
+    // Postgres grants EXECUTE to PUBLIC by default. Eight trigger functions
+    // here were never revoked from it, so a healthy database shows eight PUBLIC
+    // rows. Claiming "any PUBLIC row is a finding" would cry wolf eight times
+    // on every run of the check whose entire job is spotting anonymous entry
+    // points.
+    const derived = functionsWithoutPublicRevoke(files);
+    expect(derived).toEqual([...FUNCTIONS_WITHOUT_PUBLIC_REVOKE].sort());
+    const check5 = checkSection(
+      '## Check 5 — Anonymous entry points',
+      '## Check 6',
+    );
+    for (const name of derived) {
+      expect(check5, `Check 5 does not list ${name}`).toContain(name);
+    }
+  });
+
+  it('does not readmit pending_change_count as an ungated definer', () => {
+    // 0021 dropped the ungated 0020 version and recreated it gated on
+    // auth.uid(). Listing it as a reviewed exception would licence a rollback
+    // to the exact defect 0021 fixed.
+    expect(DEFINERS_WITHOUT_AUTH_UID).not.toContain('pending_change_count');
+    expect(doc).toContain('`pending_change_count` is **not** on this list');
   });
 
   it('names exactly the anon-readable tables and anon-executable functions', () => {
@@ -174,7 +215,12 @@ describe('runbook / migration cross-check', () => {
     const net = netTablePrivileges(files);
     expect(net.size).toBeGreaterThan(10);
 
-    const ROLE_ORDER = ['anon', 'authenticated', 'service_role'];
+    // The matrix covers the two CLIENT roles only. `service_role` is excluded
+    // by design: Supabase grants it everything on `public` by default and the
+    // migrations revoke only from public/anon/authenticated, so a healthy
+    // database shows service_role on all 22 tables. Listing "—" for it would
+    // falsify the matrix on every correct deployment.
+    const ROLE_ORDER = ['anon', 'authenticated'];
     for (const [table, byRole] of net) {
       const cells = ROLE_ORDER.map((role) => {
         const privs = byRole.get(role);
@@ -234,15 +280,26 @@ describe('runbook / migration cross-check', () => {
   });
 
   it('names the definer functions that legitimately lack an auth.uid() gate', () => {
+    // liveFunctions, not functionsDefined: the deployed database holds the LAST
+    // definition, and reading every definition ever written reports a dropped
+    // predecessor's properties as current.
     const derived = [
       ...new Set(
-        functionsDefined(files)
+        liveFunctions(files)
           .filter((f) => f.isSecurityDefiner && !f.usesAuthUid)
           .map((f) => f.name),
       ),
     ].sort();
     expect(derived).toEqual([...DEFINERS_WITHOUT_AUTH_UID].sort());
     for (const name of derived) expect(doc).toContain(`\`${name}\``);
+
+    // The doc states the split as a ratio; bind it so a new exception cannot
+    // be added to the table without the headline number moving with it.
+    const liveDefiners = new Set(
+      liveFunctions(files).filter((f) => f.isSecurityDefiner).map((f) => f.name),
+    );
+    const gated = liveDefiners.size - derived.length;
+    expect(doc).toContain(`**${gated} of the ${liveDefiners.size} definer functions reference`);
   });
 
   it('tells the operator to run the ledger check before the others', () => {

@@ -3,6 +3,7 @@ import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
   DEFINERS_WITHOUT_AUTH_UID,
+  FUNCTIONS_WITHOUT_PUBLIC_REVOKE,
   POLICY_LESS_BY_DESIGN,
   RUNNER_MANAGED_TABLES,
   SERVICE_ROLE_ONLY_TABLES,
@@ -10,6 +11,9 @@ import {
   expectedPublicTables,
   functionGrants,
   functionsDefined,
+  functionsWithoutPublicRevoke,
+  liveFunctionOverloadConflicts,
+  liveFunctions,
   netColumnPrivileges,
   netTablePrivileges,
   policiesByTable,
@@ -494,18 +498,108 @@ describe('table grants', () => {
 
 describe('SECURITY DEFINER caller checks', () => {
   it('the DERIVED set of definers without auth.uid() matches the declaration', () => {
-    // A definer function bypasses RLS, so its body IS the last gate. Four
-    // legitimately have no auth.uid() (a trigger, two anon-gated readers, a
-    // count). A FIFTH is an unauthenticated door and must be justified before
-    // it ships.
+    // A definer function bypasses RLS, so its body IS the last gate. Three
+    // legitimately have no auth.uid() (a trigger and two anon-gated readers).
+    // A FOURTH is an unauthenticated door and must be justified before it ships.
     const derived = [
       ...new Set(
-        functionsDefined(files)
+        liveFunctions(files)
           .filter((f) => f.isSecurityDefiner && !f.usesAuthUid)
           .map((f) => f.name),
       ),
     ].sort();
     expect(derived).toEqual([...DEFINERS_WITHOUT_AUTH_UID].sort());
+  });
+
+  it('resolves pending_change_count to the GATED 0021 definition', () => {
+    // 0020:179 defines pending_change_count(p_user uuid) with no caller check;
+    // 0021:26 drops it and recreates pending_change_count() gated on
+    // auth.uid(). Reading every definition ever written reports the dropped
+    // version's properties as current — which would put the function on the
+    // reviewed-exception list and licence a rollback to the 0020 defect.
+    const raw = functionsDefined(files).filter((f) => f.name === 'pending_change_count');
+    expect(raw.length).toBeGreaterThan(1);
+    expect(raw.some((f) => !f.usesAuthUid)).toBe(true); // the stale one is in there
+
+    const live = liveFunctions(files).filter((f) => f.name === 'pending_change_count');
+    expect(live).toHaveLength(1);
+    expect(live[0].usesAuthUid).toBe(true);
+    expect(live[0].file).toBe('0021_provenance_hardening.sql');
+  });
+
+  it('replays drop function so the LAST definition wins', () => {
+    const replaced = fake(`
+      create or replace function public.thing(p uuid)
+      returns void language plpgsql security definer set search_path = public
+      as $$ begin perform 1; end; $$;
+
+      drop function if exists public.thing(uuid);
+
+      create or replace function public.thing()
+      returns void language plpgsql security definer set search_path = public
+      as $$ begin perform auth.uid(); end; $$;
+    `);
+    const live = liveFunctions(replaced);
+    expect(live).toHaveLength(1);
+    expect(live[0].usesAuthUid).toBe(true);
+  });
+
+  it('drops a function that is dropped and never re-created', () => {
+    const gone = fake(`
+      create or replace function public.doomed()
+      returns void language sql set search_path = public as $$ select 1; $$;
+      drop function if exists public.doomed();
+    `);
+    expect(liveFunctions(gone)).toEqual([]);
+  });
+
+  it('has no live function name carrying two overloads', () => {
+    // liveFunctions keys by NAME, which is what the runbook's expectations do
+    // too. If a real overload pair ever survives, that keying silently loses
+    // one of them and this assertion is the warning.
+    expect(liveFunctionOverloadConflicts(files)).toEqual([]);
+  });
+});
+
+describe('functions reachable by PUBLIC', () => {
+  it('the DERIVED no-public-revoke set matches the declaration', () => {
+    // Postgres grants EXECUTE to PUBLIC by default. These were never revoked,
+    // so a healthy database shows a PUBLIC row for each — the runbook has to
+    // say so or its anonymous-entry-point check cries wolf every run.
+    expect(functionsWithoutPublicRevoke(files)).toEqual(
+      [...FUNCTIONS_WITHOUT_PUBLIC_REVOKE].sort(),
+    );
+  });
+
+  it('every one of them returns trigger', () => {
+    // This is the whole safety argument: a trigger function has no PostgREST
+    // route, so a default PUBLIC execute grant on it is not an anonymous entry
+    // point. A NON-trigger function joining that list would be one.
+    const live = liveFunctions(files);
+    const nonTrigger = functionsWithoutPublicRevoke(files).filter(
+      (n) => !live.find((f) => f.name === n)?.returnsTrigger,
+    );
+    expect(nonTrigger).toEqual([]);
+  });
+
+  it('FLAGS a non-trigger function that was never revoked from public', () => {
+    const leaky = fake(`
+      create or replace function public.rpc_without_revoke(p uuid)
+      returns integer language sql security definer set search_path = public
+      as $$ select 1; $$;
+    `);
+    expect(functionsWithoutPublicRevoke(leaky)).toEqual(['rpc_without_revoke']);
+    expect(liveFunctions(leaky)[0].returnsTrigger).toBe(false);
+  });
+
+  it('does not flag a function that IS revoked from public', () => {
+    const tidy = fake(`
+      create or replace function public.tidy_rpc(p uuid)
+      returns integer language sql security definer set search_path = public
+      as $$ select 1; $$;
+      revoke all on function public.tidy_rpc(uuid) from public, anon;
+    `);
+    expect(functionsWithoutPublicRevoke(tidy)).toEqual([]);
   });
 
   it('detects auth.uid() in a body and its absence', () => {

@@ -65,6 +65,12 @@ export type FunctionDef = {
    * legitimate exceptions look like defects.
    */
   usesAuthUid: boolean;
+  /**
+   * `returns trigger`. A trigger function cannot be called over PostgREST — it
+   * is only reachable as a trigger — so an `EXECUTE` grant on it is not an
+   * anonymous entry point in the way an RPC's would be.
+   */
+  returnsTrigger: boolean;
 };
 
 export type TableDef = {
@@ -232,6 +238,7 @@ export function functionsDefined(files: MigrationFile[]): FunctionDef[] {
         isSecurityDefiner: /security\s+definer/i.test(attributeText),
         pinsSearchPath: /set\s+search_path\s*(?:=|to)/i.test(attributeText),
         usesAuthUid: /\bauth\.uid\s*\(/i.test(bodyText),
+        returnsTrigger: /\breturns\s+trigger\b/i.test(attributeText),
       });
     }
   }
@@ -243,6 +250,141 @@ function endOfStatement(text: string): string {
   const end = text.indexOf(';');
   return end === -1 ? text : text.slice(0, end);
 }
+
+/**
+ * The function definitions a deployed database actually HOLDS, after replaying
+ * every `create` and `drop function` in order — last definition wins.
+ *
+ * `functionsDefined` returns every definition ever written, which is the wrong
+ * set to reason about deployed state. `pending_change_count` is the case that
+ * proves it: 0020:179 defines `pending_change_count(p_user uuid)` with no
+ * caller check, and 0021:26 DROPS it and recreates `pending_change_count()`
+ * gated on `auth.uid()`. Reading the raw list reports the function as having no
+ * caller check — describing a version that no longer exists, and, worse,
+ * turning the reviewed-exception list into a licence for exactly the regression
+ * 0021 was written to fix.
+ *
+ * Keyed by NAME, matching the rest of this module (the runbook's expectations
+ * are per name). `liveFunctionOverloadConflicts` guards the assumption.
+ */
+export function liveFunctions(files: MigrationFile[]): FunctionDef[] {
+  const live = new Map<string, FunctionDef>();
+  for (const file of files) {
+    const sql = stripSqlComments(file.sql);
+    const events: { at: number; kind: 'create' | 'drop'; name: string }[] = [];
+    for (const m of sql.matchAll(
+      /create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z0-9_]+)\s*\(/gi,
+    )) {
+      events.push({ at: m.index ?? 0, kind: 'create', name: m[1].toLowerCase() });
+    }
+    for (const m of sql.matchAll(
+      /drop\s+function\s+(?:if\s+exists\s+)?(?:public\.)?([a-z0-9_]+)\s*\(/gi,
+    )) {
+      events.push({ at: m.index ?? 0, kind: 'drop', name: m[1].toLowerCase() });
+    }
+    events.sort((a, b) => a.at - b.at);
+    const defsInFile = functionsDefined([file]);
+    const byNameQueue = new Map<string, FunctionDef[]>();
+    for (const d of defsInFile) {
+      byNameQueue.set(d.name, [...(byNameQueue.get(d.name) ?? []), d]);
+    }
+    for (const ev of events) {
+      if (ev.kind === 'drop') {
+        live.delete(ev.name);
+      } else {
+        const next = byNameQueue.get(ev.name)?.shift();
+        if (next) live.set(ev.name, next);
+      }
+    }
+  }
+  return [...live.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Function names that still have MORE THAN ONE definition live at the end of
+ * the corpus — i.e. real overloads, where keying by name loses information.
+ * Empty here; asserted so `liveFunctions`' name-keying stays honest.
+ */
+export function liveFunctionOverloadConflicts(files: MigrationFile[]): string[] {
+  const dropped = new Set<string>();
+  for (const file of files) {
+    for (const m of stripSqlComments(file.sql).matchAll(
+      /drop\s+function\s+(?:if\s+exists\s+)?(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/gi,
+    )) {
+      dropped.add(`${m[1].toLowerCase()}(${m[2].replace(/\s+/g, ' ').trim()})`);
+    }
+  }
+  const signatures = new Map<string, Set<string>>();
+  for (const file of files) {
+    for (const m of stripSqlComments(file.sql).matchAll(
+      /create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/gi,
+    )) {
+      const name = m[1].toLowerCase();
+      const args = m[2].replace(/\s+/g, ' ').trim();
+      const set = signatures.get(name) ?? new Set<string>();
+      set.add(args);
+      signatures.set(name, set);
+    }
+  }
+  return [...signatures.entries()]
+    .filter(([name, args]) => {
+      const surviving = [...args].filter((a) => {
+        // Compare on the argument TYPES, which is what identifies an overload.
+        const types = a.replace(/\b\w+\s+(?=\w)/g, '').trim();
+        return !dropped.has(`${name}(${a})`) && !dropped.has(`${name}(${types})`);
+      });
+      return surviving.length > 1;
+    })
+    .map(([name]) => name)
+    .sort();
+}
+
+/**
+ * Functions with no `revoke ... from public` anywhere in the corpus.
+ *
+ * Postgres grants `EXECUTE` **to `PUBLIC` by default** on every new function.
+ * The RPCs here all revoke it; these do not, so a deployed database legitimately
+ * shows a `PUBLIC` row for each. The runbook has to say so, or its
+ * anonymous-entry-point check cries wolf on every healthy run — and a check
+ * that cries wolf is a check the operator learns to skip.
+ */
+export function functionsWithoutPublicRevoke(files: MigrationFile[]): string[] {
+  const revoked = new Set<string>();
+  for (const file of files) {
+    const sql = stripSqlComments(file.sql);
+    const re =
+      /revoke\s+[^;]*?\s+on\s+function\s+(?:public\.)?([a-z0-9_]+)\s*\([^)]*\)\s+from\s+([^;]+?);/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(sql)) !== null) {
+      if (parseRoles(m[2]).includes('public')) revoked.add(m[1].toLowerCase());
+    }
+  }
+  return liveFunctions(files)
+    .map((f) => f.name)
+    .filter((n) => !revoked.has(n))
+    .sort();
+}
+
+/**
+ * The eight functions above, every one of them a TRIGGER function.
+ *
+ * A trigger function has no PostgREST route and cannot be called as an RPC, so
+ * the default `EXECUTE to PUBLIC` on them is not an anonymous entry point —
+ * which is why they were never revoked and why leaving them is acceptable. A
+ * NON-trigger function joining this list would be a genuine anonymous entry
+ * point, so the test asserts both the membership and the returns-trigger
+ * property.
+ */
+export const FUNCTIONS_WITHOUT_PUBLIC_REVOKE = [
+  'account_content_state_clock_guard',
+  'account_content_state_lww_guard',
+  'bars_touch_updated_at',
+  'handle_new_user',
+  'photo_permissions_immutable',
+  'ratings_lww_guard',
+  'touch_updated_at',
+  'vibe_profiles_lww_guard',
+];
 
 /**
  * Every `create policy` / `drop policy` statement, in application order.
@@ -669,8 +811,15 @@ export const ANON_EXECUTABLE_FUNCTIONS = ['get_public_ratings', 'get_shared_nigh
  *   get_public_ratings     anon-executable; gated on the owner's
  *                          `shares_list_publicly` opt-in instead
  *   get_shared_night       anon-executable; gated on an opaque share id
- *   pending_change_count   returns a COUNT over moderation queue rows, no
- *                          per-user data
+ *
+ * Derived from `liveFunctions`, NOT from every definition ever written. That
+ * distinction is load-bearing: `pending_change_count` was on this list while it
+ * was read from the raw definitions, because 0020 defined an ungated
+ * `pending_change_count(uuid)`. 0021 drops that and recreates the function
+ * gated on `auth.uid()`, so the entry described a version no database holds —
+ * and would have licensed a dashboard edit back to the ungated form as "the
+ * reviewed expectation".
+ *
  * The test asserts derived == declared, so a NEW definer function without a
  * caller check fails the suite and has to be justified here before it ships.
  */
@@ -678,7 +827,6 @@ export const DEFINERS_WITHOUT_AUTH_UID = [
   'get_public_ratings',
   'get_shared_night',
   'handle_new_user',
-  'pending_change_count',
 ];
 
 /**
