@@ -3,11 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 // @ts-ignore -- the operator scripts intentionally remain native ESM.
-import { runSweep } from './coverage-sweep-engine.mjs';
+import { SweepInterrupted, runSweep } from './coverage-sweep-engine.mjs';
 // @ts-ignore
 import {
+  BLOCKING_ERROR_CLASSES,
   SATURATED_AT_FLOOR,
-  ackEligibility,
   completeness,
   configHash,
   loadManifest,
@@ -195,15 +195,22 @@ describe('resume state matrix', () => {
 
       if (owesWorkBefore) {
         const changed = fs.readFileSync(file, 'utf8') !== before;
-        // Either it did something, or completeness must name a blocker the
-        // operator can actually act on. Silence with outstanding work is the
-        // dead end this exists to forbid.
-        const report = completeness(loadManifest(file));
-        const actionable =
-          report.complete ||
-          report.saturated.length > 0 ||
-          ackEligibility(loadManifest(file), cell.id).eligible;
-        expect(changed || actionable).toBe(true);
+        // The manifest must CHANGE, or the cell must already carry a terminal
+        // record of its own — a status that was on disk before this resume ran.
+        //
+        // This deliberately does NOT consult ackEligibility. Doing so made the
+        // invariant circular: a broken ackEligibility that returned `eligible`
+        // for everything satisfied the escape hatch and the whole matrix passed
+        // (mutation-tested: 0 of 57 cases failed). An invariant must not be
+        // excused by the function it is meant to constrain.
+        const recorded = loadManifest(file)!.cells.get(cell.id);
+        const alreadyTerminal =
+          recorded.terminalStatus === SATURATED_AT_FLOOR ||
+          ['unsaturated', 'cleared', 'ack_terminal'].includes(recorded.terminalStatus);
+        expect(
+          changed || alreadyTerminal,
+          `${state.name}: resume did nothing and the cell has no terminal record`,
+        ).toBe(true);
       }
     },
   );
@@ -225,13 +232,19 @@ describe('resume state matrix', () => {
         writer.close();
         if (completeness(loadManifest(file)).complete) return;
       }
-      // Not complete after four resumes: the operator must have a lever, and
-      // the report must name why.
-      const report = completeness(loadManifest(file));
-      const eligibility = ackEligibility(loadManifest(file), cell.id);
+      // Not complete after four resumes. The blocker must be one of the two
+      // the design admits — residual saturation, or a permanent failure the
+      // operator can waive — established from the RECORDS, not by asking
+      // ackEligibility (which this matrix must constrain, not defer to).
+      const final = loadManifest(file)!;
+      const report = completeness(final);
+      const recorded = final.cells.get(cell.id);
+      const lastAttempt = recorded.attempts[recorded.attempts.length - 1];
+      const permanentlyFailed =
+        lastAttempt && !lastAttempt.ok && !BLOCKING_ERROR_CLASSES.includes(lastAttempt.errorClass);
       expect(
-        report.saturated.length > 0 || eligibility.eligible,
-        `stuck at ${report.status} with no operator lever (${eligibility.reason})`,
+        report.saturated.length > 0 || permanentlyFailed,
+        `${state.name}: stuck at ${report.status} with no admissible blocker`,
       ).toBe(true);
     },
   );
@@ -303,6 +316,72 @@ describe('resume state matrix', () => {
       );
     },
   );
+
+  it.each(STATES.map((state) => [state.name, state] as const))(
+    'invariant 5 — "%s" keeps its recorded places when the budget stops the resume',
+    async (_name, state) => {
+      // The budget-exhausted and interrupted exits were structurally
+      // unreachable in this matrix: healthyTransport never fails and maxCalls
+      // defaulted to Infinity, so the two exits where past bugs actually lived
+      // were never entered. Both are exercised here.
+      const { cell, file } = build(state);
+      const recorded = loadManifest(file)!.cells.get(cell.id);
+      const expected = new Set<string>((recorded?.places ?? []).map((p: any) => p.id));
+      if (expected.size === 0) return;
+
+      for (const stopper of ['budget', 'interrupt'] as const) {
+        const emitted = new Set<string>();
+        const writer = openManifest(file);
+        await sweep({
+          cells: [cell],
+          manifest: writer,
+          state: loadManifest(file),
+          subdivision: SUBDIVISION,
+          maxResultCount: CAP,
+          maxCalls: stopper === 'budget' ? 0 : Infinity,
+          transport: async () => {
+            if (stopper === 'interrupt') throw new SweepInterrupted();
+            return { places: [] };
+          },
+          onPlaces: (places: any[]) => places.forEach((place) => emitted.add(place.id)),
+        });
+        writer.close();
+        // A stopped resume may do less work, but it must not silently discard
+        // venues the manifest still holds.
+        for (const id of expected) {
+          expect(emitted.has(id), `${state.name}/${stopper}: dropped recorded place ${id}`).toBe(
+            true,
+          );
+        }
+      }
+    },
+  );
+
+  it.each(
+    STATES.filter((state) => /floor|acknowledged/.test(state.name)).map(
+      (state) => [state.name, state] as const,
+    ),
+  )('invariant 6 — "%s" is never re-queried; it is already settled', async (_name, state) => {
+    // Nothing else in this matrix constrains these two branches: a floor cell
+    // never reaches `complete` so the honesty invariants skip it, and an
+    // acknowledged cell is terminal so the progress invariants are satisfied by
+    // its existing record. Deleting either short-circuit therefore passed every
+    // other case (mutation-tested). Spending money re-asking a settled cell is
+    // the failure here, so assert on the calls directly.
+    const { cell, file } = build(state);
+    const called: string[] = [];
+    const writer = openManifest(file);
+    await sweep({
+      cells: [cell],
+      manifest: writer,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: healthyTransport(called),
+    });
+    writer.close();
+    expect(called, `${state.name}: re-queried a cell that was already settled`).toEqual([]);
+  });
 
   it('invariant 3b — a completed run hands back everything the manifest recorded', async () => {
     for (const state of STATES) {
