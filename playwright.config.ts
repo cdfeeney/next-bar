@@ -141,13 +141,27 @@ export default defineConfig({
       dependencies: ['warmup'],
       // Repeats the tools/ exclusion: a project-level testIgnore REPLACES the
       // root one rather than merging with it.
-      testIgnore: /(warmup\.setup\.ts|e2e[\\/]tools[\\/])/,
+      // google-card.spec.ts is excluded here ON PURPOSE: it needs the
+      // google-live dev server, and these projects run the MAIN one, where
+      // NEXT_PUBLIC_GOOGLE_MEDIA is unset — so resolveMedia can never return
+      // 'google-live' and every widget-state assertion would time out.
+      // A project without testMatch collects **/*.spec.ts, and a
+      // project-level testIgnore REPLACES the root one, so this exclusion has
+      // to be repeated here rather than assumed. (santa: Claude/FABLE H1.)
+      testIgnore: /(warmup\.setup\.ts|google-card\.spec\.ts|e2e[\\/]tools[\\/])/,
     },
     {
       name: 'Pixel 7',
       use: { ...devices['Pixel 7'] },
       dependencies: ['warmup'],
-      testIgnore: /(warmup\.setup\.ts|e2e[\\/]tools[\\/])/,
+      // google-card.spec.ts is excluded here ON PURPOSE: it needs the
+      // google-live dev server, and these projects run the MAIN one, where
+      // NEXT_PUBLIC_GOOGLE_MEDIA is unset — so resolveMedia can never return
+      // 'google-live' and every widget-state assertion would time out.
+      // A project without testMatch collects **/*.spec.ts, and a
+      // project-level testIgnore REPLACES the root one, so this exclusion has
+      // to be repeated here rather than assumed. (santa: Claude/FABLE H1.)
+      testIgnore: /(warmup\.setup\.ts|google-card\.spec\.ts|e2e[\\/]tools[\\/])/,
     },
     // Marketing/legal routes are read on DESKTOPS too (links get opened on
     // laptops far more than app surfaces do), and until 2026-08-03 nothing
@@ -287,10 +301,16 @@ export default defineConfig({
   },
   {
     // google-live server. Same fence, same stubs, plus the three variables
-    // that make the supported Google card reachable at all. Started only
-    // because a google-live project is selected; Playwright skips a
-    // webServer whose projects are filtered out only if nothing needs it,
-    // so `reuseExistingServer` keeps repeat runs cheap.
+    // that make the supported Google card reachable at all.
+    //
+    // NOTE: Playwright has no project-to-webServer linkage — EVERY entry in
+    // this array is started and health-checked on EVERY run, including a run
+    // that selects only a main-server project. So this costs a second dev
+    // server each time, and E2E_GOOGLE_PORT must be varied per worktree for
+    // exactly the same reason E2E_PORT must: otherwise two concurrent
+    // worktrees silently share this server through `reuseExistingServer`.
+    // (santa: Claude/FABLE M1 — the previous comment claimed Playwright
+    // skipped unselected servers, which it does not.)
     command: `npm run dev -- --port ${E2E_GOOGLE_PORT}`,
     url: GOOGLE_BASE_URL,
     reuseExistingServer: true,
