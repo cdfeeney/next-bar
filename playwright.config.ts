@@ -304,6 +304,20 @@ export default defineConfig({
       // NEXT_PUBLIC_GOOGLE_MEDIA values — reviving the shared-chunk bug this
       // split exists to fix. (santa: Claude/FABLE M-3.)
       NEXT_E2E_DIST: '0',
+      // Same reasoning, applied to the three gates that actually decide
+      // whether a Google widget is created. Leaving them merely UNSET was
+      // an inconsistency: `next dev` also reads `.env.local` / `.env`, so on
+      // any machine whose .env.local carries real Google credentials this
+      // server would compile a Google-ON bundle and every main-server spec
+      // would silently exercise the google-live card instead of the ordinary
+      // one — passing either way, because those specs never assert Google
+      // media is off. This worktree has no .env.local, so nothing is broken
+      // today; the pin makes that independent of the machine. Browser egress
+      // is separately fenced (`use.proxy` above), so this was never a
+      // billing exposure. (santa: GLM.)
+      NEXT_PUBLIC_GOOGLE_MEDIA: '',
+      NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: '',
+      GOOGLE_MEDIA_RUNTIME_ENABLED: '',
     },
   },
   {

@@ -154,8 +154,9 @@ export default function GooglePlacePhoto({
      *
      * With a plain ref this was a permanent dead end (santa: Codex, High):
      * once an attempt gave up, the fallback rendered and the host unmounted.
-     * A later `placeId` change — ordinary here, because re-ranking reuses
-     * card positions and React reconciles by index — re-ran this effect
+     * A later `placeId` change — which happens if a parent ever reconciles
+     * cards by position rather than identity; ResultsView.tsx:387 currently
+     * keys by `bar.id`, so this path is defensive today — re-ran this effect
      * while `hostRef.current` was still null, so it returned before
      * installing an observer, a timer, or a build. `setStatus('pending')`
      * then mounted the host on the NEXT render, but the dependencies had not
@@ -374,10 +375,20 @@ export default function GooglePlacePhoto({
       // status flips to 'ready' the class is dropped entirely, so a tall
       // widget still expands freely and nothing is clipped (the 145.7-vs-365
       // regression google-photo-layout.spec.ts pins).
-      className={
-        className ??
-        (status === 'pending' ? 'w-full aspect-[21/9]' : 'w-full')
-      }
+      // COMPOSED, not replaced. `className` used to override this outright,
+      // so any future caller passing so much as a margin utility would have
+      // silently dropped BOTH guarantees above — the pending reservation
+      // (criterion 4) and the no-clip/no-fixed-height ready state that keeps
+      // Google's attribution visible. No caller passes it today, which is
+      // exactly why the footgun would have gone unnoticed until it fired.
+      // (santa: Claude/FABLE M-2.)
+      className={[
+        'w-full',
+        status === 'pending' ? 'aspect-[21/9]' : '',
+        className ?? '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
     />
   );
 }

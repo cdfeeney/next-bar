@@ -37,12 +37,14 @@ async function topResultName(page: import('@playwright/test').Page) {
     .getByRole('heading')
     .first();
   const text = (await heading.innerText()).trim();
-  // "1. Bar Name" → "Bar Name"
+  // Headings are the bar name alone; the rank moved out of the heading into
+  // its own pill (g-65ba768e criterion 2). The strip is now a tolerant no-op,
+  // kept so this helper still works against an older build.
   return text.replace(/^\d+\.\s*/, '');
 }
 
-// Card headings render as "N. Bar Name" — match the name anywhere in the
-// accessible name (role-name string matching is full-string).
+// Match the name anywhere in the accessible name (role-name string matching
+// is full-string).
 function nameRegex(name: string) {
   return new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 }

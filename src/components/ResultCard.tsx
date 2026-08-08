@@ -51,8 +51,14 @@ type ResultCardProps = {
  * Below the hero the card stays terse: one meta line (walk time + vibe
  * match), the open-now/rating badge row, and Maps. Ranking entry moved
  * off result cards entirely (the per-card "Rank it" link is gone —
- * /rankings owns that flow), and the per-card photo attribution line is
- * replaced by the blanket disclosure on /privacy + the lightbox credit.
+ * /rankings owns that flow).
+ *
+ * The per-card photo credit STAYS on the legacy hero — see the
+ * `needsGoogleAttribution` branch below, which this comment previously
+ * claimed had been replaced by the blanket /privacy disclosure. It has not:
+ * ResultCard.googleLive.test.tsx asserts that credit is required wherever
+ * Google-derived imagery is shown. On the google-live path the widget
+ * renders Google's own `gmp-place-attribution` instead.
  */
 /**
  * What a failed/blocked google-live widget degrades to: the bar's
@@ -91,6 +97,14 @@ function CardRank({ rank }: { rank: number }): JSX.Element {
   return (
     <span
       data-testid="card-rank"
+      // `role="img"` is load-bearing, not decoration. ARIA prohibits
+      // `aria-label` on an implicit `generic` role, so the bare
+      // `aria-label="Rank 1"` this used to carry was discarded by most
+      // assistive tech, which then announced "1" with no indication it was a
+      // rank. `img` is one of the roles that DOES take a label, and it keeps
+      // the element's text content as just the numeral for the five tests
+      // that assert on it. (santa: Claude/FABLE.)
+      role="img"
       aria-label={`Rank ${rank}`}
       className="shrink-0 inline-flex items-center justify-center min-w-[1.375rem] h-[1.375rem] px-1 rounded-full bg-accent/15 text-accent font-display text-xs leading-none tabular-nums"
     >

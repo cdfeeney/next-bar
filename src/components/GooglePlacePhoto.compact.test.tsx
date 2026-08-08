@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 /**
@@ -108,17 +108,33 @@ describe('a late widget must not un-do the fallback', () => {
         return el as Element;
       });
 
-      // Burn the whole widget budget without ever signalling readiness.
-      await vi.advanceTimersByTimeAsync(WIDGET_LOAD_TIMEOUT_MS + 1_000);
+      // Burn the whole widget budget and deliver Google's late answer INSIDE
+      // THE SAME act() — i.e. before React has flushed the unmount that the
+      // timeout's setStatus('unavailable') causes.
+      //
+      // The ordering is the whole point of this test (santa: Codex). If
+      // `gmp-load` is instead dispatched after an awaited flush, the host has
+      // already unmounted, `hostEl` has gone null, the effect has re-run and
+      // its cleanup has set `cancelled` — so the listener returns on
+      // `cancelled` alone and the test passes with or without the `gaveUp`
+      // latch. That version was coverage theatre: verified 2026-08-08 by
+      // deleting `|| gaveUp` from the listener and watching it still pass.
+      // Batched into one act(), `cancelled` is still false and `gaveUp` is
+      // the ONLY guard standing between a late widget and a resurrected,
+      // empty host.
+      act(() => {
+        vi.advanceTimersByTime(WIDGET_LOAD_TIMEOUT_MS + 1_000);
+        compact.dispatchEvent(new Event('gmp-load'));
+      });
+
+      // The fallback STANDS. Without the latch, the listener's
+      // setStatus('ready') lands after the timeout's setStatus('unavailable')
+      // and wins, re-rendering a host with no children and no height.
       expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
       expect(screen.queryByTestId('google-place-photo')).toBeNull();
 
-      // Google finally answers, far too late.
-      compact.dispatchEvent(new Event('gmp-load'));
+      // And it still stands once everything else settles.
       await vi.advanceTimersByTimeAsync(50);
-
-      // The fallback STANDS. Before the `gaveUp` latch this re-rendered an
-      // empty host and the assertions below both failed.
       expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
       expect(screen.queryByTestId('google-place-photo')).toBeNull();
     } finally {
@@ -131,8 +147,9 @@ describe('a late widget must not un-do the fallback', () => {
  * A card that gave up must still be able to start over.
  *
  * Once the fallback renders the host div is unmounted. A later placeId change
- * is ordinary here — re-ranking reuses card positions and React reconciles by
- * index — and the effect used to re-run while the ref was still null, return
+ * reaches a mounted card only if a parent reconciles by position rather than
+ * identity — ResultsView.tsx:387 keys by `bar.id`, so this is defensive
+ * coverage — and the effect used to re-run while the ref was still null, return
  * before installing anything, and never re-run again once the host mounted.
  * The card was then stuck on an empty pending box with no widget, no
  * fallback, no name and no Maps link. (santa: Codex, High.)

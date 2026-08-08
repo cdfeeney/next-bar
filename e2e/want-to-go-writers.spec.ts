@@ -37,7 +37,8 @@ test.describe('Want to go — result card writer', () => {
     await gotoResults(page);
     const firstCard = cardsOf(page).first();
     const heading = await firstCard.getByRole('heading').first().innerText();
-    // Card headings read "1. Bar Name" — strip the rank prefix.
+    // Headings are the bar name alone — the rank is a separate pill now
+    // (g-65ba768e criterion 2). Tolerant no-op strip, kept for older builds.
     const barName = heading.replace(/^\d+\.\s*/, '').trim();
 
     const save = firstCard.getByRole('button', { name: /^Save .* to Want to go$/ });
