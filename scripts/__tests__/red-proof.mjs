@@ -21,8 +21,9 @@
  *        3 = the legacy classifier is not available on this machine
  */
 
-import { homedir } from 'node:os';
-import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { homedir, tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -91,7 +92,48 @@ const NEW_CAPABILITY_CASES = new Set([
   'async fs/promises rm is T0',
   'Kysely deleteFrom is T0',
   'destructured non-DATABASE_URL credential is T0',
+  // Round 4 — the home-dir classifier never had any of this either.
+  'async rm called far below its import is T0',
+  'aliased async rm is T0',
+  'fs/promises namespace deletion is T0',
+  'CJS destructured unlink is T0',
+  'fs-extra remove is T0',
+  'a deletion function passed as a value is T0',
+  'a nested AGENTS.md is T0',
+  'a nested CLAUDE.md is T0',
 ]);
+
+/**
+ * The repository revision immediately BEFORE the round-4 fixes.
+ *
+ * The proof above compares against the home-dir classifier, which is the right
+ * baseline for the original port but far too weak a bar for a later round: a
+ * case can fail against a classifier from two rounds ago while changing nothing
+ * about the one shipped last night. So round 4 is proved against its own
+ * immediate predecessor. A fixed historical SHA is stable by construction; if it
+ * is unreachable (a shallow clone), the proof reports SKIPPED rather than
+ * inventing a pass.
+ */
+const PRE_ROUND4_REV = 'dcb8f2f';
+
+/** Cases that MUST fail against `PRE_ROUND4_REV` — they encode round-4 capability. */
+const ROUND4_CASES = new Set([
+  'async rm called far below its import is T0',
+  'aliased async rm is T0',
+  'fs/promises namespace deletion is T0',
+  'CJS destructured unlink is T0',
+  'fs-extra remove is T0',
+  'a deletion function passed as a value is T0',
+  'a nested AGENTS.md is T0',
+  'a nested CLAUDE.md is T0',
+]);
+
+/** The classifier module graph, so a revision can be materialized and imported. */
+const CLASSIFIER_SOURCES = [
+  'scripts/lib/tier-glob.mjs',
+  'scripts/lib/tier-capabilities.mjs',
+  'scripts/lib/tier-classify-core.mjs',
+];
 
 const rows = [];
 let unexpectedlyPassed = 0;
@@ -138,5 +180,76 @@ if (unexpectedlyPassed > 0) {
   process.exit(1);
 }
 
+// ---------------------------------------------------------------------------
+// Round-4 proof: against this repository's own immediately-preceding revision.
+// ---------------------------------------------------------------------------
+
+/**
+ * Materialize the classifier from a git revision into a throwaway directory and
+ * import it. Returns null when the revision is not reachable.
+ */
+function loadClassifierAtRevision(rev) {
+  const root = mkdtempSync(join(tmpdir(), 'next-bar-tier-redproof-'));
+  try {
+    writeFileSync(join(root, 'package.json'), '{"type":"module"}\n');
+    for (const source of CLASSIFIER_SOURCES) {
+      const text = execFileSync('git', ['show', `${rev}:${source}`], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      writeFileSync(join(root, source.split('/').pop()), text);
+    }
+    return { root, entry: join(root, 'tier-classify-core.mjs') };
+  } catch {
+    rmSync(root, { recursive: true, force: true });
+    return null;
+  }
+}
+
+const materialized = loadClassifierAtRevision(PRE_ROUND4_REV);
+if (!materialized) {
+  process.stdout.write(
+    `\nround-4 proof SKIPPED: revision ${PRE_ROUND4_REV} is not reachable ` +
+      '(shallow clone?), so the pre-change classifier cannot be materialized.\n',
+  );
+  process.stdout.write('\nRED proof holds: every new-capability case fails before the change.\n');
+  process.exit(0);
+}
+
+const previous = await import(pathToFileURL(materialized.entry).href);
+let round4Passed = 0;
+process.stdout.write(`\nPRE-ROUND-4 classifier (${PRE_ROUND4_REV}) vs the round-4 cases\n\n`);
+
+for (const testCase of TIER_CASES) {
+  if (!ROUND4_CASES.has(testCase.name)) continue;
+  const contents = Object.prototype.hasOwnProperty.call(testCase, 'contents')
+    ? { [testCase.path]: testCase.contents }
+    : undefined;
+  const result = previous.classifyPaths([testCase.path], testCase.emptyMap ? EMPTY_MAP : PROJECT_MAP, {
+    repoRoot: REPO_ROOT,
+    contents,
+  });
+  const passes = result.tier === testCase.expect;
+  if (passes) round4Passed += 1;
+  process.stdout.write(
+    `  ${passes ? 'passes' : 'FAILS '} expected ${testCase.expect}  got ${result.tier}  ${testCase.name}\n`,
+  );
+}
+
+rmSync(materialized.root, { recursive: true, force: true });
+
+if (round4Passed > 0) {
+  process.stderr.write(
+    `\nred-proof FAILED: ${round4Passed} round-4 case(s) already passed at ${PRE_ROUND4_REV}. ` +
+      'Those assertions do not test the round-4 change.\n',
+  );
+  process.exit(1);
+}
+
+process.stdout.write(
+  `\n  ${ROUND4_CASES.size}/${ROUND4_CASES.size} round-4 cases fail at ${PRE_ROUND4_REV}, as required.\n`,
+);
 process.stdout.write('\nRED proof holds: every new-capability case fails before the change.\n');
 process.exit(0);

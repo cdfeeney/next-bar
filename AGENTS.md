@@ -106,6 +106,18 @@ and raise the tier yourself when you know better.
 If the classifier cannot establish that a change lacks a high-risk capability,
 it returns **T0 with `escalated: true`**.
 
+**Deleting a file is classified by what was deleted.** A removed path has no
+content on disk, so its pre-deletion content is recovered from the base revision
+(`git show <rev>:<path>`) and graded normally — removing a purge script still
+earns its T0 floor, removing a plain component does not. If that content cannot
+be recovered, the path stays unanalyzable and fails closed at T0.
+
+**Instruction-bearing markdown is policy, not documentation.** `AGENTS.md` and
+`CLAUDE.md` are **T0 at any depth** — a coding agent executes them, so
+`src/AGENTS.md` carries the same weight as this file. Ordinary documentation
+stays inert: prose that *quotes* a destructive command cannot run it, and
+scanning prose as capability once put 15 real documentation files at T0.
+
 **Run `tier-changed` against the right base.** The changed set includes
 working-tree edits, untracked files, *and* `base...HEAD`. With no base resolved
 it can only see uncommitted work, so committed changes would go unclassified —

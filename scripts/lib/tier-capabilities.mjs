@@ -48,8 +48,14 @@ export const BAKED_PATH_FLOORS = [
   // --- The tier policy and its enforcement grade themselves. A change here must
   // never be graded by a (possibly weakened) version of itself.
   { glob: '.claude/**', tier: 'T0', capability: 'agent-policy' },
-  { glob: 'AGENTS.md', tier: 'T0', capability: 'agent-policy' },
-  { glob: 'CLAUDE.md', tier: 'T0', capability: 'agent-policy' },
+  // `**/` on purpose (attended operator decision, 2026-08-08): instruction-bearing
+  // AGENTS.md and CLAUDE.md files are capability-bearing policy, and BOTH Codex
+  // and Claude Code read NESTED ones — `src/AGENTS.md` governs work under `src/`
+  // exactly as the root file governs the repository. Anchoring these at the root
+  // only meant an agent instruction that says "skip the e2e gate" classified T2
+  // (inert documentation) as soon as it was written one directory down.
+  { glob: '**/AGENTS.md', tier: 'T0', capability: 'agent-policy' },
+  { glob: '**/CLAUDE.md', tier: 'T0', capability: 'agent-policy' },
   { glob: 'scripts/tier-classify.mjs', tier: 'T0', capability: 'tier-classifier' },
   { glob: 'scripts/lib/tier-*.mjs', tier: 'T0', capability: 'tier-classifier' },
   // The whole enforcement directory, not just `tier-*`: the RED proof lives
@@ -124,9 +130,15 @@ export const BAKED_PATH_FLOORS = [
  * and the gate gets switched off. Measured on this repository, treating prose
  * as capability put 15 documentation files at T0.
  *
- * Agent policy is the deliberate exception and is handled by BAKED_PATH_FLOORS
- * above: `AGENTS.md`, `CLAUDE.md` and `.claude/**` are instructions a coding
- * agent follows, so they CAN cause action and stay T0 by path.
+ * INSTRUCTION-BEARING MARKDOWN IS THE DELIBERATE EXCEPTION, and it is a scoping
+ * decision the operator resolved on 2026-08-08 after two reviewers disagreed:
+ * one argued that in a repository whose main contributor is a document-following
+ * agent, prose IS capability and the exemption is unsound; the other judged the
+ * carve-out sufficient. The resolution: `AGENTS.md`, `CLAUDE.md` (at any depth)
+ * and `.claude/**` are capability-bearing T0 policy because an agent executes
+ * them, while ORDINARY non-instruction documentation stays inert. That line is
+ * drawn by ROLE — see BAKED_PATH_FLOORS above — and not by scanning prose,
+ * because scanning prose is what put 15 real documentation files at T0.
  */
 export const NON_EXECUTABLE_GLOBS = ['**/*.md', '**/*.txt'];
 
@@ -198,6 +210,166 @@ export const INERT_BINARY_GLOBS = [
   '**/*.mp4',
   '**/*.pdf',
 ];
+
+// ---------------------------------------------------------------------------
+// FILESYSTEM DELETION — resolved by binding analysis, not by proximity.
+//
+// The first version of this detector matched a bare `rm(`/`unlink(` within 200
+// CHARACTERS of a `node:fs/promises` specifier. That is a heuristic about
+// FORMATTING, not about capability, and it failed on every realistic shape: an
+// alias (`import { rm as nuke }`), a namespace (`import * as fsp`), a CJS
+// destructure (`const { unlink } = require('fs/promises')`), the unprefixed
+// specifier (`'fs/promises'`), and — the common case — a purge loop further
+// down a file that imports at the top. Seven realistic deletion scripts were
+// measured classifying T1.
+//
+// Proximity is replaced by resolution: find what the fs module was bound TO,
+// then look for a use of that binding anywhere in the file. Distance stops
+// mattering because it never should have.
+// ---------------------------------------------------------------------------
+
+/** Module specifiers whose deletion functions destroy files with no undo. */
+const FS_MODULE_ALTERNATION = '(?:node:)?fs(?:/promises)?|graceful-fs|fs-extra(?:/esm)?';
+
+/** Deletion functions exported by the core fs modules (sync and promise forms). */
+const FS_CORE_DELETION_NAMES = ['rm', 'rmSync', 'rmdir', 'rmdirSync', 'unlink', 'unlinkSync'];
+
+/** `fs-extra` adds its own irreversible helpers on top of the core names. */
+const FS_EXTRA_DELETION_NAMES = [
+  ...FS_CORE_DELETION_NAMES,
+  'remove',
+  'removeSync',
+  'emptyDir',
+  'emptyDirSync',
+];
+
+/** The deletion names a given module specifier can supply. */
+function deletionNamesFor(moduleSpecifier) {
+  return /^fs-extra/.test(moduleSpecifier) ? FS_EXTRA_DELETION_NAMES : FS_CORE_DELETION_NAMES;
+}
+
+/** Escape a captured identifier before it is spliced into a RegExp (`$` is an anchor). */
+function escapeForRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const IDENTIFIER = '[A-Za-z_$][A-Za-z0-9_$]*';
+
+/**
+ * Parse one binding clause — `{ rm as nuke, readFile }` (ESM) or
+ * `{ rm: nuke }` (CJS destructuring) — into imported/local pairs.
+ */
+function parseBindingClause(clause) {
+  const pairs = [];
+  for (const part of String(clause).split(',')) {
+    const token = part.trim();
+    if (token.length === 0) continue;
+    const aliased = new RegExp(`^(${IDENTIFIER})\\s*(?::|\\bas\\b)\\s*(${IDENTIFIER})$`).exec(token);
+    if (aliased) {
+      pairs.push({ imported: aliased[1], local: aliased[2] });
+    } else if (new RegExp(`^${IDENTIFIER}$`).test(token)) {
+      pairs.push({ imported: token, local: token });
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Resolve filesystem-deletion capability by following module bindings.
+ *
+ * Two rules, and the difference between them is deliberate:
+ *
+ *   - A NAMED deletion binding (`import { rm }`, `const { unlink } = require`,
+ *     `export { rm } from`) counts on IMPORT, with no call site required. A
+ *     module that names `unlink` in its import list holds deletion capability
+ *     however it later spends it — including forms no call-shaped regex can
+ *     see, such as `files.forEach(unlink)` or a re-export. Requiring a matching
+ *     call is what reintroduces a distance heuristic through the back door.
+ *   - A NAMESPACE or default binding (`import * as fsp`, `const fs =
+ *     require('fs')`) requires an actual member call, because importing all of
+ *     `fs` is the ordinary way to call `readFile` and flooring that would
+ *     escalate a large share of the repository.
+ *
+ * @param {string} text
+ * @returns {{capable: boolean, evidence: string[]}}
+ */
+export function analyzeFsDeletion(text) {
+  const evidence = [];
+  if (typeof text !== 'string' || text.length === 0) return { capable: false, evidence };
+
+  const namespaces = new Set();
+  const mod = FS_MODULE_ALTERNATION;
+  const q = `['"]`;
+
+  /** Record a binding clause against the module it came from. */
+  const recordClause = (clause, moduleSpecifier) => {
+    const deletionNames = deletionNamesFor(moduleSpecifier);
+    for (const { imported, local } of parseBindingClause(clause)) {
+      // `const { promises: fsp } = require('fs')` binds a namespace, not a function.
+      if (imported === 'promises') {
+        namespaces.add(local);
+      } else if (deletionNames.includes(imported)) {
+        evidence.push(`imports ${imported} from '${moduleSpecifier}'`);
+      }
+    }
+  };
+
+  // `import <clause> from 'fs…'` / `export <clause> from 'fs…'`.
+  // The clause deliberately excludes quotes so it can never swallow the module
+  // string, and covers `* as fsp`, `fsp`, `{ rm as nuke }` and `fs, { rm }`.
+  const importRe = new RegExp(`\\b(?:import|export)\\s*([^;'"]*?)\\s*from\\s*${q}(${mod})${q}`, 'g');
+  for (const match of text.matchAll(importRe)) {
+    const [, clause, moduleSpecifier] = match;
+    const namespaced = new RegExp(`\\*\\s*as\\s+(${IDENTIFIER})`).exec(clause);
+    if (namespaced) namespaces.add(namespaced[1]);
+    const named = /\{([^}]*)\}/.exec(clause);
+    if (named) recordClause(named[1], moduleSpecifier);
+    // A bare leading identifier is a default import — namespace-like in practice.
+    const defaulted = new RegExp(`^\\s*(${IDENTIFIER})\\s*(?:,|$)`).exec(clause);
+    if (defaulted) namespaces.add(defaulted[1]);
+  }
+
+  // `const { unlink } = require('fs/promises')` / `= await import('node:fs/promises')`
+  // and `const fse = require('fs-extra')` / `const fsp = require('fs').promises`.
+  const requireRe = new RegExp(
+    `\\b(?:const|let|var)\\s+(\\{[^}]*\\}|${IDENTIFIER})\\s*=\\s*(?:await\\s+)?(?:import|require)\\s*\\(\\s*${q}(${mod})${q}\\s*\\)`,
+    'g',
+  );
+  for (const match of text.matchAll(requireRe)) {
+    const [, binding, moduleSpecifier] = match;
+    if (binding.startsWith('{')) recordClause(binding.slice(1, -1), moduleSpecifier);
+    else namespaces.add(binding);
+  }
+
+  // Inline, with no binding at all: `(await import('node:fs/promises')).rm(dir)`
+  // or `require('fs').promises.unlink(f)`.
+  const inlineRe = new RegExp(
+    `(?:await\\s+import|require)\\s*\\(\\s*${q}(${mod})${q}\\s*\\)\\s*\\)?\\s*(?:\\.\\s*promises\\s*)?\\.\\s*(${IDENTIFIER})\\s*\\(`,
+    'g',
+  );
+  for (const match of text.matchAll(inlineRe)) {
+    const [, moduleSpecifier, member] = match;
+    if (deletionNamesFor(moduleSpecifier).includes(member)) {
+      evidence.push(`calls ${member} on an inline require/import of '${moduleSpecifier}'`);
+    }
+  }
+
+  // A namespace binding only counts when a deletion member is actually called —
+  // ANYWHERE in the file, which is the whole point of dropping the 200-character
+  // window. `.promises` is tolerated between the two (`fs.promises.rm(…)`).
+  if (namespaces.size > 0) {
+    const members = FS_EXTRA_DELETION_NAMES.map(escapeForRegExp).join('|');
+    for (const ns of namespaces) {
+      const callRe = new RegExp(
+        `\\b${escapeForRegExp(ns)}\\s*(?:\\.\\s*promises\\s*)?\\.\\s*(${members})\\s*\\(`,
+      );
+      const hit = callRe.exec(text);
+      if (hit) evidence.push(`calls ${ns}.${hit[1]}()`);
+    }
+  }
+
+  return { capable: evidence.length > 0, evidence };
+}
 
 /**
  * Content capability signatures.
@@ -281,11 +453,14 @@ export const CAPABILITY_SIGNATURES = [
   {
     name: 'destructive-filesystem',
     tier: 'T0',
-    // Includes the modern promise idiom — `import { rm } from 'node:fs/promises'`
-    // then `await rm(dir, { recursive: true })` — which the sync-only pattern
-    // missed entirely, so a purge script written the async way earned no floor.
+    // The pattern covers the shapes that need no import resolution: qualified
+    // `fs.` access, an unmistakably destructive call name, a recursive/force
+    // options object, and the shell forms. `analyzeFsDeletion` covers everything
+    // that depends on WHAT A BINDING RESOLVES TO — aliases, namespaces, CJS
+    // destructuring, and calls arbitrarily far from their import.
     pattern:
-      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\bnode:fs\/promises\b[\s\S]{0,200}?\b(?:rm|unlink)\s*\(|\brimraf\b|\brm\s+-rf\b)/,
+      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\brm\s+-rf\b)/,
+    detect: (text) => analyzeFsDeletion(text).capable,
     note: 'deletes files with no undo',
   },
   {
@@ -334,6 +509,11 @@ export const CAPABILITY_SIGNATURES = [
 /**
  * Detect the capabilities present in a blob of source text.
  *
+ * A signature may carry a `pattern`, a `detect(text)` analyzer, or both; either
+ * firing is enough. The analyzer form exists because some capabilities are not
+ * decidable by one regex over raw text — filesystem deletion depends on what a
+ * module binding RESOLVES to, which needs a second pass.
+ *
  * @param {string} text
  * @returns {Array<{name:string, tier:string, note:string}>}
  */
@@ -341,7 +521,8 @@ export function detectCapabilities(text) {
   if (typeof text !== 'string' || text.length === 0) return [];
   const found = [];
   for (const sig of CAPABILITY_SIGNATURES) {
-    if (sig.pattern.test(text)) {
+    const matched = (sig.pattern && sig.pattern.test(text)) || (sig.detect && sig.detect(text));
+    if (matched) {
       found.push({ name: sig.name, tier: sig.tier, note: sig.note });
     }
   }

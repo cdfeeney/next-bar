@@ -7,7 +7,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,6 +21,12 @@ import {
   normalizeMap,
   validateTierMap,
 } from '../lib/tier-classify-core.mjs';
+import {
+  collectChangedPaths,
+  parseNameStatusZ,
+  recoverDeletedContents,
+} from '../lib/changed-paths-core.mjs';
+import { analyzeFsDeletion } from '../lib/tier-capabilities.mjs';
 import { globMatch, normalizePath } from '../lib/tier-glob.mjs';
 
 const { map: PROJECT_MAP, source: MAP_SOURCE } = loadTierMap(REPO_ROOT);
@@ -313,4 +320,155 @@ describe('skippable is not granted to anything that can act', () => {
     });
     expect(result.tier).not.toBe('T0');
   });
+});
+
+describe('filesystem deletion is resolved by binding, not by proximity', () => {
+  // The unit-level view of the round-4 case-table entries: these assert the
+  // ANALYZER's reasoning, so a future "simplification" back to a distance
+  // heuristic fails here with a message that names the mechanism.
+  it('records which binding earned the floor', () => {
+    const result = analyzeFsDeletion("import { rm as nuke } from 'node:fs/promises';\nawait nuke('x');\n");
+    expect(result.capable).toBe(true);
+    expect(result.evidence.join(' ')).toMatch(/imports rm from 'node:fs\/promises'/);
+  });
+
+  it('is unaffected by the distance between import and call', () => {
+    const near = "import { rm } from 'node:fs/promises';\nawait rm('x');\n";
+    const far = `import { rm } from 'node:fs/promises';\n${'// filler\n'.repeat(400)}await rm('x');\n`;
+    expect(analyzeFsDeletion(near).capable).toBe(true);
+    expect(analyzeFsDeletion(far).capable).toBe(true);
+  });
+
+  it('does not fire on a namespace import that only reads', () => {
+    expect(analyzeFsDeletion("import * as fs from 'node:fs';\nfs.readFileSync('a');\n").capable).toBe(false);
+  });
+
+  it('does not fire on unrelated modules that export a name called remove', () => {
+    expect(analyzeFsDeletion("import { remove } from 'lodash';\nremove(list, fn);\n").capable).toBe(false);
+  });
+});
+
+describe('deleted paths are graded on what was removed', () => {
+  // Before this, a deleted file had no content to analyze, so EVERY removed
+  // runtime path was AMBIGUOUS and therefore T0 + escalated. Routine cleanup of
+  // ordinary components fired the full five-family panel. The full-repository
+  // sweep could not see it because it only ever fed the classifier files that
+  // exist.
+  const deleted = ['src/components/OldCard.tsx', 'src/lib/oldHelper.ts'];
+
+  it('an ordinary deleted component is T1, not an ambiguous T0', () => {
+    const result = classifyPaths(deleted, PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      deletedPaths: deleted,
+      contents: {
+        'src/components/OldCard.tsx': 'export const OldCard = () => null;\n',
+        'src/lib/oldHelper.ts': 'export const help = 1;\n',
+      },
+    });
+    expect(result.tier).toBe('T1');
+    expect(result.ambiguousCount).toBe(0);
+    expect(result.escalated).toBe(false);
+    expect(result.perPath[0].reasons.join(' ')).toMatch(/pre-deletion content/);
+  });
+
+  it('deleting something dangerous still earns its floor', () => {
+    const path = 'scripts/purge-photos.mjs';
+    const result = classifyPaths([path], PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      deletedPaths: [path],
+      contents: { [path]: "import { rm } from 'node:fs/promises';\nawait rm('public/photos');\n" },
+    });
+    expect(result.tier).toBe('T0');
+  });
+
+  it('a deletion whose prior content cannot be recovered still fails closed', () => {
+    // "We know it was removed" is not "we know what it could do", and only the
+    // second is grounds for a low tier.
+    const path = 'src/lib/vanished.ts';
+    const result = classifyPaths([path], PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      deletedPaths: [path],
+      contents: { [path]: null },
+    });
+    expect(result.tier).toBe('T0');
+    expect(result.ambiguousCount).toBe(1);
+    expect(result.escalated).toBe(true);
+    expect(result.perPath[0].reasons.join(' ')).toMatch(/could not be recovered/);
+  });
+
+  it('a malformed deletedPaths grants no exemptions', () => {
+    // The safe direction for a bad input is FEWER recognised deletions.
+    const path = 'src/lib/vanished.ts';
+    for (const bogus of ['src/lib/vanished.ts', 42, null, undefined]) {
+      const result = classifyPaths([path], PROJECT_MAP, { repoRoot: REPO_ROOT, deletedPaths: bogus });
+      expect(result.tier, `deletedPaths=${JSON.stringify(bogus)}`).toBe('T0');
+    }
+  });
+});
+
+describe('git change evidence', () => {
+  it('splits a rename into a deletion and an addition without desynchronising', () => {
+    // `--name-status -z` is a flat field stream, and a rename is THREE fields
+    // (`R100 old new`) where everything else is two. Reading it as pairs
+    // mislabels every record after the first rename — which would have silently
+    // renamed the wrong files into the wrong tiers.
+    const stream = ['M', 'a.ts', 'R100', 'old.ts', 'new.ts', 'D', 'gone.ts', ''].join('\0');
+    const { entries, malformed } = parseNameStatusZ(stream);
+    expect(malformed).toBe(0);
+    expect(entries).toEqual([
+      { status: 'M', path: 'a.ts' },
+      { status: 'D', path: 'old.ts' },
+      { status: 'A', path: 'new.ts' },
+      { status: 'D', path: 'gone.ts' },
+    ]);
+  });
+
+  it('counts a truncated final record instead of guessing', () => {
+    const { entries, malformed } = parseNameStatusZ(['M', 'a.ts', 'D'].join('\0'));
+    expect(entries).toEqual([{ status: 'M', path: 'a.ts' }]);
+    expect(malformed).toBe(1);
+  });
+
+  // An explicit timeout, well above the 5s default: this is the one test here
+  // that spawns real git processes (six of them), and on Windows under a fully
+  // parallel suite that exceeded the default and failed as a timeout rather
+  // than an assertion. A gate suite that goes red under load is a gate people
+  // stop believing.
+  it('collects real deletions from a repository and recovers their content', () => {
+    // mkdtempSync, not a fixed path: this repository is developed in ~25
+    // concurrent worktrees and a shared fixture directory raced.
+    const root = mkdtempSync(join(tmpdir(), 'next-bar-tier-deleted-'));
+    const git = (...args) => execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.invalid');
+      git('config', 'user.name', 'test');
+      mkdirSync(join(root, 'src'), { recursive: true });
+      writeFileSync(join(root, 'package.json'), '{}\n');
+      writeFileSync(join(root, 'src', 'gone.ts'), 'export const gone = 1;\n');
+      writeFileSync(join(root, 'src', 'moved.ts'), 'export const moved = 2;\n');
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+
+      rmSync(join(root, 'src', 'gone.ts'));
+      git('mv', 'src/moved.ts', 'src/renamed.ts');
+
+      const collected = collectChangedPaths({ repoRoot: root });
+      expect(collected.deleted).toContain('src/gone.ts');
+      // The old half of a rename is a deletion at that location…
+      expect(collected.deleted).toContain('src/moved.ts');
+      // …and the new half is present on disk, so it is never called deleted.
+      expect(collected.deleted).not.toContain('src/renamed.ts');
+
+      const { contents, recovered, unrecoverable } = recoverDeletedContents(collected.deleted, {
+        repoRoot: root,
+        revisions: ['HEAD'],
+      });
+      expect(unrecoverable).toEqual([]);
+      expect(recovered).toContain('src/gone.ts');
+      expect(contents['src/gone.ts']).toBe('export const gone = 1;\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

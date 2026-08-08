@@ -53,6 +53,20 @@ export const FALLBACK_TIER_MAP = {
 const isTier = (t) => t === 'T0' || t === 'T1' || t === 'T2';
 
 /**
+ * Normalize a path list into a lookup Set.
+ *
+ * A malformed or missing value yields an EMPTY set on purpose: an unrecognised
+ * `deletedPaths` then means "no deletion evidence", so removed files fall back
+ * to the unanalyzable branch and fail closed at T0. The safe direction for a bad
+ * input here is fewer recognised deletions, never more.
+ */
+function toPathSet(value) {
+  if (value instanceof Set) return new Set([...value].map(normalizePath));
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.filter((p) => typeof p === 'string' && p.length > 0).map(normalizePath));
+}
+
+/**
  * Find the repository root by walking UP from a starting directory until a
  * directory contains `.git` or `package.json`.
  *
@@ -178,14 +192,17 @@ function mapTierFor(path, compiledRules) {
  *
  * @param {string} rawPath
  * @param {object} map normalized tier map
- * @param {object} [opts] `{repoRoot, contents}` — `contents` maps path→source
- *   text (or null for "absent"), letting tests classify hypothetical files that
- *   are not on disk.
+ * @param {object} [opts] `{repoRoot, contents, deletedPaths}` — `contents` maps
+ *   path→source text (or null for "absent"), letting tests classify
+ *   hypothetical files that are not on disk. `deletedPaths` names the paths git
+ *   reports as REMOVED, whose text in `contents` therefore comes from the base
+ *   revision rather than the working tree.
  */
 export function classifyOnePath(rawPath, map, opts = {}) {
-  const { repoRoot = REPO_ROOT, contents } = opts;
+  const { repoRoot = REPO_ROOT, contents, deletedPaths } = opts;
   const path = normalizePath(rawPath);
   const reasons = [];
+  const isDeleted = toPathSet(deletedPaths).has(path);
 
   const inert = isInertPath(path);
   const binaryAsset = isInertBinary(path);
@@ -206,6 +223,12 @@ export function classifyOnePath(rawPath, map, opts = {}) {
     // step 2 below, because instructions an agent follows really can act.
     reasons.push('non-executable file type — content is prose, not capability');
   } else if (read.status === 'ok') {
+    if (isDeleted) {
+      // A deletion is graded on what was actually removed, recovered from the
+      // base revision — so it keeps its real risk without every removed runtime
+      // file becoming an unanalyzable T0.
+      reasons.push('deleted path — classified from its pre-deletion content in the base revision');
+    }
     capabilities = detectCapabilities(read.text);
     for (const cap of capabilities) {
       tier = maxTier(tier, cap.tier);
@@ -218,10 +241,15 @@ export function classifyOnePath(rawPath, map, opts = {}) {
   } else {
     // Fail closed: we could NOT establish that this change lacks a high-risk
     // capability, so it is T0 and explicitly escalated for a human to look at.
+    // A KNOWN deletion whose pre-deletion content could not be recovered lands
+    // here too, and must: "we know it was removed" is not the same as "we know
+    // what it could do", and only the second one is grounds for a low tier.
     ambiguous = true;
     tier = 'T0';
     reasons.push(
-      `AMBIGUOUS: content ${read.status} and path is not demonstrably inert — cannot establish absence of a high-risk capability`,
+      isDeleted
+        ? 'AMBIGUOUS: path is deleted and its pre-deletion content could not be recovered — cannot establish absence of a high-risk capability'
+        : `AMBIGUOUS: content ${read.status} and path is not demonstrably inert — cannot establish absence of a high-risk capability`,
     );
   }
 

@@ -30,12 +30,55 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { REPO_ROOT } from './tier-classify-core.mjs';
+import { normalizePath } from './tier-glob.mjs';
 
 /** Split NUL-separated git output. */
 function splitZ(out) {
   return out === null ? [] : out.split('\0').filter((p) => p.length > 0);
+}
+
+/**
+ * Parse `git diff --name-status -z` into `{status, path}` entries.
+ *
+ * The format is a flat NUL-separated field stream, not one record per field:
+ * an ordinary change is `STATUS\0PATH`, but a rename or copy is
+ * `R100\0OLD\0NEW` — three fields. Reading it as pairs would desynchronise the
+ * whole stream after the first rename and mislabel every entry that follows, so
+ * the arity is decided per record.
+ *
+ * A rename yields BOTH halves: the old path is a deletion (its content is gone
+ * from that location) and the new path is an addition.
+ *
+ * @returns {{entries: Array<{status:string, path:string}>, malformed: number}}
+ */
+export function parseNameStatusZ(out) {
+  const fields = splitZ(out);
+  const entries = [];
+  let malformed = 0;
+  for (let i = 0; i < fields.length; ) {
+    const status = fields[i];
+    const arity = /^[RC]/.test(status) ? 3 : 2;
+    if (i + arity > fields.length) {
+      // A truncated final record means we cannot say what changed. Counted, not
+      // ignored: the caller turns this into a failure, because a partially
+      // parsed change set that looks complete is exactly how a gate goes green
+      // having inspected the wrong files.
+      malformed += 1;
+      break;
+    }
+    if (arity === 3) {
+      entries.push({ status: 'D', path: fields[i + 1] });
+      entries.push({ status: 'A', path: fields[i + 2] });
+    } else {
+      entries.push({ status: status[0], path: fields[i + 1] });
+    }
+    i += arity;
+  }
+  return { entries, malformed };
 }
 
 /**
@@ -45,9 +88,12 @@ function splitZ(out) {
  * @param {string|null} [opts.base] explicit base ref; falls back to
  *   `GITHUB_BASE_REF`, then `origin/HEAD|main|master`
  * @param {string} [opts.repoRoot]
- * @returns {{paths: string[], failures: string[], base: string|null}}
+ * @returns {{paths: string[], deleted: string[], failures: string[], base: string|null}}
  *   `failures` non-empty means the set may be INCOMPLETE — callers must treat
- *   that as an error, never as "no changes".
+ *   that as an error, never as "no changes". `deleted` lists the paths git
+ *   reports as removed (including the old half of a rename) that are also
+ *   absent from the working tree, so they can be classified from their
+ *   pre-deletion content instead of failing closed as unanalyzable.
  */
 export function collectChangedPaths(opts = {}) {
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
@@ -105,7 +151,21 @@ export function collectChangedPaths(opts = {}) {
   }
 
   const paths = new Set();
-  for (const p of splitZ(git(['diff', '--name-only', '-z', 'HEAD'], 'diff HEAD'))) paths.add(p);
+  const deletedCandidates = new Set();
+
+  /** Run a name-status diff and fold it into the path/deletion sets. */
+  function addDiff(args, label) {
+    const { entries, malformed } = parseNameStatusZ(git(args, label));
+    if (malformed > 0) {
+      failures.push(`git ${label} produced ${malformed} unparseable --name-status record(s)`);
+    }
+    for (const { status, path } of entries) {
+      paths.add(path);
+      if (status === 'D') deletedCandidates.add(path);
+    }
+  }
+
+  addDiff(['diff', '--name-status', '-z', 'HEAD'], 'diff HEAD');
   for (const p of splitZ(git(['ls-files', '--others', '--exclude-standard', '-z'], 'ls-files --others'))) {
     paths.add(p);
   }
@@ -113,9 +173,7 @@ export function collectChangedPaths(opts = {}) {
   const base = resolveBase();
   if (base) {
     // Three-dot: everything HEAD changed since it diverged from the base.
-    for (const p of splitZ(git(['diff', '--name-only', '-z', `${base}...HEAD`], `diff ${base}...HEAD`))) {
-      paths.add(p);
-    }
+    addDiff(['diff', '--name-status', '-z', `${base}...HEAD`], `diff ${base}...HEAD`);
   } else {
     failures.push(
       'no base ref resolved — only working-tree and untracked changes are included, ' +
@@ -123,5 +181,65 @@ export function collectChangedPaths(opts = {}) {
     );
   }
 
-  return { paths: [...paths].sort(), failures, base };
+  // A path can be reported deleted by one source and re-added by another (removed
+  // in a commit, restored in the working tree). Presence on disk is the ground
+  // truth, so it overrules the status letter.
+  const deleted = [...deletedCandidates].filter((p) => !existsSync(join(repoRoot, normalizePath(p))));
+
+  return { paths: [...paths].sort(), deleted: deleted.sort(), failures, base };
+}
+
+/**
+ * Recover the pre-deletion content of removed paths from a git revision.
+ *
+ * WHY: a deleted file has no content on disk, so capability analysis could not
+ * establish that it lacked a high-risk capability and every deleted runtime path
+ * classified AMBIGUOUS — therefore T0 and escalated. That is a continuous
+ * false-positive channel: routine cleanup of five ordinary components fired the
+ * full five-family T0 panel. It went unnoticed because the full-repository sweep
+ * only ever fed it files that exist.
+ *
+ * The evidence git already holds fixes it. `git show <rev>:<path>` returns what
+ * the file CONTAINED before it was removed, so a deletion is classified by what
+ * was actually deleted: removing a purge script still earns its T0 floor,
+ * removing a plain component does not. Recovery failure is NOT downgraded — the
+ * path stays unanalyzable and keeps failing closed.
+ *
+ * @param {string[]} paths deleted repo-relative paths
+ * @param {object} [opts] `{repoRoot, revisions}` — revisions are tried in order
+ * @returns {{contents: Record<string,string|null>, recovered: string[], unrecoverable: string[]}}
+ */
+export function recoverDeletedContents(paths, opts = {}) {
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+  const revisions = (opts.revisions ?? ['HEAD']).filter((r) => typeof r === 'string' && r.length > 0);
+  const contents = {};
+  const recovered = [];
+  const unrecoverable = [];
+
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    const path = normalizePath(raw);
+    let text = null;
+    for (const rev of revisions) {
+      let buf;
+      try {
+        buf = execFileSync('git', ['show', `${rev}:${path}`], {
+          cwd: repoRoot,
+          encoding: 'buffer',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          maxBuffer: 64 * 1024 * 1024,
+        });
+      } catch {
+        continue; // the path did not exist at that revision — try the next one
+      }
+      // A NUL byte in the first 8 KB means binary; text signatures are
+      // meaningless there, and decoding it would feed garbage to the scanner.
+      if (buf.subarray(0, 8192).includes(0)) break;
+      text = buf.toString('utf8').replace(/\r\n/g, '\n');
+      break;
+    }
+    contents[path] = text;
+    (text === null ? unrecoverable : recovered).push(path);
+  }
+
+  return { contents, recovered, unrecoverable };
 }

@@ -22,8 +22,12 @@
  * Zero runtime dependencies — Node built-ins only.
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { classifyPaths, loadTierMap, validateTierMap, REPO_ROOT } from './lib/tier-classify-core.mjs';
-import { collectChangedPaths } from './lib/changed-paths-core.mjs';
+import { collectChangedPaths, recoverDeletedContents } from './lib/changed-paths-core.mjs';
+import { normalizePath } from './lib/tier-glob.mjs';
 
 /** Read all of stdin as UTF-8. Returns '' when stdin is a TTY (no input piped). */
 async function readStdin() {
@@ -111,16 +115,20 @@ async function main() {
   // its last command's status), so a git failure became "no changed paths given"
   // and a reassuring default tier — a green gate that inspected nothing.
   let input;
+  let deletedPaths = [];
+  let base = null;
   if (argv.includes('--changed')) {
     const baseIndex = argv.indexOf('--base');
-    const base = baseIndex >= 0 && baseIndex + 1 < argv.length ? argv[baseIndex + 1] : null;
-    const collected = collectChangedPaths({ base, repoRoot: REPO_ROOT });
+    const requestedBase = baseIndex >= 0 && baseIndex + 1 < argv.length ? argv[baseIndex + 1] : null;
+    const collected = collectChangedPaths({ base: requestedBase, repoRoot: REPO_ROOT });
     if (collected.failures.length > 0) {
       process.stderr.write('tier-classify: cannot determine the changed set — refusing to report a tier.\n');
       for (const failure of collected.failures) process.stderr.write(`  - ${failure}\n`);
       process.exit(2);
     }
     input = collected.paths;
+    deletedPaths = collected.deleted;
+    base = collected.base;
     if (input.length === 0) {
       process.stderr.write(
         `tier-classify: no changes found (working tree clean; ${
@@ -130,6 +138,11 @@ async function main() {
     }
   } else {
     input = parsePaths(await readStdin());
+    // No `--name-status` evidence on this path, but git still holds the other
+    // half of it: a path that is absent from the working tree AND present in a
+    // reachable revision is an evidenced deletion. Anything else stays
+    // unrecognised and keeps failing closed.
+    deletedPaths = input.filter((p) => !existsSync(join(REPO_ROOT, normalizePath(p))));
   }
 
   if (validate) {
@@ -148,7 +161,30 @@ async function main() {
     process.exit(result.ok ? 0 : 2);
   }
 
-  const result = classifyPaths(input, map, { repoRoot: REPO_ROOT });
+  // Deleted files have no content on disk, so without this every removed runtime
+  // path classified AMBIGUOUS and therefore T0 — a continuous false-positive
+  // channel fired by routine cleanup. `git show <rev>:<path>` supplies what the
+  // file CONTAINED, so the deletion is graded on what was actually removed.
+  // Recovery failures are not downgraded: they stay absent and still fail closed.
+  const { contents, recovered, unrecoverable } = recoverDeletedContents(deletedPaths, {
+    repoRoot: REPO_ROOT,
+    revisions: [...new Set(['HEAD', base].filter(Boolean))],
+  });
+
+  // ALL deleted paths are declared, not just the recovered ones, so an
+  // unrecoverable deletion reports why it is unanalyzable instead of looking
+  // like a file that mysteriously went missing.
+  const result = classifyPaths(input, map, { repoRoot: REPO_ROOT, contents, deletedPaths });
+  if (recovered.length > 0) {
+    result.warnings.push(
+      `${recovered.length} deleted path(s) classified from pre-deletion content in the base revision`,
+    );
+  }
+  if (unrecoverable.length > 0) {
+    result.warnings.push(
+      `${unrecoverable.length} deleted path(s) had no recoverable pre-deletion content — still failing closed`,
+    );
+  }
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ...result, tierMapSource: source }, null, 2)}\n`);
   } else {
