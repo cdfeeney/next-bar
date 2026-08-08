@@ -1167,6 +1167,17 @@ describe('resume state matrix', () => {
         });
         roundWriter.close();
         counts.push(doneRecords());
+        // Checked EVERY round, not only at the end. Two writers produce a
+        // resumed 'cleared' — the settle branch and resumeChildren — and
+        // whichever one is asked first, the OTHER repairs the manifest on the
+        // following resume. An end-state assertion is therefore satisfied by
+        // the surviving guard and cannot see the missing one. The lie has to be
+        // caught in the round that tells it.
+        const mid = loadManifest(file)!.cells.get(cell.id);
+        expect(
+          mid.terminalStatus === 'cleared' && !mid.lastOk,
+          `round ${round + 1}: recorded 'cleared' for a cell with no successful attempt`,
+        ).toBe(false);
       }
       const final = loadManifest(file)!;
       expect(
@@ -1181,50 +1192,6 @@ describe('resume state matrix', () => {
       ).toBe(true);
     },
   );
-
-  it('invariant 20b — the original settle-branch shape, pinned explicitly', async () => {
-    // Forged/hand-edited shape: children finished, parent never attempted. The
-    // settle branch used to write 'cleared' over it, which left the parent
-    // still without evidence, so `isCompleting` stayed false and the NEXT
-    // resume appended another 'cleared' — unbounded growth, completeness
-    // refusing it, and ackEligibility declining a never-attempted cell.
-    const cell = baseCell();
-    const kids = realKids();
-    const file = path.join(dir, 'forged-subdivide.jsonl');
-    const writer = openManifest(file);
-    writer.plan({ configHash: configHash({ t: 'forged-subdivide' }), cells: [cell] });
-    writer.subdivide(cell.id, kids.map((k) => k.id), kids);
-    for (const kid of kids) {
-      writer.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
-      writer.result(kid.id, [{ id: `fs-${kid.id}` }]);
-      writer.done(kid.id, 'unsaturated');
-    }
-    writer.close();
-
-    const doneRecords = () =>
-      fs.readFileSync(file, 'utf8').split('\n').filter((line) => line.includes('"type":"DONE"'))
-        .length;
-
-    const counts: number[] = [doneRecords()];
-    for (let round = 0; round < 3; round++) {
-      const roundWriter = openManifest(file);
-      await sweep({
-        cells: [cell],
-        manifest: roundWriter,
-        state: loadManifest(file),
-        subdivision: SUBDIVISION,
-        maxResultCount: CAP,
-        transport: healthyTransport([]),
-      });
-      roundWriter.close();
-      counts.push(doneRecords());
-    }
-    expect(
-      counts[counts.length - 1],
-      `DONE records grew every resume: ${counts.join(' -> ')}`,
-    ).toBe(counts[1]);
-    expect(completeness(loadManifest(file)!).complete, 'never converged').toBe(true);
-  });
 
   it('invariant 21 — a parent whose child permanently fails does not record cleared', async () => {
     // The terminal-outcome lists accept only real statuses; `null` means the
