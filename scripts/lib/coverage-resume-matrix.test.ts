@@ -8,6 +8,7 @@ import { SweepInterrupted, runSweep } from './coverage-sweep-engine.mjs';
 import {
   BLOCKING_ERROR_CLASSES,
   SATURATED_AT_FLOOR,
+  ackEligibility,
   completeness,
   configHash,
   loadManifest,
@@ -971,6 +972,112 @@ describe('resume state matrix', () => {
       emitted.filter((id) => id === 'shared-place').length,
       'resume collapsed a place that a live run emits once per node',
     ).toBe(2);
+  });
+
+  it.each(SETTLED_STATES.map((state) => [state.name, state] as const))(
+    'invariant 16 — resuming settled "%s" appends nothing at all',
+    async (_name, state) => {
+      // Not spending a CALL is not the same as writing no RECORD, and only the
+      // first was ever asserted. A settled cell that re-walks its subtree and
+      // re-appends its DONE grows the manifest without bound across resumes —
+      // which is exactly what an omitted floor case did before this round.
+      const { cell, file } = build(state);
+      const before = fs.readFileSync(file, 'utf8');
+      const writer = openManifest(file);
+      await sweep({
+        cells: [cell],
+        manifest: writer,
+        state: loadManifest(file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: healthyTransport([]),
+      });
+      writer.close();
+      expect(
+        fs.readFileSync(file, 'utf8'),
+        `${state.name}: resuming a settled manifest appended records`,
+      ).toBe(before);
+    },
+  );
+
+  it('invariant 17 — a waiver is refused while a child is not genuinely settled', () => {
+    // ackEligibility is the third judge of "is this finished", and nothing in
+    // this matrix constrained it — deliberately, because the invariants must
+    // not defer to it. That left it free to drift: testing raw status
+    // membership, it read a forged ack_terminal child as finished, killed its
+    // own "acknowledge those children instead" refusal, and let the operator
+    // waive a parent whose child was still outstanding.
+    const cell = baseCell();
+    const kids = realKids();
+    const file = path.join(dir, 'ack-forged-child.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'ack-forged-child' }), cells: [cell] });
+    writer.attempt({ cellId: cell.id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(cell.id, page(CAP, 'y'));
+    writer.subdivide(cell.id, kids.map((k) => k.id), kids);
+    for (const kid of kids.slice(0, 3)) {
+      writer.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+      writer.result(kid.id, [{ id: `y-${kid.id}` }]);
+      writer.done(kid.id, 'unsaturated');
+    }
+    writer.done(kids[3].id, 'ack_terminal'); // forged: no ACK_TERMINAL record
+    // A permanent failure on the parent, so nothing else would refuse it.
+    writer.attempt({ cellId: cell.id, attemptN: 2, ok: false, errorClass: 'http4xx' });
+    writer.close();
+
+    const verdict = ackEligibility(loadManifest(file), cell.id);
+    expect(
+      verdict.eligible,
+      'a parent was waivable while one of its children was still outstanding',
+    ).toBe(false);
+    expect(verdict.reason).toContain('subdivision is unfinished');
+  });
+
+  it('invariant 18 — an abort keeps the recorded places of cells it never reached', async () => {
+    // Every other case seeds ONE root, so `cells` has no successors and the
+    // top-level abort path is structurally unobservable. Two roots make it
+    // observable: the first aborts, and the second — already complete on disk,
+    // never visited this run — must still reach the rebuilt queue.
+    const first = baseCell();
+    const second = { ...planCells(BBOX, 360, { prefix: 'n:1' })[0], kind: 'nearby' };
+    const file = path.join(dir, 'two-roots.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'two-roots' }), cells: [first, second] });
+    writer.attempt({ cellId: second.id, attemptN: 1, ok: true, count: 2, capped: false });
+    writer.result(second.id, page(2, 'z'));
+    writer.done(second.id, 'unsaturated');
+    writer.close();
+
+    for (const stopper of ['budget', 'interrupt'] as const) {
+      const run = path.join(dir, `two-roots-${stopper}.jsonl`);
+      fs.copyFileSync(file, run);
+      const emitted: string[] = [];
+      const runWriter = openManifest(run);
+      await sweep({
+        cells: [first, second],
+        manifest: runWriter,
+        state: loadManifest(run),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        maxCalls: stopper === 'budget' ? 0 : Infinity,
+        transport: async () => {
+          if (stopper === 'interrupt') throw new SweepInterrupted();
+          return { places: [] };
+        },
+        onPlaces: (places: any[]) => places.forEach((place) => emitted.push(place.id)),
+      });
+      runWriter.close();
+      for (const place of page(2, 'z')) {
+        expect(
+          emitted.includes(place.id),
+          `${stopper}: dropped ${place.id}, recorded for a planned cell the abort never reached`,
+        ).toBe(true);
+      }
+      expect(
+        [...new Set(emitted.filter((id, at) => emitted.indexOf(id) !== at))],
+        `${stopper}: replayed a node twice`,
+      ).toEqual([]);
+    }
   });
 
   it('the matrix registers every state it claims, and invariant 5 is not a no-op', () => {
