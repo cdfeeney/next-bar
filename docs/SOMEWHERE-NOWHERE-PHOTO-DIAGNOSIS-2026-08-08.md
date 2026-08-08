@@ -4,10 +4,30 @@ Goal `g-bfb6937a-8f18-477f-af93-17d92cac1d05` (Item 7). Tier **T1**.
 Scope: the **safe local half only**. No Staging access, no live Google widget, no paid API.
 Deliberately separate from Item 6's general Google-card polish.
 
-**Bottom line: the data is not the problem, and the app's render path is not the problem.**
-Every layer that could suppress this card locally is ruled out with executable evidence. What
-remains — whether the deployed row and the live widget behave the same way — is
-**`BLOCKED_ATTENDED`** and is listed as a checklist at the end.
+**Bottom line: the catalog data is internally consistent, and the mission's live hypothesis — a
+snake_case/camelCase mismatch — is refuted.** The app's React-level render path renders correctly
+when handed a successful Google response.
+
+**Three things are explicitly NOT ruled out**, and the earlier wording of this summary ("the data is
+not the problem, and the app's render path is not the problem… every layer that could suppress this
+card locally is ruled out") overstated all three. All four review lanes said so independently;
+they are named here rather than buried in the body:
+
+- **R1 — the lazy-mount observer may never fire.** No timer is armed until `build()` runs, so a card
+  that never intersects sits on an empty pending host forever, with no fallback. App-owned, local,
+  and matching the symptom exactly. See §4–5.
+- **R2 — the runtime gate can fail for ONE card.** A *failed* `/api/flags` check is deliberately not
+  cached, so a single 3s timeout suppresses that one widget while a later card succeeds and shows a
+  photo. This is the one deployment gate that does **not** apply uniformly to every bar. See §3 row 6.
+- **R3 — geometry and the provider's own rendering are unverified.** jsdom performs no layout, so the
+  local tests prove class strings, not boxes; and Google's content is closed-shadow and was never
+  rendered here. See §4–5.
+
+"Value correctness" is also out of reach locally: these tests prove the two sources agree on a place
+id, not that the id names the real venue or that Google still holds photos for it.
+
+What remains is therefore **three** buckets, not two — deployed configuration, provider data, **and
+app-side per-card behaviour (R1/R2)** — all **`BLOCKED_ATTENDED`**, with the checklist at the end.
 
 ---
 
@@ -36,20 +56,34 @@ conclude "the data is missing" — which is false. Pinned as a test:
 `src/lib/somewhereNowhere.diagnosis.test.ts` asserts BOTH that `row.photo_count === 3` and that
 `row.photoCount`/`row.googlePlaceId` are `undefined` on the raw row.
 
-**The boundary is crossed in exactly one place**, so it cannot drift: **`rowToBar`**
+**For the photo-bearing fields the boundary is crossed in exactly one place**, so it cannot drift
+(see the narrowing note below for the one unrelated mapper elsewhere in the repo): **`rowToBar`**
 (`src/lib/catalogServer.ts:60`, mapping at `:95-99`) converts `place_id -> googlePlaceId`,
 `business_status -> businessStatus`, `photo_count -> photoCount`. Every consumer reaches that one
 function: the client-side catalog swap via the batch wrapper `rowsToCatalog`
 (`src/components/CatalogRefresh.tsx:6`), and the server single-bar lookup by importing `rowToBar`
-DIRECTLY (`src/lib/barServer.ts:3`, called at `:53`). **No mismatch exists in application code.**
-This was the mission's live hypothesis; it is refuted.
+DIRECTLY (`src/lib/barServer.ts:3`, called at `:53`). **No mismatch exists on any path that carries
+photo data.** This was the mission's live hypothesis; it is refuted.
 (santa: Codex — an earlier draft said both consumers import `rowsToCatalog`, which is wrong: the
 server path imports `rowToBar`. The shared boundary is `rowToBar`; `rowsToCatalog` is the batch
 validator around it.)
 
+**Scope of that claim, narrowed (santa: Codex round 2).** "Exactly one place" is true for the
+photo-bearing fields, not for the repository as a whole: `cardFromTable` in
+`src/app/share/[barId]/opengraph-image.tsx` independently maps `price_tier → priceTier` for the
+edge Open Graph card, bypassing `rowToBar` entirely. It selects only `name, neighborhood,
+price_tier` and never touches `place_id`, `photo_count` or `business_status`, so it cannot be
+implicated in this symptom — but a blanket "the boundary is crossed in exactly one place in this
+codebase" would be false, and is not claimed.
+
 ---
 
 ## 3. Full condition trace — every gate, with the line that governs it
+
+**Anchors verified against commit `1629ac0`.** `ResultCard.tsx` and `GooglePlacePhoto.tsx` are
+shared with Item 6 (goal g-65ba768e) and moved by +14 and +1 lines respectively after this document
+was first written, which silently staled every anchor into them — caught by two reviewers. If a
+citation below lands somewhere unexpected, trust the named symbol, not the number, and re-verify.
 
 | # | Condition | Governing site | Verdict for this bar |
 |---|---|---|---|
@@ -58,15 +92,15 @@ validator around it.)
 | 3 | **Eligibility — legacy tier** | `src/lib/mediaPolicy.ts:127` (`NEXT_PUBLIC_LEGACY_PHOTOS === '1'`) | fail-closed; deliberately OFF for compliance |
 | 4 | **Eligibility — terminal** | `src/lib/mediaPolicy.ts:132` | with both flags off returns `glyph` → **no photos, by design** |
 | 5 | **Eligibility — API key** | read at MODULE SCOPE `src/lib/placesUiKit.ts:22`; checked at `:46` | fail-closed if `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` absent. **Also `NEXT_PUBLIC_*`, so also build-inlined** — a bundle built without the key stays unconfigured no matter how the environment is edited afterwards. (santa: Codex.) |
-| 6 | **Eligibility — runtime gate** | `src/lib/placesUiKit.ts:140` → `src/app/api/flags/route.ts:39` (`GOOGLE_MEDIA_RUNTIME_ENABLED === '1'`) | fail-closed on any error/timeout/non-200 |
-| 7 | **Rendering — branch** | `src/components/ResultCard.tsx:213`, `:228`, `:232` | takes the google-live branch iff (1)+(2) hold |
-| 8 | **Rendering — widget host** | `src/components/ResultCard.tsx:240` (`GooglePlacePhotoLazy`) | `next/dynamic`, `ssr:false` |
-| 9 | **Mounting — lazy** | `src/components/GooglePlacePhoto.tsx:321,332` (`IntersectionObserver`, `rootMargin:200px`) | builds only once the card nears the viewport |
-| 10 | **Sizing** | `src/components/GooglePlacePhoto.tsx:379`; enclosing article `src/components/ResultCard.tsx:231` | host: `aspect-[21/9]` while pending, plain `w-full` when ready — no height cap, no `overflow-hidden` on the host itself. The enclosing `<article>` DOES carry `overflow-hidden` (for its `rounded-3xl` corners), but imposes **no height**, so its box grows with content and cannot clip in-flow widget content or the attribution. It WOULD clip out-of-flow content anchored past the article bounds. |
+| 6 | **Eligibility — runtime gate** | `src/lib/placesUiKit.ts:140` → `src/app/api/flags/route.ts:39` (`GOOGLE_MEDIA_RUNTIME_ENABLED === '1'`) | fail-closed on any error/timeout/non-200. **NOT uniform across cards — this is residual R2.** The route itself takes no bar input, but the *fetch* happens per widget creation and a FAILED check is deliberately never cached (`placesUiKit.ts:131-133`, and only the success branch assigns `runtimeFlag`). So one card whose fetch exceeds the 3s budget renders the glyph while the very next card, fetching after the failure, succeeds and shows a photo. That is a single-bar mechanism inside the app. (santa: DeepSeek — lane-unique.) |
+| 7 | **Rendering — branch** | `src/components/ResultCard.tsx:227` (`resolveMedia`), `:242` (`isGoogleLive`), `:246` | takes the google-live branch iff (1)+(2) hold |
+| 8 | **Rendering — widget host** | `src/components/ResultCard.tsx:254` (`GooglePlacePhotoLazy`) | `next/dynamic`, `ssr:false` |
+| 9 | **Mounting — lazy** | `src/components/GooglePlacePhoto.tsx:322,333` (`IntersectionObserver`, `rootMargin:200px`) | builds only once the card nears the viewport |
+| 10 | **Sizing** | `src/components/GooglePlacePhoto.tsx:385-391`; enclosing article `src/components/ResultCard.tsx:245` | host: `aspect-[21/9]` while pending, plain `w-full` when ready — no height cap, no `overflow-hidden` on the host itself. The enclosing `<article>` DOES carry `overflow-hidden` (for its `rounded-3xl` corners), but imposes **no height**, so its box grows with content and cannot clip in-flow widget content or the attribution. It WOULD clip out-of-flow content anchored past the article bounds. |
 | 11 | **Loading — SDK** | `src/lib/placesUiKit.ts:25` (5s) + grace + import bound; total `MAX_LOAD_MS` at `:236` (11s) | bounded; failure ⇒ fallback |
-| 12 | **Loading — widget signal** | `src/components/GooglePlacePhoto.tsx:267` (`gmp-load`), budget `placesUiKit.ts:37` (4s) | bounded; no signal ⇒ fallback |
-| 13 | **Billable moment** | `src/components/GooglePlacePhoto.tsx:298` | one creation per attempt |
-| 14 | **Fallback** | `src/components/GooglePlacePhoto.tsx:346` → `ResultCard.tsx:139` (`CardMediaFallback`) | 21/9 glyph + name + **exactly one** "Open in Maps" |
+| 12 | **Loading — widget signal** | `src/components/GooglePlacePhoto.tsx:268` (`gmp-load`), budget `placesUiKit.ts:37` (4s) | bounded; no signal ⇒ fallback |
+| 13 | **Billable moment** | `src/components/GooglePlacePhoto.tsx:299` | one creation per attempt |
+| 14 | **Fallback** | `src/components/GooglePlacePhoto.tsx:347` → `ResultCard.tsx:153` (`CardMediaFallback`) | 21/9 glyph + name + **exactly one** "Open in Maps" |
 | 15 | **Fallback purity** | `mediaPolicy.resolveFallbackMedia` | forces both Google tiers off, so the failure branch can never serve a re-hosted photo |
 | 16 | **Error** | timeouts at `GooglePlacePhoto.tsx` (11s / 4s) with the `gaveUp` latch | settles on widget **or** fallback — but only ONCE `build()` starts, i.e. after intersection (see row 9). Before intersection no timer is armed at all. (santa: Codex.) |
 
@@ -77,10 +111,10 @@ validator around it.)
 Each candidate, ruled out or named:
 
 - **App-owned CSS / clipping — NOT fully ruled out locally; see the honest limit below.** The ready host imposes no
-  aspect ratio, no fixed height and no `overflow-hidden` (`GooglePlacePhoto.tsx:379`); asserted
+  aspect ratio, no fixed height and no `overflow-hidden` (`GooglePlacePhoto.tsx:385-391`); asserted
   directly in `src/components/ResultCard.somewhereNowhere.test.tsx` and in
   `GooglePlacePhoto.compact.test.tsx`. Those assertions cover the HOST ONLY. One level up, the
-  enclosing `<article>` (`ResultCard.tsx:231`) does carry `overflow-hidden`, for its rounded
+  enclosing `<article>` (`ResultCard.tsx:245`) does carry `overflow-hidden`, for its rounded
   corners — so "there is no `overflow-hidden` anywhere" would be false. It is still ruled out as a
   suppressor because that article sets no height: its box is content-driven, so it cannot clip
   in-flow widget content or Google's attribution. The residual case it would clip is out-of-flow
@@ -101,7 +135,7 @@ Each candidate, ruled out or named:
   local mechanism.** Every wait inside `build()` is bounded (11s SDK, 4s widget) and every expiry
   renders the fallback, so a timing failure produces a **glyph with an "Open in Maps" link**, never
   a blank card. **But those timers are armed INSIDE `build()`, which only runs on an intersecting
-  IntersectionObserver entry** (`GooglePlacePhoto.tsx:321-332`). If the observer never reports this
+  IntersectionObserver entry** (`GooglePlacePhoto.tsx:322-333`). If the observer never reports this
   card as intersecting, no timer is armed, nothing is built, and no fallback appears — an
   indefinitely pending host, independent of all three deployment gates. That is a real local
   mechanism and it is NOT ruled out by anything in this document; see the attended checklist step 4,
@@ -176,7 +210,9 @@ rank.
 ## 7–8. Data integrity
 
 No catalog data was edited. Nothing in this diagnosis required an edit: every value the card needs is
-already present and correct on both the static and DB paths. A speculative data edit would have been
+already present, and the static and fixture paths agree on it field for field. "Agree" is not
+"correct": nothing local can confirm the place id names the real venue or that Google still holds
+photos for it (attended step 3). A speculative data edit would have been
 forbidden and was not made.
 
 ---
@@ -187,20 +223,41 @@ The local half is complete and conclusive. The remaining question — *does the 
 live widget behave the way the local mock does?* — cannot be answered without Staging and a live
 Google call, both out of scope. Attended checklist:
 
-1. **Is the symptom bar-specific or deployment-wide?** On the deployed surface, does ANY bar show a
-   Google photo? If none do, this is the build-time flag / API key / runtime gate, not this bar.
+1. **Is the symptom bar-specific or deployment-wide?** This is the single fastest way to collapse
+   the hypothesis space, so do it first. On the deployed surface, does any OTHER card reach
+   `[data-testid="google-place-photo"]` with `data-status="ready"`?
+   - **No card does** ⇒ the build-time flag or the API key, both per-build constants. Not this bar.
+   - **Another card does** ⇒ gates 1 and 2 are eliminated, and the remaining suspects are R1
+     (observer), R2 (that card's own `/api/flags` fetch), the deployed row, or Google's data.
+
+   Two cautions (santa: Codex). Judge by the widget host and its `data-status`, **not** by "I can
+   see a photo" — a visible image could be a legacy/owned tile from a different media tier. And a
+   sibling showing a photo does **not** clear the runtime gate for this card, because a failed check
+   is not cached and the 60s success cache expires (see §3 row 6).
 2. **Deployed row identity.** In the deployed database, confirm the `bars` row for
    `somewhere-nowhere-nyc`: `place_id` non-null, `photo_count`, `business_status`. Compare against
    the local values in section 1 (`photo_count = 3`). Use the snake_case names.
-3. **Place id and non-secret metadata.** Confirm the deployed `place_id` matches the local one. Do
-   not paste API keys or connection strings into any report.
+3. **Place id — matching, and IDENTITY.** Two different questions; the local tests answer only the
+   first, and only across local sources (santa: Codex).
+   - *Matching:* confirm the deployed `place_id` equals the local one.
+   - *Identity:* confirm that id actually names **this venue**, and that Google currently holds
+     photos for it. Every local check would pass identically if a valid-looking 27-character id
+     pointed at the wrong place, or at a venue whose photos Google has since removed — and
+     `photoCount = 3` is our own import-time metadata, never a live reading. Resolve it in the
+     Google Cloud console or Places API Explorer under a human's own session.
+
+   Do not paste API keys or connection strings into any report.
 4. **ResultCard response and visual state.** On the deployed card: does
    `[data-testid="google-place-photo"]` exist, and what is its `data-status`
    (`pending` / `ready`)? If `[data-testid="google-fallback-glyph"]` is showing instead, the widget
    was reached and gave up — a different failure from the widget never being eligible.
 5. **Console and network, secrets redacted.** `GET /api/flags` — is the body `{"googleMedia":true}`?
    Any request to `maps.googleapis.com` / `places.googleapis.com`, and its status (a `403`/
-   `REQUEST_DENIED` points at key referrer restrictions; **no request at all** points at eligibility).
+   `REQUEST_DENIED` points at key referrer restrictions). **No request at all** is ambiguous and does
+   NOT by itself point at eligibility: it is equally consistent with R1 (the observer never fired, so
+   `build()` never ran) and with R2 (this card's own flag fetch timed out). Step 4's `data-status`
+   disambiguates — `pending` with no fallback means R1, the glyph means the gate or a timeout.
+   (santa: Codex.)
 6. **Classify.** Provider data (Google returns no photo for this place — the leading hypothesis if
    other bars work), widget behavior (the widget loads but renders nothing), or app-owned layout
    (our container is exonerated locally; the provider's closed-shadow rendering inside the article's

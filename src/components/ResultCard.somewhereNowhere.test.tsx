@@ -35,6 +35,23 @@ vi.mock('@/components/GooglePlacePhotoLazy', async () => ({
   )).default,
 }));
 
+/**
+ * The telemetry beacon is mocked so §11's "no network" claim is ENFORCED
+ * rather than asserted in prose.
+ *
+ * `reportGoogleMediaRequest` fires on the real success path and calls
+ * `sendMediaMetric`, which reaches for `navigator.sendBeacon` and then
+ * `fetch('/api/media-metric')`. Both are swallowed by its own try/catch, so an
+ * attempted request could never fail this test — it would simply happen, unseen,
+ * while the document claimed no network was touched. (santa: Codex.)
+ */
+const { beacon } = vi.hoisted(() => ({ beacon: vi.fn() }));
+vi.mock('@/lib/mediaMetric', () => ({
+  MEDIA_METRIC_PATH: '/api/media-metric',
+  sendMediaMetric: beacon,
+  reportGoogleMediaRequest: beacon,
+}));
+
 // Children irrelevant to the media branch.
 vi.mock('@/components/OpenNowBadge', () => ({ default: () => null }));
 vi.mock('@/components/RatingBadge', () => ({ default: () => null }));
@@ -85,6 +102,10 @@ describe('Item 7 — Somewhere Nowhere against a mocked SUCCESSFUL Google respon
     expect(host.className).not.toMatch(/aspect-\[/);
     expect(host.className).not.toMatch(/overflow-hidden/);
     expect(host.className).not.toMatch(/max-h-/);
+
+    // The billable callback fired exactly once — and, because the transport is
+    // mocked, provably reached no network. This is the enforced half of §11.
+    expect(beacon).toHaveBeenCalledTimes(1);
 
     // No re-hosted legacy photo is served on this path, ever.
     expect(container.querySelectorAll('img[src*="/bar-photos/"]')).toHaveLength(0);

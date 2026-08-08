@@ -65,6 +65,22 @@ describe('Item 7 — catalog data for Somewhere Nowhere is COMPLETE', () => {
     expect(mapped, 'bar dropped by the mapper').toBeDefined();
     expect(mapped!.googlePlaceId).toHaveLength(27);
     expect(mapped!.photoCount).toBe(3);
+
+    // CROSS-SOURCE IDENTITY, not just a length check.
+    //
+    // Asserting only `toHaveLength(27)` on each source independently would
+    // still pass if the two sources named DIFFERENT venues — swap either for
+    // any other 27-char place id and nothing here would notice, while the card
+    // would request the wrong bar. Pinning them equal is what makes "the data
+    // is internally consistent" mean something. (santa: Codex.)
+    //
+    // It still does NOT establish that this id is the correct id for the real
+    // Somewhere Nowhere, or that Google currently holds photos for it. Both are
+    // attended steps 2-3; see the diagnosis document.
+    const staticBar = bars.find((b) => b.id === ID)!;
+    expect(mapped!.googlePlaceId).toBe(staticBar.googlePlaceId);
+    expect(row!.place_id).toBe(staticBar.googlePlaceId);
+    expect(row!.photo_count).toBe(staticBar.photoCount);
   });
 });
 
