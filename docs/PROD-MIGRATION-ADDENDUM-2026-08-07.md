@@ -361,7 +361,7 @@ device can still manage its links. They are protected by owner-only RLS, revocab
 token-keyed only). **Durable server-side storage of bearer tokens is a decision the operator should
 consciously re-affirm before Production**, not discover afterwards.
 
-## 8b. ⛔ Finding (new, 2026-08-08): the packet and the candidate are **mismatched**, and the mismatch fails closed on account deletion
+## 8b. ⛔ Finding (new, 2026-08-08): the packet and the candidate are **mismatched**, and the mismatch fails closed on account deletion in three of the four configurations
 
 This is the one finding in this document that is not a caveat about method. It is a concrete defect
 in the *pairing* of artifacts, and it was invisible to the original analysis precisely because that
@@ -465,9 +465,9 @@ deploy — and `rateLimiter.test.ts:402` already asserts the `consume_rate_limit
 harness exists. The scratch-database run is still worth doing for the §9 unknowns, but it should not
 be the gate on *this* finding. *(Cheaper-falsifier point raised by the DeepSeek lane and confirmed
 against the existing test file.)*
-`rateLimiter.durable.ts:47-50` anticipates an unapplied migration in prose ("Returning
-`{ allowed: false }` would silently convert an unapplied migration or a transport blip into a hard
-block", `:49`) — under §14b's first forbidden evidence class that comment is cited here as the
+`rateLimiter.durable.ts:48-50` anticipates an unapplied migration in prose ("An error here is
+UNAVAILABLE, never 'denied'. Returning `{ allowed: false }` would silently convert an unapplied
+migration or a transport blip into a hard block") — under §14b's first forbidden evidence class that comment is cited here as the
 author's *intent* only, and carries no weight as evidence of runtime state. *(Citation corrected
 2026-08-08: `:19-22` is the wall-clock-timeout comment and says nothing about migration state.)*
 
@@ -516,7 +516,8 @@ Every item here is **unverified** and cannot be resolved locally:
      dangerous than the limitations listed in §4. *(Raised by the GLM lane, 2026-08-07.)*
 9. **Which migration set the deployed web artifact actually requires** (§8b). The packet is no longer
    a complete answer: the candidate needs `0043_rate_limits.sql` as well, and the shortfall fails
-   closed on account deletion. Before the window, decide and record (a) whether 0043 ships inside it,
+   closed on account deletion in all but one configuration (see §8b's table). Before the window,
+   decide and record (a) whether 0043 ships inside it,
    (b) which web artifact SHA is being paired with the resulting schema, and (c) whether the shared
    rate-limit tier will be armed in that deployment, **including the value of
    `REQUIRE_DURABLE_RATE_LIMIT`**. These three answers are **not independent**, and the dependency is
@@ -557,11 +558,15 @@ backup, not the commented DDL.
 > **0043's revert is the dangerous one despite losing no data — added 2026-08-08.** Every other row
 > in this table trades off *data*. 0043 trades off *availability*: reverting it drops
 > `consume_rate_limit`, and by §8b that immediately denies account deletion for every user in
-> production **on the shippable configurations (rows 1, 2 and 4)** — because the candidate calls that
-> function and the only fail-closed consumer refuses when it is missing. *(Under §8b row 3 the
-> deployed application never reaches the call, so the revert is inert there; row 3 is itself an
-> unshippable state, which is why the rule below is written for the rows that can ship — corrected
-> 2026-08-08.)* **So 0043 must not be reverted while a candidate that calls it is deployed** —
+> production, because the candidate calls that function and the only fail-closed consumer refuses
+> when it is missing. *(Precise scope, corrected 2026-08-08 — a round-10 edit got this wrong and is
+> retracted here. **Only §8b row 4 reaches the RPC at all**, so row 4 is the only configuration whose
+> outcome the revert changes: reverting there transitions the deployment into row 1 and denies every
+> deletion. Row 1 is already the post-revert state. Rows 2 and 3 short-circuit at `rateLimiter.ts:375`
+> before any RPC call and are unaffected by the revert. The round-10 edit called rows 1, 2 and 4 "the
+> shippable configurations", which was wrong twice over — §8b says three of the four rows are
+> unshippable, and rows 1 and 2 are not the rows the revert acts on.)* **So 0043 must not be reverted
+> while a candidate that calls it is deployed** —
 > the rollback order is application first, then migration. Reverting in the other order converts a
 > rollback into an outage of the account-deletion path.
 >
@@ -673,16 +678,14 @@ migration, Production deployment, or TestFlight modification is authorized by th
 
 **NOT APPROVED. Requires, before any Production window:**
 
-1. Fresh independent review of this addendum and the packet. *(Updated 2026-08-08, superseding two
-   earlier versions of this bullet. The original — "has had no independent review at the time of
-   writing" — and its round-7 successor — "what remains un-reviewed is the round-7 repair; review
-   the round-7 delta" — are both **stale and were both wrong by the time they were read**. Current
-   state: the document has been through **ten** review rounds across the Claude, Codex, GLM, DeepSeek
-   and Kimi lanes. Round 10 (§14b) was a full five-family panel over the round-9 repair, which had
-   been left unreviewed; it found and closed real defects, including one this bullet's own
-   predecessor would have hidden. **§14b is the authoritative record of review state — this bullet is
-   a pointer to it, not a second source of truth.** The requirement stands: the round-10 repair is
-   itself the most recent unreviewed delta unless §14b says otherwise.)*
+1. Fresh independent review of this addendum and the packet, covering **whatever §14b's Current
+   review state block names as the most recent unreviewed delta**. *(This bullet deliberately states
+   **no round number, no lane list and no review status** — §14b's Current review state block is the
+   single mutable record of all three. Two earlier versions carried those facts inline and both went
+   stale before anyone read them: the original said "has had no independent review at the time of
+   writing", and its successor said "what remains un-reviewed is the round-7 repair" while two
+   further rounds had already run. Round 11 found that *refreshing* the duplicate only resets the
+   timer, so 2026-08-08 removes it instead.)*
 2. **Attended Production identity verification** — a human confirming, in the Production project,
    which migrations are applied and that the target project is the intended one.
 3. A verified-restorable backup (§10).
@@ -700,13 +703,35 @@ migration, Production deployment, or TestFlight modification is authorized by th
      migration set, current grants, public-flag row count, restore capability). No amount of further
      reading settles these; they are the reason a window needs a human.
    - **Then the scratch-database run** for the §9 unknowns that survive both.
-   **Ten** review rounds preceded these and **every one found a real defect, including the last** —
-   so the ordering above, not another reading pass, is the remaining path to trustworthy. *(Round
-   count corrected 2026-08-08; it read "six" through rounds 8, 9 and 10.)*
+   Every review round so far has found a real defect, including the last (count in §14b's Current
+   review state block) — so the ordering above, **not another reading pass**, is the remaining path
+   to trustworthy. **That instruction terminates *analytical* review as a path to correctness; it
+   does not terminate *document* review, which closes under §14b's stopping rule. The two run in
+   parallel and neither substitutes for the other.** *(Disambiguation added 2026-08-08 after a
+   reviewer read the two rules as contradicting each other; the round count was moved out of this
+   bullet in the same pass, having read "six" through rounds 8, 9 and 10.)*
 
 ## 14b. Claim ledger — read this instead of trusting the prose
 
-Five review rounds each found a real defect in this document, and **rounds 2–5 each found a defect
+### Current review state — the single mutable record
+
+**Nothing else in this document states a round count, a lane list, or a review status.** Every other
+round paragraph below is **frozen historical narration** of what one round found at the time; those
+are append-only and must not be edited to match this block. Three separate propagation defects
+(rounds 9, 10 and 11) came from the same fact being asserted in more than one live place, so there is
+now exactly one live place.
+
+| | |
+|---|---|
+| Rounds completed | **11** |
+| Rounds that found a real defect | **11 — every one, including the last** |
+| Latest panel | Round 11, full five-family (Claude/Sonnet, Codex `gpt-5.6-sol`, GLM, DeepSeek, Kimi K3 deep), quorum met |
+| **Most recent unreviewed delta** | **the round-12 repair** — the edits round 11's findings produced, listed in the Round 11 record below |
+| Gating status | **NOT APPROVED** (§14). Unchanged by every round to date. |
+
+---
+
+Every review round has found a real defect in this document, and **rounds 2–5 each found a defect
 introduced or missed by the previous round's fix.** One four-line claim about `SECURITY DEFINER`
 semantics produced four mutually incompatible causal models from four expert reviewers. That is not a
 document converging on truth; it is subject matter that resists reliable modelling by inspection.
@@ -819,7 +844,7 @@ what keeps the gating conclusion intact.
 make it. It says nothing about the packet. §14 still applies in full: this is not approved, and the
 four assumptions in claims 5–8 remain unsettled by any amount of review.
 
-**Round 9 (2026-08-08, third and final full panel) — the rule fired, and was contested.** Findings:
+**Round 9 (2026-08-08, third full panel) — the rule fired, and was contested.** Findings:
 (a) the sentence *introducing* §8b's four-row table still said "both configurations deny", written
 for the two-outcome model it replaced — found independently by the Claude and GLM lanes; (b) row 3's
 "completely unlimited" and "removes the quota entirely" overstated the risk, because
@@ -887,12 +912,59 @@ round 9 *added a §12 gate*, which is a gating conclusion. Round 10 adopts a str
 replacement:
 
 > **A round that makes edits is definitionally non-terminal.** Review may terminate only at a round
-> that produces **zero edits**. Round 10 made edits; it is therefore **not** terminal, and this
-> document is once again carrying an unreviewed delta — stated plainly rather than scoped away.
+> that produces **zero edits**.
 
-That is the honest status. It is also why §14 requirement 6's empirical checks, not another reading
-pass, remain the path forward: ten rounds have now each found a real defect, and rounds 7–10 each
-found one **created or left behind by the previous round's fix**.
+**That rule lasted one round. Round 11 refuted it and it is withdrawn.** The Kimi lane's argument:
+round 8's rule was unfalsifiable toward *stopping*, and the zero-edit rule is the same error
+mirrored — unfalsifiable toward *continuation*. Editing is the only way to reach a zero-edit round
+and editing is what prevents one, so the termination condition is unreachable by construction. That
+is a liveness failure dressed as rigor, and it is worse than what it replaced. Adopted replacement:
+
+> **Review terminates at the first round whose findings are all non-gating, provided the empirical
+> sequence in §14 requirement 6 has since been run and recorded. A gating finding reopens review.**
+> Falsifiable in both directions: a gating finding stops the stop, and a clean non-gating round plus
+> executed experiments stops the loop. A zero-edit round is *sufficient* for closure, never
+> *necessary*.
+
+**And a round may no longer certify its own edits.** Round 10 wrote its fixes, its stopping rule and
+its self-assessment in one commit, and could not see the factual error it had just introduced; round
+9 did the same and could not see the three sites it had left stale. Two observations of the same
+failure is enough. From here: **a round that edits records *what* it changed and *why*, and is
+prohibited from recording *that the change is correct*. Correctness verdicts may only be issued by a
+later round that edited nothing it is judging.** *(Both amendments argued by the Kimi lane in round
+11; the diagnosis is confirmed by rounds 9, 10 and 11 in sequence.)*
+
+This is also why §14 requirement 6's empirical checks, not another reading pass, remain the path
+forward: every round has found a real defect, and rounds 7–11 each found one **created or left behind
+by the previous round's fix**. The later rounds increasingly found them in this review record rather
+than in §1–§13 — the meta-commentary is now a defect surface in its own right, which is what the
+Current review state block above exists to shrink.
+
+**Round 11 (2026-08-08, fifth full panel — the review of round 10's repair).** Full five-family
+panel, quorum met, no lane missing. **Round 10's own repair introduced a factual error and left four
+stale assertions**, which is recorded here rather than smoothed over:
+
+| Severity | Finding | Lanes |
+|---|---|---|
+| HIGH | **Round 10 broke §10.** Its new parenthetical called rows 1, 2 and 4 "the shippable configurations" — wrong twice: §8b says three of the four rows are unshippable, and the revert acts only on the rows that reach the RPC. Only **row 4** reaches it; reverting there transitions to row 1, and rows 2 and 3 short-circuit at `rateLimiter.ts:375` before any call. The **unqualified** rule round 10 tried to improve was already correct | Codex, DeepSeek |
+| MEDIUM | Round 10's `rateLimiter.durable.ts:47-50` citation was still off — `:47` is blank and the quoted text spans `:48-50` | Codex, Claude |
+| MEDIUM | §14b's opening summary, its closing argument, and round 9's "third and **final** full panel" descriptor all still carried the old round count | Codex, GLM |
+| MEDIUM | §14 requirement 1 **refreshed** the duplicated review state instead of removing it, guaranteeing the same staleness at the next round | Claude, GLM |
+| MEDIUM | §8b's heading and §9 item 9's opening clause still said "fails closed on account deletion" unconditionally while the table shows one configuration allows it | Codex, GLM |
+| — | The zero-edit stopping rule is a liveness bug; verdicts must lag edits by one round; the meta-commentary has become the dominant defect surface | Kimi K3 |
+
+**Nothing was rejected in round 11** — unusually, every lane's findings survived verification against
+the repository. GLM additionally supplied the live-versus-frozen test now governing which round
+paragraphs may be edited: a claim is **live** when it is a present-tense summary, closing argument,
+or "latest/final" descriptor, and **frozen** when it is past-tense narration of what one round found.
+Only live claims were corrected; the round-6 diagnosis and the round-8 "eight rounds" line were left
+untouched under that test.
+
+**What round 11 demonstrates about round 9's instruction.** Round 9 told a resumer to check a
+four-item diff and not re-review the document. Round 10 obeyed a wider brief and found the residue
+outside that diff; round 11 then found round 10's own residue. **The correct inference is not that
+the reviews are failing — every one has found something real — but that editing this document has a
+measurable defect-injection rate, and that no reading round should be trusted to certify itself.**
 
 ### Three classes of in-repo assertion this analysis should never have cited as evidence
 
@@ -924,7 +996,9 @@ accumulated DDL. That converts claims 5–8 from assumptions into CI output, and
 forbidden evidence classes checkable by construction.
 
 **The cheapest oracle available today was never used:** apply this packet to a throwaway database and
-observe. Five review rounds happened instead of one experiment. For this packet, the honest posture
+observe. Every review round in the table above happened instead of one experiment, and the later ones
+increasingly found defects in the review record rather than in the analysis. For this packet, the
+honest posture
 is that the safety argument is **unverifiable by the means used**, and the irreversible step should
 wait for the empirical check rather than another round of reading.
 
