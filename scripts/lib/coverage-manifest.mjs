@@ -338,11 +338,6 @@ export function isCompleting(cell) {
 }
 
 /**
- * A blocking failure with no later success and no waiver. Shared for the same
- * reason as `isCompleting`: the engine must not write a terminal status over a
- * transient failure that `completeness()` will still count against the run.
- */
-/**
  * Finished for the purpose of not working this cell again on a resume.
  *
  * Two differences from `isCompleting`, both learned from cells that got stuck:
@@ -367,6 +362,11 @@ export function isSettledForResume(cell) {
   return isCompleting(cell) || cell.terminalStatus === SATURATED_AT_FLOOR;
 }
 
+/**
+ * A blocking failure with no later success and no waiver. Shared for the same
+ * reason as `isCompleting`: the engine must not write a terminal status over a
+ * transient failure that `completeness()` will still count against the run.
+ */
 export function hasUnrecoveredBlocking(cell) {
   const blocking = (cell?.attempts ?? []).filter(
     (attempt) => !attempt.ok && BLOCKING_ERROR_CLASSES.includes(attempt.errorClass),
