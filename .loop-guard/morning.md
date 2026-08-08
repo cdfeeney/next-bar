@@ -554,3 +554,34 @@ of the window were nearly thrown away on a number I never checked.
 credentials read or printed, no environment/auth change, no email, account, TestFlight or App Store
 action. No worktree added, moved, removed, pruned, reset or cleaned; no stash created or dropped. No
 catalog data edited. No peer worktree touched.
+
+---
+
+## GLM lane outage — measured, not assumed (06:19 → 07:17 ET)
+
+Both items are blocked on this one lane, so it was characterised rather than just reported.
+
+**It is NOT an account-wide credit failure.** Throughout the window, on the SAME OpenRouter account:
+
+| Route | Result |
+|---|---|
+| `deepseek` | **OK** — answered the probe at 06:19 and again at 07:17 ET |
+| `glm` | **HTTP 402 "All target providers failed"** on 24 consecutive probes |
+| `kimi` | error (exit 4) |
+
+So the account is funded and reachable; the fault is specific to the **GLM model route**
+(`z-ai/glm-5.2`) — its upstream providers are refusing — and Kimi is affected too. A trivial
+"reply OK" probe fails identically to a real packet, so this is not packet weight (contrast
+DeepSeek earlier tonight, where an empty reply WAS packet weight and a 305-word retry succeeded).
+
+**Probe cadence:** every ~2.5–4 minutes from 06:19 to 07:17 ET, foreground and supervised (a routed
+reviewer call is never run in an untracked background shell). Every attempt returned 402.
+
+**Why the run waited instead of substituting.** The T1 panel is Claude + Codex + GLM + DeepSeek and
+the unattended rule is that every intended lane must succeed. Swapping another family in for GLM, or
+quietly dropping to a smaller panel, would manufacture a quorum that was never achieved — a worse
+outcome than an honest `blocked`. Nothing was substituted and no intensity was lowered.
+
+**Operator action:** this is an OpenRouter routing/credit problem for the GLM (and Kimi) model
+routes, not a repository problem. Once `node ~/.claude/bin/harness-consult.mjs --route glm` answers,
+both items need only their GLM lane; every other lane has already reviewed the final code.
