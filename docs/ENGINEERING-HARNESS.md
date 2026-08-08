@@ -180,9 +180,21 @@ pretending to pass.
 
 `.github/workflows/ci.yml` runs two jobs on every PR and every push to `main`:
 
-- **verify** — `npm run verify:full`
+- **verify** — first classifies the tier of the change itself
+  (`node scripts/tier-classify.mjs --changed --base <ref>`), then runs
+  `npm run verify:full`. The classification step is separate because
+  `verify:full` validates the tier *map*; it never looks at the diff in front
+  of it. The base is the target branch on a pull request and the event's
+  before-SHA on a push, falling back to `HEAD~1` when that ref is unusable
+  (new branch or rewritten history).
 - **e2e** — `npm run test:e2e:gate`, with the Playwright report uploaded as an
   artifact
+
+Note the classification step uses `--changed` rather than piping
+`changed-paths.mjs` into the classifier. A shell pipeline exits with its *last*
+command's status, so the feeder's failure exit was being discarded — a broken
+git invocation became "no changed paths" and a reassuring tier. `--changed`
+collects in-process and fails on the spot.
 
 Both call the canonical scripts rather than re-spelling `tsc`/`vitest`/`next
 build` inline, so changing a script moves the local gate and the CI gate

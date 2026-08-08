@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,7 +29,12 @@ const { map: PROJECT_MAP, source: MAP_SOURCE } = loadTierMap(REPO_ROOT);
  * policy we cannot read" branch can be exercised without touching this
  * repository's real map.
  */
-const BAD_MAP_ROOT = join(tmpdir(), 'next-bar-tier-badmap');
+// mkdtempSync, NOT a fixed path: a fixed name under tmpdir is shared state.
+// This repository is developed in ~25 concurrent worktrees, and two suites
+// writing the same fixture raced — the run that read it mid-write saw valid
+// JSON where it expected malformed, and the suite failed once and passed on
+// retry. A flaky gate is a gate people stop believing.
+const BAD_MAP_ROOT = mkdtempSync(join(tmpdir(), 'next-bar-tier-badmap-'));
 mkdirSync(join(BAD_MAP_ROOT, '.claude'), { recursive: true });
 writeFileSync(join(BAD_MAP_ROOT, 'package.json'), '{}\n');
 writeFileSync(join(BAD_MAP_ROOT, '.claude', 'tier-map.json'), '{ not valid json\n');
@@ -144,13 +149,22 @@ describe('determinism and repo-root resolution', () => {
       { name: 'only unusable entries', paths: [null, '', '   '] },
       { name: 'a non-array input', paths: 'not-an-array' },
       { name: 'an unreadable project tier map', paths: ['src/lib/a.ts'], badMap: true },
+      { name: 'a non-object tier map', paths: ['src/lib/a.ts'], stringMap: true },
     ];
 
     for (const input of degradingInputs) {
       it(`${input.name} => degraded, T0, escalated, not skippable`, () => {
-        const result = input.badMap
-          ? classifyPaths(input.paths, undefined, { repoRoot: BAD_MAP_ROOT })
-          : classifyPaths(input.paths, PROJECT_MAP, { repoRoot: REPO_ROOT, contents: { 'docs/a.md': '# a\n' } });
+        let result;
+        if (input.badMap) {
+          result = classifyPaths(input.paths, undefined, { repoRoot: BAD_MAP_ROOT });
+        } else if (input.stringMap) {
+          result = classifyPaths(input.paths, 'bogus-string', { repoRoot: REPO_ROOT });
+        } else {
+          result = classifyPaths(input.paths, PROJECT_MAP, {
+            repoRoot: REPO_ROOT,
+            contents: { 'docs/a.md': '# a\n' },
+          });
+        }
         expect(result.degraded).toBe(true);
         expect(result.tier).toBe('T0');
         expect(result.escalated).toBe(true);

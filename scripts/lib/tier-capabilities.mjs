@@ -171,7 +171,8 @@ export function isExecutableExtension(path) {
  * capability-based fail-closed from degenerating into path-based fail-closed.
  *
  * Content is still scanned — an "inert" path that actually contains a
- * capability signature is escalated anyway (see `analyzePath`).
+ * capability signature is escalated anyway (see `classifyOnePath` in
+ * `tier-classify-core.mjs`).
  */
 export const INERT_PATH_GLOBS = [
   'docs/**',
@@ -305,7 +306,7 @@ export const CAPABILITY_SIGNATURES = [
       // access. It previously named only three keywords, so
       // `const { PASSWORD, ACCESS_TOKEN } = process.env` evaded a pattern that
       // caught `process.env.PASSWORD`.
-      /(?:process\.env\s*(?:\.\s*|\[\s*['"])(?!NEXT_PUBLIC_)[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*|(?:const|let|var)\s*\{[^}]*\b[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*\b[^}]*\}\s*=\s*process\.env|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@/'"]+:[^\s:@/'"]+@)/,
+      /(?:process\.env\s*(?:\.\s*|\[\s*['"])(?!NEXT_PUBLIC_)[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*|(?:const|let|var)\s*\{[^}]*\b(?!NEXT_PUBLIC_)[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*\b[^}]*\}\s*=\s*process\.env|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@/'"]+:[^\s:@/'"]+@)/,
     note: 'reads secret credentials from the environment, or embeds a credentialed connection URI',
   },
 

@@ -14,7 +14,7 @@
     "test:e2e:gate": "playwright test --reporter=list",
     "check-env": "node scripts/check-env.mjs",
     "tier-classify": "node scripts/tier-classify.mjs",
-    "tier-changed": "node scripts/changed-paths.mjs | node scripts/tier-classify.mjs",
+    "tier-changed": "node scripts/tier-classify.mjs --changed",
     "tier-validate": "git ls-files | node scripts/tier-classify.mjs --validate",
     "tier-redproof": "node scripts/__tests__/red-proof.mjs",
     "verify:changed": "npm run typecheck && npm run test && npm run tier-changed",

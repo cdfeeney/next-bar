@@ -297,6 +297,12 @@ export function classifyPaths(changedPaths, tierMap, opts = {}) {
   const degradedReasons = [];
 
   let resolved = tierMap;
+  if (resolved !== undefined && resolved !== null && typeof resolved !== 'object') {
+    // Same input-interpretation failure as a non-array `changedPaths`, one
+    // argument over: normalizeMap would quietly swap in the rule-less fallback
+    // and drop every project escalation with only a plain warning.
+    degradedReasons.push(`tierMap is ${typeof resolved}, not an object`);
+  }
   if (resolved === undefined || resolved === null) {
     // Omitting the map must NOT silently mean "no project policy": passing
     // undefined straight to normalizeMap selected the rule-less fallback and

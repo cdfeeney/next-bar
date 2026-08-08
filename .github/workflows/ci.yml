@@ -42,22 +42,34 @@ jobs:
         # it. `--base` is required because a fresh checkout has no working-tree
         # changes, so the feeder's other two sources are both empty here.
         #
-        # On a pull_request, github.base_ref is the target branch. On a push,
-        # it is empty and HEAD *is* origin/main — so comparing against
-        # origin/main yields an empty set and a green step that inspected
-        # nothing. Push events therefore compare against the event's before-SHA.
+        # On a pull_request, github.base_ref is the target branch. On a push it
+        # is empty and HEAD *is* origin/main, so comparing against origin/main
+        # yields an empty set and a green step that inspected nothing. Push
+        # events therefore compare against the event's before-SHA.
+        #
+        # `--changed` is used instead of piping the feeder into the classifier:
+        # a shell pipeline exits with its LAST command's status, so the feeder's
+        # exit 1 on a broken git invocation was discarded and became "no changed
+        # paths" plus a reassuring tier. This form fails in-process instead.
+        shell: bash
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE="origin/${{ github.base_ref }}"
           else
             BASE="${{ github.event.before }}"
           fi
-          # A force-push or first push reports an all-zero before-SHA.
-          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+          # Branch creation reports an all-zero before-SHA. A force-push reports
+          # the OLD tip, which is usually unreachable afterwards and may not be
+          # fetched — so verify the ref and fall back rather than failing red on
+          # a history rewrite.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git rev-parse -q --verify "$BASE^{commit}" >/dev/null; then
+            echo "base '$BASE' unusable (new branch or rewritten history); falling back to HEAD~1"
             BASE="HEAD~1"
           fi
           echo "Classifying against base: $BASE"
-          node scripts/changed-paths.mjs --base "$BASE" | node scripts/tier-classify.mjs
+          node scripts/tier-classify.mjs --changed --base "$BASE"
       - name: Verify (canonical repository gate)
         run: npm run verify:full
         env:

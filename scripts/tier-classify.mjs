@@ -23,6 +23,7 @@
  */
 
 import { classifyPaths, loadTierMap, validateTierMap, REPO_ROOT } from './lib/tier-classify-core.mjs';
+import { collectChangedPaths } from './lib/changed-paths-core.mjs';
 
 /** Read all of stdin as UTF-8. Returns '' when stdin is a TTY (no input piped). */
 async function readStdin() {
@@ -105,7 +106,31 @@ async function main() {
     process.exit(2);
   }
 
-  const input = parsePaths(await readStdin());
+  // `--changed` collects the changed set IN-PROCESS rather than reading a pipe.
+  // Piping the feeder in discarded its exit status (a shell pipeline reports
+  // its last command's status), so a git failure became "no changed paths given"
+  // and a reassuring default tier — a green gate that inspected nothing.
+  let input;
+  if (argv.includes('--changed')) {
+    const baseIndex = argv.indexOf('--base');
+    const base = baseIndex >= 0 && baseIndex + 1 < argv.length ? argv[baseIndex + 1] : null;
+    const collected = collectChangedPaths({ base, repoRoot: REPO_ROOT });
+    if (collected.failures.length > 0) {
+      process.stderr.write('tier-classify: cannot determine the changed set — refusing to report a tier.\n');
+      for (const failure of collected.failures) process.stderr.write(`  - ${failure}\n`);
+      process.exit(2);
+    }
+    input = collected.paths;
+    if (input.length === 0) {
+      process.stderr.write(
+        `tier-classify: no changes found (working tree clean; ${
+          collected.base ? `no commits since ${collected.base}` : 'no base ref configured'
+        }).\n`,
+      );
+    }
+  } else {
+    input = parsePaths(await readStdin());
+  }
 
   if (validate) {
     const result = validateTierMap(map, input);
