@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
+  LEGACY_SCHEMA_FILE,
+  legacySchemaPolicies,
+  legacySchemaTables,
   DEFINERS_WITHOUT_AUTH_UID,
   FUNCTIONS_WITHOUT_PUBLIC_REVOKE,
   expectedPublicTables,
@@ -136,11 +139,20 @@ describe('runbook / migration cross-check', () => {
     // and left in the list — and the operator reads that stale name's absence
     // from the database as "migrations not fully applied", which Check 1's own
     // guidance escalates.
+    // Check 1 legitimately lists TWO sets: the 22 a migrations-only database
+    // holds, and the 5 extra a v0.1-derived one holds. Assert their union
+    // exactly — that binds both lists at once and still fails on a name the
+    // migrations no longer create.
     const check1 = checkSection(
       '## Check 1 — RLS is enabled on every table',
       '## Check 1b',
     );
-    expect(fencedNames(check1).sort()).toEqual(expectedPublicTables(files));
+    const schemaSql = readFileSync(LEGACY_SCHEMA_FILE, 'utf8');
+    const expected = [
+      ...expectedPublicTables(files),
+      ...legacySchemaTables(schemaSql, files),
+    ].sort();
+    expect(fencedNames(check1).sort()).toEqual(expected);
   });
 
   it('states the derived policy counts', () => {
@@ -189,6 +201,36 @@ describe('runbook / migration cross-check', () => {
       '## Check 5',
     );
     expect(fencedNames(check4).sort()).toEqual([...definers].sort());
+  });
+
+  it('documents the v0.1 legacy tables and their policy counts', () => {
+    // Migration 0000 renames the v0.1 tables instead of dropping them and
+    // leaves `waitlist` live, so a Production-lineage database holds five
+    // tables and fifteen policies the migrations never create. Without them
+    // documented, Checks 1-3 manufacture stop-and-escalate incidents on a
+    // healthy Production — the worst defect this artifact can have.
+    const schemaSql = readFileSync(LEGACY_SCHEMA_FILE, 'utf8');
+    const legacy = legacySchemaTables(schemaSql, files);
+    const policies = legacySchemaPolicies(schemaSql, files);
+    const legacyTotal = [...policies.values()].reduce((n, names) => n + names.length, 0);
+    const freshTables = expectedPublicTables(files).length;
+    const freshPolicies = [...policiesByTable(files).values()].flat().length;
+    const freshPolicyTables = [...policiesByTable(files).entries()].filter(
+      ([, names]) => names.length,
+    ).length;
+
+    for (const table of legacy) expect(doc).toContain(table);
+    expect(doc).toContain(`holds **${freshTables + legacy.length}**`);
+    expect(doc).toContain(
+      `**${freshPolicies + legacyTotal} policies across ${freshPolicyTables + policies.size} tables**`,
+    );
+    for (const [table, names] of policies) {
+      expect(doc, `legacy policy count missing for ${table}`).toContain(
+        `| \`${table}\` | ${names.length} |`,
+      );
+    }
+    // And the classification that keeps them from being raised as incidents.
+    expect(doc).toContain('record-and-confirm, not stop-and-escalate');
   });
 
   it('states the parsed-function count', () => {

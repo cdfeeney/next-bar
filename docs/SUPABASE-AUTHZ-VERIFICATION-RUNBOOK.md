@@ -124,6 +124,32 @@ push_subscriptions     rate_limits            ratings           schema_migration
 shared_nights          vibe_profiles          vibe_votes
 ```
 
+### The expected table set depends on the environment's LINEAGE
+
+**22 is the count for a database built purely from the migrations.** A database
+that began life as v0.1 — Production — holds **27**, and the five extra tables
+are expected, not drift:
+
+```
+bars_v01_legacy   profiles_v01_legacy   saves_v01_legacy   visits_v01_legacy
+waitlist
+```
+
+`supabase/schema.sql` is the v0.1 schema. Migration `0000` does **not** drop
+those tables; it *renames* four of them to `*_v01_legacy` "so nothing is
+destroyed even if this assumption is ever wrong" (0000:11-12), and deliberately
+leaves `waitlist` untouched because `/api/waitlist` still writes to it
+(0000:7-8). Their RLS and policies travelled with the rename.
+
+**So run Check 1 knowing which lineage you are looking at.** On Production,
+seeing 22 tables would mean the legacy tables were dropped by someone —
+itself worth recording. On a freshly rebuilt Staging, seeing 27 would mean it
+was not rebuilt from migrations after all.
+
+These five are **record-and-confirm, not stop-and-escalate**, when they appear
+on a v0.1-derived database. Their v0.1 policies and default-era grants are
+covered in Checks 2 and 3.
+
 **`rls_forced` is expected to be `false` everywhere.** No migration issues
 `force row level security`, and that is deliberate, not an omission: `FORCE`
 additionally subjects the table's OWNER to its policies. Its absence means the
@@ -240,10 +266,25 @@ exists, so default-deny applies to every client role and only the service role
 - A **missing** policy on one of the 13, or a lower count than listed, means a
   feature is silently broken. The table still fails *safe* (RLS with no policy
   denies), so it is a bug, not a breach. Record it.
+**On a v0.1-derived database (Production) add these 15 legacy policies**, which
+travelled with migration 0000's renames and are expected, not drift:
+
+| Legacy table | Policies |
+| --- | --- |
+| `bars_v01_legacy` | 1 |
+| `profiles_v01_legacy` | 4 |
+| `saves_v01_legacy` | 4 |
+| `visits_v01_legacy` | 4 |
+| `waitlist` | 2 |
+
+So Production's healthy total is **44 policies across 18 tables**, not 29
+across 13. Without this the "higher count ⇒ stop-and-escalate" rule below fires
+on five tables at once, on a perfectly healthy Production.
+
 - A **higher** count than listed means a policy was added outside the
-  migrations. Capture its definition (`pg_policies.qual`, `.with_check`) before
-  anyone changes it, then treat it as stop-and-escalate: an unreviewed policy
-  is an unreviewed grant of access.
+  migrations **and outside the v0.1 legacy set above**. Capture its definition
+  (`pg_policies.qual`, `.with_check`) before anyone changes it, then treat it as
+  stop-and-escalate: an unreviewed policy is an unreviewed grant of access.
 - **Compare the NAMES, not only the counts.** The query `string_agg`s
   `policyname` for exactly this reason: a policy dropped and replaced by a
   differently-named one leaves the count unchanged and would otherwise pass in
@@ -397,6 +438,20 @@ own `handle` directly.
 **`anon` appears exactly 2 times in that table, `select` only — on `bars` and
 `bar_photos`.** That is the product working signed-out: the bar catalog and its
 approved photos are public data (0019, 0020).
+
+**On a v0.1-derived database (Production), the five legacy tables also appear**
+— `waitlist`, `bars_v01_legacy`, `profiles_v01_legacy`, `saves_v01_legacy`,
+`visits_v01_legacy` — carrying Supabase's default-era `grant all to anon,
+authenticated` from before the revoke-first pattern existed. `waitlist` in
+particular has an `anon` INSERT path by design (`"waitlist anyone insert"`),
+because `/api/waitlist` still writes to it.
+
+Those rows are **record-and-confirm, not stop-and-escalate.** They are also the
+one place this document would genuinely like to see tightened: the four
+`*_v01_legacy` tables were verified empty by 0000 and no code reads them, so
+revoking client access to them is a safe follow-up — but that is a change to
+propose, not an incident to raise at 2am. An `anon` row on any table **outside**
+the 2 expected plus these 5 remains stop-and-escalate.
 
 **On mismatch:**
 
@@ -636,8 +691,11 @@ This runbook covers what is on **this base** (through `0043`). Migrations
 living only on release branches are out of scope and are the open question
 recorded above.
 
-**It covers the `public` schema only.** Named explicitly, because a silent
-omission reads as coverage:
+**It covers the `public` schema only, and its counts are lineage-dependent** —
+22 tables / 29 policies on a migrations-only database, 27 / 44 on one derived
+from v0.1 `supabase/schema.sql`. The legacy set is derived from that file plus
+migration 0000's rename map and asserted by the static suite, so it cannot
+drift either. Named explicitly, because a silent omission reads as coverage:
 
 - **`auth`, `storage`, `realtime`, `vault`** are managed by Supabase and are not
   created by these migrations, so nothing here can derive an expectation for

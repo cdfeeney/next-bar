@@ -132,6 +132,91 @@ export type PrivilegeStatement = {
  */
 export const RUNNER_MANAGED_TABLES = ['schema_migrations'];
 
+export const LEGACY_SCHEMA_FILE = path.resolve(process.cwd(), 'supabase', 'schema.sql');
+
+/**
+ * The v0.1 objects a PRE-MIGRATION database still holds.
+ *
+ * `supabase/schema.sql` is the v0.1 schema. Migration 0000 does NOT drop those
+ * tables — it **renames** them to `*_v01_legacy` "so nothing is destroyed even
+ * if this assumption is ever wrong" (0000:11-12), and deliberately leaves
+ * `waitlist` alone because `/api/waitlist` still writes to it (0000:7-8).
+ *
+ * So the expected surface is NOT the same in every environment:
+ *   - a FRESH database (Staging rebuilt from migrations) holds only the 22
+ *     tables the migrations create;
+ *   - a v0.1-DERIVED database (Production) additionally holds `waitlist` and
+ *     the four renamed legacy tables, with their v0.1 policies and the
+ *     Supabase default-era grants that came with them.
+ *
+ * Omitting them made Checks 1-3 false on Production: ~27 tables instead of 22,
+ * ~15 extra policies where a higher count is stop-and-escalate, and an `anon`
+ * grant on `waitlist` that the grant check would have escalated. Every one of
+ * those is a manufactured incident on a HEALTHY database.
+ */
+export function legacySchemaTables(schemaSql: string, files: MigrationFile[]): string[] {
+  const created = tablesCreated([
+    { prefix: '0000', name: 'schema.sql', sql: schemaSql },
+  ]).map((t) => t.name);
+  const renames = legacyRenames(files);
+  return [...new Set(created.map((t) => renames.get(t) ?? t))].sort();
+}
+
+/** `alter table public.X rename to Y` from the migrations, as a map X -> Y. */
+export function legacyRenames(files: MigrationFile[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const file of files) {
+    const sql = stripSqlComments(file.sql);
+    for (const m of sql.matchAll(
+      /alter\s+table\s+(?:if\s+exists\s+)?public\.([a-z0-9_]+)\s+rename\s+to\s+([a-z0-9_]+)/gi,
+    )) {
+      out.set(m[1].toLowerCase(), m[2].toLowerCase());
+    }
+  }
+  return out;
+}
+
+/** Net v0.1 policies, keyed by the table's POST-rename name. */
+export function legacySchemaPolicies(
+  schemaSql: string,
+  files: MigrationFile[],
+): Map<string, string[]> {
+  const renames = legacyRenames(files);
+  const byTable = policiesByTable([
+    { prefix: '0000', name: 'schema.sql', sql: schemaSql },
+  ]);
+  return new Map(
+    [...byTable.entries()]
+      .map(([table, names]) => [renames.get(table) ?? table, names] as [string, string[]])
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+}
+
+/**
+ * Tables present on a v0.1-derived database and on no fresh one. Reviewed
+ * intent; the tests assert it equals the derived set so a change to
+ * `schema.sql` or to 0000's renames cannot silently invalidate the runbook.
+ */
+export const V01_LEGACY_TABLES = [
+  'bars_v01_legacy',
+  'profiles_v01_legacy',
+  'saves_v01_legacy',
+  'visits_v01_legacy',
+  'waitlist',
+];
+
+/**
+ * Column-scoped grants across the whole corpus, as
+ * `table -> role -> columns`. Declared so the runbook's "exactly three rows
+ * and nothing else" for the column-ACL query is guarded corpus-wide, not just
+ * for `profiles`.
+ */
+export const COLUMN_SCOPED_GRANTS: Record<string, Record<string, string[]>> = {
+  profiles: {
+    authenticated: ['display_name', 'is_private', 'shares_list_publicly'],
+  },
+};
+
 /** Strip `--` line comments and block comments so they cannot mask or fake a match. */
 export function stripSqlComments(sql: string): string {
   return sql

@@ -1,7 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   ANON_EXECUTABLE_FUNCTIONS,
   ANON_READABLE_TABLES,
+  COLUMN_SCOPED_GRANTS,
+  LEGACY_SCHEMA_FILE,
+  V01_LEGACY_TABLES,
+  legacyRenames,
+  legacySchemaPolicies,
+  legacySchemaTables,
   DEFINERS_WITHOUT_AUTH_UID,
   FUNCTIONS_WITHOUT_PUBLIC_REVOKE,
   POLICY_LESS_BY_DESIGN,
@@ -627,6 +634,82 @@ describe('functions reachable by PUBLIC', () => {
       -- auth.uid() is checked by the caller, honest
     `);
     expect(functionsDefined(outside)[0].usesAuthUid).toBe(false);
+  });
+});
+
+describe('v0.1 legacy objects (present on a Production-lineage database)', () => {
+  const schemaSql = readFileSync(LEGACY_SCHEMA_FILE, 'utf8');
+
+  it('derives the legacy table set from schema.sql plus 0000 renames', () => {
+    // Migration 0000 RENAMES the v0.1 tables rather than dropping them and
+    // leaves `waitlist` alone because /api/waitlist still writes to it. A
+    // v0.1-derived database therefore holds five tables no migration creates.
+    // Omitting them made Checks 1-3 false on Production.
+    expect(legacySchemaTables(schemaSql, files)).toEqual([...V01_LEGACY_TABLES].sort());
+  });
+
+  it('reads 0000 rename map from the migration, not a hardcoded list', () => {
+    const renames = legacyRenames(files);
+    expect(renames.get('profiles')).toBe('profiles_v01_legacy');
+    expect(renames.get('bars')).toBe('bars_v01_legacy');
+    expect(renames.get('saves')).toBe('saves_v01_legacy');
+    expect(renames.get('visits')).toBe('visits_v01_legacy');
+    // waitlist is deliberately NOT renamed.
+    expect(renames.has('waitlist')).toBe(false);
+  });
+
+  it('counts the legacy policies that travel with the rename', () => {
+    const byTable = legacySchemaPolicies(schemaSql, files);
+    const total = [...byTable.values()].reduce((n, names) => n + names.length, 0);
+    expect(total).toBe(15);
+    expect(byTable.get('waitlist')).toEqual([
+      'waitlist anyone insert',
+      'waitlist service role select',
+    ]);
+    expect(byTable.get('profiles_v01_legacy')).toHaveLength(4);
+  });
+
+  it('keeps the legacy tables disjoint from the migration-created ones', () => {
+    // If a name ever collided, the runbook's two expected sets would overlap
+    // and the operator could not tell which lineage produced a row.
+    const fresh = new Set(expectedPublicTables(files));
+    for (const t of legacySchemaTables(schemaSql, files)) {
+      expect(fresh.has(t), `${t} is in BOTH the fresh and legacy sets`).toBe(false);
+    }
+  });
+
+  it('FAILS to treat a renamed table as still carrying its old name', () => {
+    const renamed = fake('alter table public.old_name rename to new_name;');
+    expect(legacyRenames(renamed).get('old_name')).toBe('new_name');
+  });
+});
+
+describe('column-scoped grants, corpus-wide', () => {
+  it('the DERIVED column-ACL map matches the declaration exactly', () => {
+    // The runbook's Check 3b says "exactly three rows and nothing else". Only
+    // the profiles entry was guarded, so a column grant added on ANY other
+    // table would falsify that sentence with the suite green.
+    const derived: Record<string, Record<string, string[]>> = {};
+    for (const [table, byRole] of netColumnPrivileges(files)) {
+      for (const [role, columns] of byRole) {
+        derived[table] = { ...(derived[table] ?? {}), [role]: columns };
+      }
+    }
+    expect(derived).toEqual(COLUMN_SCOPED_GRANTS);
+  });
+
+  it('FAILS when a column grant appears on another table', () => {
+    const extra = fake(`
+      grant update (secret_col) on table public.widgets to authenticated;
+    `);
+    const derived: Record<string, Record<string, string[]>> = {};
+    for (const [table, byRole] of netColumnPrivileges(extra)) {
+      for (const [role, columns] of byRole) {
+        derived[table] = { ...(derived[table] ?? {}), [role]: columns };
+      }
+    }
+    expect(derived).not.toEqual(COLUMN_SCOPED_GRANTS);
+    expect(derived.widgets.authenticated).toEqual(['secret_col']);
   });
 });
 
