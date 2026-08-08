@@ -11,6 +11,14 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "test:e2e:gate": "playwright test --reporter=list",
+    "check-env": "node scripts/check-env.mjs",
+    "tier-classify": "node scripts/tier-classify.mjs",
+    "tier-changed": "node scripts/changed-paths.mjs | node scripts/tier-classify.mjs",
+    "tier-validate": "git ls-files | node scripts/tier-classify.mjs --validate",
+    "tier-redproof": "node scripts/__tests__/red-proof.mjs",
+    "verify:changed": "npm run typecheck && npm run test && npm run tier-changed",
+    "verify:full": "npm run check-env && npm run typecheck && npm run test && npm run build && npm run tier-validate",
     "db:migrate": "tsx scripts/apply-migrations.ts"
   },
   "dependencies": {

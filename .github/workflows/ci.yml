@@ -1,14 +1,17 @@
 name: CI
 
 # Push-protocol gate (operator ask 2026-07-25): every PR and every push to
-# main runs the same three gates the local workflow uses — type-check,
-# unit tests, production build. With branch protection requiring this
-# check, a build that would fail on Vercel can never reach main (today's
-# edge-bundle-size failure would have been caught at the PR).
+# main runs the same gates the local workflow uses. With branch protection
+# requiring this check, a build that would fail on Vercel can never reach main.
 #
-# E2e (Playwright) is deliberately NOT here yet: it needs browser installs
-# + a dev server and roughly 10x the minutes. Add as a separate
-# nightly/PR-labeled job when the team grows.
+# CI calls the SAME canonical npm scripts a developer runs locally —
+# `npm run verify:full` and `npm run test:e2e:gate` — rather than re-spelling
+# tsc/vitest/next-build inline. Inline copies drift: the local gate and the CI
+# gate stop being the same gate, and nobody notices until CI passes something
+# that fails on a laptop (or the reverse). Change the script, and both move.
+#
+# verify:full = check-env + typecheck + unit tests + production build + tier
+# validation. E2E is deliberately NOT in verify:full — see the e2e job below.
 
 on:
   push:
@@ -16,9 +19,42 @@ on:
   pull_request:
 
 jobs:
-  gates:
+  verify:
+    name: Verify (types, unit, build, tier gate)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # tier-validate runs `git ls-files`, and verify:changed diffs against
+          # HEAD. A shallow clone still provides both, but fetching the full
+          # history keeps `git diff HEAD` meaningful on a PR merge commit.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Verify (canonical repository gate)
+        run: npm run verify:full
+        env:
+          # Build-time publics only — no secrets. The Supabase URL/key are the
+          # anon publishables and are only needed if a page prerenders against
+          # them; the build tolerates their absence (dual-mode), and check-env
+          # treats absence as a warning rather than an error for exactly this
+          # reason.
+          NEXT_TELEMETRY_DISABLED: '1'
+
+  e2e:
+    name: E2E (canonical browser gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A SEPARATE job on purpose. E2E needs browser installs, a dev server, and
+    # roughly 10x the minutes of the unit gate. Folding it into verify:full
+    # would make every doc-only change wait on Playwright — and a gate that is
+    # expensive on trivial changes is a gate people learn to skip. Keeping it
+    # separate means it can be required, retried, or scheduled independently
+    # without weakening the fast gate.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,14 +62,18 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - name: Type-check
-        run: npx tsc --noEmit
-      - name: Unit tests
-        run: npx vitest run
-      - name: Production build
-        run: npm run build
+      - name: Install Playwright browsers
+        # The config runs the iPhone 13 (WebKit) and Pixel 7 (Chromium)
+        # projects, so both engines are required.
+        run: npx playwright install --with-deps
+      - name: E2E (canonical browser gate)
+        run: npm run test:e2e:gate
         env:
-          # Build-time publics only — no secrets. Supabase URL/key are the
-          # anon publishables and are only needed if a page prerenders
-          # against them; the build tolerates their absence (dual-mode).
           NEXT_TELEMETRY_DISABLED: '1'
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

@@ -15,7 +15,10 @@ export default defineConfig({
     // the ONE gate rather than a second config, because a suite you have to
     // remember a --config flag to run is not a gate. (Replaces the separate
     // ceo/vitest.config.mjs, deleted.)
-    include: ['src/**/*.test.{ts,tsx}', 'ceo/**/*.test.{ts,tsx}'],
+    // scripts/** holds the repository-owned tier classifier's adversarial
+    // suite. Same reasoning as ceo/** above: the tier gate is only a gate if
+    // the ONE unit-test command runs it.
+    include: ['src/**/*.test.{ts,tsx}', 'ceo/**/*.test.{ts,tsx}', 'scripts/**/*.test.mjs'],
   },
   resolve: {
     alias: {
