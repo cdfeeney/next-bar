@@ -86,8 +86,22 @@ export default function GooglePlacePhoto({
 }: GooglePlacePhotoProps) {
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const builtRef = useRef(false);
-  /** Identity inputs of the attempt currently represented by `builtRef`. */
-  const inputsRef = useRef<string | null>(null);
+  /**
+   * Identity inputs of the attempt currently represented by `builtRef`.
+   *
+   * Compared FIELD BY FIELD, deliberately. A delimiter-joined string
+   * normalized `surface: undefined` and `surface: ''` to the same key while
+   * the dependency array below treats them as different — so that pair could
+   * re-run the effect (cleanup cancelling the in-flight build) without
+   * resetting `builtRef`, and the new run would return at the `builtRef`
+   * guard, leaving neither a widget nor a fallback. Matching the dependency
+   * array's own equality removes the mismatch. (santa: Codex round 3.)
+   */
+  const inputsRef = useRef<{
+    placeId: string;
+    allowed: boolean;
+    surface: string | undefined;
+  } | null>(null);
   const [status, setStatus] = useState<Status>('pending');
 
   /**
@@ -116,9 +130,14 @@ export default function GooglePlacePhoto({
      * detached. Resetting `builtRef` on those runs would let the SAME card
      * build a second widget — a duplicated billable event.
      */
-    const inputs = `${placeId}|${allowed}|${surface ?? ''}`;
-    if (inputsRef.current !== inputs) {
-      inputsRef.current = inputs;
+    const prev = inputsRef.current;
+    if (
+      prev === null ||
+      prev.placeId !== placeId ||
+      prev.allowed !== allowed ||
+      prev.surface !== surface
+    ) {
+      inputsRef.current = { placeId, allowed, surface };
       builtRef.current = false;
       setStatus('pending');
       hostEl?.replaceChildren();
@@ -268,6 +287,14 @@ export default function GooglePlacePhoto({
       // Google bills per widget created, so two cards sharing one googlePlaceId
       // (the Fleming's/Dominie's collision 0028 resolves) bill twice;
       // de-duplicating the callback would silently undercount real spend.
+      // Belt and braces before the billable moment. Today no `await` sits
+      // between the last guard and this line, so a timer cannot interleave
+      // and this can never be true — but the append and the two meter calls
+      // below are the one place money is spent, and a future refactor that
+      // introduces an await above would silently start billing for widgets
+      // that were already abandoned. (santa: DeepSeek round 3, Q3.)
+      if (cancelled || gaveUp) return;
+
       host.appendChild(details);
       markRequested(placeId, surface);
       onBillableRequestRef.current?.(placeId);
@@ -276,7 +303,15 @@ export default function GooglePlacePhoto({
     // Lazy mount. IntersectionObserver is absent in some test environments;
     // fall back to building immediately rather than never showing a photo.
     if (typeof IntersectionObserver === 'undefined') {
-      void build();
+      // Deferred by a microtask so StrictMode's synchronous double-invoke
+      // cannot strand the card. Calling build() inline let run 1 claim
+      // `builtRef` before its first await; cleanup then cancelled that build,
+      // and run 2 — whose inputs had not changed, so `builtRef` was never
+      // reset — returned at the `builtRef` guard. Nothing built and nothing
+      // set 'unavailable': an empty pending box. Deferring lets the cleanup
+      // land first, so the cancelled attempt returns without claiming the
+      // guard. (santa: Claude/FABLE round 3.)
+      queueMicrotask(() => void build());
       return () => {
         cancelled = true;
         window.clearTimeout(timer);
