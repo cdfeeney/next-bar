@@ -415,3 +415,89 @@ ENVIRONMENT NOTES FOR THE NEXT RUN:
   - e2e/rankings-add-flow.spec.ts is FLAKY AT HEAD under load, not a regression from this
     item: restoring QuickAddBar.tsx to its exact HEAD content failed the same test twice.
     Every stall is Playwright's "visible, enabled and stable" actionability check.
+
+### g-b9dc294e — REOPENED FOR FINAL-CANDIDATE REVIEW → BLOCKED (quorum not met)
+
+The 2026-08-08 coordination audit reopened this item: round 3 reviewed through
+`ba06c2f`, then the confirmed Medium was corrected in `6527089`, and that final
+commit received verification but no fresh independent panel. `f244b8c` on top of
+it is only the administrative morning record.
+
+REVERIFICATION of the exact final candidate `f244b8c` (working tree clean, no
+uncommitted work) — all green, bounded-run exit 0 each, run serially with the
+worktree uncontended and `:3000` confirmed free beforehand:
+  typecheck clean; vitest 164 files / 2483 tests; `npm run build` compiled
+  successfully; secret-scan clean (721 tracked files); `git diff --check` exit 0;
+  e2e/add-bar-overflow.spec.ts 13 passed on EACH of iPhone 13, Pixel 7, iPhone 17.
+  Tier on the actual goal-specific paths: T1, t0FileCount 0, escalated false.
+
+PANEL (intensity FULL as ordered) — **quorumMet FALSE, so REVIEW_INCOMPLETE, not NICE**:
+  Claude/FABLE  SUCCEEDED — model fable, tier-routed, preflight ok:true,
+                 override_present false. APPROVE, zero findings. Independently
+                 traced and CONFIRMED the round-3 stale-memo correction.
+  Codex         SUCCEEDED — family openai, proof codex-review:gpt-5.6-sol:65dea3f2.
+                 Three Mediums, all Codex-unique.
+  GLM           SUCCEEDED — 10/10 chunks, exit 0 each.
+  DeepSeek      SUCCEEDED — 10/10 chunks, exit 0 each.
+  Kimi (deep)   **FAILED** — 2 of 7 chunks returned, then exit 4 for every
+                 subsequent call. Diagnosed through the coordinator (launcher
+                 NOT called directly): "Kimi K3 OpenRouter request failed: The
+                 remote server returned an error: (402) Payment Required."
+                 Kimi at STANDARD depth still answers, so the deep profile's
+                 larger token budget no longer fits the remaining OpenRouter
+                 credit. Not a 124 timeout and not exit 5. Downgrading to
+                 standard depth was refused: a shallow substitute lane is not
+                 the lane the panel claims.
+
+CONFIRMED FINDINGS (all Medium, all Codex-unique, all verified by reading the
+current files) — **not fixed, deliberately**:
+  M1 spec:199-229 — the affordance exemption is purely property-based. Putting
+     Tailwind `truncate` on the bare `overflow-hidden` <ul> exempts the clipper
+     itself while the reverted row's spans compute `overflow-x: visible` and are
+     skipped, so `offenders` stays empty with a name silently clipped. Same
+     shape as the line-clamp hole closed in round 3.
+  M2 spec:497-542 — criterion 6 is pinned to the one scroller containing
+     `li button`. The tier stage is unasserted, and criterion 6's "keyboard
+     open" and "accessibility text sizes" clauses are simulated nowhere. GLM,
+     DeepSeek and Kimi each reached the second half independently; FABLE raised
+     it as an advisory.
+  M3 spec:383-398 — the long-address test asserts only the row button by NAME.
+     Hiding or deleting `{bar.address}` keeps every assertion green. The name
+     half of criterion 2 was hardened with `toContainText` in round 1; the
+     address half never was.
+
+WHY NO FIX WAS COMMITTED: the mandate requires the corrected candidate to itself
+pass a fresh successful full panel before completion, and that is unobtainable
+while Kimi deep returns 402 — nothing available to an unattended session clears
+it. Committing a fix now would recreate the exact defect this reopen exists to
+correct: a fix commit no independent panel ever saw. The candidate is left
+byte-identical at `f244b8c`.
+
+FINDINGS VERIFIED AND REJECTED (recorded so the reasoning is auditable):
+  Kimi HIGH, "the stale-memo comment names a mechanism that cannot happen" —
+    REFUTED. `installCatalogFixture` installs a `page.route` interception for
+    /rest/v1/bars; it does not pre-seed the catalog, so first render uses the
+    static bundled rows and CatalogRefresh swaps later. catalog.ts:203-212's own
+    SWAP-DAY CHECKLIST names "rankings/page (deps [ratings])" verbatim as a
+    stale non-reactive reader, and page.tsx:95-106 is that memo. Kimi's second
+    point is already stated in the comment it disputes. The 6527089 correction
+    stands.
+  GLM, "a descendant's ellipsis exempts an overflow-x:hidden ancestor" —
+    REFUTED; `hasEllipsis` reads the ancestor's own computed style, and the
+    round-2 RED proof already showed that mutation failing.
+  GLM, "gotoRankings sets the age-ack after the first goto" — REFUTED;
+    `openAddBarModal` asserts the "+ Add a bar" trigger, so a wrong page fails.
+  DeepSeek, "the ordinary-bar seed is missing" — REFUTED; spec:109 seeds both
+    ids. The lane could not see past its chunk boundary.
+  DeepSeek, "RegExp metacharacters in LONG_NAME" — not live; LONG_NAME is
+    alphanumeric. Latent only.
+  GLM, "hasClamp is logically dead" — TRUE and worth a cleanup, but it weakens
+    nothing: the push already requires scrollWidth > clientWidth.
+
+NEXT SESSION, in order: restore OpenRouter credit (or get explicit operator
+approval to run the panel without the Kimi deep lane), then fix M1, M3 and M2
+with RED-before-GREEN, and give the resulting commit a fresh full panel.
+
+Nothing was pushed, deployed, migrated, removed or externally changed. No
+credentials used, no database contacted, no paid product API called. Local
+commits only; worktree topology untouched.
