@@ -267,7 +267,10 @@ async function resumeChildren(cell, known, ctx) {
     }
   }
   const terminal = [...COMPLETING_STATUSES, SATURATED_AT_FLOOR];
-  if (outcomes.every((outcome) => terminal.includes(outcome))) {
+  // Same evidence rule as the settle branch: a 'cleared' attests that THIS cell
+  // was searched and censored, so it needs an ok ATTEMPT of its own. Without
+  // one, leave the parent outstanding and let it be queried.
+  if (known.lastOk && outcomes.every((outcome) => terminal.includes(outcome))) {
     ctx.manifest.done(cell.id, 'cleared', { children: known.children.length, resumed: true });
     return 'cleared';
   }
@@ -331,8 +334,16 @@ async function processCell(cell, ctx) {
     // incomplete_failed, the completing-status path above meant no later resume
     // ever retried it, and ackEligibility refused to waive a transient class.
     // Fall through instead and let the retry that resume exists for happen.
+    // `known.lastOk` is what keeps this from manufacturing evidence. A SUBDIVIDE
+    // with no ATTEMPT behind it cannot arise from a kill — records append
+    // ATTEMPT before SUBDIVIDE — but a hand-edited manifest can hold one, and
+    // writing 'cleared' there was self-perpetuating: the cell still had no
+    // lastOk afterwards, so `isCompleting` stayed false and the next resume
+    // appended another 'cleared', forever, with completeness refusing it and
+    // ackEligibility declining a never-attempted cell. Fall through and search.
     if (
       known.children?.length > 0 &&
+      known.lastOk &&
       !isCompleting(known) &&
       !hasUnrecoveredBlocking(known)
     ) {

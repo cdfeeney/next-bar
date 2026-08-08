@@ -316,6 +316,18 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
     write: (w, id) => w.done(id, 'unsaturated'),
   },
   {
+    // A completing DONE whose only ATTEMPT FAILED. Distinct from the
+    // never-attempted fixture: that one has zero attempts, so a check written
+    // as `attempts.length > 0` would still reject it and look correct. This one
+    // has an attempt and still no evidence, which is what forces the check to
+    // be `lastOk` rather than a count.
+    name: 'DONE claims unsaturated after a permanent failure',
+    write: (w, id) => {
+      w.attempt({ cellId: id, attemptN: 1, ok: false, errorClass: 'http4xx' });
+      w.done(id, 'unsaturated');
+    },
+  },
+  {
     // A legitimately cleared parent one of whose children sits at the floor.
     // The floor child is finished for SUBDIVISION purposes but never counts
     // toward a complete run, and the engine's child predicate omitted that —
@@ -1080,6 +1092,121 @@ describe('resume state matrix', () => {
     }
   });
 
+  it.each(STATES.map((state) => [state.name, state] as const))(
+    'invariant 19 — the summary never counts "%s" as finished while reporting it outstanding',
+    async (_name, state) => {
+      // `summary.finished` was the last judge still reading the bare status
+      // word, so an evidence-less DONE was counted finished while the same cell
+      // sat in `missing` — in the same object, which is what RUN_DONE persists
+      // for the operator. Asserted as a contradiction rather than by recomputing
+      // with the same predicate, so the check cannot be satisfied by the bug.
+      const { cell, file } = build(state);
+      const seeded = completeness(loadManifest(file)!);
+      expect(
+        seeded.summary.finished + seeded.missing.length,
+        `${state.name}: a cell was counted finished AND reported missing`,
+      ).toBeLessThanOrEqual(seeded.summary.plannedCells);
+
+      const writer = openManifest(file);
+      await sweep({
+        cells: [cell],
+        manifest: writer,
+        state: loadManifest(file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: healthyTransport([]),
+      });
+      writer.close();
+      const after = completeness(loadManifest(file)!);
+      expect(
+        after.summary.finished + after.missing.length,
+        `${state.name}: after resume, a cell was counted finished AND reported missing`,
+      ).toBeLessThanOrEqual(after.summary.plannedCells);
+    },
+  );
+
+  it('invariant 20 — a SUBDIVIDE with no parent attempt converges instead of growing forever', async () => {
+    // Forged/hand-edited shape: children finished, parent never attempted. The
+    // settle branch used to write 'cleared' over it, which left the parent
+    // still without evidence, so `isCompleting` stayed false and the NEXT
+    // resume appended another 'cleared' — unbounded growth, completeness
+    // refusing it, and ackEligibility declining a never-attempted cell.
+    const cell = baseCell();
+    const kids = realKids();
+    const file = path.join(dir, 'forged-subdivide.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'forged-subdivide' }), cells: [cell] });
+    writer.subdivide(cell.id, kids.map((k) => k.id), kids);
+    for (const kid of kids) {
+      writer.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+      writer.result(kid.id, [{ id: `fs-${kid.id}` }]);
+      writer.done(kid.id, 'unsaturated');
+    }
+    writer.close();
+
+    const doneRecords = () =>
+      fs.readFileSync(file, 'utf8').split('\n').filter((line) => line.includes('"type":"DONE"'))
+        .length;
+
+    const counts: number[] = [doneRecords()];
+    for (let round = 0; round < 3; round++) {
+      const roundWriter = openManifest(file);
+      await sweep({
+        cells: [cell],
+        manifest: roundWriter,
+        state: loadManifest(file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: healthyTransport([]),
+      });
+      roundWriter.close();
+      counts.push(doneRecords());
+    }
+    expect(
+      counts[counts.length - 1],
+      `DONE records grew every resume: ${counts.join(' -> ')}`,
+    ).toBe(counts[1]);
+    expect(completeness(loadManifest(file)!).complete, 'never converged').toBe(true);
+  });
+
+  it('invariant 21 — a parent whose child permanently fails does not record cleared', async () => {
+    // The terminal-outcome lists accept only real statuses; `null` means the
+    // child is unfinished. Nothing pinned that, because healthyTransport never
+    // fails, so adding `null` to those lists survived every case while letting
+    // a parent claim 'cleared' over a child that never finished.
+    const state = STATES.find((candidate) => candidate.name === 'capped with page, no subdivide');
+    expect(state, 'fixture missing — a rename must not silently drop this case').toBeDefined();
+
+    const { cell, file } = build(state!);
+    let firstChild: string | null = null;
+    const writer = openManifest(file);
+    await sweep({
+      cells: [cell],
+      manifest: writer,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: async (queried: any) => {
+        // One child fails permanently; the rest answer normally.
+        if (firstChild === null) firstChild = queried.id;
+        if (queried.id === firstChild) {
+          const error: any = new Error('permanent rejection');
+          error.status = 400;
+          throw error;
+        }
+        return { places: page(1, queried.id) };
+      },
+    });
+    writer.close();
+
+    const after = loadManifest(file)!;
+    expect(
+      after.cells.get(cell.id).terminalStatus,
+      'the parent claimed cleared while one child never finished',
+    ).not.toBe('cleared');
+    expect(completeness(after).complete, 'reported complete with an unfinished child').toBe(false);
+  });
+
   it('the matrix registers every state it claims, and invariant 5 is not a no-op', () => {
     // The count is NOT the signal — a previous edit deleted three invariants
     // while the total went up. Pin the shape instead: unique names, both
@@ -1088,9 +1215,9 @@ describe('resume state matrix', () => {
     expect(new Set(STATES.map((state) => state.name)).size, 'duplicate state name').toBe(
       STATES.length,
     );
-    expect(STATES.length, 'a state was dropped').toBe(25);
+    expect(STATES.length, 'a state was dropped').toBe(26);
     expect(SETTLED_STATES.length, 'the settled partition shrank').toBe(6);
-    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(19);
+    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(20);
 
     const withRecords = STATES.filter((state) => {
       const { cell, file } = build(state);

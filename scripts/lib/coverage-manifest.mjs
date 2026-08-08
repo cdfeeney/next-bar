@@ -338,28 +338,38 @@ export function isCompleting(cell) {
 }
 
 /**
+ * Terminal: this cell owes no further SUBDIVISION, whatever that means for the
+ * run's verdict. The floor belongs here and not in `isCompleting`, because a
+ * cell still capping at the minimum size is finished as work and knowably short
+ * as coverage — two different questions with two different answers.
+ *
+ * This is the predicate `completeness` needs for "did this cell's children
+ * finish", and it is deliberately NOT `isSettledForResume`: completeness must
+ * not consult the blocking check here, because a blocked child is already
+ * reported against ITSELF by clause 3. It was previously hand-spelled at that
+ * call site, one omitted disjunct away from silently letting a floor-saturated
+ * child count toward a clean report.
+ */
+export function isTerminal(cell) {
+  if (!cell) return false;
+  return isCompleting(cell) || cell.terminalStatus === SATURATED_AT_FLOOR;
+}
+
+/**
  * Finished for the purpose of not working this cell again on a resume.
  *
- * Two differences from `isCompleting`, both learned from cells that got stuck:
+ * `isTerminal` plus one thing: a terminal status does NOT survive a blocking
+ * failure recorded after it. The run must retry, and nothing else can clear it
+ * — `ackEligibility` deliberately refuses to waive a transient class — so
+ * treating such a cell as finished strands it with no lever at all.
  *
- * - A completing status does NOT survive a blocking failure recorded after it.
- *   The run must retry, and nothing else can clear it — `ackEligibility`
- *   deliberately refuses to waive a transient class — so treating it as
- *   finished strands the cell with no lever at all.
- * - A cell at the floor IS finished for SUBDIVISION purposes, even though it
- *   can never count toward a complete run. Callers used to spell that half by
- *   hand as `|| terminalStatus === SATURATED_AT_FLOOR`; the one place that
- *   forgot it re-walked the subtree and appended a duplicate DONE on every
- *   single resume.
- *
- * `isCompleting` answers "may the run report this cell as done?"; this answers
- * "does a resume still owe it work?". They are different questions, and giving
- * each a name is what stops the next caller from picking the wrong one.
+ * The three questions now have three names. `isCompleting`: may the run report
+ * this cell as done? `isTerminal`: does it owe more subdivision? This: does a
+ * resume still owe it work? Picking the wrong one used to be an omitted
+ * disjunct at a call site; now it is a visible choice of verb.
  */
 export function isSettledForResume(cell) {
-  if (!cell) return false;
-  if (hasUnrecoveredBlocking(cell)) return false;
-  return isCompleting(cell) || cell.terminalStatus === SATURATED_AT_FLOOR;
+  return isTerminal(cell) && !hasUnrecoveredBlocking(cell);
 }
 
 /**
@@ -410,11 +420,7 @@ export function completeness(state) {
     //     is reported once, against the cell that has it.
     if (cell.capped && cell.terminalStatus !== SATURATED_AT_FLOOR) {
       const children = cell.children.map((id) => state.cells.get(id));
-      const finishedByChildren =
-        children.length > 0 &&
-        children.every(
-          (child) => isCompleting(child) || child?.terminalStatus === SATURATED_AT_FLOOR,
-        );
+      const finishedByChildren = children.length > 0 && children.every(isTerminal);
       if (!finishedByChildren && !isAcknowledged(cell)) {
         unclearedCap.push(cell.cellId);
       }
@@ -451,8 +457,11 @@ export function completeness(state) {
     unclearedCap,
     summary: {
       plannedCells: plannedCells.length,
-      finished: plannedCells.filter((cell) => COMPLETING_STATUSES.includes(cell.terminalStatus))
-        .length,
+      // `isCompleting`, not raw status membership. The summary was the last
+      // judge still reading the bare word, so an evidence-less DONE was counted
+      // as finished while the same cell sat in `missing` in the same object —
+      // and that object is what RUN_DONE persists for the operator.
+      finished: plannedCells.filter(isCompleting).length,
       subdivided: plannedCells.filter((cell) => cell.children.length > 0).length,
       saturatedAtFloor: saturated.length,
       failed: failed.length,
