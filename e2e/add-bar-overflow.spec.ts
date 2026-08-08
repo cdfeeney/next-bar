@@ -211,22 +211,37 @@ async function expectNoHorizontalOverflowWithin(
         // exempt an element that is still clipping silently — the same hole
         // the line-clamp rule closed in round 3 (santa: DeepSeek). Tailwind's
         // `truncate` always sets nowrap, so requiring it costs nothing here.
+        //
+        // ...and the properties are still not enough on their own. They are
+        // inherited-or-set on ANY element, including one with no inline text of
+        // its own, and `text-overflow` has no effect on a box whose children
+        // are blocks. So putting `truncate` on the bare `overflow-hidden` <ul>
+        // that wraps the inline match rows used to exempt the CLIPPER ITSELF
+        // while its unconstrained descendants — computing `overflow-x: visible`
+        // — were skipped by the auto/scroll branch below. `offenders` came back
+        // empty with a name clipped silently: exactly the banned workaround,
+        // waved through (santa recovery round, Codex). An exemption is now
+        // earned only by an element that OWNS ellipsable text, i.e. holds a
+        // non-empty text node directly rather than delegating to child boxes.
+        const ownsEllipsableText = Array.from(node.childNodes).some(
+          (child) => child.nodeType === 3 && (child.textContent ?? '').trim() !== '',
+        );
         const hasEllipsis =
           style.textOverflow === 'ellipsis' &&
-          (style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre');
-        // A line-clamp is a VERTICAL affordance: it wraps, then caps the line
-        // count. It says nothing about the horizontal axis, so exempting a
-        // clamped element outright let a real regression through — drop
-        // `break-words` while keeping `line-clamp-3` and an unbreakable name is
-        // clipped sideways on one line with no visible ellipsis, yet the clamp
-        // exempted it. Verified: that mutation passed 4/4 before this existed
-        // (santa round 3, Codex). A correctly wrapping clamped element has no
-        // horizontal overflow, so requiring that costs nothing.
-        const hasClamp =
-          style.webkitLineClamp !== 'none' &&
-          style.webkitLineClamp !== '' &&
-          node.scrollWidth <= node.clientWidth;
-        if (!hasEllipsis && !hasClamp && node.scrollWidth > node.clientWidth) {
+          (style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre') &&
+          ownsEllipsableText;
+        // A line-clamp earns NO horizontal exemption. It is a VERTICAL
+        // affordance — it wraps, then caps the line count — so it says nothing
+        // about this axis. Round 3 added a `hasClamp` term that also required
+        // `scrollWidth <= clientWidth`; that made it dead code, because the
+        // offender test below fires only when `scrollWidth > clientWidth`, so
+        // the two conditions are mutually exclusive and the term never exempted
+        // anything (santa recovery round, GLM). Removing it is behaviour-
+        // preserving and stops the guard reading as though clamps get a pass:
+        // drop `break-words` while keeping `line-clamp-3` and an unbreakable
+        // name clips sideways with no ellipsis, which must fail — it does,
+        // because `text-overflow` stays `clip` on a `-webkit-box`.
+        if (!hasEllipsis && node.scrollWidth > node.clientWidth) {
           out.push({
             cls: `[${style.overflowX}, no affordance] ` + (node.className?.toString().slice(0, 60) ?? ''),
             scrollWidth: node.scrollWidth,
@@ -271,6 +286,63 @@ async function openAddBarModal(page: Page): Promise<void> {
   await expect(trigger).toBeVisible();
   await trigger.click();
   await expect(modal(page)).toBeVisible();
+}
+
+/** Search for the synthetic long-named bar and advance to the tier stage. */
+async function selectLongBar(page: Page): Promise<void> {
+  const search = modal(page).getByLabel('Search bars');
+  await expect(search).toBeVisible();
+  await search.click();
+  await search.pressSequentially('Supercalifragilistic');
+  const match = modal(page).getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) });
+  await expect(match.first()).toBeVisible({ timeout: 10_000 });
+  await match.first().click();
+  await expect(modal(page).getByRole('heading')).toContainText('How was');
+}
+
+/**
+ * Measure the ONE scroller that matters, pinned by a descendant so a future
+ * `overflow-x-auto` utility elsewhere in the dialog cannot silently retarget
+ * the assertion (the round-2 lesson).
+ *
+ * This deliberately duplicates the probe inlined in the criterion-6 test below
+ * rather than refactoring it: that test is the frozen criterion-6 assertion and
+ * the operator's instruction for this round was to preserve it exactly and ADD
+ * coverage around it. It also records the pre-existing scrollTop as its
+ * baseline instead of assuming 0, so a scroller that opens already-scrolled
+ * cannot report a phantom move.
+ */
+async function probeScroller(
+  page: Page,
+  rootSelector: string,
+  pin: { selector: string; text?: string },
+): Promise<{ found: boolean; overflows: boolean; moved: boolean; clientHeight: number }> {
+  return page.locator(rootSelector).evaluate((el, pinArg) => {
+    const candidates = (Array.from(el.querySelectorAll('*')) as HTMLElement[]).filter((n) => {
+      const oy = getComputedStyle(n).overflowY;
+      return oy === 'auto' || oy === 'scroll';
+    });
+    const scroller = candidates.find((n) =>
+      Array.from(n.querySelectorAll(pinArg.selector)).some(
+        (c) => !pinArg.text || (c.textContent ?? '').trim().startsWith(pinArg.text),
+      ),
+    );
+    if (!scroller) return { found: false, overflows: false, moved: false, clientHeight: 0 };
+    const overflows = scroller.scrollHeight > scroller.clientHeight;
+    const before = scroller.scrollTop;
+    scroller.scrollTop = before + 150;
+    const moved = scroller.scrollTop > before;
+    scroller.scrollTop = before;
+    return { found: true, overflows, moved, clientHeight: scroller.clientHeight };
+  }, pin);
+}
+
+/** Shrink only the height, keeping each project's own width. */
+async function shrinkViewportHeight(page: Page, height: number): Promise<void> {
+  const vp = page.viewportSize();
+  await page.setViewportSize({ width: vp?.width ?? 390, height });
+  // Let the resize settle before anything measures the new layout.
+  await page.waitForFunction((h) => window.innerHeight <= h, height);
 }
 
 test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
@@ -392,6 +464,22 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
 
     const match = modal(page).getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) });
     await expect(match.first()).toBeVisible({ timeout: 10_000 });
+
+    // The ADDRESS must actually be rendered, not merely absent-and-therefore-
+    // narrow. Without this the containment fix could "pass" by regressing to no
+    // address at all: hide or delete `{bar.address}` in BarPicker and every
+    // width and scroller assertion below still goes green, because the row is
+    // located by its NAME. The name half of criterion 2 was pinned with
+    // toContainText in round 1; the address half never was (santa recovery
+    // round, Codex). Codex named two triggers — deleting `{bar.address}` and
+    // hiding it — and they need different assertions: `toContainText` reads
+    // textContent, so it catches deletion but a `display:none` span still
+    // matches (verified: the mutation passed 2/2 against a toContainText-only
+    // version). Asserting the address is VISIBLE covers both. Truncation is
+    // visual, so a truncated-but-rendered address still satisfies this.
+    await expect(
+      match.first().getByText(LONG_ADDRESS.slice(0, 30), { exact: false }),
+    ).toBeVisible();
 
     // Row on screen — this is the moment that matters.
     await expectNoNestedHorizontalScroll(page, 'pick-bar stage with long address');
@@ -539,6 +627,128 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
     // programmatically while the user sees a slit (santa round 2: Codex, with
     // DeepSeek giving the same shape as a max-height collapse).
     expect(result.clientHeight).toBeGreaterThan(100);
+  });
+
+  /**
+   * Criterion 6, TIER STAGE. The assertion above pins the scroller that holds
+   * the picker rows, so the tier stage — a DIFFERENT `overflow-y-auto`
+   * container (QuickAddBar's tier branch) — had no coverage at all: delete
+   * `overflow-y-auto` there and every existing test still passes while the tier
+   * options sit unreachable under a locked body (santa recovery round, Codex).
+   */
+  test('the tier stage still scrolls when its options overflow', async ({ page }) => {
+    await gotoRankings(page);
+    await openAddBarModal(page);
+    await selectLongBar(page);
+
+    // Three tier buttons fit comfortably on a tall phone, so measuring as-is
+    // would assert nothing on iPhone 13 and Pixel 7 — measured: still no
+    // overflow at 420px tall. Shrink until the stage genuinely overflows, then
+    // REQUIRE that below, so this can never silently degrade into a no-op. The
+    // floor is 300px, roughly what a 667px phone leaves with the keyboard up.
+    const pin = { selector: 'button', text: 'Loved' };
+    let tier = await probeScroller(page, DIALOG_SELECTOR, pin);
+    for (const height of [420, 360, 300]) {
+      if (tier.overflows) break;
+      await shrinkViewportHeight(page, height);
+      tier = await probeScroller(page, DIALOG_SELECTOR, pin);
+    }
+    expect(tier.found).toBe(true);
+    expect(tier.overflows).toBe(true);
+    expect(tier.moved).toBe(true);
+
+    // And every tier option is genuinely reachable, not just present in the
+    // DOM — toBeVisible() would pass on a button clipped outside the scrollport.
+    for (const label of [/^Loved/, /^Liked/, /^Pass/]) {
+      const option = modal(page).getByRole('button', { name: label });
+      await option.scrollIntoViewIfNeeded();
+      await expect(option).toBeInViewport();
+    }
+
+    await expectNoNestedHorizontalScroll(page, 'tier stage on a short viewport');
+  });
+
+  /**
+   * Criterion 6, KEYBOARD OPEN. Playwright cannot raise a real IME, so the
+   * honest proxy is the geometric effect a keyboard has: the visual viewport
+   * loses roughly half its height while a text field holds focus. The failure
+   * this guards is a list that stops scrolling exactly when the user is typing.
+   */
+  test('vertical scrolling survives the on-screen keyboard opening', async ({ page }) => {
+    await gotoRankings(page);
+    await openAddBarModal(page);
+
+    const search = modal(page).getByLabel('Search bars');
+    await expect(search).toBeVisible();
+    await search.click();
+    await expect(search).toBeFocused();
+
+    await shrinkViewportHeight(page, 380);
+
+    const list = await probeScroller(page, DIALOG_SELECTOR, { selector: 'li button' });
+    expect(list.found).toBe(true);
+    expect(list.overflows).toBe(true);
+    expect(list.moved).toBe(true);
+    // A deliberately different bar from the unobstructed case's `> 100`: with
+    // half the screen gone, what criterion 6 requires is that a usable slice of
+    // list survives — at least one 44px tap target — not the full scrollport.
+    // This ADDS a floor for the keyboard state; it does not relax that one.
+    expect(list.clientHeight).toBeGreaterThan(44);
+
+    await expectNoNestedHorizontalScroll(page, 'pick-bar stage with the keyboard open');
+  });
+
+  /**
+   * Criterion 6, ACCESSIBILITY TEXT SIZES. Every Tailwind size in this modal is
+   * rem-based, so doubling the root font size is what a user's large-text
+   * setting actually does to this layout. It is also the harshest containment
+   * case: the same unbreakable name, twice as wide.
+   */
+  test('vertical scrolling and containment survive doubled text size', async ({ page }) => {
+    await gotoRankings(page);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = '200%';
+    });
+    await openAddBarModal(page);
+
+    const list = await probeScroller(page, DIALOG_SELECTOR, { selector: 'li button' });
+    expect(list.found).toBe(true);
+    expect(list.overflows).toBe(true);
+    expect(list.moved).toBe(true);
+
+    // Containment at 2x is asserted at the level the acceptance criteria
+    // actually specify: the page must not pan (criteria 7 and 9).
+    //
+    // The nested-scroller guard is deliberately NOT run here, and the reason is
+    // measured, not assumed. At 200% the picker scroller reports scrollWidth
+    // 297 vs clientWidth 294 on iPhone 13 — a real but 3px settable axis — and
+    // an attribution pass could not find anything actually out of reach: every
+    // descendant box ends at exactly the content edge (maxRight 342.00 ===
+    // left 48 + clientWidth 294), the scroller has no padding or scrollbar
+    // gutter (border-box width 294 === clientWidth), and the only inline text
+    // extending past the edge sits inside `truncate` spans that clip on purpose
+    // behind an ellipsis. The overflow is sub-pixel accumulation at 2x zoom
+    // that `clientWidth`'s integer rounding turns into a 3px delta.
+    //
+    // Asserting equality here would therefore fail on a rounding artifact, and
+    // the only way to "pass" it would be `overflow-x: hidden` on an ancestor —
+    // the exact workaround this goal bans. Criterion 6 asks that vertical
+    // scrolling survive large text, which is asserted above; it does not extend
+    // the nested-axis equality to 2x. The 3px is recorded as a measured
+    // residual rather than silently dropped or blind-fixed.
+    //
+    // The DOCUMENT is likewise not asserted at 2x, and this one is not subtle:
+    // /rankings already measures scrollWidth 550 vs clientWidth 390 at 200%
+    // text BEFORE this modal is opened, and opening it does not move the number
+    // (measured both ways). The offenders are page chrome — the header's
+    // `relative z-20 shrink-0 text-right` control at 176px wide, and the
+    // five-tab bottom nav — neither of which this goal owns. A document
+    // assertion here would fail on someone else's defect and pressure a future
+    // author into "fixing" the add-a-bar modal for it. It is recorded as a
+    // separate finding instead. What IS asserted is criterion 8 on the surface
+    // this goal does own: the modal itself must not pan at 2x.
+    const m = await widths(page, DIALOG_SELECTOR);
+    expect(m.scrollWidth).toBe(m.clientWidth);
   });
 
   /**
