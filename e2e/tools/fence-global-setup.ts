@@ -81,7 +81,8 @@ function probe(PORT: number, BANNER: string): Promise<ProbeResult> {
  * Server-side canary (santa round-2, Fable HIGH): with reuseExistingServer,
  * a dev server started WITHOUT the proxy env is silently unfenced —
  * webServer.env is never applied to a reused server. If a server already
- * answers on :3000, hit /api/health: its handler performs a SERVER-SIDE fetch
+ * answers on the configured app port (NB_E2E_PORT, default 3000), hit
+ * /api/health: its handler performs a SERVER-SIDE fetch
  * to the Supabase auth health URL. supabase:'ok' is affirmative proof that a
  * live call left the box → abort. 'unreachable'/'unconfigured' pass — that IS
  * the fenced outcome (indistinguishable from Supabase-down, which also means
@@ -94,6 +95,18 @@ async function assertReusedServerFenced(attempt = 0): Promise<void> {
   // messages naming :3000 while probing :3200 send the operator to kill the
   // wrong server, which on this machine means another worktree's.
   const appPort = process.env.NB_E2E_PORT ?? '3000';
+  // Fail CLOSED on a malformed port. `?? '3000'` does not catch an EMPTY
+  // string, and `http://localhost:/api/health` is a VALID url meaning port 80
+  // — so `NB_E2E_PORT=''` (a trailing space in CI config, a blank shell var)
+  // would probe :80, get ECONNREFUSED, and this function would `return`
+  // clean, certifying a server it never contacted. Every other malformed
+  // value already fails closed via the throw below, but this one did not.
+  if (!/^\d{1,5}$/.test(appPort)) {
+    throw new Error(
+      `NB_E2E_PORT is not a valid port (${JSON.stringify(appPort)}) — refusing ` +
+        'to run: the fence canary cannot verify a server it cannot address.',
+    );
+  }
   let res: Response;
   try {
     // Must follow the app port playwright.config.ts actually uses

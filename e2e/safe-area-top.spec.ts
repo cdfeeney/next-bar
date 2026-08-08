@@ -291,9 +291,26 @@ test.describe('app-owned chrome respects the top safe area', () => {
     // overflow-y-hidden and every assertion below would still pass. So pin the
     // computed overflow to a value that actually accepts a gesture, and only
     // then measure.
+    // IF THIS FAILS, the scroll container moved — update the selector to query
+    // the new one. Do NOT loosen the allowlist: 'hidden'/'clip'/'visible' are
+    // exactly the values that mean a user cannot reach the action. This
+    // deliberately couples to today's architecture (the dialog IS the scroll
+    // container); QuickAddBar and TonightSuggestions already scroll an INNER
+    // wrapper instead, so a refactor toward that shape must move this query.
     const overflowY = await dialog.evaluate((el) => getComputedStyle(el).overflowY);
     expect(['auto', 'scroll', 'overlay'], `dialog overflow-y was "${overflowY}"`)
       .toContain(overflowY);
+
+    // overflow-y alone proves PLAYWRIGHT can scroll it, not that a FINGER can.
+    // `touch-action: none` — a plausible fix for a swipe conflict — leaves
+    // overflow-y untouched and scrollIntoViewIfNeeded() unaffected, while
+    // locking out touch scrolling entirely on the device this item is about.
+    const touchAction = await dialog.evaluate(
+      (el) => getComputedStyle(el).touchAction,
+    );
+    expect(touchAction, `dialog touch-action was "${touchAction}"`).not.toContain(
+      'none',
+    );
 
     await primary.scrollIntoViewIfNeeded();
     await expect(primary).toBeInViewport();

@@ -24,6 +24,14 @@ const FENCE_PROXY = 'http://127.0.0.1:39555';
  *   NB_E2E_PORT=3200 npx playwright test
  */
 const APP_PORT = process.env.NB_E2E_PORT ?? '3000';
+// `??` does not catch an EMPTY string, and `http://localhost:` is a valid URL
+// meaning port 80 — so a blank NB_E2E_PORT would silently retarget the whole
+// run. Fail loudly instead; the fence canary carries the identical guard.
+if (!/^\d{1,5}$/.test(APP_PORT)) {
+  throw new Error(
+    `NB_E2E_PORT is not a valid port: ${JSON.stringify(APP_PORT)}`,
+  );
+}
 const APP_URL = `http://localhost:${APP_PORT}`;
 
 /**
@@ -167,23 +175,23 @@ export default defineConfig({
       },
       // vibe-tweak-reachable added 2026-07-31 (goal g-44007df6): its whole
       // subject is a control row sitting under the fixed bottom nav on a SHORT
-      // viewport, and 402x681 is the shortest configured — running it only on
+      // viewport, and 402x681 is a short one — running it only on
       // the taller two would test everywhere except where the bug lives. One
       // extra spec, consistent with the scoping rationale above.
       // map-lightbox added 2026-07-31 (goal g-5ead112c): the lightbox is a
       // full-screen overlay whose action row sits at the bottom, so the
-      // shortest configured viewport is exactly where it would fail first —
+      // short viewport is exactly where it would fail first —
       // the same class of defect vibe-tweak-reachable was added for.
       // map-interaction added 2026-07-31 (goal g-12d33864): /map's filter
       // control became MapFilterSheet, a sheet whose Apply/Cancel row is its
       // LAST child — the identical shape as vibe-tweak-reachable above, and
-      // therefore the identical way to fail on the shortest viewport. Its
+      // therefore the identical way to fail on a short viewport. Its
       // acceptance criteria are stated at 402x681, so running it only on the
       // taller two would have tested everywhere except where it can break.
       // exact-filter-empty added 2026-08-02 (goal g-6cc99120): the recovery
       // card carries two 44px action buttons above the map — the same
       // bottom-crowded control shape as the specs above, so it must run on
-      // the shortest configured viewport too.
+      // a short viewport too.
       // cancel-bottomnav added 2026-08-02 (goal g-2c788c17): its entire
       // subject is Apply/Cancel-vs-fixed-nav geometry, stated at 402x681.
       // search-bars added 2026-08-03 (goal g-7b6021a8): the acceptance is
@@ -205,7 +213,7 @@ export default defineConfig({
       // modal is a full-screen dialog whose inner list is the only scrollable
       // region, and its acceptance criterion 6 is stated as "vertical
       // scrolling remains available on short viewports". 402x681 is the
-      // shortest configured, so running it only on the taller two would test
+      // short, so running it only on the taller two would test
       // everywhere except where scroll-lock and a wrapped multi-line heading
       // can actually squeeze the list out.
       // safe-area-top added 2026-08-08 (goal g-cb7cefd2): its acceptance
