@@ -274,3 +274,72 @@ src/components/BarLightbox.tsx (modified) and e2e/safe-area-top.spec.ts (untrack
 `loop-guard checkpoint` DID sweep all three into a commit as memory warned; that commit was undone
 with a soft reset and the files restored to their exact prior state, and every later commit was
 path-scoped by hand.
+
+---
+
+## C3 overnight run — Item 4 (safe-area positioning)
+
+Started: 2026-08-08 02:39 ET. Stop: 08:00 America/New_York 2026-08-08, or when no safe runnable
+item remains. Queue: g-cb7cefd2-9a91-40c4-b801-6890e6917c13 (Item 4), stored status `planned`.
+
+- Starting SHA: 689e564. Branch: fix/nighttime-mobile-hardening.
+- Preflight: tierMapSource=project, 10/10 live T0 rules, no dead rules. Recovery TERMINAL. No lease.
+- The two preconditions that blocked this item on 2026-08-07 are RE-CHECKED, not assumed:
+  (1) DISK/ENOSPC — RESOLVED, C: has GBs free and node_modules is present (the C2 run built and ran
+      Playwright repeatedly against it).
+  (2) AUTH BASE (<AUTH-NICE-SHA> from goal g-3fc3789d in a sibling worktree) — re-checked below.
+- In-flight work from C1 is present and is this item's own: src/app/page.tsx and
+  src/components/BarLightbox.tsx carry the safe-area padding, and e2e/safe-area-top.spec.ts is a
+  written-but-uncommitted spec. It is no longer "unrelated dirty state" now that Item 4 is active.
+
+### Item 4 - g-cb7cefd2-9a91-40c4-b801-6890e6917c13 - READY_FOR_REVIEW (Santa NOT run)
+Commit: 7fe3c48 (local only, NOT pushed). Tier T1 (re-classified on the actual diff, unchanged).
+
+STOPPED AT THE 08:00 America/New_York LIMIT with the item at `ready_for_review`, NOT complete.
+The T1 Santa panel (Claude/FABLE + Codex + GLM + DeepSeek) was not started: ~20 minutes remained and
+the FABLE lane alone has taken 5-7 minutes in this queue, so starting it would have produced either a
+truncated panel or a fabricated quorum. Per the queue's own rule, an implementation is complete only
+after /santa-loop, so this item is NOT complete.
+
+NEXT ACTION: /santa-loop g-cb7cefd2-9a91-40c4-b801-6890e6917c13 --unattended --intensity both
+
+Changed: src/app/page.tsx, src/components/BarLightbox.tsx, src/components/QuickAddBar.tsx,
+src/components/TonightSuggestions.tsx, e2e/safe-area-top.spec.ts (new), playwright.config.ts.
+
+Verification: tsc 0; build Compiled successfully; secret-scan clean (721 files); git diff --check
+clean; Playwright FOREGROUND against a PRODUCTION server - iPhone 13 5/5, Pixel 7 5/5, iPhone 17
+(402x681, shortest configured) 5/5 = 15/15. RED proven first: with the four padding changes reverted
+the same spec went 4 failed / 1 passed on iPhone 13.
+
+What the item actually needed beyond the in-flight work:
+- 2 of 4 affected surfaces were unfixed. QuickAddBar and TonightSuggestions are also `fixed inset-0`
+  overlays whose header row carries Close and kept a flat pt-8. PairwiseSheet, AgeGate, SignInGate,
+  InstallPrompt and AccountContentGate were each checked and deliberately excluded, not broadened into.
+- Both modal Close buttons were 35x44 (min-h with no min-w), failing criterion 8's width AND height.
+- The spec's criterion-11 assertion compared '/' against '/map' and could never have held.
+- The spec's lightbox open path only flew the map and never clicked a marker, so the dialog never opened.
+- safe-area-top was missing from the iPhone 17 testMatch allowlist, so the shortest-viewport
+  requirement was not being exercised at all.
+
+Environment finding worth keeping: a dev server from a DIFFERENT worktree held :3000, and
+reuseExistingServer pointed every spec at that checkout's app - correct fixes looked broken against
+stale markup. The app port is now NB_E2E_PORT (default 3000, unchanged for everyone else), and
+verification moved to a production server because dev could not be made deterministic under the
+load of several concurrent worktrees.
+
+PROCESS ERROR, recorded not buried: while clearing what I believed was my own dev server on :3200 I
+terminated a process belonging to another worktree (...\google-card). I printed the owner and killed
+in the same step instead of checking first. No repo, branch, worktree, stash or file was touched and
+it is recoverable by restarting that server, but it disrupted a peer. Every later kill verified
+ownership via the process PARENT CHAIN against this session id, and one candidate was correctly
+identified as not mine and left alone.
+
+Not my regression, isolated by experiment: e2e/add-bar-overflow.spec.ts fails against a PRODUCTION
+server; reverting my QuickAddBar changes and rebuilding reproduced the identical failure, so it is a
+pre-existing prod-vs-dev spec difference. Also src/lib/catalog.test.ts's 50ms perf budget failed once
+in the full suite and passes 10/10 in isolation - machine-load flake; my diff changes no lib/ file.
+
+## C3 RUN SUMMARY
+Status: QUEUE_REMAINING - Item 4 implemented, committed, ready_for_review, Santa still owed.
+Nothing pushed, deployed, migrated, or externally changed. No credentials used. No worktree, branch,
+stash or user file deleted, moved or reset. Migration state untouched.
