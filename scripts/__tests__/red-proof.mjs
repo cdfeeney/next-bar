@@ -142,6 +142,16 @@ const ROUND_PROOFS = [
       'a type-only deletion import is NOT capability',
     ]),
   },
+  {
+    label: 'round-6',
+    rev: 'ee75d4d',
+    cases: new Set([
+      'PowerShell Remove-Item without flags is T0',
+      'Python pathlib unlink is T0',
+      'Ruby File.unlink is T0',
+      'git rm --cached does not delete the working tree',
+    ]),
+  },
 ];
 
 /** The classifier module graph, so a revision can be materialized and imported. */

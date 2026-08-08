@@ -152,25 +152,40 @@ export function normalizeMap(tierMap, warnings = []) {
 /**
  * Read a file for capability analysis.
  *
- * @returns {{status:'ok'|'absent'|'binary', text:string}}
+ * Returns a LIST of texts, not one text. A deleted path can have several
+ * versions — one per revision that still holds it, plus the current file if it
+ * was re-created — and they must be scanned SEPARATELY.
+ *
+ * Concatenating them was wrong in both directions, and reviewers demonstrated
+ * both: one version's unterminated syntax swallowed the next version's real
+ * deletion import (a fail-open), while `'.delete('` in one version and
+ * `').where('` in another jointly matched a signature that neither version has.
+ * Scanning per version and unioning the results makes "the highest tier any
+ * single version earns" literally true rather than approximately true.
+ *
+ * @returns {{status:'ok'|'absent'|'binary', texts:string[]}}
  */
 export function readForAnalysis(path, repoRoot = REPO_ROOT, overrides) {
   if (overrides && Object.prototype.hasOwnProperty.call(overrides, path)) {
     const v = overrides[path];
-    return v === null || v === undefined ? { status: 'absent', text: '' } : { status: 'ok', text: String(v) };
+    if (v === null || v === undefined) return { status: 'absent', texts: [] };
+    const texts = (Array.isArray(v) ? v : [v])
+      .filter((t) => t !== null && t !== undefined)
+      .map((t) => String(t));
+    return texts.length === 0 ? { status: 'absent', texts: [] } : { status: 'ok', texts };
   }
   const abs = join(repoRoot, normalizePath(path));
   let buf;
   try {
     buf = readFileSync(abs);
   } catch {
-    return { status: 'absent', text: '' };
+    return { status: 'absent', texts: [] };
   }
   // A NUL byte in the first 8 KB means binary — text signatures are meaningless.
   const head = buf.subarray(0, 8192);
-  if (head.includes(0)) return { status: 'binary', text: '' };
+  if (head.includes(0)) return { status: 'binary', texts: [] };
   // CRLF is normalized so a Windows checkout and a Linux CI agent agree.
-  return { status: 'ok', text: buf.toString('utf8').replace(/\r\n/g, '\n') };
+  return { status: 'ok', texts: [buf.toString('utf8').replace(/\r\n/g, '\n')] };
 }
 
 /** Highest tier-map rule matching a path (case-insensitively). */
@@ -234,7 +249,15 @@ export function classifyOnePath(rawPath, map, opts = {}) {
         'deleted path — graded on every recoverable version (prior revisions, plus the current file if it was re-created)',
       );
     }
-    capabilities = detectCapabilities(read.text);
+    // Each version is scanned on its own and the results are unioned, so no
+    // version can create or conceal a capability in another.
+    const byName = new Map();
+    for (const text of read.texts) {
+      for (const cap of detectCapabilities(text)) {
+        if (!byName.has(cap.name)) byName.set(cap.name, cap);
+      }
+    }
+    capabilities = [...byName.values()];
     for (const cap of capabilities) {
       tier = maxTier(tier, cap.tier);
       reasons.push(`capability ${cap.name} (${cap.tier}) — ${cap.note}`);

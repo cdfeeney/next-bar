@@ -256,67 +256,79 @@ function escapeForRegExp(s) {
 const IDENTIFIER = '[A-Za-z_$][A-Za-z0-9_$]*';
 
 /**
- * Blank out JavaScript comments, preserving length and line structure.
+ * Blank out JavaScript comments that occupy a whole line, preserving lines.
  *
- * A reviewer found that `// import { rm } from 'node:fs/promises'` floored an
- * ordinary module at T0: a commented-out import is not capability, and a gate
+ * WHY THIS EXISTS. `// import { rm } from 'node:fs/promises'` floored an
+ * ordinary module at T0. A commented-out import is not capability, and a gate
  * that fires on dead text acquires exactly the continuous false-positive rate
  * this design exists to avoid.
  *
- * Scoped deliberately to `analyzeFsDeletion`, which is JavaScript-specific by
- * construction. It is NOT applied to the raw signature patterns, because those
- * also scan `.sql`, `.ps1`, `.py` and `.sh`, where `--`, `#` and `/* *​/` mean
- * different things and a JS-shaped stripper would remove live code.
+ * WHY IT IS THIS CONSERVATIVE. This function can only ever REMOVE text before
+ * the analyzer sees it, so every mistake it makes is a FAIL-OPEN. The first
+ * version tried to lex `/` in general and three independent reviewers broke it
+ * the same way: `/` starts a regex literal as well as a comment, so
+ * `s.replace(/\/*$/, '')` and `const route = /^\/*api/` were read as an opening
+ * block comment. With no closing `*​/` anywhere, blanking ran to the end of the
+ * input and erased the real deletion import below it — reproduced, and it
+ * defeated the very laundering defence the recovery code exists to provide.
  *
- * String and template literals are preserved so a URL like `https://x` is not
- * mistaken for a comment. A regex literal containing an unescaped `//` could in
- * principle confuse this, but such a literal cannot be written (it would be an
- * empty regex), and the residual contrived case costs at most the remainder of
- * one line.
+ * So the rule is now the narrowest one that still fixes the false positive:
+ *
+ *   1. Only a comment marker that is the FIRST non-whitespace on its line is
+ *      blanked. A regex literal or a division can never be line-leading `//` or
+ *      `/*` in valid JavaScript — `//` and `/*` at the start of an expression
+ *      are a comment to the parser too. Commented-out code, the case this
+ *      exists for, is essentially always line-leading.
+ *   2. A block comment is only entered when a closing `*​/` actually exists
+ *      later in the input. An unterminated `/*` blanks NOTHING, so the
+ *      catastrophic "erase the rest of the file" mode cannot occur.
+ *
+ * A trailing comment (`const x = 1; // import { rm } …`) is deliberately NOT
+ * blanked. That direction over-escalates, which is the safe one.
+ *
+ * Scoped to `analyzeFsDeletion`, which is JavaScript-specific by construction.
+ * It is NOT applied to the raw signature patterns, because those also scan
+ * `.sql`, `.ps1`, `.py` and `.sh`, where a JS-shaped stripper would remove live
+ * code.
  */
 export function blankComments(text) {
-  let out = '';
-  let i = 0;
-  const n = text.length;
-  while (i < n) {
-    const c = text[i];
-    const next = i + 1 < n ? text[i + 1] : '';
-    if (c === '/' && next === '/') {
-      while (i < n && text[i] !== '\n') {
-        out += ' ';
-        i += 1;
-      }
+  const lines = String(text).split('\n');
+  const out = [];
+  let closing = -1; // index of the line that closes the block we are inside
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (i <= closing) {
+      // Inside a block comment whose terminator is known to exist.
+      const end = i === closing ? line.indexOf('*/') : -1;
+      out.push(end === -1 ? '' : ' '.repeat(end + 2) + line.slice(end + 2));
       continue;
     }
-    if (c === '/' && next === '*') {
-      while (i < n && !(text[i] === '*' && text[i + 1] === '/')) {
-        out += text[i] === '\n' ? '\n' : ' ';
-        i += 1;
-      }
-      out += i < n ? '  ' : '';
-      i += 2;
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('//')) {
+      out.push('');
       continue;
     }
-    if (c === '"' || c === "'" || c === '`') {
-      out += c;
-      i += 1;
-      while (i < n) {
-        if (text[i] === '\\') {
-          out += text[i] + (i + 1 < n ? text[i + 1] : '');
-          i += 2;
-          continue;
-        }
-        out += text[i];
-        const closed = text[i] === c;
-        i += 1;
-        if (closed) break;
+    if (trimmed.startsWith('/*')) {
+      const indent = line.length - trimmed.length;
+      const sameLine = line.indexOf('*/', indent + 2);
+      if (sameLine !== -1) {
+        out.push(' '.repeat(sameLine + 2) + line.slice(sameLine + 2));
+        continue;
       }
+      // Only enter the block if it is genuinely closed somewhere below.
+      const terminator = lines.findIndex((l, j) => j > i && l.includes('*/'));
+      if (terminator === -1) {
+        out.push(line); // not a comment we can trust — leave it intact
+        continue;
+      }
+      closing = terminator;
+      out.push('');
       continue;
     }
-    out += c;
-    i += 1;
+    out.push(line);
   }
-  return out;
+  return out.join('\n');
 }
 
 /**
@@ -544,8 +556,11 @@ export const CAPABILITY_SIGNATURES = [
     //
     // The POSIX branch requires the recursive flag to be a real short-option
     // cluster or `--recursive`, so `npm rm --registry=… pkg` does not match.
+    // `git rm` is excluded: it stages a removal from the index and, with
+    // `--cached`, does not touch the filesystem at all. Matching it made
+    // `git rm -r --cached generated/` a T0 event.
     pattern:
-      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\brm\s+(?:-[a-zA-Z]{1,8}\s+)*-[a-zA-Z]{0,6}[rR][a-zA-Z]{0,6}\b|\brm\s+[^\n]*--recursive\b|\bRemove-Item\b[^\n]*-(?:Recurse|Force)\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\b(?:rd|rmdir)\s+\/[sSqQ]\b|\bdel\s+\/[fFsSqQ]\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|unlink|rmdir)\s*\(|\bFileUtils\.rm_r?f?\b|\bFile\.delete\s*\(|\bfind\s+[^\n]*\s-delete\b)/,
+      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|(?<!\bgit )\brm\s+(?:-[a-zA-Z]{1,8}\s+)*-[a-zA-Z]{0,6}[rR][a-zA-Z]{0,6}\b|(?<!\bgit )\brm\s+[^\n]*--(?:recursive|force)\b|\bRemove-Item\b|\bri\s+-(?:Recurse|Force)\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\b(?:rd|rmdir)\s+\/[sSqQ]\b|\bdel\s+\/[fFsSqQ]\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|removedirs|unlink|rmdir)\s*\(|\.unlink\s*\(|\brmtree\s*\(|\bFileUtils\.rm_r?f?\b|\b(?:File|Dir)\.(?:delete|unlink|rmdir)\s*\(|\bfind\s+[^\n]*\s-delete\b)/,
     detect: (text) => analyzeFsDeletion(text).capable,
     note: 'deletes files with no undo',
   },

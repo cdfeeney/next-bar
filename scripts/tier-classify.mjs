@@ -29,6 +29,7 @@ import { classifyPaths, loadTierMap, validateTierMap, REPO_ROOT } from './lib/ti
 import {
   collectChangedPaths,
   recoverDeletedContents,
+  refExists,
   resolveRecoveryRevisions,
 } from './lib/changed-paths-core.mjs';
 import { normalizePath } from './lib/tier-glob.mjs';
@@ -153,6 +154,18 @@ async function main() {
     // graded T1 through one entry point and an ambiguous T0 through the other —
     // and a reviewer reproducing a CI result by piping paths in would see a
     // number CI never produced.
+    //
+    // It is VERIFIED, not trusted, exactly as `--changed` verifies it. An
+    // unresolvable base (a typo, an unfetched ref) would otherwise degrade
+    // silently to HEAD-only recovery and reopen that same divergence for the
+    // one case where the reviewer least expects it.
+    if (requestedBase !== null && !refExists(requestedBase, { repoRoot: REPO_ROOT })) {
+      process.stderr.write(
+        `tier-classify: base "${requestedBase}" does not resolve to a commit in this repository — ` +
+          'refusing to report a tier against a base that does not exist.\n',
+      );
+      process.exit(2);
+    }
     base = requestedBase;
   }
 

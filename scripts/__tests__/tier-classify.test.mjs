@@ -480,9 +480,9 @@ describe('git change evidence', () => {
       });
       expect(unrecoverable).toEqual([]);
       expect(recovered).toContain('src/gone.ts');
-      // Recovered text carries a per-version header, because several revisions
-      // may contribute — the assertion is that the real content is in there.
-      expect(contents['src/gone.ts']).toContain('export const gone = 1;');
+      // Recovered content is a LIST of versions, one per revision that holds
+      // the path, because they must be scanned separately.
+      expect(contents['src/gone.ts']).toEqual(['export const gone = 1;\n']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -547,18 +547,95 @@ describe('git change evidence', () => {
   }, 60_000);
 });
 
-describe('commented-out and type-only code is not capability', () => {
-  it('blanks comments while preserving strings', () => {
-    expect(blankComments("const url = 'https://x/y'; // import { rm } from 'fs'")).toContain('https://x/y');
-    expect(blankComments("// import { rm } from 'node:fs/promises'")).not.toContain('rm');
-    expect(blankComments("/* import { rm } from 'node:fs/promises' */\nconst a = 1;")).toContain('const a = 1;');
+describe('comment blanking can only ever remove evidence, so it must not misfire', () => {
+  // Bytes are built explicitly. These cases are ABOUT punctuation, and a
+  // mis-escaped fixture would silently assert something else — the first
+  // version of this test used `/a\/b/`, which contains no `/`-adjacent `*`,
+  // so it passed while the fail-open below was live.
+  const SLASH = String.fromCharCode(47);
+  const STAR = String.fromCharCode(42);
+  const BACKSLASH = String.fromCharCode(92);
+  const DELETION_IMPORT =
+    "import { rm as nuke } from 'node:fs/promises';\nexport const purge = (d) => nuke(d);\n";
+
+  /**
+   * Each prefix is valid JavaScript that an earlier `/`-lexing implementation
+   * mistook for an opening comment. With no closing delimiter it blanked the
+   * REST OF THE INPUT, hiding the deletion import below — reproduced, and it
+   * defeated the deletion-laundering defence.
+   */
+  const misleadingPrefixes = {
+    'regex containing an escaped slash then a star':
+      `export const trimSlash = (s) => s.replace(${SLASH}${BACKSLASH}${SLASH}${STAR}$${SLASH}, '');\n`,
+    'anchored regex with an escaped slash':
+      `const route = ${SLASH}^${BACKSLASH}${SLASH}${STAR}api${SLASH};\n`,
+    'unterminated block comment': `const x = 1; ${SLASH}${STAR} WARNING unclosed\n`,
+    'template literal containing a comment opener':
+      'const note = `outer ${`' + SLASH + STAR + '`}`;\n',
+    'division adjacent to a star': `const share = a${SLASH}${STAR}b${STAR}${SLASH}c;\n`,
+  };
+
+  for (const [name, prefix] of Object.entries(misleadingPrefixes)) {
+    it(`still sees a deletion import below ${name}`, () => {
+      expect(analyzeFsDeletion(prefix + DELETION_IMPORT).capable).toBe(true);
+    });
+  }
+
+  it('an unterminated block comment blanks nothing at all', () => {
+    const text = `${SLASH}${STAR} opened and never closed\nconst kept = 1;\n`;
+    expect(blankComments(text)).toContain('const kept = 1;');
   });
 
-  it('still sees a real import that follows a regex literal and a division', () => {
-    // The stripper's one theoretical failure mode is misreading a `/`. If it
-    // ever does, it would hide real capability — so this pins the direction
-    // that matters.
-    const text = "const re = /a\\/b/;\nconst n = 10 / 2;\nimport { rm } from 'node:fs/promises';\nawait rm('x');\n";
-    expect(analyzeFsDeletion(text).capable).toBe(true);
+  it('still removes the false positive it exists for', () => {
+    expect(analyzeFsDeletion("// import { rm } from 'node:fs/promises';\nexport const x = 1;\n").capable).toBe(
+      false,
+    );
+    const block = `${SLASH}${STAR}\nimport { rm } from 'node:fs/promises';\n${STAR}${SLASH}\nexport const y = 2;\n`;
+    expect(analyzeFsDeletion(block).capable).toBe(false);
+  });
+
+  it('preserves string content that looks like a comment', () => {
+    expect(blankComments("const url = 'https://x/y';")).toContain('https://x/y');
+  });
+});
+
+describe('versions are scanned separately, never concatenated', () => {
+  const path = 'scripts/laundered.mjs';
+  const SLASH = String.fromCharCode(47);
+  const STAR = String.fromCharCode(42);
+
+  it('a harmless version cannot hide a dangerous one', () => {
+    const harmless = `const x = 1; ${SLASH}${STAR} unclosed\n`;
+    const dangerous = "import { rm } from 'node:fs/promises';\nawait rm(dir);\n";
+    const result = classifyPaths([path], PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      deletedPaths: [path],
+      contents: { [path]: [harmless, dangerous] },
+    });
+    expect(result.tier).toBe('T0');
+  });
+
+  it('fragments in two versions do not jointly match a signature', () => {
+    // `.delete(` in one version and `).where(` in another matched
+    // destructive-data-client when the versions were joined, though neither
+    // version can do anything.
+    const result = classifyPaths(['src/lib/split.ts'], PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      deletedPaths: ['src/lib/split.ts'],
+      contents: { 'src/lib/split.ts': ['const a = ".delete(";\n', 'const b = ").where(";\n'] },
+    });
+    expect(result.tier).not.toBe('T0');
+  });
+
+  it('a path whose NAME reads like SQL is not itself capability', () => {
+    // Recovered versions once carried a synthetic header naming the path, so a
+    // file called `delete from cache.py` matched the destructive-SQL signature.
+    const odd = 'scripts/delete from cache.py';
+    const result = classifyPaths([odd], PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      deletedPaths: [odd],
+      contents: { [odd]: ['print("hello")\n'] },
+    });
+    expect(result.tier).not.toBe('T0');
   });
 });

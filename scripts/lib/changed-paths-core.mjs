@@ -213,6 +213,21 @@ export function collectChangedPaths(opts = {}) {
  *
  * @returns {string[]} deduped, in the order they should be reported
  */
+export function refExists(ref, opts = {}) {
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+  if (typeof ref !== 'string' || ref.length === 0) return false;
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveRecoveryRevisions(opts = {}) {
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
   const revisions = ['HEAD'];
@@ -289,9 +304,14 @@ function readBlobAtRevision(repoRoot, rev, path) {
  * of a dangerous file, then delete it, and the gate graded the harmless HEAD
  * version. Reviewers found the mirror image too — for a deletion committed on the
  * branch, the base tip can hold a staler version than the one actually removed.
- * Both disappear if no single revision is trusted to be *the* prior content. The
- * recovered versions are concatenated, and because capability detection is a
- * union over the text, that is exactly "the highest tier any version earns".
+ * Both disappear if no single revision is trusted to be *the* prior content.
+ *
+ * The versions are returned as a LIST and scanned separately. They were briefly
+ * concatenated into one text, which reviewers broke in both directions: one
+ * version's unterminated syntax hid the next version's real deletion import, and
+ * fragments from two versions jointly matched a signature neither one has. No
+ * synthetic header is injected either — a header naming the path made a file
+ * called `delete from cache.py` match the destructive-SQL signature.
  *
  * The CURRENT working-tree file is included when the path exists again, so a
  * delete-then-recreate is graded on both halves rather than on the replacement
@@ -299,7 +319,7 @@ function readBlobAtRevision(repoRoot, rev, path) {
  *
  * @param {string[]} paths deleted repo-relative paths
  * @param {object} [opts] `{repoRoot, revisions}`
- * @returns {{contents: Record<string,string|null>, recovered: string[], unrecoverable: string[]}}
+ * @returns {{contents: Record<string,string[]|null>, recovered: string[], unrecoverable: string[]}}
  */
 export function recoverDeletedContents(paths, opts = {}) {
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
@@ -315,25 +335,21 @@ export function recoverDeletedContents(paths, opts = {}) {
     const versions = [];
     for (const rev of revisions) {
       const text = readBlobAtRevision(repoRoot, rev, path);
-      if (text !== null) versions.push(`// tier-classify: version of ${path} at ${rev}\n${text}`);
+      if (text !== null) versions.push(text);
     }
     const absolute = join(repoRoot, path);
     if (existsSync(absolute)) {
       try {
         const buf = readFileSync(absolute);
         if (!buf.subarray(0, 8192).includes(0)) {
-          versions.push(
-            `// tier-classify: current working-tree version of ${path}\n${buf
-              .toString('utf8')
-              .replace(/\r\n/g, '\n')}`,
-          );
+          versions.push(buf.toString('utf8').replace(/\r\n/g, '\n'));
         }
       } catch {
         // Unreadable on disk; the recovered revisions above still stand.
       }
     }
 
-    contents[path] = versions.length > 0 ? versions.join('\n') : null;
+    contents[path] = versions.length > 0 ? versions : null;
     (versions.length > 0 ? recovered : unrecoverable).push(path);
   }
 

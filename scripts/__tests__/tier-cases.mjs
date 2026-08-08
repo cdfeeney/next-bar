@@ -558,6 +558,39 @@ export const TIER_CASES = [
     escalated: false,
     why: 'a loose recursive-flag pattern would match any long option containing an r',
   },
+
+  // ---------------------------------------------------------------- Round-6
+  // Deletion idioms a second review round found still missing, and one
+  // over-escalation it found.
+  {
+    name: 'PowerShell Remove-Item without flags is T0',
+    path: 'scripts/drop-one.ps1',
+    contents: 'Remove-Item $TargetFile\n',
+    expect: 'T0',
+    why: 'requiring -Recurse or -Force missed the plain single-file delete',
+  },
+  {
+    name: 'Python pathlib unlink is T0',
+    path: 'tools/prune.py',
+    contents: 'from pathlib import Path\nPath(target).unlink()\n',
+    expect: 'T0',
+    why: 'pathlib is the modern Python deletion API and matched nothing',
+  },
+  {
+    name: 'Ruby File.unlink is T0',
+    path: 'tools/prune.rb',
+    contents: 'File.unlink(path)\n',
+    expect: 'T0',
+    why: 'only File.delete was matched, and unlink is the same operation',
+  },
+  {
+    name: 'git rm --cached does not delete the working tree',
+    path: 'scripts/untrack.sh',
+    contents: '#!/usr/bin/env bash\ngit rm -r --cached generated/\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'it stages an index removal; matching it made routine untracking a T0 event',
+  },
 ];
 
 /**
