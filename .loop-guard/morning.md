@@ -274,3 +274,28 @@ src/components/BarLightbox.tsx (modified) and e2e/safe-area-top.spec.ts (untrack
 `loop-guard checkpoint` DID sweep all three into a commit as memory warned; that commit was undone
 with a soft reset and the files restored to their exact prior state, and every later commit was
 path-scoped by hand.
+
+---
+
+# Overnight run — 2026-08-08 (C3, America/New_York)
+
+- Queue: g-4e72a0c5-eb4b-4e5f-b192-6c1b7b64fa92 (Item 5: Compact auth layout — visual only)
+- Stop conditions: 08:00 America/New_York 2026-08-08 | loop-guard item cap (max-iters 4) | no safe runnable item remains
+- Start time: 2026-08-08 02:41 EDT
+- Starting SHA: 689e564edd0de5744f07e920230c6b98fae0d092
+- Worktree: D:\harness-worktrees\nb-20260808-expanded\auth-layout
+- Branch: harness/nb-20260808-expanded/auth-layout
+- Preflight: overnight-recovery IDLE; git status clean; lease null/not-live; overnight-guard preflight TIER_MAP_READY (project map, 10 live T0 rules, 0 dead)
+- Constraints: local commits only; no push/PR/deploy/migrate/DNS/credentials/external contact; no destructive cleanup; no worktree create/remove; no node_modules junctions; one writer, one lease; gating Claude reviewer = FABLE for T0/T1; missing review lanes fail closed.
+
+## Precondition re-check (the two 2026-08-07 blockers, both now CLEARED)
+
+1. **DISK — cleared.** C: now has 4.9 GB free (was 1.1 MB on 2026-08-07). This worktree lives on
+   D: with 629 GB free, npm cache is already warm at 770 MB on C:, and every Playwright browser
+   build is already present in C:\Users\cdfee\AppData\Local\ms-playwright. No cleanup, deletion or
+   attended file-management step was performed to reach this state.
+2. **AUTH BASE — cleared.** Goal g-3fc3789d-2219-43aa-8b94-e46fb43e3a19 is `complete`
+   (2026-08-07T15:37Z) in the C:\Users\cdfee\projects\nb-google-photos workspace, so
+   <AUTH-NICE-SHA> resolves to b6a7957, the reviewed tip of fix/auth-cross-context-email.
+   `git merge-base --is-ancestor b6a7957 HEAD` succeeds: this worktree's 689e564 already descends
+   from the reviewed auth base, so Item 5 needs no branch creation and touches no protected worktree.
