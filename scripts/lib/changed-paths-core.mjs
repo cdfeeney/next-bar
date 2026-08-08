@@ -274,7 +274,14 @@ function readBlobAtRevision(repoRoot, rev, path) {
   // version alone. `ls-tree` answers existence without needing the object.
   let listing;
   try {
-    listing = execFileSync('git', ['ls-tree', '--name-only', rev, '--', path], {
+    // `:(literal)` because a pathspec treats `*?[]` as wildcards, and this is a
+    // Next.js app whose dynamic routes are literally `[handle]`, `[barId]`,
+    // `[...slug]`. Two reviewers predicted that would read as "path absent" —
+    // which would silently skip the version instead of failing closed. Measured
+    // against this repository the glob form does still resolve those paths, so
+    // this is hardening rather than a reproduced defect; the literal form
+    // removes the dependency on that behaviour entirely.
+    listing = execFileSync('git', ['ls-tree', '--name-only', rev, '--', `:(literal)${path}`], {
       cwd: repoRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],

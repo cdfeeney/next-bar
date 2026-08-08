@@ -27,7 +27,7 @@ import {
   recoverDeletedContents,
   resolveRecoveryRevisions,
 } from '../lib/changed-paths-core.mjs';
-import { analyzeFsDeletion, startsInLineComment } from '../lib/tier-capabilities.mjs';
+import { analyzeFsDeletion } from '../lib/tier-capabilities.mjs';
 import { globMatch, normalizePath } from '../lib/tier-glob.mjs';
 
 const { map: PROJECT_MAP, source: MAP_SOURCE } = loadTierMap(REPO_ROOT);
@@ -593,9 +593,13 @@ describe('excluding commented-out code must never hide real code', () => {
     });
   }
 
-  it('still excludes the false positive it exists for', () => {
+  it('a COMMENTED-OUT import now over-escalates, by design', () => {
+    // Round 9 reversed this deliberately. Four mechanisms tried to keep a
+    // commented-out import at T1 and reviewers broke every one of them into
+    // hiding a REAL import. Suppression was removed; nothing in the analyzer
+    // ignores any part of the text, so no misparse can hide capability.
     expect(analyzeFsDeletion("// import { rm } from 'node:fs/promises';\nexport const x = 1;\n").capable).toBe(
-      false,
+      true,
     );
   });
 
@@ -655,12 +659,6 @@ describe('versions are scanned separately, never concatenated', () => {
     expect(result.ambiguousCount).toBe(1);
     expect(result.escalated).toBe(true);
     expect(result.perPath[0].reasons.join(' ')).toMatch(/at least one version of this path could not be read/);
-  });
-
-  it('scopes the line-comment check to the match line', () => {
-    const text = "const a = 1; // note\nimport { rm } from 'node:fs/promises';\n";
-    expect(startsInLineComment(text, text.indexOf('note'))).toBe(true);
-    expect(startsInLineComment(text, text.indexOf('import'))).toBe(false);
   });
 
   it('a path whose NAME reads like SQL is not itself capability', () => {

@@ -256,57 +256,42 @@ function escapeForRegExp(s) {
 const IDENTIFIER = '[A-Za-z_$][A-Za-z0-9_$]*';
 
 /**
- * True when the character at `index` sits after a `//` on its own line.
+ * COMMENT SUPPRESSION HAS BEEN REMOVED. This note is the reason, kept because
+ * the obvious next change is to add it back.
  *
- * WHY THIS SHAPE, AFTER THREE FAILURES. A commented-out import
- * (`// import { rm } from 'node:fs/promises'`) is not capability, and flooring
- * it at T0 is the kind of false positive that gets a gate switched off. Three
- * successive attempts to solve that by BLANKING comment text were each broken
- * by a different reviewer, always the same way: the blanker can only ever
- * REMOVE text before the analyzer sees it, so every misparse is a FAIL-OPEN,
- * and `/` is genuinely ambiguous in JavaScript — it starts a regex literal, a
- * division, and two kinds of comment. `s.replace(/\/*$/, '')`, `const route =
- * /^\/*api/`, an unterminated `/*`, and a template literal whose interior line
- * began with `/*` each caused a real deletion import below to be erased.
+ * A commented-out import (`// import { rm } from 'node:fs/promises'`) is not
+ * capability, and flooring it at T0 is a false positive. FOUR separate
+ * mechanisms were built to suppress it, and independent reviewers broke every
+ * one of them the same way — by making the suppressor believe a comment was
+ * there when it was not, which SKIPS a real deletion import:
  *
- * So nothing is removed any more. Instead a candidate match is checked against
- * its OWN line, and skipped only when a `//` precedes it there. The blast radius
- * of a misread is one line rather than the remainder of the file.
+ *   1. blank comment text            — `s.replace(/\/*$/, '')` opened a block
+ *                                      comment and erased the rest of the file
+ *   2. blank only line-leading ones  — an unterminated `/*` did the same
+ *   3. inspect the line prefix       — a URL in a block comment, an escaped
+ *                                      quote, and an unterminated quote each
+ *                                      manufactured a false `//`
+ *   4. fail-closed prefix analysis   — a regex literal (`/[//]/`,
+ *                                      `/https:\/\//`) still manufactures one
  *
- * THE PREFIX ANALYSIS IS ITSELF FAIL-CLOSED, which is the round-8 correction.
- * Three reviewers independently drove the previous one-line strip
- * (`/'[^']*'|"[^"]*"|` + backtick + `[^` + backtick + `]*` + backtick + `/g`) into
- * reporting a comment that was not there, which SKIPS a real deletion import:
+ * Each fix closed exactly the input the previous reviewer supplied and left the
+ * same class open, because `/` is irreducibly ambiguous in JavaScript without a
+ * real parser: it begins a regex literal, a division, and two kinds of comment.
+ * The architecture lane's verdict on round 2 was that this is divergence, not
+ * convergence, and that the cost asymmetry is decisive: the mechanism exists to
+ * prevent an over-escalation, and every version of it has instead hidden real
+ * destructive code.
  *
- *   - `/* https://example.invalid *​/ import { rm } …` — the `//` belongs to a
- *     URL inside a block comment, not to a line comment.
- *   - `const label = 'it\'s // ok'; import { rm } …` — the escaped quote ended
- *     the match early and exposed the `//` inside the string.
- *   - `const s = 'oops // ; import { rm } …` — an unterminated quote strips
- *     nothing at all.
+ * So there is no suppression. A commented-out deletion import floors T0. That
+ * is a false positive we accept, measured at zero occurrences across this
+ * repository's 3,866 tracked files, and it is recorded in
+ * `docs/ENGINEERING-HARNESS.md`. Nothing in this module removes, rewrites, or
+ * ignores any part of the text it scans, so no misparse can hide capability.
  *
- * So complete block comments and escape-aware complete string literals are
- * removed, and if anything ambiguous SURVIVES — an unpaired quote or an
- * unclosed `/*` — the answer is `false`: do not skip the match. Every
- * uncertainty therefore over-escalates rather than hiding capability, which is
- * the only direction this function is allowed to fail in.
- *
- * A block-commented deletion import still floors T0 (the opener is on an earlier
- * line, so it is never removed from this line's prefix). That over-escalation is
- * recorded in `docs/ENGINEERING-HARNESS.md` as an accepted cost.
+ * If you are about to reintroduce suppression: it needs a real tokenizer, not a
+ * regex, and a tokenizer belongs in the toolchain rather than in a
+ * zero-dependency gate that must run before `npm ci`.
  */
-export function startsInLineComment(text, index) {
-  const lineStart = text.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
-  let prefix = text.slice(lineStart, index);
-  // A `//` inside a complete block comment is comment CONTENT, not a comment
-  // opener — most often a URL.
-  prefix = prefix.replace(/\/\*[\s\S]*?\*\//g, ' ');
-  // Escape-aware, so `'it\'s // ok'` is consumed whole.
-  prefix = prefix.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, ' ');
-  // Anything unbalanced left over means we cannot tell code from content.
-  if (/['"`]/.test(prefix) || prefix.includes('/*')) return false;
-  return prefix.includes('//');
-}
 
 /**
  * Parse one binding clause — `{ rm as nuke, readFile }` (ESM) or
@@ -353,8 +338,8 @@ export function analyzeFsDeletion(text) {
   const evidence = [];
   if (typeof text !== 'string' || text.length === 0) return { capable: false, evidence };
 
-  // The text is NEVER rewritten. Commented-out code is excluded per match, by
-  // checking that match's own line — see `startsInLineComment`.
+  // The text is NEVER rewritten and nothing is excluded. See the note above
+  // `FS_MODULE_ALTERNATION` on why comment suppression was removed.
   const namespaces = new Set();
   const mod = FS_MODULE_ALTERNATION;
   const q = `['"]`;
@@ -378,7 +363,6 @@ export function analyzeFsDeletion(text) {
   const importRe = new RegExp(`\\b(?:import|export)\\s*([^;'"]*?)\\s*from\\s*${q}(${mod})${q}`, 'g');
   for (const match of text.matchAll(importRe)) {
     const [, clause, moduleSpecifier] = match;
-    if (startsInLineComment(text, match.index)) continue;
     // `import type { rm } from …` is erased at compile time — no runtime binding
     // exists, so it cannot delete anything.
     if (/^\s*type\b/.test(clause)) continue;
@@ -399,7 +383,6 @@ export function analyzeFsDeletion(text) {
   );
   for (const match of text.matchAll(requireRe)) {
     const [, binding, moduleSpecifier] = match;
-    if (startsInLineComment(text, match.index)) continue;
     if (binding.startsWith('{')) recordClause(binding.slice(1, -1), moduleSpecifier);
     else namespaces.add(binding);
   }
@@ -412,7 +395,6 @@ export function analyzeFsDeletion(text) {
   );
   for (const match of text.matchAll(inlineRe)) {
     const [, moduleSpecifier, member] = match;
-    if (startsInLineComment(text, match.index)) continue;
     if (deletionNamesFor(moduleSpecifier).includes(member)) {
       evidence.push(`calls ${member} on an inline require/import of '${moduleSpecifier}'`);
     }
@@ -432,7 +414,6 @@ export function analyzeFsDeletion(text) {
         'g',
       );
       for (const hit of text.matchAll(memberRe)) {
-        if (startsInLineComment(text, hit.index)) continue;
         evidence.push(`references ${ns}.${hit[1]}`);
         break;
       }
@@ -571,16 +552,24 @@ export const CAPABILITY_SIGNATURES = [
     // never touches the working tree), as are the package managers, whose `rm`
     // subcommand uninstalls a dependency rather than deleting a path.
     //
-    // `remove-item` additionally requires a command position: the previous
-    // character must not be a word character, quote or hyphen, because
-    // `<button data-testid="remove-item">` put ordinary React components at T0.
-    // `Get-Command Remove-Item` merely names a cmdlet.
+    // `remove-item` requires a command position: the previous character must not
+    // be a word character, quote, hyphen or dot, because
+    // `<button data-testid="remove-item">` and `querySelector(".remove-item")`
+    // put ordinary React components at T0.
     //
-    // A BARE `rm` with no flags still deletes. It is matched only when its first
-    // argument looks like a path or a variable, which keeps prose like
-    // "rm the old files" out while catching `rm "$target"` and `rm $TargetFile`.
+    // THE `get-command` EXCLUSION WAS REMOVED rather than narrowed. It existed so
+    // `Get-Command Remove-Item` (naming a cmdlet) would not floor, but
+    // `& (Get-Command Remove-Item) $path` INVOKES the cmdlet and deletes, and the
+    // exclusion suppressed it. Every exclusion added here has produced a
+    // fail-open; naming a cmdlet now over-escalates instead, which is the
+    // direction this gate is allowed to be wrong in.
+    //
+    // A BARE `rm` with no flags still deletes, and so do the PowerShell aliases
+    // `ri`, `del` and `erase` with no switches. `rm` is matched on any first
+    // argument, with the package managers excluded, because `rm cache.db` and
+    // `rm -- "$target"` were both missed by requiring a path-shaped argument.
     pattern:
-      /(?:(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+(?:-[a-z]{1,8}[ \t]+)*-[a-z]{0,6}[rf][a-z]{0,6}\b|(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+[^\n]*--(?:recursive|force)\b|(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+(?:["'$~.\/]|[\w.-]+\/)|(?<!get-command[ \t]{1,8})(?<!["'\w-])remove-item\b|\bri[ \t]+(?:-(?:recurse|force)\b|\$)|\b(?:rd|rmdir)[ \t]+\/[sq]\b|\bdel[ \t]+\/[fsq]\b|\bfind[ \t]+[^\n]*[ \t]-delete\b)/i,
+      /(?:(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+(?:-[a-z]{1,8}[ \t]+)*-[a-z]{0,6}[rf][a-z]{0,6}\b|(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+[^\n]*--(?:recursive|force)\b|(?<!\b(?:git|npm|pnpm|yarn|bun)[ \t]{1,8})\brm[ \t]+(?:--[ \t]+)?(?:["'$~.\/]|[\w.-]+)|(?<!["'\w.-])remove-item\b|\b(?:ri|del|erase)[ \t]+(?:-(?:recurse|force)\b|["'$~.\/])|\b(?:rd|rmdir)[ \t]+\/[sq]\b|\bdel[ \t]+\/[fsq]\b|\bfind[ \t]+[^\n]*[ \t]-delete\b)/i,
     note: 'deletes files with no undo',
   },
   {

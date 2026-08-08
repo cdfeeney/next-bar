@@ -535,12 +535,15 @@ export const TIER_CASES = [
     why: 'requiring a call site missed the member being extracted to a variable first',
   },
   {
-    name: 'a commented-out deletion import is NOT capability',
+    // EXPECTATION DELIBERATELY REVERSED in round 9. Four successive mechanisms
+    // tried to keep this at T1 and every one of them was broken by a reviewer
+    // into hiding a REAL deletion import. Suppression was removed entirely, so a
+    // commented-out import now over-escalates. That is the accepted cost.
+    name: 'a commented-out deletion import over-escalates to T0',
     path: 'src/lib/notes.ts',
     contents: "// import { rm } from 'node:fs/promises';\nexport const label = 'x';\n",
-    expect: 'T1',
-    escalated: false,
-    why: 'dead text firing the T0 panel is the false-positive rate that gets gates switched off',
+    expect: 'T0',
+    why: 'no mechanism may remove or ignore text before scanning; over-escalation is the safe direction',
   },
   {
     name: 'a type-only deletion import is NOT capability',
@@ -633,12 +636,14 @@ export const TIER_CASES = [
     why: 'the same bypass by capitalisation',
   },
   {
-    name: 'naming a cmdlet is not invoking it',
+    // EXPECTATION DELIBERATELY REVERSED in round 9. The get-command exclusion
+    // was removed because `& (Get-Command Remove-Item) $path` INVOKES the cmdlet
+    // and the exclusion suppressed it. Naming a cmdlet now over-escalates.
+    name: 'naming a cmdlet over-escalates rather than suppressing an invocation',
     path: 'scripts/inspect.ps1',
     contents: 'Get-Command Remove-Item\n',
-    expect: 'T1',
-    escalated: false,
-    why: 'a bare Remove-Item match floored introspection scripts at T0',
+    expect: 'T0',
+    why: 'every exclusion added to this branch produced a fail-open; this one hid an invocation',
   },
   {
     name: 'an unlink on a graph is not a filesystem delete',
@@ -694,6 +699,48 @@ export const TIER_CASES = [
     expect: 'T1',
     escalated: false,
     why: 'a bare remove-item match put ordinary React components at T0',
+  },
+
+  // ---------------------------------------------------------------- Round-9
+  // Comment suppression was REMOVED after a fourth fail-open; the remaining
+  // cases close shell-branch misses and one more false positive.
+  {
+    name: 'a regex literal does not hide a deletion import',
+    path: 'scripts/cleanup.cjs',
+    // SAME LINE on purpose: the suppressor only ever inspected the match's own
+    // line prefix, so a regex on an earlier line proves nothing.
+    contents: "const slashPair = /[//]/; const { rm } = require('node:fs/promises');\nrm(target);\n",
+    expect: 'T0',
+    why: 'a regex containing two adjacent slashes made the suppressor believe the line was commented',
+  },
+  {
+    name: 'rm with a bare filename is T0',
+    path: 'scripts/x-bare.sh',
+    contents: '#!/bin/sh\nrm cache.db\n',
+    expect: 'T0',
+    why: 'requiring a path-shaped argument missed the commonest form of all',
+  },
+  {
+    name: 'invoking a cmdlet resolved by Get-Command is T0',
+    path: 'scripts/x-invoke.ps1',
+    contents: '& (Get-Command Remove-Item) $path\n',
+    expect: 'T0',
+    why: 'the get-command exclusion suppressed an actual invocation',
+  },
+  {
+    name: 'the del alias with a variable is T0',
+    path: 'scripts/x-del.ps1',
+    contents: 'del $CachePath\n',
+    expect: 'T0',
+    why: 'del and erase are Remove-Item aliases and delete with no switches',
+  },
+  {
+    name: 'a CSS selector named remove-item is not a deletion',
+    path: 'src/components/Y.tsx',
+    contents: 'const b = document.querySelector(".remove-item");\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'the command-position check did not exclude a leading dot',
   },
 ];
 

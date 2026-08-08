@@ -160,23 +160,36 @@ policy rather than as a bug to be worked around:
   writing a JavaScript engine inside a zero-dependency gate that must run before
   `npm ci`. The stopping point is deliberate; treat the classifier as a floor,
   and raise the tier yourself when you know better.
-- **An import inside a multi-line block comment still counts.** Only a `//` on
-  the match's own line excludes it. Three separate attempts to strip comments
-  properly were each broken by a reviewer the same way: `/` starts a regex
-  literal as well as a comment, so `s.replace(/\/*$/, '')`, an unterminated
-  `/*`, and a template literal whose interior line began with `/*` all caused a
-  *real* deletion import below them to be erased. Anything that rewrites the
-  source before scanning can only remove evidence, so every misparse is a
-  fail-open. Nothing is rewritten now.
+- **A commented-out deletion import counts as capability.** There is no comment
+  suppression at all, and that is a deliberate, measured decision rather than an
+  oversight.
 
-  The line prefix is analysed rather than the file, and that analysis is itself
-  fail-closed: complete block comments and escape-aware string literals are
-  removed, and if anything unbalanced survives — an unpaired quote, an unclosed
-  `/*` — the match is **not** excluded. So `/* https://x */ import { rm } …`,
-  `'it\'s // ok'`, and an unterminated quote all keep their capability, while a
-  genuine `// import { rm } …` does not. The residual cost is that a deletion
-  import wrapped in a *multi-line* `/* … */` over-escalates to T0 — the safe
-  direction, and cheap to avoid by using `//`.
+  Four separate mechanisms were built to stop a commented-out
+  `import { rm } from 'node:fs/promises'` from flooring a file at T0 — blank all
+  comments, blank only line-leading ones, inspect the match's line prefix, and
+  make that prefix analysis fail-closed. Independent reviewers broke every one
+  of them the same way: by making the suppressor believe a comment was there
+  when it was not, which **skips a real deletion import**. The last version was
+  defeated by an ordinary regex literal (`/[//]/`), because `/` is irreducibly
+  ambiguous in JavaScript without a real parser — it begins a regex literal, a
+  division, and two kinds of comment.
+
+  The asymmetry decides it. The mechanism exists to prevent an over-escalation;
+  every version of it instead hid destructive code. So it is gone. Nothing in
+  the analyzer removes, rewrites or ignores any part of the text it scans, which
+  makes this whole class of failure unreachable rather than fixed-again.
+
+  The measured cost of removing it, across all 3,866 tracked files, is **zero
+  files** — the T0 set is byte-identical with and without it. If you are about
+  to add suppression back: it needs a tokenizer, not a regex, and a tokenizer
+  belongs in the toolchain rather than in a zero-dependency gate that must run
+  before `npm ci`.
+
+- **Naming a PowerShell cmdlet over-escalates.** `Get-Command Remove-Item` is
+  graded T0. Its exclusion was removed because `& (Get-Command Remove-Item)
+  $path` *invokes* the cmdlet and the exclusion suppressed it. Every exclusion
+  added to that branch has produced a fail-open; over-escalation is the
+  direction this gate is allowed to be wrong in.
 
 ### The tier map can escalate, never de-escalate
 
