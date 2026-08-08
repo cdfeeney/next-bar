@@ -62,9 +62,46 @@ async function gotoRankings(page: Page): Promise<void> {
   await page.reload();
 }
 
+/**
+ * The OTHER add-a-bar entry point — and the one every returning user sees.
+ *
+ * `/rankings` mounts QuickAddBar in one of two variants. The empty state
+ * mounts the `button` variant, which opens the dialog that every test above
+ * drives. But as soon as `ratings.length > 0`, the header instead mounts
+ * `variant="search"` (src/app/rankings/page.tsx:216) — an INLINE match list
+ * that lives on the page, not inside any dialog.
+ *
+ * `gotoRankings` clears localStorage, so `hasNoRatings` is permanently true
+ * and no assertion above can reach that variant. Seeding one rating is the
+ * whole difference, and it is why a real affordance-free clip survived a
+ * green suite through three Santa rounds.
+ */
+async function gotoRankingsWithExistingRating(page: Page): Promise<void> {
+  await gotoRankings(page);
+  const ratedBarId = loadBundledRows()[0].id;
+  await page.evaluate((barId) => {
+    localStorage.setItem(
+      'next-bar:ratings:v1',
+      JSON.stringify([
+        { barId, rating: 'loved', ratedAt: new Date(0).toISOString() },
+      ]),
+    );
+  }, ratedBarId);
+  await page.reload();
+}
+
+/** The add-a-bar modal's dialog. */
+const DIALOG_SELECTOR = 'div[role="dialog"][aria-label="Add a bar"]';
+
+/**
+ * The inline `variant="search"` match list rendered on /rankings itself —
+ * OUTSIDE the dialog, which is why the dialog-scoped guard never saw it.
+ */
+const INLINE_MATCH_LIST_SELECTOR = 'ul[aria-label="Matching bars"]';
+
 /** The dialog element for the add-a-bar modal. */
 function modal(page: Page) {
-  return page.locator('div[role="dialog"][aria-label="Add a bar"]');
+  return page.locator(DIALOG_SELECTOR);
 }
 
 /** scrollWidth/clientWidth of a locator, measured in the browser. */
@@ -94,24 +131,28 @@ async function widths(
  * So: walk every scroller in the dialog and prove each one has no horizontal
  * axis at all — not merely that it happens to be at scrollLeft 0.
  */
-async function expectNoNestedHorizontalScroll(page: Page, where: string): Promise<void> {
+async function expectNoHorizontalOverflowWithin(
+  page: Page,
+  rootSelector: string,
+  where: string,
+): Promise<void> {
   // Settle async layout first. Fonts and late images change scrollWidth after
   // open, so a synchronous walk can measure a narrower pre-swap layout, pass,
   // and never re-check (santa round 2: GLM + DeepSeek). The network fence
   // blocks the webfont so this resolves to the fallback immediately — that is
   // fine; what matters is that metrics are settled before measuring.
   await page.evaluate(() => document.fonts.ready);
-  await page.waitForFunction(() => {
-    const dialog = document.querySelector('div[role="dialog"][aria-label="Add a bar"]');
-    if (!dialog) return false;
-    return Array.from(dialog.querySelectorAll('img')).every((img) => img.complete);
-  });
+  await page.waitForFunction((sel) => {
+    const root = document.querySelector(sel);
+    if (!root) return false;
+    return Array.from(root.querySelectorAll('img')).every((img) => img.complete);
+  }, rootSelector);
 
-  const offenders = await page.evaluate(() => {
-    const dialog = document.querySelector('div[role="dialog"][aria-label="Add a bar"]');
-    if (!dialog) throw new Error('modal not open');
+  const offenders = await page.evaluate((sel) => {
+    const root = document.querySelector(sel);
+    if (!root) throw new Error(`guard root not mounted: ${sel}`);
     const out: { cls: string; scrollWidth: number; clientWidth: number; scrollLeft: number }[] = [];
-    const all = [dialog, ...Array.from(dialog.querySelectorAll('*'))];
+    const all = [root, ...Array.from(root.querySelectorAll('*'))];
     for (const el of all) {
       const style = getComputedStyle(el as Element);
       const node = el as HTMLElement;
@@ -171,9 +212,17 @@ async function expectNoNestedHorizontalScroll(page: Page, where: string): Promis
       }
     }
     return out;
-  });
+  }, rootSelector);
 
   expect(offenders, `nested horizontal scroll at ${where}: ${JSON.stringify(offenders)}`).toEqual([]);
+}
+
+/**
+ * Dialog-scoped guard — the original call shape, behaviour unchanged. Kept so
+ * the existing assertions keep measuring exactly what they measured before.
+ */
+async function expectNoNestedHorizontalScroll(page: Page, where: string): Promise<void> {
+  await expectNoHorizontalOverflowWithin(page, DIALOG_SELECTOR, where);
 }
 
 async function openAddBarModal(page: Page): Promise<void> {
@@ -419,5 +468,74 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
 
     expect(moved).not.toBe('stuck');
     expect(moved).not.toBeNull();
+  });
+
+  /**
+   * Criteria 2/3/4 on the `variant="search"` path — the residual HIGH carried
+   * out of santa round 3.
+   *
+   * The inline match list is a bare `overflow-hidden` <ul> whose row button
+   * holds unconstrained inline spans. A name that cannot wrap is clipped
+   * sideways with no ellipsis and no clamp: silent, unreachable, and exactly
+   * the workaround this goal bans. Every assertion above is dialog-scoped, so
+   * none of them could ever see this list.
+   */
+  test('the inline rankings search list cannot clip a long bar name', async ({ page }) => {
+    await gotoRankingsWithExistingRating(page);
+
+    // Non-vacuity, part 1: we are on the search variant, NOT the dialog path
+    // the rest of this suite exercises.
+    await expect(page.locator(DIALOG_SELECTOR)).toHaveCount(0);
+    const search = page.getByLabel('Search bars');
+    await expect(search).toBeVisible();
+
+    await search.click();
+    await search.pressSequentially('Supercalifragilistic');
+
+    // Non-vacuity, part 2: the offending row is really mounted before we
+    // measure it. Without this the guard would pass on an empty list.
+    const list = page.locator(INLINE_MATCH_LIST_SELECTOR);
+    await expect(list).toBeVisible();
+    await expect(
+      list.getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) }).first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    await expectNoHorizontalOverflowWithin(
+      page,
+      INLINE_MATCH_LIST_SELECTOR,
+      'inline rankings search match list',
+    );
+
+    // The page itself must not pan either.
+    const doc = await widths(page, ':root');
+    expect(doc.scrollWidth).toBe(doc.clientWidth);
+    expect(await page.evaluate(() => window.scrollX)).toBe(0);
+  });
+
+  /**
+   * Criteria 11/12 on the same path: selecting from the inline list must
+   * still open the tier sheet, must not navigate, and the sheet reached this
+   * way must be contained too.
+   */
+  test('the inline rankings search still selects a bar without changing the URL', async ({
+    page,
+  }) => {
+    await gotoRankingsWithExistingRating(page);
+    const urlBefore = page.url();
+
+    const search = page.getByLabel('Search bars');
+    await search.click();
+    await search.pressSequentially('Supercalifragilistic');
+
+    const match = page
+      .locator(INLINE_MATCH_LIST_SELECTOR)
+      .getByRole('button', { name: new RegExp(LONG_NAME.slice(0, 24)) });
+    await expect(match.first()).toBeVisible({ timeout: 10_000 });
+    await match.first().click();
+
+    await expect(modal(page).getByRole('heading')).toContainText('How was');
+    expect(page.url()).toBe(urlBefore);
+
+    await expectNoNestedHorizontalScroll(page, 'tier stage entered from inline search');
   });
 });

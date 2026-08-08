@@ -218,16 +218,38 @@ export default function QuickAddBar({
                   <button
                     type="button"
                     onClick={() => handlePick(b)}
-                    className="w-full text-left px-4 py-3 min-h-[44px] touch-manipulation hover:bg-bg transition-colors"
+                    // The <ul> above clips with `overflow-hidden` — it has to,
+                    // that is what keeps the hover fills and the dividers
+                    // inside the rounded corners. So a name with no space in
+                    // it never pans the list: it is silently cut off, with no
+                    // ellipsis and no way to reach it. Measured on iPhone 13
+                    // before this row was constrained: scrollWidth 1025 vs
+                    // clientWidth 340.
+                    //
+                    // Flex + `min-w-0` on the children is the cause-level fix
+                    // (criterion 4): a flex child defaults to `min-width: auto`
+                    // and refuses to shrink below its content, which is exactly
+                    // what pushed this row past the list.
+                    //
+                    // Truncation is chosen over wrapping deliberately
+                    // (criterion 3): these rows are fixed-height hit targets in
+                    // a list the user is tapping, and an ellipsis is the
+                    // affordance that says "shortened" without reflowing the
+                    // row under their finger. `break-words` also contains the
+                    // overflow and would be a defensible alternative; it was
+                    // rejected on layout grounds, not test grounds.
+                    className="w-full flex items-center gap-2 text-left px-4 py-3 min-h-[44px] touch-manipulation hover:bg-bg transition-colors"
                   >
-                    <span className="font-display text-sm">{b.name}</span>
-                    <span className="text-muted text-xs ml-2">
+                    <span className="font-display text-sm min-w-0 truncate">
+                      {b.name}
+                    </span>
+                    <span className="text-muted text-xs min-w-0 truncate">
                       {displayHood(b.neighborhood)}
                     </span>
                     {/* Already-rated cue — BarPicker rows show the same
                         badge; ONE page-level useRatings feeds every row
                         (see RatingBadge's mount-wave warning). */}
-                    <span className="ml-2">
+                    <span className="shrink-0">
                       <RatingBadgeView rating={getRating(b.id)} />
                     </span>
                   </button>
