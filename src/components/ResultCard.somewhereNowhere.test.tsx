@@ -92,17 +92,31 @@ describe('Item 7 — Somewhere Nowhere against a mocked SUCCESSFUL Google respon
     expect(screen.queryByTestId('google-fallback-glyph')).toBeNull();
   });
 
-  test('with google media OFF the same card shows no photo surface at all', async () => {
+  test('with google media OFF the card serves NO image at all — only the glyph tile', async () => {
     vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '');
     vi.stubEnv('NEXT_PUBLIC_LEGACY_PHOTOS', '');
     const { container } = render(
       <ResultCard bar={BAR} rank={1} miles={0.4} userTags={[]} />,
     );
 
-    // No widget host, no legacy photo, no billing — the shipped default.
+    // No widget host, no billing — the shipped fail-closed default.
     expect(screen.queryByTestId('google-place-photo')).toBeNull();
-    expect(container.querySelectorAll('img[src*="/bar-photos/"]')).toHaveLength(0);
     expect(billableEventCount()).toBe(0);
+
+    // NOT just "no /bar-photos URL": no <img> and no CSS background image
+    // anywhere on the card. Checking only the /bar-photos substring would
+    // still pass if the glyph branch ever started serving a photo from
+    // somewhere else. (santa: Codex.)
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    expect(container.querySelectorAll('picture, source')).toHaveLength(0);
+    const withBackgroundImage = [...container.querySelectorAll<HTMLElement>('*')].filter(
+      (el) => /url\(/i.test(el.style.backgroundImage || ''),
+    );
+    expect(withBackgroundImage).toHaveLength(0);
+
+    // The deterministic glyph tile IS the intended surface in this state —
+    // the card is not blank, it simply has no photograph.
+    expect(screen.getByTestId('bar-visual')).toBeTruthy();
     // The card still identifies its bar and its rank.
     expect(screen.getByTestId('card-name').textContent).toBe('Somewhere Nowhere NYC');
     expect(screen.getByTestId('card-rank').textContent).toBe('1');
