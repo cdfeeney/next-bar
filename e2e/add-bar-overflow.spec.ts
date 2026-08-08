@@ -95,6 +95,18 @@ async function widths(
  * axis at all — not merely that it happens to be at scrollLeft 0.
  */
 async function expectNoNestedHorizontalScroll(page: Page, where: string): Promise<void> {
+  // Settle async layout first. Fonts and late images change scrollWidth after
+  // open, so a synchronous walk can measure a narrower pre-swap layout, pass,
+  // and never re-check (santa round 2: GLM + DeepSeek). The network fence
+  // blocks the webfont so this resolves to the fallback immediately — that is
+  // fine; what matters is that metrics are settled before measuring.
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForFunction(() => {
+    const dialog = document.querySelector('div[role="dialog"][aria-label="Add a bar"]');
+    if (!dialog) return false;
+    return Array.from(dialog.querySelectorAll('img')).every((img) => img.complete);
+  });
+
   const offenders = await page.evaluate(() => {
     const dialog = document.querySelector('div[role="dialog"][aria-label="Add a bar"]');
     if (!dialog) throw new Error('modal not open');
@@ -102,8 +114,38 @@ async function expectNoNestedHorizontalScroll(page: Page, where: string): Promis
     const all = [dialog, ...Array.from(dialog.querySelectorAll('*'))];
     for (const el of all) {
       const style = getComputedStyle(el as Element);
-      if (style.overflowX !== 'auto' && style.overflowX !== 'scroll') continue;
       const node = el as HTMLElement;
+
+      // `hidden`/`clip` are NOT a pass. The first version of this helper
+      // skipped them, which left the door open to the exact workaround the
+      // goal forbids: silence a future overflow with `overflow-x: hidden` and
+      // this guard would wave it through while the content sat clipped and
+      // unreachable (santa round 2 — Codex, GLM and DeepSeek all reached it
+      // independently). A legitimately hidden element that clips nothing has
+      // scrollWidth === clientWidth, so this cannot false-positive.
+      if (style.overflowX === 'hidden' || style.overflowX === 'clip') {
+        // ...but INTENTIONAL truncation is explicitly allowed by criterion 3,
+        // and it is implemented with overflow:hidden, so a naive
+        // "hidden + scrollWidth > clientWidth" rule flags every `truncate` and
+        // `line-clamp` in the modal. Verified empirically: it fired on the
+        // picker's own name and address spans, which are supposed to truncate.
+        // The real distinction is the AFFORDANCE — an ellipsis (or a clamp)
+        // tells the user text was shortened; bare overflow-x:hidden hides it
+        // silently, which is the workaround the goal bans.
+        const hasEllipsis = style.textOverflow === 'ellipsis';
+        const hasClamp = style.webkitLineClamp !== 'none' && style.webkitLineClamp !== '';
+        if (!hasEllipsis && !hasClamp && node.scrollWidth > node.clientWidth) {
+          out.push({
+            cls: `[${style.overflowX}, no affordance] ` + (node.className?.toString().slice(0, 60) ?? ''),
+            scrollWidth: node.scrollWidth,
+            clientWidth: node.clientWidth,
+            scrollLeft: -1,
+          });
+        }
+        continue;
+      }
+
+      if (style.overflowX !== 'auto' && style.overflowX !== 'scroll') continue;
       // Try to move it: a container with no horizontal range cannot scroll.
       node.scrollLeft = 999;
       const moved = node.scrollLeft;
@@ -262,10 +304,18 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
     await gotoRankings(page);
     // Seed a list whose name is one long unbreakable token: flex-wrap only
     // wraps BETWEEN chips, so a single oversized chip still overflows.
+    // `createdAt`/`updatedAt` are REQUIRED by isBarList in src/lib/lists.ts.
+    // Without them parseBarLists returns null, the store degrades to [], the
+    // "No lists yet" branch renders instead of the chips, and this test passes
+    // while never mounting the thing it exists to check — verified vacuous in
+    // santa round 2 (Claude/FABLE), which is textbook coverage theater.
     await page.evaluate((name) => {
+      const now = new Date(0).toISOString();
       localStorage.setItem(
         'next-bar:lists:v1',
-        JSON.stringify([{ id: 'overflow-list', name, barIds: [] }]),
+        JSON.stringify([
+          { id: 'overflow-list', name, barIds: [], createdAt: now, updatedAt: now },
+        ]),
       );
     }, 'ListNamed' + 'Wwwwwwwwwwwwwwwwwwww'.repeat(6));
     await page.reload();
@@ -279,6 +329,13 @@ test.describe('/rankings add-a-bar modal — no horizontal overflow', () => {
     await match.first().click();
 
     await expect(modal(page).getByRole('heading')).toContainText('How was');
+
+    // Prove the chip actually mounted. Without this the seed could silently
+    // fail validation again and the measurement below would assert nothing.
+    await expect(
+      modal(page).getByRole('button', { name: /ListNamedWwwwww/ }),
+    ).toBeVisible();
+
     await expectNoNestedHorizontalScroll(page, 'tier stage with long list name');
   });
 

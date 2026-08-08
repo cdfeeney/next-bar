@@ -165,10 +165,13 @@ export default function BarPicker({
                         became a real sideways-scrollable axis nested inside a
                         modal meant to scroll vertically only, invisible to
                         document- and dialog-level width assertions. Mirrors the
-                        name span above (`min-w-0 truncate`); capped at 45% so
-                        the address cannot crowd out the name beside it.
+                        name span above (`min-w-0 truncate`). No arbitrary width cap: an
+                        earlier attempt used max-w-[45%], which truncated
+                        ordinary short addresses even when the name left room.
+                        Both children are shrinkable, so flexbox negotiates and
+                        the address yields only as much as it must.
                       */}
-                      <span className="text-muted text-xs min-w-0 max-w-[45%] truncate">
+                      <span className="text-muted text-xs min-w-0 truncate">
                         {bar.address}
                       </span>
                     </button>
