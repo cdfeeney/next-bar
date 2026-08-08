@@ -311,10 +311,24 @@ export default defineConfig({
       // server would compile a Google-ON bundle and every main-server spec
       // would silently exercise the google-live card instead of the ordinary
       // one — passing either way, because those specs never assert Google
-      // media is off. This worktree has no .env.local, so nothing is broken
-      // today; the pin makes that independent of the machine. Browser egress
-      // is separately fenced (`use.proxy` above), so this was never a
-      // billing exposure. (santa: GLM.)
+      // media is off. Browser egress is separately fenced (`use.proxy` above),
+      // so this was never a billing exposure. (santa: GLM.)
+      //
+      // TWO LIMITS, so this is not misread as a guarantee (santa: Codex):
+      //  - `reuseExistingServer: true` skips `command` AND this `env`
+      //    entirely. A dev server you started yourself from a Google-enabled
+      //    .env.local is adopted as-is and these pins never apply — same
+      //    caveat as the fence note above. Kill a foreign server first if the
+      //    guarantee matters.
+      //  - On a checkout whose .env.local DOES enable Google media, pinning it
+      //    off here newly fails google-photo-layout.spec.ts: that spec is still
+      //    collected by the main projects but waits on a node only the
+      //    google-live branch renders. It already fails at HEAD for the same
+      //    reason, and its fix — moving it onto the google-live projects and
+      //    repairing its one-shot isVisible() race — is tracked separately.
+      //
+      // Verified 2026-08-08: none of these three variables appear in the
+      // operator's .env.local, so neither limit bites today.
       NEXT_PUBLIC_GOOGLE_MEDIA: '',
       NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: '',
       GOOGLE_MEDIA_RUNTIME_ENABLED: '',
