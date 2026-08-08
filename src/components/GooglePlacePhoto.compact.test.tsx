@@ -93,11 +93,17 @@ describe('no clipping of a loaded Google child', () => {
     expect(host.className).not.toMatch(/max-h-/);
   });
 
-  test('while pending the container reserves height but still never clips', async () => {
+  test('while pending the container reserves the 21/9 strip and still never clips', async () => {
     const host = await mountWidget();
     expect(host.getAttribute('data-status')).toBe('pending');
-    expect(host.className).toMatch(/min-h-/); // stable first paint
+    // The reservation must be the SAME ratio the fallback renders, so a
+    // widget that never arrives changes nothing about the card's height
+    // (g-65ba768e criterion 4). The old `min-h-[146px]` matched the
+    // fallback at exactly one card width and jumped at every other.
+    expect(host.className).toMatch(/aspect-\[21\/9\]/);
     expect(host.className).not.toMatch(/overflow-hidden/);
-    expect(host.className).not.toMatch(/aspect-\[/);
+    // An aspect ratio sets height from width; it must never also CAP it,
+    // or a tall ready widget would be clipped again.
+    expect(host.className).not.toMatch(/max-h-/);
   });
 });

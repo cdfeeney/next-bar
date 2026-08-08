@@ -71,6 +71,71 @@ function mapsSearchHref(bar: Bar): string {
   )}`;
 }
 
+/**
+ * The card's rank, rendered the SAME way in every media state.
+ *
+ * It used to appear in three different shapes depending on which branch
+ * rendered: baked into the hero heading as "1. Attaboy", baked into the
+ * glyph-row heading the same way, and — on a google-live card — as a small
+ * muted "1." leading the walk-time sentence. So the one number that orders
+ * the whole list was styled as part of the bar's NAME in two states and as
+ * a prefix to an unrelated sentence in the third, and moved position
+ * between them (g-65ba768e criterion 2).
+ *
+ * Now it is one element, in one place — the app-owned meta row, which is
+ * the only row that renders in all three states — so scanning down the
+ * list gives a single fixed column of ranks. Keeping it out of the heading
+ * also stops "1." from being read aloud as part of the bar's name.
+ */
+function CardRank({ rank }: { rank: number }): JSX.Element {
+  return (
+    <span
+      data-testid="card-rank"
+      aria-label={`Rank ${rank}`}
+      className="shrink-0 inline-flex items-center justify-center min-w-[1.375rem] h-[1.375rem] px-1 rounded-full bg-accent/15 text-accent font-display text-xs leading-none tabular-nums"
+    >
+      {rank}
+    </span>
+  );
+}
+
+/**
+ * The bar's name, rendered the same way wherever WE own identity.
+ *
+ * Three things make it cleaner than the raw heading it replaces:
+ *   - `break-words` + balanced wrapping, so a long name splits sensibly
+ *     instead of forcing the overlay wider than its column;
+ *   - `line-clamp-2`, so the longest names in the catalogue
+ *     ("La Compagnie des Vins Surnaturels", 33 chars) cannot push the
+ *     gradient overlay past the 21/9 strip it is painted on — the case
+ *     that made the fallback look broken at 390px;
+ *   - `title`, so clamping never hides the full name from a user or from
+ *     assistive tech.
+ *
+ * NOT rendered when Google's widget is showing: the compact widget renders
+ * the name itself, and a second copy is the duplication criterion 10
+ * forbids.
+ */
+function CardName({
+  bar,
+  tone,
+}: {
+  bar: Bar;
+  tone: 'over-image' | 'on-surface';
+}): JSX.Element {
+  return (
+    <h3
+      data-testid="card-name"
+      title={bar.name}
+      className={`font-display text-lg leading-tight break-words [text-wrap:balance] line-clamp-2 ${
+        tone === 'over-image' ? 'text-white drop-shadow-sm' : ''
+      }`}
+    >
+      {bar.name}
+    </h3>
+  );
+}
+
 function CardMediaFallback({ bar }: { bar: Bar }): JSX.Element {
   const visual = barVisual(bar);
   return (
@@ -98,13 +163,11 @@ function CardMediaFallback({ bar }: { bar: Bar }): JSX.Element {
       />
       <div className="absolute inset-x-0 bottom-0 px-4 pb-3 flex items-end justify-between gap-3">
         <div className="pointer-events-none min-w-0 flex flex-col gap-0.5">
-          {/* Name only — the rank lives in the meta line below, which renders
+          {/* Name only — the rank lives in the meta row below, which renders
               in BOTH the loaded and fallback states. Repeating it here showed
               "1." twice on the first screenshot of this layout. */}
-          <h3 className="font-display text-lg leading-snug text-white drop-shadow-sm">
-            {bar.name}
-          </h3>
-          <p className="text-[11px] uppercase tracking-wider text-white/85">
+          <CardName bar={bar} tone="over-image" />
+          <p className="text-[11px] uppercase tracking-wider text-white/85 truncate">
             {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
           </p>
         </div>
@@ -217,12 +280,10 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
             </span>
           ) : null}
           <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pointer-events-none flex flex-col gap-0.5">
-            {/* Small-but-readable, and it NEVER truncates — long bar names
-                wrap onto a second line instead (operator: text-lg max). */}
-            <h3 className="font-display text-lg leading-snug text-white drop-shadow-sm">
-              {rank}. {bar.name}
-            </h3>
-            <p className="text-[11px] uppercase tracking-wider text-white/85">
+            {/* Small-but-readable. Long names wrap to a second line and stop
+                there (operator: text-lg max) — see CardName. */}
+            <CardName bar={bar} tone="over-image" />
+            <p className="text-[11px] uppercase tracking-wider text-white/85 truncate">
               {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
             </p>
           </div>
@@ -247,10 +308,8 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
               <BarVisualTile bar={bar} size={56} />
             </button>
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-              <h3 className="font-display text-lg leading-snug">
-                {rank}. {bar.name}
-              </h3>
-              <p className="text-[11px] uppercase tracking-wider text-muted">
+              <CardName bar={bar} tone="on-surface" />
+              <p className="text-[11px] uppercase tracking-wider text-muted truncate">
                 {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
               </p>
             </div>
@@ -265,20 +324,31 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare, hasS
             profile, and the auto surface, which by operator decision ranks
             on proximity and ignores the saved quiz profile (the quiz/tweak
             surfaces pass real tags and get the numeric badge). */}
-        <p className="text-sm">
-          {/* Rank survives the removal of our identity row — Google's widget
-              renders the name but has no notion of OUR ranking. */}
-          {isGoogleLive ? (
-            <span className="font-display text-muted mr-1">{rank}.</span>
-          ) : null}
-          <span className="font-display text-accent">{lead.text}</span>
-          <span className="text-muted">
-            {userTags.length === 0
-              ? hasSavedVibe
-                ? ' · Vibe match off — Tweak to use yours'
-                : ' · Vibe match after you set a vibe'
-              : ` · Vibe match ${badge.num}/${badge.den}`}
-          </span>
+        {/* Two lines instead of one run-on sentence (criterion 3).
+            Previously rank, walk time and vibe state were three unrelated
+            facts concatenated into a single <p> with " · " glue, so the
+            primary fact (how far away it is) carried the same weight as the
+            secondary one (whether a vibe is in play) and the rank was easy
+            to miss between them. Splitting them gives the card a real
+            hierarchy: rank + distance lead, vibe state supports.
+
+            Rank survives the removal of our identity row in the google-live
+            state — Google's widget renders the name but has no notion of
+            OUR ranking. */}
+        <div className="flex items-center gap-2">
+          <CardRank rank={rank} />
+          <p className="min-w-0 text-sm font-display text-accent truncate">
+            {lead.text}
+          </p>
+        </div>
+        {/* One element, one contiguous string — e2e keys on the exact
+            "Vibe match off — Tweak to use yours" phrasing. */}
+        <p className="text-xs text-muted">
+          {userTags.length === 0
+            ? hasSavedVibe
+              ? 'Vibe match off — Tweak to use yours'
+              : 'Vibe match after you set a vibe'
+            : `Vibe match ${badge.num}/${badge.den}`}
         </p>
 
         {/* flex-wrap (review HIGH): open-badge + rating + Send + Maps can

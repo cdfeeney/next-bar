@@ -202,8 +202,12 @@ describe('google-live wiring', () => {
     renderCard();
     expect(screen.queryByTestId('bar-visual')).toBeNull();
     expect(screen.queryByText(/1\. Attaboy/)).toBeNull();
-    // Rank survives — Google has no notion of our ranking.
-    expect(screen.getByText('1.')).toBeTruthy();
+    // Our NAME stays suppressed — the compact widget renders it.
+    expect(screen.queryByTestId('card-name')).toBeNull();
+    // Rank survives — Google has no notion of our ranking — and is now its
+    // own element rather than a "1." prefix glued to the walk-time
+    // sentence, so it reads the same way in every media state.
+    expect(screen.getByTestId('card-rank').textContent).toBe('1');
   });
 
   test('LOADED widget: zero app-provided Maps links — Google’s action is the only one', () => {
@@ -277,7 +281,10 @@ describe('google-live wiring', () => {
   test('the NON-google-live card is untouched: identity row, Maps action and attribution credit all remain', () => {
     vi.stubEnv('NEXT_PUBLIC_LEGACY_PHOTOS', '1');
     const { container } = renderCard();
-    expect(screen.getByText(/1\. Attaboy/)).toBeTruthy();
+    // Identity row intact: the name is ours to render on this tier, and the
+    // rank sits beside it in the same element every other state uses.
+    expect(screen.getByTestId('card-name').textContent).toBe('Attaboy');
+    expect(screen.getByTestId('card-rank').textContent).toBe('1');
     // The app's Maps ACTION survives on the legacy tier — exactly one.
     expect(screen.getAllByText(/Maps →/)).toHaveLength(1);
     // …alongside GoogleAttribution's separate credit link, which is a

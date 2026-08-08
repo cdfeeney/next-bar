@@ -8,6 +8,53 @@ import { defineConfig, devices } from '@playwright/test';
 const FENCE_PROXY = 'http://127.0.0.1:39555';
 
 /**
+ * Ports are overridable because sibling worktrees run e2e CONCURRENTLY.
+ *
+ * `webServer.reuseExistingServer` is true, so a run launched while another
+ * worktree already holds the port silently binds to THAT worktree's dev
+ * server — the suite then passes or fails on code the run never changed.
+ * Observed 2026-08-08: :3000 was held by
+ * C:\Users\cdfee\projects\nb-overnight-20260807 while this worktree ran.
+ * Defaults are unchanged, so a single-worktree run behaves exactly as before.
+ */
+const E2E_PORT = process.env.E2E_PORT ?? '3000';
+const BASE_URL = `http://localhost:${E2E_PORT}`;
+
+/**
+ * Second dev server, google-live ENABLED — the only way to exercise the
+ * supported Google card in a browser.
+ *
+ * `NEXT_PUBLIC_GOOGLE_MEDIA` is inlined at compile time, so `resolveMedia`
+ * cannot be switched to `google-live` per-test; it is a property of the
+ * server. Turning it on for the MAIN server would flip every result card in
+ * every unrelated spec, so the google-card scenarios get their own server
+ * and their own projects instead.
+ *
+ * Nothing here reaches Google. The key is a syntactically-valid stub, the
+ * fence proxy refuses every non-loopback request, and the specs install a
+ * fake SDK before page scripts run. No live widget and no paid API is ever
+ * invoked.
+ */
+const E2E_GOOGLE_PORT = process.env.E2E_GOOGLE_PORT ?? '3100';
+const GOOGLE_BASE_URL = `http://localhost:${E2E_GOOGLE_PORT}`;
+const GOOGLE_LIVE_ENV: Record<string, string> = {
+  NEXT_PUBLIC_GOOGLE_MEDIA: '1',
+  NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: 'e2e-stub-maps-key-not-a-credential',
+  GOOGLE_MEDIA_RUNTIME_ENABLED: '1',
+};
+
+/** Age-gate seeding is per-ORIGIN, so each server needs its own copy. */
+const ageAckState = (origin: string) => ({
+  cookies: [],
+  origins: [
+    {
+      origin,
+      localStorage: [{ name: 'next-bar:age-ack:v1', value: '1' }],
+    },
+  ],
+});
+
+/**
  * Stub Supabase credentials for worktrees with no `.env.local`.
  *
  * The signed-OUT auth specs (auth-page, auth-cross-context, and the
@@ -62,7 +109,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: BASE_URL,
     // Network fence (overnight scope 2026-08-05): every non-loopback request
     // from a test browser is sent to the local refuse-all logging proxy
     // (e2e/tools/fence-proxy.mjs); loopback bypasses it. Tests must pass with
@@ -77,15 +124,7 @@ export default defineConfig({
     // app-store-pack.spec.ts overrides this with an empty storageState to
     // test the gate itself. Specs that call localStorage.clear() re-seed
     // the key at the clear site.
-    storageState: {
-      cookies: [],
-      origins: [
-        {
-          origin: 'http://localhost:3000',
-          localStorage: [{ name: 'next-bar:age-ack:v1', value: '1' }],
-        },
-      ],
-    },
+    storageState: ageAckState(BASE_URL),
   },
   projects: [
     // Compiles every route on the cold dev server BEFORE any real spec
@@ -189,10 +228,39 @@ export default defineConfig({
         /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|quiz-path|onboarding-identity|account-content-conflict|add-bar-overflow)\.spec\.ts/,
       dependencies: ['warmup'],
     },
+    // ---- google-live projects -------------------------------------------
+    // These run against the SECOND dev server (google-live enabled) and are
+    // the only projects that do. Scoped by testMatch so no other spec is
+    // pulled onto a server whose media policy it was not written for.
+    {
+      name: 'google-warmup',
+      testMatch: /warmup\.setup\.ts/,
+      use: { ...devices['iPhone 13'], baseURL: GOOGLE_BASE_URL },
+    },
+    {
+      name: 'google-live iPhone 13',
+      use: {
+        ...devices['iPhone 13'],
+        baseURL: GOOGLE_BASE_URL,
+        storageState: ageAckState(GOOGLE_BASE_URL),
+      },
+      testMatch: /google-card\.spec\.ts/,
+      dependencies: ['google-warmup'],
+    },
+    {
+      name: 'google-live Pixel 7',
+      use: {
+        ...devices['Pixel 7'],
+        baseURL: GOOGLE_BASE_URL,
+        storageState: ageAckState(GOOGLE_BASE_URL),
+      },
+      testMatch: /google-card\.spec\.ts/,
+      dependencies: ['google-warmup'],
+    },
   ],
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
+  webServer: [{
+    command: `npm run dev -- --port ${E2E_PORT}`,
+    url: BASE_URL,
     reuseExistingServer: true,
     timeout: 120_000,
     // Server-side half of the network fence: the dev server's own outbound
@@ -217,4 +285,27 @@ export default defineConfig({
       ...STUB_SUPABASE_ENV,
     },
   },
+  {
+    // google-live server. Same fence, same stubs, plus the three variables
+    // that make the supported Google card reachable at all. Started only
+    // because a google-live project is selected; Playwright skips a
+    // webServer whose projects are filtered out only if nothing needs it,
+    // so `reuseExistingServer` keeps repeat runs cheap.
+    command: `npm run dev -- --port ${E2E_GOOGLE_PORT}`,
+    url: GOOGLE_BASE_URL,
+    reuseExistingServer: true,
+    timeout: 120_000,
+    env: {
+      HTTP_PROXY: FENCE_PROXY,
+      http_proxy: FENCE_PROXY,
+      HTTPS_PROXY: FENCE_PROXY,
+      https_proxy: FENCE_PROXY,
+      NO_PROXY: 'localhost,127.0.0.1',
+      no_proxy: 'localhost,127.0.0.1',
+      NODE_USE_ENV_PROXY: '1',
+      NEXT_TELEMETRY_DISABLED: '1',
+      ...STUB_SUPABASE_ENV,
+      ...GOOGLE_LIVE_ENV,
+    },
+  }],
 });

@@ -263,12 +263,25 @@ export default function GooglePlacePhoto({
       // 145.7px box). A reservation that truncates the provider's required
       // credit is worse than a little layout shift.
       //
-      // So: while PENDING, reserve a minimum height so first paint is stable;
-      // once the widget is READY, the container takes its natural height and
-      // the content decides. `min-height` reserves without ever truncating.
+      // So: while PENDING, reserve the SAME 21/9 strip the fallback and the
+      // loaded card use; once the widget is READY, the container takes its
+      // natural height and the content decides.
+      //
+      // The reservation used to be `min-h-[146px]` — a number that matched
+      // nothing. The fallback renders `aspect-[21/9]`, which is ~153px at a
+      // 358px card and ~170px at 398px, so every degradation moved the card
+      // by a different amount at every width. Reserving the ratio instead of
+      // a magic height makes pending and fallback identical at ALL widths,
+      // which is what "the aspect ratio holds and does not collapse or jump
+      // during load" actually requires (g-65ba768e criterion 4).
+      //
+      // `aspect-[21/9]` sets height from width without capping it: once the
+      // status flips to 'ready' the class is dropped entirely, so a tall
+      // widget still expands freely and nothing is clipped (the 145.7-vs-365
+      // regression google-photo-layout.spec.ts pins).
       className={
         className ??
-        (status === 'pending' ? 'w-full min-h-[146px]' : 'w-full')
+        (status === 'pending' ? 'w-full aspect-[21/9]' : 'w-full')
       }
     />
   );
