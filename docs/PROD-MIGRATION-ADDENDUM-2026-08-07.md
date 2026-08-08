@@ -560,10 +560,15 @@ backup, not the commented DDL.
 > `consume_rate_limit`, and by §8b that immediately denies account deletion for every user in
 > production, because the candidate calls that function and the only fail-closed consumer refuses
 > when it is missing. *(Precise scope, corrected 2026-08-08 — a round-10 edit got this wrong and is
-> retracted here. **Only §8b row 4 reaches the RPC at all**, so row 4 is the only configuration whose
-> outcome the revert changes: reverting there transitions the deployment into row 1 and denies every
-> deletion. Row 1 is already the post-revert state. Rows 2 and 3 short-circuit at `rateLimiter.ts:375`
-> before any RPC call and are unaffected by the revert. The round-10 edit called rows 1, 2 and 4 "the
+> retracted here. **Rows 1 and 4 reach the RPC** — the tier is armed in both, so
+> `durableCounterFromEnv` returns a counter, `rateLimiter.ts:375` is false, and `:412` calls
+> `consume_rate_limit`; row 1 is precisely the case where that call *errors* because 0043 is
+> unapplied. **Row 4 is nevertheless the only configuration whose *outcome* the revert changes**:
+> reverting there transitions the deployment into row 1 and denies every deletion. Row 1 is already
+> the post-revert state, so nothing changes for it. Rows 2 and 3 short-circuit at
+> `rateLimiter.ts:375` before any RPC call and are unaffected by the revert. **"Reaches the RPC" and
+> "the revert changes this outcome" are different predicates, and conflating them is what went wrong
+> twice here.** The round-10 edit called rows 1, 2 and 4 "the
 > shippable configurations", which was wrong twice over — §8b says three of the four rows are
 > unshippable, and rows 1 and 2 are not the rows the revert acts on.)* **So 0043 must not be reverted
 > while a candidate that calls it is deployed** —
@@ -715,19 +720,52 @@ migration, Production deployment, or TestFlight modification is authorized by th
 
 ### Current review state — the single mutable record
 
-**Nothing else in this document states a round count, a lane list, or a review status.** Every other
-round paragraph below is **frozen historical narration** of what one round found at the time; those
-are append-only and must not be edited to match this block. Three separate propagation defects
-(rounds 9, 10 and 11) came from the same fact being asserted in more than one live place, so there is
-now exactly one live place.
+**Scope of this block, narrowed 2026-08-08.** It is the single mutable record of exactly three
+things: the **round count**, the **identity of the latest panel**, and **which delta is currently
+unreviewed**. Nothing else in this document may state those three facts as a live claim.
 
-| | |
-|---|---|
-| Rounds completed | **11** |
-| Rounds that found a real defect | **11 — every one, including the last** |
-| Latest panel | Round 11, full five-family (Claude/Sonnet, Codex `gpt-5.6-sol`, GLM, DeepSeek, Kimi K3 deep), quorum met |
-| **Most recent unreviewed delta** | **the round-12 repair** — the edits round 11's findings produced, listed in the Round 11 record below |
-| Gating status | **NOT APPROVED** (§14). Unchanged by every round to date. |
+Three things are deliberately **outside** that scope, because an earlier version of this sentence
+claimed them and was over-broad:
+
+- **The gating verdict.** "NOT APPROVED" is fixed document scaffolding and appears at the head of the
+  document and at §14. It is not round-tracking prose, it has never changed in any round, and it is
+  not maintained here.
+- **Qualitative generalisations** such as "every review round has found a real defect". These carry
+  no number and cannot go stale against a count.
+- **Frozen historical narration.** Every round paragraph below records what one round found *and
+  believed at the time*. Those are **append-only and must never be edited to match this block** —
+  including when a later round proves them wrong. A superseding fact belongs here, dated, not in the
+  history.
+
+Three separate propagation defects (rounds 9, 10 and 11) came from a *live* fact being asserted in
+more than one place, so there is now exactly one live place for each of the three.
+
+| | | |
+|---|---|---|
+| Rounds completed | **13** | |
+| Rounds that found a real defect | **13 — every one, including the last** | |
+| Latest panel | Round 13, over candidate `4f4850f` | Claude/Sonnet and Codex `gpt-5.6-sol` reported; **GLM, DeepSeek and Kimi all failed on routed-provider authentication** (403 / exit 4 / exit 5). **Quorum NOT met.** |
+| **Most recent unreviewed delta** | **the round-14 repair** — four edits: the §10 RPC correction, the restored round-9 heading, this block's narrowed scope, and the dated corrections below | |
+| Gating status | **NOT APPROVED** (§14). Unchanged by every round to date. | |
+
+### Dated corrections superseding frozen history — 2026-08-08
+
+Facts that later rounds proved wrong live here. The round paragraphs below are **not** edited to
+match them.
+
+- **Round 9's heading calls itself "third and final full panel". It was not final** — rounds 10
+  through 14 followed. The heading is preserved verbatim because it records what round 9
+  contemporaneously believed, and that mistaken belief is exactly what the audit trail exists to
+  show. *(Round 12 edited that heading to "third full panel"; the edit has been reverted. The Codex
+  lane held it violated the append-only rule for frozen narration; the GLM lane held "final" was a
+  live descriptor and correctly editable. **Operator decision 2026-08-08: preserve frozen historical
+  narration and carry the correction here instead.** The dispute is resolved, not merely recorded.)*
+- **Round 12 asserted "Only §8b row 4 reaches the RPC at all". That is false** — rows 1 and 4 both
+  reach it, and row 1 is precisely the configuration where the call errors. Corrected in §10 by round
+  14. The claim round 12 was reaching for — that row 4 is the only configuration whose *outcome* the
+  revert changes — is true and survives.
+- **Round 8's stopping rule and round 10's zero-edit replacement are both withdrawn.** The rule now
+  in force is stated below under the stopping-rule heading.
 
 ---
 
@@ -844,7 +882,7 @@ what keeps the gating conclusion intact.
 make it. It says nothing about the packet. §14 still applies in full: this is not approved, and the
 four assumptions in claims 5–8 remain unsettled by any amount of review.
 
-**Round 9 (2026-08-08, third full panel) — the rule fired, and was contested.** Findings:
+**Round 9 (2026-08-08, third and final full panel) — the rule fired, and was contested.** Findings:
 (a) the sentence *introducing* §8b's four-row table still said "both configurations deny", written
 for the two-outcome model it replaced — found independently by the Claude and GLM lanes; (b) row 3's
 "completely unlimited" and "removes the quota entirely" overstated the risk, because
@@ -935,8 +973,10 @@ later round that edited nothing it is judging.** *(Both amendments argued by the
 11; the diagnosis is confirmed by rounds 9, 10 and 11 in sequence.)*
 
 This is also why §14 requirement 6's empirical checks, not another reading pass, remain the path
-forward: every round has found a real defect, and rounds 7–11 each found one **created or left behind
-by the previous round's fix**. The later rounds increasingly found them in this review record rather
+forward: every round has found a real defect, and **every round since round 7 has found one created
+or left behind by the previous round's fix** (stated without a round number so it cannot go stale —
+the count lives only in the Current review state block). The later rounds increasingly found them in
+this review record rather
 than in §1–§13 — the meta-commentary is now a defect surface in its own right, which is what the
 Current review state block above exists to shrink.
 
