@@ -484,3 +484,73 @@ and never committed, but it will reappear locally after an e2e run.
 ### Item 7 — g-bfb6937a — NOT STARTED (`planned`, untouched)
 
 Item 6 consumed the window. Item 7 was never bound, no lease taken, no file touched.
+
+---
+
+## Item 7 — g-bfb6937a — Santa round 1. FINAL: **blocked** (quorum failed, GLM down).
+
+Commits `87f2c2d` (diagnosis) + `ed88644` (santa fixes). Deliverable:
+`docs/SOMEWHERE-NOWHERE-PHOTO-DIAGNOSIS-2026-08-08.md` plus two test files that make the diagnosis
+executable rather than prose.
+
+| Lane | Result |
+|---|---|
+| Claude/**FABLE** | OK — Critical 0, High 0, 2 Medium (both fixed). |
+| **Codex** | OK — proof `codex-review:gpt-5.6-sol:659a837b`. 6 Medium (all fixed). |
+| **DeepSeek** | OK — reframed the conclusion (fixed). |
+| **GLM** | **UNAVAILABLE** — HTTP 402, re-confirmed by probe. Same provider-side billing failure as Item 6. |
+
+**The finding.** This bar's data is complete on every local layer and the card's own render path is
+exonerated: with a mocked successful Google response the card builds the widget, is handed the real
+place id, bills exactly once, and reaches `ready`. The mission's live hypothesis — a
+snake_case/camelCase mismatch in application code — is **refuted**: the fixture really is
+`photo_count` and `row.photoCount` really is `undefined` (the false-negative trap, asserted as a
+test), but the boundary is crossed in one shared function that every consumer reaches.
+
+**Every santa finding was the diagnosis over-claiming — the evidence itself stood.** The most
+valuable was DeepSeek's: my conclusion was unconditional, and if OTHER bars on the deployment show
+photos then the three eligibility gates are *eliminated*, not implicated (they are per-deployment,
+not per-bar). That splits the determination into two worlds and surfaces the hypothesis local
+evidence cannot reach — Google returning 200-with-zero-photos, making `photoCount: 3` stale
+import-time metadata. Codex corrected three factual anchors and caught that "every wait is bounded"
+is false *before* intersection (the timers are armed inside `build()`, which only runs on an
+intersecting observer entry — a real local mechanism, now stated). FABLE caught that "no
+`overflow-hidden`" was literally false one DOM level up, and that I had labelled a checked-in
+fixture as a "DB row", implying deployed evidence I never gathered.
+
+**Refused, and recorded in the doc:** DeepSeek proposed curling Google's Places API with the project
+key. That invokes a live billable API and reads a credential — both forbidden by this goal. Folded
+into the attended checklist for a human instead.
+
+**Live half:** `BLOCKED_ATTENDED` with a six-point checklist whose FIRST step is the one that
+decides everything: is the symptom bar-specific or deployment-wide?
+
+---
+
+# C3 RUN SUMMARY — QUEUE_TERMINAL (0 complete, 2 blocked)
+
+`overnight-guard finish` → `QUEUE_TERMINAL {complete:0, blocked:2}`. Both items were implemented,
+verified, and reviewed across three model families; **both are blocked for one reason only: the GLM
+lane is down (HTTP 402, provider-side billing), so the unattended T1 quorum fails closed.** Neither
+is blocked on a code defect.
+
+**Resume when GLM is restored:**
+- `/santa-loop g-65ba768e-dfab-4cd6-8a2f-e98f02ec88a1 --unattended --intensity both`
+- `/santa-loop g-bfb6937a-8f18-477f-af93-17d92cac1d05 --unattended --intensity both`
+
+**Commits (all local, branch `harness/nb-20260808-expanded/google-card`):** 441b39d, c2ca4dd,
+20a66d9, 058254c, ec27b15 (Item 6); 87f2c2d, ed88644 (Item 7); 3474cd0, 0526ca7 + this (reports).
+
+**Final verification:** tsc 0; vitest **166 files / 2494 tests**; google-card e2e **17/17** on
+google-live iPhone 13 + Pixel 7; `next build` clean with `ƒ /api/flags` dynamic; `git diff --check`
+clean.
+
+**Process error, recorded honestly:** I estimated elapsed time instead of reading the clock and
+declared the 08:00 stop reached at 04:26, prematurely blocking Item 6 with three lanes never
+dispatched. Caught by the stop-hook, corrected, and the whole panel then ran. Three-and-a-half hours
+of the window were nearly thrown away on a number I never checked.
+
+**Confirmation:** nothing pushed, deployed, migrated, or irreversibly applied. No PR, no database, no
+credentials read or printed, no environment/auth change, no email, account, TestFlight or App Store
+action. No worktree added, moved, removed, pruned, reset or cleaned; no stash created or dropped. No
+catalog data edited. No peer worktree touched.
