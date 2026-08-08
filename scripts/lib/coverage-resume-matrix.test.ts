@@ -1125,7 +1125,64 @@ describe('resume state matrix', () => {
     },
   );
 
-  it('invariant 20 — a SUBDIVIDE with no parent attempt converges instead of growing forever', async () => {
+  it.each([
+    ['children already finished (settle branch)', true],
+    ['children still outstanding (resumeChildren)', false],
+  ] as const)(
+    'invariant 20 — a SUBDIVIDE with no parent attempt, %s, converges instead of growing forever',
+    async (_label, seedChildrenFinished) => {
+      // Two paths write a resumed 'cleared', and both must demand evidence.
+      // Seeding the children FINISHED exercises the settle branch; seeding them
+      // outstanding routes through resumeChildren instead, which is why one
+      // fixture could not pin both.
+      const cell = baseCell();
+      const kids = realKids();
+      const file = path.join(dir, `forged-subdivide-${seedChildrenFinished}.jsonl`);
+      const writer = openManifest(file);
+      writer.plan({ configHash: configHash({ t: `forged-${seedChildrenFinished}` }), cells: [cell] });
+      writer.subdivide(cell.id, kids.map((k) => k.id), kids);
+      if (seedChildrenFinished) {
+        for (const kid of kids) {
+          writer.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+          writer.result(kid.id, [{ id: `fs-${kid.id}` }]);
+          writer.done(kid.id, 'unsaturated');
+        }
+      }
+      writer.close();
+
+      const doneRecords = () =>
+        fs.readFileSync(file, 'utf8').split('\n').filter((line) => line.includes('"type":"DONE"'))
+          .length;
+
+      const counts: number[] = [doneRecords()];
+      for (let round = 0; round < 3; round++) {
+        const roundWriter = openManifest(file);
+        await sweep({
+          cells: [cell],
+          manifest: roundWriter,
+          state: loadManifest(file),
+          subdivision: SUBDIVISION,
+          maxResultCount: CAP,
+          transport: healthyTransport([]),
+        });
+        roundWriter.close();
+        counts.push(doneRecords());
+      }
+      const final = loadManifest(file)!;
+      expect(
+        counts[counts.length - 1],
+        `DONE records kept growing: ${counts.join(' -> ')}`,
+      ).toBe(counts[counts.length - 2]);
+      expect(completeness(final).complete, 'never converged').toBe(true);
+      // The parent's terminal record must rest on a real attempt of its own.
+      expect(
+        Boolean(final.cells.get(cell.id).lastOk),
+        'the parent was given a terminal status with no successful attempt',
+      ).toBe(true);
+    },
+  );
+
+  it('invariant 20b — the original settle-branch shape, pinned explicitly', async () => {
     // Forged/hand-edited shape: children finished, parent never attempted. The
     // settle branch used to write 'cleared' over it, which left the parent
     // still without evidence, so `isCompleting` stayed false and the NEXT
