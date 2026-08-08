@@ -90,14 +90,25 @@ show them as unknown-to-the-repo rather than as drift.
    environment-variable name only (`DATABASE_URL`,
    `SUPABASE_SERVICE_ROLE_KEY`, `RATE_LIMIT_KEY_SALT`).
 4. Record results in a scratch file, not in this document.
-5. **Run Check 7 (ledger parity) FIRST, before Checks 1–6.** Everything below is
-   derived from all 39 local migrations and therefore describes a database with
-   all 39 applied. If the environment is legitimately behind — 0043 is currently
-   unapplied by design — then tables, policies and grants introduced by the
-   unapplied files are *absent on purpose*, and reading that as drift means this
-   document cries wolf on a healthy deployment. Establish which migrations are
-   actually applied, then treat expectations from later files as not-yet-in-force
-   rather than as findings.
+5. **Run Check 7 (ledger parity) FIRST — for calibration, not reassurance.**
+   Everything below is derived from all 39 local migrations and describes a
+   database with all 39 applied. If the environment is legitimately behind —
+   0043 is currently unapplied by design — then objects introduced by the
+   unapplied files are *absent on purpose*, and reading that as drift makes this
+   document cry wolf on a healthy deployment. Establish which migrations are
+   actually applied, then treat expectations from later files as
+   not-yet-in-force rather than as findings.
+
+   **A passing Check 7 carries no evidentiary weight about authorization
+   integrity.** `public.schema_migrations` is a table inside the database being
+   inspected; anyone who can tamper with the schema can tamper with the ledger
+   that describes it. Its pass tells you *which expected surface to compare
+   against* — nothing more. Never let a green ledger relax the scrutiny you
+   apply to Checks 1–6.
+
+   **And treat this combination as its own finding:** Check 7 green while
+   Checks 1–6 show drift is the signature of a *forged ledger*, not of a
+   confusing deployment. Escalate it exactly as you would a failed Check 7.
 
 ---
 
@@ -211,6 +222,29 @@ is **stop-and-escalate** and makes every other check in this document
 meaningless. A new named role with `rolbypassrls` and `rolcanlogin` is also
 stop-and-escalate until someone identifies who created it and why.
 
+**Role ATTRIBUTES are not the only way in — check role MEMBERSHIP too.**
+`grant service_role to anon` gives `anon` everything `service_role` has,
+including its `BYPASSRLS`, while leaving `anon`'s own `rolbypassrls` false. The
+query above would show nothing:
+
+```sql
+select r.rolname as member, g.rolname as granted_role, m.admin_option
+from pg_auth_members m
+join pg_roles r on r.oid = m.member
+join pg_roles g on g.oid = m.roleid
+order by r.rolname, g.rolname;
+```
+
+**Expected:** no edge from `anon` or `authenticated` to any privileged role.
+Record the full edge list on the first run and compare against that baseline
+afterwards; Supabase maintains its own internal memberships and their exact
+shape varies by platform version.
+
+**On mismatch:** any path from `anon` or `authenticated` to `service_role`,
+`postgres`, or any role with `rolsuper`/`rolbypassrls` is
+**stop-and-escalate** — it is a privilege escalation that silently voids every
+policy and grant this document verifies.
+
 ---
 
 ## Check 2 — Policies exist where they are relied upon
@@ -320,6 +354,11 @@ expected expressions and diff them by eye:
 npx tsx scripts/lib/authzSurface.report.mts   # see "expected policy EXPRESSIONS"
 ```
 
+On a **v0.1-derived database**, that report also prints the 15 legacy policy
+names and expressions under "v0.1 LEGACY policy expressions"; their source is
+`supabase/schema.sql`, not the migrations. Without them the name-equality rule
+above is unsatisfiable for the five legacy tables.
+
 Postgres normalises what you wrote (it will re-print `auth.uid() = user_id` as
 `(auth.uid() = user_id)`, expand `select auth.uid()` into a subquery form, and
 schema-qualify functions), so **compare meaning, not text**. What you are
@@ -333,6 +372,28 @@ looking for is a predicate that is *weaker* than the migration's:
 
 A predicate that is *stricter* than the migration breaks a feature and fails
 safe: record it as a bug.
+
+**Do not rely on reading the predicates alone.** "Compare the meaning" is the
+right instruction and the weakest link in this document: the realistic 2am edit
+is not `using (true)` but a plausible-looking widening — someone debugging
+"users can't see their own data" adds an `or` branch with a subquery that, given
+one mis-scoped correlation, is true for everyone. It reads like access control
+and it is not. Three mechanical checks that do not depend on your judgement at
+2am, in order of value:
+
+1. **Any table named in a deployed predicate that is not named in the expected
+   predicate is stop-and-escalate.** The expected predicates reference only the
+   policy's own table and `auth.uid()`. A new table name — even a plausible one
+   — is a structural change no correct fix required.
+2. **`qual` or `with_check` that is literally `true`, `1 = 1`, or
+   `auth.uid() is not null` is stop-and-escalate.** The last is the subtle one:
+   it authenticates but does not authorize, so every signed-in user reads every
+   row.
+3. **A `with_check` that is NULL where the migration has one** — an INSERT or
+   UPDATE policy without it lets a user write rows they could not read.
+
+`pg_policies.qual` and `.with_check` are what these read; capture both verbatim
+before anyone changes anything.
 
 ---
 
@@ -602,6 +663,15 @@ function.
   standard Supabase, `anon`/`authenticated` rows from platform defaults. A ninth
   name there, or any name that does not return `trigger`, is
   **stop-and-escalate**.
+
+**One caveat on a v0.1-derived database.** `supabase/schema.sql:4` runs
+`create extension if not exists "pgcrypto"` with no schema qualifier. On standard
+Supabase that is a no-op — pgcrypto already lives in the `extensions` schema —
+but had it installed into `public`, its ~36 functions would appear here with
+default `PUBLIC`/`anon` EXECUTE. Confirm with
+`select extname, extnamespace::regnamespace from pg_extension;` before treating a
+wall of unfamiliar names as an incident. They are **record-and-confirm**; what
+matters is that none of them is `SECURITY DEFINER`.
 
 ---
 

@@ -217,6 +217,38 @@ export const COLUMN_SCOPED_GRANTS: Record<string, Record<string, string[]>> = {
   },
 };
 
+/**
+ * Object forms the runbook states an expectation about but this module does
+ * NOT parse, found in live (non-comment) SQL.
+ *
+ * The runbook says "expected: zero views" and "`rls_forced` false everywhere".
+ * Nothing derives either, so a future migration legitimately adding a view or
+ * `force row level security` would leave the document asserting
+ * stop-and-escalate on a healthy database — the exact drift the generated
+ * expectations exist to prevent, reappearing in the two places that are still
+ * hand-stated. Failing the build is the cheap fix: whoever adds one must update
+ * the runbook in the same change.
+ */
+export function unmodelledObjectStatements(
+  files: MigrationFile[],
+): { file: string; statement: string }[] {
+  const out: { file: string; statement: string }[] = [];
+  const patterns = [
+    /\bcreate\s+(?:or\s+replace\s+)?(?:materialized\s+)?view\b[^;]*/gi,
+    /\balter\s+table\s+[^;]*\bforce\s+row\s+level\s+security\b[^;]*/gi,
+  ];
+  for (const file of files) {
+    const sql = stripSqlComments(file.sql);
+    for (const re of patterns) {
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(sql)) !== null) {
+        out.push({ file: file.name, statement: m[0].replace(/\s+/g, ' ').trim().slice(0, 120) });
+      }
+    }
+  }
+  return out;
+}
+
 /** Strip `--` line comments and block comments so they cannot mask or fake a match. */
 export function stripSqlComments(sql: string): string {
   return sql

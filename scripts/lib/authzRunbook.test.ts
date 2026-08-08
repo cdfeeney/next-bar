@@ -428,6 +428,35 @@ describe('runbook / migration cross-check', () => {
     expect(doc).toContain('Run Check 7 (ledger parity) FIRST');
   });
 
+  it('denies a passing ledger check any evidentiary weight', () => {
+    // Two reviewers disagreed on ordering: run-first avoids crying wolf on a
+    // behind-but-healthy database, but the ledger lives INSIDE the database an
+    // attacker would control, so a pass proves nothing. Keeping the ordering
+    // and denying the pass evidentiary weight serves both.
+    expect(doc).toContain('carries no evidentiary weight');
+    expect(doc).toContain('signature of a *forged ledger*');
+  });
+
+  it('checks role MEMBERSHIP, not only role attributes', () => {
+    // `grant service_role to anon` leaves anon's own rolbypassrls false while
+    // giving it everything service_role has — invisible to an attribute check.
+    const check1b = checkSection(
+      '## Check 1b — No unexpected role can bypass RLS',
+      '## Check 2 —',
+    );
+    expect(check1b).toContain('pg_auth_members');
+    expect(check1b).toContain('role MEMBERSHIP');
+  });
+
+  it('gives mechanical policy red flags, not only "compare the meaning"', () => {
+    // Eyeballing predicates at 2am is the weakest link; these three checks do
+    // not depend on the operator's judgement.
+    const check2b = checkSection('### Check 2b — policy EXPRESSIONS', '---');
+    expect(check2b).toContain('not named in the expected\n   predicate');
+    expect(check2b).toContain('auth.uid() is not null');
+    expect(check2b).toContain('`with_check` that is NULL');
+  });
+
   it('states the migration count used by the ledger check', () => {
     expect(files).toHaveLength(39);
     expect(doc).toContain(`**Compare against** the ${files.length} local files`);

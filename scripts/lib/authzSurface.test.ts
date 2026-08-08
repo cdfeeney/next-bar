@@ -35,6 +35,7 @@ import {
   tablesRelyingOnDefaultGrants,
   tablesWithRlsEnabled,
   unmodelableGrantStatements,
+  unmodelledObjectStatements,
   type MigrationFile,
 } from './authzSurface';
 
@@ -492,6 +493,25 @@ describe('table grants', () => {
     const blind = fake('grant select on all tables in schema public to anon;');
     expect(unmodelableGrantStatements(blind)).toHaveLength(1);
     expect(unmodelableGrantStatements(blind)[0].statement).toContain('all tables in schema');
+  });
+
+  it('the corpus contains no view or force-RLS the runbook does not expect', () => {
+    // The runbook states "expected: zero views" and "rls_forced false
+    // everywhere" — two hand-stated expectations with no derivation behind
+    // them. A future migration adding either would leave the document
+    // demanding stop-and-escalate on a healthy database.
+    expect(unmodelledObjectStatements(files)).toEqual([]);
+  });
+
+  it('FLAGS a view or a force-RLS statement in live sql', () => {
+    const withView = fake('create view public.leaky_view as select * from public.profiles;');
+    expect(unmodelledObjectStatements(withView)).toHaveLength(1);
+
+    const forced = fake('alter table public.widgets force row level security;');
+    expect(unmodelledObjectStatements(forced)).toHaveLength(1);
+
+    const commented = fake('-- create view public.someday as select 1;');
+    expect(unmodelledObjectStatements(commented)).toEqual([]);
   });
 
   it('ignores an unmodelable grant that is only mentioned in a comment', () => {

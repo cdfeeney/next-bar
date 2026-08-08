@@ -6,8 +6,14 @@
  * Read-only; opens no network connection.
  *   npx tsx scripts/lib/authzSurface.report.mts
  */
+import { readFileSync } from 'node:fs';
 import {
   ANON_EXECUTABLE_FUNCTIONS,
+  LEGACY_SCHEMA_FILE,
+  legacyRenames,
+  legacySchemaPolicies,
+  legacySchemaTables,
+  unmodelledObjectStatements,
   ANON_READABLE_TABLES,
   DEFINERS_WITHOUT_AUTH_UID,
   FUNCTIONS_WITHOUT_PUBLIC_REVOKE,
@@ -113,6 +119,12 @@ console.log('\n-- unmodelable grant forms in LIVE sql (must be empty) --');
   console.log(`  ${bad.length ? bad.map((b) => `${b.file}: ${b.statement}`).join('\n  ') : '(none)'}`);
 }
 
+console.log('\n-- views / force-RLS in LIVE sql (runbook says zero; must be empty) --');
+{
+  const bad = unmodelledObjectStatements(files);
+  console.log(`  ${bad.length ? bad.map((b) => `${b.file}: ${b.statement}`).join('\n  ') : '(none)'}`);
+}
+
 console.log('\n-- SECURITY DEFINER functions whose body does NOT use auth.uid() --');
 {
   const derived = [
@@ -154,6 +166,27 @@ for (const [table, names] of policies) {
   if (!names.length) continue;
   console.log(`  ${table}`);
   for (const n of names) console.log(`      ${n}`);
+}
+
+console.log('\n-- v0.1 LEGACY policy expressions (Production lineage only) --');
+{
+  const schemaSql = readFileSync(LEGACY_SCHEMA_FILE, 'utf8');
+  const legacyTables = legacySchemaTables(schemaSql, files);
+  const legacyPolicies = legacySchemaPolicies(schemaSql, files);
+  const renames = legacyRenames(files);
+  console.log(`  legacy tables: ${legacyTables.join(', ')}`);
+  const defs = policyDefinitions([
+    { prefix: '0000', name: 'schema.sql', sql: schemaSql },
+  ]);
+  for (const [table, names] of legacyPolicies) {
+    console.log(`  [${table}] ${names.length} policy`);
+    for (const n of names) {
+      const def = defs.find(
+        (d) => (renames.get(d.table) ?? d.table) === table && d.policy === n,
+      );
+      console.log(`      ${def?.sql ?? n}`);
+    }
+  }
 }
 
 console.log('\n-- SECURITY DEFINER functions --');
