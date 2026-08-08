@@ -389,14 +389,16 @@ every user, continuously**, while every other rate-limited route merely loses it
 falls back to per-instance limiting.
 
 **The failure does not depend on the shared tier being armed — corrected 2026-08-08.** An earlier
-version of this section made "with the shared tier armed" a precondition. Checking the other branch
-shows the precondition is unnecessary, because **in production both configurations deny**:
+version of this section made "with the shared tier armed" a precondition. Checking the other branches
+shows that precondition is too narrow: **on production defaults the deletion path denies whether or
+not the tier is armed, and exactly one configuration — row 3, the explicit escape hatch — allows it.
+Three of the four rows below are unshippable states.**
 
 | # | Production configuration | Path taken | Account deletion |
 |---|---|---|---|
-| 1 | Tier armed (URL + service key + salt present), 0043 **unapplied** | RPC errors → throw → `rateLimiter.ts:422` catch → `allowed: onDegraded === 'fail-open'` | **denied** |
+| 1 | Tier armed (URL + service key + salt present), 0043 **unapplied** | RPC errors → throw → `rateLimiter.ts:420` `catch` → `:422` `allowed: onDegraded === 'fail-open'` | **denied** |
 | 2 | Tier **not** armed (any of the three env vars missing), `REQUIRE_DURABLE_RATE_LIMIT` unset | `rateLimiter.ts:375` `if (!durable \|\| !salt)` → `:388` `if (requireDurable) return { allowed: false, degraded: true }` | **denied** |
-| 3 | Tier **not** armed **and** `REQUIRE_DURABLE_RATE_LIMIT=0` (or `false`) | `:375` → `:388` skipped → `:391` `return { allowed: true, degraded: false }` | allowed — **and completely unlimited** |
+| 3 | Tier **not** armed **and** `REQUIRE_DURABLE_RATE_LIMIT=0` (or `false`) | `:375` → `:388` skipped → `:391` `return { allowed: true, degraded: false }` | allowed — **no *shared* quota; per-instance limiting remains** |
 | 4 | Tier armed **and** 0043 applied | normal | allowed, limited to 5/user/hour |
 
 `requireDurable` defaults **on** in production (`account/delete/route.ts:95-97`,
@@ -407,15 +409,27 @@ state.
 
 > ⚠️ **Row 3 is the trap, and it is the reason "just don't arm the tier" is not a workaround.**
 > `REQUIRE_DURABLE_RATE_LIMIT=0` is described in 0043's own header (`:163`) as "the escape hatch".
-> It does make deletions succeed with 0043 unapplied — by **removing the quota entirely**. Row 3
-> returns `degraded: false`, so it does not even report itself as degraded: the local tier was
-> already consulted and passed, and the shared tier is simply skipped. The result is the app's one
-> irreversible action running with **no effective shared limit and no degradation signal**. Anyone
-> proposing this as a way to ship without 0043 is proposing to disable the protection, not to avoid
-> the problem, and it should be an explicit, recorded decision rather than an env-var default.
+> It does make deletions succeed with 0043 unapplied — by **dropping back to per-instance limiting
+> on the one irreversible action**, which is precisely the weakness 0043 exists to remove. Row 3
+> also returns `degraded: false`, so it does **not report itself as degraded**: the shared tier is
+> skipped rather than failed. Anyone proposing this as a way to ship without 0043 is proposing to
+> disable a protection, not to avoid the problem, and it should be an explicit recorded decision
+> rather than an env-var default.
+>
+> **Do not overstate row 3 either — corrected 2026-08-08.** An earlier version of this note said the
+> escape hatch leaves the action "completely unlimited" and "removes the quota entirely". **That is
+> false.** `rateLimiter.ts:371` consults the in-memory limiter — created with the *same* limit and
+> window (`:365`) — and returns `{ allowed: false, degraded: false }` **before** any of the branches
+> in this table are reached. So row 3 still enforces 5 deletions per user per hour *per process*.
+> What is lost is **cross-instance coordination**: N warm instances mean the ceiling scales with N
+> instead of being global, and a restarted instance starts from an empty counter. That is a real
+> weakening and a real reason not to ship row 3 — but it is not the absence of a limit, and a gate
+> document must not overstate risk any more than it understates it.
 >
 > *(Row 3 was missing from the first version of this table. Found independently by the Claude, Codex
-> and DeepSeek lanes; Codex located `route.ts:95-97` and `rateLimiter.ts:391`.)*
+> and DeepSeek lanes; Codex located `route.ts:95-97` and `rateLimiter.ts:391`. The "completely
+> unlimited" overstatement was then caught independently by the Codex and DeepSeek lanes in the
+> following round.)*
 
 *(The broadening above came out of testing a DeepSeek claim that an unset salt would let deletions
 succeed. On production defaults the repository shows the opposite — `:388` refuses — so the claim as
@@ -592,6 +606,16 @@ Each must be exercised against the migrated environment by a real account, not a
   remains a gate here. *(Corrected 2026-08-08: this bullet still described `76d610f` as
   "un-reviewed" after §2 had retracted exactly that characterisation. Review is not the same gate as
   deployment; only the review half changed.)*
+- **Account deletion, exercised under the configuration that will actually ship** — *added
+  2026-08-08.* Delete a disposable pre-existing account and confirm it succeeds, **with the deployed
+  values of `SUPABASE_SERVICE_ROLE_KEY`, `RATE_LIMIT_KEY_SALT` and `REQUIRE_DURABLE_RATE_LIMIT` in
+  place, and 0043 in whatever state the window leaves it.** §8b's table has four rows and three of
+  them deny or degrade this path; a gate run against row 4 while production ships row 1, 2 or 3
+  proves nothing about the deployment. Record which row was exercised. This is the only gate here
+  whose failure mode is *silent until a user tries to delete their account*, and it is the reason
+  §9 item 9 asks for all three configuration answers together rather than separately.
+  *(Gap raised by the GLM lane: §12's gate list predated the escape hatch entering this document's
+  risk model, so nothing in it exercised the deletion path at all.)*
 - **Public shared list** — **the READ path is pre-existing; the WRITE path is what this packet
   opens.** Separate the two or the risk is misread in either direction:
   - *Read (already live).* `get_public_ratings` is `SECURITY DEFINER` with
@@ -776,6 +800,37 @@ what keeps the gating conclusion intact.
 **What the rule does not license.** Termination here means the *document* is as good as reading can
 make it. It says nothing about the packet. §14 still applies in full: this is not approved, and the
 four assumptions in claims 5–8 remain unsettled by any amount of review.
+
+**Round 9 (2026-08-08, third and final full panel) — the rule fired, and was contested.** Findings:
+(a) the sentence *introducing* §8b's four-row table still said "both configurations deny", written
+for the two-outcome model it replaced — found independently by the Claude and GLM lanes; (b) row 3's
+"completely unlimited" and "removes the quota entirely" overstated the risk, because
+`rateLimiter.ts:371` consults an in-memory limiter with the same limit before any branch in the table
+— found independently by the Codex and DeepSeek lanes; (c) a catch-block citation off by one line
+(Codex); (d) §12's gate list never exercised account deletion at all, let alone under the shipping
+configuration (GLM).
+
+**The GLM lane argued the stopping rule was falsified** — that a contradiction *inside* the table
+round 8 added is a primary content defect, not a propagation defect, and that it changes a gating
+conclusion because an operator cannot read shippability off a self-contradicting table. **The Kimi
+lane adjudicated against that, and the adjudication is adopted**, on the ground that the *table* is
+correct — row 3 does say "allowed" — so (a) is stale prose adjacent to a correct edit, which is the
+definition of a propagation defect rather than a new class. The gating conclusion (not approved;
+correctness delegated to §14 requirement 6) was untouched by every finding, and (d) *tightens* the
+gate rather than loosening it.
+
+Note what (a) and (b) are together, because it is the most useful thing round 9 produced: the same
+passage **overstated** safety in one direction (claiming deletion is always denied when one
+configuration allows it) and **overstated** risk in the other (claiming no limit where a per-instance
+limit remains). A gate document is wrong in both directions for the same reason — prose drifting from
+the mechanism it describes — and neither error is more forgivable than the other.
+
+> **Disclosure, recorded deliberately.** Round 9's four fixes are the last edits to this document and
+> **they did not themselves receive an independent pass**: the review budget of three rounds was
+> exhausted. Anyone resuming should verify *that four-item diff only* — the intro sentence, row 3's
+> wording, the `:420`/`:422` citation, and the new §12 gate — and should not re-review the document
+> from scratch. All four are safety-monotone: three conform prose to content two lanes independently
+> verified, and the fourth adds a gate.
 
 ### Three classes of in-repo assertion this analysis should never have cited as evidence
 
