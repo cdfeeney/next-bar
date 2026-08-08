@@ -140,6 +140,24 @@ only way to tell how the cell was finished:
 A `cleared` parent's venues live in its **children**, not in its own page, so do
 not read a settled parent's own place count as the coverage of that geography.
 
+**A `DONE` is a claim; a successful `ATTEMPT` is the evidence for it.** That rule
+applies to every row above, not just `ack_terminal` — a `DONE` saying
+`unsaturated`, `cleared`, or `saturated_at_floor` with no successful attempt
+behind it is treated as unfinished by every part of the system. `ack_terminal`
+is the one status a search cannot back, and its evidence is the operator's
+`ACK_TERMINAL` record instead. Nothing legitimate is excluded: a floor status is
+only ever written after a capped response, and a capped response *is* a
+successful attempt.
+
+That judgement is made in exactly one place — `classify()` in
+`scripts/lib/coverage-manifest.mjs`, which returns a `Verdict` (`kind` is one of
+`unfinished` / `unbacked` / `floor` / `complete`, plus `blocked`). The engine,
+the completeness invariant, the summary counts and the waiver check are all
+views over that one verdict. If you are adding a caller that needs to know
+whether a cell is finished, read the verdict; do not test `terminalStatus`
+yourself. Every defect this file documents was two pieces of code answering that
+question differently.
+
 ## When a cell can never succeed
 
 Resume handles the transient failures — quota resets, network blips, 5xx, an
