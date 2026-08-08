@@ -58,7 +58,7 @@ const page = (n: number, tag: string) =>
   Array.from({ length: n }, (_, index) => ({ id: `${tag}-${index}` }));
 
 /** The reachable shapes a cell can be in when a run is resumed. */
-const STATES: Array<{ name: string; write: (w: any, id: string) => void }> = [
+const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: string) => void }> = [
   { name: 'never attempted', write: () => {} },
   {
     name: 'uncapped, complete',
@@ -139,6 +139,7 @@ const STATES: Array<{ name: string; write: (w: any, id: string) => void }> = [
   },
   {
     name: 'acknowledged permanent failure',
+    settled: true,
     write: (w, id) => {
       w.attempt({ cellId: id, attemptN: 1, ok: false, errorClass: 'http4xx' });
       w.ackTerminal(id, 'permanent rejection', 'operator');
@@ -147,13 +148,44 @@ const STATES: Array<{ name: string; write: (w: any, id: string) => void }> = [
   },
   {
     name: 'saturated at the floor',
+    settled: true,
     write: (w, id) => {
       w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
       w.result(id, page(CAP, 'i'));
       w.done(id, SATURATED_AT_FLOOR);
     },
   },
+  {
+    // The state the acknowledged short-circuit actually exists for. The
+    // uncapped acknowledged cell above cannot detect its removal: without the
+    // short-circuit it falls through to the generic completing-status path and
+    // behaves identically. Only a CAPPED acknowledged cell takes cap recovery
+    // instead, spending four child calls on work the operator waived.
+    name: 'acknowledged while capped',
+    settled: true,
+    write: (w, id) => {
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, page(CAP, 'j'));
+      w.ackTerminal(id, 'permanent rejection at this geometry', 'operator');
+      w.done(id, 'ack_terminal');
+    },
+  },
 ];
+
+/** Cells the engine must treat as finished: waived, or short of the floor. */
+const SETTLED_STATES = STATES.filter((state) => state.settled);
+
+/** Every place the manifest records for a cell AND its descendants. */
+function recordedSubtree(state: any, cellId: string, seen = new Set<string>()): string[] {
+  if (seen.has(cellId)) return [];
+  seen.add(cellId);
+  const cell = state?.cells?.get(cellId);
+  if (!cell) return [];
+  return [
+    ...(cell.places ?? []).map((place: any) => place.id),
+    ...(cell.children ?? []).flatMap((childId: string) => recordedSubtree(state, childId, seen)),
+  ];
+}
 
 function build(state: (typeof STATES)[number]) {
   const cell = baseCell();
@@ -324,12 +356,18 @@ describe('resume state matrix', () => {
       // unreachable in this matrix: healthyTransport never fails and maxCalls
       // defaulted to Infinity, so the two exits where past bugs actually lived
       // were never entered. Both are exercised here.
-      const { cell, file } = build(state);
-      const recorded = loadManifest(file)!.cells.get(cell.id);
-      const expected = new Set<string>((recorded?.places ?? []).map((p: any) => p.id));
+      // Expected comes from the whole SUBTREE, not the root: a child's already
+      // recorded page is exactly what a mid-subtree interruption threatens, and
+      // deriving it from the root alone skipped those states entirely.
+      const seedFile = build(state).file;
+      const expected = new Set(recordedSubtree(loadManifest(seedFile), baseCell().id));
       if (expected.size === 0) return;
 
       for (const stopper of ['budget', 'interrupt'] as const) {
+        // A FRESH manifest per stopper. Running both against one file made the
+        // second inherit the first's records, so it no longer tested the state
+        // this case is named for.
+        const { cell, file } = build(state);
         const emitted = new Set<string>();
         const writer = openManifest(file);
         await sweep({
@@ -346,8 +384,6 @@ describe('resume state matrix', () => {
           onPlaces: (places: any[]) => places.forEach((place) => emitted.add(place.id)),
         });
         writer.close();
-        // A stopped resume may do less work, but it must not silently discard
-        // venues the manifest still holds.
         for (const id of expected) {
           expect(emitted.has(id), `${state.name}/${stopper}: dropped recorded place ${id}`).toBe(
             true,
@@ -357,31 +393,103 @@ describe('resume state matrix', () => {
     },
   );
 
-  it.each(
-    STATES.filter((state) => /floor|acknowledged/.test(state.name)).map(
-      (state) => [state.name, state] as const,
-    ),
-  )('invariant 6 — "%s" is never re-queried; it is already settled', async (_name, state) => {
-    // Nothing else in this matrix constrains these two branches: a floor cell
-    // never reaches `complete` so the honesty invariants skip it, and an
-    // acknowledged cell is terminal so the progress invariants are satisfied by
-    // its existing record. Deleting either short-circuit therefore passed every
-    // other case (mutation-tested). Spending money re-asking a settled cell is
-    // the failure here, so assert on the calls directly.
-    const { cell, file } = build(state);
-    const called: string[] = [];
-    const writer = openManifest(file);
-    await sweep({
-      cells: [cell],
-      manifest: writer,
-      state: loadManifest(file),
-      subdivision: SUBDIVISION,
-      maxResultCount: CAP,
-      transport: healthyTransport(called),
-    });
-    writer.close();
-    expect(called, `${state.name}: re-queried a cell that was already settled`).toEqual([]);
+  it('invariant 6 selects its states semantically, not by name', () => {
+    // A regex over display names silently drops coverage on a rename. The
+    // marker is a property of the fixture, and this asserts the selection still
+    // finds them — a filter that matches nothing is a green no-op.
+    expect(SETTLED_STATES.length).toBeGreaterThanOrEqual(3);
   });
+
+  it.each(SETTLED_STATES.map((state) => [state.name, state] as const))(
+    'invariant 6 — "%s" is never re-queried; it is already settled',
+    async (_name, state) => {
+      // Nothing else constrains these branches: a floor cell never reaches
+      // `complete` so the honesty invariants skip it, and an acknowledged cell
+      // is terminal so the progress invariants are satisfied by its existing
+      // record. Spending money re-asking a settled cell is the failure, so
+      // assert on the calls directly.
+      const { cell, file } = build(state);
+      const called: string[] = [];
+      const writer = openManifest(file);
+      await sweep({
+        cells: [cell],
+        manifest: writer,
+        state: loadManifest(file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: healthyTransport(called),
+      });
+      writer.close();
+      expect(called, `${state.name}: re-queried a cell that was already settled`).toEqual([]);
+    },
+  );
+
+  it.each(STATES.map((state) => [state.name, state] as const))(
+    'invariant 7 — the seeded state "%s" is judged honestly before anything runs',
+    async (_name, state) => {
+      // Every other invariant resumes first, which lets the healthy engine
+      // repair the manifest before completeness is ever consulted. A
+      // completeness() that ignored unclearedCap therefore passed every case.
+      // Judge the manifest as seeded, with no resume in between.
+      const { cell, file } = build(state);
+      const seeded = loadManifest(file)!;
+      const recorded = seeded.cells.get(cell.id);
+      if (!completeness(seeded).complete) return;
+      expect(
+        !recorded.capped || recorded.children.length > 0 || Boolean(recorded.acked),
+        `${state.name}: reported complete while capped and never subdivided`,
+      ).toBe(true);
+      expect(['unsaturated', 'cleared', 'ack_terminal']).toContain(recorded.terminalStatus);
+    },
+  );
+
+  it.each(STATES.filter((state) => !state.settled).map((state) => [state.name, state] as const))(
+    'invariant 8 — one healthy resume fully settles "%s", with no redundant call',
+    async (_name, state) => {
+      // Catches a subdivision that finishes its children but never records its
+      // own terminal status: the run self-heals a resume later, at the cost of
+      // a wasted paid call and a duplicate SUBDIVIDE. "Converges eventually" is
+      // not the bar; converging in one pass without re-billing is.
+      const { cell, file } = build(state);
+      const writer = openManifest(file);
+      await sweep({
+        cells: [cell],
+        manifest: writer,
+        state: loadManifest(file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: healthyTransport([]),
+      });
+      writer.close();
+
+      const after = loadManifest(file)!;
+      // Against a transport that always answers and never caps, every
+      // non-settled state must finish in ONE pass. "Converges eventually" is
+      // not the bar: a subdivision that completes its children but never
+      // records its own terminal status self-heals on the next resume, and
+      // pays for the parent a second time to do it.
+      expect(
+        completeness(after).status,
+        `${state.name}: one healthy resume did not settle it`,
+      ).toBe('complete');
+      expect(
+        after.cells.get(cell.id).terminalStatus,
+        `${state.name}: complete but the parent recorded no terminal status`,
+      ).not.toBeNull();
+      const second: string[] = [];
+      const again = openManifest(file);
+      await sweep({
+        cells: [cell],
+        manifest: again,
+        state: loadManifest(file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: healthyTransport(second),
+      });
+      again.close();
+      expect(second, `${state.name}: a completed manifest was re-queried`).toEqual([]);
+    },
+  );
 
   it('invariant 3b — a completed run hands back everything the manifest recorded', async () => {
     for (const state of STATES) {
