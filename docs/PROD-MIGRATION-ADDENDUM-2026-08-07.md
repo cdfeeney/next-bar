@@ -392,21 +392,38 @@ falls back to per-instance limiting.
 version of this section made "with the shared tier armed" a precondition. Checking the other branch
 shows the precondition is unnecessary, because **in production both configurations deny**:
 
-| Production configuration | Path taken | Account deletion |
-|---|---|---|
-| Tier armed (URL + service key + salt present), 0043 **unapplied** | RPC errors → throw → `rateLimiter.ts:422` catch → `allowed: onDegraded === 'fail-open'` | **denied** |
-| Tier **not** armed (any of the three env vars missing) | `rateLimiter.ts:375` `if (!durable \|\| !salt)` → `:388` `if (requireDurable) return { allowed: false, degraded: true }` | **denied** |
-| Tier armed **and** 0043 applied | normal | allowed, limited to 5/user/hour |
+| # | Production configuration | Path taken | Account deletion |
+|---|---|---|---|
+| 1 | Tier armed (URL + service key + salt present), 0043 **unapplied** | RPC errors → throw → `rateLimiter.ts:422` catch → `allowed: onDegraded === 'fail-open'` | **denied** |
+| 2 | Tier **not** armed (any of the three env vars missing), `REQUIRE_DURABLE_RATE_LIMIT` unset | `rateLimiter.ts:375` `if (!durable \|\| !salt)` → `:388` `if (requireDurable) return { allowed: false, degraded: true }` | **denied** |
+| 3 | Tier **not** armed **and** `REQUIRE_DURABLE_RATE_LIMIT=0` (or `false`) | `:375` → `:388` skipped → `:391` `return { allowed: true, degraded: false }` | allowed — **and completely unlimited** |
+| 4 | Tier armed **and** 0043 applied | normal | allowed, limited to 5/user/hour |
 
-`requireDurable` defaults **on** in production (`account/delete/route.ts`, `requireDurableRateLimit()`),
-and its whole purpose is to refuse loudly rather than silently fall back to per-instance limiting on
-the one irreversible action. So the honest statement is stronger than the original: **in production,
-account deletion works only if 0043 is applied.** Misconfiguring the tier does not rescue it; it just
-changes which line denies.
+`requireDurable` defaults **on** in production (`account/delete/route.ts:95-97`,
+`requireDurableRateLimit()`), and its whole purpose is to refuse loudly rather than silently fall
+back to per-instance limiting on the one irreversible action. So, **on production defaults, account
+deletion works only if 0043 is applied** — rows 1 and 2 both deny, and only row 4 is the healthy
+state.
 
-*(This correction came out of testing a DeepSeek claim that an unset salt would let deletions
-succeed. The repository shows the opposite — `:388` refuses — so that claim is **rejected on
-evidence**; but checking it exposed that this section's precondition was too narrow.)*
+> ⚠️ **Row 3 is the trap, and it is the reason "just don't arm the tier" is not a workaround.**
+> `REQUIRE_DURABLE_RATE_LIMIT=0` is described in 0043's own header (`:163`) as "the escape hatch".
+> It does make deletions succeed with 0043 unapplied — by **removing the quota entirely**. Row 3
+> returns `degraded: false`, so it does not even report itself as degraded: the local tier was
+> already consulted and passed, and the shared tier is simply skipped. The result is the app's one
+> irreversible action running with **no effective shared limit and no degradation signal**. Anyone
+> proposing this as a way to ship without 0043 is proposing to disable the protection, not to avoid
+> the problem, and it should be an explicit, recorded decision rather than an env-var default.
+>
+> *(Row 3 was missing from the first version of this table. Found independently by the Claude, Codex
+> and DeepSeek lanes; Codex located `route.ts:95-97` and `rateLimiter.ts:391`.)*
+
+*(The broadening above came out of testing a DeepSeek claim that an unset salt would let deletions
+succeed. On production defaults the repository shows the opposite — `:388` refuses — so the claim as
+stated is **rejected on evidence**; but it was directionally right, because the escape hatch in row 3
+does exactly what it described. A second DeepSeek concern — that the account-delete key might hit the
+unattributed short-circuit at `:407` — is also **rejected on evidence**: `:369` runs the key through
+`aggregateIp`, whose first line is `if (!ip.includes(':')) return ip`, so a UUID user id is returned
+unchanged and can never equal the `'unknown'` sentinel.)*
 
 The account-delete bucket keys on the verified user id, so it never takes the unattributed
 short-circuit at `rateLimiter.ts:407` that would otherwise allow the request.
@@ -434,9 +451,17 @@ against the existing test file.)*
 forbidden evidence class that comment is cited here as the author's *intent* only, and carries no
 weight as evidence of runtime state.
 
-**Disposition.** Whether to ship 0043 inside this window, ship it separately before the candidate,
-or deploy a candidate without the durable tier armed is **an operator decision, not this document's
-call** (§13, §14). What this document does assert is that **the packet and `689e564` must not be
+**Disposition.** The genuine options are: ship 0043 inside this window; ship it separately *before*
+the candidate; or pin the deployment to an application ref that predates the dependency. Which of
+those to take is **an operator decision, not this document's call** (§13, §14).
+
+> **"Deploy without the durable tier armed" was listed here as a fourth option and has been
+> withdrawn.** Per row 2 of the table above it does not work — it denies deletion by a different
+> line — and the only way to make it work is row 3, `REQUIRE_DURABLE_RATE_LIMIT=0`, which ships the
+> irreversible action with no shared quota at all. That is a decision to remove a protection, so it
+> does not belong in a list of ways to avoid the problem. *(Withdrawn after four independent lanes
+> flagged that this sentence still encoded the narrower precondition this section had just
+> abandoned — the same failure-to-propagate pattern recorded in §14b.)* What this document does assert is that **the packet and `689e564` must not be
 shipped as a pair as they stand**, and that "the migration set is 0033–0036 + 0042" is no longer a
 complete description of what the candidate needs.
 
@@ -473,8 +498,14 @@ Every item here is **unverified** and cannot be resolved locally:
    a complete answer: the candidate needs `0043_rate_limits.sql` as well, and the shortfall fails
    closed on account deletion. Before the window, decide and record (a) whether 0043 ships inside it,
    (b) which web artifact SHA is being paired with the resulting schema, and (c) whether the shared
-   rate-limit tier will be armed in that deployment. These three answers are **not independent** —
-   arming the tier without 0043 is the failing combination.
+   rate-limit tier will be armed in that deployment, **including the value of
+   `REQUIRE_DURABLE_RATE_LIMIT`**. These three answers are **not independent**, and the dependency is
+   not the one an earlier draft stated. *(Corrected 2026-08-08.)* Of the four configurations in
+   §8b's table, **three fail and only one is healthy**: 0043 applied *and* the tier armed. It is not
+   the case that "arming the tier without 0043" is *the* failing combination — leaving the tier
+   unarmed fails too, and the one setting that makes deletion succeed without 0043 does so by
+   removing the quota entirely. Record all three answers together, or the combination that actually
+   ships will not be the one anyone approved.
 
 ## 10. Backup and revert requirements
 
@@ -509,6 +540,17 @@ backup, not the commented DDL.
 > when it is missing. **So 0043 must not be reverted while a candidate that calls it is deployed** —
 > the rollback order is application first, then migration. Reverting in the other order converts a
 > rollback into an outage of the account-deletion path.
+>
+> **The forward direction carries no such constraint.** Applying 0043 before deploying the candidate
+> is safe: the currently-deployed application never calls `consume_rate_limit`, so the new table
+> simply sits empty until a candidate that uses it arrives. Only the reverse order is dangerous, and
+> only on the way back out.
+>
+> **One transient effect to expect, not to chase.** Reverting 0043 drops the counter rows with the
+> table, so a re-apply starts every bucket at zero: a user who had consumed their 5 deletions in the
+> current hour gets a fresh quota. That is a temporary quota reset, not a correctness failure, and
+> it is the intended consequence of counters being ephemeral — but it should not surprise anyone
+> watching the numbers during a rollback. *(Both points raised by the DeepSeek lane.)*
 >
 > This row was missing entirely until the GLM lane pointed out that §8b widened the migration set
 > without propagating the change into the revert and preservation sections. **§11's
@@ -647,7 +689,7 @@ So do not judge this document by whether the latest round found nothing. Judge i
 | 9 | 0042 is additive | `derived-from-explicit-DDL` | — solid |
 | 10 | Revoke/re-grant is atomic | `verified-in-repo` — **corrected citation** `apply-migrations.ts:487` `begin` → `:494` SQL → `:499` `commit` → `:503` `rollback` (see claim 14) | — solid at the corrected lines |
 | 11 | This packet is the candidate's complete migration set | ~~`assumed`, never stated~~ **FALSIFIED 2026-08-08** | The candidate carries `0043_rate_limits.sql`; 38 files vs 39 (§1) |
-| 12 | In production, unapplied 0043 ⇒ account deletion denied for every user, **in both tier configurations** | **split** — tier-layer half `verified-by-test` (`rateLimiter.test.ts:251-258`); "unapplied 0043 makes the RPC error" still `derived-from-code` | A client stub returning `PGRST202` through the account-delete consumer — cheaper than a scratch DB, and the harness already exists |
+| 12 | **On production defaults**, unapplied 0043 ⇒ account deletion denied for every user, whether or not the tier is armed. **Defeasible by `REQUIRE_DURABLE_RATE_LIMIT=0`**, which allows it by removing the quota (§8b row 3) | **split** — tier-layer half `verified-by-test` (`rateLimiter.test.ts:251-258`); "unapplied 0043 makes the RPC error" still `derived-from-code` | A client stub returning `PGRST202` through the account-delete consumer — cheaper than a scratch DB, and the harness already exists |
 | 13 | §5's enumeration covers the **web candidate**, not just the packet ref | `verified-in-repo` — re-run at `689e564`, output identical | A `src` path reaching these tables other than `.from('<table>')` (dynamic name, raw SQL, a new RPC in INVOKER mode) |
 | 14 | §4's atomicity **citation** (distinct from claim 10's conclusion) | ~~`verified-in-repo`~~ **CITATION FALSIFIED 2026-08-08, conclusion intact** | `:281/:320/:322` are `installBootstrapFixture`; the per-file transaction is `:487`–`:503` |
 | 15 | §3's destructive-statement scan covers the **candidate's** migration set | ~~implied~~ **corrected 2026-08-08** — the scan covered the 5 packet files; 0043 has since been scanned separately (§3 scope note) | A 40th migration appearing on the candidate without §3 being re-run |
@@ -694,6 +736,46 @@ application SHA + the disposition of 0043 — and the window planned as: verify 
 the bundle → review the delta → schedule. Any plan that gates the old packet alone is planning a
 deployment that cannot happen. This supersedes nothing in §1–§13; it reframes what they are a review
 *of*, and it is the reason §14 requirement 4 is a blocker rather than a note.
+
+**Round 8 (2026-08-08, second full panel — the review of round 7's repair).** One defect, and
+**four lanes converged on the same one** rather than each finding a different one: §8b's Disposition
+and §9's item 9(c) still encoded the narrower precondition that §8b had just abandoned in the
+paragraph above them. Codex and DeepSeek additionally supplied the missing table row — the
+`REQUIRE_DURABLE_RATE_LIMIT=0` escape hatch — which turns "both configurations deny" into "both deny
+*on production defaults*". DeepSeek added the forward-ordering and counter-reset notes in §10. Two
+DeepSeek claims were **rejected on repository evidence** (the unset-salt claim, and the `:407`
+unattributed short-circuit — `aggregateIp` returns any colon-free key unchanged, so a UUID never
+becomes the `'unknown'` sentinel). One GLM prediction was wrong on the facts: it expected §13 to be a
+rollback runbook carrying the ordering constraint, but §13 is the Staging-authorisation section and
+carries no procedure.
+
+### Why the review stopped here, and how to falsify that
+
+Eight rounds, every one of which found something real. The stopping decision is **not** "we ran out
+of patience", and it should not be read as "the document is now correct". It is a rule, recorded so a
+future reader can re-run it:
+
+> **Review terminated after round 8 under a fixed stopping rule: the final round found only
+> propagation defects confined to the prior round's edit neighbourhood, introduced no new defect
+> class, and produced no finding that changes a gating conclusion; all residual correctness is
+> delegated to the empirical checks in §14 requirement 6, which must pass before any action is
+> taken.** *(Rule articulated by the Kimi K3 lane.)*
+
+The evidence for it is the **change in defect class**, not the lane agreement — agreement measures
+how detectable a defect is, not whether the remaining ones are gone. Rounds 1–5 found contradictions
+*generated by* reviewer reasoning; round 6 found document-versus-reality drift; rounds 7 and 8 found
+only the previous edit's own incompleteness, at shrinking radius. That is residue, not generation.
+
+**Falsify the rule this way:** if a ninth round finds a defect that is *not* adjacent to round 8's
+edits, or that belongs to a class not seen since round 6, or that changes any gating conclusion, the
+rule did not hold and the review was stopped early. Note also the one condition the rule nearly
+failed: round 8's finding *did* touch a gate-bypassing option (`REQUIRE_DURABLE_RATE_LIMIT=0`). It is
+resolved not by hiding the option but by naming it as a removal of protection (§8b row 3), which is
+what keeps the gating conclusion intact.
+
+**What the rule does not license.** Termination here means the *document* is as good as reading can
+make it. It says nothing about the packet. §14 still applies in full: this is not approved, and the
+four assumptions in claims 5–8 remain unsettled by any amount of review.
 
 ### Three classes of in-repo assertion this analysis should never have cited as evidence
 
