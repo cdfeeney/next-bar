@@ -386,7 +386,8 @@ analysis read `src` at the migration ref (§5).
 **Consequence.** Deploy candidate `689e564` against a database migrated with only this packet and
 `consume_rate_limit` does not exist. Every call to it errors, so **account deletion is denied for
 every user, continuously**, while every other rate-limited route merely loses its shared tier and
-falls back to per-instance limiting.
+falls back to per-instance limiting. *(Read "continuously" against row 3 of the table below, which is
+the one configuration that does not reach the call at all — corrected 2026-08-08.)*
 
 **The failure does not depend on the shared tier being armed — corrected 2026-08-08.** An earlier
 version of this section made "with the shared tier armed" a precondition. Checking the other branches
@@ -401,8 +402,11 @@ Three of the four rows below are unshippable states.**
 | 3 | Tier **not** armed **and** `REQUIRE_DURABLE_RATE_LIMIT=0` (or `false`) | `:375` → `:388` skipped → `:391` `return { allowed: true, degraded: false }` | allowed — **no *shared* quota; per-instance limiting remains** |
 | 4 | Tier armed **and** 0043 applied | normal | allowed, limited to 5/user/hour |
 
-`requireDurable` defaults **on** in production (`account/delete/route.ts:95-97`,
-`requireDurableRateLimit()`), and its whole purpose is to refuse loudly rather than silently fall
+`requireDurable` defaults **on** in production (`account/delete/route.ts:94-105`
+`requireDurableRateLimit()`; `:95-97` parse an explicit `REQUIRE_DURABLE_RATE_LIMIT` override, and
+the production *default* is `:103-105`, `VERCEL_ENV`/`NODE_ENV` — **citation corrected 2026-08-08**,
+the earlier `:95-97` pointed at the override branch, not the default it was cited for), and its whole
+purpose is to refuse loudly rather than silently fall
 back to per-instance limiting on the one irreversible action. So, **on production defaults, account
 deletion works only if 0043 is applied** — rows 1 and 2 both deny, and only row 4 is the healthy
 state.
@@ -461,9 +465,11 @@ deploy — and `rateLimiter.test.ts:402` already asserts the `consume_rate_limit
 harness exists. The scratch-database run is still worth doing for the §9 unknowns, but it should not
 be the gate on *this* finding. *(Cheaper-falsifier point raised by the DeepSeek lane and confirmed
 against the existing test file.)*
-`rateLimiter.durable.ts:19-22` anticipates an unapplied migration in prose — under §14b's first
-forbidden evidence class that comment is cited here as the author's *intent* only, and carries no
-weight as evidence of runtime state.
+`rateLimiter.durable.ts:47-50` anticipates an unapplied migration in prose ("Returning
+`{ allowed: false }` would silently convert an unapplied migration or a transport blip into a hard
+block", `:49`) — under §14b's first forbidden evidence class that comment is cited here as the
+author's *intent* only, and carries no weight as evidence of runtime state. *(Citation corrected
+2026-08-08: `:19-22` is the wall-clock-timeout comment and says nothing about migration state.)*
 
 **Disposition.** The genuine options are: ship 0043 inside this window; ship it separately *before*
 the candidate; or pin the deployment to an application ref that predates the dependency. Which of
@@ -515,11 +521,12 @@ Every item here is **unverified** and cannot be resolved locally:
    rate-limit tier will be armed in that deployment, **including the value of
    `REQUIRE_DURABLE_RATE_LIMIT`**. These three answers are **not independent**, and the dependency is
    not the one an earlier draft stated. *(Corrected 2026-08-08.)* Of the four configurations in
-   §8b's table, **three fail and only one is healthy**: 0043 applied *and* the tier armed. It is not
-   the case that "arming the tier without 0043" is *the* failing combination — leaving the tier
-   unarmed fails too, and the one setting that makes deletion succeed without 0043 does so by
-   removing the quota entirely. Record all three answers together, or the combination that actually
-   ships will not be the one anyone approved.
+   §8b's table, **three deny or degrade and only one is fully healthy**: 0043 applied *and* the tier
+   armed. It is not the case that "arming the tier without 0043" is *the* failing combination —
+   leaving the tier unarmed fails too, and the one setting that makes deletion succeed without 0043
+   does so by **removing the shared quota; per-instance limiting remains** (§8b row 3, and read that
+   row's correction before quoting this line). Record all three answers together, or the combination
+   that actually ships will not be the one anyone approved.
 
 ## 10. Backup and revert requirements
 
@@ -550,8 +557,11 @@ backup, not the commented DDL.
 > **0043's revert is the dangerous one despite losing no data — added 2026-08-08.** Every other row
 > in this table trades off *data*. 0043 trades off *availability*: reverting it drops
 > `consume_rate_limit`, and by §8b that immediately denies account deletion for every user in
-> production, because the candidate calls that function and the only fail-closed consumer refuses
-> when it is missing. **So 0043 must not be reverted while a candidate that calls it is deployed** —
+> production **on the shippable configurations (rows 1, 2 and 4)** — because the candidate calls that
+> function and the only fail-closed consumer refuses when it is missing. *(Under §8b row 3 the
+> deployed application never reaches the call, so the revert is inert there; row 3 is itself an
+> unshippable state, which is why the rule below is written for the rows that can ship — corrected
+> 2026-08-08.)* **So 0043 must not be reverted while a candidate that calls it is deployed** —
 > the rollback order is application first, then migration. Reverting in the other order converts a
 > rollback into an outage of the account-deletion path.
 >
@@ -663,13 +673,16 @@ migration, Production deployment, or TestFlight modification is authorized by th
 
 **NOT APPROVED. Requires, before any Production window:**
 
-1. Fresh independent review of this addendum and the packet. *(Updated 2026-08-08: the original
-   wording — "has had no independent review at the time of writing" — is superseded. The document has
-   since been through five review rounds across the Claude, Codex, GLM, DeepSeek and Kimi lanes, and
-   the 2026-08-08 revision adds §8b and rewrites §1, §2, §5, §9 and §15. That revision has **since
-   been reviewed** by a five-family panel (round 7, §14b), whose findings are folded in above. What
-   remains un-reviewed is the round-7 repair itself. The requirement therefore still stands, but it
-   is now narrow: review the round-7 delta, not the document from scratch.)*
+1. Fresh independent review of this addendum and the packet. *(Updated 2026-08-08, superseding two
+   earlier versions of this bullet. The original — "has had no independent review at the time of
+   writing" — and its round-7 successor — "what remains un-reviewed is the round-7 repair; review
+   the round-7 delta" — are both **stale and were both wrong by the time they were read**. Current
+   state: the document has been through **ten** review rounds across the Claude, Codex, GLM, DeepSeek
+   and Kimi lanes. Round 10 (§14b) was a full five-family panel over the round-9 repair, which had
+   been left unreviewed; it found and closed real defects, including one this bullet's own
+   predecessor would have hidden. **§14b is the authoritative record of review state — this bullet is
+   a pointer to it, not a second source of truth.** The requirement stands: the round-10 repair is
+   itself the most recent unreviewed delta unless §14b says otherwise.)*
 2. **Attended Production identity verification** — a human confirming, in the Production project,
    which migrations are applied and that the target project is the intended one.
 3. A verified-restorable backup (§10).
@@ -687,8 +700,9 @@ migration, Production deployment, or TestFlight modification is authorized by th
      migration set, current grants, public-flag row count, restore capability). No amount of further
      reading settles these; they are the reason a window needs a human.
    - **Then the scratch-database run** for the §9 unknowns that survive both.
-   Six review rounds preceded these, and rounds 6 and 7 each still found real defects — so the
-   ordering above, not another reading pass, is the remaining path to trustworthy.
+   **Ten** review rounds preceded these and **every one found a real defect, including the last** —
+   so the ordering above, not another reading pass, is the remaining path to trustworthy. *(Round
+   count corrected 2026-08-08; it read "six" through rounds 8, 9 and 10.)*
 
 ## 14b. Claim ledger — read this instead of trusting the prose
 
@@ -713,7 +727,7 @@ So do not judge this document by whether the latest round found nothing. Judge i
 | 9 | 0042 is additive | `derived-from-explicit-DDL` | — solid |
 | 10 | Revoke/re-grant is atomic | `verified-in-repo` — **corrected citation** `apply-migrations.ts:487` `begin` → `:494` SQL → `:499` `commit` → `:503` `rollback` (see claim 14) | — solid at the corrected lines |
 | 11 | This packet is the candidate's complete migration set | ~~`assumed`, never stated~~ **FALSIFIED 2026-08-08** | The candidate carries `0043_rate_limits.sql`; 38 files vs 39 (§1) |
-| 12 | **On production defaults**, unapplied 0043 ⇒ account deletion denied for every user, whether or not the tier is armed. **Defeasible by `REQUIRE_DURABLE_RATE_LIMIT=0`**, which allows it by removing the quota (§8b row 3) | **split** — tier-layer half `verified-by-test` (`rateLimiter.test.ts:251-258`); "unapplied 0043 makes the RPC error" still `derived-from-code` | A client stub returning `PGRST202` through the account-delete consumer — cheaper than a scratch DB, and the harness already exists |
+| 12 | **On production defaults**, unapplied 0043 ⇒ account deletion denied for every user, whether or not the tier is armed. **Defeasible by `REQUIRE_DURABLE_RATE_LIMIT=0`**, which allows it by removing the **shared** quota while per-instance limiting remains (§8b row 3) | **split** — tier-layer half `verified-by-test` (`rateLimiter.test.ts:251-258`); "unapplied 0043 makes the RPC error" still `derived-from-code` | A client stub returning `PGRST202` through the account-delete consumer — cheaper than a scratch DB, and the harness already exists |
 | 13 | §5's enumeration covers the **web candidate**, not just the packet ref | `verified-in-repo` — re-run at `689e564`, output identical | A `src` path reaching these tables other than `.from('<table>')` (dynamic name, raw SQL, a new RPC in INVOKER mode) |
 | 14 | §4's atomicity **citation** (distinct from claim 10's conclusion) | ~~`verified-in-repo`~~ **CITATION FALSIFIED 2026-08-08, conclusion intact** | `:281/:320/:322` are `installBootstrapFixture`; the per-file transaction is `:487`–`:503` |
 | 15 | §3's destructive-statement scan covers the **candidate's** migration set | ~~implied~~ **corrected 2026-08-08** — the scan covered the 5 packet files; 0043 has since been scanned separately (§3 scope note) | A 40th migration appearing on the candidate without §3 being re-run |
@@ -773,7 +787,11 @@ becomes the `'unknown'` sentinel). One GLM prediction was wrong on the facts: it
 rollback runbook carrying the ordering constraint, but §13 is the Staging-authorisation section and
 carries no procedure.
 
-### Why the review stopped here, and how to falsify that
+### Why the review stopped at round 8, and how to falsify that
+
+*(Historical: this records the decision taken at round 8. Rounds 9 and 10 ran anyway, and round 10
+replaced the rule below with a mechanical one — see "The stopping rule is amended". Kept unedited so
+the superseded reasoning stays auditable.)*
 
 Eight rounds, every one of which found something real. The stopping decision is **not** "we ran out
 of patience", and it should not be read as "the document is now correct". It is a rule, recorded so a
@@ -825,12 +843,56 @@ configuration allows it) and **overstated** risk in the other (claiming no limit
 limit remains). A gate document is wrong in both directions for the same reason — prose drifting from
 the mechanism it describes — and neither error is more forgivable than the other.
 
-> **Disclosure, recorded deliberately.** Round 9's four fixes are the last edits to this document and
-> **they did not themselves receive an independent pass**: the review budget of three rounds was
-> exhausted. Anyone resuming should verify *that four-item diff only* — the intro sentence, row 3's
-> wording, the `:420`/`:422` citation, and the new §12 gate — and should not re-review the document
-> from scratch. All four are safety-monotone: three conform prose to content two lanes independently
-> verified, and the fourth adds a gate.
+> **Disclosure, recorded deliberately — SUPERSEDED by round 10, and quoted because being wrong is
+> the point.** Round 9 closed with: *"Round 9's four fixes are the last edits to this document and
+> they did not themselves receive an independent pass… Anyone resuming should verify that four-item
+> diff only… and should not re-review the document from scratch. All four are safety-monotone."*
+> An independent coordination audit reopened the item on exactly that admission, and round 10
+> reviewed the round-9 state. **The scoping instruction was unsafe and is withdrawn** — see round 10.
+
+**Round 10 (2026-08-08, fourth full panel — the review round 9 declared it had no budget for).**
+Commissioned by an independent coordination audit, not by this document. Full five-family panel over
+the final candidate: Claude/Sonnet, Codex (`gpt-5.6-sol`), GLM, DeepSeek, Kimi K3 deep. Quorum met;
+no lane missing. Findings, with the lanes that found each **independently**:
+
+| Severity | Finding | Lanes |
+|---|---|---|
+| HIGH | §9 item 9 and §14b claim 12 still said the escape hatch works by "removing the quota entirely" — **the exact phrase round 9's own §8b correction declares "That is false"** | Claude, Codex, GLM |
+| HIGH | §10's revert note asserted the same unconditionally ("immediately denies … for every user"), true only of the shippable rows | Codex, GLM |
+| HIGH | §14 requirements 1 and 6 were **two rounds stale** — the operator-facing status section still said "what remains un-reviewed is the round-7 repair" and "six review rounds", while §14b narrated 8 and 9 | Kimi |
+| MEDIUM | §8b's "denied … continuously" and §10's rollback rule read as unconditional | Codex, GLM |
+| MEDIUM | Two citation defects: `rateLimiter.durable.ts:19-22` (wall-clock timeout, not migration state; correct pointer `:47-50`) and `route.ts:95-97` (override branch, not the production default at `:103-105`) | Claude, Codex |
+
+**Rejected on repository evidence.** DeepSeek argued (i) row 1's throw escapes the `try` and is never
+caught — false, `durable.increment` is awaited *inside* the `try` at `rateLimiter.ts:412`, so `:420`
+catches it; and (ii) `REQUIRE_DURABLE_RATE_LIMIT` is not wired to `requireDurable`, so row 3 cannot
+exist — false, `account/delete/route.ts:97` returns `false` for `'0'`/`'false'`. Row 3 stands.
+Separately, Claude and Codex both reported §1's "Lines" column as wrong (they counted physical
+lines). **Also rejected:** 130/100/123/46/123 are exactly the **non-blank** line counts at `99ff7b3`,
+reproducible by command. The numbers are right; the *convention* is undisclosed, which is the same
+LOW first raised in round 1 and still not worth a table column.
+
+> **Why this round matters more than its findings.** Round 9 told the next reviewer to check a
+> four-item diff and not to re-review the document. **Round 10's highest-severity finding lived
+> outside that diff** — round 9 corrected a claim in §8b and left the same claim standing in §9, §10
+> and §14b. A reviewer who obeyed the instruction would have found nothing and signed off. That is
+> the concrete demonstration, not the theory, that **a document may record the scope its last review
+> had; it may not bind the scope of its next one.** *(Argued by the Kimi lane and confirmed by what
+> the panel actually found.)*
+
+**The stopping rule is amended, not re-fired.** The Kimi lane argued the round-8 rule was
+question-begging: "propagation defect" is retroactively elastic, so any late finding can be narrated
+as residue and the falsifiers can always be talked away — and, on the rule's own third falsifier,
+round 9 *added a §12 gate*, which is a gating conclusion. Round 10 adopts a stricter, mechanical
+replacement:
+
+> **A round that makes edits is definitionally non-terminal.** Review may terminate only at a round
+> that produces **zero edits**. Round 10 made edits; it is therefore **not** terminal, and this
+> document is once again carrying an unreviewed delta — stated plainly rather than scoped away.
+
+That is the honest status. It is also why §14 requirement 6's empirical checks, not another reading
+pass, remain the path forward: ten rounds have now each found a real defect, and rounds 7–10 each
+found one **created or left behind by the previous round's fix**.
 
 ### Three classes of in-repo assertion this analysis should never have cited as evidence
 
