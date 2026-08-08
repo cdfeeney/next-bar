@@ -23,7 +23,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -104,29 +104,45 @@ const NEW_CAPABILITY_CASES = new Set([
 ]);
 
 /**
- * The repository revision immediately BEFORE the round-4 fixes.
+ * Per-round proofs against each round's OWN immediate predecessor.
  *
  * The proof above compares against the home-dir classifier, which is the right
  * baseline for the original port but far too weak a bar for a later round: a
  * case can fail against a classifier from two rounds ago while changing nothing
- * about the one shipped last night. So round 4 is proved against its own
- * immediate predecessor. A fixed historical SHA is stable by construction; if it
- * is unreachable (a shallow clone), the proof reports SKIPPED rather than
- * inventing a pass.
+ * about the one shipped last night. So every round names the revision it must
+ * beat. Fixed historical SHAs are stable by construction; if one is unreachable
+ * (a shallow clone), that stage reports SKIPPED rather than inventing a pass.
  */
-const PRE_ROUND4_REV = 'dcb8f2f';
-
-/** Cases that MUST fail against `PRE_ROUND4_REV` — they encode round-4 capability. */
-const ROUND4_CASES = new Set([
-  'async rm called far below its import is T0',
-  'aliased async rm is T0',
-  'fs/promises namespace deletion is T0',
-  'CJS destructured unlink is T0',
-  'fs-extra remove is T0',
-  'a deletion function passed as a value is T0',
-  'a nested AGENTS.md is T0',
-  'a nested CLAUDE.md is T0',
-]);
+const ROUND_PROOFS = [
+  {
+    label: 'round-4',
+    rev: 'dcb8f2f',
+    cases: new Set([
+      'async rm called far below its import is T0',
+      'aliased async rm is T0',
+      'fs/promises namespace deletion is T0',
+      'CJS destructured unlink is T0',
+      'fs-extra remove is T0',
+      'a deletion function passed as a value is T0',
+      'a nested AGENTS.md is T0',
+      'a nested CLAUDE.md is T0',
+    ]),
+  },
+  {
+    label: 'round-5',
+    rev: 'cb764e6',
+    cases: new Set([
+      'PowerShell recursive delete is T0',
+      'Python shutil.rmtree is T0',
+      'Ruby FileUtils.rm_rf is T0',
+      'separated shell recursive-force flags are T0',
+      'Windows rd /s /q is T0',
+      'a namespace deletion member assigned to a variable is T0',
+      'a commented-out deletion import is NOT capability',
+      'a type-only deletion import is NOT capability',
+    ]),
+  },
+];
 
 /** The classifier module graph, so a revision can be materialized and imported. */
 const CLASSIFIER_SOURCES = [
@@ -181,7 +197,7 @@ if (unexpectedlyPassed > 0) {
 }
 
 // ---------------------------------------------------------------------------
-// Round-4 proof: against this repository's own immediately-preceding revision.
+// Per-round proofs: each against this repository's own preceding revision.
 // ---------------------------------------------------------------------------
 
 /**
@@ -208,48 +224,131 @@ function loadClassifierAtRevision(rev) {
   }
 }
 
-const materialized = loadClassifierAtRevision(PRE_ROUND4_REV);
-if (!materialized) {
+let stagesProved = 0;
+for (const stage of ROUND_PROOFS) {
+  const materialized = loadClassifierAtRevision(stage.rev);
+  if (!materialized) {
+    process.stdout.write(
+      `\n${stage.label} proof SKIPPED: revision ${stage.rev} is not reachable ` +
+        '(shallow clone?), so that classifier cannot be materialized.\n',
+    );
+    continue;
+  }
+
+  const previous = await import(pathToFileURL(materialized.entry).href);
+  let alreadyPassing = 0;
+  process.stdout.write(`\nPRE-${stage.label.toUpperCase()} classifier (${stage.rev}) vs its cases\n\n`);
+
+  for (const testCase of TIER_CASES) {
+    if (!stage.cases.has(testCase.name)) continue;
+    const contents = Object.prototype.hasOwnProperty.call(testCase, 'contents')
+      ? { [testCase.path]: testCase.contents }
+      : undefined;
+    const result = previous.classifyPaths([testCase.path], testCase.emptyMap ? EMPTY_MAP : PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      contents,
+    });
+    const passes = result.tier === testCase.expect;
+    if (passes) alreadyPassing += 1;
+    process.stdout.write(
+      `  ${passes ? 'passes' : 'FAILS '} expected ${testCase.expect}  got ${result.tier}  ${testCase.name}\n`,
+    );
+  }
+
+  rmSync(materialized.root, { recursive: true, force: true });
+
+  if (alreadyPassing > 0) {
+    process.stderr.write(
+      `\nred-proof FAILED: ${alreadyPassing} ${stage.label} case(s) already passed at ${stage.rev}. ` +
+        'Those assertions do not test that round.\n',
+    );
+    process.exit(1);
+  }
   process.stdout.write(
-    `\nround-4 proof SKIPPED: revision ${PRE_ROUND4_REV} is not reachable ` +
-      '(shallow clone?), so the pre-change classifier cannot be materialized.\n',
+    `\n  ${stage.cases.size}/${stage.cases.size} ${stage.label} cases fail at ${stage.rev}, as required.\n`,
   );
-  process.stdout.write('\nRED proof holds: every new-capability case fails before the change.\n');
-  process.exit(0);
+  stagesProved += 1;
 }
 
-const previous = await import(pathToFileURL(materialized.entry).href);
-let round4Passed = 0;
-process.stdout.write(`\nPRE-ROUND-4 classifier (${PRE_ROUND4_REV}) vs the round-4 cases\n\n`);
+// ---------------------------------------------------------------------------
+// Deletion grading: an INTEGRATION proof, because the case table cannot express
+// a deleted path.
+//
+// A reviewer pointed out that the round-4 proof covered only the capability
+// analyzer, so the OTHER half of that change — deletions graded from git
+// evidence instead of failing closed — had no fails-before/passes-after
+// evidence at all. This drives the real pipeline (collect -> recover ->
+// classify) over a throwaway repository at the pre-change revision and at the
+// current one, and requires them to disagree.
+// ---------------------------------------------------------------------------
 
-for (const testCase of TIER_CASES) {
-  if (!ROUND4_CASES.has(testCase.name)) continue;
-  const contents = Object.prototype.hasOwnProperty.call(testCase, 'contents')
-    ? { [testCase.path]: testCase.contents }
-    : undefined;
-  const result = previous.classifyPaths([testCase.path], testCase.emptyMap ? EMPTY_MAP : PROJECT_MAP, {
-    repoRoot: REPO_ROOT,
-    contents,
-  });
-  const passes = result.tier === testCase.expect;
-  if (passes) round4Passed += 1;
+const DELETION_PROOF_REV = 'dcb8f2f';
+
+function buildDeletionFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'next-bar-tier-delproof-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  mkdirSync(join(root, 'src', 'components'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), '{}\n');
+  writeFileSync(join(root, 'src', 'components', 'OldCard.tsx'), 'export const OldCard = () => null;\n');
+  git('init', '-q', '.');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'test');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+  rmSync(join(root, 'src', 'components', 'OldCard.tsx'));
+  return root;
+}
+
+const fixture = buildDeletionFixture();
+const currentCore = await import(pathToFileURL(join(REPO_ROOT, 'scripts/lib/tier-classify-core.mjs')).href);
+const currentPaths = await import(pathToFileURL(join(REPO_ROOT, 'scripts/lib/changed-paths-core.mjs')).href);
+
+const deletedPath = 'src/components/OldCard.tsx';
+const collected = currentPaths.collectChangedPaths({ repoRoot: fixture });
+const recovered = currentPaths.recoverDeletedContents(collected.deleted, {
+  repoRoot: fixture,
+  revisions: currentPaths.resolveRecoveryRevisions({ repoRoot: fixture }),
+});
+const nowResult = currentCore.classifyPaths([deletedPath], EMPTY_MAP, {
+  repoRoot: fixture,
+  contents: recovered.contents,
+  deletedPaths: collected.deleted,
+});
+
+const oldMaterialized = loadClassifierAtRevision(DELETION_PROOF_REV);
+let deletionProofVerdict = 'SKIPPED';
+if (oldMaterialized) {
+  const oldCore = await import(pathToFileURL(oldMaterialized.entry).href);
+  // The old classifier has no notion of a deleted path: it reads the working
+  // tree, finds nothing, and fails closed.
+  const beforeResult = oldCore.classifyPaths([deletedPath], EMPTY_MAP, { repoRoot: fixture });
+  rmSync(oldMaterialized.root, { recursive: true, force: true });
   process.stdout.write(
-    `  ${passes ? 'passes' : 'FAILS '} expected ${testCase.expect}  got ${result.tier}  ${testCase.name}\n`,
+    `\nDeletion grading, real pipeline over a throwaway repository\n\n` +
+      `  before (${DELETION_PROOF_REV}): tier ${beforeResult.tier}  ambiguous ${beforeResult.ambiguousCount}  escalated ${beforeResult.escalated}\n` +
+      `  after  (working tree): tier ${nowResult.tier}  ambiguous ${nowResult.ambiguousCount}  escalated ${nowResult.escalated}\n`,
   );
+  const improved =
+    beforeResult.tier === 'T0' &&
+    beforeResult.ambiguousCount === 1 &&
+    nowResult.tier === 'T1' &&
+    nowResult.ambiguousCount === 0;
+  if (!improved) {
+    rmSync(fixture, { recursive: true, force: true });
+    process.stderr.write(
+      '\nred-proof FAILED: deleting an ordinary component must be an ambiguous T0 before the ' +
+        'change and a non-ambiguous T1 after it. It is not, so the deletion-grading fix is ' +
+        'either absent or untested.\n',
+    );
+    process.exit(1);
+  }
+  deletionProofVerdict = 'holds';
+  stagesProved += 1;
 }
-
-rmSync(materialized.root, { recursive: true, force: true });
-
-if (round4Passed > 0) {
-  process.stderr.write(
-    `\nred-proof FAILED: ${round4Passed} round-4 case(s) already passed at ${PRE_ROUND4_REV}. ` +
-      'Those assertions do not test the round-4 change.\n',
-  );
-  process.exit(1);
-}
+rmSync(fixture, { recursive: true, force: true });
 
 process.stdout.write(
-  `\n  ${ROUND4_CASES.size}/${ROUND4_CASES.size} round-4 cases fail at ${PRE_ROUND4_REV}, as required.\n`,
+  `\n  deletion-grading proof: ${deletionProofVerdict}\n` +
+    `\nRED proof holds: ${stagesProved} staged proof(s) passed; every new-capability case fails before its change.\n`,
 );
-process.stdout.write('\nRED proof holds: every new-capability case fails before the change.\n');
 process.exit(0);

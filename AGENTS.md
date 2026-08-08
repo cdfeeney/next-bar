@@ -107,10 +107,13 @@ If the classifier cannot establish that a change lacks a high-risk capability,
 it returns **T0 with `escalated: true`**.
 
 **Deleting a file is classified by what was deleted.** A removed path has no
-content on disk, so its pre-deletion content is recovered from the base revision
-(`git show <rev>:<path>`) and graded normally — removing a purge script still
-earns its T0 floor, removing a plain component does not. If that content cannot
-be recovered, the path stays unanalyzable and fails closed at T0.
+content on disk, so its prior content is recovered from git — every revision
+that still holds it (`HEAD`, the merge base, the base tip) plus the current file
+if the path was re-created — and the tier is the highest any version earns.
+Removing a purge script still earns its T0 floor; removing a plain component
+does not. If no version can be recovered, the path stays unanalyzable and fails
+closed at T0. Git's status is the provenance: recreating a path does not erase
+the deletion that preceded it.
 
 **Instruction-bearing markdown is policy, not documentation.** `AGENTS.md` and
 `CLAUDE.md` are **T0 at any depth** — a coding agent executes them, so

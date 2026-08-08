@@ -224,10 +224,15 @@ export function classifyOnePath(rawPath, map, opts = {}) {
     reasons.push('non-executable file type — content is prose, not capability');
   } else if (read.status === 'ok') {
     if (isDeleted) {
-      // A deletion is graded on what was actually removed, recovered from the
-      // base revision — so it keeps its real risk without every removed runtime
-      // file becoming an unanalyzable T0.
-      reasons.push('deleted path — classified from its pre-deletion content in the base revision');
+      // A deletion is graded on what was actually removed — so it keeps its real
+      // risk without every removed runtime file becoming an unanalyzable T0.
+      // "every recoverable version" is literal: each revision that holds the path
+      // contributes, and so does the current file if the path exists again, so
+      // neither a stale base nor a harmless replacement can be the only thing
+      // graded.
+      reasons.push(
+        'deleted path — graded on every recoverable version (prior revisions, plus the current file if it was re-created)',
+      );
     }
     capabilities = detectCapabilities(read.text);
     for (const cap of capabilities) {

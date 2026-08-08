@@ -256,6 +256,70 @@ function escapeForRegExp(s) {
 const IDENTIFIER = '[A-Za-z_$][A-Za-z0-9_$]*';
 
 /**
+ * Blank out JavaScript comments, preserving length and line structure.
+ *
+ * A reviewer found that `// import { rm } from 'node:fs/promises'` floored an
+ * ordinary module at T0: a commented-out import is not capability, and a gate
+ * that fires on dead text acquires exactly the continuous false-positive rate
+ * this design exists to avoid.
+ *
+ * Scoped deliberately to `analyzeFsDeletion`, which is JavaScript-specific by
+ * construction. It is NOT applied to the raw signature patterns, because those
+ * also scan `.sql`, `.ps1`, `.py` and `.sh`, where `--`, `#` and `/* *​/` mean
+ * different things and a JS-shaped stripper would remove live code.
+ *
+ * String and template literals are preserved so a URL like `https://x` is not
+ * mistaken for a comment. A regex literal containing an unescaped `//` could in
+ * principle confuse this, but such a literal cannot be written (it would be an
+ * empty regex), and the residual contrived case costs at most the remainder of
+ * one line.
+ */
+export function blankComments(text) {
+  let out = '';
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i];
+    const next = i + 1 < n ? text[i + 1] : '';
+    if (c === '/' && next === '/') {
+      while (i < n && text[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      while (i < n && !(text[i] === '*' && text[i + 1] === '/')) {
+        out += text[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      out += i < n ? '  ' : '';
+      i += 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      out += c;
+      i += 1;
+      while (i < n) {
+        if (text[i] === '\\') {
+          out += text[i] + (i + 1 < n ? text[i + 1] : '');
+          i += 2;
+          continue;
+        }
+        out += text[i];
+        const closed = text[i] === c;
+        i += 1;
+        if (closed) break;
+      }
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/**
  * Parse one binding clause — `{ rm as nuke, readFile }` (ESM) or
  * `{ rm: nuke }` (CJS destructuring) — into imported/local pairs.
  */
@@ -264,6 +328,9 @@ function parseBindingClause(clause) {
   for (const part of String(clause).split(',')) {
     const token = part.trim();
     if (token.length === 0) continue;
+    // `{ type rm }` is an inline type-only specifier: erased at compile time, so
+    // it holds no runtime capability.
+    if (/^type\s+/.test(token)) continue;
     const aliased = new RegExp(`^(${IDENTIFIER})\\s*(?::|\\bas\\b)\\s*(${IDENTIFIER})$`).exec(token);
     if (aliased) {
       pairs.push({ imported: aliased[1], local: aliased[2] });
@@ -293,10 +360,12 @@ function parseBindingClause(clause) {
  * @param {string} text
  * @returns {{capable: boolean, evidence: string[]}}
  */
-export function analyzeFsDeletion(text) {
+export function analyzeFsDeletion(rawText) {
   const evidence = [];
-  if (typeof text !== 'string' || text.length === 0) return { capable: false, evidence };
+  if (typeof rawText !== 'string' || rawText.length === 0) return { capable: false, evidence };
 
+  // Commented-out code is not capability. See `blankComments`.
+  const text = blankComments(rawText);
   const namespaces = new Set();
   const mod = FS_MODULE_ALTERNATION;
   const q = `['"]`;
@@ -320,6 +389,9 @@ export function analyzeFsDeletion(text) {
   const importRe = new RegExp(`\\b(?:import|export)\\s*([^;'"]*?)\\s*from\\s*${q}(${mod})${q}`, 'g');
   for (const match of text.matchAll(importRe)) {
     const [, clause, moduleSpecifier] = match;
+    // `import type { rm } from …` is erased at compile time — no runtime binding
+    // exists, so it cannot delete anything.
+    if (/^\s*type\b/.test(clause)) continue;
     const namespaced = new RegExp(`\\*\\s*as\\s+(${IDENTIFIER})`).exec(clause);
     if (namespaced) namespaces.add(namespaced[1]);
     const named = /\{([^}]*)\}/.exec(clause);
@@ -354,17 +426,20 @@ export function analyzeFsDeletion(text) {
     }
   }
 
-  // A namespace binding only counts when a deletion member is actually called —
-  // ANYWHERE in the file, which is the whole point of dropping the 200-character
-  // window. `.promises` is tolerated between the two (`fs.promises.rm(…)`).
+  // A namespace binding counts when a deletion member is REFERENCED anywhere in
+  // the file — not only called. Requiring a call site missed
+  // `const nuke = fsp.rm; await nuke(target)`, where the destructive function is
+  // extracted to a variable first; chasing that through the variable would be
+  // value-flow analysis, but reading the member at all is already the capability.
+  // `.promises` is tolerated between the two (`fs.promises.rm`).
   if (namespaces.size > 0) {
     const members = FS_EXTRA_DELETION_NAMES.map(escapeForRegExp).join('|');
     for (const ns of namespaces) {
-      const callRe = new RegExp(
-        `\\b${escapeForRegExp(ns)}\\s*(?:\\.\\s*promises\\s*)?\\.\\s*(${members})\\s*\\(`,
+      const memberRe = new RegExp(
+        `\\b${escapeForRegExp(ns)}\\s*(?:\\.\\s*promises\\s*)?\\.\\s*(${members})\\b`,
       );
-      const hit = callRe.exec(text);
-      if (hit) evidence.push(`calls ${ns}.${hit[1]}()`);
+      const hit = memberRe.exec(text);
+      if (hit) evidence.push(`references ${ns}.${hit[1]}`);
     }
   }
 
@@ -458,8 +533,19 @@ export const CAPABILITY_SIGNATURES = [
     // options object, and the shell forms. `analyzeFsDeletion` covers everything
     // that depends on WHAT A BINDING RESOLVES TO — aliases, namespaces, CJS
     // destructuring, and calls arbitrarily far from their import.
+    //
+    // NON-JAVASCRIPT IDIOMS ARE FIRST-CLASS HERE, not an afterthought. Three
+    // independent reviewers converged on the same gap: `EXECUTABLE_EXTENSION_GLOBS`
+    // declares `.ps1`, `.py`, `.rb` and `.sh` in scope, the operator's primary
+    // shell is PowerShell, and yet the only shell form matched was `rm -rf`. A new
+    // `scripts/purge-cache.ps1` holding `Remove-Item -Recurse -Force $dir`
+    // classified T1 — a destructive change graded low by a first-class idiom, not
+    // by the obscure indirection the design openly disclaims.
+    //
+    // The POSIX branch requires the recursive flag to be a real short-option
+    // cluster or `--recursive`, so `npm rm --registry=… pkg` does not match.
     pattern:
-      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\brm\s+-rf\b)/,
+      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\brm\s+(?:-[a-zA-Z]{1,8}\s+)*-[a-zA-Z]{0,6}[rR][a-zA-Z]{0,6}\b|\brm\s+[^\n]*--recursive\b|\bRemove-Item\b[^\n]*-(?:Recurse|Force)\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\b(?:rd|rmdir)\s+\/[sSqQ]\b|\bdel\s+\/[fFsSqQ]\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|unlink|rmdir)\s*\(|\bFileUtils\.rm_r?f?\b|\bFile\.delete\s*\(|\bfind\s+[^\n]*\s-delete\b)/,
     detect: (text) => analyzeFsDeletion(text).capable,
     note: 'deletes files with no undo',
   },

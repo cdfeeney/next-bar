@@ -25,8 +25,9 @@ import {
   collectChangedPaths,
   parseNameStatusZ,
   recoverDeletedContents,
+  resolveRecoveryRevisions,
 } from '../lib/changed-paths-core.mjs';
-import { analyzeFsDeletion } from '../lib/tier-capabilities.mjs';
+import { analyzeFsDeletion, blankComments } from '../lib/tier-capabilities.mjs';
 import { globMatch, normalizePath } from '../lib/tier-glob.mjs';
 
 const { map: PROJECT_MAP, source: MAP_SOURCE } = loadTierMap(REPO_ROOT);
@@ -368,7 +369,7 @@ describe('deleted paths are graded on what was removed', () => {
     expect(result.tier).toBe('T1');
     expect(result.ambiguousCount).toBe(0);
     expect(result.escalated).toBe(false);
-    expect(result.perPath[0].reasons.join(' ')).toMatch(/pre-deletion content/);
+    expect(result.perPath[0].reasons.join(' ')).toMatch(/deleted path — graded on every recoverable/);
   });
 
   it('deleting something dangerous still earns its floor', () => {
@@ -407,6 +408,19 @@ describe('deleted paths are graded on what was removed', () => {
 });
 
 describe('git change evidence', () => {
+  it('treats a COPY as an addition only — its source was not changed', () => {
+    // `C100 AGENTS.md docs/AGENTS-copy.md` must not put AGENTS.md into the
+    // change set. It is baked-T0, so emitting D(source) for a copy would fire
+    // the full T0 panel on a file the commit never touched.
+    const stream = ['C100', 'AGENTS.md', 'docs/AGENTS-copy.md', 'M', 'a.ts', ''].join('\0');
+    const { entries, malformed } = parseNameStatusZ(stream);
+    expect(malformed).toBe(0);
+    expect(entries).toEqual([
+      { status: 'A', path: 'docs/AGENTS-copy.md' },
+      { status: 'M', path: 'a.ts' },
+    ]);
+  });
+
   it('splits a rename into a deletion and an addition without desynchronising', () => {
     // `--name-status -z` is a flat field stream, and a rename is THREE fields
     // (`R100 old new`) where everything else is two. Reading it as pairs
@@ -466,9 +480,85 @@ describe('git change evidence', () => {
       });
       expect(unrecoverable).toEqual([]);
       expect(recovered).toContain('src/gone.ts');
-      expect(contents['src/gone.ts']).toBe('export const gone = 1;\n');
+      // Recovered text carries a per-version header, because several revisions
+      // may contribute — the assertion is that the real content is in there.
+      expect(contents['src/gone.ts']).toContain('export const gone = 1;');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it('closes the deletion evasions reviewers reproduced', () => {
+    // One repository, three attacks, because each spawns git processes:
+    //   A. launder by rewriting a dangerous file harmlessly, THEN deleting it
+    //   B. delete a dangerous file and re-create the path with benign content
+    //   C. `git show <rev>:<dir>` succeeds on a directory and prints a tree
+    const root = mkdtempSync(join(tmpdir(), 'next-bar-tier-evasion-'));
+    const git = (...args) => execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    const dangerous = "import { rm } from 'node:fs/promises';\nexport const purge = (d) => rm(d);\n";
+    try {
+      git('init', '-q', '-b', 'main', '.');
+      git('config', 'user.email', 'test@example.invalid');
+      git('config', 'user.name', 'test');
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      writeFileSync(join(root, 'package.json'), '{}\n');
+      writeFileSync(join(root, 'scripts', 'launder.mjs'), dangerous);
+      writeFileSync(join(root, 'scripts', 'recreate.mjs'), dangerous);
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+
+      git('checkout', '-q', '-b', 'feature');
+      // A: harmless rewrite committed, then deleted in the working tree.
+      writeFileSync(join(root, 'scripts', 'launder.mjs'), 'export const purge = () => {};\n');
+      git('add', '-A');
+      git('commit', '-qm', 'harmless rewrite');
+      rmSync(join(root, 'scripts', 'launder.mjs'));
+      // B: staged deletion, then the same path re-created with benign content.
+      git('rm', '-q', 'scripts/recreate.mjs');
+      // `git rm` removes the directory too when it empties it.
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      writeFileSync(join(root, 'scripts', 'recreate.mjs'), 'export const noop = () => {};\n');
+
+      const collected = collectChangedPaths({ base: 'main', repoRoot: root });
+      // B: git status is provenance — the working tree must not erase it.
+      expect(collected.deleted).toContain('scripts/recreate.mjs');
+
+      const revisions = resolveRecoveryRevisions({ repoRoot: root, base: 'main' });
+      expect(revisions.length).toBeGreaterThan(1); // HEAD, merge base, base tip
+      const { contents } = recoverDeletedContents(collected.deleted, { repoRoot: root, revisions });
+      const result = classifyPaths(collected.paths, EMPTY_MAP, {
+        repoRoot: root,
+        contents,
+        deletedPaths: collected.deleted,
+      });
+      const tierOf = (p) => result.perPath.find((e) => e.path === p)?.tier;
+      // A: grading only the first revision found would have returned T1.
+      expect(tierOf('scripts/launder.mjs')).toBe('T0');
+      // B: grading only the replacement would have returned T1.
+      expect(tierOf('scripts/recreate.mjs')).toBe('T0');
+
+      // C: a directory is not file content, however successfully git prints it.
+      const tree = recoverDeletedContents(['scripts'], { repoRoot: root, revisions: ['HEAD'] });
+      expect(tree.unrecoverable).toEqual(['scripts']);
+      expect(tree.contents.scripts).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe('commented-out and type-only code is not capability', () => {
+  it('blanks comments while preserving strings', () => {
+    expect(blankComments("const url = 'https://x/y'; // import { rm } from 'fs'")).toContain('https://x/y');
+    expect(blankComments("// import { rm } from 'node:fs/promises'")).not.toContain('rm');
+    expect(blankComments("/* import { rm } from 'node:fs/promises' */\nconst a = 1;")).toContain('const a = 1;');
+  });
+
+  it('still sees a real import that follows a regex literal and a division', () => {
+    // The stripper's one theoretical failure mode is misreading a `/`. If it
+    // ever does, it would hide real capability — so this pins the direction
+    // that matters.
+    const text = "const re = /a\\/b/;\nconst n = 10 / 2;\nimport { rm } from 'node:fs/promises';\nawait rm('x');\n";
+    expect(analyzeFsDeletion(text).capable).toBe(true);
+  });
 });

@@ -123,6 +123,44 @@ lacks a high-risk capability — the file is unreadable, or binary, and is not
 demonstrably inert — it returns **T0 with `escalated: true`** rather than
 guessing.
 
+### Deleting a file
+
+A deletion is graded on **what was deleted**, recovered from git rather than
+from disk. Every revision that still holds the path contributes — `HEAD`, the
+merge base, and the base tip — and so does the current file if the path was
+re-created. The tier is the highest any of those versions earns.
+
+That plurality is not belt-and-braces; each half closes a reproduced evasion.
+Trusting a single revision let a change launder itself in two steps (commit a
+harmless rewrite, then delete), and skipping a deleted path that exists again
+let a dangerous file be swapped for a benign one inside one change set. Git's
+status is provenance and the working tree cannot erase it. A deletion whose
+prior content cannot be recovered — including a directory or submodule entry,
+which `git show` will happily print as a tree listing — stays unanalyzable and
+fails closed at T0.
+
+### What this deliberately costs
+
+Two accepted trade-offs, recorded so that the first time one fires it reads as
+policy rather than as a bug to be worked around:
+
+- **Importing a deletion function counts, even without a call.** A module that
+  names `rm` or `unlink` in its import list is floored T0 whether or not a call
+  is visible, because `files.map(unlink)` and re-exports have no call-shaped
+  text. The consequence is that ordinary temp-directory cleanup in a test —
+  `mkdtempSync` then `rmSync` — classifies **T0 + escalated**. That is the
+  intended reading: the file really can delete a directory tree. Do not add a
+  test-file exemption; a carve-out by path is itself a laundering vector, which
+  is the reason this design does not classify by path in the first place.
+- **The analyzer resolves bindings, not values.** It follows what a module
+  specifier was bound to — aliases, destructuring, namespaces, defaults — and
+  stops there. `const nuke = fsp.rm` is caught because the member is
+  *referenced*; a deletion function passed through a parameter, stored in an
+  object, or reached via a computed specifier is not. Chasing those means
+  writing a JavaScript engine inside a zero-dependency gate that must run before
+  `npm ci`. The stopping point is deliberate; treat the classifier as a floor,
+  and raise the tier yourself when you know better.
+
 ### The tier map can escalate, never de-escalate
 
 `.claude/tier-map.json` still exists and is still useful: it escalates specific

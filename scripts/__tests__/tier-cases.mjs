@@ -486,6 +486,78 @@ export const TIER_CASES = [
     expect: 'T2',
     why: 'the operator scoped instruction files to T0 WITHOUT re-escalating ordinary prose',
   },
+
+  // ---------------------------------------------------------------- Round-5
+  // Every case below was raised by an independent reviewer on the round-4 diff
+  // and reproduced before being fixed. Three lanes independently reported that
+  // only JavaScript deletion was detected while `.ps1`, `.py`, `.rb` and `.sh`
+  // are all declared executable — and the operator's primary shell is PowerShell.
+  {
+    name: 'PowerShell recursive delete is T0',
+    path: 'scripts/purge-cache.ps1',
+    contents: 'Remove-Item -Recurse -Force $CachePath\n',
+    expect: 'T0',
+    why: 'the operator works on Windows and only `rm -rf` was matched',
+  },
+  {
+    name: 'Python shutil.rmtree is T0',
+    path: 'tools/cleanup.py',
+    contents: 'import shutil\nshutil.rmtree(target)\n',
+    expect: 'T0',
+    why: '.py is declared executable but no Python deletion API was matched',
+  },
+  {
+    name: 'Ruby FileUtils.rm_rf is T0',
+    path: 'tools/cleanup.rb',
+    contents: "require 'fileutils'\nFileUtils.rm_rf(dir)\n",
+    expect: 'T0',
+    why: 'same gap, third declared-executable language',
+  },
+  {
+    name: 'separated shell recursive-force flags are T0',
+    path: 'scripts/wipe.sh',
+    contents: '#!/usr/bin/env bash\nrm -r -f /srv/next-bar/cache\n',
+    expect: 'T0',
+    why: 'only the exact string `rm -rf` was matched, so splitting the flags evaded it',
+  },
+  {
+    name: 'Windows rd /s /q is T0',
+    path: 'scripts/wipe-win.sh',
+    contents: 'rd /s /q C:\\data\n',
+    expect: 'T0',
+    why: 'the native Windows recursive delete had no signature at all',
+  },
+  {
+    name: 'a namespace deletion member assigned to a variable is T0',
+    path: 'tools/extracted.mjs',
+    contents: "import * as fsp from 'node:fs/promises';\nconst nuke = fsp.rm;\nawait nuke(target);\n",
+    expect: 'T0',
+    why: 'requiring a call site missed the member being extracted to a variable first',
+  },
+  {
+    name: 'a commented-out deletion import is NOT capability',
+    path: 'src/lib/notes.ts',
+    contents: "// import { rm } from 'node:fs/promises';\nexport const label = 'x';\n",
+    expect: 'T1',
+    escalated: false,
+    why: 'dead text firing the T0 panel is the false-positive rate that gets gates switched off',
+  },
+  {
+    name: 'a type-only deletion import is NOT capability',
+    path: 'src/lib/types.ts',
+    contents: "import type { rm } from 'node:fs/promises';\nexport type Rm = typeof rm;\n",
+    expect: 'T1',
+    escalated: false,
+    why: 'type imports are erased at compile time, so no runtime binding exists',
+  },
+  {
+    name: 'npm rm with a --registry flag is not a recursive delete',
+    path: 'scripts/install.sh',
+    contents: 'npm rm --registry=https://registry.example.com some-package\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'a loose recursive-flag pattern would match any long option containing an r',
+  },
 ];
 
 /**

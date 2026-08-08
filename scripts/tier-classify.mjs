@@ -26,7 +26,11 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { classifyPaths, loadTierMap, validateTierMap, REPO_ROOT } from './lib/tier-classify-core.mjs';
-import { collectChangedPaths, recoverDeletedContents } from './lib/changed-paths-core.mjs';
+import {
+  collectChangedPaths,
+  recoverDeletedContents,
+  resolveRecoveryRevisions,
+} from './lib/changed-paths-core.mjs';
 import { normalizePath } from './lib/tier-glob.mjs';
 
 /** Read all of stdin as UTF-8. Returns '' when stdin is a TTY (no input piped). */
@@ -114,12 +118,13 @@ async function main() {
   // Piping the feeder in discarded its exit status (a shell pipeline reports
   // its last command's status), so a git failure became "no changed paths given"
   // and a reassuring default tier — a green gate that inspected nothing.
+  const baseIndex = argv.indexOf('--base');
+  const requestedBase = baseIndex >= 0 && baseIndex + 1 < argv.length ? argv[baseIndex + 1] : null;
+
   let input;
   let deletedPaths = [];
   let base = null;
   if (argv.includes('--changed')) {
-    const baseIndex = argv.indexOf('--base');
-    const requestedBase = baseIndex >= 0 && baseIndex + 1 < argv.length ? argv[baseIndex + 1] : null;
     const collected = collectChangedPaths({ base: requestedBase, repoRoot: REPO_ROOT });
     if (collected.failures.length > 0) {
       process.stderr.write('tier-classify: cannot determine the changed set — refusing to report a tier.\n');
@@ -143,6 +148,12 @@ async function main() {
     // reachable revision is an evidenced deletion. Anything else stays
     // unrecognised and keeps failing closed.
     deletedPaths = input.filter((p) => !existsSync(join(REPO_ROOT, normalizePath(p))));
+    // `--base` is honoured here too. Without this the stdin path searched only
+    // HEAD while `--changed` searched HEAD and the base, so the SAME deletion
+    // graded T1 through one entry point and an ambiguous T0 through the other —
+    // and a reviewer reproducing a CI result by piping paths in would see a
+    // number CI never produced.
+    base = requestedBase;
   }
 
   if (validate) {
@@ -168,7 +179,7 @@ async function main() {
   // Recovery failures are not downgraded: they stay absent and still fail closed.
   const { contents, recovered, unrecoverable } = recoverDeletedContents(deletedPaths, {
     repoRoot: REPO_ROOT,
-    revisions: [...new Set(['HEAD', base].filter(Boolean))],
+    revisions: resolveRecoveryRevisions({ repoRoot: REPO_ROOT, base }),
   });
 
   // ALL deleted paths are declared, not just the recovered ones, so an
