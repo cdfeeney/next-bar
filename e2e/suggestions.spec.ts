@@ -20,6 +20,16 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 
 const USER_ID = '11111111-2222-3333-4444-555555555555';
 
+/**
+ * A reviewer proposed falling back to the STUB Supabase origin that
+ * playwright.config.ts injects when `.env.local` is absent, so this
+ * signed-in file would run in a clean checkout instead of skipping. It was
+ * TRIED and REVERTED: with the stub origin the cookie is built, but the app
+ * does not treat it as an authenticated session, so the signed-in surface
+ * never renders and every test in this file FAILED rather than skipped.
+ * Trading an honest skip for a red suite is strictly worse, so the guard
+ * stays until a real signed-in fixture exists.
+ */
 function readSupabaseUrl(): string | null {
   try {
     const env = readFileSync(path.join(__dirname, '..', '.env.local'), 'utf8');
@@ -226,6 +236,57 @@ test.describe('/friends/consensus — tonight\'s poll board', () => {
     const vote = page.getByRole('button', { name: 'Vote for Ace Bar' });
     await expect(vote).toHaveAttribute('aria-pressed', 'true');
     await expect(vote).toContainText('1');
+  });
+
+  /**
+   * Item 4 (goal g-cb7cefd2): the "Suggest a bar" picker is a `fixed inset-0`
+   * overlay whose header row carries Close, so that control sat under the
+   * iPhone status area. It lives here rather than in safe-area-top.spec.ts
+   * because this surface is signed-in only, and this file already owns the
+   * session-cookie scaffolding and the .env.local skip guard — duplicating
+   * that setup would have produced a second, weaker copy.
+   */
+  test('the picker Close control clears the top safe area and is a 44px target', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { following: [FRIEND] });
+    await page.goto('/friends/consensus');
+
+    await page.getByRole('button', { name: /\+ find a bar/i }).click();
+    const sheet = page.getByRole('dialog', { name: /suggest a bar/i });
+    await expect(sheet).toBeVisible();
+
+    const close = sheet.getByRole('button', { name: 'Close' });
+    await expect(close).toBeVisible();
+
+    // Same paired convention as e2e/safe-area-top.spec.ts: emulation pins
+    // env(safe-area-inset-*) to 0, so the computed floor proves the padding
+    // is applied and the formula proves it still responds to a real inset.
+    const column = close.locator('xpath=ancestor::div[contains(@class,"min-h-0")][1]');
+    const padTop = await column.evaluate((el) => getComputedStyle(el).paddingTop);
+    expect(parseFloat(padTop)).toBeGreaterThanOrEqual(32);
+    await expect(column).toHaveClass(/env\(safe-area-inset-top\)/);
+
+    // Measured clearance: the gap between the column and the row holding
+    // Close collapses to 0 if the padding is removed.
+    const outer = await column.boundingBox();
+    const inner = await close.boundingBox();
+    expect(outer).not.toBeNull();
+    expect(inner).not.toBeNull();
+    expect(inner!.y - outer!.y).toBeGreaterThanOrEqual(32);
+
+    // Both dimensions: this button was 35x44 before min-w-[44px].
+    expect(inner!.width).toBeGreaterThanOrEqual(44);
+    expect(inner!.height).toBeGreaterThanOrEqual(44);
+
+    // Negative: no horizontal overflow with the overlay open.
+    const state = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      scrollX: window.scrollX,
+    }));
+    expect(state.scrollWidth).toBe(state.clientWidth);
+    expect(state.scrollX).toBe(0);
   });
 
   test("a friend's suggestion renders name-FREE (photo + bar + tally only); your toggle starts OFF", async ({

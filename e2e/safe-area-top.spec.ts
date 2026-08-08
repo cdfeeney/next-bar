@@ -277,12 +277,26 @@ test.describe('app-owned chrome respects the top safe area', () => {
     const dialog = page.locator('div[role="dialog"]').first();
     await expect(dialog).toBeVisible();
 
-    const scrolled = await dialog.evaluate((el) => {
-      if (el.scrollHeight <= el.clientHeight) return 'no-overflow';
-      el.scrollTop = 120;
-      return el.scrollTop > 0 ? 'scrolled' : 'stuck';
-    });
-    expect(scrolled).not.toBe('stuck');
+    // Criterion 10 is about a SPECIFIC primary action still being reachable,
+    // so name one. The earlier version only set scrollTop programmatically
+    // and accepted a 'no-overflow' escape, which stayed green even if the
+    // action had vanished entirely — it proved scrollability, not
+    // reachability.
+    const primary = dialog.getByRole('link', { name: /View on Maps/i });
+    await expect(primary).toHaveCount(1);
+
+    // Bring it into view the way a user would — scrolling the dialog, not the
+    // element's own programmatic offset — then assert it is actually in the
+    // viewport and hittable.
+    await primary.scrollIntoViewIfNeeded();
+    await expect(primary).toBeInViewport();
+    await expect(primary).toBeEnabled();
+
+    const box = await primary.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    const viewport = page.viewportSize();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
 
     await expectNoHorizontalOverflow(page, 'lightbox scrolled');
   });

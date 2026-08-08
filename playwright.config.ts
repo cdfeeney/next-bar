@@ -210,10 +210,20 @@ export default defineConfig({
       // can actually squeeze the list out.
       // safe-area-top added 2026-08-08 (goal g-cb7cefd2): its acceptance
       // criteria name "iPhone 13, Pixel 7, and the shortest-viewport
-      // project" explicitly, and 402x681 is the shortest configured. It is
-      // also the viewport where top-inset padding competes hardest with the
-      // fixed bottom nav for vertical room, so a clearance that pushes the
-      // primary action out of reach would show here first.
+      // project", and top-inset padding competes with the fixed bottom nav
+      // for vertical room, so it belongs on this device too.
+      //
+      // CORRECTION, measured rather than inherited: 402x681 is NOT the
+      // shortest configured viewport, and several comments in this file
+      // (including the ones above) repeat that claim. Playwright's iPhone 13
+      // descriptor is 390x664 — 17px SHORTER — and Pixel 7 is 412x839. The
+      // comment at the head of this project already says iPhone 17 is "wider
+      // AND taller than iPhone 13", which is the accurate statement. The
+      // genuinely shortest project is iPhone 13, and because iPhone 13 and
+      // Pixel 7 carry no testMatch allowlist, this spec already runs there.
+      // Flagged because future scoping decisions that allowlist a spec "only
+      // where it can fail" on the strength of that phrase would target the
+      // wrong device.
       testMatch:
         /(mobile-controls|a11y-mobile|app-shell-smoke|vibe-tweak-reachable|map-lightbox|map-interaction|exact-filter-empty|cancel-bottomnav|search-bars|install-sheet|search-autohide|quiz-path|onboarding-identity|account-content-conflict|add-bar-overflow|safe-area-top)\.spec\.ts/,
       dependencies: ['warmup'],

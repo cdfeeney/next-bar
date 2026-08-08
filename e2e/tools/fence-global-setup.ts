@@ -90,9 +90,19 @@ function probe(PORT: number, BANNER: string): Promise<ProbeResult> {
  * canary detects affirmative egress, it is not a fencedness proof.
  */
 async function assertReusedServerFenced(attempt = 0): Promise<void> {
+  // One source for the port, used by BOTH the probe and every diagnostic —
+  // messages naming :3000 while probing :3200 send the operator to kill the
+  // wrong server, which on this machine means another worktree's.
+  const appPort = process.env.NB_E2E_PORT ?? '3000';
   let res: Response;
   try {
-    res = await fetch('http://localhost:3000/api/health', {
+    // Must follow the app port playwright.config.ts actually uses
+    // (NB_E2E_PORT). globalSetup runs in the same process env, so this reads
+    // the same value. Hardcoding :3000 silently voided this canary on any
+    // custom port: it probed a server the run never touches, got
+    // ECONNREFUSED, and returned clean — while a FOREIGN worktree's server on
+    // :3000 could spuriously abort an unrelated run.
+    res = await fetch(`http://localhost:${appPort}/api/health`, {
       cache: 'no-store',
       redirect: 'manual', // a redirecting impostor must not steer this fetch
       // Generous: a reused dev server may cold-compile /api/health.
@@ -116,7 +126,7 @@ async function assertReusedServerFenced(attempt = 0): Promise<void> {
       return assertReusedServerFenced(attempt + 1);
     }
     throw new Error(
-      `reused dev server on :3000 did not answer the fence canary (${code ?? String(e)}) — ` +
+      `reused dev server on :${appPort} did not answer the fence canary (${code ?? String(e)}) — ` +
         'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
     );
   }
@@ -129,13 +139,13 @@ async function assertReusedServerFenced(attempt = 0): Promise<void> {
     // or impostor server: fail CLOSED (round-5 Codex MEDIUM — fetch resolves
     // at headers, so body errors must not be swallowed).
     throw new Error(
-      `reused server on :3000 answered the canary with an unreadable body (${String(e)}) — ` +
+      `reused server on :${appPort} answered the canary with an unreadable body (${String(e)}) — ` +
         'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
     );
   }
   if (body.supabase === 'ok') {
     throw new Error(
-      'reused dev server on :3000 reached live Supabase server-side — it ' +
+      `reused dev server on :${appPort} reached live Supabase server-side — it ` +
         'is NOT fenced (started without the proxy env). Kill it and let ' +
         'Playwright spawn the fenced one.',
     );
