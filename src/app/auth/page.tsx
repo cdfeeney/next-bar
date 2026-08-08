@@ -221,7 +221,12 @@ export default function AuthPage() {
           decoration. Auto margins are specified to resolve to zero when free
           space is negative, so overflow can only ever go downward, where it
           stays scrollable. (santa: GLM + DeepSeek, endorsed by Kimi.) */}
-      <section className="flex-1 flex px-6 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:py-12">
+      {/* The desktop override is split into pt/pb rather than a single
+          `md:py-12` because `py` would reset padding-bottom to a flat 3rem and
+          drop the safe-area term above 768px — which is a real viewport for an
+          installed PWA on a tablet or an unfolded foldable, where a gesture bar
+          inset still exists. (santa: Kimi.) */}
+      <section className="flex-1 flex px-6 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:pt-12 md:pb-[max(3rem,env(safe-area-inset-bottom))]">
         <div className="max-w-md w-full m-auto">
           <p className="text-accent uppercase tracking-[0.25em] text-xs mb-2 md:mb-3 text-center">
             Save your nights

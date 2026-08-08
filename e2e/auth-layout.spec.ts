@@ -406,11 +406,113 @@ test.describe('/auth layout — declaration pins for what emulation cannot show'
     expect(paddingTop).toBeGreaterThanOrEqual(8);
   });
 
+  test('desktop keeps the pre-compaction spacing at the md breakpoint', async ({ page }) => {
+    // The compaction is scoped to phones, so every tightened utility carries an
+    // `md:` restoration. Both configured device projects are mobile, so without
+    // this test the entire desktop path is implemented and unverified — a
+    // regression in any `md:` value would be invisible. (santa: GLM.)
+    // Asserted as padding and font-size values rather than element heights,
+    // because heights move with the fallback font the network fence forces.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/auth');
+    await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
+
+    const desktop = await page.evaluate(() => {
+      const section = document.querySelector('main section');
+      const heading = document.querySelector('main h1');
+      const email = document.querySelector('main input[type="email"]');
+      const submit = document.querySelector('main button[type="submit"]');
+      const px = (el: Element | null, prop: string) =>
+        el ? parseFloat(getComputedStyle(el).getPropertyValue(prop)) : NaN;
+      return {
+        sectionPaddingTop: px(section, 'padding-top'),
+        sectionPaddingBottom: px(section, 'padding-bottom'),
+        headingFontSize: px(heading, 'font-size'),
+        emailPaddingTop: px(email, 'padding-top'),
+        submitPaddingTop: px(submit, 'padding-top'),
+      };
+    });
+
+    // The original pre-item values: py-12, text-5xl, py-4, py-4.
+    expect(desktop.sectionPaddingTop).toBe(48);
+    expect(desktop.sectionPaddingBottom).toBe(48);
+    expect(desktop.headingFontSize).toBe(48);
+    expect(desktop.emailPaddingTop).toBe(16);
+    expect(desktop.submitPaddingTop).toBe(16);
+
+    // ...and the desktop path must still RESERVE the bottom inset. A flat
+    // `md:py-12` computes to the same 48px under emulation (insets are 0) while
+    // silently dropping the safe-area term, so the computed value above cannot
+    // catch it — only the declaration can. (santa: Kimi.)
+    const declaredBottom = await page.evaluate(() => {
+      const section = document.querySelector('main section');
+      if (!section) throw new Error('no section');
+      const out: string[] = [];
+      const walk = (rules: CSSRuleList): void => {
+        for (const rule of Array.from(rules)) {
+          const grouping = rule as CSSMediaRule;
+          if (grouping.cssRules && grouping.conditionText !== undefined) {
+            walk(grouping.cssRules);
+            continue;
+          }
+          const styleRule = rule as CSSStyleRule;
+          if (!styleRule.selectorText || !styleRule.style) continue;
+          const value = styleRule.style.getPropertyValue('padding-bottom');
+          if (!value) continue;
+          try {
+            if (section.matches(styleRule.selectorText)) out.push(value);
+          } catch {
+            /* unsupported selector text */
+          }
+        }
+      };
+      for (const sheet of Array.from(document.styleSheets)) {
+        try {
+          walk(sheet.cssRules);
+        } catch {
+          continue;
+        }
+      }
+      return out;
+    });
+
+    const withInset = declaredBottom.filter((v) => v.includes('safe-area-inset-bottom'));
+    // Both the mobile base and the md: override must carry the inset.
+    expect(withInset.length, JSON.stringify(declaredBottom)).toBeGreaterThanOrEqual(2);
+  });
+
+  test('the card stays vertically centred when it has room to be', async ({ page }) => {
+    // `m-auto` replaced `items-center`; nothing else asserts that it still
+    // CENTRES rather than top-aligns. If the section ever stopped filling
+    // main's min-height, the card would silently jump to the top with every
+    // other assertion here still green. (santa: GLM.)
+    await page.goto('/auth');
+    await expect(page.getByRole('button', { name: /^Sign in →$/ })).toBeVisible();
+
+    const gaps = await page.evaluate(() => {
+      const section = document.querySelector('main section') as HTMLElement;
+      const card = section.firstElementChild as HTMLElement;
+      const s = section.getBoundingClientRect();
+      const c = card.getBoundingClientRect();
+      const style = getComputedStyle(section);
+      return {
+        above: c.top - s.top - parseFloat(style.paddingTop),
+        below: s.bottom - c.bottom - parseFloat(style.paddingBottom),
+      };
+    });
+
+    // Genuinely centred: real space on both sides, and symmetric within 2px.
+    expect(gaps.above, JSON.stringify(gaps)).toBeGreaterThan(0);
+    expect(Math.abs(gaps.above - gaps.below), JSON.stringify(gaps)).toBeLessThanOrEqual(2);
+  });
+
   test('compaction did not summon a bottom nav onto /auth', async ({ page }) => {
     // BottomNav.tsx returns null on /auth precisely because the raised centre
     // pill overlaps the form on phone viewports. A tighter layout must not
-    // change that, and the `body` bottom reserve it leaves behind must not
-    // reappear as scrollable dead space (already covered by expectNoDeadTail).
+    // change that. The `body` bottom reserve it leaves behind never becomes
+    // scrollable space on this route — see the CORRECTION in the file header;
+    // the assertion that once claimed to cover that was vacuous and is gone,
+    // so nothing here should be read as guarding it.
     await page.goto('/auth');
     await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
   });
