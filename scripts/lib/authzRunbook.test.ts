@@ -59,6 +59,32 @@ function checkSection(heading: string, nextHeading: string): string {
   return doc.slice(from, to === -1 ? undefined : to);
 }
 
+/**
+ * The identifier tokens inside a section's ``` fenced block(s).
+ *
+ * The runbook lists expected table and function names in fenced blocks; pulling
+ * them out lets a test assert set-EQUALITY with the derivation instead of mere
+ * containment, which is what catches a name left behind after a migration
+ * removed it.
+ */
+function fencedNames(section: string): string[] {
+  // Pair fences by language tag, then keep only the UNTAGGED blocks — those are
+  // the plain name lists. Matching bare ``` would start at the closing fence of
+  // a ```sql block and swallow the prose that follows it.
+  const blocks = [...section.matchAll(/```([a-z]*)\n([\s\S]*?)```/g)]
+    .filter((m) => m[1] === '')
+    .map((m) => m[2]);
+  return [
+    ...new Set(
+      blocks
+        .join(' ')
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter((t) => /^[a-z][a-z0-9_]*$/.test(t)),
+    ),
+  ];
+}
+
 /** Only the Check 3 grant matrix — other checks also have per-table tables. */
 const CHECK3 = checkSection(
   '## Check 3 — Grants match the design',
@@ -100,21 +126,21 @@ describe('runbook / migration cross-check', () => {
     expect(doc).toContain(`**Expected:** **${expected} rows**`);
   });
 
-  it('names every expected table in Check 1 ITSELF', () => {
-    // The check an operator actually runs lists table names; a table added by
-    // a migration and never added here is a table they will not notice is
-    // missing from the database either.
-    //
+  it('lists EXACTLY the expected tables in Check 1 — no missing, no stale', () => {
     // Scoped to the Check 1 section on purpose: a doc-wide search passes even
     // if a name is deleted from this list, because almost every table name also
     // appears in Check 2 or Check 3.
+    //
+    // Set-EQUALITY, not containment. Containment alone catches a table added by
+    // a migration and never documented, but not a table REMOVED by a migration
+    // and left in the list — and the operator reads that stale name's absence
+    // from the database as "migrations not fully applied", which Check 1's own
+    // guidance escalates.
     const check1 = checkSection(
       '## Check 1 — RLS is enabled on every table',
       '## Check 1b',
     );
-    for (const table of expectedPublicTables(files)) {
-      expect(check1, `Check 1 does not list ${table}`).toContain(table);
-    }
+    expect(fencedNames(check1).sort()).toEqual(expectedPublicTables(files));
   });
 
   it('states the derived policy counts', () => {
@@ -153,17 +179,21 @@ describe('runbook / migration cross-check', () => {
     expect(definers.size).toBe(29);
     expect(doc).toContain(`**Expected:** ${definers.size} distinct definer function names`);
 
-    // And names every one of them, IN CHECK 4 ITSELF: an operator comparing the
+    // And lists EXACTLY them in Check 4 itself. An operator comparing the
     // deployed list to this document can only spot an EXTRA definer function if
-    // the expected list is complete. A doc-wide search would pass with a name
-    // deleted from the list, since most also appear in Checks 5 and 6.
+    // the expected list is complete, and only avoid chasing a phantom if the
+    // list carries nothing stale. A doc-wide search would pass with a name
+    // deleted, since most also appear in Checks 5 and 6.
     const check4 = checkSection(
       '## Check 4 — `SECURITY DEFINER` functions pin `search_path`',
       '## Check 5',
     );
-    for (const name of definers) {
-      expect(check4, `Check 4 does not list ${name}`).toContain(name);
-    }
+    expect(fencedNames(check4).sort()).toEqual([...definers].sort());
+  });
+
+  it('states the parsed-function count', () => {
+    // The one summary-table figure that was carrying no binding at all.
+    expect(doc).toContain(`| Functions parsed | ${functionsDefined(files).length} |`);
   });
 
   it('names the functions expected to carry a PUBLIC execute grant', () => {
@@ -178,9 +208,57 @@ describe('runbook / migration cross-check', () => {
       '## Check 5 — Anonymous entry points',
       '## Check 6',
     );
-    for (const name of derived) {
-      expect(check5, `Check 5 does not list ${name}`).toContain(name);
-    }
+    expect(fencedNames(check5).sort()).toEqual([...derived].sort());
+    expect(check5).toContain(`**${derived.length} functions** in this corpus have no`);
+  });
+
+  it('filters trigger functions out of the Check 5 query', () => {
+    // Without this clause the check returns ~10 rows against an expectation of
+    // 2 and demands stop-and-escalate on every extra one, on a healthy
+    // database: the 8 unrevoked functions show a PUBLIC row, and Supabase's
+    // default privileges add anon rows too. The filter is what makes
+    // "exactly 2" true rather than aspirational — so it is asserted, not
+    // trusted to survive the next edit.
+    const check5 = checkSection(
+      '## Check 5 — Anonymous entry points',
+      '## Check 6',
+    );
+    expect(check5).toContain(`p.prorettype <> 'trigger'::regtype`);
+    expect(check5).toContain('**Expected:** exactly 2 rows, both `anon`');
+  });
+
+  it('sends the operator to the LEDGER check for unapplied migrations', () => {
+    // Check 6 is definer bodies; ledger parity is Check 7. A 2am operator
+    // chasing a missing table must not be routed to the wrong procedure.
+    const check1 = checkSection(
+      '## Check 1 — RLS is enabled on every table',
+      '## Check 1b',
+    );
+    expect(check1).toContain('**Check 7** (ledger parity)');
+    expect(check1).not.toMatch(/Compare against Check 6/);
+  });
+
+  it('tells the operator to compare policy NAMES, not just counts', () => {
+    // A policy dropped and replaced by a differently-named one leaves the count
+    // unchanged and would otherwise pass in silence.
+    const check2 = checkSection(
+      '## Check 2 — Policies exist where they are relied upon',
+      '### Check 2b',
+    );
+    expect(check2).toContain('Compare the NAMES, not only the counts');
+    expect(check2).toContain('name mismatch with a matching count is stop-and-escalate');
+  });
+
+  it('warns that Check 3 must run as a role that can see the grants', () => {
+    // role_table_grants shows only rows whose grantor/grantee the current user
+    // is a member of; the read-only role the runbook suggests sees nothing, and
+    // an empty result read through the "missing grant" rule invents 15 bugs.
+    const check3 = checkSection(
+      '## Check 3 — Grants match the design',
+      '### Check 3b',
+    );
+    expect(check3).toContain('Run this as the table owner');
+    expect(check3).toContain('empty result');
   });
 
   it('does not readmit pending_change_count as an ungated definer', () => {

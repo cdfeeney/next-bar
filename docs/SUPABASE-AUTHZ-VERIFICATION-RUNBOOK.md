@@ -157,7 +157,8 @@ confirms it is `security_invoker` and intended.
   the migrations. Record it and find out what created it before doing anything
   else; an unmanaged table is unmanaged in both directions.
 - A table in the list above but **absent from the database** means migrations
-  were not fully applied. Compare against Check 6 before concluding anything.
+  were not fully applied. Compare against **Check 7** (ledger parity) before
+  concluding anything.
 
 ---
 
@@ -243,6 +244,13 @@ exists, so default-deny applies to every client role and only the service role
   migrations. Capture its definition (`pg_policies.qual`, `.with_check`) before
   anyone changes it, then treat it as stop-and-escalate: an unreviewed policy
   is an unreviewed grant of access.
+- **Compare the NAMES, not only the counts.** The query `string_agg`s
+  `policyname` for exactly this reason: a policy dropped and replaced by a
+  differently-named one leaves the count unchanged and would otherwise pass in
+  silence. The per-table name lists must equal those printed by
+  `npx tsx scripts/lib/authzSurface.report.mts` under "policies per table". **A
+  name mismatch with a matching count is stop-and-escalate** — it means a policy
+  this document never reviewed is deciding who can read the table.
 
 `bar_rsvps` is the trap. It is the one table whose policy was created and then
 deliberately removed, so "it had a policy once" is true and irrelevant.
@@ -298,6 +306,15 @@ where table_schema = 'public' and grantee in ('anon', 'authenticated')
 group by table_name, grantee
 order by table_name, grantee;
 ```
+
+**Run this as the table owner (`postgres`) or `service_role`.**
+`information_schema.role_table_grants` shows only rows whose grantor or grantee
+is a role the *current* user is a member of. The read-only role suggested in
+"Before you start" is typically a member of neither `anon` nor `authenticated`,
+so it sees an **empty result** — and an empty result read through the
+"missing grant" rule below turns a healthy database into 15 false
+feature-breakage findings. If you cannot run as the owner, use
+`pg_class.relacl` with `aclexplode` instead, which reads the ACL directly.
 
 **`service_role` is deliberately excluded from this query.** Supabase grants it
 everything on the `public` schema by default and every migration here revokes
@@ -472,6 +489,7 @@ left join pg_roles r on r.oid = a.grantee
 where n.nspname = 'public'
   and a.privilege_type = 'EXECUTE'
   and (r.rolname = 'anon' or a.grantee = 0)
+  and p.prorettype <> 'trigger'::regtype
 order by p.proname, grantee;
 ```
 
@@ -481,15 +499,19 @@ internally: `get_public_ratings` returns rows only where the owner set
 `shares_list_publicly` (0015), and `get_shared_night` is keyed by an opaque
 share id (0016).
 
-The left join is deliberate: `aclexplode` reports the pseudo-role `PUBLIC` as
-grantee OID `0`, which has no row in `pg_roles`, so an inner join silently drops
-it. Postgres grants `EXECUTE` **to `PUBLIC` by default** on every new function,
-and a function whose migration forgot its `revoke all ... from public` is
-therefore callable by anyone — the single most likely way an accidental
-anonymous entry point appears.
+Two clauses in that query are load-bearing, and the check is wrong without
+either.
 
-**`PUBLIC` rows are expected for exactly these 8 functions**, which have no
-`revoke ... from public` in the corpus:
+**The left join** catches `PUBLIC`. `aclexplode` reports the pseudo-role
+`PUBLIC` as grantee OID `0`, which has no row in `pg_roles`, so an inner join
+silently drops it. Postgres grants `EXECUTE` **to `PUBLIC` by default** on every
+new function, and a function whose migration forgot its
+`revoke all ... from public` is therefore callable by anyone — the single most
+likely way an accidental anonymous entry point appears.
+
+**The `prorettype <> 'trigger'` filter** is what makes "exactly 2" true rather
+than aspirational. **8 functions** in this corpus have no
+`revoke ... from public`:
 
 ```
 account_content_state_clock_guard   account_content_state_lww_guard
@@ -499,10 +521,17 @@ touch_updated_at                    vibe_profiles_lww_guard
 ```
 
 Every one of them `returns trigger`. A trigger function has no PostgREST route
-and cannot be invoked as an RPC, so the default `EXECUTE to PUBLIC` on them is
-not an anonymous entry point — which is why they were never revoked. The static
-suite asserts both this membership and that all 8 return `trigger`, so the list
-is generated rather than trusted.
+and cannot be invoked directly, so it is inert as an entry point — but it would
+still show a `PUBLIC` row, and on standard Supabase an `anon` row too, because
+the platform's default privileges grant `EXECUTE` on public-schema functions to
+`anon` and `authenticated`. Without the filter this check reports about ten rows
+against an expectation of two and demands stop-and-escalate on every one of
+them, on a perfectly healthy database. With it, "exactly 2" holds under either
+ACL regime, because every **callable** function in the corpus is revoke-first.
+
+The static suite asserts that those 8 are exactly the unrevoked set and that all
+8 return `trigger`, so the filter can never quietly start hiding a callable
+function.
 
 **On mismatch:**
 
@@ -510,10 +539,14 @@ is generated rather than trusted.
   **stop-and-escalate** — a definer function reachable anonymously bypasses RLS
   by design, so its internal gate is the only thing between an anonymous caller
   and the data;
-- a `PUBLIC` row for any function **not** in the list above is
-  **stop-and-escalate**, and doubly so if it does not return `trigger`;
-- a *missing* `PUBLIC` row for one of the 8 means someone added a revoke —
-  harmless, record it so this list can be regenerated.
+- **any `PUBLIC` row at all** is now stop-and-escalate: the filter has already
+  removed every function for which `PUBLIC` is expected, so a survivor is a
+  callable function that was never revoked from `PUBLIC`;
+- to audit the excluded trigger functions instead, drop the `prorettype` clause
+  and expect exactly the 8 names above, each with a `PUBLIC` row and, on
+  standard Supabase, `anon`/`authenticated` rows from platform defaults. A ninth
+  name there, or any name that does not return `trigger`, is
+  **stop-and-escalate**.
 
 ---
 
