@@ -133,7 +133,7 @@ only way to tell how the cell was finished:
 |---|---|
 | `unsaturated`, `detail.count` | The cell was searched and came back under the cap |
 | `cleared`, `detail.children` | The cell capped, was subdivided, and every child finished |
-| `cleared`, `detail.resumed: true` | **No search happened on this resume.** The children's records already showed the subtree was covered, so the run recorded the parent's status and moved on |
+| `cleared`, `detail.resumed: true` | **The parent itself was not re-searched** — its status was settled from its recorded page plus its children's outcomes. This does *not* mean the resume was free: two of the three writers of this flag (cap recovery and continuing a started subdivision) search the children during that resume and pay for them. Only the settle case, where every child was already finished, costs zero calls |
 | `saturated_at_floor`, `detail.reason` | Still capping at the floor — recall is knowably short here |
 | `ack_terminal`, `detail.reason` | An operator waiver. Backed by a matching `ACK_TERMINAL` record; a `DONE` claiming this word without one is treated as unfinished |
 
@@ -191,7 +191,8 @@ still outstanding, `1` if it refused. Repeat `--ack-cell` for several cells;
 |---|---|
 | never been attempted | run or resume the sweep first — waiving it would report COMPLETE over a geography nobody searched |
 | most recent attempt succeeded | the cell is not stuck |
-| subdivision is unfinished | acknowledge the outstanding children instead, or resume to finish them |
+| subdivision is unfinished | acknowledge the outstanding children instead, or resume to finish them — this walks the whole subtree, not just direct children |
+| last failure was transient | quota windows reopen and networks recover, so resume handles it. Raise `--max-calls` or wait rather than waiving real geography |
 | already acknowledged | no double-waivers |
 
 A waiver **survives resume**: an acknowledged cell is not re-queried and its

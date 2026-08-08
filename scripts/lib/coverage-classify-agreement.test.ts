@@ -33,6 +33,7 @@ import {
   isCompleting,
   isSettledForResume,
   isTerminal,
+  isTerminalStatus,
   replay,
 } from './coverage-manifest.mjs';
 
@@ -232,6 +233,43 @@ describe('classify is the only judge', () => {
   });
 });
 
+describe('the terminal vocabulary has an oracle of its own', () => {
+  // Every other assertion in this file derives its expectation from
+  // `classify`, so they all move together if the VOCABULARY moves. Adding a
+  // junk word to TERMINAL_STATUSES was demonstrated to pass the entire suite:
+  // an evidenced `DONE bogus` would classify `complete`, be skipped on resume,
+  // and count toward COMPLETE. These two tests are the independent oracle.
+
+  it('is exactly these four words', () => {
+    // Written out literally on purpose. Deriving this list from the constant
+    // under test would be the same tautology the suite exists to avoid.
+    expect([...TERMINAL_STATUSES].sort()).toEqual([
+      'ack_terminal',
+      'cleared',
+      'saturated_at_floor',
+      'unsaturated',
+    ]);
+  });
+
+  it('an evidenced DONE carrying an unknown word finishes nothing', () => {
+    expect(isTerminalStatus('bogus')).toBe(false);
+    const state = replay({
+      records: [PLAN, okAttempt(1, false), { type: 'DONE', cellId: 'x', terminalStatus: 'bogus' }],
+    });
+    expect(classify(state.cells.get('x'))).toMatchObject({
+      kind: 'unfinished',
+      completing: false,
+      terminal: false,
+      settledForResume: false,
+      atFloor: false,
+    });
+    const report = completeness(state);
+    expect(report.complete).toBe(false);
+    expect(report.missing).toContain('x');
+    expect(report.summary.finished).toBe(0);
+  });
+});
+
 describe('the observed disagreement classes, one test each', () => {
   const forged = (status: string, extra: Record_[] = []) =>
     replay({ records: [PLAN, ...extra, { type: 'DONE', cellId: 'x', terminalStatus: status }] });
@@ -344,12 +382,26 @@ describe('the construction cannot be quietly undone', () => {
 
   it('the engine decides from the verdict, never from a status word', () => {
     const stripped = codeOnly(engine);
-    // Reading `terminalStatus` directly is exactly how the engine became a
-    // second judge. `classify` is now the only place that may.
-    expect(stripped).not.toMatch(/\.terminalStatus\s*===/);
-    expect(stripped).not.toMatch(/COMPLETING_STATUSES\s*\.\s*includes/);
+
+    // An ALLOWLIST, not a blocklist. The first version of this guard banned the
+    // shapes it happened to imagine — `.terminalStatus ===` and
+    // `COMPLETING_STATUSES.includes` — and review demonstrated four ways
+    // straight past it: `!==`, reversed operands, destructuring the field out
+    // first, and `isTerminalStatus(known.terminalStatus)` (which is the worst
+    // of them, since it silently drops the evidence requirement). Enumerating
+    // evasions is a losing game, so instead: the token may appear exactly once
+    // in the engine, at the one sanctioned site, and any second occurrence
+    // fails regardless of the syntax wrapped around it.
+    const sanctioned = 'return known.terminalStatus;';
+    expect(stripped).toContain(sanctioned);
+    // Reachable only under `verdict.settledForResume`, which already
+    // guarantees the word is terminal AND evidenced — it reports WHICH word,
+    // it does not decide anything.
+    expect(stripped.match(/terminalStatus/g)).toHaveLength(1);
+
     // `.acked` and `.lastOk` are the raw fields behind `acknowledged` and
-    // `hasEvidence`; reading them here is the same mistake one field down.
+    // `hasEvidence`; reading them here is the same mistake one field down. Not
+    // anchored to `known` — `childState.acked` is the identical defect.
     //
     // The line this guard draws is between JUDGEMENT and DATA. `terminalStatus`,
     // `acked` and `lastOk` are the inputs to "is this cell finished", which is
@@ -358,7 +410,17 @@ describe('the construction cannot be quietly undone', () => {
     // plain recorded facts with one reader each ("did this attempt's page reach
     // the disk" is not a verdict about finishedness), so the word boundary here
     // is deliberate: it excludes `lastOkHasResult` and catches `lastOk`.
-    expect(stripped).not.toMatch(/known\??\.\s*acked\b/);
-    expect(stripped).not.toMatch(/known\??\.\s*lastOk\b/);
+    expect(stripped).not.toMatch(/\.\s*acked\b/);
+    expect(stripped).not.toMatch(/\.\s*lastOk\b/);
+    // ...including destructured out of a cell record.
+    expect(stripped).not.toMatch(/\backed\s*[,:}]/);
+    expect(stripped).not.toMatch(/\blastOk\s*[,:}]/);
+
+    // Membership in the vocabulary is not finishedness — it omits the evidence
+    // requirement entirely. The engine may ALIAS `isTerminalStatus` for the
+    // outcome domain (`isTerminalOutcome`), but must never call it on a
+    // recorded cell's field.
+    expect(stripped).not.toMatch(/(COMPLETING_STATUSES|TERMINAL_STATUSES)\s*\.\s*includes/);
+    expect(stripped).not.toMatch(/isTerminalStatus\s*\(/);
   });
 });
