@@ -190,3 +190,87 @@ Residual risk / follow-ups NOT done here (deliberate, recorded):
 5. Uneven runtime validation in direct Supabase helpers remains from the original audit -
    upsertServerVibeProfile rebuilds from destructured fields and is auth+RLS+LWW guarded, but its
    tag/neighborhood element types are not allowlist-checked. Outside Item 9's stated scope.
+
+### Item 10 - g-ce503c6c-e3d9-43b1-a600-4b3bb8c1fb93 - COMPLETE
+Commit: 5bf69c8 (local only, NOT pushed). Tier T0, intensity full, 3 rounds, quorum 5/5.
+
+Changed: src/lib/rateLimiter.ts, rateLimiter.durable.ts, rateLimiter.test.ts (new);
+src/lib/waitlistGuard.ts (+test), mediaMetric.server.ts; the four API routes; two new route-level
+policy suites; supabase/migrations/0043_rate_limits.sql (WRITTEN, NOT APPLIED).
+
+Verification: tsc 0; vitest 163 files / 2469 tests; build 0; secret-scan clean; Playwright 73/73;
+production-server behavioral run 5/5 with the shared store deliberately UNREACHABLE - waitlist fails
+open (200), the local backstop still binds (4 of 14 throttled, so fail-open is NOT unlimited), event
+fails open at the limiter (503 at the store, not 429), one IPv6 /64 shares a bucket, a different /64
+keeps its own.
+
+Lane status: Claude/FABLE, Codex gpt-5.6-sol, DeepSeek, GLM, Kimi K3 deep - all succeeded.
+Codex TIMED OUT once at 540s on an oversized round-2 packet (exit 124, supervisor confirmed
+process-tree termination); re-run with a narrowed packet and returned valid output with proof. A
+timeout was NOT counted as approval. FABLE BLOCKED twice; both blocks closed.
+
+Findings unique to ONE lane:
+- Claude/FABLE only: two RAW NUL BYTES making rateLimiter.ts binary to ripgrep (the core module was
+  invisible to every content search); compressed-IPv6 mis-bucketing reopening the 2^64 rotation
+  bypass; NODE_ENV arming the refusal on Vercel PREVIEW deploys too; and a rollout note that my own
+  earlier fix had silently turned into a production-outage instruction.
+- Codex only: malformed dotted quads and empty zone indexes coerced into real buckets.
+- DeepSeek only: IPv4-mapped notation granting DOUBLE quota (its stated mechanism was wrong; the
+  defect was real and verified empirically before acting).
+- GLM only: partial configuration being indistinguishable from intentional local-only, with the
+  degraded flag staying false so monitoring shows green while the global cap does not exist.
+- FABLE + DeepSeek + GLM converging: an unconfigured shared tier silently leaving the
+  irreversible-action quota per-instance.
+- Kimi only: adjudicated the L1/L2 window seam as the standard fixed-window 2x property rather than
+  a composition bug, and endorsed the Postgres-over-Redis choice with named exit criteria.
+
+Attended-only decisions STOPPED at, none made: applying 0043; provisioning any paid KV/Redis;
+creating or setting RATE_LIMIT_KEY_SALT; salt rotation cadence; enabling pg_cron (avoided by design);
+sign-off on the fail-open policy for event/media-metric.
+
+### Item 11 - g-e0fb31ba-d3b2-41a7-85db-1eaf7ab684a6 - BLOCKED (REVIEW_INCOMPLETE)
+WIP preserved at 652020d. Tier T1. Santa round 1 = BLOCK; quorum NOT met.
+
+Claude/FABLE ran and blocked with 1 High + 4 Medium. Codex, GLM and DeepSeek did NOT run, so the
+'both' panel never reached quorum. Under the unattended rule that is REVIEW_INCOMPLETE, never NICE.
+
+What is sound: parser, report generator and 14 static tests are OFFLINE BY CONSTRUCTION (node:fs and
+node:path only - no network, no database contacted, which was the item's central constraint), run in
+the ordinary vitest gate, and every assertion is paired with a broken fixture. Their generated
+numbers are independently true: 39 migrations 0000..0043, 21 tables, 21 of 21 with RLS, 41 functions,
+29 SECURITY DEFINER, 0 unpinned search_path.
+
+Why blocked - the deliverable IS the expected state, and parts of it are wrong:
+1. Check 2 claims all but two tables have a policy; six more are intentionally policy-less, so an
+   operator on a HEALTHY Staging would log six false mismatches.
+2. public.schema_migrations is created by the migration RUNNER, not a migration, so the parser cannot
+   see it; a healthy schema has 22 tables, not 21.
+3. The anon-grant invariant covers 2 tables; the corpus grants to anon on three (bars, bar_photos,
+   pairwise_comparisons) - FABLE's own allowlist named only two, which is itself evidence the
+   expectation must be generated rather than written by hand.
+4. tableGrants has no corpus-level non-vacuity guard.
+5. Function tail-attribution spans to the next function, so a future 'alter function ... set
+   search_path' could falsely mark an unpinned definer as pinned. Not live today.
+
+Root cause, demonstrated on myself: my own verification regex reported all 21 tables as policy-less
+- false - because policy names are quoted and contain colons ("profiles: owner can read own"). The
+policy and grant expectations must be GENERATED like the counts already are.
+
+NEXT ACTION: /santa-loop g-e0fb31ba-d3b2-41a7-85db-1eaf7ab684a6 --unattended --intensity both
+after generating the policy/grant expectations and adding schema_migrations to Checks 1-3.
+
+## C2 RUN SUMMARY
+
+Status: QUEUE_TERMINAL - 2 complete, 1 blocked. Commits: 037a527, 619b109, 5bf69c8, 652020d.
+Deployed RLS parity remains UNVERIFIED; Item 11 builds the means to check it and was not finished.
+
+Nothing was pushed, deployed, migrated, or irreversibly applied. No PR, no database connection, no
+environment/auth change, no email, account, TestFlight or App Store action. Migration 0043 was
+WRITTEN and NOT APPLIED. No worktree was added, moved, removed, pruned, reset or cleaned; no stash
+was created or dropped.
+
+Protected C1 Item 4 state is intact and still uncommitted: src/app/page.tsx,
+src/components/BarLightbox.tsx (modified) and e2e/safe-area-top.spec.ts (untracked), plus stash@{0}.
+`loop-guard checkpoint` DID sweep all three into a commit as memory warned; that commit was undone
+with a soft reset and the files restored to their exact prior state, and every later commit was
+path-scoped by hand.
