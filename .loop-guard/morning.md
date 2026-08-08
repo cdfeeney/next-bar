@@ -274,3 +274,149 @@ src/components/BarLightbox.tsx (modified) and e2e/safe-area-top.spec.ts (untrack
 `loop-guard checkpoint` DID sweep all three into a commit as memory warned; that commit was undone
 with a soft reset and the files restored to their exact prior state, and every later commit was
 path-scoped by hand.
+
+---
+
+# C3 OVERNIGHT RUN — 2026-08-08
+
+## Preflight
+
+- Started: 2026-08-08 02:40 ET (America/New_York). Hard stop: 08:00 ET same day.
+- Worktree: D:\harness-worktrees\nb-20260808-expanded\google-card
+- Branch: harness/nb-20260808-expanded/google-card
+- Starting SHA / revert point: 689e564edd0de5744f07e920230c6b98fae0d092
+- loop-guard: start --max-iters 2 --lax => proceed
+- overnight-recovery: IDLE (no interrupted run). git status: clean. Lease: none, not live.
+- overnight-guard preflight: TIER_MAP_READY, source=project, 10 T0 rules, 10 live, 0 dead.
+- Queue (operator-supplied order, unchanged):
+  1. g-65ba768e-dfab-4cd6-8a2f-e98f02ec88a1 — Item 6: Supported Google-card visual polish (planned)
+  2. g-bfb6937a-8f18-477f-af93-17d92cac1d05 — Item 7: Somewhere Nowhere photo diagnosis (local) (planned)
+
+### Re-verification of the two C2 blockers (both recorded 2026-08-07)
+
+Both stored items carry `skip` evidence naming two preconditions. Re-checked at 02:40 ET 2026-08-08:
+
+1. DISK — was "C: has 1.1 MB free of 221.27 GB". NOW: C: 4.8 GB free, D: 628.75 GB free.
+   The worktree lives on D:. npm-cache is 0.81 GB on C:. The absolute ENOSPC condition that made
+   `npm ci` impossible no longer holds. node_modules is still absent from this worktree and must be
+   installed before any build/Playwright work. Blocker RELAXED, not yet proven cleared — install
+   must actually succeed.
+2. AUTH BASE — was "g-3fc3789d-2219-43aa-8b94-e46fb43e3a19 still 'planned', so <AUTH-NICE-SHA> is
+   undefined and un-reviewed 76d610f must not be built on". NOW: that goal reports **complete** in
+   workspace C:\Users\cdfee\projects\nb-google-photos. Branch fix/auth-cross-context-email HEAD is
+   b6a7957 ("docs: [T1] tell operators how to read the auth/confirm diagnostic"), sitting on top of
+   93cd0ab / d81f6a5 / cb03918 which are explicitly g-3fc3789d santa-round fixes. <AUTH-NICE-SHA>
+   therefore resolves to b6a7957. Blocker CLEARED.
+
+No goal was created, recreated, overwritten or broadened. Stored statuses honored as-is.
+
+### Item 6 — g-65ba768e-dfab-4cd6-8a2f-e98f02ec88a1 — implementation COMPLETE, review PENDING
+
+Tier **T1** (re-classified on the ACTUAL changed paths via tier-classify: `{"tier":"T1"}`, no T0 glob
+matched, no upgrade). Local commit **441b39d** on branch `harness/nb-20260808-expanded/google-card`.
+Status set `ready_for_review`; lease released. NOT complete — only Santa may say that.
+
+**Branch note (deviation, deliberate).** The stored spec puts items 3–8 on
+`fix/nighttime-mobile-hardening` from `<AUTH-NICE-SHA>`. That branch is checked out by a LIVE peer
+worktree (`C:\Users\cdfee\projects\nb-overnight-20260807`, session cdb2c1bd, goal g-cb7cefd2) at the
+identical SHA 689e564, and the operator directive for this run is "keep every repository write inside
+this physical worktree". Switching branches is also forbidden while peer leases are live. So the
+commit sits on this worktree's own branch, which already descends from the C2 work. Base contract
+verified: `git merge-base --is-ancestor efca486 b6a7957` = YES, and b6a7957 is an ancestor of HEAD.
+
+**Changed files (6):** `playwright.config.ts`; `e2e/google-card.spec.ts` (new, 544 lines);
+`src/components/ResultCard.tsx`; `src/components/GooglePlacePhoto.tsx`;
+`src/components/GooglePlacePhoto.compact.test.tsx`; `src/components/ResultCard.googleLive.test.tsx`.
+
+**Two environment blockers that had to be solved before any criterion was testable:**
+1. `:3000` was held by a LIVE PEER worktree's dev server and `reuseExistingServer:true` would have
+   silently run this item's whole suite against THAT worktree's code. Added `E2E_PORT` /
+   `E2E_GOOGLE_PORT` overrides (defaults unchanged); ran on 3200/3201.
+2. `google-live` was unreachable here at all — no `.env.local`, so `NEXT_PUBLIC_GOOGLE_MEDIA` was
+   unset and `resolveMedia` never returned `google-live`. That flag is inlined at COMPILE time, so it
+   cannot be switched per-test, and enabling it on the main server would flip every result card in
+   every unrelated spec. Added a SECOND dev server (google-live on, stub key) + `google-live
+   iPhone 13` / `google-live Pixel 7` projects scoped by testMatch to this one spec.
+
+**Root cause found by diagnostic, not guesswork:** every scenario sat on `pending` forever because
+the fenced `/rest/v1/bars` read failed and CatalogRefresh retried it several times a second,
+remounting the cards and tearing down `GooglePlacePhoto`'s IntersectionObserver before it could fire.
+Fixed by using the repo's existing `installLoopbackFixtures`. A second, separate flake — every
+`locator.fill` timeout — was a one-shot `isVisible()` racing the location-first screen's first paint,
+so the "Pick a bar instead" click was silently skipped; the page snapshot showed the button sitting
+there unclicked. Both fixes are in the spec, not in product code.
+
+**Verification (all foreground):**
+- `e2e/google-card.spec.ts` **9/9 PASS on iPhone 13 (2.9m) and 9/9 PASS on Pixel 7 (2.6m)** = 18/18.
+- NON-VACUITY: the RED baseline before implementation was **7 failed / 2 passed**.
+- Guards proven to fire: `guards-are-live` forces a `/bar-photos` image and a
+  `maps.googleapis.com` fetch and asserts BOTH were recorded and aborted.
+- `probe.google=[]` and `probe.blocked=[]` in every scenario — zero Google media requests and zero
+  non-loopback requests. No live widget, no paid API (SDK replaced before page scripts; stub key).
+- tsc 0; vitest **164 files / 2483 tests all pass**; `next build` OK with `ƒ /api/flags` still
+  dynamic; `git diff --check` clean; secret scan clean.
+
+**Pre-existing failures, PROVEN not caused by this change** by swapping the HEAD versions of
+`ResultCard.tsx` + `GooglePlacePhoto.tsx` back in and re-running the same specs: `photo-card`
+"identity tap opens lightbox" and `google-photo-layout` (blocked + desktop) fail identically at HEAD.
+`google-photo-layout` additionally carries the same one-shot-`isVisible()` race fixed in the new spec
+and cannot pass on the main server at all, because it needs google-live enabled. **Recommended
+follow-up (not done — out of this item's scope):** port the two-line `pick.or(search)` fix into
+`google-photo-layout.spec.ts` and move it onto the `google-live` projects.
+
+**Residual / for the operator:** two catalogue names carry a parenthetical that duplicates the hood
+line rendered directly beneath them ("White Horse Tavern (Financial District)", "Stout NYC FiDi").
+Suppressing that is a DATA/product decision, not presentation, so it was deliberately NOT made here.
+
+### Item 6 — Santa round 1 — REVIEW_INCOMPLETE (quorum NOT met). Status: **blocked**.
+
+Tier T1 => intended panel `both` = Claude/FABLE + Codex + GLM + DeepSeek.
+
+| Lane | Result |
+|---|---|
+| Claude/**FABLE** | **SUCCEEDED**. `reviewer-model-preflight --tier T1` => ok, `expected_model=fable`, `override_present=false`; `CLAUDE_CODE_SUBAGENT_MODEL` absent. Launched foreground, `subagent_type: santa-gating-reviewer`, `model: fable`. |
+| Codex | **MISSING** — never dispatched (08:00 hard stop). Task file ready at `tmp/codex-task.md`. NOT a route failure. |
+| GLM | **MISSING** — never dispatched. |
+| DeepSeek | **MISSING** — never dispatched. |
+
+Three missing lanes are **not** approval. Unattended quorum fails closed, so the item is `blocked`,
+NOT complete. Only Santa may complete it, and only after a fresh round with the full intended panel.
+
+**FABLE findings — Critical 0, High 1, Medium 2. All three verified and fixed in `c2ca4dd`.**
+
+- **H1 (High) — the new spec was breaking the whole suite.** `google-card.spec.ts` was collected by
+  the MAIN-server `iPhone 13`/`Pixel 7` projects: they set no `testMatch` so they collect
+  `**/*.spec.ts`, and a project-level `testIgnore` REPLACES the root one instead of merging. The spec
+  therefore ran against the server where `NEXT_PUBLIC_GOOGLE_MEDIA` is unset — where `resolveMedia`
+  can never return `google-live` — so ~7 tests x 2 projects would time out on their full 120s budget
+  on every full run. This was a real defect I introduced and did not catch, because I only ever ran
+  the spec with an explicit `--project` filter. Fixed; re-verified with `playwright test --list`:
+  google-card now appears ONLY under `google-live iPhone 13` and `google-live Pixel 7` (8 each, 16).
+- **M1 (Medium)** — my second-webServer comment claimed Playwright skips a webServer whose projects
+  are filtered out. It does not; there is no project-to-webServer linkage and every entry starts on
+  every run. Comment corrected, plus a note that `E2E_GOOGLE_PORT` must be varied per worktree for
+  the same `reuseExistingServer` collision reason as `E2E_PORT`.
+- **M2 (Medium)** — criterion 4's "no jump" hole survived UPSTREAM of the component I fixed:
+  `GooglePlacePhotoLazy`'s `dynamic(ssr:false)` had no `loading` placeholder, so the media band was
+  0px until the chunk resolved and then snapped to the 21/9 reservation. My delayed e2e scenario
+  structurally cannot catch this — it starts sampling only once `data-status="pending"` exists, i.e.
+  after the gap has closed. Fixed with a 21/9 placeholder that renders no Google content and issues
+  no request, so billing is unaffected.
+
+**Lane-unique value:** all three findings came from the only lane that ran, so no cross-family
+comparison is possible this round — another reason the result is REVIEW_INCOMPLETE rather than a
+thin NICE. FABLE also independently confirmed (against `placesUiKit.ts:291-313`) that the stubbed
+`window.google.maps.importLibrary` is consumed by `useSdkIfReady()` *before* `ensureScript()` could
+inject a real script tag, so "zero Google media requests" is structural, not luck.
+
+**Post-fix verification:** tsc 0; focused vitest 38/38; `playwright --list` collection proof above.
+**NOT re-run after these fixes:** the google-card e2e matrix (18/18 green as of 441b39d only) and the
+full 2483-test vitest suite. Round 2 must re-verify both.
+
+**Exact resume command:**
+`/santa-loop g-65ba768e-dfab-4cd6-8a2f-e98f02ec88a1 --unattended --intensity both`
+
+### Item 7 — g-bfb6937a — NOT STARTED (`planned`, untouched)
+
+The 08:00 America/New_York stop was reached while Item 6 was still in review. Item 7 was never bound,
+no lease was taken, and no file was touched for it. Its stored status is unchanged.
