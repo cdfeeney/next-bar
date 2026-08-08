@@ -61,9 +61,9 @@ export const BAKED_PATH_FLOORS = [
   // that inspected nothing.
   { glob: 'scripts/changed-paths.mjs', tier: 'T0', capability: 'tier-classifier' },
   // The test runner's config decides whether the enforcement suite runs at all.
-  // Flooring `scripts/__tests__/**` while leaving this at T1 was a gap: deleting
-  // 'scripts/**/*.test.mjs' from the vitest include list silences all 45 tier
-  // tests — and every other test — just as effectively as deleting them.
+  // Flooring the enforcement test directory while leaving this at T1 was a gap:
+  // deleting the scripts glob from the vitest include list silences the entire
+  // tier suite — and every other test — just as effectively as deleting them.
   { glob: 'vitest.config.*', tier: 'T0', capability: 'tier-enforcement-test' },
   { glob: 'playwright.config.ts', tier: 'T0', capability: 'tier-enforcement-test' },
   { glob: 'tsconfig.json', tier: 'T0', capability: 'tier-enforcement-test' },
@@ -253,13 +253,14 @@ export const CAPABILITY_SIGNATURES = [
     // `classList.remove('open')` in the UI.
     // Three shapes, because ORMs disagree:
     //   `.delete()`                    Supabase/PostgREST — empty parens
-    //   `.delete(users).where(...)`    Drizzle/Kysely — table passed as an arg
+    //   `.delete(users).where(...)`    Drizzle — table passed as an arg
+    //   `.deleteFrom('person')`        Kysely — no `.delete(` at all
     //   `export const DELETE = ...`    Next.js route handler, both spellings
     // The empty-paren form stays anchored so ordinary `Map.delete(key)` and
     // `set.delete(x)` do not match; the arg form requires a following
     // `.where(`/`.returning(`, which collections never have.
     pattern:
-      /(?:\.delete\s*\(\s*\)|\.delete\s*\([^)]*\)\s*\.\s*(?:where|returning)\s*\(|\.from\s*\([^)]*\)\s*\.remove\s*\(|\bexport\s+(?:(?:async\s+)?function\s+DELETE\s*\(|const\s+DELETE\s*=))/,
+      /(?:\.delete\s*\(\s*\)|\.delete\s*\([^)]*\)\s*\.\s*(?:where|returning)\s*\(|\.deleteFrom\s*\(|\.from\s*\([^)]*\)\s*\.remove\s*\(|\bexport\s+(?:(?:async\s+)?function\s+DELETE\s*\(|const\s+DELETE\s*=))/,
     note: 'deletes rows or stored objects through a data client, or exposes a DELETE handler',
   },
   {
@@ -279,8 +280,11 @@ export const CAPABILITY_SIGNATURES = [
   {
     name: 'destructive-filesystem',
     tier: 'T0',
+    // Includes the modern promise idiom — `import { rm } from 'node:fs/promises'`
+    // then `await rm(dir, { recursive: true })` — which the sync-only pattern
+    // missed entirely, so a purge script written the async way earned no floor.
     pattern:
-      /(?:\bfs\.(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\brimraf\b|\brm\s+-rf\b)/,
+      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\bnode:fs\/promises\b[\s\S]{0,200}?\b(?:rm|unlink)\s*\(|\brimraf\b|\brm\s+-rf\b)/,
     note: 'deletes files with no undo',
   },
   {
@@ -297,7 +301,11 @@ export const CAPABILITY_SIGNATURES = [
     // can appear in a committed snapshot or fixture with no `process.env` in
     // sight.
     pattern:
-      /(?:process\.env\s*(?:\.\s*|\[\s*['"])(?!NEXT_PUBLIC_)[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*|(?:const|let|var)\s*\{[^}]*\b(?:DATABASE_URL|SERVICE_ROLE_KEY|[A-Z0-9_]*SECRET[A-Z0-9_]*)\b[^}]*\}\s*=\s*process\.env|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@/'"]+:[^\s:@/'"]+@)/,
+      // The destructured branch reuses the SAME keyword group as dot/bracket
+      // access. It previously named only three keywords, so
+      // `const { PASSWORD, ACCESS_TOKEN } = process.env` evaded a pattern that
+      // caught `process.env.PASSWORD`.
+      /(?:process\.env\s*(?:\.\s*|\[\s*['"])(?!NEXT_PUBLIC_)[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*|(?:const|let|var)\s*\{[^}]*\b[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*\b[^}]*\}\s*=\s*process\.env|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@/'"]+:[^\s:@/'"]+@)/,
     note: 'reads secret credentials from the environment, or embeds a credentialed connection URI',
   },
 

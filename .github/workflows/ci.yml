@@ -41,7 +41,23 @@ jobs:
         # policy's internal consistency and nothing about the diff in front of
         # it. `--base` is required because a fresh checkout has no working-tree
         # changes, so the feeder's other two sources are both empty here.
-        run: node scripts/changed-paths.mjs --base "origin/${{ github.base_ref || github.event.repository.default_branch }}" | node scripts/tier-classify.mjs
+        #
+        # On a pull_request, github.base_ref is the target branch. On a push,
+        # it is empty and HEAD *is* origin/main — so comparing against
+        # origin/main yields an empty set and a green step that inspected
+        # nothing. Push events therefore compare against the event's before-SHA.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="origin/${{ github.base_ref }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # A force-push or first push reports an all-zero before-SHA.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE="HEAD~1"
+          fi
+          echo "Classifying against base: $BASE"
+          node scripts/changed-paths.mjs --base "$BASE" | node scripts/tier-classify.mjs
       - name: Verify (canonical repository gate)
         run: npm run verify:full
         env:

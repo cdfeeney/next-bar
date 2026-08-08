@@ -88,6 +88,9 @@ const NEW_CAPABILITY_CASES = new Set([
   'bracket credential access is T0',
   'snapshot embedding a credentialed URI is T0',
   'the vitest config is T0',
+  'async fs/promises rm is T0',
+  'Kysely deleteFrom is T0',
+  'destructured non-DATABASE_URL credential is T0',
 ]);
 
 const rows = [];

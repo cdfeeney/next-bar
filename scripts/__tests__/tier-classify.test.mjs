@@ -7,7 +7,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { EQUIVALENCE_CASES, TIER_CASES } from './tier-cases.mjs';
@@ -22,6 +23,16 @@ import {
 import { globMatch, normalizePath } from '../lib/tier-glob.mjs';
 
 const { map: PROJECT_MAP, source: MAP_SOURCE } = loadTierMap(REPO_ROOT);
+
+/**
+ * A throwaway repo root holding a MALFORMED tier map, so the "project has a
+ * policy we cannot read" branch can be exercised without touching this
+ * repository's real map.
+ */
+const BAD_MAP_ROOT = join(tmpdir(), 'next-bar-tier-badmap');
+mkdirSync(join(BAD_MAP_ROOT, '.claude'), { recursive: true });
+writeFileSync(join(BAD_MAP_ROOT, 'package.json'), '{}\n');
+writeFileSync(join(BAD_MAP_ROOT, '.claude', 'tier-map.json'), '{ not valid json\n');
 
 /** A map with no rules at all — proves floors do not come from the map. */
 const EMPTY_MAP = {
@@ -121,6 +132,49 @@ describe('determinism and repo-root resolution', () => {
     });
     expect(result.perPath).toHaveLength(1);
     expect(result.t0FileCount).toBe(1);
+  });
+
+  describe('degraded ALWAYS implies a closed gate (property, not prose)', () => {
+    // Three separate warnings once claimed "failing closed to T0" while the
+    // returned tier was T1 or T2 — the claim lived in a string and the fact in
+    // a value, so nothing forced them to agree. This asserts the invariant over
+    // every way the classifier can degrade, so a fourth instance cannot appear.
+    const degradingInputs = [
+      { name: 'a single unusable entry', paths: ['docs/a.md', null] },
+      { name: 'only unusable entries', paths: [null, '', '   '] },
+      { name: 'a non-array input', paths: 'not-an-array' },
+      { name: 'an unreadable project tier map', paths: ['src/lib/a.ts'], badMap: true },
+    ];
+
+    for (const input of degradingInputs) {
+      it(`${input.name} => degraded, T0, escalated, not skippable`, () => {
+        const result = input.badMap
+          ? classifyPaths(input.paths, undefined, { repoRoot: BAD_MAP_ROOT })
+          : classifyPaths(input.paths, PROJECT_MAP, { repoRoot: REPO_ROOT, contents: { 'docs/a.md': '# a\n' } });
+        expect(result.degraded).toBe(true);
+        expect(result.tier).toBe('T0');
+        expect(result.escalated).toBe(true);
+        expect(result.skippable).toBe(false);
+        expect(result.degradedReasons.length).toBeGreaterThan(0);
+      });
+    }
+
+    it('a clean classification is NOT marked degraded', () => {
+      const result = classifyPaths(['docs/a.md'], PROJECT_MAP, {
+        repoRoot: REPO_ROOT,
+        contents: { 'docs/a.md': '# a\n' },
+      });
+      expect(result.degraded).toBe(false);
+      expect(result.degradedReasons).toEqual([]);
+      expect(result.tier).toBe('T2');
+    });
+
+    it('every human warning about degradation is derived from the flag', () => {
+      const result = classifyPaths(['a.ts', null], PROJECT_MAP, { repoRoot: REPO_ROOT });
+      const claims = result.warnings.filter((w) => /DEGRADED/.test(w));
+      // One message per recorded reason — no hand-authored safety claims.
+      expect(claims).toHaveLength(result.degradedReasons.length);
+    });
   });
 
   it('omitting the tier map loads the PROJECT map, not the rule-less fallback', () => {

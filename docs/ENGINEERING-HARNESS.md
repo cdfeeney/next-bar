@@ -165,8 +165,10 @@ non-zero if a case marked as new capability already passed against the old
 classifier — that is coverage theater, and it is caught mechanically rather
 than by good intentions.
 
-At the time of writing, 16 of 27 cases are classified wrong by the pre-change
-classifier.
+At the time of writing, 28 of 40 cases are classified wrong by the pre-change
+classifier. Treat that ratio as indicative rather than exact — the suite grows
+as reviewers find new evasions, and `npm run tier-redproof` always prints the
+current numbers.
 
 The RED proof reads the old classifier from the operator's home directory. On a
 machine without the harness installed it exits **3** and says so, rather than

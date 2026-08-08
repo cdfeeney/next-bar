@@ -342,6 +342,27 @@ export const TIER_CASES = [
     why: 'snapshots were exempt from content scanning and can capture real secrets',
   },
   {
+    name: 'async fs/promises rm is T0',
+    path: 'tools/clean.mjs',
+    contents: "import { rm } from 'node:fs/promises';\nawait rm('public/photos', { recursive: true });\n",
+    expect: 'T0',
+    why: 'the sync-only pattern missed the modern promise deletion idiom',
+  },
+  {
+    name: 'Kysely deleteFrom is T0',
+    path: 'src/lib/kysely-purge.ts',
+    contents: "await db.deleteFrom('person').where('id', '=', id).execute();\n",
+    expect: 'T0',
+    why: 'Kysely never writes .delete(, so the arg form did not cover it',
+  },
+  {
+    name: 'destructured non-DATABASE_URL credential is T0',
+    path: 'scripts/pay.mjs',
+    contents: 'const { STRIPE_API_KEY, ACCESS_TOKEN } = process.env;\n',
+    expect: 'T0',
+    why: 'the destructured branch named only three keywords while dot access named seven',
+  },
+  {
     name: 'the vitest config is T0',
     path: 'vitest.config.ts',
     contents: "export default { test: { include: ['src/**/*.test.ts'] } };\n",

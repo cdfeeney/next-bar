@@ -277,38 +277,74 @@ export function classifyPaths(changedPaths, tierMap, opts = {}) {
   const warnings = [];
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
 
-  // Omitting the map must NOT silently mean "no project policy". Passing
-  // `undefined` straight to normalizeMap selected the rule-less fallback and
-  // discarded every project escalation, so a caller using the documented
-  // default got a quieter answer than the repository's own policy — a fail-open
-  // in the one function everything else routes through.
+  // ---------------------------------------------------------------------------
+  // DEGRADED STATE IS A VALUE, NOT A SENTENCE.
+  //
+  // A review round found three separate places where a warning string asserted
+  // "failing closed to T0" while the returned tier was actually T1 or T2. That
+  // was not three typos: the safety CLAIM lived in an unstructured side channel
+  // (a string) while the safety FACT lived in a value computed elsewhere, so
+  // nothing forced them to agree, and every future edit could desynchronise them
+  // again.
+  //
+  // So degradation is recorded once, as data. The tier is derived from it, and
+  // every human-readable message is generated FROM it below — there is no code
+  // path where a safety claim can be authored independently of the value it
+  // describes. `assertFailClosed` in the test suite pins the invariant:
+  // degraded === true implies tier T0 and escalated true.
+  // ---------------------------------------------------------------------------
+  /** @type {string[]} */
+  const degradedReasons = [];
+
   let resolved = tierMap;
   if (resolved === undefined || resolved === null) {
+    // Omitting the map must NOT silently mean "no project policy": passing
+    // undefined straight to normalizeMap selected the rule-less fallback and
+    // discarded every project escalation.
     const loaded = loadTierMap(repoRoot);
     resolved = loaded.map;
     if (loaded.source === 'error') {
-      warnings.push(`tier-map unreadable (${loaded.error}); failing closed`);
+      // The project HAS a policy we cannot read. Classifying against the
+      // rule-less fallback would silently drop every declared T0 rule.
+      degradedReasons.push(`tier-map present but unreadable (${loaded.error})`);
     } else if (loaded.source === 'default') {
+      // Genuinely absent is not degraded — the fallback is an honest answer.
       warnings.push('no project tier-map found; using fallback (no project rules)');
     }
   }
   const map = normalizeMap(resolved, warnings);
 
-  // An entry we cannot interpret means the change set is INCOMPLETE. Dropping
-  // it quietly let a mixed array like ['docs/readme.md', null] return T2 and
-  // skippable:true, reporting a confident verdict on a partial input.
+  // An entry we cannot interpret means the change set is INCOMPLETE.
+  //
+  // A DEFINED non-array (a bare string is the easy caller mistake) was silently
+  // treated as an empty list and returned a confident default tier. The
+  // degraded-state property test found this the moment it existed — the fourth
+  // instance of the same class. Omitting the argument entirely still means
+  // "no paths", which is an honest answer.
+  if (changedPaths !== undefined && changedPaths !== null && !Array.isArray(changedPaths)) {
+    degradedReasons.push(`changedPaths is ${typeof changedPaths}, not an array`);
+  }
   const rawEntries = Array.isArray(changedPaths) ? changedPaths : [];
   const usable = rawEntries.filter((p) => typeof p === 'string' && p.trim().length > 0);
   const unusableCount = rawEntries.length - usable.length;
   if (unusableCount > 0) {
-    warnings.push(
-      `${unusableCount} unusable path entr${unusableCount === 1 ? 'y' : 'ies'} ignored — ` +
-        'classification is incomplete, failing closed to T0',
+    degradedReasons.push(
+      `${unusableCount} unusable path entr${unusableCount === 1 ? 'y' : 'ies'} in the input`,
     );
   }
   const paths = [...new Set(usable.map(normalizePath))];
+  const degraded = degradedReasons.length > 0;
 
-  if (paths.length === 0) {
+  // Every message about degradation is DERIVED from the flag above.
+  for (const reason of degradedReasons) {
+    warnings.push(`DEGRADED: ${reason} — classification is incomplete, forcing T0`);
+  }
+
+  const perPath = paths.map((p) => classifyOnePath(p, map, { ...opts, repoRoot }));
+  const t0FileCount = perPath.filter((r) => r.tier === 'T0').length;
+  const ambiguousCount = perPath.filter((r) => r.ambiguous).length + unusableCount;
+
+  if (paths.length === 0 && !degraded) {
     warnings.push('no changed paths given');
     return {
       tier: map.default_tier,
@@ -317,14 +353,16 @@ export function classifyPaths(changedPaths, tierMap, opts = {}) {
       escalated: false,
       skippable: false,
       ambiguousCount: 0,
+      degraded: false,
+      degradedReasons: [],
       warnings,
     };
   }
 
-  const perPath = paths.map((p) => classifyOnePath(p, map, { ...opts, repoRoot }));
-  const t0FileCount = perPath.filter((r) => r.tier === 'T0').length;
-  const ambiguousCount = perPath.filter((r) => r.ambiguous).length + unusableCount;
-  const tier = unusableCount > 0 ? 'T0' : perPath.reduce((acc, r) => maxTier(acc, r.tier), 'T2');
+  // The single place the tier is decided. Degradation wins over everything,
+  // including the zero-path case that previously returned default_tier while a
+  // warning claimed T0.
+  const tier = degraded ? 'T0' : perPath.reduce((acc, r) => maxTier(acc, r.tier), 'T2');
 
   return {
     tier,
@@ -332,9 +370,11 @@ export function classifyPaths(changedPaths, tierMap, opts = {}) {
     t0FileCount,
     // Ambiguity always escalates: an unanalyzable change is exactly the case a
     // human must look at, regardless of how many files are involved.
-    escalated: t0FileCount >= map.escalate_min_t0_files || ambiguousCount > 0,
-    skippable: unusableCount === 0 && perPath.every((r) => r.nonRuntime) && tier !== 'T0',
+    escalated: degraded || t0FileCount >= map.escalate_min_t0_files || ambiguousCount > 0,
+    skippable: !degraded && paths.length > 0 && perPath.every((r) => r.nonRuntime) && tier !== 'T0',
     ambiguousCount,
+    degraded,
+    degradedReasons,
     warnings,
   };
 }
