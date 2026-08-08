@@ -407,7 +407,12 @@ export function completeness(state) {
     if (cell.terminalStatus === null) {
       missing.push(cell.cellId);
     } else if (cell.terminalStatus === SATURATED_AT_FLOOR) {
-      saturated.push(cell.cellId);
+      // Only a floor status with evidence behind it means "recall is knowably
+      // short HERE". Without a successful attempt the cell was never searched
+      // at all, and reporting it as saturated tells the operator the opposite
+      // of the truth — that the geography was covered as far as it can be.
+      if (cell.lastOk) saturated.push(cell.cellId);
+      else missing.push(cell.cellId);
     } else if (!COMPLETING_STATUSES.includes(cell.terminalStatus)) {
       missing.push(cell.cellId);
     } else if (cell.terminalStatus === 'ack_terminal') {
@@ -525,6 +530,17 @@ export function outstandingCells(state) {
  *
  * Returns `{ eligible, reason }` so the caller can explain a refusal.
  */
+/** Every cell beneath this one, at any depth. `seen` guards a malformed cycle. */
+function descendantIds(state, cellId, seen = new Set()) {
+  const out = [];
+  for (const childId of state?.cells?.get(cellId)?.children ?? []) {
+    if (seen.has(childId)) continue;
+    seen.add(childId);
+    out.push(childId, ...descendantIds(state, childId, seen));
+  }
+  return out;
+}
+
 export function ackEligibility(state, cellId) {
   const cell = state?.cells?.get(cellId);
   if (!cell) return { eligible: false, reason: 'no such cell in this manifest' };
@@ -535,14 +551,23 @@ export function ackEligibility(state, cellId) {
   // here made this a THIRD judge with its own answer: a forged ack_terminal
   // child read as finished, the "acknowledge those children instead" refusal
   // went dead, and a parent could be waived while its child stayed outstanding.
-  const unfinishedChildren = (cell.children ?? []).filter(
-    (childId) => !isSettledForResume(state.cells.get(childId)),
+  //
+  // And it walks the whole SUBTREE, not one level. A waiver makes this cell
+  // terminal, so the engine stops descending through it — anything unfinished
+  // below is then orphaned, with no resume that will ever reach it. Checking
+  // only direct children let a grandchild's unrecovered retry be waived away
+  // by acknowledging its grandparent.
+  const unfinishedChildren = descendantIds(state, cellId).filter(
+    (descendantId) => !isSettledForResume(state.cells.get(descendantId)),
   );
   if (unfinishedChildren.length > 0) {
     return {
       eligible: false,
       reason:
-        `its subdivision is unfinished (${unfinishedChildren.length} of ${cell.children.length} children outstanding) — ` +
+        // Both numbers count the same thing — the whole subtree. Reporting the
+        // direct-child total beside a descendant count read as "1 of 4" for a
+        // grandchild four levels down.
+        `its subdivision is unfinished (${unfinishedChildren.length} of ${descendantIds(state, cellId).length} cells beneath it outstanding) — ` +
         'acknowledge those children instead, or resume to finish them',
     };
   }
@@ -554,7 +579,17 @@ export function ackEligibility(state, cellId) {
   if (cell.attempts.length === 0) {
     return { eligible: false, reason: 'it has never been attempted; run or resume the sweep first' };
   }
-  if (cell.terminalStatus === SATURATED_AT_FLOOR) return { eligible: true, reason: 'saturated at the floor' };
+  // `cell.lastOk`, not merely "has attempts". The never-attempted guard above
+  // closes the zero-attempt forgery; this closes the attempted-and-FAILED one,
+  // where a fabricated floor DONE sat over nothing but errors and was waived
+  // with the reassuring reason below — reaching COMPLETE with no successful
+  // query ever made. It must stay ABOVE the two refusals that follow: a real
+  // floor cell is legitimately waivable whether its last attempt succeeded or
+  // later failed transiently, because at the floor there is nothing left to
+  // subdivide and nothing for a retry to reach.
+  if (cell.terminalStatus === SATURATED_AT_FLOOR && cell.lastOk) {
+    return { eligible: true, reason: 'saturated at the floor' };
+  }
   const last = cell.attempts[cell.attempts.length - 1];
   if (last.ok) {
     return { eligible: false, reason: 'its most recent attempt succeeded, so it is not stuck' };

@@ -386,6 +386,18 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
     write: (w, id) => w.done(id, SATURATED_AT_FLOOR),
   },
   {
+    // The floor twin of the unsaturated fixture above, and the shape that
+    // distinguishes "has attempts" from "has EVIDENCE". A fabricated floor over
+    // nothing but errors passed the never-attempted guard and was waived with
+    // the reassuring reason 'saturated at the floor', reaching COMPLETE without
+    // a single successful query.
+    name: 'DONE claims saturated_at_floor after a permanent failure',
+    write: (w, id) => {
+      w.attempt({ cellId: id, attemptN: 1, ok: false, errorClass: 'http4xx' });
+      w.done(id, SATURATED_AT_FLOOR);
+    },
+  },
+  {
     // A place recorded by BOTH a capped parent and one of its children — which
     // is the normal case, since a child re-searches ground the parent already
     // covered. Every other fixture keeps parent and child ids disjoint, so
@@ -1147,6 +1159,13 @@ describe('resume state matrix', () => {
         seeded.summary.finished + seeded.summary.outstanding,
         `${state.name}: a cell was counted finished AND outstanding`,
       ).toBeLessThanOrEqual(seeded.summary.plannedCells);
+      // `failed` is neither of the above: a cell can carry a completing status
+      // WITH evidence and still hold an unrecovered blocking failure, so only
+      // this pairing catches `finished` forgetting to exclude it.
+      expect(
+        seeded.summary.finished + seeded.summary.failed,
+        `${state.name}: a cell was counted finished AND failed`,
+      ).toBeLessThanOrEqual(seeded.summary.plannedCells);
 
       const writer = openManifest(file);
       await sweep({
@@ -1246,24 +1265,112 @@ describe('resume state matrix', () => {
     },
   );
 
+  it('invariant 23 — a waiver is refused while any DESCENDANT is unsettled', () => {
+    // The children check walked one level. A waiver makes this cell terminal,
+    // so the engine stops descending through it — anything unfinished below is
+    // orphaned with no resume that will ever reach it. Here the grandchild
+    // carries the unrecovered retry while both the child and the parent look
+    // finished from one level up.
+    const cell = baseCell();
+    const kids = realKids();
+    const grandkids = subdivideCell(kids[0], SUBDIVISION) as any[];
+    const file = path.join(dir, 'deep-waiver.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'deep-waiver' }), cells: [cell] });
+    writer.attempt({ cellId: cell.id, attemptN: 1, ok: false, errorClass: 'http4xx' });
+    writer.subdivide(cell.id, kids.map((k) => k.id), kids);
+    writer.attempt({ cellId: kids[0].id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(kids[0].id, page(CAP, 'dw'));
+    writer.subdivide(kids[0].id, grandkids.map((g) => g.id), grandkids);
+    for (const grandkid of grandkids) {
+      writer.attempt({ cellId: grandkid.id, attemptN: 1, ok: true, count: 1, capped: false });
+      writer.result(grandkid.id, [{ id: `dw-${grandkid.id}` }]);
+      writer.done(grandkid.id, 'unsaturated');
+    }
+    writer.done(kids[0].id, 'cleared');
+    // One grandchild then took a transient failure it never recovered from.
+    writer.attempt({ cellId: grandkids[0].id, attemptN: 2, ok: false, errorClass: 'quota' });
+    for (const kid of kids.slice(1)) {
+      writer.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+      writer.result(kid.id, [{ id: `dw-${kid.id}` }]);
+      writer.done(kid.id, 'unsaturated');
+    }
+    writer.close();
+
+    const state = loadManifest(file)!;
+    expect(completeness(state).failed, 'the grandchild should be reported failed').toContain(
+      grandkids[0].id,
+    );
+    const verdict = ackEligibility(state, cell.id);
+    expect(
+      verdict.eligible,
+      'the root was waivable while a grandchild still owed a retry',
+    ).toBe(false);
+    expect(verdict.reason).toContain('unfinished');
+  });
+
+  it('invariant 24 — a live subdivision that reaches the floor still clears its parent', async () => {
+    // The terminal-outcome helper accepts SATURATED_AT_FLOOR as a finished
+    // child. Every seeded floor fixture short-circuits before that helper is
+    // consulted, and every healthy transport returns uncapped pages, so no case
+    // drove a LIVE floor outcome through it — dropping the floor from the helper
+    // survived while leaving a real subdivided parent unable to record 'cleared'.
+    const state = STATES.find((candidate) => candidate.name === 'capped with page, no subdivide');
+    expect(state, 'fixture missing — a rename must not silently drop this case').toBeDefined();
+
+    const { cell, file } = build(state!);
+    const writer = openManifest(file);
+    await sweep({
+      cells: [cell],
+      manifest: writer,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      // Always capped, so every level saturates until the depth bound stops it.
+      transport: async (queried: any) => ({ places: page(CAP, queried.id) }),
+    });
+    writer.close();
+
+    const after = loadManifest(file)!;
+    const report = completeness(after);
+    expect(report.saturated.length, 'no cell reached the floor, so the case is vacuous')
+      .toBeGreaterThan(0);
+    expect(
+      after.cells.get(cell.id).terminalStatus,
+      'a parent whose subdivision bottomed out at the floor failed to record cleared',
+    ).toBe('cleared');
+  });
+
   it('invariant 22 — a fabricated floor status is neither terminal nor waivable', () => {
     // The floor was the last status accepted on its bare word, and a floor cell
     // is waivable — so one --ack-cell turned a fabricated DONE into an
     // acknowledged terminal and the run reported COMPLETE over geography nobody
     // had searched. Reproduced before the fix; both halves are pinned here.
-    const state = STATES.find(
-      (candidate) => candidate.name === 'DONE claims saturated_at_floor, never attempted',
+    const forged = STATES.filter((candidate) =>
+      candidate.name.startsWith('DONE claims saturated_at_floor'),
     );
-    expect(state, 'fixture missing — a rename must not silently drop this case').toBeDefined();
+    expect(forged.length, 'both floor forgeries must be registered').toBe(2);
 
-    const { cell, file } = build(state!);
-    const seeded = loadManifest(file)!;
-    const verdict = ackEligibility(seeded, cell.id);
-    expect(verdict.eligible, 'a never-searched cell was waivable on a bare floor status').toBe(
-      false,
-    );
-    expect(verdict.reason).toContain('never been attempted');
-    expect(completeness(seeded).complete, 'a fabricated floor status reported complete').toBe(false);
+    for (const state of forged) {
+      const { cell, file } = build(state);
+      const seeded = loadManifest(file)!;
+      const verdict = ackEligibility(seeded, cell.id);
+      // The point is not that these can never be waived — a permanently failed
+      // cell legitimately can be, and one of these two is exactly that. The
+      // point is that neither may be waived AS A FLOOR CELL, because that arm
+      // sits above the refusals and grants the waiver on the status word alone.
+      expect(
+        verdict.reason,
+        `${state.name}: waived as a floor cell with no successful query behind it`,
+      ).not.toContain('saturated at the floor');
+      expect(completeness(seeded).complete, `${state.name}: reported complete`).toBe(false);
+      // Diagnosed honestly: unsearched geography is missing work, not "recall
+      // is knowably short here", which is what a real floor status means.
+      expect(
+        completeness(seeded).missing,
+        `${state.name}: a never-searched cell was reported as saturated`,
+      ).toContain(cell.id);
+    }
   });
 
   it.each([
@@ -1324,9 +1431,9 @@ describe('resume state matrix', () => {
     expect(new Set(STATES.map((state) => state.name)).size, 'duplicate state name').toBe(
       STATES.length,
     );
-    expect(STATES.length, 'a state was dropped').toBe(29);
+    expect(STATES.length, 'a state was dropped').toBe(30);
     expect(SETTLED_STATES.length, 'the settled partition shrank').toBe(6);
-    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(23);
+    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(24);
 
     const withRecords = STATES.filter((state) => {
       const { cell, file } = build(state);
