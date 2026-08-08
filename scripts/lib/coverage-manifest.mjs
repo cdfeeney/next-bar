@@ -324,7 +324,7 @@ function unrecoveredBlocking(cell) {
 /**
  * @typedef {object} Verdict
  * @property {'unfinished'|'unbacked'|'floor'|'complete'} kind what this cell IS
- * @property {string|null} status the raw DONE word — for messages, never for decisions
+ * @property {boolean} claimsFloor the DONE says `saturated_at_floor`, evidence or not
  * @property {boolean} hasEvidence a successful ATTEMPT is on record
  * @property {boolean} acknowledged an `ack_terminal` DONE with a real ACK_TERMINAL behind it
  * @property {boolean} blocked an unrecovered blocking failure
@@ -398,7 +398,18 @@ export function classify(cell) {
   const terminal = kind === 'complete' || kind === 'floor';
   return Object.freeze({
     kind,
-    status,
+    // The raw word is deliberately NOT on this object. It was, briefly, as
+    // "for messages, never for decisions" — but a decision object carrying the
+    // exact word the old defects switched on is an invitation, and a naming
+    // convention is advice, not structure. `why` carries the word for messages;
+    // there is nothing here to branch on by accident.
+    //
+    // `claimsFloor` is the one place the CLAIM is separable from the fact, and
+    // it is named so the difference is visible: `atFloor` means the cell IS at
+    // the floor (claim AND evidence); `claimsFloor` means only that the DONE
+    // says so. Exactly one caller needs the weaker one — see completeness
+    // clause 2.
+    claimsFloor: status === SATURATED_AT_FLOOR,
     hasEvidence,
     acknowledged,
     blocked: unrecoveredBlocking(cell),
@@ -473,9 +484,17 @@ export function completeness(state) {
     //     A child at the floor counts as finished here — its own
     //     SATURATED_AT_FLOOR entry is what blocks completion, so the residual
     //     is reported once, against the cell that has it.
-    //     `verdict.atFloor`, not the status word: a capped cell whose floor
-    //     claim has no evidence has NOT subdivided and still owes one.
-    if (cell.capped && !verdict.atFloor) {
+    //     `claimsFloor`, not `atFloor`. This clause exempts anything claiming
+    //     the floor, evidence or not — which is what the raw-word test it
+    //     replaced did, and `unclearedCap` is part of the published report and
+    //     the CLI diagnostic. Tightening it to `atFloor` would add unbacked
+    //     floor claims to that array. Those cells are already reported by
+    //     clause 1, so nothing is lost, and the shape cannot arise from a real
+    //     manifest anyway: `replay` sets `capped` only inside the `record.ok`
+    //     branch, so `capped` implies evidence. Reading the verdict rather than
+    //     the word keeps the single source of truth; `claimsFloor` is how the
+    //     verdict says "the DONE claims it" without asserting it is true.
+    if (cell.capped && !verdict.claimsFloor) {
       const children = cell.children.map((id) => state.cells.get(id));
       const finishedByChildren = children.length > 0 && children.every(isTerminal);
       if (!finishedByChildren && !verdict.acknowledged) {

@@ -686,3 +686,116 @@ describe('budget and error paths', () => {
     expect(attempts).toEqual([1, 2]);
   });
 });
+
+describe('no terminal writer may contradict the invariant', () => {
+  /**
+   * `resumeChildren` was the one 'cleared' writer that checked the parent's
+   * evidence but not its blocking failure — the settle branch and the
+   * cap-recovery call site both do. A parent with a successful attempt AND a
+   * later quota failure, whose children then all finish during the resume,
+   * had 'cleared' written over it while `completeness` reported that same cell
+   * in `failed`. This test is the shape that produced it.
+   */
+  const PARENT = {
+    id: 'p',
+    kind: 'nearby',
+    depth: 0,
+    sideMeters: 360,
+    bbox: BBOX,
+    center: { latitude: 40.7215, longitude: -73.988 },
+    radiusMeters: 255,
+  };
+  const kid = (n: number) => ({
+    ...PARENT,
+    id: `p/${n}`,
+    depth: 1,
+    sideMeters: 180,
+    radiusMeters: 127,
+  });
+
+  function seedBlockedParentWithOneUnfinishedChild(file: string) {
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'blocked-parent' }), cells: [PARENT] });
+    writer.attempt({ cellId: PARENT.id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(PARENT.id, [{ id: 'v-parent' }]);
+    const kids = [kid(0), kid(1), kid(2), kid(3)];
+    writer.subdivide(PARENT.id, kids.map((k) => k.id), kids);
+    for (const k of kids.slice(0, 3)) {
+      writer.attempt({ cellId: k.id, attemptN: 1, ok: true, count: 1, capped: false });
+      writer.result(k.id, [{ id: `v-${k.id}` }]);
+      writer.done(k.id, 'unsaturated', { count: 1 });
+    }
+    // Recorded AFTER the success and after the subdivision — the shape the
+    // pre-fix engine produced by re-querying such a parent, so in-flight
+    // manifests already contain it.
+    writer.attempt({ cellId: PARENT.id, attemptN: 2, ok: false, errorClass: 'quota' });
+    writer.close();
+  }
+
+  it('does not write cleared over a parent the invariant reports failed', async () => {
+    const file = path.join(dir, 'blocked-parent.jsonl');
+    seedBlockedParentWithOneUnfinishedChild(file);
+
+    const writer = openManifest(file);
+    await sweep({
+      cells: [PARENT],
+      state: loadManifest(file),
+      manifest: writer,
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      // The last child succeeds; the parent's quota is still down.
+      transport: async (cell: any) => {
+        if (cell.id === PARENT.id) {
+          const error: any = new Error('quota exceeded');
+          error.status = 429;
+          throw error;
+        }
+        return { places: [{ id: `v-${cell.id}` }] };
+      },
+    });
+    writer.close();
+
+    const after = loadManifest(file)!;
+    const report = completeness(after);
+    const parentDones = after.records.filter(
+      (record: any) => record.type === 'DONE' && record.cellId === PARENT.id,
+    );
+
+    // Asserted as the CONTRADICTION, not as "the status equals X": the
+    // manifest must never claim a cell finished while the invariant reports
+    // the same cell outstanding.
+    expect(report.failed).toContain(PARENT.id);
+    expect(parentDones.map((record: any) => record.terminalStatus)).not.toContain('cleared');
+
+    // And the cell keeps a lever: the block is what holds it, so a resume
+    // retries it rather than skipping it.
+    expect(report.status).toBe('incomplete_failed');
+  });
+
+  it('writes cleared once the block clears, and stops there', async () => {
+    // The complement — the guard must not make a legitimate parent unreachable.
+    const file = path.join(dir, 'recovered-parent.jsonl');
+    seedBlockedParentWithOneUnfinishedChild(file);
+
+    for (const attempt of [1, 2]) {
+      const writer = openManifest(file);
+      await sweep({
+        cells: [PARENT],
+        state: loadManifest(file),
+        manifest: writer,
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: async (cell: any) => ({ places: [{ id: `v-${cell.id}-${attempt}` }] }),
+      });
+      writer.close();
+    }
+
+    const after = loadManifest(file)!;
+    expect(completeness(after).complete).toBe(true);
+    const parentDones = after.records.filter(
+      (record: any) => record.type === 'DONE' && record.cellId === PARENT.id,
+    );
+    // Converged, not looping: it settles and does not append a DONE per resume.
+    expect(parentDones.length).toBeLessThanOrEqual(2);
+  });
+});

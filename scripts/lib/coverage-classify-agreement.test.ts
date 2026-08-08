@@ -163,7 +163,13 @@ describe('classify is the only judge', () => {
 
     expect(['unfinished', 'unbacked', 'floor', 'complete']).toContain(verdict.kind);
     expect(verdict.completing).toBe(verdict.kind === 'complete');
-    expect(verdict.atFloor).toBe(verdict.kind === SATURATED_AT_FLOOR ? true : verdict.kind === 'floor');
+    expect(verdict.atFloor).toBe(verdict.kind === 'floor');
+    // The claim and the fact differ in exactly one direction: a cell can claim
+    // the floor without being at it, never the reverse.
+    if (verdict.atFloor) expect(verdict.claimsFloor).toBe(true);
+    // The raw DONE word is deliberately absent from the verdict — a decision
+    // object must not carry the field the old defects branched on.
+    expect(verdict).not.toHaveProperty('status');
     // `terminal` is the union of the two finished kinds, and nothing else.
     expect(verdict.terminal).toBe(verdict.completing || verdict.atFloor);
     // A run may only report done what owes no further subdivision.
@@ -230,6 +236,51 @@ describe('classify is the only judge', () => {
     if (verdict.acknowledged) {
       expect(eligibility).toMatchObject({ eligible: false, reason: 'already acknowledged' });
     }
+  });
+});
+
+describe('the published report shape is the contract', () => {
+  // `unclearedCap` is returned to callers and printed by the CLI, so which
+  // cells land in it is contract, not an implementation detail. Every `capped`
+  // history in the matrix above also carries evidence — `replay` sets `capped`
+  // only inside the `record.ok` branch — so the matrix structurally CANNOT
+  // reach a capped cell with an unbacked floor claim. Only a hand-built cell
+  // can, which is exactly why this is pinned by hand.
+  it('a capped cell claiming the floor without evidence stays out of unclearedCap', () => {
+    const state = {
+      cells: new Map([
+        [
+          'x',
+          {
+            cellId: 'x',
+            planned: true,
+            depth: 0,
+            attempts: [],
+            lastOk: null,
+            capped: true,
+            placeIds: [],
+            places: [],
+            children: [],
+            parentId: null,
+            terminalStatus: SATURATED_AT_FLOOR,
+            cell: CELL,
+          },
+        ],
+      ]),
+      records: [],
+      plan: PLAN,
+    };
+    const report = completeness(state as any);
+    // Clause 1 already reports it, and it is not `saturated` because a floor
+    // claim with no search behind it does not mean "recall is short here".
+    expect(report.missing).toEqual(['x']);
+    expect(report.saturated).toEqual([]);
+    // The exemption the raw-word test used to give is preserved deliberately.
+    expect(report.unclearedCap).toEqual([]);
+    expect(report.status).toBe('incomplete_missing_work');
+    expect(report.complete).toBe(false);
+    expect(report.summary.finished).toBe(0);
+    expect(report.summary.outstanding).toBe(1);
   });
 });
 
@@ -422,5 +473,11 @@ describe('the construction cannot be quietly undone', () => {
     // recorded cell's field.
     expect(stripped).not.toMatch(/(COMPLETING_STATUSES|TERMINAL_STATUSES)\s*\.\s*includes/);
     expect(stripped).not.toMatch(/isTerminalStatus\s*\(/);
+
+    // `classify` no longer returns the raw word at all, which is the real fix.
+    // This is the backstop: if anyone re-adds it, branching on it here fails
+    // rather than silently reading `undefined`.
+    expect(stripped).not.toMatch(/verdict\s*\.\s*status\b/);
+    expect(stripped).not.toMatch(/\{[^}]*\bstatus\b[^}]*\}\s*=\s*(verdict|classify)/);
   });
 });

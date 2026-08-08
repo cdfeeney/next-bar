@@ -275,10 +275,24 @@ async function resumeChildren(cell, known, ctx) {
       throw error;
     }
   }
-  // Same evidence rule as the settle branch: a 'cleared' attests that THIS cell
-  // was searched and censored, so it needs an ok ATTEMPT of its own. Without
-  // one, leave the parent outstanding and let it be queried.
-  if (classify(known).hasEvidence && outcomes.every(isTerminalOutcome)) {
+  // The same TWO rules as the settle branch, not just the first one.
+  //
+  // Evidence: a 'cleared' attests that THIS cell was searched and censored, so
+  // it needs an ok ATTEMPT of its own.
+  //
+  // And `!blocked`. This writer was the one terminal writer still outside that
+  // rule — the settle branch and the cap-recovery call site both consult it,
+  // this did not. A parent holding a successful attempt AND a later quota
+  // failure, whose children then all finish during the resume, had 'cleared'
+  // written over it while `completeness` reported the very same cell in
+  // `failed`. Reproduced: the manifest said cleared and the invariant said
+  // incomplete_failed, in the same breath — the two-judge contradiction this
+  // module exists to make impossible. It did converge (the next resume
+  // re-queries, because a blocked cell is never `settledForResume`), but at the
+  // cost of re-buying a parent whose children had already covered its
+  // geography, and of a manifest that lied in the meantime.
+  const parent = classify(known);
+  if (parent.hasEvidence && !parent.blocked && outcomes.every(isTerminalOutcome)) {
     ctx.manifest.done(cell.id, 'cleared', { children: known.children.length, resumed: true });
     return 'cleared';
   }
