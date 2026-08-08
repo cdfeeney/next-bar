@@ -170,6 +170,68 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
       w.done(id, 'ack_terminal');
     },
   },
+  {
+    // 'cleared' is the terminal status of every subdivided parent and it was
+    // seeded by NO fixture, so the one completeness clause that accepts it was
+    // never exercised from disk. Here the children are all finished but the
+    // parent's own DONE was lost — the state a kill after the last child
+    // produces, and the one where the engine must write 'cleared' itself.
+    name: 'subdivided, all children done, parent DONE lost',
+    write: (w, id) => {
+      const kids = [0, 1, 2, 3].map((i) => ({ id: `${id}/${i}`, depth: 1, sideMeters: 180 }));
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, page(CAP, 'k'));
+      w.subdivide(id, kids.map((k) => k.id), kids);
+      for (const kid of kids) {
+        w.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+        w.result(kid.id, [{ id: `k-${kid.id}` }]);
+        w.done(kid.id, 'unsaturated');
+      }
+    },
+  },
+  {
+    // The same subtree one record later: the parent recorded 'cleared'. The
+    // clean terminal shape of a subdivision, and previously unrepresented.
+    name: 'subdivided and cleared',
+    settled: true,
+    write: (w, id) => {
+      const kids = [0, 1, 2, 3].map((i) => ({ id: `${id}/${i}`, depth: 1, sideMeters: 180 }));
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, page(CAP, 'l'));
+      w.subdivide(id, kids.map((k) => k.id), kids);
+      for (const kid of kids) {
+        w.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+        w.result(kid.id, [{ id: `l-${kid.id}` }]);
+        w.done(kid.id, 'unsaturated');
+      }
+      w.done(id, 'cleared');
+    },
+  },
+  {
+    // Reachable: the --ack-cell path writes ACK_TERMINAL and DONE as two
+    // separately fsynced records (nearby-sweep.mjs), so a kill between them
+    // leaves a waiver that never committed. The cell must therefore still owe
+    // work — a half-written waiver is not a waiver.
+    name: 'waiver written, DONE lost',
+    write: (w, id) => {
+      w.attempt({ cellId: id, attemptN: 1, ok: false, errorClass: 'http4xx' });
+      w.ackTerminal(id, 'permanent rejection', 'operator');
+    },
+  },
+  {
+    // The inverse, and the one the `acked` check in the engine's waiver guard
+    // exists for: a DONE claiming the word with no ACK_TERMINAL behind it.
+    // Capped, because only a capped cell can tell the two guards apart — an
+    // uncapped one reaches the same replay-and-return either way, which is why
+    // dropping the check survived the previous matrix. A forged status must not
+    // buy a cell out of the subdivision it owes.
+    name: 'DONE claims ack_terminal while capped, no ACK record',
+    write: (w, id) => {
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, page(CAP, 'm'));
+      w.done(id, 'ack_terminal');
+    },
+  },
 ];
 
 /** Cells the engine must treat as finished: waived, or short of the floor. */
@@ -187,9 +249,16 @@ function recordedSubtree(state: any, cellId: string, seen = new Set<string>()): 
   ];
 }
 
+let buildSeq = 0;
 function build(state: (typeof STATES)[number]) {
   const cell = baseCell();
-  const file = path.join(dir, `${state.name.replace(/\W+/g, '-')}.jsonl`);
+  // A UNIQUE file per CALL, not per state name. `openManifest` opens with 'a'
+  // and `dir` is per-test rather than per-build, so deriving the path from the
+  // name alone made every build() inside one test append to one file. Invariant
+  // 5 builds three times: its "fresh manifest per stopper" was actually three
+  // PLAN records deep, and the interrupt pass resumed the SUBDIVIDE the budget
+  // pass had just written instead of the capped-unsubdivided state it names.
+  const file = path.join(dir, `${state.name.replace(/\W+/g, '-')}-${++buildSeq}.jsonl`);
   const writer = openManifest(file);
   writer.plan({ configHash: configHash({ t: state.name }), cells: [cell] });
   state.write(writer, cell.id);
@@ -525,5 +594,198 @@ describe('resume state matrix', () => {
         report.summary.uniquePlaceIds,
       );
     }
+  });
+
+  // --------------------------------------------------------------------------
+  // The invariants below close mutations that survived all 107 earlier cases.
+  // Every one of them was confirmed to survive by applying the edit named in
+  // the comment and watching the whole matrix stay green.
+  // --------------------------------------------------------------------------
+
+  it.each(STATES.map((state) => [state.name, state] as const))(
+    'invariant 9 — "%s" spends no call once the budget is gone',
+    async (_name, state) => {
+      // Survived: `ctx.callsUsed >= ctx.maxCalls` -> `>`. The matrix asserted
+      // that a budget stop KEEPS its data (invariant 5) but never that the
+      // budget is actually honoured, so an off-by-one bought one paid call per
+      // outstanding cell — the exact opposite of what AC7 calls a hard budget.
+      const { cell, file } = build(state);
+      const called: string[] = [];
+      const writer = openManifest(file);
+      const report = await sweep({
+        cells: [cell],
+        manifest: writer,
+        state: loadManifest(file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        maxCalls: 0,
+        transport: async (queried: any) => {
+          called.push(queried.id);
+          return { places: [] };
+        },
+      });
+      writer.close();
+      expect(called, `${state.name}: called the API with a spent budget`).toEqual([]);
+      expect(report.callsUsed, `${state.name}: reported spending a call it had no budget for`).toBe(
+        0,
+      );
+    },
+  );
+
+  it.each(STATES.map((state) => [state.name, state] as const))(
+    'invariant 10 — "%s" reports interruption honestly',
+    async (_name, state) => {
+      // Survived: `ctx.interrupted = true` -> `false`. Every case discarded
+      // runSweep's return value, so nothing constrained the report the caller
+      // uses to decide whether the run may be treated as a normal stop.
+      const healthy = build(state);
+      const healthyWriter = openManifest(healthy.file);
+      const clean = await sweep({
+        cells: [healthy.cell],
+        manifest: healthyWriter,
+        state: loadManifest(healthy.file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: healthyTransport([]),
+      });
+      healthyWriter.close();
+      expect(clean.interrupted, `${state.name}: a healthy run claimed it was interrupted`).toBe(
+        false,
+      );
+
+      const stopped = build(state);
+      const called: string[] = [];
+      const stoppedWriter = openManifest(stopped.file);
+      const halted = await sweep({
+        cells: [stopped.cell],
+        manifest: stoppedWriter,
+        state: loadManifest(stopped.file),
+        subdivision: SUBDIVISION,
+        maxResultCount: CAP,
+        transport: async (queried: any) => {
+          called.push(queried.id);
+          throw new SweepInterrupted();
+        },
+      });
+      stoppedWriter.close();
+      // Only states that actually reach the transport can be interrupted; the
+      // settled ones legitimately never call it.
+      if (called.length > 0) {
+        expect(
+          halted.interrupted,
+          `${state.name}: an interrupted run reported interrupted:false`,
+        ).toBe(true);
+      }
+    },
+  );
+
+  it('invariant 11 — a re-queried cell emits each place once, not once per source', async () => {
+    // Survived: `new Set(freshPlaces.map(p => p.id))` -> `new Set()`. Every
+    // fixture's recorded ids were disjoint from the healthy transport's, so the
+    // subtraction in replayRecordedOnce was never actually exercised. Overlap
+    // it here: queryHits counts callbacks and feeds the score gate, so a double
+    // emission inflates a candidate's score on resume.
+    const state = STATES.find(
+      (candidate) => candidate.name === 'capped then a later ok attempt whose page was lost',
+    );
+    expect(state, 'fixture missing — a rename must not silently drop this case').toBeDefined();
+
+    const { cell, file } = build(state!);
+    const emitted: string[] = [];
+    const writer = openManifest(file);
+    await sweep({
+      cells: [cell],
+      manifest: writer,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      // Returns ids the manifest ALREADY recorded for this cell.
+      transport: async (queried: any) =>
+        queried.id === cell.id ? { places: page(5, 'e') } : { places: page(1, queried.id) },
+      onPlaces: (places: any[]) => places.forEach((place) => emitted.push(place.id)),
+    });
+    writer.close();
+
+    const duplicated = [...new Set(emitted.filter((id, index) => emitted.indexOf(id) !== index))];
+    expect(duplicated, 'a recorded place was emitted twice for one cell').toEqual([]);
+    expect(emitted.filter((id) => id.startsWith('e-')).length, 'the recorded page was lost').toBe(
+      CAP,
+    );
+  });
+
+  it('invariant 12 — the later DONE wins, so a waiver can supersede a floor status', () => {
+    // Survived: last-DONE-wins -> first-DONE-wins in replay(). No fixture wrote
+    // two DONEs, yet that is exactly the shape the documented recovery lever
+    // produces: ackEligibility admits a saturated_at_floor cell, and the ack
+    // path then appends ACK_TERMINAL + DONE over the existing floor DONE. Under
+    // first-wins the waiver silently does nothing and the run can never finish.
+    const cell = baseCell();
+    const file = path.join(dir, 'two-done.jsonl');
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'two-done' }), cells: [cell] });
+    writer.attempt({ cellId: cell.id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(cell.id, page(CAP, 'n'));
+    writer.done(cell.id, SATURATED_AT_FLOOR);
+    writer.ackTerminal(cell.id, 'accepted residual saturation', 'operator');
+    writer.done(cell.id, 'ack_terminal');
+    writer.close();
+
+    const recorded = loadManifest(file)!.cells.get(cell.id);
+    expect(recorded.terminalStatus, 'the waiver did not supersede the floor DONE').toBe(
+      'ack_terminal',
+    );
+    expect(
+      completeness(loadManifest(file)).complete,
+      'an acknowledged floor cell still blocked completion',
+    ).toBe(true);
+  });
+
+  it('invariant 13 — a capped cell whose page is on record subdivides without re-billing it', async () => {
+    // Survived: dropping the `known.lastOkHasResult` branch so a capped cell is
+    // always re-queried. Sticky saturation still forces the subdivision, so the
+    // run converges and every case stayed green — while every capped resume
+    // silently paid for its parent a second time. Invariant 8 only counts calls
+    // on the SECOND pass, which is why it could not see this.
+    const state = STATES.find((candidate) => candidate.name === 'capped with page, no subdivide');
+    expect(state, 'fixture missing — a rename must not silently drop this case').toBeDefined();
+
+    const { cell, file } = build(state!);
+    const called: string[] = [];
+    const writer = openManifest(file);
+    await sweep({
+      cells: [cell],
+      manifest: writer,
+      state: loadManifest(file),
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      transport: healthyTransport(called),
+    });
+    writer.close();
+    expect(called, 'the parent was re-queried although its capped page was on record').not.toContain(
+      cell.id,
+    );
+    expect(called.length, 'the subdivision never ran').toBeGreaterThan(0);
+  });
+
+  it('the matrix registers every state it claims, and invariant 5 is not a no-op', () => {
+    // The count is NOT the signal — a previous edit deleted three invariants
+    // while the total went up. Pin the shape instead: unique names, both
+    // partitions populated, and enough states carrying recorded places that
+    // invariant 5 cannot quietly degrade into an all-skip green.
+    expect(new Set(STATES.map((state) => state.name)).size, 'duplicate state name').toBe(
+      STATES.length,
+    );
+    expect(STATES.length, 'a state was dropped').toBe(19);
+    expect(SETTLED_STATES.length, 'the settled partition shrank').toBe(4);
+    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(15);
+
+    const withRecords = STATES.filter((state) => {
+      const { cell, file } = build(state);
+      return recordedSubtree(loadManifest(file), cell.id).length > 0;
+    });
+    expect(
+      withRecords.length,
+      'invariant 5 asserts on too few states to constrain anything',
+    ).toBeGreaterThanOrEqual(9);
   });
 });

@@ -258,6 +258,18 @@ async function processCell(cell, ctx) {
       if (known.places?.length) ctx.onPlaces(known.places, cell);
       return resumeChildren(cell, known, ctx);
     }
+    // Every child finished, but this cell never recorded a terminal status of
+    // its own — the one-record window between the last child's DONE and the
+    // parent's. What is outstanding here is the RECORD, not more searching: the
+    // subdivision already covered this geography. Falling through to queryCell
+    // instead re-bought the parent's page, and if the budget or an interrupt
+    // stopped that call, the exit replayed only the parent's own page and
+    // silently dropped every venue the subdivision had found.
+    if (known.children?.length > 0 && !COMPLETING_STATUSES.includes(known.terminalStatus)) {
+      replaySubtree(cell.id, cell, ctx);
+      ctx.manifest.done(cell.id, 'cleared', { children: known.children.length, resumed: true });
+      return 'cleared';
+    }
     // Capped and never subdivided. If the capped attempt's own page reached the
     // disk we can subdivide from it; otherwise there is nothing to subdivide
     // from and the cell must be asked again. "Has any places" cannot answer
