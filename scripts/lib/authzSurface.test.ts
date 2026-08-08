@@ -1,11 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ANON_EXECUTABLE_FUNCTIONS,
+  ANON_READABLE_TABLES,
+  POLICY_LESS_BY_DESIGN,
+  RUNNER_MANAGED_TABLES,
   SERVICE_ROLE_ONLY_TABLES,
+  anonTableGrants,
+  expectedPublicTables,
+  functionGrants,
   functionsDefined,
+  netTablePrivileges,
+  policiesByTable,
+  policyLessTables,
+  policyStatements,
+  privilegeStatements,
   readMigrations,
   stripSqlComments,
   tableGrants,
   tablesCreated,
+  tablesRelyingOnDefaultGrants,
   tablesWithRlsEnabled,
   type MigrationFile,
 } from './authzSurface';
@@ -19,6 +32,10 @@ import {
  * database, which is an attended operation. What they prove is that the
  * migrations, which are the source of truth the runbook compares against,
  * still say what we think they say.
+ *
+ * Every assertion over the real corpus is paired with (a) a guard that the
+ * match set is non-empty, so it cannot pass vacuously, and (b) a fixture that
+ * exercises the FAILING direction, so it is shown to actually bite.
  */
 
 const files = readMigrations();
@@ -70,6 +87,24 @@ describe('RLS coverage', () => {
     expect(created.map((t) => t.name)).toEqual(['leaky']);
     expect(withRls.has('leaky')).toBe(false);
   });
+
+  it('every RLS-enabled table is either created by a migration or a known runner table', () => {
+    // The inverse gap, and the reason the runbook's table count was wrong:
+    // `schema_migrations` is hardened by 0036 but CREATED by the runner
+    // (MIGRATION_LEDGER_DDL in scripts/lib/migrationLedger.ts), so it shows up
+    // in the RLS scan and not in the `create table` scan. Any OTHER name
+    // appearing here is a table nobody in this repository creates.
+    const created = new Set(tablesCreated(files).map((t) => t.name));
+    const orphans = [...tablesWithRlsEnabled(files)].filter((t) => !created.has(t)).sort();
+    expect(orphans).toEqual([...RUNNER_MANAGED_TABLES].sort());
+  });
+
+  it('counts the runner-managed table in the expected public schema', () => {
+    const expected = expectedPublicTables(files);
+    const created = [...new Set(tablesCreated(files).map((t) => t.name))];
+    expect(expected).toContain('schema_migrations');
+    expect(expected.length).toBe(created.length + RUNNER_MANAGED_TABLES.length);
+  });
 });
 
 describe('SECURITY DEFINER functions', () => {
@@ -77,6 +112,7 @@ describe('SECURITY DEFINER functions', () => {
 
   it('parses a substantial number of function definitions', () => {
     expect(functions.length).toBeGreaterThan(20);
+    expect(functions.filter((f) => f.isSecurityDefiner).length).toBeGreaterThan(20);
   });
 
   it('every SECURITY DEFINER function pins search_path', () => {
@@ -151,10 +187,129 @@ describe('SECURITY DEFINER functions', () => {
     expect(parsed[0].isSecurityDefiner).toBe(true);
     expect(parsed[1].isSecurityDefiner).toBe(false);
   });
+
+  it('does not let a LATER statement pin an unpinned definer function', () => {
+    // The attribute tail is bounded at the statement's semicolon. Reading to
+    // the start of the next function instead would let this unrelated
+    // `alter function` mark `victim` as pinned when it is not — a false
+    // "all definers are pinned" on the single highest-value check here.
+    const trailingAlter = fake(`
+      create or replace function public.victim(p int)
+      returns void
+      language plpgsql
+      security definer
+      as $$ begin perform 1; end; $$;
+
+      alter function public.unrelated(int) set search_path = public;
+
+      create or replace function public.other(p int)
+      returns void language sql set search_path = public
+      as $$ select 1; $$;
+    `);
+    const parsed = functionsDefined(trailingAlter);
+    const victim = parsed.find((f) => f.name === 'victim');
+    expect(victim?.isSecurityDefiner).toBe(true);
+    expect(victim?.pinsSearchPath).toBe(false);
+  });
 });
 
-describe('service-role-only tables', () => {
-  it('grant nothing to anon or authenticated', () => {
+describe('policies', () => {
+  const byTable = policiesByTable(files);
+  const allPolicies = [...byTable.values()].flat();
+
+  it('finds the policies at all', () => {
+    // Non-vacuity, and a real trap: EVERY `create policy` in this corpus puts
+    // its `on public.<table>` on the NEXT line, so a line-oriented match finds
+    // zero policies and reports all 22 tables as policy-less. That mistake was
+    // made while verifying this module by hand.
+    expect(allPolicies.length).toBeGreaterThan(20);
+    expect(policyStatements(files).length).toBeGreaterThan(30);
+  });
+
+  it('parses QUOTED policy names containing colons and spaces', () => {
+    // "profiles: owner can read own" — the colon is what broke the ad-hoc
+    // character class that started this.
+    const quoted = allPolicies.filter((p) => p.includes(': '));
+    expect(quoted.length).toBeGreaterThan(10);
+    expect(byTable.get('profiles')).toContain('profiles: owner can read own');
+  });
+
+  it('finds a policy whose target table is on the following line', () => {
+    const wrapped = fake(`
+      create policy "widgets: owner can read own"
+        on public.widgets for select
+        using (auth.uid() = user_id);
+    `);
+    expect(policiesByTable(wrapped).get('widgets')).toEqual([
+      'widgets: owner can read own',
+    ]);
+  });
+
+  it('replays drops, so a dropped policy is NOT counted', () => {
+    // 0012 creates bar_rsvps_delete_own and 0014 drops it with no replacement.
+    // Counting `create policy` alone would claim bar_rsvps has a policy.
+    expect(byTable.get('bar_rsvps') ?? []).toEqual([]);
+
+    const dropped = fake(`
+      create policy gone on public.widgets for select using (true);
+      drop policy if exists gone on public.widgets;
+    `);
+    expect(policiesByTable(dropped).get('widgets')).toEqual([]);
+  });
+
+  it('a drop followed by a re-create leaves the policy present', () => {
+    // The house idempotency pattern; getting the order wrong would report
+    // every re-created policy as absent.
+    const recreated = fake(`
+      drop policy if exists "widgets: read" on public.widgets;
+      create policy "widgets: read" on public.widgets for select using (true);
+    `);
+    expect(policiesByTable(recreated).get('widgets')).toEqual(['widgets: read']);
+  });
+});
+
+describe('policy-less tables (RLS on, zero policies)', () => {
+  it('the DERIVED set matches the reviewed declaration exactly', () => {
+    // RLS with no policy is default-deny: correct and deliberate for counters
+    // and internal ledgers, indistinguishable from a forgotten policy
+    // otherwise. Asserting derived === declared means a new policy-less table
+    // cannot appear without a human deciding it is intentional, and a
+    // policy-less table cannot silently gain a policy either.
+    const derived = policyLessTables(files);
+    expect(derived.length).toBeGreaterThan(5);
+    expect(derived).toEqual([...POLICY_LESS_BY_DESIGN].sort());
+  });
+
+  it('every service-role-only table is policy-less', () => {
+    for (const t of SERVICE_ROLE_ONLY_TABLES) {
+      expect(POLICY_LESS_BY_DESIGN).toContain(t);
+    }
+  });
+
+  it('FAILS to list a table that has a policy, and lists one that does not', () => {
+    const mixed = fake(`
+      create table if not exists public.guarded (id uuid);
+      alter table public.guarded enable row level security;
+      create policy guarded_read on public.guarded for select using (true);
+
+      create table if not exists public.bare (id uuid);
+      alter table public.bare enable row level security;
+    `);
+    expect(policyLessTables(mixed)).toEqual(['bare']);
+  });
+});
+
+describe('table grants', () => {
+  it('finds the grants at all', () => {
+    // Corpus-level non-vacuity: without this, every grant assertion below
+    // could pass over an empty match set forever.
+    expect(tableGrants(files).length).toBeGreaterThan(10);
+    expect(privilegeStatements(files).length).toBeGreaterThan(20);
+    expect(privilegeStatements(files).filter((s) => s.action === 'revoke').length)
+      .toBeGreaterThan(10);
+  });
+
+  it('service-role-only tables grant nothing to anon or authenticated', () => {
     // These are counters whose only writer is the service role. A grant to a
     // client role would let an anonymous caller read or forge them.
     const offenders = tableGrants(files)
@@ -164,7 +319,7 @@ describe('service-role-only tables', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('are each actually present in the corpus', () => {
+  it('service-role-only tables are each actually present in the corpus', () => {
     // Otherwise the assertion above is vacuous: a typo in the table name
     // would make it pass over an empty set forever.
     const created = new Set(tablesCreated(files).map((t) => t.name));
@@ -181,6 +336,108 @@ describe('service-role-only tables', () => {
     expect(found).toHaveLength(1);
     expect(found[0].roles).toContain('anon');
   });
+
+  it('the DERIVED anon-readable table set matches the reviewed allowlist', () => {
+    // Generated, not hand-written. A spot check on two named tables cannot see
+    // a `grant ... to anon` appearing on a THIRD table, which is the failure
+    // it is supposed to prevent.
+    const derived = anonTableGrants(files);
+    expect(derived.map((g) => g.table).sort()).toEqual([...ANON_READABLE_TABLES].sort());
+    // Anonymous access is READ-ONLY: catalog data, never a write path.
+    for (const g of derived) expect(g.privileges).toEqual(['select']);
+  });
+
+  it('FAILS when a new table is granted to anon', () => {
+    const broken = fake(`
+      create table if not exists public.secrets (id uuid);
+      alter table public.secrets enable row level security;
+      revoke all on table public.secrets from public, anon, authenticated;
+      grant select on table public.secrets to anon;
+    `);
+    expect(anonTableGrants(broken).map((g) => g.table)).toEqual(['secrets']);
+  });
+
+  it('replays revoke-then-grant to get the NET privilege set', () => {
+    const replayed = fake(`
+      grant all on table public.widgets to authenticated;
+      revoke all on table public.widgets from public, anon, authenticated;
+      grant select, insert on table public.widgets to authenticated;
+    `);
+    const net = netTablePrivileges(replayed);
+    expect(net.get('widgets')?.get('authenticated')).toEqual(['insert', 'select']);
+    expect(net.get('widgets')?.get('anon')).toBeUndefined();
+  });
+
+  it('reads a column-scoped grant as the privilege, not the column list', () => {
+    // `grant update (display_name, is_private) on table public.profiles`
+    // (0006/0034) — the column list must not be parsed as privilege names.
+    const scoped = fake(
+      'grant update (display_name, is_private) on table public.profiles to authenticated;',
+    );
+    expect(privilegeStatements(scoped)[0].privileges).toEqual(['update']);
+  });
+
+  it('does NOT read a function grant as a table grant', () => {
+    // `grant execute on function public.get_public_ratings(text) to anon` is a
+    // different surface. Counting it as an anonymous TABLE grant would raise a
+    // false alarm on a healthy database.
+    const fnGrant = fake(
+      'grant execute on function public.get_public_ratings(text) to anon, authenticated;',
+    );
+    expect(privilegeStatements(fnGrant)).toEqual([]);
+    expect(tableGrants(fnGrant)).toEqual([]);
+  });
+
+  it('every created table is revoke-first', () => {
+    // The house pattern (0019:80). It matters for reading Check 3: on a
+    // revoke-first table the deployed grants should match the migrations
+    // exactly, because Supabase's default `grant all ... to anon,
+    // authenticated` has been taken away. A table that never revoked could
+    // legitimately show more than the migrations say.
+    expect(tablesRelyingOnDefaultGrants(files)).toEqual([]);
+  });
+
+  it('FAILS to call a table revoke-first when it never revoked', () => {
+    const lazy = fake(`
+      create table if not exists public.inherited (id uuid);
+      alter table public.inherited enable row level security;
+    `);
+    expect(tablesRelyingOnDefaultGrants(lazy)).toEqual(['inherited']);
+  });
+});
+
+describe('function grants', () => {
+  it('the DERIVED anon-executable function set matches the reviewed allowlist', () => {
+    const derived = [
+      ...new Set(
+        functionGrants(files)
+          .filter((g) => g.roles.includes('anon'))
+          .map((g) => g.function),
+      ),
+    ].sort();
+    expect(derived.length).toBeGreaterThan(0);
+    expect(derived).toEqual([...ANON_EXECUTABLE_FUNCTIONS].sort());
+  });
+
+  it('FAILS when a new function is granted to anon', () => {
+    const broken = fake(
+      'grant execute on function public.leak_everything(uuid) to anon;',
+    );
+    const found = functionGrants(broken).filter((g) => g.roles.includes('anon'));
+    expect(found.map((g) => g.function)).toEqual(['leak_everything']);
+  });
+
+  it('every anon-executable function is a SECURITY DEFINER function', () => {
+    // An anonymous entry point that is NOT definer would run as `anon` and hit
+    // RLS anyway; one that IS definer is deliberately reaching past RLS and
+    // must gate internally. Either way the operator needs to know which.
+    const definers = new Set(
+      functionsDefined(files).filter((f) => f.isSecurityDefiner).map((f) => f.name),
+    );
+    for (const name of ANON_EXECUTABLE_FUNCTIONS) {
+      expect(definers.has(name)).toBe(true);
+    }
+  });
 });
 
 describe('stripSqlComments', () => {
@@ -191,5 +448,17 @@ describe('stripSqlComments', () => {
     expect(out).toContain('select 1;');
     expect(out).toContain('select 2;');
     expect(out).not.toContain('grant all to anon');
+  });
+
+  it('keeps a commented-out rollback grant out of the surface', () => {
+    // Every migration ends with a commented rollback block that often reads
+    // `grant all on table public.x to anon, authenticated;`. Counting those
+    // would report an anonymous grant on almost every table.
+    const withRollback = fake(`
+      revoke all on table public.widgets from public, anon, authenticated;
+      -- Rollback:
+      --   grant all on table public.widgets to anon, authenticated;
+    `);
+    expect(anonTableGrants(withRollback)).toEqual([]);
   });
 });
