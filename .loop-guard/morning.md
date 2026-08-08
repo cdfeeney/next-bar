@@ -366,3 +366,45 @@ NO DATABASE WAS CONTACTED at any point - not Staging, not Production. Nothing
 pushed, deployed, migrated, or irreversibly applied. `npm ci` was run once in
 this worktree (node_modules was empty); D: had 628 GB free, so the stored
 ENOSPC precondition did not apply.
+
+## C3 ITEM 11 — g-e0fb31ba — COMPLETE (operator-directed continuation)
+
+Connor directed "apply the five fixes and re-run santa", lifting the exhausted
+3-round cap by attended decision. Outcome: **complete**, quorum met, no lane
+blocking.
+
+Commits added after the blocked report: 9a7d847 (the five findings), d599436
+(v0.1 legacy surface), 24f76b7 (tampered-database hardening), 14bb8e8 and
+ee76838 (two self-inflicted defects caught by confirmation reviews).
+
+Final: typecheck 0; 165 files / 2568 tests (from 164/2483 at the start of the
+night); authz suite 14 -> 99 tests; secret-scan clean over 722 files.
+
+The big one the earlier rounds all missed: the runbook derived its expected
+surface only from the migrations, but Production did not start there. Migration
+0000 RENAMES the v0.1 tables to *_v01_legacy instead of dropping them and leaves
+waitlist live for /api/waitlist, so Production holds 27 tables and 44 policies,
+not 22 and 29. Checks 1-3 would each have manufactured stop-and-escalate
+incidents on a healthy Production. The legacy set is now derived from
+supabase/schema.sql plus 0000's own rename statements, and asserted.
+
+Reviewer disagreement, adjudicated: DeepSeek argued running the ledger check
+first is a WEAKNESS (the ledger is a table inside the database an attacker
+controls); GLM had earlier argued it must run first or a behind-but-healthy
+environment reports every unapplied migration as drift. GLM adjudicated its own
+position: keep the ordering, deny a PASS any evidentiary weight, and name
+"Check 7 green while 1-6 red" as the signature of a forged ledger.
+
+STILL OPEN — SEPARATE ITEM, NOT THIS ONE:
+Codex found a real Production defect out of scope here. supabase/schema.sql:39
+creates index bars_neighborhood_idx on the v0.1 `bars`; migration 0000 renames
+only the TABLE, and index names are unique per schema, so the index stays
+attached to bars_v01_legacy. Migration 0019:83's
+`create index if not exists bars_neighborhood_idx on public.bars (neighborhood)`
+is therefore a NAME-based no-op, and the live catalog table has no neighborhood
+index on a v0.1-derived Production. Fixing it needs a forward migration, which
+this item's stored constraints forbid. Worth its own item.
+
+Deployed RLS parity is still UNVERIFIED — this item builds the means to check
+it; running it is attended work that has not happened. NO DATABASE WAS EVER
+CONTACTED. Nothing pushed, deployed, migrated, or irreversibly applied.
