@@ -87,6 +87,33 @@ statement at all.
 **Conclusion: no migration in this packet deletes, truncates, or drops `auth.users`, and none
 removes any existing user row.**
 
+> ⚠️ **Do not quote the sentence above on its own.** It is the single most quotable line in this
+> document and the one most likely to be forwarded upward as "the review confirms `auth.users` is
+> untouched." Stripped of context it loses all four of its qualifiers: it is **static-only** (§4), it
+> covers the **packet's five files, not the candidate's migration set** (see the scope note below),
+> it says nothing about the **grants** question that is 0034's actual risk (§5), and it comes from a
+> document whose own ledger marks its safety argument unverifiable by the means used (§14b). Quote
+> the ledger row, not the sentence.
+
+### Scope of this scan — corrected 2026-08-08
+
+The scan above covered **the five packet files only**. Once §1 and §8b established that the web
+candidate's migration set is 39 files rather than the packet's 38, "no *pending* migration deletes
+`auth.users`" became ambiguous about which set it means, and the 39th file had never been scanned.
+It has now been:
+
+`0043_rate_limits.sql` — **no `auth.users` reference at all** (`grep -n "auth.users"` → no match).
+It has one **executable** `delete from` at `:110` and a commented one at `:107`, both targeting
+`public.rate_limits`, the new table 0043 itself creates; the delete is the function's own purge of
+expired counter rows. The commented rollback `drop table if exists public.rate_limits` sits at `:135`.
+
+So the conclusion survives the widened scope — but note the earlier phrasing "**Two matches, both
+non-executable**" is true of the five packet files and **false of the candidate's 39**, where there
+is a third match and it *is* executable. It is harmless (a new table purging its own rows), and that
+is exactly why the scope had to be stated rather than left to be discovered.
+*(Scope gap raised by the GLM lane; it was introduced by this pass's own §8b, which widened the
+document's frame of reference without re-running §3.)*
+
 ## 4. The limits of that static claim — read this before trusting §3
 
 The §3 finding is a **text scan of five files**. It does **not** establish, and must not be reported
@@ -115,12 +142,22 @@ as establishing:
 A reviewer raised that `revoke all` (0034:42) precedes the re-grants (0034:44, :64), so a failure
 between them could strand `authenticated` with **zero** privileges on `profiles` — a user-facing
 outage. **Rejected on evidence.** PostgreSQL has fully transactional DDL, and this repo's runner
-wraps each migration in an explicit transaction with its ledger row:
-`scripts/apply-migrations.ts:281` `begin` → `:320` `commit` → `:322` `rollback` on error, documented
-at `:19` and `:44`, with `:352` noting that the GRANT and REVOKE "commit atomically". No other
-session can observe an intermediate state; a mid-migration failure rolls back to the pre-0034 grants
-in full. The concern would be valid on MySQL, where DDL causes an implicit commit. It does not apply
-here. Recorded so it is not re-raised at the window.
+wraps each migration file's body in an explicit transaction together with its ledger row:
+`scripts/apply-migrations.ts:487` `begin` → `:494` the migration SQL → `:495-498` the
+`schema_migrations` insert → `:499` `commit`, with `:503` `rollback` on error. No other session can
+observe an intermediate state; a mid-migration failure rolls back to the pre-0034 grants in full.
+The concern would be valid on MySQL, where DDL causes an implicit commit. It does not apply here.
+Recorded so it is not re-raised at the window.
+
+> **Citation corrected 2026-08-08 — the conclusion held, the evidence pointer did not.** This
+> paragraph previously cited `:281` `begin` → `:320` `commit` → `:322` `rollback`, plus `:44` and
+> `:352`. Those lines are a **different transaction**: `:281`–`:322` are inside
+> `installBootstrapFixture()`, `:44` describes the baseline pass, and `:352` concerns the initial
+> ledger DDL. None of them wraps a migration file. An operator following this document's own
+> "check the citation" discipline would have landed in unrelated code and found the claim
+> unsupported. The per-file transaction really does exist, at the lines now cited, so claim 10 in
+> §14b remains sound — but it was sound by luck, not by the evidence given.
+> *(Found independently by the Claude and Codex lanes; Codex supplied the corrected line numbers.)*
 
 A static "no destructive statement" result is **necessary but nowhere near sufficient** for a
 Production window.
@@ -346,20 +383,53 @@ analysis read `src` at the migration ref (§5).
 6. Exactly one consumer is `fail-closed`: `src/app/api/account/delete/route.ts:79`. Every other
    consumer (`api/event`, `api/waitlist`, `mediaMetric.server.ts`) is `fail-open`.
 
-**Consequence.** Deploy candidate `689e564` against a database migrated with only this packet, with
-the shared tier armed (`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and
-`RATE_LIMIT_KEY_SALT` present — the expected Production configuration; `requireDurable` additionally
-defaults **on** in production), and `consume_rate_limit` does not exist. Every call to it errors, so
-**account deletion is denied for every user, continuously**, while every other rate-limited route
-merely loses its shared tier and falls back to per-instance limiting.
+**Consequence.** Deploy candidate `689e564` against a database migrated with only this packet and
+`consume_rate_limit` does not exist. Every call to it errors, so **account deletion is denied for
+every user, continuously**, while every other rate-limited route merely loses its shared tier and
+falls back to per-instance limiting.
+
+**The failure does not depend on the shared tier being armed — corrected 2026-08-08.** An earlier
+version of this section made "with the shared tier armed" a precondition. Checking the other branch
+shows the precondition is unnecessary, because **in production both configurations deny**:
+
+| Production configuration | Path taken | Account deletion |
+|---|---|---|
+| Tier armed (URL + service key + salt present), 0043 **unapplied** | RPC errors → throw → `rateLimiter.ts:422` catch → `allowed: onDegraded === 'fail-open'` | **denied** |
+| Tier **not** armed (any of the three env vars missing) | `rateLimiter.ts:375` `if (!durable \|\| !salt)` → `:388` `if (requireDurable) return { allowed: false, degraded: true }` | **denied** |
+| Tier armed **and** 0043 applied | normal | allowed, limited to 5/user/hour |
+
+`requireDurable` defaults **on** in production (`account/delete/route.ts`, `requireDurableRateLimit()`),
+and its whole purpose is to refuse loudly rather than silently fall back to per-instance limiting on
+the one irreversible action. So the honest statement is stronger than the original: **in production,
+account deletion works only if 0043 is applied.** Misconfiguring the tier does not rescue it; it just
+changes which line denies.
+
+*(This correction came out of testing a DeepSeek claim that an unset salt would let deletions
+succeed. The repository shows the opposite — `:388` refuses — so that claim is **rejected on
+evidence**; but checking it exposed that this section's precondition was too narrow.)*
 
 The account-delete bucket keys on the verified user id, so it never takes the unattributed
 short-circuit at `rateLimiter.ts:407` that would otherwise allow the request.
 
-**Warrant and falsifier — stated in §14b's terms.** This is `derived-from-code`, not
-`verified-by-execution`: it is a read of six linked call sites, and **nothing here was run**. The
-falsifier is cheap and should be run rather than argued: apply the packet to a scratch database,
-deploy the candidate against it with the shared tier armed, and attempt one account deletion.
+**Warrant and falsifier — stated in §14b's terms, and split, because the two halves are not equally
+supported.**
+
+- **The tier-layer half is already `verified-by-test`.** `src/lib/rateLimiter.test.ts:251-258`
+  ("FAILS CLOSED when the store is unreachable and the action is irreversible") constructs a
+  fail-closed limiter over an unavailable counter and asserts exactly
+  `{ allowed: false, degraded: true }`. The step this section leans on hardest is therefore not a
+  reading at all — it is a green test in the ordinary suite.
+- **The database half remains `derived-from-code`.** That an *unapplied 0043* is what makes the RPC
+  error is still only read, never executed. That is the single unverified link.
+
+**The cheapest sufficient falsifier is therefore NOT a scratch database.** An earlier version of this
+section named one. A unit test with a client stub whose `rpc` returns a
+`{ error: { code: 'PGRST202' } }` (undefined-function) response, driven through `durableCounterFromEnv`
+and the account-delete consumer, settles the whole chain with no Postgres, no migration and no
+deploy — and `rateLimiter.test.ts:402` already asserts the `consume_rate_limit failed` throw, so the
+harness exists. The scratch-database run is still worth doing for the §9 unknowns, but it should not
+be the gate on *this* finding. *(Cheaper-falsifier point raised by the DeepSeek lane and confirmed
+against the existing test file.)*
 `rateLimiter.durable.ts:19-22` anticipates an unapplied migration in prose — under §14b's first
 forbidden evidence class that comment is cited here as the author's *intent* only, and carries no
 weight as evidence of runtime state.
@@ -426,10 +496,24 @@ Revert characteristics per migration:
 | 0035 | Not audited for revert in this addendum |
 | 0036 | Header states **no application rollback is expected or useful**; re-opening it restores the finding |
 | 0042 | `drop table` in comments — **destroys any account content state written after apply** |
+| **0043** | **Added to this table 2026-08-08.** Commented `drop table if exists public.rate_limits` at `:135`. Destroys only in-flight rate-limit counters, which are ephemeral by design — so this is the one revert here with **no durable data loss**. But see the asymmetry below. |
 
 **The two `drop table` rollbacks are data-destroying once users have written through them.** After
 the first write, "revert" is no longer free, and the window's real rollback plan is restore-from-
 backup, not the commented DDL.
+
+> **0043's revert is the dangerous one despite losing no data — added 2026-08-08.** Every other row
+> in this table trades off *data*. 0043 trades off *availability*: reverting it drops
+> `consume_rate_limit`, and by §8b that immediately denies account deletion for every user in
+> production, because the candidate calls that function and the only fail-closed consumer refuses
+> when it is missing. **So 0043 must not be reverted while a candidate that calls it is deployed** —
+> the rollback order is application first, then migration. Reverting in the other order converts a
+> rollback into an outage of the account-deletion path.
+>
+> This row was missing entirely until the GLM lane pointed out that §8b widened the migration set
+> without propagating the change into the revert and preservation sections. **§11's
+> account-preservation evidence is unaffected**: 0043 creates one new table, references no
+> pre-existing table and no `auth.users` (§3 scope note), so no preservation assertion changes.
 
 ## 11. Account-preservation evidence stronger than an aggregate count
 
@@ -459,9 +543,13 @@ Each must be exercised against the migrated environment by a real account, not a
   identically to a pre-window capture.
 - **Saved nights survive**, and the account-content-state write-through works on a *new* device.
 - **Password reset completes end-to-end**, including the cross-container path.
-- **Cross-container authentication** — the TestFlight WKWebView → Safari boundary. **This is the
-  path the un-reviewed `76d610f` work addresses and it has never been tested against a deployed
-  environment.**
+- **Cross-container authentication** — the TestFlight WKWebView → Safari boundary. This is the path
+  the auth cross-context work addresses. That work is **now reviewed** — its gate goal completed and
+  `76d610f` is an ancestor of the current auth tip `b6a7957`, which is in the candidate's ancestry
+  (§2) — but **it has still never been exercised against a deployed environment**, which is why it
+  remains a gate here. *(Corrected 2026-08-08: this bullet still described `76d610f` as
+  "un-reviewed" after §2 had retracted exactly that characterisation. Review is not the same gate as
+  deployment; only the review half changed.)*
 - **Public shared list** — **the READ path is pre-existing; the WRITE path is what this packet
   opens.** Separate the two or the risk is misread in either direction:
   - *Read (already live).* `get_public_ratings` is `SECURITY DEFINER` with
@@ -512,9 +600,10 @@ migration, Production deployment, or TestFlight modification is authorized by th
 1. Fresh independent review of this addendum and the packet. *(Updated 2026-08-08: the original
    wording — "has had no independent review at the time of writing" — is superseded. The document has
    since been through five review rounds across the Claude, Codex, GLM, DeepSeek and Kimi lanes, and
-   the 2026-08-08 revision adds §8b and rewrites §1, §2, §5, §9 and §15. **That revision is itself
-   un-reviewed at the time of writing**, so the requirement stands — it is now a review of the new
-   material, not a first review.)*
+   the 2026-08-08 revision adds §8b and rewrites §1, §2, §5, §9 and §15. That revision has **since
+   been reviewed** by a five-family panel (round 7, §14b), whose findings are folded in above. What
+   remains un-reviewed is the round-7 repair itself. The requirement therefore still stands, but it
+   is now narrow: review the round-7 delta, not the document from scratch.)*
 2. **Attended Production identity verification** — a human confirming, in the Production project,
    which migrations are applied and that the target project is the intended one.
 3. A verified-restorable backup (§10).
@@ -523,10 +612,17 @@ migration, Production deployment, or TestFlight modification is authorized by th
    candidate's ancestry. It is replaced by a sharper one: the candidate requires a migration this
    packet does not carry, and the shortfall is not benign.
 5. Answers to every unknown in §9.
-6. **An empirical check against a scratch database** (§14b). §8b is the second load-bearing claim in
-   this document that no amount of further reading can settle, and it is the first one that predicts
-   a specific, testable, user-visible failure. That makes the scratch-database run cheaper than
-   another review round, not more expensive.
+6. **Empirical checks, in this order of cost.** *(Revised 2026-08-08 after round 7.)*
+   - **First, the unit test** — a client stub returning an undefined-function error through the
+     account-delete consumer settles §8b's one unverified link with no database at all (§8b). Do
+     this before the window; it is minutes of work and it is the only gate on the finding that
+     predicts a user-visible failure.
+   - **Then, read-only Production queries** for the four assumptions in §14b claims 5–8 (applied
+     migration set, current grants, public-flag row count, restore capability). No amount of further
+     reading settles these; they are the reason a window needs a human.
+   - **Then the scratch-database run** for the §9 unknowns that survive both.
+   Six review rounds preceded these, and rounds 6 and 7 each still found real defects — so the
+   ordering above, not another reading pass, is the remaining path to trustworthy.
 
 ## 14b. Claim ledger — read this instead of trusting the prose
 
@@ -540,7 +636,7 @@ So do not judge this document by whether the latest round found nothing. Judge i
 
 | # | Claim | Warrant type | Falsifier |
 |---|---|---|---|
-| 1 | No migration deletes/truncates/drops `auth.users` | `derived-from-explicit-DDL` (text scan of 5 files) | A function/trigger body that deletes; not audited (§4.1) |
+| 1 | No migration deletes/truncates/drops `auth.users` | `derived-from-explicit-DDL` — text scan of the 5 packet files, **plus 0043 scanned separately** (claim 15) | A function/trigger body that deletes; not audited (§4.1) |
 | 2 | 0034 breaks no application path | `derived-from-explicit-DDL` + repo enumeration | An untraced writer or a definer→invoker flip (§5) |
 | 3 | Public-list **read** path is pre-existing | `derived-from-explicit-DDL` (0015 anon EXECUTE) | — solid |
 | 4 | `shares_list_publicly` had no reachable writer before 0034 | ~~`author-asserted`~~ **FALSIFIED** | Column grants restrict UPDATE, not INSERT; default `grant all` supplied INSERT |
@@ -549,14 +645,18 @@ So do not judge this document by whether the latest round found nothing. Judge i
 | 7 | Production's applied migration set is 0000–0032 | **`assumed`** | Query the ledger table |
 | 8 | Restore capability exists | **`assumed`, explicitly UNVERIFIED** | Restore a backup into a scratch project |
 | 9 | 0042 is additive | `derived-from-explicit-DDL` | — solid |
-| 10 | Revoke/re-grant is atomic | `verified-in-repo` (`apply-migrations.ts:281/320/322`) | — solid |
+| 10 | Revoke/re-grant is atomic | `verified-in-repo` — **corrected citation** `apply-migrations.ts:487` `begin` → `:494` SQL → `:499` `commit` → `:503` `rollback` (see claim 14) | — solid at the corrected lines |
 | 11 | This packet is the candidate's complete migration set | ~~`assumed`, never stated~~ **FALSIFIED 2026-08-08** | The candidate carries `0043_rate_limits.sql`; 38 files vs 39 (§1) |
-| 12 | Unapplied 0043 + armed shared tier ⇒ account deletion denied for every user | **`derived-from-code`** (6 linked sites, §8b) | Apply the packet to a scratch DB, deploy the candidate, attempt one deletion — **run it** |
+| 12 | In production, unapplied 0043 ⇒ account deletion denied for every user, **in both tier configurations** | **split** — tier-layer half `verified-by-test` (`rateLimiter.test.ts:251-258`); "unapplied 0043 makes the RPC error" still `derived-from-code` | A client stub returning `PGRST202` through the account-delete consumer — cheaper than a scratch DB, and the harness already exists |
 | 13 | §5's enumeration covers the **web candidate**, not just the packet ref | `verified-in-repo` — re-run at `689e564`, output identical | A `src` path reaching these tables other than `.from('<table>')` (dynamic name, raw SQL, a new RPC in INVOKER mode) |
+| 14 | §4's atomicity **citation** (distinct from claim 10's conclusion) | ~~`verified-in-repo`~~ **CITATION FALSIFIED 2026-08-08, conclusion intact** | `:281/:320/:322` are `installBootstrapFixture`; the per-file transaction is `:487`–`:503` |
+| 15 | §3's destructive-statement scan covers the **candidate's** migration set | ~~implied~~ **corrected 2026-08-08** — the scan covered the 5 packet files; 0043 has since been scanned separately (§3 scope note) | A 40th migration appearing on the candidate without §3 being re-run |
 
-**Claims 5–8 are assumptions, and 11 is a falsified one.** Five of the thirteen load-bearing claims
-cannot be settled by any amount of further reading, and claim 12 — the only one predicting a
-concrete user-visible failure — is among them.
+**Claims 5–8 are assumptions; 11 and 14 are falsified; 15 was a silent scope error.** Of the fifteen
+load-bearing claims, **four (5–8) cannot be settled by any amount of further reading** and require a
+Production query. Claim 12 — the only one predicting a concrete user-visible failure — was *partly*
+recovered from that category by the independent review below: its tier-layer half turned out to be
+covered by an existing green test, leaving one unverified link instead of six.
 
 **What round 6 (2026-08-08) changed about the diagnosis.** Rounds 1–5 were reviewers disagreeing
 about *semantics* — what `SECURITY DEFINER` does, what a column grant restricts. Round 6 found
@@ -566,6 +666,34 @@ reasoning over the prose would have caught either class, because the prose was i
 throughout. Both were caught by re-running the original commands and comparing. That is the actual
 argument for the §14b structural fix below: a document whose facts decay needs its claims *recomputed*
 on a schedule, not re-argued.
+
+**Round 7 (2026-08-08, independent panel: Claude, Codex, GLM, DeepSeek, Kimi K3).** Reviewing round
+6's own material. Every lane found something no other lane found, which is the first round where
+that is true:
+
+| Lane | Unique finding |
+|---|---|
+| Claude | §12 still called `76d610f` "un-reviewed" after §2 had retracted exactly that phrase — round 6 committing the very error it had just diagnosed |
+| Codex | The corrected line numbers for §4's atomicity citation (`:487`–`:503`), which Claude flagged as wrong but could not locate |
+| GLM | §8b widened the migration set without propagating it into §3's scan scope or §10's revert table — a *consequence* omission rather than a contradiction |
+| DeepSeek | The scratch-database falsifier was not the cheapest one; an existing unit test already covers the tier-layer half |
+| Kimi K3 | The quotability hazard now guarded at the head of §3, and the scope-dissolution argument recorded below |
+
+One DeepSeek claim was **rejected on repository evidence** (that an unset salt would let deletions
+succeed — `rateLimiter.ts:388` refuses instead), but testing it corrected §8b's precondition. Note
+what the split implies: the two lanes with repository access found *citation and contradiction*
+defects, and the three text-only lanes found *scope, cost and framing* defects. Neither group could
+have found the other's.
+
+**Scope dissolution — the finding with the longest reach, from the Kimi lane.** This document was
+commissioned to gate *one frozen packet*. §8b establishes that the application candidate depends on
+a migration outside that packet. So "review this frozen packet" is no longer a coherent unit of
+work: gating the packet alone would approve a schema that breaks account deletion when paired with
+the real candidate. **The unit of review must be re-frozen as a bundle** — migration set + pinned
+application SHA + the disposition of 0043 — and the window planned as: verify empirically → re-freeze
+the bundle → review the delta → schedule. Any plan that gates the old packet alone is planning a
+deployment that cannot happen. This supersedes nothing in §1–§13; it reframes what they are a review
+*of*, and it is the reason §14 requirement 4 is a blocker rather than a note.
 
 ### Three classes of in-repo assertion this analysis should never have cited as evidence
 
