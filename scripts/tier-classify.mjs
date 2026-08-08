@@ -32,12 +32,49 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** Split piped input into paths. Tolerates CRLF, blank lines and quoting. */
+/**
+ * Split piped input into paths.
+ *
+ * Prefers NUL separation (`git ls-files -z`, `changed-paths.mjs`) because it is
+ * the only form git never mangles. Falls back to newlines for a hand-typed or
+ * legacy pipe, and there undoes `core.quotePath`: git wraps any path with
+ * non-ASCII or special characters in quotes and C-escapes the bytes
+ * (`"caf\303\251.txt"`). Left as-is that string matches no glob and the file is
+ * misclassified, so the escapes are decoded back to real bytes.
+ */
 function parsePaths(raw) {
+  if (raw.includes('\0')) return raw.split('\0').filter((p) => p.length > 0);
   return raw
     .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^"(.*)"$/, '$1'))
-    .filter((line) => line.length > 0);
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map(unquoteGitPath);
+}
+
+/** Decode one `core.quotePath` entry back to its real path. */
+function unquoteGitPath(line) {
+  if (!(line.startsWith('"') && line.endsWith('"') && line.length >= 2)) return line;
+  const body = line.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== '\\') {
+      bytes.push(body.charCodeAt(i));
+      continue;
+    }
+    const next = body[i + 1];
+    const simple = { n: 10, t: 9, r: 13, '"': 34, '\\': 92 };
+    if (next in simple) {
+      bytes.push(simple[next]);
+      i += 1;
+    } else if (/[0-7]/.test(next)) {
+      // Three-digit octal escape for a raw byte, e.g. \303\251 for "é".
+      bytes.push(parseInt(body.slice(i + 1, i + 4), 8));
+      i += 3;
+    } else {
+      bytes.push(body.charCodeAt(i));
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
 }
 
 function printHuman(result, source) {

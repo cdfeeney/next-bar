@@ -34,6 +34,7 @@ import {
   TIER_RANK,
   bakedFloorFor,
   detectCapabilities,
+  isExecutableExtension,
   isInertBinary,
   isInertPath,
   isNonExecutable,
@@ -189,7 +190,10 @@ export function classifyOnePath(rawPath, map, opts = {}) {
   const inert = isInertPath(path);
   const binaryAsset = isInertBinary(path);
   const nonExecutable = isNonExecutable(path);
-  const baseline = inert || binaryAsset ? 'T2' : map.default_tier;
+  // An inert DIRECTORY does not make an executable file inert. `docs/sync.mjs`
+  // keeps the T1 baseline; only genuinely inert content drops to T2.
+  const executable = isExecutableExtension(path);
+  const baseline = (inert || binaryAsset) && !executable ? 'T2' : map.default_tier;
   let tier = baseline;
 
   // 1. Capability analysis of the actual content.
@@ -239,8 +243,14 @@ export function classifyOnePath(rawPath, map, opts = {}) {
     }
   }
 
+  // `nonRuntime` drives `skippable`, which lets a change skip behavioral
+  // verification entirely — so an executable never qualifies, even under an
+  // inert directory. `src/fixtures/factory.ts` was previously skippable.
   const nonRuntime =
-    (inert || binaryAsset) && matchesAnyGlob(map.non_runtime_paths, path) !== null && tier !== 'T0';
+    (inert || binaryAsset) &&
+    !executable &&
+    matchesAnyGlob(map.non_runtime_paths, path) !== null &&
+    tier !== 'T0';
 
   return {
     path,

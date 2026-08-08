@@ -60,8 +60,10 @@ much process the change gets — how it is reviewed, what must be tested, and
 whether a revert point is required. `AGENTS.md` section 5 has the table.
 
 The classifier is `scripts/tier-classify.mjs`. It has **zero runtime
-dependencies** (Node built-ins only), so it runs in CI before `npm ci` and
-cannot be disabled by a dependency failure.
+dependencies** (Node built-ins only), so it *can* run before `npm ci` and
+cannot be disabled by a dependency resolution failure. In the current CI
+workflow the tier classification step runs after `npm ci`, and `tier-validate`
+runs last inside `verify:full`.
 
 ### Capability-based, not path-based
 

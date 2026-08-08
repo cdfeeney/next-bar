@@ -95,9 +95,21 @@ npm run tier-validate     # check the tier map against every tracked file
 | **T2** | Demonstrably inert content — docs, fixtures, plain text | Do not break the build |
 
 Classification is **capability-based and fails closed**. What a change *can do*
-decides its tier, regardless of where the file sits, so moving or renaming a
-destructive script cannot lower it. If the classifier cannot establish that a
-change lacks a high-risk capability, it returns **T0 with `escalated: true`**.
+decides its tier, largely regardless of where the file sits, so moving or
+renaming a destructive script does not lower it **below the capability floor
+its content earns**. That guarantee is exactly as good as the signature list in
+`scripts/lib/tier-capabilities.mjs`: a destructive operation expressed in a form
+no signature matches — SQL assembled at runtime, a delete behind an
+indirection — will not be caught. Treat the classifier as a floor, not a proof,
+and raise the tier yourself when you know better.
+
+If the classifier cannot establish that a change lacks a high-risk capability,
+it returns **T0 with `escalated: true`**.
+
+**Run `tier-changed` against the right base.** The changed set includes
+working-tree edits, untracked files, *and* `base...HEAD`. With no base resolved
+it can only see uncommitted work, so committed changes would go unclassified —
+pass `--base origin/main` when in doubt.
 
 **Tier is upgrade-only.** A reviewer may raise a tier; nobody may lower one.
 Never self-label work T2 to skip a gate. The tier map may escalate a path but

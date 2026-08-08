@@ -35,6 +35,13 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Classify the tier of this change
+        # `verify:full` validates the tier MAP; it never classifies the files
+        # this pull request actually changed. Without this step CI checked the
+        # policy's internal consistency and nothing about the diff in front of
+        # it. `--base` is required because a fresh checkout has no working-tree
+        # changes, so the feeder's other two sources are both empty here.
+        run: node scripts/changed-paths.mjs --base "origin/${{ github.base_ref || github.event.repository.default_branch }}" | node scripts/tier-classify.mjs
       - name: Verify (canonical repository gate)
         run: npm run verify:full
         env:

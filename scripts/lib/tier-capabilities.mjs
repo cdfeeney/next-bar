@@ -60,6 +60,13 @@ export const BAKED_PATH_FLOORS = [
   // make every subsequent change classify as "no paths given" — a green gate
   // that inspected nothing.
   { glob: 'scripts/changed-paths.mjs', tier: 'T0', capability: 'tier-classifier' },
+  // The test runner's config decides whether the enforcement suite runs at all.
+  // Flooring `scripts/__tests__/**` while leaving this at T1 was a gap: deleting
+  // 'scripts/**/*.test.mjs' from the vitest include list silences all 45 tier
+  // tests — and every other test — just as effectively as deleting them.
+  { glob: 'vitest.config.*', tier: 'T0', capability: 'tier-enforcement-test' },
+  { glob: 'playwright.config.ts', tier: 'T0', capability: 'tier-enforcement-test' },
+  { glob: 'tsconfig.json', tier: 'T0', capability: 'tier-enforcement-test' },
 
   // --- CI and release behaviour: a workflow edit can delete the gate that
   // protects everything else, or add a step that reads deployment secrets.
@@ -121,7 +128,42 @@ export const BAKED_PATH_FLOORS = [
  * above: `AGENTS.md`, `CLAUDE.md` and `.claude/**` are instructions a coding
  * agent follows, so they CAN cause action and stay T0 by path.
  */
-export const NON_EXECUTABLE_GLOBS = ['**/*.md', '**/*.txt', '**/*.snap'];
+export const NON_EXECUTABLE_GLOBS = ['**/*.md', '**/*.txt'];
+
+/**
+ * Extensions that CAN execute. A path under an inert directory keeps the T1
+ * baseline if it has one of these.
+ *
+ * Without this, INERT_PATH_GLOBS handed a T2 (and `skippable`) baseline to
+ * anything under a docs or fixtures directory — so `docs/tools/sync.mjs`
+ * classified T2/skippable whenever its content matched no signature, while the
+ * identical file at `tools/sync.mjs` was T1. That is a path-based downgrade,
+ * the precise thing this design forbids: moving a script under a docs
+ * directory must not launder it.
+ */
+export const EXECUTABLE_EXTENSION_GLOBS = [
+  '**/*.js',
+  '**/*.mjs',
+  '**/*.cjs',
+  '**/*.jsx',
+  '**/*.ts',
+  '**/*.mts',
+  '**/*.cts',
+  '**/*.tsx',
+  '**/*.sh',
+  '**/*.bash',
+  '**/*.ps1',
+  '**/*.py',
+  '**/*.rb',
+  '**/*.sql',
+  '**/*.yml',
+  '**/*.yaml',
+];
+
+/** True when the path can execute, whatever directory it sits in. */
+export function isExecutableExtension(path) {
+  return matchesAnyGlob(EXECUTABLE_EXTENSION_GLOBS, path) !== null;
+}
 
 /**
  * Paths that are demonstrably inert: they carry no executable capability, so a
@@ -173,9 +215,28 @@ export const CAPABILITY_SIGNATURES = [
   {
     name: 'destructive-sql',
     tier: 'T0',
+    // `TABLE` is OPTIONAL after TRUNCATE in PostgreSQL: `TRUNCATE users CASCADE`
+    // is valid and was missed while `TRUNCATE TABLE users` was caught.
+    //
+    // The bare form MUST be anchored to real SQL context — a terminating `;`,
+    // CASCADE, or RESTART. `truncate` is also a Tailwind utility class, and the
+    // unanchored version matched `className="truncate text-sm"`, which put five
+    // ordinary React components at T0 in a full-repository sweep. That is the
+    // alert-fatigue failure mode this design exists to avoid.
     pattern:
-      /\b(?:drop\s+(?:table|schema|database|policy|function|trigger)|truncate\s+table|delete\s+from|alter\s+table\s+\S+\s+drop)\b/i,
+      /(?:\bdrop\s+(?:table|schema|database|policy|function|trigger)\b|\btruncate\s+table\b|\btruncate\s+(?:only\s+)?[a-z_][\w.]*(?:\s*;|\s+cascade\b|\s+restart\b)|\bdelete\s+from\b|\balter\s+table\s+\S+\s+drop\b)/i,
     note: 'destroys or drops persistent data',
+  },
+  {
+    name: 'remote-deploy',
+    tier: 'T0',
+    // Release-path control was previously matched ONLY by filename convention
+    // (**/deploy*.sh, **/release*.mjs), so renaming deploy.sh to ship.sh
+    // dropped it to T1 — the exact rename evasion this design claims to close.
+    // Detect the mechanism instead of the name.
+    pattern:
+      /(?:\bscp\s+|\brsync\s+|\bssh\s+\S+\s+(?:sudo\s+)?(?:systemctl|service|docker|pm2)\b|\bdocker\s+push\b|\bnpm\s+publish\b|\bpm2\s+(?:restart|reload)\b)/,
+    note: 'moves code onto, or restarts, a deployed environment',
   },
   {
     name: 'destructive-data-client',
@@ -190,8 +251,15 @@ export const CAPABILITY_SIGNATURES = [
     // match. `.remove(` is likewise anchored to the `.from(...).remove(`
     // storage idiom, because a bare `.remove(` would match every
     // `classList.remove('open')` in the UI.
+    // Three shapes, because ORMs disagree:
+    //   `.delete()`                    Supabase/PostgREST — empty parens
+    //   `.delete(users).where(...)`    Drizzle/Kysely — table passed as an arg
+    //   `export const DELETE = ...`    Next.js route handler, both spellings
+    // The empty-paren form stays anchored so ordinary `Map.delete(key)` and
+    // `set.delete(x)` do not match; the arg form requires a following
+    // `.where(`/`.returning(`, which collections never have.
     pattern:
-      /(?:\.delete\s*\(\s*\)|\.from\s*\([^)]*\)\s*\.remove\s*\(|\bexport\s+(?:async\s+)?function\s+DELETE\s*\()/,
+      /(?:\.delete\s*\(\s*\)|\.delete\s*\([^)]*\)\s*\.\s*(?:where|returning)\s*\(|\.from\s*\([^)]*\)\s*\.remove\s*\(|\bexport\s+(?:(?:async\s+)?function\s+DELETE\s*\(|const\s+DELETE\s*=))/,
     note: 'deletes rows or stored objects through a data client, or exposes a DELETE handler',
   },
   {
@@ -220,9 +288,17 @@ export const CAPABILITY_SIGNATURES = [
     tier: 'T0',
     // NEXT_PUBLIC_* is publishable by definition and is excluded — including it
     // would floor most of the app at T0 and destroy the signal.
+    //
+    // Three access shapes, because only dot-access was covered before:
+    //   process.env.DATABASE_URL
+    //   process.env['DATABASE_URL']
+    //   const { DATABASE_URL } = process.env
+    // Also catches a literal connection URI with embedded credentials, which
+    // can appear in a committed snapshot or fixture with no `process.env` in
+    // sight.
     pattern:
-      /process\.env\.(?!NEXT_PUBLIC_)[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*/,
-    note: 'reads secret credentials from the environment',
+      /(?:process\.env\s*(?:\.\s*|\[\s*['"])(?!NEXT_PUBLIC_)[A-Z0-9_]*(?:SECRET|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|DATABASE_URL|ACCESS_TOKEN|API_KEY)[A-Z0-9_]*|(?:const|let|var)\s*\{[^}]*\b(?:DATABASE_URL|SERVICE_ROLE_KEY|[A-Z0-9_]*SECRET[A-Z0-9_]*)\b[^}]*\}\s*=\s*process\.env|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@/'"]+:[^\s:@/'"]+@)/,
+    note: 'reads secret credentials from the environment, or embeds a credentialed connection URI',
   },
 
   // ---------- T1: must be reviewed, but recoverable ----------

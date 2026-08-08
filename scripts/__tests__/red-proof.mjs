@@ -78,6 +78,16 @@ const NEW_CAPABILITY_CASES = new Set([
   'new destructive script is T0 even with an empty tier map',
   'unanalyzable runtime file is T0 and escalated',
   'demonstrably inert NEW fixture stays low tier',
+  // Round 2 — each found by an independent reviewer and reproduced before fixing.
+  'executable under docs/ keeps the runtime baseline',
+  'TRUNCATE without the optional TABLE keyword is T0',
+  'ORM delete with a table argument is T0',
+  'arrow-form DELETE route handler is T0',
+  'renamed deploy script is still T0 by mechanism',
+  'destructured credential access is T0',
+  'bracket credential access is T0',
+  'snapshot embedding a credentialed URI is T0',
+  'the vitest config is T0',
 ]);
 
 const rows = [];
