@@ -120,7 +120,15 @@ async function main() {
   // its last command's status), so a git failure became "no changed paths given"
   // and a reassuring default tier — a green gate that inspected nothing.
   const baseIndex = argv.indexOf('--base');
-  const requestedBase = baseIndex >= 0 && baseIndex + 1 < argv.length ? argv[baseIndex + 1] : null;
+  // A trailing `--base` with no value silently became "no base at all", so
+  // `… --changed --base` reported a confident tier against a base the caller
+  // believed they had supplied. Asking for a base and not giving one is an
+  // error, not a default.
+  if (baseIndex >= 0 && baseIndex + 1 >= argv.length) {
+    process.stderr.write('tier-classify: --base requires a ref argument.\n');
+    process.exit(2);
+  }
+  const requestedBase = baseIndex >= 0 ? argv[baseIndex + 1] : null;
 
   let input;
   let deletedPaths = [];

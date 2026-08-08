@@ -256,79 +256,38 @@ function escapeForRegExp(s) {
 const IDENTIFIER = '[A-Za-z_$][A-Za-z0-9_$]*';
 
 /**
- * Blank out JavaScript comments that occupy a whole line, preserving lines.
+ * True when the character at `index` sits after a `//` on its own line.
  *
- * WHY THIS EXISTS. `// import { rm } from 'node:fs/promises'` floored an
- * ordinary module at T0. A commented-out import is not capability, and a gate
- * that fires on dead text acquires exactly the continuous false-positive rate
- * this design exists to avoid.
+ * WHY THIS SHAPE, AFTER THREE FAILURES. A commented-out import
+ * (`// import { rm } from 'node:fs/promises'`) is not capability, and flooring
+ * it at T0 is the kind of false positive that gets a gate switched off. Three
+ * successive attempts to solve that by BLANKING comment text were each broken
+ * by a different reviewer, always the same way: the blanker can only ever
+ * REMOVE text before the analyzer sees it, so every misparse is a FAIL-OPEN,
+ * and `/` is genuinely ambiguous in JavaScript — it starts a regex literal, a
+ * division, and two kinds of comment. `s.replace(/\/*$/, '')`, `const route =
+ * /^\/*api/`, an unterminated `/*`, and a template literal whose interior line
+ * began with `/*` each caused a real deletion import below to be erased.
  *
- * WHY IT IS THIS CONSERVATIVE. This function can only ever REMOVE text before
- * the analyzer sees it, so every mistake it makes is a FAIL-OPEN. The first
- * version tried to lex `/` in general and three independent reviewers broke it
- * the same way: `/` starts a regex literal as well as a comment, so
- * `s.replace(/\/*$/, '')` and `const route = /^\/*api/` were read as an opening
- * block comment. With no closing `*​/` anywhere, blanking ran to the end of the
- * input and erased the real deletion import below it — reproduced, and it
- * defeated the very laundering defence the recovery code exists to provide.
+ * So nothing is removed any more. Instead a candidate match is checked against
+ * its OWN line, and skipped only when a `//` precedes it there. That is not a
+ * heuristic — in JavaScript a `//` outside a string really does comment out the
+ * rest of its line — and the blast radius of a misread is one line rather than
+ * the remainder of the file.
  *
- * So the rule is now the narrowest one that still fixes the false positive:
+ * BLOCK COMMENTS ARE DELIBERATELY NOT HANDLED. Deciding where `/* … *​/` begins
+ * and ends is the ambiguity that produced all three failures. A block-commented
+ * deletion import therefore still floors T0. That over-escalates, which is the
+ * safe direction, and it is recorded in `docs/ENGINEERING-HARNESS.md` as an
+ * accepted cost rather than left to be discovered.
  *
- *   1. Only a comment marker that is the FIRST non-whitespace on its line is
- *      blanked. A regex literal or a division can never be line-leading `//` or
- *      `/*` in valid JavaScript — `//` and `/*` at the start of an expression
- *      are a comment to the parser too. Commented-out code, the case this
- *      exists for, is essentially always line-leading.
- *   2. A block comment is only entered when a closing `*​/` actually exists
- *      later in the input. An unterminated `/*` blanks NOTHING, so the
- *      catastrophic "erase the rest of the file" mode cannot occur.
- *
- * A trailing comment (`const x = 1; // import { rm } …`) is deliberately NOT
- * blanked. That direction over-escalates, which is the safe one.
- *
- * Scoped to `analyzeFsDeletion`, which is JavaScript-specific by construction.
- * It is NOT applied to the raw signature patterns, because those also scan
- * `.sql`, `.ps1`, `.py` and `.sh`, where a JS-shaped stripper would remove live
- * code.
+ * String literals are removed from the line prefix first, so `'https://x'` and
+ * a URL in a template literal are not mistaken for a comment.
  */
-export function blankComments(text) {
-  const lines = String(text).split('\n');
-  const out = [];
-  let closing = -1; // index of the line that closes the block we are inside
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (i <= closing) {
-      // Inside a block comment whose terminator is known to exist.
-      const end = i === closing ? line.indexOf('*/') : -1;
-      out.push(end === -1 ? '' : ' '.repeat(end + 2) + line.slice(end + 2));
-      continue;
-    }
-    const trimmed = line.trimStart();
-    if (trimmed.startsWith('//')) {
-      out.push('');
-      continue;
-    }
-    if (trimmed.startsWith('/*')) {
-      const indent = line.length - trimmed.length;
-      const sameLine = line.indexOf('*/', indent + 2);
-      if (sameLine !== -1) {
-        out.push(' '.repeat(sameLine + 2) + line.slice(sameLine + 2));
-        continue;
-      }
-      // Only enter the block if it is genuinely closed somewhere below.
-      const terminator = lines.findIndex((l, j) => j > i && l.includes('*/'));
-      if (terminator === -1) {
-        out.push(line); // not a comment we can trust — leave it intact
-        continue;
-      }
-      closing = terminator;
-      out.push('');
-      continue;
-    }
-    out.push(line);
-  }
-  return out.join('\n');
+export function startsInLineComment(text, index) {
+  const lineStart = text.lastIndexOf('\n', Math.max(0, index - 1)) + 1;
+  const prefix = text.slice(lineStart, index).replace(/'[^']*'|"[^"]*"|`[^`]*`/g, '');
+  return prefix.includes('//');
 }
 
 /**
@@ -372,12 +331,12 @@ function parseBindingClause(clause) {
  * @param {string} text
  * @returns {{capable: boolean, evidence: string[]}}
  */
-export function analyzeFsDeletion(rawText) {
+export function analyzeFsDeletion(text) {
   const evidence = [];
-  if (typeof rawText !== 'string' || rawText.length === 0) return { capable: false, evidence };
+  if (typeof text !== 'string' || text.length === 0) return { capable: false, evidence };
 
-  // Commented-out code is not capability. See `blankComments`.
-  const text = blankComments(rawText);
+  // The text is NEVER rewritten. Commented-out code is excluded per match, by
+  // checking that match's own line — see `startsInLineComment`.
   const namespaces = new Set();
   const mod = FS_MODULE_ALTERNATION;
   const q = `['"]`;
@@ -401,6 +360,7 @@ export function analyzeFsDeletion(rawText) {
   const importRe = new RegExp(`\\b(?:import|export)\\s*([^;'"]*?)\\s*from\\s*${q}(${mod})${q}`, 'g');
   for (const match of text.matchAll(importRe)) {
     const [, clause, moduleSpecifier] = match;
+    if (startsInLineComment(text, match.index)) continue;
     // `import type { rm } from …` is erased at compile time — no runtime binding
     // exists, so it cannot delete anything.
     if (/^\s*type\b/.test(clause)) continue;
@@ -421,6 +381,7 @@ export function analyzeFsDeletion(rawText) {
   );
   for (const match of text.matchAll(requireRe)) {
     const [, binding, moduleSpecifier] = match;
+    if (startsInLineComment(text, match.index)) continue;
     if (binding.startsWith('{')) recordClause(binding.slice(1, -1), moduleSpecifier);
     else namespaces.add(binding);
   }
@@ -433,6 +394,7 @@ export function analyzeFsDeletion(rawText) {
   );
   for (const match of text.matchAll(inlineRe)) {
     const [, moduleSpecifier, member] = match;
+    if (startsInLineComment(text, match.index)) continue;
     if (deletionNamesFor(moduleSpecifier).includes(member)) {
       evidence.push(`calls ${member} on an inline require/import of '${moduleSpecifier}'`);
     }
@@ -449,9 +411,13 @@ export function analyzeFsDeletion(rawText) {
     for (const ns of namespaces) {
       const memberRe = new RegExp(
         `\\b${escapeForRegExp(ns)}\\s*(?:\\.\\s*promises\\s*)?\\.\\s*(${members})\\b`,
+        'g',
       );
-      const hit = memberRe.exec(text);
-      if (hit) evidence.push(`references ${ns}.${hit[1]}`);
+      for (const hit of text.matchAll(memberRe)) {
+        if (startsInLineComment(text, hit.index)) continue;
+        evidence.push(`references ${ns}.${hit[1]}`);
+        break;
+      }
     }
   }
 
@@ -556,12 +522,32 @@ export const CAPABILITY_SIGNATURES = [
     //
     // The POSIX branch requires the recursive flag to be a real short-option
     // cluster or `--recursive`, so `npm rm --registry=… pkg` does not match.
-    // `git rm` is excluded: it stages a removal from the index and, with
-    // `--cached`, does not touch the filesystem at all. Matching it made
-    // `git rm -r --cached generated/` a T0 event.
+    // JavaScript and language-agnostic forms. Case-SENSITIVE on purpose: these
+    // are API names, and `.unlink(` is anchored to the argument shapes that
+    // actually mean filesystem deletion (`Path(x).unlink()`,
+    // `.unlink(missing_ok=True)`) because a bare `.unlink(` matched
+    // `graph.unlink(nodeA, nodeB)` in ordinary graph code.
     pattern:
-      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|(?<!\bgit )\brm\s+(?:-[a-zA-Z]{1,8}\s+)*-[a-zA-Z]{0,6}[rR][a-zA-Z]{0,6}\b|(?<!\bgit )\brm\s+[^\n]*--(?:recursive|force)\b|\bRemove-Item\b|\bri\s+-(?:Recurse|Force)\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\b(?:rd|rmdir)\s+\/[sSqQ]\b|\bdel\s+\/[fFsSqQ]\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|removedirs|unlink|rmdir)\s*\(|\.unlink\s*\(|\brmtree\s*\(|\bFileUtils\.rm_r?f?\b|\b(?:File|Dir)\.(?:delete|unlink|rmdir)\s*\(|\bfind\s+[^\n]*\s-delete\b)/,
+      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|removedirs|unlink|rmdir)\s*\(|\.unlink\s*\(\s*(?:\)|missing_ok)|\brmtree\s*\(|\bFileUtils\.rm_r?f?\b|\b(?:File|Dir)\.(?:delete|unlink|rmdir)\s*\()/,
     detect: (text) => analyzeFsDeletion(text).capable,
+    note: 'deletes files with no undo',
+  },
+  {
+    // SHELL AND POWERSHELL FORMS, MATCHED CASE-INSENSITIVELY. PowerShell is a
+    // case-insensitive language: `remove-item`, `Remove-Item` and `REMOVE-ITEM`
+    // are the same cmdlet, and a case-sensitive pattern graded the lowercase
+    // spelling T1. `Git rm` likewise had to be excluded case-insensitively.
+    //
+    // Same capability name as the entry above, so the two are one finding.
+    name: 'destructive-filesystem',
+    tier: 'T0',
+    // `git rm` is excluded: it stages a removal from the index and, with
+    // `--cached`, does not touch the working tree at all. The lookbehind allows
+    // repeated whitespace because `git  rm -r --cached` bypassed a single-space
+    // form. `Get-Command Remove-Item` is excluded for the same reason — naming a
+    // cmdlet is not invoking it.
+    pattern:
+      /(?:(?<!\bgit\s{1,8})\brm\s+(?:-[a-z]{1,8}\s+)*-[a-z]{0,6}[rf][a-z]{0,6}\b|(?<!\bgit\s{1,8})\brm\s+[^\n]*--(?:recursive|force)\b|(?<!get-command\s{1,8})\bremove-item\b|\bri\s+(?:-(?:recurse|force)\b|\$)|\b(?:rd|rmdir)\s+\/[sq]\b|\bdel\s+\/[fsq]\b|\bfind\s+[^\n]*\s-delete\b)/i,
     note: 'deletes files with no undo',
   },
   {

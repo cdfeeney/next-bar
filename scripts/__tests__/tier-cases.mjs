@@ -591,6 +591,63 @@ export const TIER_CASES = [
     escalated: false,
     why: 'it stages an index removal; matching it made routine untracking a T0 event',
   },
+
+  // ---------------------------------------------------------------- Round-7
+  // PowerShell is a CASE-INSENSITIVE language, and the shell exclusions were
+  // bypassed by whitespace and capitalisation.
+  {
+    name: 'lowercase remove-item is T0',
+    path: 'scripts/purge-lower.ps1',
+    contents: 'remove-item $TargetFile\n',
+    expect: 'T0',
+    why: 'PowerShell cmdlets are case-insensitive; the lowercase spelling graded T1',
+  },
+  {
+    name: 'the ri alias with a variable is T0',
+    path: 'scripts/purge-alias.ps1',
+    contents: 'ri $TargetFile\n',
+    expect: 'T0',
+    why: 'ri is Remove-Item and needs no flags to delete',
+  },
+  {
+    name: 'rm -f without -r is T0',
+    path: 'scripts/drop-file.sh',
+    contents: '#!/usr/bin/env bash\nrm -f "$target"\n',
+    expect: 'T0',
+    why: 'requiring a recursive flag missed the irreversible single-file delete',
+  },
+  {
+    name: 'double-spaced git rm is still excluded',
+    path: 'scripts/untrack2.sh',
+    contents: '#!/usr/bin/env bash\ngit  rm -r --cached generated/\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'a single-space exclusion was bypassed by ordinary whitespace',
+  },
+  {
+    name: 'capitalised Git rm is still excluded',
+    path: 'scripts/untrack3.sh',
+    contents: 'Git rm -r --cached generated/\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'the same bypass by capitalisation',
+  },
+  {
+    name: 'naming a cmdlet is not invoking it',
+    path: 'scripts/inspect.ps1',
+    contents: 'Get-Command Remove-Item\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'a bare Remove-Item match floored introspection scripts at T0',
+  },
+  {
+    name: 'an unlink on a graph is not a filesystem delete',
+    path: 'src/lib/graph.ts',
+    contents: 'export const detach = (g, a, b) => g.unlink(a, b);\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'a bare .unlink( matched ordinary graph code',
+  },
 ];
 
 /**

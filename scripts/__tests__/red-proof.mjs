@@ -152,6 +152,19 @@ const ROUND_PROOFS = [
       'git rm --cached does not delete the working tree',
     ]),
   },
+  {
+    label: 'round-7',
+    rev: 'a830823',
+    cases: new Set([
+      'lowercase remove-item is T0',
+      'the ri alias with a variable is T0',
+      'rm -f without -r is T0',
+      'double-spaced git rm is still excluded',
+      'capitalised Git rm is still excluded',
+      'naming a cmdlet is not invoking it',
+      'an unlink on a graph is not a filesystem delete',
+    ]),
+  },
 ];
 
 /** The classifier module graph, so a revision can be materialized and imported. */

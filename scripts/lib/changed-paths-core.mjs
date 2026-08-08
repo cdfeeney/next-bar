@@ -249,7 +249,19 @@ export function resolveRecoveryRevisions(opts = {}) {
   return [...new Set(revisions)];
 }
 
-/** Read one path at one revision, but ONLY if it is a blob. */
+/**
+ * Read one path at one revision, but ONLY if it is a blob.
+ *
+ * Three outcomes, and the difference between the last two is load-bearing:
+ *   `{ status: 'absent' }`   the path did not exist there — nothing to grade
+ *   `{ status: 'text', text }` readable content
+ *   `{ status: 'unreadable' }` the object EXISTS but cannot be text-scanned
+ *
+ * Collapsing `unreadable` into `absent` let a binary prior revision be dropped
+ * from the version list while the path was still reported as recovered — so it
+ * contributed nothing and the change graded low. An existing-but-unscannable
+ * version must fail closed instead.
+ */
 function readBlobAtRevision(repoRoot, rev, path) {
   let type;
   try {
@@ -259,13 +271,13 @@ function readBlobAtRevision(repoRoot, rev, path) {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   } catch {
-    return null; // the path did not exist at that revision
+    return { status: 'absent' }; // the path did not exist at that revision
   }
   // `git show HEAD:scripts` SUCCEEDS on a directory and prints a tree listing —
   // text with no capability signature in it, which would grade the removal of a
   // whole subtree as T1. A gitlink resolves to a commit object the same way.
-  // Only a blob is file content.
-  if (type !== 'blob') return null;
+  // Only a blob is file content; a tree or gitlink EXISTS but is unscannable.
+  if (type !== 'blob') return { status: 'unreadable' };
   let buf;
   try {
     buf = execFileSync('git', ['show', `${rev}:${path}`], {
@@ -275,12 +287,12 @@ function readBlobAtRevision(repoRoot, rev, path) {
       maxBuffer: 64 * 1024 * 1024,
     });
   } catch {
-    return null;
+    return { status: 'unreadable' };
   }
   // A NUL byte in the first 8 KB means binary; text signatures are meaningless
   // there, and decoding it would feed garbage to the scanner.
-  if (buf.subarray(0, 8192).includes(0)) return null;
-  return buf.toString('utf8').replace(/\r\n/g, '\n');
+  if (buf.subarray(0, 8192).includes(0)) return { status: 'unreadable' };
+  return { status: 'text', text: buf.toString('utf8').replace(/\r\n/g, '\n') };
 }
 
 /**
@@ -332,25 +344,30 @@ export function recoverDeletedContents(paths, opts = {}) {
 
   for (const raw of Array.isArray(paths) ? paths : []) {
     const path = normalizePath(raw);
+    // `null` entries are deliberate: they mark a version that EXISTS but could
+    // not be scanned, so `classifyOnePath` fails closed on it instead of
+    // grading the path on its readable versions alone.
     const versions = [];
     for (const rev of revisions) {
-      const text = readBlobAtRevision(repoRoot, rev, path);
-      if (text !== null) versions.push(text);
+      const result = readBlobAtRevision(repoRoot, rev, path);
+      if (result.status === 'text') versions.push(result.text);
+      else if (result.status === 'unreadable') versions.push(null);
     }
     const absolute = join(repoRoot, path);
     if (existsSync(absolute)) {
       try {
         const buf = readFileSync(absolute);
-        if (!buf.subarray(0, 8192).includes(0)) {
-          versions.push(buf.toString('utf8').replace(/\r\n/g, '\n'));
-        }
+        versions.push(
+          buf.subarray(0, 8192).includes(0) ? null : buf.toString('utf8').replace(/\r\n/g, '\n'),
+        );
       } catch {
-        // Unreadable on disk; the recovered revisions above still stand.
+        versions.push(null);
       }
     }
 
+    const readable = versions.filter((v) => v !== null);
     contents[path] = versions.length > 0 ? versions : null;
-    (versions.length > 0 ? recovered : unrecoverable).push(path);
+    (readable.length > 0 ? recovered : unrecoverable).push(path);
   }
 
   return { contents, recovered, unrecoverable };

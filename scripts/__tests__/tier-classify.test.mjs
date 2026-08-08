@@ -27,7 +27,7 @@ import {
   recoverDeletedContents,
   resolveRecoveryRevisions,
 } from '../lib/changed-paths-core.mjs';
-import { analyzeFsDeletion, blankComments } from '../lib/tier-capabilities.mjs';
+import { analyzeFsDeletion, startsInLineComment } from '../lib/tier-capabilities.mjs';
 import { globMatch, normalizePath } from '../lib/tier-glob.mjs';
 
 const { map: PROJECT_MAP, source: MAP_SOURCE } = loadTierMap(REPO_ROOT);
@@ -540,14 +540,16 @@ describe('git change evidence', () => {
       // C: a directory is not file content, however successfully git prints it.
       const tree = recoverDeletedContents(['scripts'], { repoRoot: root, revisions: ['HEAD'] });
       expect(tree.unrecoverable).toEqual(['scripts']);
-      expect(tree.contents.scripts).toBeNull();
+      // Every version is null — a tree object EXISTS but is not file content,
+      // so it is recorded as unreadable rather than dropped.
+      expect(tree.contents.scripts.every((v) => v === null)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }, 60_000);
 });
 
-describe('comment blanking can only ever remove evidence, so it must not misfire', () => {
+describe('excluding commented-out code must never hide real code', () => {
   // Bytes are built explicitly. These cases are ABOUT punctuation, and a
   // mis-escaped fixture would silently assert something else — the first
   // version of this test used `/a\/b/`, which contains no `/`-adjacent `*`,
@@ -555,6 +557,7 @@ describe('comment blanking can only ever remove evidence, so it must not misfire
   const SLASH = String.fromCharCode(47);
   const STAR = String.fromCharCode(42);
   const BACKSLASH = String.fromCharCode(92);
+  const BACKTICK = String.fromCharCode(96);
   const DELETION_IMPORT =
     "import { rm as nuke } from 'node:fs/promises';\nexport const purge = (d) => nuke(d);\n";
 
@@ -573,29 +576,40 @@ describe('comment blanking can only ever remove evidence, so it must not misfire
     'template literal containing a comment opener':
       'const note = `outer ${`' + SLASH + STAR + '`}`;\n',
     'division adjacent to a star': `const share = a${SLASH}${STAR}b${STAR}${SLASH}c;\n`,
+    // A multi-line template whose interior line begins with a block-comment
+    // opener. Any later `*/` — including one inside a trailing comment — used to
+    // supply an apparent terminator, and everything between was erased.
+    'multi-line template starting a line with a comment opener':
+      `const banner = ${BACKTICK}\n${SLASH}${STAR} decorative\n${BACKTICK};\n`,
   };
+
+  // A trailing comment containing a block terminator, appended to every case:
+  // it was the terminator that made the multi-line template case fire.
+  const TRAILING = `const tail = 'x'; ${SLASH}${SLASH} closes ${STAR}${SLASH}\n`;
 
   for (const [name, prefix] of Object.entries(misleadingPrefixes)) {
     it(`still sees a deletion import below ${name}`, () => {
-      expect(analyzeFsDeletion(prefix + DELETION_IMPORT).capable).toBe(true);
+      expect(analyzeFsDeletion(prefix + DELETION_IMPORT + TRAILING).capable).toBe(true);
     });
   }
 
-  it('an unterminated block comment blanks nothing at all', () => {
-    const text = `${SLASH}${STAR} opened and never closed\nconst kept = 1;\n`;
-    expect(blankComments(text)).toContain('const kept = 1;');
-  });
-
-  it('still removes the false positive it exists for', () => {
+  it('still excludes the false positive it exists for', () => {
     expect(analyzeFsDeletion("// import { rm } from 'node:fs/promises';\nexport const x = 1;\n").capable).toBe(
       false,
     );
-    const block = `${SLASH}${STAR}\nimport { rm } from 'node:fs/promises';\n${STAR}${SLASH}\nexport const y = 2;\n`;
-    expect(analyzeFsDeletion(block).capable).toBe(false);
   });
 
-  it('preserves string content that looks like a comment', () => {
-    expect(blankComments("const url = 'https://x/y';")).toContain('https://x/y');
+  it('does not mistake a URL in a string for a comment', () => {
+    const text = "const u = 'https://x/y';\nimport { rm } from 'node:fs/promises';\nawait rm(u);\n";
+    expect(analyzeFsDeletion(text).capable).toBe(true);
+  });
+
+  it('a BLOCK-commented import still floors T0, by design', () => {
+    // Deciding where a block comment begins and ends is the ambiguity that
+    // produced three separate fail-opens. It is not attempted, so this
+    // over-escalates — the safe direction — and the cost is documented.
+    const block = `${SLASH}${STAR}\nimport { rm } from 'node:fs/promises';\n${STAR}${SLASH}\nexport const y = 2;\n`;
+    expect(analyzeFsDeletion(block).capable).toBe(true);
   });
 });
 
@@ -625,6 +639,28 @@ describe('versions are scanned separately, never concatenated', () => {
       contents: { 'src/lib/split.ts': ['const a = ".delete(";\n', 'const b = ").where(";\n'] },
     });
     expect(result.tier).not.toBe('T0');
+  });
+
+  it('a version that exists but cannot be read fails closed', () => {
+    // Dropping an unreadable version and grading the path on the readable ones
+    // silently broke the guarantee that the tier is the highest ANY version
+    // earns — a binary prior revision contributed nothing.
+    const p = 'src/lib/partial.ts';
+    const result = classifyPaths([p], PROJECT_MAP, {
+      repoRoot: REPO_ROOT,
+      deletedPaths: [p],
+      contents: { [p]: [null, 'export const x = 1;\n'] },
+    });
+    expect(result.tier).toBe('T0');
+    expect(result.ambiguousCount).toBe(1);
+    expect(result.escalated).toBe(true);
+    expect(result.perPath[0].reasons.join(' ')).toMatch(/at least one version of this path could not be read/);
+  });
+
+  it('scopes the line-comment check to the match line', () => {
+    const text = "const a = 1; // note\nimport { rm } from 'node:fs/promises';\n";
+    expect(startsInLineComment(text, text.indexOf('note'))).toBe(true);
+    expect(startsInLineComment(text, text.indexOf('import'))).toBe(false);
   });
 
   it('a path whose NAME reads like SQL is not itself capability', () => {

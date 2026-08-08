@@ -169,10 +169,16 @@ export function readForAnalysis(path, repoRoot = REPO_ROOT, overrides) {
   if (overrides && Object.prototype.hasOwnProperty.call(overrides, path)) {
     const v = overrides[path];
     if (v === null || v === undefined) return { status: 'absent', texts: [] };
-    const texts = (Array.isArray(v) ? v : [v])
-      .filter((t) => t !== null && t !== undefined)
-      .map((t) => String(t));
-    return texts.length === 0 ? { status: 'absent', texts: [] } : { status: 'ok', texts };
+    const supplied = Array.isArray(v) ? v : [v];
+    const texts = supplied.filter((t) => t !== null && t !== undefined).map((t) => String(t));
+    if (texts.length === 0) return { status: 'absent', texts: [] };
+    // A version we could NOT read is not a version with nothing in it. Dropping
+    // it silently let a deleted path be graded on its readable versions alone —
+    // so a binary or unrecoverable prior revision contributed nothing while the
+    // result still claimed to be "the highest tier any version earns". The
+    // readable versions are still scanned, but the answer is incomplete and must
+    // fail closed.
+    return { status: 'ok', texts, incomplete: texts.length !== supplied.length };
   }
   const abs = join(repoRoot, normalizePath(path));
   let buf;
@@ -261,6 +267,15 @@ export function classifyOnePath(rawPath, map, opts = {}) {
     for (const cap of capabilities) {
       tier = maxTier(tier, cap.tier);
       reasons.push(`capability ${cap.name} (${cap.tier}) — ${cap.note}`);
+    }
+    if (read.incomplete) {
+      // Some version of this path could not be read at all, so absence of a
+      // capability was never established for it.
+      ambiguous = true;
+      tier = 'T0';
+      reasons.push(
+        'AMBIGUOUS: at least one version of this path could not be read — cannot establish absence of a high-risk capability in it',
+      );
     }
   } else if (inert || binaryAsset) {
     // An inert doc/fixture/asset stays cheap even when we cannot read it. This
