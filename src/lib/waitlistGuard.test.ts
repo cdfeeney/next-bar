@@ -6,7 +6,6 @@ import {
   isValidWaitlistEmail,
   normalizeEmail,
   sanitizeNeighborhood,
-  sanitizeVibeProfile,
 } from '@/lib/waitlistGuard';
 
 describe('isValidWaitlistEmail', () => {
@@ -62,27 +61,12 @@ describe('sanitizeNeighborhood', () => {
   });
 });
 
-describe('sanitizeVibeProfile', () => {
-  it('passes a normal profile object through untouched', () => {
-    const profile = { vibe: 'dive', budget: 2 };
-    expect(sanitizeVibeProfile(profile)).toBe(profile);
-  });
-
-  it('drops null/undefined/non-objects and oversize payloads to null', () => {
-    expect(sanitizeVibeProfile(null)).toBeNull();
-    expect(sanitizeVibeProfile(undefined)).toBeNull();
-    expect(sanitizeVibeProfile('a-string' as never)).toBeNull();
-    expect(
-      sanitizeVibeProfile({ dump: 'x'.repeat(3000) }),
-    ).toBeNull();
-  });
-
-  it('drops unserializable objects (circular) instead of throwing', () => {
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
-    expect(sanitizeVibeProfile(circular)).toBeNull();
-  });
-});
+// `sanitizeVibeProfile` was REMOVED by Item 9. Its contract was "any object
+// under 2 KB passes through by reference", which is exactly the hole that
+// let an anonymous caller choose the shape of a jsonb column. Its
+// replacement, `parseVibeProfile`, has its own suite in
+// `src/lib/vibeProfileSchema.test.ts` — including the cases this block used
+// to cover (non-objects, oversize payloads, circular references).
 
 describe('clientIpFromHeaders', () => {
   it('takes the first x-forwarded-for hop', () => {

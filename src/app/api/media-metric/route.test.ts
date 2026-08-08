@@ -49,6 +49,25 @@ describe('/api/media-metric', () => {
     expect(Object.keys(line).sort()).toEqual(['at', 'surface', 'type']);
   });
 
+  test.each(['capacitor://localhost', 'ionic://localhost'])(
+    'accepts the native shell origin %s → 204 and one log line',
+    async (origin) => {
+      // Pins the shared-gate migration. The route's former INLINE origin
+      // check compared `new URL(origin).host` against the public host, and
+      // for these schemes that host is "localhost", which never matches — so
+      // native beacons were silently 403'd and native media usage vanished
+      // from the operator's billing smoke detector. Without this test the
+      // whole class of regression is invisible: every other origin case here
+      // passes equally well under the old inline implementation.
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const res = await POST(
+        post(JSON.stringify({ surface: 'result-card' }), { origin }),
+      );
+      expect(res.status).toBe(204);
+      expect(log).toHaveBeenCalledTimes(1);
+    },
+  );
+
   test('cross-origin → 403 before any parsing', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const res = await POST(

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { clientIpFromHeaders, createRateLimiter } from '@/lib/waitlistGuard';
+import { guardOrigin, readBoundedJson } from '@/lib/requestBoundary';
 import { ANALYTICS_EVENTS } from '@/lib/analytics';
 import { nycNightKey } from '@/lib/nightKey';
 
@@ -24,7 +25,14 @@ import { nycNightKey } from '@/lib/nightKey';
  *  - Cross-origin writes (review M4): a PRESENT Origin header must match
  *    the request host — blocks third-party pages poisoning counts from
  *    browsers. Origin-less clients (curl) are indistinguishable from
- *    beacons and are accepted; the counter model bounds the damage.
+ *    beacons and are accepted; the counter model bounds the damage. This is
+ *    the ONLY route that tolerates an absent Origin, and `sendBeacon` is the
+ *    reason (Item 9 re-confirmed the carve-out rather than removing it).
+ *  - Item 9: the body is BOUNDED. This route used to call `request.json()`
+ *    with no cap, so an arbitrarily large payload was buffered before the
+ *    name was even looked at. Checks now run in the shared order from
+ *    `@/lib/requestBoundary`: origin → rate limit → Content-Length →
+ *    bounded read → parse.
  */
 
 const RATE_LIMIT_PER_MINUTE = 60;
@@ -32,6 +40,9 @@ const limiter = createRateLimiter({
   limit: RATE_LIMIT_PER_MINUTE,
   windowMs: 60 * 1000,
 });
+
+/** The body is `{"name":"<enum member>"}` and nothing else. */
+const MAX_BODY_BYTES = 256;
 
 export async function POST(request: Request): Promise<NextResponse> {
   if (process.env.ANALYTICS_ENABLED !== '1') {
@@ -42,31 +53,40 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!url || !serviceKey) {
     return NextResponse.json({ ok: false }, { status: 503 });
   }
+  // Review M4: a browser always sends Origin on cross-origin POST/beacon —
+  // when present it must match our host. Item 9 moved this AHEAD of the
+  // limiter so a forged cross-origin flood cannot spend the quota belonging
+  // to the IP it was forged from.
+  const blocked = guardOrigin(
+    request.headers,
+    () => NextResponse.json({ ok: false }, { status: 403 }),
+    {
+      // Precise on purpose: sendBeacon from a page DOES send Origin and is
+      // already covered by the same-origin path, so naming it alone would
+      // overstate how narrow this exemption is. What it actually admits is
+      // origin-less NON-BROWSER clients — in-app webviews and bridges that
+      // omit the header. The counter model bounds the damage: the table is
+      // capped at 4 rows/night, so the worst case is a skewed count.
+      allowAbsent: 'origin-less non-browser beacon clients (webviews/bridges)',
+    },
+  );
+  if (blocked) return blocked;
+
   if (!limiter.allow(clientIpFromHeaders(request.headers))) {
     return NextResponse.json({ ok: false }, { status: 429 });
   }
 
-  // Review M4: a browser always sends Origin on cross-origin POST/beacon
-  // — when present it must match our host.
-  const origin = request.headers.get('origin');
-  const host = request.headers.get('host');
-  if (origin && host) {
-    try {
-      if (new URL(origin).host !== host) {
-        return NextResponse.json({ ok: false }, { status: 403 });
-      }
-    } catch {
-      return NextResponse.json({ ok: false }, { status: 403 });
-    }
+  const read = await readBoundedJson(request, MAX_BODY_BYTES);
+  if (read.kind === 'too-large') {
+    return NextResponse.json({ ok: false }, { status: 413 });
   }
-
-  let name: unknown;
-  try {
-    const body = (await request.json()) as { name?: unknown };
-    name = body.name;
-  } catch {
+  if (read.kind === 'invalid-json' || read.kind === 'stream-error') {
     return NextResponse.json({ ok: false }, { status: 400 });
   }
+  const name =
+    typeof read.value === 'object' && read.value !== null
+      ? (read.value as { name?: unknown }).name
+      : undefined;
   if (
     typeof name !== 'string' ||
     !(ANALYTICS_EVENTS as readonly string[]).includes(name)

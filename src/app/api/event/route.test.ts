@@ -170,4 +170,74 @@ describe('POST /api/event', () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ ok: false });
   });
+
+  // -------------------------------------------------------------------
+  // Item 9 — request-boundary hardening
+  // -------------------------------------------------------------------
+
+  it('rejects an honestly oversized body before the RPC', async () => {
+    const headers = new Headers({
+      'content-type': 'application/json',
+      'x-forwarded-for': '198.51.100.31',
+      host: 'nextbar.app',
+      'content-length': '999999',
+    });
+    const res = await POST(
+      new Request('http://localhost/api/event', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ name: 'search' }),
+      }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized STREAMED body with no honest Content-Length', async () => {
+    const chunk = new TextEncoder().encode('x'.repeat(512));
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= 8 * 1024) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+        sent += chunk.byteLength;
+      },
+    });
+    const res = await POST(
+      new Request('http://localhost/api/event', {
+        method: 'POST',
+        headers: new Headers({
+          'content-type': 'application/json',
+          'x-forwarded-for': '198.51.100.32',
+          host: 'nextbar.app',
+        }),
+        body,
+        // @ts-expect-error - undici-only option, not in the DOM RequestInit type
+        duplex: 'half',
+      }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects cross-origin WITHOUT charging the victim IP any quota', async () => {
+    const victim = '203.0.113.44';
+    for (let i = 0; i < 70; i++) {
+      const res = await POST(
+        makeRequest({ name: 'search' }, { ip: victim, origin: 'https://evil.example' }),
+      );
+      expect(res.status).toBe(403);
+    }
+    expect(rpcMock).not.toHaveBeenCalled();
+
+    // 70 forged requests is past the 60/minute bound. If the limiter had run
+    // first, this legitimate beacon would now be 429.
+    const real = await POST(makeRequest({ name: 'search' }, { ip: victim }));
+    expect(real.status).toBe(200);
+  });
 });

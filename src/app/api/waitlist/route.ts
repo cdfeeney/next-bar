@@ -6,9 +6,9 @@ import {
   isValidWaitlistEmail,
   normalizeEmail,
   sanitizeNeighborhood,
-  sanitizeVibeProfile,
 } from '@/lib/waitlistGuard';
-import type { VibeProfile } from '@/types';
+import { guardOrigin, readBoundedJson } from '@/lib/requestBoundary';
+import { parseWaitlistVibeProfile } from '@/lib/vibeProfileSchema';
 
 /**
  * POST /api/waitlist — hardened per audit MED-23 (H1):
@@ -18,12 +18,19 @@ import type { VibeProfile } from '@/types';
  *     leaked Postgres/RLS internals to callers, and a unique-violation
  *     reply doubled as an email-existence oracle. A duplicate email now
  *     reads as plain success (idempotent join).
+ *
+ * Item 9 added the request boundary this route never had. It is the only
+ * unauthenticated WRITE surface in the app, and it used to call
+ * `request.json()` with no cap of any kind, so one request could buffer an
+ * arbitrary body into the function. Checks now run in the shared order
+ * documented in `@/lib/requestBoundary`: origin → rate limit → Content-Length
+ * → bounded read → strict parse.
  */
 
 type WaitlistPayload = {
   email?: unknown;
   neighborhood?: unknown;
-  vibe_profile?: VibeProfile | null;
+  vibe_profile?: unknown;
 };
 
 const RATE_LIMIT_PER_HOUR = 10;
@@ -32,10 +39,33 @@ const limiter = createRateLimiter({
   windowMs: 60 * 60 * 1000,
 });
 
+/**
+ * Generous next to the real payload (a 254-char email, a 40-char
+ * neighborhood, and a shape-bounded profile) and still small enough that a
+ * flood cannot buffer anything meaningful per request.
+ */
+const MAX_BODY_BYTES = 4_096;
+
 /** Postgres unique_violation — an already-joined email, not a failure. */
 const UNIQUE_VIOLATION = '23505';
 
 export async function POST(request: Request): Promise<NextResponse> {
+  // FIRST, before the limiter. A cross-origin request must not be able to
+  // spend the quota belonging to the IP it was forged from — see the check
+  // order rationale in `@/lib/requestBoundary`.
+  //
+  // Strict by default: an ABSENT Origin is rejected too, and no `allowAbsent`
+  // exception is claimed. Browsers send Origin on every POST, and on HTTPS an
+  // intermediary cannot strip a header without terminating TLS, so the
+  // realistic population that lands here is scripted abuse rather than real
+  // signups. That makes it a cheap bot filter on the only unauthenticated
+  // write surface in the app — which is the actual threat here, since an
+  // anonymous session-less route has no CSRF to defend against.
+  const blocked = guardOrigin(request.headers, () =>
+    NextResponse.json({ ok: false, error: 'forbidden_origin' }, { status: 403 }),
+  );
+  if (blocked) return blocked;
+
   if (!limiter.allow(clientIpFromHeaders(request.headers))) {
     return NextResponse.json(
       { ok: false, error: 'rate_limited' },
@@ -43,15 +73,28 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  let body: WaitlistPayload;
-  try {
-    body = (await request.json()) as WaitlistPayload;
-  } catch {
+  const read = await readBoundedJson(request, MAX_BODY_BYTES);
+  if (read.kind === 'too-large') {
+    return NextResponse.json(
+      { ok: false, error: 'payload_too_large' },
+      { status: 413 },
+    );
+  }
+  if (read.kind === 'stream-error') {
+    // The client went away mid-body. Their problem, not a server fault —
+    // 400, never an unhandled 500.
+    return NextResponse.json(
+      { ok: false, error: 'invalid_body' },
+      { status: 400 },
+    );
+  }
+  if (read.kind === 'invalid-json') {
     return NextResponse.json(
       { ok: false, error: 'invalid_json' },
       { status: 400 },
     );
   }
+  const body = (read.value ?? {}) as WaitlistPayload;
 
   if (!isValidWaitlistEmail(body.email)) {
     return NextResponse.json(
@@ -62,7 +105,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const email = normalizeEmail(body.email);
   const neighborhood = sanitizeNeighborhood(body.neighborhood);
-  const vibeProfile = sanitizeVibeProfile(body.vibe_profile);
+  const vibeProfile = parseWaitlistVibeProfile(body.vibe_profile);
 
   if (supabase) {
     const { error } = await supabase

@@ -3,8 +3,8 @@ import {
   contentLengthExceeds,
   mediaMetricRateLimited,
   readBoundedBody,
-  requestPublicHost,
 } from '@/lib/mediaMetric.server';
+import { guardOrigin } from '@/lib/requestBoundary';
 
 /**
  * Advisory Google-media request counter → structured Vercel log lines.
@@ -16,9 +16,10 @@ import {
  * (docs/GOOGLE-MEDIA-RUNBOOK.md) — this is a smoke detector, not the bill.
  *
  * Hard bounds, each matching its implementation exactly:
- * - Same-origin only: Origin's host must equal the request's PUBLIC host —
- *   x-forwarded-host (first entry of a forwarding chain) when present,
- *   else Host — compared case-insensitively. Absent, malformed, or
+ * - Same-origin only, via the SHARED `guardOrigin` policy gate: Origin's host
+ *   must equal the request's PUBLIC host — x-forwarded-host (first entry of a
+ *   forwarding chain) when present, else Host — compared case-insensitively,
+ *   or be one of the documented native-shell origins. Absent, malformed, or
  *   mismatched origins → 403 before any body handling.
  * - Body capped at 64 actual UTF-8 BYTES: an honest oversized
  *   Content-Length is rejected before reading; a missing, chunked, or
@@ -33,24 +34,19 @@ import {
 /** The only billing surface in this release. */
 const SURFACES = new Set(['result-card']);
 
-function sameOrigin(req: NextRequest): boolean {
-  const origin = req.headers.get('origin');
-  const host = requestPublicHost(
-    req.headers.get('x-forwarded-host'),
-    req.headers.get('host'),
-  );
-  if (!origin || !host) return false;
-  try {
-    return new URL(origin).host.toLowerCase() === host;
-  } catch {
-    return false;
-  }
-}
-
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  if (!sameOrigin(req)) {
-    return new NextResponse(null, { status: 403 });
-  }
+  // This route's own inline `sameOrigin` helper was replaced by the shared
+  // policy gate. Keeping a second origin implementation was not merely
+  // duplication: it compared `new URL(origin).host` against the public host,
+  // and for `capacitor://localhost` that host is `localhost`, which never
+  // matches — so the native shell's media beacons were silently 403'd and the
+  // operator's billing smoke detector undercounted native usage. Sharing the
+  // gate fixes that and keeps all mutating routes on one posture (strict: no
+  // `allowAbsent`, because only the app's own widget code posts here).
+  const blocked = guardOrigin(req.headers, () =>
+    new NextResponse(null, { status: 403 }),
+  );
+  if (blocked) return blocked;
   if (mediaMetricRateLimited(Date.now())) {
     return new NextResponse(null, { status: 429 });
   }
@@ -63,6 +59,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const read = await readBoundedBody(req.body);
   if (read.kind === 'too-large') {
     return new NextResponse(null, { status: 413 });
+  }
+  // A client that drops mid-body used to escape as a rejection and surface as
+  // a 500. The shared boundary now reports it, so it answers as the cheap,
+  // terminal 400 every other malformed request here already gets. This is the
+  // one behavior change outside the header layer, and it replaces an
+  // unhandled server error rather than altering a working path.
+  if (read.kind === 'stream-error') {
+    return new NextResponse(null, { status: 400 });
   }
 
   let surface: string;

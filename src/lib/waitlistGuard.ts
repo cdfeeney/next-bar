@@ -19,8 +19,6 @@
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const EMAIL_MAX_LENGTH = 254;
 const NEIGHBORHOOD_MAX_LENGTH = 40;
-/** Cap the serialized vibe_profile so the column can't be used as a dump. */
-const VIBE_PROFILE_MAX_JSON_LENGTH = 2_000;
 
 /**
  * Rejection of a PADDED address is deliberate, not an accident of the regex.
@@ -72,20 +70,18 @@ export function sanitizeNeighborhood(value: unknown): string | null {
   return trimmed;
 }
 
-/** Oversize or non-object payloads are dropped (null), not rejected. */
-export function sanitizeVibeProfile<T>(value: T | null | undefined): T | null {
-  if (value === null || value === undefined || typeof value !== 'object') {
-    return null;
-  }
-  try {
-    if (JSON.stringify(value).length > VIBE_PROFILE_MAX_JSON_LENGTH) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-  return value;
-}
+/**
+ * `sanitizeVibeProfile` used to live here. It measured only the SERIALIZED
+ * SIZE of the payload and then returned the caller's object by reference, so
+ * any sub-2 KB object — arbitrary keys, arbitrary depth, arbitrary value
+ * types — was written to the jsonb column verbatim. It has been replaced by
+ * `parseVibeProfile` in `@/lib/vibeProfileSchema`, which validates against an
+ * allowlisted shape and REBUILDS the stored value from validated fields.
+ *
+ * Deliberately not kept as a deprecated alias: the two have different
+ * contracts (pass-through vs rebuild), and an alias would let a future caller
+ * pick the unsafe semantics back up by accident.
+ */
 
 /**
  * First hop of x-forwarded-for (Vercel sets it; the first entry is the
