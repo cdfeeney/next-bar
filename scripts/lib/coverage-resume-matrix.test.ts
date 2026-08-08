@@ -287,6 +287,58 @@ const STATES: Array<{ name: string; settled?: boolean; write: (w: any, id: strin
     },
   },
   {
+    // A transient failure recorded against a CHILD after that child already
+    // finished. The parent's own records look clean, so the settle branch was
+    // happy to clear it, and the child — completing status, blocking failure —
+    // was skipped by the engine's fast path and rejected by completeness at the
+    // same time, with ackEligibility refusing to waive a transient class.
+    name: 'subdivided and finished, but a child failed transiently after',
+    write: (w, id) => {
+      const kids = realKids();
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, page(CAP, 'u'));
+      w.subdivide(id, kids.map((k) => k.id), kids);
+      for (const kid of kids) {
+        w.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+        w.result(kid.id, [{ id: `u-${kid.id}` }]);
+        w.done(kid.id, 'unsaturated');
+      }
+      w.attempt({ cellId: kids[0].id, attemptN: 2, ok: false, errorClass: 'quota' });
+    },
+  },
+  {
+    // A DONE with no ATTEMPT behind it at all. completeness has always demanded
+    // evidence for 'unsaturated'; the engine's status check did not, so this
+    // was finished to one judge and outstanding to the other — and unwaivable,
+    // because ackEligibility refuses a cell that was never attempted.
+    name: 'DONE claims unsaturated, never attempted',
+    write: (w, id) => w.done(id, 'unsaturated'),
+  },
+  {
+    // A legitimately cleared parent one of whose children sits at the floor.
+    // The floor child is finished for SUBDIVISION purposes but never counts
+    // toward a complete run, and the engine's child predicate omitted that —
+    // so this manifest re-walked its subtree and appended a duplicate DONE on
+    // every resume, forever.
+    name: 'cleared parent with a child at the floor',
+    settled: true,
+    write: (w, id) => {
+      const kids = realKids();
+      w.attempt({ cellId: id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(id, page(CAP, 'v'));
+      w.subdivide(id, kids.map((k) => k.id), kids);
+      for (const kid of kids.slice(0, 3)) {
+        w.attempt({ cellId: kid.id, attemptN: 1, ok: true, count: 1, capped: false });
+        w.result(kid.id, [{ id: `v-${kid.id}` }]);
+        w.done(kid.id, 'unsaturated');
+      }
+      w.attempt({ cellId: kids[3].id, attemptN: 1, ok: true, count: CAP, capped: true });
+      w.result(kids[3].id, page(CAP, 'w'));
+      w.done(kids[3].id, SATURATED_AT_FLOOR);
+      w.done(id, 'cleared');
+    },
+  },
+  {
     // A place recorded by BOTH a capped parent and one of its children — which
     // is the normal case, since a child re-searches ground the parent already
     // covered. Every other fixture keeps parent and child ids disjoint, so
@@ -514,6 +566,7 @@ describe('resume state matrix', () => {
         // this case is named for.
         const { cell, file } = build(state);
         const emitted = new Set<string>();
+        const order: string[] = [];
         const writer = openManifest(file);
         await sweep({
           cells: [cell],
@@ -526,7 +579,14 @@ describe('resume state matrix', () => {
             if (stopper === 'interrupt') throw new SweepInterrupted();
             return { places: [] };
           },
-          onPlaces: (places: any[]) => places.forEach((place) => emitted.add(place.id)),
+          onPlaces: (places: any[], from: any) =>
+            places.forEach((place) => {
+              emitted.add(place.id);
+              // Keyed by NODE, not by place. A place held by both a parent and
+              // a child is emitted twice by a live run, on purpose (invariant
+              // 15) — the defect is replaying the same node twice.
+              order.push(`${from?.id ?? '?'}|${place.id}`);
+            }),
         });
         writer.close();
         for (const id of expected) {
@@ -534,6 +594,12 @@ describe('resume state matrix', () => {
             true,
           );
         }
+        // Exactly once per node, not merely at least once. The abort exits now
+        // replay the cells this run never reached, so the risk flips from
+        // losing a place to replaying a node twice — and queryHits feeds the
+        // score gate in both directions.
+        const duplicated = [...new Set(order.filter((key, at) => order.indexOf(key) !== at))];
+        expect(duplicated, `${state.name}/${stopper}: replayed a node twice`).toEqual([]);
       }
     },
   );
@@ -915,9 +981,9 @@ describe('resume state matrix', () => {
     expect(new Set(STATES.map((state) => state.name)).size, 'duplicate state name').toBe(
       STATES.length,
     );
-    expect(STATES.length, 'a state was dropped').toBe(22);
-    expect(SETTLED_STATES.length, 'the settled partition shrank').toBe(5);
-    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(17);
+    expect(STATES.length, 'a state was dropped').toBe(25);
+    expect(SETTLED_STATES.length, 'the settled partition shrank').toBe(6);
+    expect(STATES.filter((state) => !state.settled).length, 'the live partition shrank').toBe(19);
 
     const withRecords = STATES.filter((state) => {
       const { cell, file } = build(state);

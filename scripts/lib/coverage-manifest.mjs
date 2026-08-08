@@ -328,7 +328,13 @@ function isAcknowledged(cell) {
 export function isCompleting(cell) {
   if (!cell) return false;
   if (cell.terminalStatus === 'ack_terminal') return isAcknowledged(cell);
-  return COMPLETING_STATUSES.includes(cell.terminalStatus);
+  if (!COMPLETING_STATUSES.includes(cell.terminalStatus)) return false;
+  // A DONE is a claim; a successful ATTEMPT is the evidence for it. The
+  // invariant has always demanded this and the engine never did, so a DONE
+  // saying 'unsaturated' with no attempt behind it was finished to one judge
+  // and outstanding to the other — the same deadlock the ack_terminal case
+  // had, and just as unwaivable, since a never-attempted cell is not eligible.
+  return Boolean(cell.lastOk);
 }
 
 /**
@@ -336,6 +342,31 @@ export function isCompleting(cell) {
  * reason as `isCompleting`: the engine must not write a terminal status over a
  * transient failure that `completeness()` will still count against the run.
  */
+/**
+ * Finished for the purpose of not working this cell again on a resume.
+ *
+ * Two differences from `isCompleting`, both learned from cells that got stuck:
+ *
+ * - A completing status does NOT survive a blocking failure recorded after it.
+ *   The run must retry, and nothing else can clear it — `ackEligibility`
+ *   deliberately refuses to waive a transient class — so treating it as
+ *   finished strands the cell with no lever at all.
+ * - A cell at the floor IS finished for SUBDIVISION purposes, even though it
+ *   can never count toward a complete run. Callers used to spell that half by
+ *   hand as `|| terminalStatus === SATURATED_AT_FLOOR`; the one place that
+ *   forgot it re-walked the subtree and appended a duplicate DONE on every
+ *   single resume.
+ *
+ * `isCompleting` answers "may the run report this cell as done?"; this answers
+ * "does a resume still owe it work?". They are different questions, and giving
+ * each a name is what stops the next caller from picking the wrong one.
+ */
+export function isSettledForResume(cell) {
+  if (!cell) return false;
+  if (hasUnrecoveredBlocking(cell)) return false;
+  return isCompleting(cell) || cell.terminalStatus === SATURATED_AT_FLOOR;
+}
+
 export function hasUnrecoveredBlocking(cell) {
   const blocking = (cell?.attempts ?? []).filter(
     (attempt) => !attempt.ok && BLOCKING_ERROR_CLASSES.includes(attempt.errorClass),
@@ -473,10 +504,13 @@ export function ackEligibility(state, cellId) {
   if (cell.terminalStatus === 'ack_terminal' && cell.acked) {
     return { eligible: false, reason: 'already acknowledged' };
   }
-  const unfinishedChildren = (cell.children ?? []).filter((childId) => {
-    const child = state.cells.get(childId);
-    return !child || !COMPLETING_STATUSES.includes(child.terminalStatus);
-  });
+  // The same definition the engine resumes by. Testing raw status membership
+  // here made this a THIRD judge with its own answer: a forged ack_terminal
+  // child read as finished, the "acknowledge those children instead" refusal
+  // went dead, and a parent could be waived while its child stayed outstanding.
+  const unfinishedChildren = (cell.children ?? []).filter(
+    (childId) => !isSettledForResume(state.cells.get(childId)),
+  );
   if (unfinishedChildren.length > 0) {
     return {
       eligible: false,

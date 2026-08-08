@@ -12,6 +12,7 @@ import {
   COMPLETING_STATUSES,
   hasUnrecoveredBlocking,
   isCompleting,
+  isSettledForResume,
   SATURATED_AT_FLOOR,
 } from './coverage-manifest.mjs';
 import {
@@ -83,16 +84,18 @@ export async function runSweep({
     replayedCells: new Set(),
   };
 
-  for (const cell of cells) {
+  for (const [index, cell] of cells.entries()) {
     try {
       await processCell(cell, ctx);
     } catch (error) {
-      if (error instanceof SweepInterrupted) {
-        ctx.interrupted = true;
-        break;
-      }
-      if (error instanceof BudgetExhausted) break;
-      throw error;
+      if (!isAbort(error)) throw error;
+      if (error instanceof SweepInterrupted) ctx.interrupted = true;
+      // The abort ends this run's CALLS, not the data already on record. The
+      // cells after this one were never reached, but whatever the manifest
+      // holds for them still belongs in the rebuilt queue — otherwise an
+      // aborted resume hands back a queue shorter than its own manifest.
+      replayUnreached(cells.slice(index + 1).map((skipped) => skipped.id), cell, ctx);
+      break;
     }
   }
 
@@ -106,6 +109,24 @@ export async function runSweep({
 
 function priorState(ctx, cellId) {
   return ctx.state?.cells?.get(cellId) ?? null;
+}
+
+/** The two exits that stop a run early rather than failing a single cell. */
+function isAbort(error) {
+  return error instanceof SweepInterrupted || error instanceof BudgetExhausted;
+}
+
+/**
+ * Replay the recorded subtrees of cells this run will now never reach.
+ *
+ * Every abort exit already replays the cell it stopped ON. These are its
+ * SUCCESSORS — the siblings after it in a subdivision, and the planned cells
+ * after it at the top level. Their pages are on disk and the run is about to
+ * end without visiting them, so without this the queue silently loses venues
+ * the manifest still records.
+ */
+function replayUnreached(cellIds, cell, ctx) {
+  for (const cellId of cellIds) replaySubtree(cellId, cell, ctx);
 }
 
 /**
@@ -197,7 +218,16 @@ async function subdivideFrom(cell, ctx) {
   }
   ctx.manifest.subdivide(cell.id, children.map((child) => child.id), children);
   const outcomes = [];
-  for (const child of children) outcomes.push(await processCell(child, ctx));
+  for (const [index, child] of children.entries()) {
+    try {
+      outcomes.push(await processCell(child, ctx));
+    } catch (error) {
+      if (isAbort(error)) {
+        replayUnreached(children.slice(index + 1).map((sibling) => sibling.id), cell, ctx);
+      }
+      throw error;
+    }
+  }
   const terminal = [...COMPLETING_STATUSES, SATURATED_AT_FLOOR];
   if (outcomes.every((outcome) => terminal.includes(outcome))) {
     ctx.manifest.done(cell.id, 'cleared', { children: children.length, resumed: true });
@@ -213,7 +243,7 @@ async function subdivideFrom(cell, ctx) {
  */
 async function resumeChildren(cell, known, ctx) {
   const outcomes = [];
-  for (const childId of known.children) {
+  for (const [index, childId] of known.children.entries()) {
     const childState = ctx.state?.cells?.get(childId);
     const childCell = childState?.cell;
     if (!childCell) {
@@ -229,7 +259,12 @@ async function resumeChildren(cell, known, ctx) {
       outcomes.push(null);
       continue;
     }
-    outcomes.push(await processCell({ ...childCell, kind: childCell.kind ?? cell.kind }, ctx));
+    try {
+      outcomes.push(await processCell({ ...childCell, kind: childCell.kind ?? cell.kind }, ctx));
+    } catch (error) {
+      if (isAbort(error)) replayUnreached(known.children.slice(index + 1), cell, ctx);
+      throw error;
+    }
   }
   const terminal = [...COMPLETING_STATUSES, SATURATED_AT_FLOOR];
   if (outcomes.every((outcome) => terminal.includes(outcome))) {
@@ -267,9 +302,14 @@ async function processCell(cell, ctx) {
   // recorded after one. Every outstanding case is settled here, ahead of the
   // completing-status fast path, so an ordering accident cannot strand work.
   if (known) {
+    // A floor child IS finished here — it did the subdivision it was asked to
+    // do, and its residual is reported against itself. Omitting that made an
+    // already-cleared parent re-walk its subtree and append a duplicate DONE on
+    // every resume. A child carrying an unrecovered blocking failure is NOT
+    // finished, however completing its status looks.
     const unfinishedChildren =
       known.children?.length > 0 &&
-      known.children.some((childId) => !isCompleting(ctx.state?.cells?.get(childId)));
+      known.children.some((childId) => !isSettledForResume(ctx.state?.cells?.get(childId)));
     if (unfinishedChildren) {
       // Only this cell's own page: resumeChildren recurses through processCell,
       // so each child replays its own subtree.
@@ -315,7 +355,11 @@ async function processCell(cell, ctx) {
     }
   }
 
-  if (known && isCompleting(known)) {
+  // `isSettledForResume`, not `isCompleting`: a completing status that carries a
+  // blocking failure recorded after it still owes a retry, and skipping it here
+  // was what left such a cell unreachable by the engine and unwaivable by the
+  // operator at the same time.
+  if (known && isSettledForResume(known)) {
     // Replay the whole SUBTREE. Skipping the CALL is the point of resume;
     // skipping the RESULTS hands the caller a short candidate list while the
     // manifest still says the cell was covered. A 'cleared' cell's venues live
@@ -456,8 +500,15 @@ async function queryCell(cell, ctx, known) {
 
   ctx.manifest.subdivide(cell.id, children.map((child) => child.id), children);
   const outcomes = [];
-  for (const child of children) {
-    outcomes.push(await processCell(child, ctx));
+  for (const [index, child] of children.entries()) {
+    try {
+      outcomes.push(await processCell(child, ctx));
+    } catch (error) {
+      if (isAbort(error)) {
+        replayUnreached(children.slice(index + 1).map((sibling) => sibling.id), cell, ctx);
+      }
+      throw error;
+    }
   }
   // A child that hit the floor is still a FINISHED child: this cell did the
   // subdivision it was asked to do. The residual saturation belongs to the
