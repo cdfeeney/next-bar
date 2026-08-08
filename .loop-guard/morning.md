@@ -299,3 +299,117 @@ path-scoped by hand.
    <AUTH-NICE-SHA> resolves to b6a7957, the reviewed tip of fix/auth-cross-context-email.
    `git merge-base --is-ancestor b6a7957 HEAD` succeeds: this worktree's 689e564 already descends
    from the reviewed auth base, so Item 5 needs no branch creation and touches no protected worktree.
+
+### Item 5 - g-4e72a0c5-eb4b-4e5f-b192-6c1b7b64fa92 - COMPLETE (NICE, 3 Santa rounds, quorum met every round)
+
+**Branch** `harness/nb-20260808-expanded/auth-layout` (descends from b6a7957, the reviewed auth base,
+and from the nighttime-hardening tip 689e564). Four local commits, nothing pushed:
+- `bdfcfef` compact /auth layout (visual only)
+- `302eb63` santa round-1 findings
+- `92ced7f` santa round-2 findings
+- `54b201c` santa round-3 test hardening
+(`5ea0809` is the loop-guard checkpoint; it touched only this morning log.)
+
+**Changed files**: `src/app/auth/page.tsx` (classNames + comments ONLY), `e2e/auth-layout.spec.ts`
+(new, 17 tests), `e2e/tools/appOrigin.ts` (new), `playwright.config.ts`,
+`e2e/tools/fence-global-setup.ts`, `scripts/screenshot-g-12d33864.mjs`.
+
+**Result**: /auth needed 772px of document height in a 390x664 iPhone 13 viewport - the sign-in form
+scrolled on the smallest configured phone. It now needs 587px, so signin, signup, forgot and
+reset-sent are each exactly one screen on iPhone 13 and Pixel 7. Headroom: signin 77px, signup 125px,
+forgot 172px, inbox 111px.
+
+**Verification**: vitest 164 files / 2483 tests; the 8 auth unit files (149 tests) pass UNMODIFIED
+and `git status` on those paths is empty (criterion 6); typecheck, production build, secret-scan
+(723 files), `git diff --check` all clean; Playwright foreground 111/111 across auth-layout,
+auth-page, auth-cross-context and app-shell-smoke on iPhone 13 + Pixel 7.
+
+**Panel** (T1 tier, escalated to `full` intensity because this is UI work) - quorum met all 3 rounds:
+- R1 (bdfcfef): Claude/FABLE + Codex + GLM + DeepSeek + Kimi deep. 5 findings fixed, 3 refuted.
+- R2 (302eb63): same five. Codex 0 findings, DeepSeek 0, GLM/Kimi no blockers, FABLE 1 advisory.
+- R3 (92ced7f): same five, Kimi at STANDARD depth (`--depth deep` errored exit 4 twice while a route
+  probe answered OK - the deep profile specifically was degraded; recorded, not hidden).
+  Codex 3 Mediums, all against my own tests; FABLE/GLM/DeepSeek clean.
+
+**Lane-unique catches**:
+- Codex only: the `deadTail` assertion was vacuous; `fits-one-screen` could not distinguish "fits"
+  from "clipped"; three round-3 test false-pass paths; `screenshot-g-12d33864.mjs` ignoring the port.
+- Claude/FABLE only: independently caught the vacuous dead-tail claim; the stale comment still
+  advertising the deleted helper's coverage.
+- GLM only: the `md:` restorations were implemented but wholly unverified (both device projects are
+  mobile); the `m-auto` centring was untested at runtime.
+- DeepSeek only: raised that `min-h-dvh` might not resolve in Tailwind 3.4 - refuted by reading the
+  built CSS.
+- GLM + DeepSeek converging: the missing `dvh` fallback, and the desktop spacing leak.
+- Kimi only: ruled the `md:py-12` safe-area drop above 768px a FIX NOW; adjudicated the two disputed
+  claims below; and set the post-cap gate for test-only fixes.
+
+**Claims REFUTED with evidence, recorded rather than quietly dropped**:
+1. "The bottom safe-area inset is double-counted; content overflows on a notched device" (GLM +
+   DeepSeek independently, and the mechanism under FABLE's round-1 HIGH). Measured: the gap below
+   `<main>` was 0.5px before the change and ~0px after. `<main>` overflows the body's `height:100%`
+   border box instead of stacking after its padding, so the nav reserve never becomes scrollable
+   space. Kimi adjudicated it refuted. FABLE's proposed fix - conditioning the body reserve away -
+   would be a root-layout change touching every route to fix a non-problem on this one.
+2. "items-center currently traps the top of overflowing content" - refuted as a live defect by the
+   390x420 and 390x340 states. Hardened to `m-auto` anyway on Kimi's endorsement.
+3. My OWN first hypothesis was wrong the same way, and the spec header now carries the correction:
+   I initially blamed a 64px dead strip and wrote an assertion claiming it was RED pre-fix. It never
+   was. That assertion is deleted.
+
+**Honest negative result**: the reviewer-requested tall-card overflow assertion was written and
+measured NOT to work - mutating back to `items-center` + `mx-auto` left it green, because the
+section's `min-height:auto` growth means the trap cannot fire in this structure. It was replaced with
+a guard on the precondition that would arm it (the section must keep `overflow: visible`), which does
+go red. Shipping the original would have been the same coverage theater this item removed elsewhere.
+
+**Mutation proofs** (memory rule: a regression test must fail pre-fix). Eight real product-code
+mutations, each reverted: bare `min-h-dvh` fails the @supports pin; a clipped card fails the clipping
+guard; dropping an `md:` restoration fails the desktop pin; `mx-auto` fails the centring test; flat
+`md:py-12` fails the desktop safe-area pin; `md:pb-12` fails the media-scoped inset assertion;
+`overflow-hidden` on the section fails the precondition guard; removing `min-h-screen` fails the
+fallback assertion. The @supports SOURCE-ORDER clause has no available product mutation and is
+corroborated by direct built-CSS inspection instead (`.min-h-screen{min-height: 100vh}` at byte
+18325, `@supports (min-height:100dvh)` at 44602 - fallback first, gate after).
+
+**Test-infrastructure change, flagged for the operator**: `NB_E2E_PORT` (default 3000, behaviour
+unchanged when unset). `reuseExistingServer: true` plus a hardcoded `:3000` means a Playwright run in
+one leased worktree silently tests the code served by another worktree's dev server - and `:3000` was
+in fact held by the sibling `item3-overflow` worktree throughout this run, so this item could not
+have been verified honestly without it. `playwright.config.ts`'s storageState origin and
+fence-global-setup's reused-server canary both follow the port. GLM noted this is bundled into a
+visual-only commit and would ideally have shipped separately; it is in `bdfcfef` alongside the
+layout change.
+
+**ATTENDED CHECKS STILL OWED** (not blockers for local completion):
+1. Real-device pass for criteria 1-2. Playwright emulates neither collapsing browser chrome nor
+   device safe-area insets, so `100dvh` vs `100vh` and every `env(safe-area-inset-*)` value are
+   pinned as CSSOM DECLARATION assertions only. On a notched iPhone and a gesture-nav Pixel, confirm:
+   nothing retreats behind the address bar as it expands, the home indicator does not overlap the
+   submit button, and overscroll exposes no broken-looking gap.
+2. Keyboard-open behaviour on real hardware (the tests approximate it by shrinking the viewport).
+3. Orientation change mid-session, 200% text zoom / iOS Dynamic Type, and PWA standalone mode.
+
+**Residuals deliberately NOT actioned** (Kimi ruled DOCUMENT or DROP):
+- The body's `pb-[calc(64px+env(safe-area-inset-bottom))]` reserve is inert on nav-less routes.
+  Measured non-visible; making it route-aware is a root-layout change and belongs in its own item.
+- The `md:` breakpoint at 768px gives portrait iPads the compact layout - deliberate for a single
+  short form.
+- Residual reliance on Tailwind emitting variant utilities after base utilities, now guarded by the
+  source-order assertion.
+- FABLE's round-3 Low note: the media-scope assertion counts carriers rather than binding scope
+  exactly; the round-3 fix addressed the substance, and the narrower duplicate-stylesheet case
+  remains a known limitation noted in the test file.
+
+**Nothing was pushed, deployed, migrated, or irreversibly applied.** No PR, no database connection,
+no environment/credential access, no email/account/TestFlight/App Store action. No worktree was
+added, moved, removed or pruned; no stash was created or dropped; no branch was force-updated,
+merged or rebased. The only writes outside this worktree were temp files under the job scratch dir.
+The `npm run build` step performs next/font's build-time Google Fonts fetch - the project's own
+standard verification step, read-only, no credentials; under the network fence it fails closed, and
+that is why the fenced build attempt is recorded as failing on fonts alone.
+
+## C3 RUN SUMMARY
+
+Status: **COMPLETE** - 1 supplied goal, 1 complete, 0 blocked, 0 remaining.
+Commits: bdfcfef, 302eb63, 92ced7f, 54b201c (+ 5ea0809 checkpoint, morning log only). All local.
