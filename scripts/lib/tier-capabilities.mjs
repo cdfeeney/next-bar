@@ -439,6 +439,20 @@ export function analyzeFsDeletion(text) {
     else namespaces.add(binding);
   }
 
+  // THE CJS RE-EXPORT BARREL, which is the counterpart of the bare `export *`
+  // above and was missed because `module.exports` is not an identifier the
+  // binding group can capture. `module.exports = require('fs-extra')` forwards
+  // every deletion function to whoever imports this module, and the importer's
+  // own specifier is a local path, so neither file held capability.
+  const cjsReexportRe = new RegExp(
+    `(?:module\\s*\\.\\s*)?exports\\s*=\\s*[^\\n=]{0,80}?(?:await\\s+)?(?:import|require)\\s*\\(\\s*${q}(${mod})${q}\\s*\\)`,
+    'g',
+  );
+  for (const match of text.matchAll(cjsReexportRe)) {
+    evidence.push(`re-exports all of '${match[1]}', including its deletion functions`);
+    break;
+  }
+
   // A CONTINUATION receives the module without ever binding a name in this
   // scope: `import('fs/promises').then(({ rm }) => rm(p))` and
   // `import('fs').then(fs => fs.unlink(p))`. Neither shape has a declaration to
@@ -479,12 +493,27 @@ export function analyzeFsDeletion(text) {
   // than narrowed. Requiring a call site costs only the case where a computed
   // specifier binds a deletion function that is never called anywhere in the
   // file, which cannot delete anything from this module.
-  const dynamicSpecRe = new RegExp(`(?:\\bimport|\\brequire)\\s*\\(\\s*(?!\\s*${q})[^)\\n]{1,120}\\)`, 'g');
+  const dynamicSpec = `(?:\\bimport|\\brequire)\\s*\\(\\s*(?!\\s*${q})[^)\\n]{1,120}\\)`;
+  const dynamicSpecRe = new RegExp(dynamicSpec, 'g');
   if (dynamicSpecRe.test(text)) {
     const names = FS_EXTRA_DELETION_NAMES.map(escapeForRegExp).join('|');
     const calledDeletionName = new RegExp(`(?:\\.\\s*)?\\b(?:${names})\\s*\\(`);
     if (calledDeletionName.test(text)) {
       evidence.push('resolves a module specifier dynamically and calls a deletion name — unanalyzable, failing closed');
+    }
+  }
+  // AN ALIAS DEFEATED THE CALL-SITE REQUIREMENT ABOVE. In
+  // `const { rm: nuke } = await import(spec); await nuke(dir)` the call site is
+  // `nuke(`, which is no deletion name at all, so nothing fired. The clause is
+  // read here instead: what is DESTRUCTURED from a dynamic specifier names the
+  // imported function regardless of what it is renamed to.
+  const dynamicClauseRe = new RegExp(`(\\{[^}\\n]*\\})\\s*=\\s*[^\\n=]{0,80}?${dynamicSpec}`, 'g');
+  for (const match of text.matchAll(dynamicClauseRe)) {
+    const imported = parseBindingClause(match[1].slice(1, -1)).map((b) => b.imported);
+    const hit = imported.find((name) => FS_EXTRA_DELETION_NAMES.includes(name));
+    if (hit) {
+      evidence.push(`destructures ${hit} from a dynamically resolved module — unanalyzable, failing closed`);
+      break;
     }
   }
 
@@ -517,6 +546,19 @@ export function analyzeFsDeletion(text) {
       for (const hit of text.matchAll(memberRe)) {
         evidence.push(`references ${ns}.${hit[1]}`);
         break;
+      }
+      // A namespace can also be DESTRUCTURED rather than dotted:
+      // `const fsp = require('node:fs/promises'); const { unlink: nuke } = fsp;`
+      // reaches exactly the same function, and only the dotted form was read.
+      // The clause names the imported member whatever it is renamed to.
+      const destructureRe = new RegExp(`(\\{[^}\\n]*\\})\\s*=\\s*${escapeForRegExp(ns)}\\s*(?:;|$)`, 'gm');
+      for (const hit of text.matchAll(destructureRe)) {
+        const imported = parseBindingClause(hit[1].slice(1, -1)).map((b) => b.imported);
+        const found = imported.find((name) => FS_EXTRA_DELETION_NAMES.includes(name));
+        if (found) {
+          evidence.push(`destructures ${found} from the ${ns} namespace`);
+          break;
+        }
       }
     }
   }

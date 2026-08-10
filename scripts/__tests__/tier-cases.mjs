@@ -892,6 +892,30 @@ export const TIER_CASES = [
     escalated: false,
     why: 'remove is an ordinary word; the fail-closed rule now requires a call position',
   },
+  // --------------------------------------------------------------- Round-12
+  // Three binding gaps that survived the removal of the history-dependent
+  // import rule. Each ADDS capability and can never lower a verdict.
+  {
+    name: 'a CJS re-export barrel of an fs module is capability',
+    path: 'scripts/r12-barrel.cjs',
+    contents: "module.exports = require('fs-extra');\n",
+    expect: 'T0',
+    why: 'module.exports is not an identifier, so the binding group could not capture the counterpart of export *',
+  },
+  {
+    name: 'an aliased destructure from a computed import is capability',
+    path: 'scripts/r12-alias.mjs',
+    contents: 'const { rm: nuke } = await import(spec);\nawait nuke(dir, { recursive: true });\n',
+    expect: 'T0',
+    why: 'the call site is nuke(, which is no deletion name, so requiring one at the call site missed it',
+  },
+  {
+    name: 'destructuring a deletion function off a namespace is capability',
+    path: 'scripts/r12-nsdestructure.mjs',
+    contents: "const fsp = require('node:fs/promises');\nconst { unlink: nuke } = fsp;\nawait nuke(file);\n",
+    expect: 'T0',
+    why: 'only the dotted form fsp.unlink was read, though a destructure reaches the same function',
+  },
   {
     name: 'a work ledger describing agent work stays inert',
     path: 'docs/R10-LEDGER.md',

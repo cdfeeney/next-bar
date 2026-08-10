@@ -160,7 +160,10 @@ MEASURING the alternative against this repository, not by preference:
 - **The analyzer resolves bindings, not values.** It follows what a module
   specifier was bound to and stops there. Binding resolution is broader than it
   looks and is meant to cover *ordinary code*, not just the tidy form: aliases,
-  destructuring, namespaces and defaults, `import`/`require`/`await import`,
+  destructuring (including off a resolved namespace, and off a dynamically
+  resolved module), namespaces and defaults, ESM and CJS re-export barrels
+  (`export *` and `module.exports = require(…)`),
+  `import`/`require`/`await import`,
   assignment without a declaration keyword (`fsp = require('fs/promises')`), a
   conditional or `try`/`catch` load, a parenthesized `await import`, and the
   parameter of a `.then()` continuation. `const nuke = fsp.rm` is caught because
@@ -174,47 +177,40 @@ MEASURING the alternative against this repository, not by preference:
   deliberate; treat the classifier as a floor, and raise the tier yourself when
   you know better.
 
-- **A newly added import of a T0 file escalates the importer.** Capability
-  resolution stops at one module's own bindings, so calling a local wrapper —
-  `purgeAll()`, a command registry, a barrel re-export — leaves no risky token in
-  the file that introduced the call, and wiring an existing destructive primitive
-  into a new call path graded T1.
+- **Cross-file capability is NOT followed, and a rule that tried was removed.**
+  Capability resolution stops at one module’s own bindings, so calling a local
+  wrapper — `purgeAll()`, a command registry, a barrel re-export — leaves no
+  risky token in the file that introduced the call. Wiring an existing
+  destructive primitive into a new call path therefore grades T1.
 
-  "Newly imported" is a SET DIFFERENCE between the imports of the previous
-  version and the imports of the current one — not a reading of diff lines. The
-  first implementation did read diff lines and was wrong in four separate ways
-  reviewers demonstrated: an added line whose own text begins with `++` renders
-  as `+++…` and was discarded as a file header; re-quoting an existing import
-  made the line look added and escalated a file that gained nothing; a partial
-  git failure skipped the fail-closed fallback while the warning claimed the
-  opposite; and the tier came to depend on the SHAPE of history, so a squash, a
-  rebase or a shallow clone changed the verdict for identical content. Comparing
-  resolved import sets makes formatting, ordering and history irrelevant.
+  A rule that escalated any file which NEWLY imported a T0 file was built to
+  close that, and it is worth recording why it is gone rather than quietly
+  absent. It decided the tier from the **diff** instead of the content, and
+  four reviewers broke it in two rounds:
 
-  Only what the change **added** counts, and that boundary was chosen from a
-  measurement rather than taste. Unioning the capabilities of *every* imported
-  file promotes 15 files to T0 here, among them
+  - reading git’s added lines dropped any added line whose own text began
+    `++` (it renders as `+++…`), and re-quoting an existing import made the
+    line look new and escalated a file that gained nothing;
+  - rebuilt as a set difference against the previous version, it then compared
+    a brand-new **committed** file against itself — absent at the base, it fell
+    through to `HEAD`, which holds its current content — so the escalation
+    never fired. CI only ever sees committed work, so the one shape the rule
+    existed to catch was exactly the shape it missed.
+
+  Identical content produced different verdicts depending on whether the work
+  had been committed, squashed, rebased or shallow-cloned. The operator’s
+  decision was to remove it rather than repair it a third time, and it leaves
+  behind the rule new mechanisms are held to:
+
+  > **A file’s tier is a function of its content alone.** No provenance, no
+  > history, and no absence of a prior revision may lower it.
+
+  For the record, the alternative was measured too: unioning the capabilities
+  of *every* imported file promotes 15 files to T0 here, among them
   `src/components/ShareNightButton.tsx`, `src/hooks/useRatings.ts` and
-  `src/app/settings/page.tsx` — so restyling a button would summon the
-  five-family panel, which acceptance criterion 11 forbids and which is exactly
-  the alert fatigue this design exists to avoid. Keying on the added import
-  escalates the change that creates the call path and leaves untouched the file
-  that has always had it. Side-effect imports (`import './purge'`) count too —
-  importing a module purely for what it does at load time is the strongest form
-  of wiring there is.
-
-  It runs in **both** input modes, so the gate and a reviewer piping the same
-  path in cannot disagree; only `--summary` skips it, because a whole-repository
-  distribution is not a gate decision. If a file's previous version cannot be
-  read — a brand-new file, a shallow clone, an unresolvable base — every import
-  it holds now counts as new, which escalates, and the affected paths are named
-  in a warning rather than passed over.
-
-  Two limits, stated rather than implied. The escalation is exactly **one hop**:
-  in a chain A → B → C where only C is intrinsically T0, B escalates but A does
-  not. And a file whose *existing* import becomes T0 in the same change is not
-  itself escalated — though that change set still contains the newly dangerous
-  file, so the change as a whole is T0 regardless.
+  `src/app/settings/page.tsx`, so restyling a button would summon the
+  five-family panel — which acceptance criterion 11 forbids. Raise the tier
+  yourself when you wire a destructive primitive into a new call path.
 - **A commented-out deletion import counts as capability.** There is no comment
   suppression at all, and that is a deliberate, measured decision rather than an
   oversight.

@@ -165,6 +165,15 @@ const ROUND_PROOFS = [
     ]),
   },
   {
+    label: 'round-12',
+    rev: 'fd7b9cf',
+    cases: new Set([
+      'a CJS re-export barrel of an fs module is capability',
+      'an aliased destructure from a computed import is capability',
+      'destructuring a deletion function off a namespace is capability',
+    ]),
+  },
+  {
     label: 'round-11',
     rev: 'd779e63',
     cases: new Set([
@@ -486,7 +495,6 @@ function buildPipelineFixture() {
   mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
   writeFileSync(join(root, 'package.json'), '{"name":"redproof"}\n');
   writeFileSync(join(root, 'src', 'lib', 'purge.ts'), PURGE_SOURCE);
-  writeFileSync(join(root, 'src', 'lib', 'caller.ts'), 'export function handler() { return 1; }\n');
   writeFileSync(join(root, 'scripts', 'recreate.mjs'), PURGE_SOURCE);
   git('init', '-q', '-b', 'main', '.');
   git('config', 'user.email', 'test@example.invalid');
@@ -498,34 +506,24 @@ function buildPipelineFixture() {
   git('rm', '-q', 'scripts/recreate.mjs');
   mkdirSync(join(root, 'scripts'), { recursive: true });
   writeFileSync(join(root, 'scripts', 'recreate.mjs'), 'export const noop = () => {};\n');
-  // (b) wire an existing destructive primitive into a new call path
-  writeFileSync(
-    join(root, 'src', 'lib', 'caller.ts'),
-    "import { purge } from './purge';\nexport function handler() { return purge('/var/data'); }\n",
-  );
-  git('add', 'src/lib/caller.ts');
-  git('commit', '-qm', 'wire');
   return root;
 }
 
 /**
- * The answers this proof compares, from one fixture and one CLI.
+ * The two answers this proof compares, from one fixture and one CLI.
  *
- * `stdinNewCallPath` is the round-11 addition: the escalation used to be
- * computed only in `--changed` mode, so the same file graded T0 through the gate
- * and T1 through a pipe, and this proof stayed green because it only ever piped
- * the deleted path. A reviewer pointed out that a proof which never exercises the
- * disagreement cannot detect it.
+ * Only the deleted-then-recreated path is exercised now. The new-import
+ * escalation this proof also covered was REMOVED: it made the tier depend on
+ * history rather than content, and a brand-new committed file was compared
+ * against itself and never escalated.
  */
 function pipelineAnswers(root) {
-  const piped = runCli(root, ['--base', 'main'], 'scripts/recreate.mjs\nsrc/lib/caller.ts\n');
+  const piped = runCli(root, ['--base', 'main'], 'scripts/recreate.mjs\n');
   const changed = runCli(root, ['--changed', '--base', 'main']);
   const tierIn = (result, path) => result.perPath.find((e) => e.path === path)?.tier ?? '(absent)';
   return {
     stdinRecreated: tierIn(piped, 'scripts/recreate.mjs'),
     changedRecreated: tierIn(changed, 'scripts/recreate.mjs'),
-    newCallPath: tierIn(changed, 'src/lib/caller.ts'),
-    stdinNewCallPath: tierIn(piped, 'src/lib/caller.ts'),
   };
 }
 
@@ -539,31 +537,18 @@ try {
     process.stdout.write(
       `\nRound-10 pipeline proof, real CLI over a throwaway repository\n\n` +
         `  deleted-then-recreated via stdin   before (${PIPELINE_PROOF_REV}): ${before.stdinRecreated}` +
-        `   after: ${after.stdinRecreated}   (--changed says ${after.changedRecreated})\n` +
-        `  newly added import of a T0 file    before (${PIPELINE_PROOF_REV}): ${before.newCallPath}` +
-        `   after: ${after.newCallPath}
-` +
-        `  the SAME import seen via stdin     before (${PIPELINE_PROOF_REV}): ${before.stdinNewCallPath}` +
-          `   after: ${after.stdinNewCallPath}
-`,
+        `   after: ${after.stdinRecreated}   (--changed says ${after.changedRecreated})\n`,
     );
     const improved =
       before.stdinRecreated === 'T1' &&
       before.changedRecreated === 'T0' &&
       after.stdinRecreated === 'T0' &&
-      after.changedRecreated === 'T0' &&
-      before.newCallPath === 'T1' &&
-      after.newCallPath === 'T0' &&
-      // The import escalation was --changed-only before this round, so the same
-      // file graded T1 through a pipe; now both entry points must agree.
-      before.stdinNewCallPath === 'T1' &&
-      after.stdinNewCallPath === 'T0';
+      after.changedRecreated === 'T0';
     if (!improved) {
       process.stderr.write(
         '\nred-proof FAILED: before this round stdin must under-grade a deleted-then-recreated path ' +
-          'that --changed grades T0, and a newly added import of a T0 file must not escalate. After ' +
-          'it, both entry points must agree and the new call path must be T0. They do not, so one of ' +
-          'these fixes is either absent or untested.\n',
+          'that --changed grades T0, and after it both entry points must agree. They do not, so ' +
+          'that fix is either absent or untested.\n',
       );
       process.exit(1);
     }

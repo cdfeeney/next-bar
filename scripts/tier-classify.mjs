@@ -28,7 +28,6 @@ import { join } from 'node:path';
 import { classifyPaths, loadTierMap, validateTierMap, REPO_ROOT } from './lib/tier-classify-core.mjs';
 import {
   collectChangedPaths,
-  newLocalImports,
   recoverDeletedContents,
   refExists,
   resolveRecoveryRevisions,
@@ -101,60 +100,6 @@ function printHuman(result, source) {
   }
   for (const warning of result.warnings) lines.push(`  ! ${warning}`);
   return lines.join('\n');
-}
-
-/** Source files whose imports are worth resolving. */
-const IMPORTABLE_SOURCE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/i;
-
-/**
- * For each changed source file, the T0 repository files it NEWLY imports.
- *
- * Deleted paths are excluded: a file that no longer exists cannot introduce a
- * call path. Targets are classified once, without this option, so the escalation
- * is exactly one hop deep and cannot recurse.
- *
- * "Newly" is a SET DIFFERENCE between the imports of the previous version and
- * the imports of the current one — see `newLocalImports` for why reading diff
- * lines was wrong in four separate ways. A path whose previous version cannot be
- * read has every import counted as new, which escalates, and is named in a
- * warning rather than passed over.
- *
- * This runs for BOTH input modes. Restricting it to `--changed` made the two
- * entry points disagree — the defect this file had already been fixed for once,
- * in the other direction — because a reviewer piping the same path in got T1
- * where the gate said T0.
- */
-function computeNewRiskyImports(paths, deletedPaths, base, map) {
-  const importWarnings = [];
-  const deleted = new Set(deletedPaths.map((p) => normalizePath(p)));
-  const candidates = paths.map((p) => normalizePath(p)).filter((p) => IMPORTABLE_SOURCE.test(p) && !deleted.has(p));
-  if (candidates.length === 0) return { newRiskyImports: {}, importWarnings };
-
-  const { added: importsByPath, unreadableBase } = newLocalImports(candidates, { repoRoot: REPO_ROOT, base });
-  if (unreadableBase.length > 0) {
-    importWarnings.push(
-      `${unreadableBase.length} path(s) had no readable previous version, so every import they hold now was ` +
-        `treated as newly added (escalating, never lowering): ${unreadableBase.slice(0, 3).join(', ')}`,
-    );
-  }
-
-  const allTargets = new Set();
-  for (const targets of Object.values(importsByPath)) {
-    for (const t of targets) allTargets.add(t);
-  }
-  if (allTargets.size === 0) return { newRiskyImports: {}, importWarnings };
-
-  // One classification pass over the targets, WITHOUT `newRiskyImports`, so a
-  // target is graded on its own content and the escalation stops at one hop.
-  const targetTiers = new Map(
-    classifyPaths([...allTargets], map, { repoRoot: REPO_ROOT }).perPath.map((e) => [e.path, e.tier]),
-  );
-  const newRiskyImports = {};
-  for (const [path, targets] of Object.entries(importsByPath)) {
-    const risky = targets.filter((t) => targetTiers.get(normalizePath(t)) === 'T0');
-    if (risky.length > 0) newRiskyImports[path] = risky;
-  }
-  return { newRiskyImports, importWarnings };
 }
 
 async function main() {
@@ -294,17 +239,7 @@ async function main() {
   // ALL deleted paths are declared, not just the recovered ones, so an
   // unrecoverable deletion reports why it is unanalyzable instead of looking
   // like a file that mysteriously went missing.
-  // A NEWLY ADDED import of a T0 file escalates the importer, in BOTH input
-  // modes, so the two cannot disagree. It is skipped only for `--summary`: a
-  // whole-repository distribution is not a gate decision, and resolving the
-  // previous version of all 3,866 tracked files would spawn a git process per
-  // file to answer a question the sweep does not ask.
-  const { newRiskyImports, importWarnings } = summary
-    ? { newRiskyImports: undefined, importWarnings: [] }
-    : computeNewRiskyImports(input, deletedPaths, base, map);
-
-  const result = classifyPaths(input, map, { repoRoot: REPO_ROOT, contents, deletedPaths, newRiskyImports });
-  for (const warning of importWarnings) result.warnings.push(warning);
+  const result = classifyPaths(input, map, { repoRoot: REPO_ROOT, contents, deletedPaths });
   if (stdinDeletionWarning) result.warnings.push(stdinDeletionWarning);
   if (recovered.length > 0) {
     result.warnings.push(

@@ -103,19 +103,18 @@ no signature matches — SQL assembled at runtime, a delete behind an
 indirection — will not be caught. Treat the classifier as a floor, not a proof,
 and raise the tier yourself when you know better.
 
-One part of that gap is closed and it is worth knowing which. **Adding an import
-of a T0 file escalates the importing file to T0**, because wiring an existing
-destructive primitive into a new call path really does change what the code can
-do, and the file that does it holds no risky token of its own. Only a *newly
-added* import counts — measured by comparing the imports of the previous version
-with those of the current one, so reformatting and re-quoting change nothing. A
-file that has always imported a privileged module keeps its tier when you edit it
-for unrelated reasons, so ordinary UI does not escalate.
+That gap is **open, and deliberately so**. A rule that escalated any file which
+newly imported a T0 file was built and then removed, because it decided the tier
+from the *diff* rather than from the content: a brand-new file, once committed,
+was compared against itself and never escalated — and CI only ever sees committed
+work. Identical content produced different verdicts depending on whether the work
+had been committed, squashed or shallow-cloned.
 
-Three limits worth knowing: calling a primitive you already imported is still
-invisible; the escalation is one hop, so in a chain A → B → C only B escalates;
-and if the previous version of a file cannot be read, every import it holds now
-counts as new, which over-escalates on purpose and says so in a warning.
+The rule that replaced it is simpler and is the one to hold new mechanisms to:
+**a file's tier is a function of its content alone.** No provenance, no history,
+no absence of a prior revision may lower it. So wiring an existing destructive
+primitive into a new call path is *not* caught, and you are expected to raise the
+tier yourself when you do it.
 
 If the classifier cannot establish that a change lacks a high-risk capability,
 it returns **T0 with `escalated: true`**.
