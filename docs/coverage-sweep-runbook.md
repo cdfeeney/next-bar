@@ -171,6 +171,32 @@ there — the run will otherwise sit at that status forever, because the
 completeness gate is deliberately unwilling to look away from it. A cell stuck
 at `incomplete_saturated` on the floor is the other case a waiver can clear.
 
+> That `http4xx` routing depends on one property: the transport must put the
+> HTTP status **on the thrown error**, because `classifyError` reads
+> `error.status` and silently means `network` — a blocking class — without it.
+> It did not, for a while: `scripts/nearby-sweep.mjs` threw a bare `new Error`,
+> so every permanent 4xx classified as `network`, the `http4xx` branch was dead
+> code in production, and this paragraph described behaviour that did not
+> happen. The transport now lives in `scripts/lib/google-fetch.mjs` precisely so
+> it can be tested — the old one was unreachable from a test, and the fixture
+> double set `.status` by hand, so the offline suite passed over the broken
+> path.
+
+Three classes reach the waiver as **permanently failed**, and all three are
+deliberately *outside* `BLOCKING_ERROR_CLASSES`, because every blocking class
+promises that a retry might help:
+
+| Class | What it means |
+|---|---|
+| `http4xx` | Google rejects this request and always will |
+| `manifest_corrupt` | a `SUBDIVIDE` names a child but carries no geometry for it, so there is nothing to search and no resume can supply it |
+| `types_exhausted` | Google rejected every `includedType` we know how to ask for, so there is nothing left to request |
+
+A cell whose **geometry is missing from the manifest entirely** is waivable for
+the same reason, and is granted ahead of the never-attempted refusal — it can
+never have been attempted, and refusing it would leave it visible, outstanding
+and unsatisfiable forever.
+
 Acknowledge the cell explicitly:
 
 ```bash
@@ -193,6 +219,7 @@ still outstanding, `1` if it refused. Repeat `--ack-cell` for several cells;
 | most recent attempt succeeded | the cell is not stuck |
 | subdivision is unfinished | acknowledge the outstanding children instead, or resume to finish them — this walks the whole subtree, not just direct children |
 | last failure was transient | quota windows reopen and networks recover, so resume handles it. Raise `--max-calls` or wait rather than waiving real geography |
+| last failure was a rejected `includedType` | `unsupported_type` is the one class the engine resolves *within* a run, by dropping the rejected type and re-querying with what remains. A resume rebuilds the type list and finishes the cell, so waiving it discards geography that is still reachable |
 | already acknowledged | no double-waivers |
 
 A waiver **survives resume**: an acknowledged cell is not re-queried and its

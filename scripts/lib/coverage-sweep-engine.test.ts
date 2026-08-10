@@ -878,6 +878,44 @@ describe('every stuck cell keeps a lever', () => {
     expect(completeness(after).complete).toBe(true);
   });
 
+  it('never re-records a failure against a child the operator already waived', async () => {
+    // A review round claimed `resumeChildren` re-spams MANIFEST_CORRUPT over an
+    // already-waived child on every resume, because it tests `!childCell`
+    // before consulting the verdict. Reproduction refuted it: `resumeChildren`
+    // is only reached when some child fails `isSettledForResume`, and a waived
+    // child passes it, so the geometry-less branch is never re-entered. The
+    // ordering inside that branch is therefore unreachable in this case.
+    //
+    // This test pins the guarantee to the behaviour rather than to that one
+    // upstream guard, so a future change to the resume path cannot quietly
+    // reintroduce the unbounded re-spam. It is a characterisation test, not
+    // the regression test for a fix: it passes before and after.
+    const file = path.join(dir, 'corrupt-ack-no-respam.jsonl');
+    seedMissingChildGeometry(file);
+    await resume(file);
+
+    const writer = openManifest(file);
+    writer.ackTerminal('q/0', 'SUBDIVIDE record lost this child geometry', 'operator');
+    writer.done('q/0', 'ack_terminal', { reason: 'geometry unrecoverable' });
+    writer.close();
+
+    const countCorrupt = (state: any) =>
+      state.records.filter(
+        (record: any) =>
+          record.type === 'ATTEMPT' &&
+          record.cellId === 'q/0' &&
+          record.errorClass === MANIFEST_CORRUPT,
+      ).length;
+
+    // One sentinel from the pre-waiver resume above, and no more after it.
+    const firstAfterAck = await resume(file);
+    expect(countCorrupt(firstAfterAck)).toBe(1);
+
+    const secondAfterAck = await resume(file);
+    expect(countCorrupt(secondAfterAck)).toBe(1);
+    expect(completeness(secondAfterAck).complete).toBe(true);
+  });
+
   it('numbers repeated sentinels upward instead of rewriting attempt 1', async () => {
     const file = path.join(dir, 'corrupt-twice.jsonl');
     seedMissingChildGeometry(file);

@@ -82,6 +82,7 @@ import {
   assertTypeCoverage,
 } from './lib/coverage-types.mjs';
 import { resolveIdentity } from './lib/coverage-identity.mjs';
+import { fetchJson } from './lib/google-fetch.mjs';
 
 const VALUE_OPTIONS = new Set([
   '--ack-cell',
@@ -318,35 +319,6 @@ if (regions.length === 0) {
   process.exit(1);
 }
 
-async function fetchJson(url, init, source) {
-  const retryable = new Set([429, 500, 502, 503, 504]);
-  let lastError;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    let response;
-    let body;
-    try {
-      response = await fetch(url, init);
-      body = await response.json();
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) {
-        const delayMs = 250 * 3 ** attempt;
-        console.warn(`${source} network failure; retrying in ${delayMs}ms`);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-      continue;
-    }
-    if (response.ok && !body?.error) return body;
-    const detail = body?.error?.message ?? body?.message ?? response.statusText;
-    lastError = new Error(`${source} failed (${response.status}): ${detail}`);
-    if (!retryable.has(response.status)) throw lastError;
-    if (attempt === 3) break;
-    const delayMs = 250 * 3 ** attempt;
-    console.warn(`${source} transient failure; retrying in ${delayMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-  throw lastError;
-}
 
 async function fetchCatalog() {
   const rows = [];
