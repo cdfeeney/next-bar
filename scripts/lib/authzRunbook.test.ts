@@ -301,6 +301,21 @@ describe('runbook / migration cross-check', () => {
     expect(doc).toContain(`the ${created} migration-created tables is *revoke-first*`);
   });
 
+  it('binds the NARRATIVE counts too, not only the summary table', () => {
+    // Round-2 review, GLM lane: binding the table alone still lets prose
+    // elsewhere in the document state a contradicting number. An operator reads
+    // whichever sentence they reach first, so a document that disagrees with
+    // itself is worse than one that is merely stale.
+    const migrations = files.length;
+    const healthy = expectedPublicTables(files).length;
+    const anonTables = anonTableGrants(files).length;
+
+    expect(doc).toContain(`derived from all ${migrations} local migrations`);
+    expect(doc).toContain(`database with all ${migrations} applied`);
+    expect(doc).toContain(`privileges on all ${healthy} tables on a healthy database`);
+    expect(doc).toContain(`**\`anon\` appears exactly ${anonTables} times in that table`);
+  });
+
   it('gives Check 7 a real local-checksum command and warns off raw hashes', () => {
     // Claude lane. Check 7 classifies "checksums differ" as stop-and-escalate
     // but gave the operator no way to compute the local side. The ledger hashes

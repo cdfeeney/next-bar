@@ -1007,6 +1007,79 @@ describe('parser fail-closed guarantees (round-1 review)', () => {
     expect(functionsWithoutPublicRevoke(files)).toEqual(['rpc_fn']);
   });
 
+  it('does NOT credit an auth.uid() that appears only in a body COMMENT', () => {
+    // Round-2 review, Codex and Claude lanes. Carrying the body through verbatim
+    // is what lets it be inspected at all, but it also let a commented-out
+    // caller check satisfy the one gate a SECURITY DEFINER function has left
+    // after it bypasses RLS.
+    const [fn] = functionsDefined(fake(`
+      create or replace function public.gated() returns void as $$
+      begin
+        -- callers must pass auth.uid() checks upstream
+        perform 1;
+      end;
+      $$ language plpgsql security definer set search_path = public;
+    `));
+    expect(fn?.isSecurityDefiner).toBe(true);
+    expect(fn?.usesAuthUid).toBe(false);
+
+    // The other direction, so the assertion cannot pass by always returning false.
+    const [real] = functionsDefined(fake(`
+      create or replace function public.gated() returns void as $$
+      begin
+        if auth.uid() is null then raise exception 'no'; end if;
+      end;
+      $$ language plpgsql security definer set search_path = public;
+    `));
+    expect(real?.usesAuthUid).toBe(true);
+  });
+
+  it('sees a grant on a quoted or schema-qualified function name', () => {
+    // Round-2 review, corroborated by Codex, GLM and Claude. The census
+    // recognised the function while the GRANT derivation did not, so a new
+    // anonymous entry point would never reach the allowlist test.
+    const grants = functionGrants(fake(`
+      create or replace function public."someFunc"() returns void as $$
+      begin perform 1; end;
+      $$ language plpgsql security definer set search_path = public;
+      revoke execute on function public."someFunc"() from public;
+      grant execute on function public."someFunc"() to anon;
+    `));
+    expect(grants.map((g) => g.function)).toEqual(['someFunc']);
+    expect(grants[0]?.roles).toEqual(['anon']);
+  });
+
+  it('does NOT count DDL written inside a CREATE FUNCTION body', () => {
+    // Round-2 review, DeepSeek lane. A function body is stored text that runs
+    // only when something calls it, so a policy written inside one grants
+    // nothing at migration time. Counting it INVENTS access and sends an
+    // operator hunting a policy no database will ever have.
+    const inBody = fake(`
+      create or replace function public.f() returns void as $fn$
+      begin
+        execute 'create policy "fake" on public.t for insert to anon with check (true)';
+      end;
+      $fn$ language plpgsql security definer set search_path = public;
+    `);
+    expect([...policiesByTable(inBody).keys()]).toEqual([]);
+    expect(anonTableGrants(inBody)).toEqual([]);
+  });
+
+  it('DOES count DDL inside a `do $$ ... $$` block, which executes on apply', () => {
+    // The counterweight to the test above, and the exact case that caught an
+    // over-broad first attempt at it: migration 0000 performs its
+    // `alter table ... rename to ..._v01_legacy` inside a do-block. Blanking
+    // those alongside function bodies silently lost all four legacy renames.
+    const doBlock = fake(`
+      do $$
+      begin
+        alter table public.saves rename to saves_v01_legacy;
+      end
+      $$;
+    `);
+    expect(legacyRenames(doBlock).get('saves')).toBe('saves_v01_legacy');
+  });
+
   it('still clears a function whose revoke IS replayed after the drop', () => {
     // The other direction, so the guard above cannot pass by flagging everything.
     const files: MigrationFile[] = [
