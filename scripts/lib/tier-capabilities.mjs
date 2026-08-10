@@ -466,13 +466,18 @@ function bindingBefore(text, eqIndex) {
   }
   if (i < 0) return null;
   if (text[i] === '}') {
-    let depth = 0;
+    // COUNTING BACKWARDS IS NOT SAFE and a reviewer proved it: a brace inside a
+    // string default (`{ rm: nuke = "}" }`) unbalances a naive reverse count,
+    // which returned null and lost a real deletion binding. Scanning backwards
+    // cannot tell an opening quote from a closing one, so the candidate opening
+    // braces are tried against the FORWARD scanner instead — the one that does
+    // skip string and template literals — and the group is accepted only when it
+    // closes exactly here. Nearest opener first, so a nested pattern resolves to
+    // its own outermost brace.
     for (let j = i; j >= 0; j--) {
-      if (text[j] === '}') depth += 1;
-      else if (text[j] === '{') {
-        depth -= 1;
-        if (depth === 0) return text.slice(j, i + 1);
-      }
+      if (text[j] !== '{') continue;
+      const group = readBraceGroup(text, j);
+      if (group && group.end === i + 1) return group.text;
     }
     return null;
   }
@@ -641,16 +646,27 @@ export function analyzeFsDeletion(text) {
   // `function` and `async function` continuations count too. Matching only the
   // arrow form captured the literal word `function` as the namespace name, so
   // `.then(function ({ unlink }) { … })` bound nothing at all.
+  // The PARAMETER is taken with the depth scanner, not a first-closing-brace
+  // capture. This site kept the old pattern when the others were converted, so
+  // `import('node:fs').then(({ promises: { rm } }) => rm(f))` truncated to
+  // `{ promises: { rm }`, parsed as nothing, and graded T1 — while the flat
+  // `({ rm })` form was a proven T0 case. The regex now matches only up to the
+  // start of the parameter; the parameter itself is scanned.
   const thenRe = new RegExp(
     `import\\s*\\(\\s*${q}(${mod})${q}\\s*\\)\\s*\\.\\s*then\\s*\\(\\s*(?:async\\s+)?` +
-      `(?:function\\s*(?:${IDENTIFIER})?\\s*)?` +
-      `(?:\\(\\s*)?(\\{[^}]*\\}|${IDENTIFIER})`,
+      `(?:function\\s*(?:${IDENTIFIER})?\\s*)?(?:\\(\\s*)?`,
     'g',
   );
   for (const match of text.matchAll(thenRe)) {
-    const [, moduleSpecifier, param] = match;
-    if (param.startsWith('{')) recordClause(param.slice(1, -1), moduleSpecifier);
-    else namespaces.add(param);
+    const moduleSpecifier = match[1];
+    const at = match.index + match[0].length;
+    if (text[at] === '{') {
+      const group = readBraceGroup(text, at);
+      if (group) recordClause(group.text, moduleSpecifier);
+      continue;
+    }
+    const ident = new RegExp(`^(${IDENTIFIER})`).exec(text.slice(at));
+    if (ident) namespaces.add(ident[1]);
   }
 
   // A NON-LITERAL module specifier cannot be resolved by a text scan:

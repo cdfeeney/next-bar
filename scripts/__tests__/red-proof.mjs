@@ -165,6 +165,14 @@ const ROUND_PROOFS = [
     ]),
   },
   {
+    label: 'round-15',
+    rev: '9c75b08',
+    cases: new Set([
+      'a brace inside a string default does not break the clause scan',
+      'a nested destructure in a then parameter is capability',
+    ]),
+  },
+  {
     label: 'round-14',
     rev: '97e9db7',
     cases: new Set([

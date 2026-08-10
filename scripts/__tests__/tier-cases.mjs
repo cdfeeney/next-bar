@@ -1067,6 +1067,24 @@ export const TIER_CASES = [
     escalated: false,
     why: 'letting the gap cross a newline associated a destructure with an import two statements away',
   },
+  // --------------------------------------------------------------- Round-15
+  // The scanner itself, attacked. Both are fail-opens in the machinery added
+  // last round, and one of them existed because the string-aware scanner was
+  // written and then never called.
+  {
+    name: 'a brace inside a string default does not break the clause scan',
+    path: 'scripts/r15-stringbrace.mjs',
+    contents: 'const { rm: nuke = "}" } = require("node:fs/promises");\nawait nuke(d);\n',
+    expect: 'T0',
+    why: 'counting braces backwards cannot tell an opening quote from a closing one',
+  },
+  {
+    name: 'a nested destructure in a then parameter is capability',
+    path: 'scripts/r15-thennested.mjs',
+    contents: "import('node:fs').then(({ promises: { rm } }) => rm(f));\n",
+    expect: 'T0',
+    why: 'this site kept the first-closing-brace capture when the others were converted',
+  },
   {
     name: 'a work ledger describing agent work stays inert',
     path: 'docs/R10-LEDGER.md',
