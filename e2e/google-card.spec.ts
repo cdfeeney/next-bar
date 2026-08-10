@@ -24,7 +24,19 @@ import { installLoopbackFixtures } from './helpers/catalogFixture';
 
 type Scenario = 'loaded' | 'delayed' | 'zero' | 'error' | 'unsupported';
 
-/** Under the widget-load budget (4s) so `delayed` still resolves to READY. */
+/**
+ * How long the `delayed` mock waits, after build(), before signalling load.
+ *
+ * Bounded at BOTH ends, which the previous one-line note left half-stated:
+ *  - UPPER: comfortably under the component's 4s widget-load budget, or
+ *    `delayed` degrades to the fallback instead of resolving to READY.
+ *  - LOWER: this is the entire window in which scenario 16 can observe the
+ *    reservation mid-flight. The clock starts at build(), which for a leading
+ *    card that first paints inside the observer's 200px margin is BEFORE the
+ *    reveal runs, not because of it. Scenario 16 retries its observation
+ *    rather than racing this value once, but shrinking DELAY_MS still shrinks
+ *    the window and will make it intermittent. (santa round 1: Claude/FABLE.)
+ */
 const DELAY_MS = 1_200;
 
 /**
@@ -306,16 +318,13 @@ const revealCardReady = (page: Page): Promise<Locator> =>
     expect(host).toHaveAttribute('data-status', 'ready', { timeout: 5_000 }),
   );
 
-/**
- * Reveal only, asserting nothing about status.
- *
- * For a scenario that must observe a TRANSIENT state itself. Retrying a
- * transient condition is worse than not retrying it: `pending` lasts DELAY_MS,
- * so a retry loop that misses the window once never sees it again and burns
- * its whole budget before failing. The caller asserts immediately instead.
- */
-const revealCard = (page: Page): Promise<Locator> =>
-  revealCardUntil(page, async () => {}, 20_000);
+// There is deliberately NO "reveal only" helper. One existed, taking an empty
+// settle predicate, and it was the single defect santa round 1 found: with
+// nothing to satisfy, `toPass` returned after one scroll, and the post-paint
+// re-render could then swap in a fresh, never-built host that satisfied a bare
+// `pending` assertion. Every caller must state a condition that only a widget
+// which actually RAN can meet, so a reveal can never again be reported as
+// success while the thing under test never happened.
 
 /** Geometry + composition of ONE card. A page-wide count proves nothing. */
 async function inspectCard(page: Page) {
@@ -637,10 +646,31 @@ test.describe('supported Google card', () => {
     const probe = await setup(page, 'delayed');
     await openResults(page);
 
-    // Revealed while still PENDING — the state this scenario is about. The
-    // reveal is what starts the clock, so it has to happen before the
-    // reservation is measured, not after.
-    const host = await revealCard(page);
+    // Wait until the widget is genuinely MID-BUILD, not merely `pending`.
+    //
+    // The mock's custom element is constructed by build() and only dispatches
+    // gmp-load DELAY_MS later, so a host that is `pending` WHILE the widget
+    // element is present is proof that build() ran and the slow load is
+    // actually in flight. Waiting on `pending` alone was still vacuous: the
+    // post-paint re-render can hand back a fresh, NEVER-BUILT host that is
+    // also `pending`, and every measurement below — the 21/9 band and the
+    // universal compliance invariants — would then describe a widget that
+    // never ran. That is the same "no build, so no request, so green" trap
+    // this whole change exists to remove, surviving in the one scenario whose
+    // subject is the pending state. Caught independently by Codex, DeepSeek
+    // and GLM in santa round 1.
+    //
+    // Note the clock starts at build(), which for a leading card that first
+    // paints inside the observer's 200px margin is BEFORE this reveal runs,
+    // not because of it. Retrying the pair is what makes the observation
+    // reliable rather than a race against DELAY_MS.
+    const host = await revealCardUntil(page, async (h) => {
+      await expect(h).toHaveAttribute('data-status', 'pending', { timeout: 1_000 });
+      await expect(
+        card(page).locator('gmp-place-details-compact'),
+        'widget element absent: this host never built, so the samples below would be vacuous',
+      ).toHaveCount(1, { timeout: 1_000 });
+    });
     // While PENDING the reserved band must already be the 21/9 the loaded
     // and fallback states use — a differently-sized placeholder is the
     // layout jump criterion 4 forbids.
@@ -657,6 +687,15 @@ test.describe('supported Google card', () => {
       if (s?.hostStatus === 'pending' && s.mediaBand) heights.push(s.mediaBand.h);
     }
     console.log(`MEASURE delayed-heights ${JSON.stringify(heights)}`);
+    // The loop above skips any sample whose host is not pending-with-a-band,
+    // so an early ready, an early fallback swap or an unmount would leave
+    // `heights` as just the t0 measurement and the stability check below would
+    // pass without observing the load at all. "Holds THROUGH a slow load" has
+    // to rest on more than one instant. (santa round 1: Claude/FABLE.)
+    expect(
+      heights.length,
+      'no mid-load samples were observed while pending: the hold is unproven',
+    ).toBeGreaterThanOrEqual(2);
     for (const h of heights) {
       expect(Math.abs(h - heights[0]), 'reserved height moved while pending').toBeLessThanOrEqual(1);
     }
@@ -676,7 +715,16 @@ test.describe('supported Google card', () => {
     // load budget EXPIRES, and those budgets are armed inside build(). Without
     // the reveal this waited on a glyph whose timer had never started.
     const glyph = card(page).locator('[data-testid="google-fallback-glyph"]');
-    await revealCardUntil(page, () => expect(glyph).toHaveCount(1, { timeout: 6_000 }));
+    await revealCardUntil(page, async () => {
+      await expect(glyph).toHaveCount(1, { timeout: 6_000 });
+      // The glyph must be the widget's TERMINAL state, not something rendered
+      // beside a host that is still deciding. `CardMediaFallback` is passed to
+      // `GooglePlacePhotoLazy` as its fallback, so host and glyph are mutually
+      // exclusive by construction; asserting it makes that a checked property
+      // rather than an assumption the settle predicate silently relies on.
+      // (santa round 1: DeepSeek.)
+      await expect(hostOf(card(page))).toHaveCount(0);
+    });
 
     const d = await inspectCard(page);
     console.log(`MEASURE error-fallback ${JSON.stringify(d)}`);
@@ -707,7 +755,16 @@ test.describe('supported Google card', () => {
     // load budget EXPIRES, and those budgets are armed inside build(). Without
     // the reveal this waited on a glyph whose timer had never started.
     const glyph = card(page).locator('[data-testid="google-fallback-glyph"]');
-    await revealCardUntil(page, () => expect(glyph).toHaveCount(1, { timeout: 6_000 }));
+    await revealCardUntil(page, async () => {
+      await expect(glyph).toHaveCount(1, { timeout: 6_000 });
+      // The glyph must be the widget's TERMINAL state, not something rendered
+      // beside a host that is still deciding. `CardMediaFallback` is passed to
+      // `GooglePlacePhotoLazy` as its fallback, so host and glyph are mutually
+      // exclusive by construction; asserting it makes that a checked property
+      // rather than an assumption the settle predicate silently relies on.
+      // (santa round 1: DeepSeek.)
+      await expect(hostOf(card(page))).toHaveCount(0);
+    });
 
     const d = await inspectCard(page);
     console.log(`MEASURE unsupported ${JSON.stringify(d)}`);
