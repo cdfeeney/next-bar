@@ -557,9 +557,11 @@ backup, not the commented DDL.
 
 > **0043's revert is the dangerous one despite losing no data — added 2026-08-08.** Every other row
 > in this table trades off *data*. 0043 trades off *availability*: reverting it drops
-> `consume_rate_limit`, and by §8b that immediately denies account deletion for every user in
-> production, because the candidate calls that function and the only fail-closed consumer refuses
-> when it is missing. *(Precise scope, corrected 2026-08-08 — a round-10 edit got this wrong and is
+> `consume_rate_limit`, and by §8b that immediately denies account deletion **for every user of a
+> deployment whose durable tier is armed** — not for every user in production, because §8b row 3, the
+> explicit escape hatch, never reaches the RPC and still allows deletion after the revert. Where the
+> tier *is* armed the denial is total, because the candidate calls that function and the only
+> fail-closed consumer refuses when it is missing. *(Precise scope, corrected 2026-08-08 — a round-10 edit got this wrong and is
 > retracted here. **Rows 1 and 4 reach the RPC** — the tier is armed in both, so
 > `durableCounterFromEnv` returns a counter, `rateLimiter.ts:375` is false, and `:412` calls
 > `consume_rate_limit`; row 1 is precisely the case where that call *errors* because 0043 is
@@ -708,6 +710,14 @@ migration, Production deployment, or TestFlight modification is authorized by th
      migration set, current grants, public-flag row count, restore capability). No amount of further
      reading settles these; they are the reason a window needs a human.
    - **Then the scratch-database run** for the §9 unknowns that survive both.
+   - **A document check, not a Production one, and the only one runnable today: the frozen-history
+     completeness sweep.** For every claim a later round has disproved, grep this file for **all**
+     of its occurrences and confirm each one is either live text that has been corrected or frozen
+     narration covered by an entry in §14b's dated-corrections list. The list is maintained by hand,
+     so nothing but this sweep prevents it from silently disagreeing with the history it governs —
+     which is exactly the failure the append-only rule would otherwise have relocated rather than
+     removed. *(Added 2026-08-10 after the Kimi and GLM lanes independently observed that the
+     corrections mechanism had no completeness invariant.)*
    Every review round so far has found a real defect, including the last (count in §14b's Current
    review state block) — so the ordering above, **not another reading pass**, is the remaining path
    to trustworthy. **That instruction terminates *analytical* review as a path to correctness; it
@@ -742,10 +752,10 @@ more than one place, so there is now exactly one live place for each of the thre
 
 | | | |
 |---|---|---|
-| Rounds completed | **13** | |
-| Rounds that found a real defect | **13 — every one, including the last** | |
-| Latest panel | Round 13, over candidate `4f4850f` | Claude/Sonnet and Codex `gpt-5.6-sol` reported; **GLM, DeepSeek and Kimi all failed on routed-provider authentication** (403 / exit 4 / exit 5). **Quorum NOT met.** |
-| **Most recent unreviewed delta** | **the round-14 repair** — four edits: the §10 RPC correction, the restored round-9 heading, this block's narrowed scope, and the dated corrections below | |
+| Rounds completed | **14** | |
+| Rounds that found a real defect | **14 — every one, including the last** | |
+| Latest panel | Round 14, over candidate `617264a` | Full five-family — Claude `claude-sonnet-5`, Codex `gpt-5.6-sol`, GLM-5.2, DeepSeek V4 Pro, Kimi K3 deep. **Quorum met**, no lane missing, every lane's run bound to that candidate. |
+| **Most recent unreviewed delta** | **the round-15 repair** — the §10 "every user" scoping; the dated-corrections list gaining a completeness obligation, losing its round range, and gaining entries for the superseded live-versus-frozen test, the broadened RPC claim and round 10's "final candidate"; §14 requirement 6's completeness sweep; and the self-certification clarification | |
 | Gating status | **NOT APPROVED** (§14). Unchanged by every round to date. | |
 
 ### Dated corrections superseding frozen history — 2026-08-08
@@ -753,17 +763,37 @@ more than one place, so there is now exactly one live place for each of the thre
 Facts that later rounds proved wrong live here. The round paragraphs below are **not** edited to
 match them.
 
-- **Round 9's heading calls itself "third and final full panel". It was not final** — rounds 10
-  through 14 followed. The heading is preserved verbatim because it records what round 9
-  contemporaneously believed, and that mistaken belief is exactly what the audit trail exists to
-  show. *(Round 12 edited that heading to "third full panel"; the edit has been reverted. The Codex
-  lane held it violated the append-only rule for frozen narration; the GLM lane held "final" was a
-  live descriptor and correctly editable. **Operator decision 2026-08-08: preserve frozen historical
+**Completeness is a requirement of this list, not a courtesy.** A round that disproves a claim
+appearing in frozen narration must append an entry here naming **every** frozen occurrence it can
+find, not only the one it happened to be reading. An entry that corrects one site and silently
+leaves a second is the same propagation defect this mechanism exists to end, relocated from the
+history into the corrections. The sweep that enforces this is §14 requirement 6's final bullet.
+Entries state *what* is false and *where* it appears; they carry no round count, because the count
+is live and lives only in the table above.
+
+- **Round 9's heading calls itself "third and final full panel". It was not final** — later rounds
+  followed. The heading is preserved verbatim because it records what round 9 contemporaneously
+  believed, and that mistaken belief is exactly what the audit trail exists to show. *(Round 12
+  edited that heading to "third full panel"; the edit has been reverted. The Codex lane held it
+  violated the append-only rule for frozen narration; the GLM lane held "final" was a live
+  descriptor and correctly editable. **Operator decision 2026-08-08: preserve frozen historical
   narration and carry the correction here instead.** The dispute is resolved, not merely recorded.)*
-- **Round 12 asserted "Only §8b row 4 reaches the RPC at all". That is false** — rows 1 and 4 both
-  reach it, and row 1 is precisely the configuration where the call errors. Corrected in §10 by round
-  14. The claim round 12 was reaching for — that row 4 is the only configuration whose *outcome* the
-  revert changes — is true and survives.
+- **That decision supersedes the round-11 live-versus-frozen test for headings — added 2026-08-10.**
+  Round 11 adopted a GLM test classifying any "latest/final" descriptor as a *live* claim and
+  therefore correctable in place; that test is recorded in round 11's frozen paragraph below and
+  still reads as governing there. For a string that is simultaneously historical narration and a
+  navigational label, the operator decision above now governs and the test does not: the label is
+  preserved and the correction is carried here. The cost is accepted and stated plainly — a reader
+  who navigates by that heading alone is misled until they reach this list, which is the price of an
+  audit trail that cannot be rewritten.
+- **"Only §8b row 4 reaches the RPC at all" is false, wherever it appears** — rows 1 and 4 both reach
+  it, and row 1 is precisely the configuration where the call errors. It appears in **round 12's §10
+  edit** (corrected in §10 by round 14) and, in the form "Only **row 4** reaches it", in **round 11's
+  findings table** below, which is frozen and not edited. The claim both were reaching for — that row
+  4 is the only configuration whose *outcome* the revert changes — is true and survives.
+- **Round 10's narration calls its input "the final candidate". It was not** — later candidates
+  followed, including the one this block's table names as the current unreviewed delta. The phrase is
+  frozen narration of what round 10 believed and is not edited.
 - **Round 8's stopping rule and round 10's zero-edit replacement are both withdrawn.** The rule now
   in force is stated below under the stopping-rule heading.
 
@@ -971,6 +1001,16 @@ failure is enough. From here: **a round that edits records *what* it changed and
 prohibited from recording *that the change is correct*. Correctness verdicts may only be issued by a
 later round that edited nothing it is judging.** *(Both amendments argued by the Kimi lane in round
 11; the diagnosis is confirmed by rounds 9, 10 and 11 in sequence.)*
+
+> **"Edited nothing it is judging" is the whole of the restriction — clarified 2026-08-10.** A
+> reviewing round necessarily appends its own findings record and, when it corrects a superseded
+> claim, an entry in the dated-corrections list. Those appends are **not** edits to the material
+> under judgement, so they never disqualify the round from certifying that material. Read otherwise —
+> as "a round that writes anything may not certify" — the rule would be the withdrawn zero-edit rule
+> in another costume: no round could ever both review and conclude, and termination would again be
+> unreachable by construction. A terminal round is therefore reachable: it judges the previous
+> round's delta, mutates none of it, and closes review under the stopping rule above once §14
+> requirement 6 has been run and recorded.
 
 This is also why §14 requirement 6's empirical checks, not another reading pass, remain the path
 forward: every round has found a real defect, and **every round since round 7 has found one created
