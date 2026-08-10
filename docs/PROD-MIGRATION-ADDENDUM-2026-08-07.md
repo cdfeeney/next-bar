@@ -363,7 +363,7 @@ device can still manage its links. They are protected by owner-only RLS, revocab
 token-keyed only). **Durable server-side storage of bearer tokens is a decision the operator should
 consciously re-affirm before Production**, not discover afterwards.
 
-## 8b. ⛔ Finding (new, 2026-08-08): the packet and the candidate are **mismatched**, and the mismatch fails closed on account deletion in three of the four configurations
+## 8b. ⛔ Finding (new, 2026-08-08): the packet and the candidate are **mismatched**, and the mismatch makes three of the four configurations unshippable — two by denying account deletion
 
 This is the one finding in this document that is not a caveat about method. It is a concrete defect
 in the *pairing* of artifacts, and it was invisible to the original analysis precisely because that
@@ -446,7 +446,14 @@ unattributed short-circuit at `:407` — is also **rejected on evidence**: `:369
 unchanged and can never equal the `'unknown'` sentinel.)*
 
 The account-delete bucket keys on the verified user id, so it never takes the unattributed
-short-circuit at `rateLimiter.ts:407` that would otherwise allow the request.
+short-circuit at `rateLimiter.ts:407` that would otherwise allow the request. **Line-level warrant,
+because this is the one branch that could turn a denial into an allow:** the sentinel is
+`UNATTRIBUTED_KEY = 'unknown'` (`rateLimiter.ts:100`); `:407` fires only when the aggregated key
+equals it; `:369` derives that key via `aggregateIp`, whose first line
+`if (!ip.includes(':')) return ip` (`:115-116`) returns any colon-free string unchanged; and the
+caller passes an authenticated Supabase user id (`account/delete/route.ts:210`), reached only after
+`:196-206` returns `unauthorized()` on a falsy id. A UUID is colon-free and is never the string
+`unknown`, so the branch is unreachable on this path.
 
 **Warrant and falsifier — stated in §14b's terms, and split, because the two halves are not equally
 supported.**
@@ -726,11 +733,24 @@ migration, Production deployment, or TestFlight modification is authorized by th
 **NOT APPROVED.** §14 states what must be true before any Production window, and requirements 1–6
 are unmet. That verdict is this document's headline; it is stated at the top and at §14 deliberately.
 
-**This document does not track its own review.** Which rounds ran, which lanes reported, what they
-found, and what was refuted on what evidence live in the harness goal record
+**The verdict is not version-specific, which is why no commit is named here.** It does not say "this
+revision is unapproved"; it says the packet is unapproved until requirements 1–6 are met, and none of
+them can be met by editing this file — they need an attended human, a real database, and a re-frozen
+bundle (§14, and "Scope dissolution" below). Any revision of this document carries the same verdict
+until that work is done, so binding it to a commit would add a field that can go stale without adding
+information.
+
+**This document holds no review *status*.** No round count, no panel identity, no pass/fail, no
+pointer to what is currently unreviewed. Those live in the harness goal record
 `g-e82c72a8-023a-4b49-bcd1-2826556d5175` — an append-only store carrying a receipt per lane per
-candidate, which this document cannot edit. Consult it for review state. Nothing here restates it,
-so nothing here can drift from it.
+candidate, which this document cannot edit. Consult it for review state.
+
+**What that costs a standalone reader, stated plainly.** With the file but not the record, you can
+still read the verdict, the analysis and the claim ledger, and you can re-run every command cited
+here. You **cannot** determine whether this revision has been independently reviewed, by whom, or
+what they found; treat that as unknown rather than assuming either answer. Individual corrections in
+§§1–13 do name the lane that raised them — that is frozen provenance for one finding, not status, and
+it cannot go stale.
 
 *(Through 2026-08-10 this section also carried a mutable status table, a dated-corrections list,
 editorial supersession markers, per-round narration, and a check that audited that list for
@@ -784,45 +804,20 @@ throughout. Both were caught by re-running the original commands and comparing. 
 argument for the §14b structural fix below: a document whose facts decay needs its claims *recomputed*
 on a schedule, not re-argued.
 
-**Round 7 (2026-08-08, independent panel: Claude, Codex, GLM, DeepSeek, Kimi K3).** Reviewing round
-6's own material. Every lane found something no other lane found, which is the first round where
-that is true:
+### Scope dissolution — the unit of review is not the packet
 
-| Lane | Unique finding |
-|---|---|
-| Claude | §12 still called `76d610f` "un-reviewed" after §2 had retracted exactly that phrase — round 6 committing the very error it had just diagnosed |
-| Codex | The corrected line numbers for §4's atomicity citation (`:487`–`:503`), which Claude flagged as wrong but could not locate |
-| GLM | §8b widened the migration set without propagating it into §3's scan scope or §10's revert table — a *consequence* omission rather than a contradiction |
-| DeepSeek | The scratch-database falsifier was not the cheapest one; an existing unit test already covers the tier-layer half |
-| Kimi K3 | The quotability hazard now guarded at the head of §3, and the scope-dissolution argument recorded below |
+This document was commissioned to gate *one frozen packet*. §8b establishes that the application
+candidate depends on a migration outside that packet. So "review this frozen packet" is no longer a
+coherent unit of work: gating the packet alone would approve a schema that breaks account deletion
+when paired with the real candidate.
 
-One DeepSeek claim was **rejected on repository evidence** (that an unset salt would let deletions
-succeed — `rateLimiter.ts:388` refuses instead), but testing it corrected §8b's precondition. Note
-what the split implies: the two lanes with repository access found *citation and contradiction*
-defects, and the three text-only lanes found *scope, cost and framing* defects. Neither group could
-have found the other's.
+**The unit of review must be re-frozen as a bundle** — migration set + pinned application SHA + the
+disposition of 0043 — and the window planned as: verify empirically → re-freeze the bundle → review
+the delta → schedule. Any plan that gates the old packet alone is planning a deployment that cannot
+happen.
 
-**Scope dissolution — the finding with the longest reach, from the Kimi lane.** This document was
-commissioned to gate *one frozen packet*. §8b establishes that the application candidate depends on
-a migration outside that packet. So "review this frozen packet" is no longer a coherent unit of
-work: gating the packet alone would approve a schema that breaks account deletion when paired with
-the real candidate. **The unit of review must be re-frozen as a bundle** — migration set + pinned
-application SHA + the disposition of 0043 — and the window planned as: verify empirically → re-freeze
-the bundle → review the delta → schedule. Any plan that gates the old packet alone is planning a
-deployment that cannot happen. This supersedes nothing in §1–§13; it reframes what they are a review
-*of*, and it is the reason §14 requirement 4 is a blocker rather than a note.
-
-**Round 8 (2026-08-08, second full panel — the review of round 7's repair).** One defect, and
-**four lanes converged on the same one** rather than each finding a different one: §8b's Disposition
-and §9's item 9(c) still encoded the narrower precondition that §8b had just abandoned in the
-paragraph above them. Codex and DeepSeek additionally supplied the missing table row — the
-`REQUIRE_DURABLE_RATE_LIMIT=0` escape hatch — which turns "both configurations deny" into "both deny
-*on production defaults*". DeepSeek added the forward-ordering and counter-reset notes in §10. Two
-DeepSeek claims were **rejected on repository evidence** (the unset-salt claim, and the `:407`
-unattributed short-circuit — `aggregateIp` returns any colon-free key unchanged, so a UUID never
-becomes the `'unknown'` sentinel). One GLM prediction was wrong on the facts: it expected §13 to be a
-rollback runbook carrying the ordering constraint, but §13 is the Staging-authorisation section and
-carries no procedure.
+This supersedes nothing in §§1–13; it reframes what they are a review *of*, and it is the reason §14
+requirement 4 is a blocker rather than a note.
 
 ### Three classes of in-repo assertion this analysis should never have cited as evidence
 
@@ -854,8 +849,8 @@ accumulated DDL. That converts claims 5–8 from assumptions into CI output, and
 forbidden evidence classes checkable by construction.
 
 **The cheapest oracle available today was never used:** apply this packet to a throwaway database and
-observe. Every review round in the table above happened instead of one experiment, and the later ones
-increasingly found defects in the review record rather than in the analysis. For this packet, the
+observe. Every review round this document has been through happened instead of that one experiment,
+and the later ones increasingly found defects in the review record rather than in the analysis. For this packet, the
 honest posture
 is that the safety argument is **unverifiable by the means used**, and the irreversible step should
 wait for the empirical check rather than another round of reading.
