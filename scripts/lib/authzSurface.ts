@@ -287,11 +287,79 @@ export function unmodelledObjectStatements(
   return out;
 }
 
-/** Strip `--` line comments and block comments so they cannot mask or fake a match. */
+/**
+ * Strip `--` line comments and block comments so they cannot mask or fake a match.
+ *
+ * This is a single left-to-right scan, NOT two independent regex passes, and
+ * that is load-bearing. Stripping `/* ... *\/` first and `--` second lets a
+ * line comment that merely MENTIONS a block-open swallow real SQL: given
+ *
+ *   -- historical note: the old /* wrapper is gone
+ *   create function public.later() ... security definer ...;
+ *   -- end of file marker *\/
+ *
+ * the block-comment pass matches from the `/*` inside the first line comment
+ * to the `*\/` inside the last one and deletes the `create function` between
+ * them. The function then vanishes from every count this module derives, so
+ * the runbook under-reports the definer surface while the suite stays green.
+ *
+ * Scanning once also means a `--` or `/*` inside a string literal or a
+ * dollar-quoted body is data, not a comment, and is left alone. Postgres block
+ * comments nest, so the depth counter matches the server's own rule.
+ */
 export function stripSqlComments(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ');
+  let out = '';
+  let i = 0;
+  while (i < sql.length) {
+    const two = sql.slice(i, i + 2);
+
+    if (two === '--') {
+      const nl = sql.indexOf('\n', i);
+      out += ' ';
+      i = nl === -1 ? sql.length : nl;
+      continue;
+    }
+
+    if (two === '/*') {
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql.slice(i, i + 2) === '/*') { depth += 1; i += 2; continue; }
+        if (sql.slice(i, i + 2) === '*/') { depth -= 1; i += 2; continue; }
+        i += 1;
+      }
+      out += ' ';
+      continue;
+    }
+
+    // A single-quoted literal. Postgres escapes an embedded quote by doubling it.
+    if (sql[i] === "'") {
+      const start = i;
+      i += 1;
+      while (i < sql.length) {
+        if (sql[i] === "'" && sql[i + 1] === "'") { i += 2; continue; }
+        if (sql[i] === "'") { i += 1; break; }
+        i += 1;
+      }
+      out += sql.slice(start, i);
+      continue;
+    }
+
+    // A dollar-quoted body: everything up to the matching tag is opaque data.
+    const dollar = /^\$[a-z0-9_]*\$/i.exec(sql.slice(i));
+    if (dollar) {
+      const tag = dollar[0];
+      const close = sql.indexOf(tag, i + tag.length);
+      const end = close === -1 ? sql.length : close + tag.length;
+      out += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    out += sql[i];
+    i += 1;
+  }
+  return out;
 }
 
 export function readMigrations(dir: string = MIGRATIONS_DIR): MigrationFile[] {
@@ -346,6 +414,36 @@ export function expectedPublicTables(files: MigrationFile[]): string[] {
 }
 
 /**
+ * One SQL identifier: bare, or double-quoted so it may hold capitals and
+ * punctuation. The old patterns accepted only `[a-z0-9_]+` optionally prefixed
+ * by a literal `public.`, so `create function "mixedCase"()`,
+ * `create function app.helper()` and `create function "public"."someFunc"()`
+ * matched NOTHING and the function was dropped from every count in silence —
+ * a definer function could enter the schema without appearing in the census.
+ * Matching them is what makes an unexpected one visible enough to argue about.
+ */
+const IDENT = '(?:"[^"]+"|[A-Za-z0-9_]+)';
+const QUALIFIED_IDENT = `(?:${IDENT}\\s*\\.\\s*)?(${IDENT})`;
+
+/** Postgres folds a bare identifier to lower case and takes a quoted one verbatim. */
+function normalizeIdentifier(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith('"') && trimmed.endsWith('"')
+    ? trimmed.slice(1, -1)
+    : trimmed.toLowerCase();
+}
+
+/**
+ * Fresh `RegExp` objects, never shared module-level constants: these are all
+ * `/g`, and a `/g` regex carries `lastIndex` between calls, so reusing one
+ * across files would start the second scan wherever the first stopped.
+ */
+const createFunctionRe = () =>
+  new RegExp(`create\\s+(?:or\\s+replace\\s+)?function\\s+${QUALIFIED_IDENT}\\s*\\(`, 'gi');
+const dropFunctionRe = () =>
+  new RegExp(`drop\\s+function\\s+(?:if\\s+exists\\s+)?${QUALIFIED_IDENT}\\s*\\(`, 'gi');
+
+/**
  * Every function definition, with its OWN security attributes.
  *
  * A function's header runs from `create ... function` up to the `as $$`/`as $body$`
@@ -361,11 +459,7 @@ export function functionsDefined(files: MigrationFile[]): FunctionDef[] {
   for (const file of files) {
     const sql = stripSqlComments(file.sql);
     // Split on each function definition start, keeping what follows.
-    const starts = [
-      ...sql.matchAll(
-        /create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z0-9_]+)\s*\(/gi,
-      ),
-    ];
+    const starts = [...sql.matchAll(createFunctionRe())];
     for (let i = 0; i < starts.length; i += 1) {
       const start = starts[i];
       const from = start.index ?? 0;
@@ -378,8 +472,20 @@ export function functionsDefined(files: MigrationFile[]): FunctionDef[] {
         const delimiter = bodyOpen[1];
         const openAt = (bodyOpen.index ?? 0) + bodyOpen[0].length;
         const closeAt = segment.indexOf(delimiter, openAt);
-        const tail = closeAt === -1 ? '' : segment.slice(closeAt + delimiter.length);
-        bodyText = closeAt === -1 ? segment.slice(openAt) : segment.slice(openAt, closeAt);
+        if (closeAt === -1) {
+          // An unterminated body used to be absorbed silently: `bodyText` ran to
+          // the end of the segment and `attributeText` kept only the text BEFORE
+          // `as $$`, so a `security definer ... set search_path` written after the
+          // body was read as neither. The function then counted as non-definer and
+          // non-pinning at once — the derivation's worst possible failure, because
+          // it removes a function from the definer census instead of flagging it.
+          // Malformed SQL is a stop, not a silent zero.
+          throw new Error(
+            `${file.name}: function ${normalizeIdentifier(start[1])} opens a ${delimiter} body that is never closed`,
+          );
+        }
+        const tail = segment.slice(closeAt + delimiter.length);
+        bodyText = segment.slice(openAt, closeAt);
         attributeText = segment.slice(0, bodyOpen.index) + endOfStatement(tail);
       } else {
         // No dollar-quoted body found; bound at the statement terminator so a
@@ -387,7 +493,7 @@ export function functionsDefined(files: MigrationFile[]): FunctionDef[] {
         attributeText = endOfStatement(segment);
       }
       out.push({
-        name: start[1].toLowerCase(),
+        name: normalizeIdentifier(start[1]),
         file: file.name,
         header: attributeText,
         isSecurityDefiner: /security\s+definer/i.test(attributeText),
@@ -427,15 +533,11 @@ export function liveFunctions(files: MigrationFile[]): FunctionDef[] {
   for (const file of files) {
     const sql = stripSqlComments(file.sql);
     const events: { at: number; kind: 'create' | 'drop'; name: string }[] = [];
-    for (const m of sql.matchAll(
-      /create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z0-9_]+)\s*\(/gi,
-    )) {
-      events.push({ at: m.index ?? 0, kind: 'create', name: m[1].toLowerCase() });
+    for (const m of sql.matchAll(createFunctionRe())) {
+      events.push({ at: m.index ?? 0, kind: 'create', name: normalizeIdentifier(m[1]) });
     }
-    for (const m of sql.matchAll(
-      /drop\s+function\s+(?:if\s+exists\s+)?(?:public\.)?([a-z0-9_]+)\s*\(/gi,
-    )) {
-      events.push({ at: m.index ?? 0, kind: 'drop', name: m[1].toLowerCase() });
+    for (const m of sql.matchAll(dropFunctionRe())) {
+      events.push({ at: m.index ?? 0, kind: 'drop', name: normalizeIdentifier(m[1]) });
     }
     events.sort((a, b) => a.at - b.at);
     const defsInFile = functionsDefined([file]);
@@ -464,17 +566,17 @@ export function liveFunctionOverloadConflicts(files: MigrationFile[]): string[] 
   const dropped = new Set<string>();
   for (const file of files) {
     for (const m of stripSqlComments(file.sql).matchAll(
-      /drop\s+function\s+(?:if\s+exists\s+)?(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/gi,
+      new RegExp(`drop\\s+function\\s+(?:if\\s+exists\\s+)?${QUALIFIED_IDENT}\\s*\\(([^)]*)\\)`, 'gi'),
     )) {
-      dropped.add(`${m[1].toLowerCase()}(${m[2].replace(/\s+/g, ' ').trim()})`);
+      dropped.add(`${normalizeIdentifier(m[1])}(${m[2].replace(/\s+/g, ' ').trim()})`);
     }
   }
   const signatures = new Map<string, Set<string>>();
   for (const file of files) {
     for (const m of stripSqlComments(file.sql).matchAll(
-      /create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/gi,
+      new RegExp(`create\\s+(?:or\\s+replace\\s+)?function\\s+${QUALIFIED_IDENT}\\s*\\(([^)]*)\\)`, 'gi'),
     )) {
-      const name = m[1].toLowerCase();
+      const name = normalizeIdentifier(m[1]);
       const args = m[2].replace(/\s+/g, ' ').trim();
       const set = signatures.get(name) ?? new Set<string>();
       set.add(args);
@@ -504,14 +606,37 @@ export function liveFunctionOverloadConflicts(files: MigrationFile[]): string[] 
  * that cries wolf is a check the operator learns to skip.
  */
 export function functionsWithoutPublicRevoke(files: MigrationFile[]): string[] {
+  // Replayed in order, exactly like `liveFunctions`, `policiesByTable` and
+  // `netTablePrivileges` — because a revoke is not permanent. `DROP FUNCTION`
+  // takes the ACL with it, so a later `CREATE FUNCTION` of the same name starts
+  // again at the Postgres default of EXECUTE to PUBLIC. Treating one revoke as
+  // effective forever made this guard FAIL OPEN through the drop-and-recreate
+  // pattern the corpus already uses (0008:79, 0021:26): recreate without the
+  // re-revoke and the function keeps its stale revoked mark, so the derived set
+  // still equals the declared allowlist and the suite stays green while the
+  // deployed function is callable by anon.
   const revoked = new Set<string>();
   for (const file of files) {
     const sql = stripSqlComments(file.sql);
-    const re =
-      /revoke\s+[^;]*?\s+on\s+function\s+(?:public\.)?([a-z0-9_]+)\s*\([^)]*\)\s+from\s+([^;]+?);/gi;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(sql)) !== null) {
-      if (parseRoles(m[2]).includes('public')) revoked.add(m[1].toLowerCase());
+    type Event = { at: number; kind: 'drop' | 'revoke'; name: string };
+    const events: Event[] = [];
+
+    for (const m of sql.matchAll(dropFunctionRe())) {
+      events.push({ at: m.index ?? 0, kind: 'drop', name: normalizeIdentifier(m[1]) });
+    }
+    for (const m of sql.matchAll(new RegExp(
+      `revoke\\s+[^;]*?\\s+on\\s+function\\s+${QUALIFIED_IDENT}\\s*\\([^)]*\\)\\s+from\\s+([^;]+?);`,
+      'gi',
+    ))) {
+      if (parseRoles(m[2]).includes('public')) {
+        events.push({ at: m.index ?? 0, kind: 'revoke', name: normalizeIdentifier(m[1]) });
+      }
+    }
+
+    events.sort((a, b) => a.at - b.at);
+    for (const ev of events) {
+      if (ev.kind === 'drop') revoked.delete(ev.name);
+      else revoked.add(ev.name);
     }
   }
   return liveFunctions(files)

@@ -1,5 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+
+import { checksum } from '../../src/lib/migrationPlan';
 import { describe, expect, it } from 'vitest';
 import {
   ANON_EXECUTABLE_FUNCTIONS,
@@ -11,6 +14,8 @@ import {
   legacySchemaTables,
   DEFINERS_WITHOUT_AUTH_UID,
   FUNCTIONS_WITHOUT_PUBLIC_REVOKE,
+  RUNNER_MANAGED_TABLES,
+  anonTableGrants,
   expectedPublicTables,
   functionsDefined,
   functionsWithoutPublicRevoke,
@@ -20,6 +25,8 @@ import {
   policiesByTable,
   policyLessTables,
   readMigrations,
+  tablesCreated,
+  tablesRelyingOnDefaultGrants,
 } from './authzSurface';
 
 /**
@@ -235,9 +242,86 @@ describe('runbook / migration cross-check', () => {
     expect(doc).toContain('record-and-confirm, not stop-and-escalate');
   });
 
-  it('states the parsed-function count', () => {
-    // The one summary-table figure that was carrying no binding at all.
-    expect(doc).toContain(`| Functions parsed | ${functionsDefined(files).length} |`);
+  it('binds EVERY row of the headline summary table to the derivation', () => {
+    // Round-1 review, corroborated by the Claude and GLM lanes. Only two rows of
+    // this table were bound. The rest restate the same counts in a DIFFERENT
+    // format from the bound check-section strings — `| Policies | 29, across 13
+    // tables |` against `**29 policies across 13 tables**` — so a migration that
+    // changed the surface forced the check sections to be regenerated while the
+    // summary at the top of the document silently kept the old numbers.
+    //
+    // That is exactly the drift acceptance criterion 6 exists to prevent, and it
+    // is the most-read table in the document: an operator calibrates against the
+    // summary before running a single query.
+    const byTable = policiesByTable(files);
+    const withPolicies = [...byTable.entries()].filter(([, names]) => names.length);
+    const policyTotal = withPolicies.reduce((sum, [, names]) => sum + names.length, 0);
+    const created = tablesCreated(files);
+    const definers = new Set(
+      functionsDefined(files).filter((f) => f.isSecurityDefiner).map((f) => f.name),
+    );
+    const unpinned = functionsDefined(files)
+      .filter((f) => f.isSecurityDefiner && !f.pinsSearchPath);
+    const anonTables = anonTableGrants(files);
+    const defaultGrantTables = tablesRelyingOnDefaultGrants(files);
+    const prefixes = files.map((f) => f.prefix).sort();
+
+    for (const row of [
+      `| Migrations | ${files.length} files, \`${prefixes[0]}\`..\`${prefixes[prefixes.length - 1]}\` |`,
+      `| Tables created by migrations | ${created.length} |`,
+      `| Tables created by the migration runner | ${RUNNER_MANAGED_TABLES.length} (\`${RUNNER_MANAGED_TABLES[0]}\`) |`,
+      `| **Tables in a healthy \`public\` schema** | **${expectedPublicTables(files).length}** |`,
+      `| Policies | ${policyTotal}, across ${withPolicies.length} tables |`,
+      `| Tables with RLS and zero policies (default-deny, deliberate) | ${policyLessTables(files).length} |`,
+      `| Functions parsed | ${functionsDefined(files).length} |`,
+      `| \`SECURITY DEFINER\` functions | ${definers.size} |`,
+      `| Definer functions missing a pinned \`search_path\` | **${unpinned.length}** |`,
+      `| Functions executable by \`anon\` | ${ANON_EXECUTABLE_FUNCTIONS.length} (\`${ANON_EXECUTABLE_FUNCTIONS[0]}\`, \`${ANON_EXECUTABLE_FUNCTIONS[1]}\`) |`,
+      `| Tables relying on Supabase default grants | **${defaultGrantTables.length}** — all ${created.length} are revoke-first |`,
+    ]) {
+      expect(doc, `summary row drifted from the derivation: ${row}`).toContain(row);
+    }
+
+    // The anon-grant row names its tables, so bind the count and both names.
+    expect(anonTables).toHaveLength(2);
+    expect(doc).toContain(`| Tables granting anything to \`anon\` | ${anonTables.length} (`);
+    for (const grant of anonTables) {
+      expect(doc).toContain(`\`${grant.table}\``);
+    }
+  });
+
+  it('binds the revoke-first prose, not just the grant matrix', () => {
+    // GLM lane: "all 21 migration-created tables are revoke-first" was pure
+    // prose. A table added WITHOUT the revoke-first pattern would leave the
+    // per-table matrix passing while this sentence became false — and the
+    // sentence is the one an operator actually reads before deciding the grant
+    // surface is safe. Bind it to the same derivation the row above uses.
+    const created = tablesCreated(files).length;
+    expect(tablesRelyingOnDefaultGrants(files)).toEqual([]);
+    expect(doc).toContain(`the ${created} migration-created tables is *revoke-first*`);
+  });
+
+  it('gives Check 7 a real local-checksum command and warns off raw hashes', () => {
+    // Claude lane. Check 7 classifies "checksums differ" as stop-and-escalate
+    // but gave the operator no way to compute the local side. The ledger hashes
+    // CRLF-normalised, trailing-whitespace-stripped content, so a raw sha256sum
+    // on this Windows/autocrlf checkout mismatches EVERY file — the runbook's
+    // own rule then manufactures a mass-tampering incident on a healthy database.
+    const check7 = checkSection('## Check 7 — Migration ledger parity', '## After the run');
+    expect(check7).toContain('npx tsx scripts/migration-checksums.mts');
+    expect(check7).toContain('Do not use `sha256sum`');
+    expect(check7).toContain('core.autocrlf');
+
+    // The command must actually exist, or the instruction is worse than none.
+    expect(
+      existsSync(path.resolve(process.cwd(), 'scripts', 'migration-checksums.mts')),
+    ).toBe(true);
+
+    // And it must hash what the ledger hashes.
+    const sample = 'select 1;\r\n\r\n';
+    expect(checksum(sample)).toBe(
+      createHash('sha256').update('select 1;', 'utf8').digest('hex'),
+    );
   });
 
   it('names the functions expected to carry a PUBLIC execute grant', () => {

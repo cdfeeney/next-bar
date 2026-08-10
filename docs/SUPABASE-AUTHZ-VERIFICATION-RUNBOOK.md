@@ -740,6 +740,23 @@ Run it as the **table owner or `service_role`** — 0036 revoked all access from
 `anon` and `authenticated`, so a browser-role session sees nothing here, and an
 empty result read as "no migrations applied" would be a serious misreading.
 
+**Compute the local checksums with this command — not with a general-purpose
+hashing tool:**
+
+```bash
+npx tsx scripts/migration-checksums.mts
+```
+
+**Do not use `sha256sum`, `Get-FileHash`, or any other raw file hash here.** The
+ledger stores `checksum()` from `src/lib/migrationPlan.ts`, which normalises
+CRLF to LF and strips trailing whitespace *before* hashing, because this repo is
+developed on Windows with `core.autocrlf` active. A raw hash of the same file
+disagrees with the ledger for every migration whose working copy has CRLF
+endings — for example `0000_reconcile_v01_schema.sql` hashes to `9324e1f0…` in
+the ledger and `933e437e…` under `sha256sum`. Reading that as drift would
+escalate a mass-tampering incident on a completely healthy database, which is
+the single most expensive way to misread this check.
+
 **Compare against** the 39 local files. Three outcomes:
 
 | Outcome | Meaning | Action |

@@ -887,4 +887,151 @@ describe('stripSqlComments', () => {
     `);
     expect(anonTableGrants(withRollback)).toEqual([]);
   });
+
+  it('does NOT let a line comment mentioning a block-open swallow real SQL', () => {
+    // Round-1 review, DeepSeek lane. Two independent passes — block comments
+    // first, line comments second — let the `/*` inside one line comment pair
+    // with the `*/` inside a later one and delete everything between them.
+    // The victim here is a SECURITY DEFINER function with NO pinned
+    // search_path: precisely the object the whole runbook exists to count.
+    const sql = `
+      create or replace function public.first_fn() returns void as $$
+      begin perform 1; end;
+      $$ language plpgsql security definer set search_path = public;
+
+      -- historical note: the old /* wrapper is gone
+      create or replace function public.later_fn() returns void as $$
+      begin perform 2; end;
+      $$ language plpgsql security definer;
+      -- end of file marker */
+    `;
+    expect(stripSqlComments(sql)).toContain('later_fn');
+
+    const parsed = functionsDefined(fake(sql));
+    expect(parsed.map((f) => f.name)).toEqual(['first_fn', 'later_fn']);
+    // And it is still visible as the unpinned definer that it is.
+    const later = parsed.find((f) => f.name === 'later_fn');
+    expect(later?.isSecurityDefiner).toBe(true);
+    expect(later?.pinsSearchPath).toBe(false);
+  });
+
+  it('treats `--` and `/*` inside a string literal as data, not a comment', () => {
+    const sql = `
+      create or replace function public.quoted_fn() returns void as $$
+      begin
+        execute 'select ''a--b'', ''c/*d'';
+      end;
+      $$ language plpgsql security definer set search_path = public;
+    `;
+    const [fn] = functionsDefined(fake(sql));
+    expect(fn?.isSecurityDefiner).toBe(true);
+    expect(fn?.pinsSearchPath).toBe(true);
+  });
+});
+
+describe('parser fail-closed guarantees (round-1 review)', () => {
+  it('THROWS on a dollar-quoted body that is never closed', () => {
+    // DeepSeek lane. This used to be the derivation's worst failure mode: the
+    // unterminated body absorbed the trailing attributes, so a definer function
+    // with an unpinned search_path was reported as NEITHER a definer NOR
+    // unpinned — it left the census entirely instead of raising an alarm.
+    const sql = `
+      create or replace function public.truncated() returns void as $$
+      begin perform 1; end;
+      language plpgsql security definer set search_path = public;
+    `;
+    expect(() => functionsDefined(fake(sql))).toThrow(/never closed/);
+  });
+
+  it('parses nested dollar-quote tags without losing the trailing attributes', () => {
+    const sql = `
+      create or replace function public.nested() returns void as $outer$
+      begin
+        execute $inner$ select 1 $inner$;
+      end;
+      $outer$ language plpgsql security definer set search_path = public;
+    `;
+    const [fn] = functionsDefined(fake(sql));
+    expect(fn?.isSecurityDefiner).toBe(true);
+    expect(fn?.pinsSearchPath).toBe(true);
+  });
+
+  it('sees quoted, mixed-case and non-public function names', () => {
+    // These matched nothing at all before, so a definer function could enter
+    // the schema without ever appearing in a count.
+    const names = (sql: string) => functionsDefined(fake(sql)).map((f) => f.name);
+    expect(names(`
+      create or replace function "mixedCase"() returns void as $$
+      begin perform 1; end;
+      $$ language plpgsql security definer;
+    `)).toEqual(['mixedCase']);
+    expect(names(`
+      create or replace function app.helper() returns void as $$
+      begin perform 1; end;
+      $$ language plpgsql security definer;
+    `)).toEqual(['helper']);
+    expect(names(`
+      create or replace function "public"."someFunc"() returns void as $$
+      begin perform 1; end;
+      $$ language plpgsql security definer;
+    `)).toEqual(['someFunc']);
+  });
+
+  it('FLAGS a function recreated after a drop without its revoke replayed', () => {
+    // Claude lane. `DROP FUNCTION` takes the ACL with it, so the recreated
+    // function is executable by PUBLIC again. Treating the original revoke as
+    // permanent made this guard fail open through the drop-and-recreate pattern
+    // the corpus already uses.
+    const files: MigrationFile[] = [
+      {
+        prefix: '9998',
+        name: '9998_create.sql',
+        sql: `
+          create or replace function public.rpc_fn() returns void as $$
+          begin perform 1; end;
+          $$ language plpgsql security definer set search_path = public;
+          revoke execute on function public.rpc_fn() from public;
+        `,
+      },
+      {
+        prefix: '9999',
+        name: '9999_recreate.sql',
+        sql: `
+          drop function if exists public.rpc_fn();
+          create or replace function public.rpc_fn() returns void as $$
+          begin perform 2; end;
+          $$ language plpgsql security definer set search_path = public;
+        `,
+      },
+    ];
+    expect(functionsWithoutPublicRevoke(files)).toEqual(['rpc_fn']);
+  });
+
+  it('still clears a function whose revoke IS replayed after the drop', () => {
+    // The other direction, so the guard above cannot pass by flagging everything.
+    const files: MigrationFile[] = [
+      {
+        prefix: '9998',
+        name: '9998_create.sql',
+        sql: `
+          create or replace function public.rpc_fn() returns void as $$
+          begin perform 1; end;
+          $$ language plpgsql security definer set search_path = public;
+          revoke execute on function public.rpc_fn() from public;
+        `,
+      },
+      {
+        prefix: '9999',
+        name: '9999_recreate.sql',
+        sql: `
+          drop function if exists public.rpc_fn();
+          create or replace function public.rpc_fn() returns void as $$
+          begin perform 2; end;
+          $$ language plpgsql security definer set search_path = public;
+          revoke execute on function public.rpc_fn() from public;
+        `,
+      },
+    ];
+    expect(functionsWithoutPublicRevoke(files)).toEqual([]);
+  });
 });
