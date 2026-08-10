@@ -191,7 +191,25 @@ promises that a retry might help:
 | `http4xx` | Google rejects this request and always will |
 | `manifest_corrupt` | a `SUBDIVIDE` names a child but carries no geometry for it, so there is nothing to search and no resume can supply it |
 | `types_exhausted` | Google rejected every `includedType` we know how to ask for, so there is nothing left to request |
-| `api_rejected` | the API answered, rejected the request, and the transport declined to retry it — the case where the envelope status matches none of the classifier's numeric guards, e.g. an HTTP 200 wrapping an error body |
+| `api_rejected` | the API answered, rejected the request, and the transport declined to retry it — a non-retryable 5xx (501, 505–511, the Cloudflare 520–530 family), or an envelope status matching none of the classifier's numeric guards such as an HTTP 200 wrapping an error body |
+
+**How the class is chosen.** Retryability is the *primary* axis and it comes from
+the transport, which is the only component that knows what actually happened.
+`classifyError` asks "would the transport try again?" before it looks at status
+families, because the blocking-ness is the contract and the class name is only
+diagnostics. Ordering it the other way — status buckets first — inverted the
+invariant in both directions at once: a non-retryable 5xx was filed as blocking
+`http5xx` and could never be waived, while a transient 408/425 was filed as
+non-blocking and offered to the operator as permanent.
+
+Two details worth knowing when reading a manifest:
+
+- A `error.code` below 100 is a gRPC canonical code, **not** an HTTP status.
+  4, 8, 10 and 14 mean "try again later", so they stay blocking even when the
+  HTTP envelope is a healthy 200.
+- A 2xx whose body never parses is retried like any truncated read, but once
+  every attempt is spent it becomes waivable rather than blocking — four
+  consecutive failed reads are evidence, not a blip.
 
 A cell whose **geometry is missing from the manifest entirely** is waivable for
 the same reason, and is granted ahead of the never-attempted refusal — it can

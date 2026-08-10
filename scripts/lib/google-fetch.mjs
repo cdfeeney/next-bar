@@ -15,8 +15,38 @@
  * class that tells an operator to resume forever over a cell no resume can fix.
  */
 
-/** Statuses worth another attempt; everything else is permanent and throws at once. */
-const RETRYABLE = Object.freeze(new Set([429, 500, 502, 503, 504]));
+/**
+ * Statuses worth another attempt; everything else throws at once.
+ *
+ * 408 and 425 are here because they are transient client errors. While every
+ * non-member was treated as permanent, they were handed to the operator as
+ * permanently-failed cells even though the very next attempt would likely have
+ * succeeded — a waiver over geography that was still reachable.
+ */
+const RETRYABLE = Object.freeze(new Set([408, 425, 429, 500, 502, 503, 504]));
+
+/**
+ * The smallest value we will accept from `body.error.code` as an HTTP status.
+ *
+ * Google's REST error model puts the HTTP status in `error.code`, but its gRPC
+ * canonical codes are small integers in the same field name (8 =
+ * RESOURCE_EXHAUSTED, 14 = UNAVAILABLE), and both of those are TRANSIENT.
+ * Taking them as statuses made `14` a "status" below every guard, which then
+ * classified a temporary outage as a permanently-failed cell the operator was
+ * invited to waive. Anything under 100 is not an HTTP status.
+ */
+const MIN_HTTP_STATUS = 100;
+
+/**
+ * gRPC canonical codes that mean "try again later".
+ *
+ * Ignoring a canonical code was only half the fix. A transient code wrapped in a
+ * healthy 200 envelope still resolved to status 200, which is not retryable, so
+ * a temporary backend outage was handed to the operator as a permanently-failed
+ * cell. The code has to inform retryability, not merely be refused as a status.
+ * 4 DEADLINE_EXCEEDED, 8 RESOURCE_EXHAUSTED, 10 ABORTED, 14 UNAVAILABLE.
+ */
+const RETRYABLE_CANONICAL = Object.freeze(new Set([4, 8, 10, 14]));
 
 const ATTEMPTS = 4;
 
@@ -64,9 +94,18 @@ export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = 
       // If `response` is undefined the socket genuinely failed and there is no
       // status to attach. That is the one case `network` is actually about.
       if (response) {
-        const permanent = !RETRYABLE.has(response.status);
-        lastError = Object.assign(error, { status: response.status, permanent });
-        if (permanent) throw lastError;
+        // A body that fails to read on an OTHERWISE GOOD response is a truncated
+        // or interrupted read, which is exactly the transient case: retry it.
+        // Marking it permanent on the first try and throwing at once offered the
+        // operator a waiver over a cell a single retry would have collected.
+        // `torn` marks the specific optimism being taken on credit: the response
+        // looked healthy, so the read is presumed truncated rather than refused.
+        // Only that optimism gets withdrawn on exhaustion below -- a genuinely
+        // transient status keeps its promise.
+        const torn = response.ok;
+        const retryable = torn || RETRYABLE.has(response.status);
+        lastError = Object.assign(error, { status: response.status, retryable, torn });
+        if (!retryable) throw lastError;
       } else {
         lastError = error;
       }
@@ -85,29 +124,45 @@ export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = 
     // numeric guard in `classifyError`, fell through to `network` (BLOCKING),
     // and -- because 200 is not retryable -- threw at once, leaving the cell
     // permanently stuck with no waiver lever. Prefer the API's own code.
-    const status = typeof body?.error?.code === 'number' ? body.error.code : response.status;
+    // Only when it is plausibly an HTTP status: see MIN_HTTP_STATUS. A gRPC
+    // canonical code in the same field (8, 14) is transient, and taking it as a
+    // status turned a temporary outage into a permanently-failed cell.
+    const apiCode = body?.error?.code;
+    const isCanonical = typeof apiCode === 'number' && apiCode < MIN_HTTP_STATUS;
+    const status =
+      typeof apiCode === 'number' && !isCanonical ? apiCode : response.status;
     // The status travels ON the error. A bare `new Error` left it undefined,
     // every `typeof status === 'number'` guard in `classifyError` was false,
     // and a permanent Google 400 fell through to the `network` default — a
     // BLOCKING class. The engine could not fix the cell and `ackEligibility`
     // refused to waive it because "resume handles that", so the cell was
-    // unfinishable and unwaivable at once. The `http4xx` branch was dead code
-    // in production and the runbook's documented behaviour was false.
-    // `permanent` is the transport stating its OWN judgement rather than making
-    // the classifier re-derive it from a status number. RETRYABLE is already the
-    // decision about whether another attempt is worth making; a status the
-    // classifier cannot key on (a 200 wrapping an error body) otherwise fell
-    // through to the blocking `network` default and stranded the cell.
-    const permanent = !RETRYABLE.has(status);
+    // unfinishable and unwaivable at once.
+    //
+    // `retryable` is the transport stating its OWN judgement rather than making
+    // the classifier re-derive it from a status number. RETRYABLE already IS the
+    // decision about whether another attempt is worth making, so saying it
+    // directly is both truthful and exactly what `classifyError` needs.
+    const retryable =
+      RETRYABLE.has(status) || (isCanonical && RETRYABLE_CANONICAL.has(apiCode));
     lastError = Object.assign(new Error(`${source} failed (${status}): ${detail}`), {
       status,
-      permanent,
+      retryable,
     });
-    if (permanent) throw lastError;
+    if (!retryable) throw lastError;
     if (attempt === ATTEMPTS - 1) break;
     const delayMs = 250 * 3 ** attempt;
     console.warn(`${source} transient failure; retrying in ${delayMs}ms`);
     await sleep(delayMs);
+  }
+  // Every attempt is spent. A response-backed failure we were willing to retry
+  // ONLY because the response looked healthy -- a 2xx whose body never once
+  // parsed -- has now disproved that optimism, so stop promising a resume will
+  // clear it and let the operator waive the cell. A status that is genuinely in
+  // RETRYABLE (a 503) keeps its promise: four fast attempts say nothing about a
+  // resume minutes later, and treating it as permanent would waive geography a
+  // retry could still reach.
+  if (lastError?.torn === true) {
+    lastError.retryable = false;
   }
   throw lastError;
 }

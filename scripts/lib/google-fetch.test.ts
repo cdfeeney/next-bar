@@ -15,6 +15,9 @@ import { fetchJson } from './google-fetch.mjs';
  */
 const noSleep = () => Promise.resolve();
 
+/** What the transport throws: the status it saw, and whether it would try again. */
+type Failure = Error & { status?: number; retryable?: boolean };
+
 function respondWith(status: number, body: unknown = {}) {
   return vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
@@ -126,9 +129,9 @@ describe('fetchJson error status', () => {
         json: async () => ({ error: { message: 'request rejected' } }),
       }),
       sleep: noSleep,
-    }).catch((caught) => caught)) as Error & { status?: number; permanent?: boolean };
+    }).catch((caught) => caught)) as Failure;
 
-    expect(error.permanent).toBe(true);
+    expect(error.retryable).toBe(false);
     const errorClass = classifyError(error, error.status);
     expect(errorClass).toBe(API_REJECTED);
     expect(BLOCKING_ERROR_CLASSES).not.toContain(errorClass);
@@ -145,10 +148,154 @@ describe('fetchJson error status', () => {
         json: async () => ({ error: { message: 'backend unavailable' } }),
       }),
       sleep: noSleep,
-    }).catch((caught) => caught)) as Error & { status?: number; permanent?: boolean };
+    }).catch((caught) => caught)) as Failure;
 
-    expect(error.permanent).toBe(false);
+    expect(error.retryable).toBe(true);
     expect(classifyError(error, error.status)).toBe('http5xx');
+  });
+
+  // A non-retryable 5xx: the transport will not try again, so the classifier
+  // must not file it as blocking http5xx and refuse the operator a waiver.
+  it.each([501, 505, 508, 511, 520])(
+    'keeps a non-retryable %i waivable instead of filing it as blocking http5xx',
+    async (status) => {
+      const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+        fetchImpl: vi.fn().mockResolvedValue({
+          ok: false,
+          status,
+          statusText: 'nope',
+          json: async () => ({ error: { message: 'not implemented' } }),
+        }),
+        sleep: noSleep,
+      }).catch((caught) => caught)) as Failure;
+
+      expect(error.retryable).toBe(false);
+      const errorClass = classifyError(error, error.status);
+      expect(BLOCKING_ERROR_CLASSES).not.toContain(errorClass);
+    },
+  );
+
+  // gRPC canonical codes share the `error.code` field with REST HTTP statuses,
+  // and both of these mean "try again later".
+  it.each([
+    [8, 'RESOURCE_EXHAUSTED'],
+    [14, 'UNAVAILABLE'],
+  ])('does not read canonical code %i (%s) as an HTTP status', async (code) => {
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+        json: async () => ({ error: { code, message: 'backend' } }),
+      }),
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Failure;
+
+    // The envelope status stands; the canonical code is not a status.
+    expect(error.status).toBe(503);
+    const errorClass = classifyError(error, error.status);
+    expect(errorClass).toBe('http5xx');
+    // Transient, so it must stay blocking -- a resume is the right answer.
+    expect(BLOCKING_ERROR_CLASSES).toContain(errorClass);
+  });
+
+  it.each([8, 14])(
+    'keeps a transient canonical code %i blocking even inside a healthy 200 envelope',
+    async (code) => {
+      // Refusing the code as a status was only half the fix: the envelope was
+      // then 200, which is not retryable, so a temporary backend outage was
+      // still offered to the operator as a permanently-failed cell.
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ error: { code, message: 'backend' } }),
+      });
+
+      const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+        fetchImpl,
+        sleep: noSleep,
+      }).catch((caught) => caught)) as Failure;
+
+      expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+      expect(error.retryable).toBe(true);
+      expect(BLOCKING_ERROR_CLASSES).toContain(classifyError(error, error.status));
+    },
+  );
+
+  // Transient client errors. Treated as permanent, they became a waiver over
+  // geography the next attempt would have collected.
+  it.each([408, 425])('retries a transient %i and keeps it blocking', async (status) => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status,
+      statusText: 'transient',
+      json: async () => ({ error: { message: 'timeout' } }),
+    });
+
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl,
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Failure;
+
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+    expect(error.retryable).toBe(true);
+    expect(BLOCKING_ERROR_CLASSES).toContain(classifyError(error, error.status));
+  });
+
+  it('retries a torn body on a healthy response, then stops promising a resume', async () => {
+    // A 2xx whose body fails to read is a truncated read: worth retrying. But a
+    // body that never once parses has disproved that optimism, and a cell whose
+    // every read fails must stay waivable rather than blocking forever.
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => {
+        throw new SyntaxError('Unexpected end of JSON input');
+      },
+    });
+
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl,
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Failure;
+
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(error.retryable).toBe(false);
+    expect(BLOCKING_ERROR_CLASSES).not.toContain(classifyError(error, error.status));
+  });
+
+  it('treats a 403 quota rejection as blocking, since a daily cap reopens', async () => {
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        json: async () => ({ error: { message: 'Quota exceeded per day' } }),
+      }),
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Failure;
+
+    expect(classifyError(error, error.status)).toBe('quota');
+  });
+
+  it('does not call an ordinary permanent 403 a quota block on message alone', async () => {
+    // The regex used to run against every status, so any permanent error whose
+    // text mentioned a rate limit was filed blocking and lost its waiver.
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        json: async () => ({ error: { message: 'invalid argument near rate limit field' } }),
+      }),
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Failure;
+
+    const errorClass = classifyError(error, error.status);
+    expect(errorClass).toBe('http4xx');
+    expect(BLOCKING_ERROR_CLASSES).not.toContain(errorClass);
   });
 
   it('leaves a genuine socket failure without a status, so it stays network', async () => {

@@ -153,21 +153,56 @@ export function configHash(config) {
     .slice(0, 16);
 }
 
+/**
+ * Which class a failed attempt belongs to.
+ *
+ * The ONLY thing this has to get right is whether a retry could plausibly help,
+ * because that is what `BLOCKING_ERROR_CLASSES` means and what decides whether
+ * the operator gets a waiver. The class name is diagnostics; the blocking-ness
+ * is the contract.
+ *
+ * Retryability is therefore the PRIMARY axis, taken from the transport, which is
+ * the only component that actually knows what happened. An earlier version put
+ * the status buckets first and consulted the transport's judgement fourth, which
+ * inverted the invariant in both directions at once: a non-retryable 5xx (501,
+ * 505-511, and the Cloudflare 520-530 family) was filed as blocking `http5xx`
+ * and could never be waived, while a transient 408/425 was filed as non-blocking
+ * `http4xx` and was offered to the operator as permanent. Ordering a decision
+ * table by how specific each guard LOOKS is not the same as ordering it by what
+ * the decision means.
+ */
 export function classifyError(error, status) {
-  if (status === 429 || /quota|rate.?limit|per day/i.test(String(error?.message ?? ''))) {
-    return 'quota';
+  // Quota is called out before everything else because it is the one blocking
+  // condition with a long, known recovery window, and the operator needs it
+  // named rather than folded into ordinary 5xx retry noise.
+  if (status === 429 || isQuotaRejection(error, status)) return 'quota';
+  // The transport would try again, so a resume can too.
+  if (error?.retryable === true) {
+    return typeof status === 'number' && status >= 500 ? 'http5xx' : 'network';
   }
-  if (typeof status === 'number' && status >= 500) return 'http5xx';
-  if (typeof status === 'number' && status >= 400) return 'http4xx';
-  // Asked LAST, so it can never shadow a status we can classify honestly, and
-  // FIRST among the fallthroughs, because `network` is the default for "we could
-  // not determine anything" and that default is blocking. A response-backed
-  // rejection the transport declined to retry is determined: it is permanent.
-  // Without this, an envelope status matching no guard above (HTTP 200 carrying
-  // an error body) landed in `network` and left the cell neither fixable nor
-  // waivable.
-  if (error?.permanent === true) return API_REJECTED;
+  // The transport refused to try again, so no resume will fix this cell and it
+  // must stay waivable. `http4xx` keeps its name for the ordinary permanent
+  // client error; anything else response-backed is `api_rejected`.
+  if (error?.retryable === false) {
+    return typeof status === 'number' && status >= 400 && status < 500 ? 'http4xx' : API_REJECTED;
+  }
+  // No transport judgement at all means no response ever arrived. That is the
+  // one thing `network` is really about, and it is correctly blocking.
   return 'network';
+}
+
+/**
+ * A quota rejection Google reports as 403 rather than 429.
+ *
+ * Deliberately narrow. The message regex used to run against EVERY status,
+ * including failures with no status at all, so any permanent error whose text
+ * happened to mention a rate limit was filed as blocking `quota` and lost its
+ * waiver. A daily cap genuinely does reopen, so treating a real one as blocking
+ * is right — but only where Google actually reports one.
+ */
+function isQuotaRejection(error, status) {
+  if (status !== 403) return false;
+  return /quota|rate.?limit|per day/i.test(String(error?.message ?? ''));
 }
 
 class ManifestWriter {
