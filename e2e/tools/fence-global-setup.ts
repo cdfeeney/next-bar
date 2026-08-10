@@ -89,10 +89,10 @@ function probe(PORT: number, BANNER: string): Promise<ProbeResult> {
  * unfenced within the last cache window can serve a stale non-'ok' — this
  * canary detects affirmative egress, it is not a fencedness proof.
  */
-async function assertReusedServerFenced(attempt = 0): Promise<void> {
+async function assertReusedServerFenced(port: string, attempt = 0): Promise<void> {
   let res: Response;
   try {
-    res = await fetch('http://localhost:3000/api/health', {
+    res = await fetch(`http://localhost:${port}/api/health`, {
       cache: 'no-store',
       redirect: 'manual', // a redirecting impostor must not steer this fetch
       // Generous: a reused dev server may cold-compile /api/health.
@@ -113,10 +113,10 @@ async function assertReusedServerFenced(attempt = 0): Promise<void> {
     // server still exhausts the retries and aborts fail-closed.
     if (attempt < 3) {
       await new Promise((r) => setTimeout(r, 2000));
-      return assertReusedServerFenced(attempt + 1);
+      return assertReusedServerFenced(port, attempt + 1);
     }
     throw new Error(
-      `reused dev server on :3000 did not answer the fence canary (${code ?? String(e)}) — ` +
+      `reused dev server on :${port} did not answer the fence canary (${code ?? String(e)}) — ` +
         'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
     );
   }
@@ -129,18 +129,35 @@ async function assertReusedServerFenced(attempt = 0): Promise<void> {
     // or impostor server: fail CLOSED (round-5 Codex MEDIUM — fetch resolves
     // at headers, so body errors must not be swallowed).
     throw new Error(
-      `reused server on :3000 answered the canary with an unreadable body (${String(e)}) — ` +
+      `reused server on :${port} answered the canary with an unreadable body (${String(e)}) — ` +
         'cannot verify it is fenced. Kill it and let Playwright spawn the fenced one.',
     );
   }
   if (body.supabase === 'ok') {
     throw new Error(
-      'reused dev server on :3000 reached live Supabase server-side — it ' +
+      `reused dev server on :${port} reached live Supabase server-side — it ` +
         'is NOT fenced (started without the proxy env). Kill it and let ' +
         'Playwright spawn the fenced one.',
     );
   }
 }
+
+/**
+ * The ports Playwright may REUSE. `webServer.reuseExistingServer` is true, so
+ * the canary has to interrogate the servers this run would actually adopt —
+ * which are the ports playwright.config.ts resolves, not a fixed 3000. These
+ * two defaults are deliberately kept identical to that file's.
+ *
+ * Hardcoding 3000 was wrong in BOTH directions on a machine running more than
+ * one worktree: it interrogated whatever unrelated project happened to hold
+ * :3000 (aborting a run whose servers were on 3400/3401 and never went near
+ * :3000) while never checking the ports this run really uses. That made the
+ * whole suite's ability to start depend on unrelated processes.
+ */
+const reusablePorts = (): string[] => [
+  process.env.E2E_PORT ?? '3000',
+  process.env.E2E_GOOGLE_PORT ?? '3100',
+];
 
 export default async function fenceGlobalSetup(): Promise<void> {
   const { BANNER, PORT } = await loadContract();
@@ -180,5 +197,9 @@ export default async function fenceGlobalSetup(): Promise<void> {
         BANNER,
     );
   }
-  await assertReusedServerFenced();
+  // Sequential, not concurrent: each call has its own retry ladder and a
+  // failure must name the exact port that could not be cleared.
+  for (const port of reusablePorts()) {
+    await assertReusedServerFenced(port);
+  }
 }

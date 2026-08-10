@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { installLoopbackFixtures } from './helpers/catalogFixture';
 
 /**
@@ -26,6 +26,17 @@ type Scenario = 'loaded' | 'delayed' | 'zero' | 'error' | 'unsupported';
 
 /** Under the widget-load budget (4s) so `delayed` still resolves to READY. */
 const DELAY_MS = 1_200;
+
+/**
+ * Longer than EVERY budget `GooglePlacePhoto` can arm: `MAX_LOAD_MS` (11s =
+ * SDK_LOAD_TIMEOUT_MS 5s + SDK_LOAD_GRACE_MS 1s + IMPORT_TIMEOUT_MS 5s) and
+ * the 4s budget for a mounted widget that never signals readiness. Mirrored
+ * here rather than imported from `src/lib/placesUiKit` so this spec does not
+ * pull component modules into the Node test process. If those constants grow,
+ * this must grow with them — the `lazy-host` guard is only meaningful while it
+ * outlasts every timer the component can start.
+ */
+const BEYOND_EVERY_BUDGET_MS = 13_000;
 
 /** Tolerance on the 21/9 ratio: sub-pixel layout rounding only. */
 const RATIO_EPSILON = 0.15;
@@ -228,6 +239,84 @@ async function openResults(page: Page): Promise<void> {
 const card = (page: Page) =>
   page.locator('article').filter({ hasText: /Vibe match/i }).first();
 
+/** Every google-live card on the results surface, in rank order. */
+const allCards = (page: Page) =>
+  page.locator('article').filter({ hasText: /Vibe match/i });
+
+const hostOf = (scope: Locator) =>
+  scope.locator('[data-testid="google-place-photo"]');
+
+/**
+ * Bring the lazy widget host into view, then hand back its locator.
+ *
+ * `GooglePlacePhoto` arms BOTH of its load budgets inside `build()`, and in a
+ * real browser `build()` is reachable only from an `IntersectionObserver`
+ * entry at `rootMargin: 200px`. Playwright's `expect(locator)` POLLS but never
+ * scrolls — only actions do — so before this helper existed, whether the
+ * widget built at all depended on where the leading card happened to land in
+ * the layout. That had two distinct consequences:
+ *
+ *   - the readiness assertions were load-correlated and failed on a different
+ *     scenario each run, always with the same signature (an EMPTY host stuck
+ *     on `data-status="pending"`, which means no budget was ever armed);
+ *   - worse, the COMPLIANCE assertions were vacuous. `expectUniversalInvariants`
+ *     proves criterion 19 by observing an empty Google-request list, and a
+ *     widget that never builds issues no request at all — so the strongest
+ *     compliance claim in this file could pass for exactly the wrong reason.
+ *
+ * Revealing the card first makes the widget actually run, which is the state
+ * every criterion below is written about. The `lazy-host` guard is the
+ * deterministic proof that this reveal is load-bearing rather than decorative.
+ */
+async function revealCardUntil(
+  page: Page,
+  settled: (host: Locator) => Promise<void>,
+  timeout = 60_000,
+): Promise<Locator> {
+  // Scroll the CARD, not the host. The host is not guaranteed to exist: an
+  // unsupported SDK is detected before a widget is ever created, so scenario
+  // 18 renders the fallback glyph with no host at all, and scrolling the host
+  // there waits forever on a locator that will never resolve. The article
+  // always exists, and the media band sits at its top, so revealing the card
+  // is what actually brings the observer target within its 200px margin.
+  const target = card(page);
+  const host = hostOf(target);
+  // Retried as ONE unit, for the same reason openResults() retries its
+  // choose-then-search step. The results list re-renders shortly after first
+  // paint as the ranking settles, and the cards are keyed by bar id, so the
+  // article — and the host inside it — is REPLACED. A single scroll then has
+  // two ways to fail, and both were observed:
+  //   - it lands mid-swap and throws "Element is not attached to the DOM";
+  //   - it succeeds against the doomed node, and the replacement host is a
+  //     fresh, never-intersected element that sits wherever the new layout
+  //     puts it — so the card goes back to being stuck on `pending` and the
+  //     readiness assertion polls a widget whose budgets were never armed.
+  // Re-scrolling on every attempt means whatever element is CURRENT ends up
+  // revealed, which is the property the scenarios actually need.
+  await expect(async () => {
+    await target.scrollIntoViewIfNeeded({ timeout: 5_000 });
+    await settled(host);
+  }).toPass({ timeout });
+  return host;
+}
+
+/** The common case: reveal the card and wait for the widget to finish building. */
+const revealCardReady = (page: Page): Promise<Locator> =>
+  revealCardUntil(page, (host) =>
+    expect(host).toHaveAttribute('data-status', 'ready', { timeout: 5_000 }),
+  );
+
+/**
+ * Reveal only, asserting nothing about status.
+ *
+ * For a scenario that must observe a TRANSIENT state itself. Retrying a
+ * transient condition is worse than not retrying it: `pending` lasts DELAY_MS,
+ * so a retry loop that misses the window once never sees it again and burns
+ * its whole budget before failing. The caller asserts immediately instead.
+ */
+const revealCard = (page: Page): Promise<Locator> =>
+  revealCardUntil(page, async () => {}, 20_000);
+
 /** Geometry + composition of ONE card. A page-wide count proves nothing. */
 async function inspectCard(page: Page) {
   return page.evaluate(() => {
@@ -329,7 +418,26 @@ async function expectUniversalInvariants(
  * that by construction, and raising it here is honest about why rather than
  * trimming the waits the criteria are actually about.
  */
-test.describe.configure({ timeout: 120_000 });
+/**
+ * `mode: 'default'` opts this FILE out of the root `fullyParallel: true`, so
+ * its scenarios run sequentially in one worker (the two google-live PROJECTS
+ * still run in parallel with each other).
+ *
+ * This is a determinism requirement, not a preference. Every scenario here
+ * drives a full search flow against the SINGLE google-live dev server and then
+ * asserts against the component's REAL timing budgets — 4s for a mounted
+ * widget to signal readiness, MAX_LOAD_MS (11s) overall. Under `fullyParallel`
+ * six of them ran concurrently against that one `next dev`, starved exactly
+ * those budgets, and the component then did the correct thing: it gave up and
+ * rendered the fallback. The scenario failed with `Expected "ready" / element(s)
+ * not found` — a host that is ABSENT because it fell back, which is a
+ * different signature from the lazy-mount bug's EMPTY host stuck on `pending`.
+ *
+ * Measured on this machine (6 workers vs capped): 6 workers failed 3/19 on one
+ * run and passed the next; capped, two consecutive runs passed 19/19 and were
+ * no slower (1.4m vs 1.5-2.0m), because the contention was pure overhead.
+ */
+test.describe.configure({ mode: 'default', timeout: 120_000 });
 
 test.describe('supported Google card', () => {
   /**
@@ -365,6 +473,61 @@ test.describe('supported Google card', () => {
     expect(probe.google.some((u) => u.includes('e2e-probe'))).toBe(true);
   });
 
+  /**
+   * NON-VACUITY, second half — and the deterministic proof behind
+   * `revealCardUntil`.
+   *
+   * The six criterion scenarios below all assert against the LEADING card,
+   * which usually sits within the observer's 200px margin already, so a green
+   * run there proves nothing about whether the reveal is needed. This guard
+   * removes the luck by asserting on a card that is unambiguously below the
+   * fold: it must NOT build on its own, and it must build once revealed.
+   *
+   * Both halves matter. The first pins the pre-fix failure mode — a host that
+   * stays EMPTY on `data-status="pending"` straight through every budget the
+   * component has (MAX_LOAD_MS = 11s, plus the 4s mounted-widget budget), which
+   * is why no timeout ever rescued it and why an unrevealed card could never
+   * satisfy a readiness assertion. The second shows the scroll is the whole
+   * remedy: delete the `scrollIntoViewIfNeeded` line below and this test fails
+   * on its final assertion, with the host still `pending` after 45s. That is
+   * the pre-fix failure reproduced deterministically — and it is exactly what
+   * the six scenarios could never detect for themselves, because each of them
+   * asserts against a leading card that is usually already in view.
+   */
+  test('lazy-host: a below-the-fold card builds only once revealed', async ({
+    page,
+  }) => {
+    await setup(page, 'loaded');
+    await openResults(page);
+
+    // The results surface ranks a hand of five bars; the last is far below a
+    // phone viewport. Asserted, not assumed — if the surface ever returns one
+    // card this guard would silently stop testing anything.
+    const cards = allCards(page);
+    await expect(cards).toHaveCount(5);
+    const host = hostOf(cards.last());
+
+    // It exists, and it has not built.
+    await expect(host).toHaveAttribute('data-status', 'pending');
+
+    // Still pending after longer than EVERY budget the component can arm.
+    // This is the load-bearing half: it separates "lazy" from "merely slow",
+    // and a widget that never builds is also a widget that never requests,
+    // which is what made criterion 19 vacuous for an unrevealed card.
+    await page.waitForTimeout(BEYOND_EVERY_BUDGET_MS);
+    await expect(host).toHaveAttribute('data-status', 'pending');
+    await expect(
+      cards.last().locator('gmp-place-details-compact'),
+      'an unrevealed card must not build a widget',
+    ).toHaveCount(0);
+
+    // Revealing it — and only revealing it — arms the budgets.
+    await expect(async () => {
+      await host.scrollIntoViewIfNeeded({ timeout: 5_000 });
+      await expect(host).toHaveAttribute('data-status', 'ready', { timeout: 5_000 });
+    }).toPass({ timeout: 45_000 });
+  });
+
   // 13 — successful widget render.
   test('scenario 13: the widget renders and our duplicates stay suppressed', async ({
     page,
@@ -372,8 +535,7 @@ test.describe('supported Google card', () => {
     const probe = await setup(page, 'loaded');
     await openResults(page);
 
-    const host = card(page).locator('[data-testid="google-place-photo"]');
-    await expect(host).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
+    const host = await revealCardReady(page);
 
     const d = await inspectCard(page);
     console.log(`MEASURE loaded ${JSON.stringify(d)}`);
@@ -406,8 +568,7 @@ test.describe('supported Google card', () => {
     const probe = await setup(page, 'loaded');
     await openResults(page);
 
-    const host = card(page).locator('[data-testid="google-place-photo"]');
-    await expect(host).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
+    const host = await revealCardReady(page);
 
     // Photo expansion is delegated to Google's own lightbox, not re-implemented.
     const d = await inspectCard(page);
@@ -447,8 +608,7 @@ test.describe('supported Google card', () => {
     const probe = await setup(page, 'zero');
     await openResults(page);
 
-    const host = card(page).locator('[data-testid="google-place-photo"]');
-    await expect(host).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
+    const host = await revealCardReady(page);
 
     const d = await inspectCard(page);
     console.log(`MEASURE zero-photo ${JSON.stringify(d)}`);
@@ -477,7 +637,10 @@ test.describe('supported Google card', () => {
     const probe = await setup(page, 'delayed');
     await openResults(page);
 
-    const host = card(page).locator('[data-testid="google-place-photo"]');
+    // Revealed while still PENDING — the state this scenario is about. The
+    // reveal is what starts the clock, so it has to happen before the
+    // reservation is measured, not after.
+    const host = await revealCard(page);
     // While PENDING the reserved band must already be the 21/9 the loaded
     // and fallback states use — a differently-sized placeholder is the
     // layout jump criterion 4 forbids.
@@ -498,7 +661,7 @@ test.describe('supported Google card', () => {
       expect(Math.abs(h - heights[0]), 'reserved height moved while pending').toBeLessThanOrEqual(1);
     }
 
-    await expect(host).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
+    await revealCardReady(page);
     await expectUniversalInvariants(page, probe, 'delayed');
   });
 
@@ -509,8 +672,11 @@ test.describe('supported Google card', () => {
     const probe = await setup(page, 'error');
     await openResults(page);
 
+    // The fallback is just as lazy as the success path: it appears only when a
+    // load budget EXPIRES, and those budgets are armed inside build(). Without
+    // the reveal this waited on a glyph whose timer had never started.
     const glyph = card(page).locator('[data-testid="google-fallback-glyph"]');
-    await glyph.waitFor({ timeout: 25_000 });
+    await revealCardUntil(page, () => expect(glyph).toHaveCount(1, { timeout: 6_000 }));
 
     const d = await inspectCard(page);
     console.log(`MEASURE error-fallback ${JSON.stringify(d)}`);
@@ -537,8 +703,11 @@ test.describe('supported Google card', () => {
     const probe = await setup(page, 'unsupported');
     await openResults(page);
 
+    // The fallback is just as lazy as the success path: it appears only when a
+    // load budget EXPIRES, and those budgets are armed inside build(). Without
+    // the reveal this waited on a glyph whose timer had never started.
     const glyph = card(page).locator('[data-testid="google-fallback-glyph"]');
-    await glyph.waitFor({ timeout: 25_000 });
+    await revealCardUntil(page, () => expect(glyph).toHaveCount(1, { timeout: 6_000 }));
 
     const d = await inspectCard(page);
     console.log(`MEASURE unsupported ${JSON.stringify(d)}`);
@@ -557,8 +726,7 @@ test.describe('supported Google card', () => {
     const probe = await setup(page, 'loaded');
     await openResults(page);
 
-    const host = card(page).locator('[data-testid="google-place-photo"]');
-    await expect(host).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
+    const host = await revealCardReady(page);
 
     const before = page.url();
     // Every app-owned control on the card that is not a real link.
