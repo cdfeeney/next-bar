@@ -16,9 +16,10 @@
     "tier-classify": "node scripts/tier-classify.mjs",
     "tier-changed": "node scripts/tier-classify.mjs --changed",
     "tier-validate": "git ls-files | node scripts/tier-classify.mjs --validate",
+    "tier-sweep": "git ls-files | node scripts/tier-classify.mjs --summary",
     "tier-redproof": "node scripts/__tests__/red-proof.mjs",
     "verify:changed": "npm run typecheck && npm run test && npm run tier-changed",
-    "verify:full": "npm run check-env && npm run typecheck && npm run test && npm run build && npm run tier-validate",
+    "verify:full": "npm run check-env && npm run typecheck && npm run test && npm run build && npm run tier-validate && npm run tier-sweep",
     "db:migrate": "tsx scripts/apply-migrations.ts"
   },
   "dependencies": {

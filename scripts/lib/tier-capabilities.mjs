@@ -56,6 +56,31 @@ export const BAKED_PATH_FLOORS = [
   // (inert documentation) as soon as it was written one directory down.
   { glob: '**/AGENTS.md', tier: 'T0', capability: 'agent-policy' },
   { glob: '**/CLAUDE.md', tier: 'T0', capability: 'agent-policy' },
+  // THE POLICY LIST IS NOT A TWO-NAME LIST, which is the round-10 correction.
+  // The architecture lane's point was that a boundary defined by two filenames
+  // fails silently as agent tooling diversifies: the instruction file of the
+  // NEXT tool a contributor adopts is executable policy that would classify T2
+  // as inert documentation. These floors are DORMANT — none of these paths
+  // exists here today — and that is the point: they are in place before the
+  // file that needs them is written. `validateTierMap` checks the project tier
+  // MAP for dead rules, not these baked floors, so a dormant floor costs
+  // nothing and cannot fail the gate.
+  { glob: '**/AGENT.md', tier: 'T0', capability: 'agent-policy' },
+  { glob: '**/GEMINI.md', tier: 'T0', capability: 'agent-policy' },
+  { glob: '**/.cursorrules', tier: 'T0', capability: 'agent-policy' },
+  { glob: '**/.windsurfrules', tier: 'T0', capability: 'agent-policy' },
+  { glob: '**/.clinerules', tier: 'T0', capability: 'agent-policy' },
+  { glob: '.cursor/**', tier: 'T0', capability: 'agent-policy' },
+  { glob: '.windsurf/**', tier: 'T0', capability: 'agent-policy' },
+  { glob: '.github/copilot-instructions.md', tier: 'T0', capability: 'agent-policy' },
+  // WHAT THIS STILL DOES NOT CATCH, stated rather than implied: a section of an
+  // ordinary README addressed to coding agents. The obvious remedy — floor any
+  // markdown whose prose contains an agent-directed imperative — was MEASURED
+  // against this repository's 44 tracked markdown files before being rejected:
+  // it floors four genuine documents (a blueprint, a continuation note, a night
+  // log and a work ledger) that merely DESCRIBE agent work. That is the same
+  // failure that once put 15 documentation files at T0. Instructions an agent
+  // must follow belong in a file whose role says so.
   { glob: 'scripts/tier-classify.mjs', tier: 'T0', capability: 'tier-classifier' },
   { glob: 'scripts/lib/tier-*.mjs', tier: 'T0', capability: 'tier-classifier' },
   // The whole enforcement directory, not just `tier-*`: the RED proof lives
@@ -377,14 +402,67 @@ export function analyzeFsDeletion(text) {
 
   // `const { unlink } = require('fs/promises')` / `= await import('node:fs/promises')`
   // and `const fse = require('fs-extra')` / `const fsp = require('fs').promises`.
+  //
+  // THE DECLARATION KEYWORD IS OPTIONAL, which is the round-10 correction. Four
+  // lanes independently drove the previous `\b(?:const|let|var)\s+` anchor into
+  // missing a real binding, and every one of them is ordinary JavaScript rather
+  // than an evasion:
+  //
+  //   let fsp; fsp = require('fs/promises');          — hoisted declaration
+  //   let fse; try { fse = require('fs-extra') } …    — optional dependency
+  //   ({ unlink } = require('fs'));                   — destructuring assignment
+  //   const fsp = (await import('fs/promises'));      — parenthesized
+  //   const fse = flag ? require('fs-extra') : shim;  — conditional
+  //
+  // So the binding is matched by its ASSIGNMENT rather than by its declaration:
+  // an optional keyword, an optional `(`, and an optional non-newline run
+  // between `=` and the call, which is what admits the ternary and any other
+  // expression prefix. The run cannot cross a line, so it can never reach past
+  // the statement it belongs to.
   const requireRe = new RegExp(
-    `\\b(?:const|let|var)\\s+(\\{[^}]*\\}|${IDENTIFIER})\\s*=\\s*(?:await\\s+)?(?:import|require)\\s*\\(\\s*${q}(${mod})${q}\\s*\\)`,
+    `(?:\\b(?:const|let|var)\\s+)?\\(?\\s*(\\{[^}\\n]*\\}|${IDENTIFIER})\\s*\\)?\\s*=\\s*` +
+      `[^\\n=]{0,80}?(?:await\\s+)?(?:import|require)\\s*\\(\\s*${q}(${mod})${q}\\s*\\)`,
     'g',
   );
   for (const match of text.matchAll(requireRe)) {
     const [, binding, moduleSpecifier] = match;
     if (binding.startsWith('{')) recordClause(binding.slice(1, -1), moduleSpecifier);
     else namespaces.add(binding);
+  }
+
+  // A CONTINUATION receives the module without ever binding a name in this
+  // scope: `import('fs/promises').then(({ rm }) => rm(p))` and
+  // `import('fs').then(fs => fs.unlink(p))`. Neither shape has a declaration to
+  // anchor on, and both really delete. Rather than parse the callback, the
+  // parameter list is read as a binding clause when it destructures, and as a
+  // namespace when it is a bare identifier — the same two rules used everywhere
+  // else in this function.
+  const thenRe = new RegExp(
+    `import\\s*\\(\\s*${q}(${mod})${q}\\s*\\)\\s*\\.\\s*then\\s*\\(\\s*(?:async\\s*)?` +
+      `(?:\\(\\s*)?(\\{[^}\\n]*\\}|${IDENTIFIER})`,
+    'g',
+  );
+  for (const match of text.matchAll(thenRe)) {
+    const [, moduleSpecifier, param] = match;
+    if (param.startsWith('{')) recordClause(param.slice(1, -1), moduleSpecifier);
+    else namespaces.add(param);
+  }
+
+  // A NON-LITERAL module specifier cannot be resolved by a text scan:
+  // `const mod = 'node:fs/promises'; const { rm } = require(mod)` binds real
+  // deletion capability that every pattern above misses, because each of them
+  // requires a quoted specifier. Chasing the variable is value-flow analysis,
+  // which this module deliberately does not do — so the answer is to FAIL
+  // CLOSED instead. A dynamic specifier alongside any deletion name in the same
+  // file is reported as capability; the cost is over-escalating a file that
+  // computes a module path and separately mentions `remove`, which is the
+  // direction this gate is allowed to be wrong in.
+  const dynamicSpecRe = new RegExp(`(?:\\bimport|\\brequire)\\s*\\(\\s*(?!\\s*${q})[^)\\n]{1,120}\\)`, 'g');
+  if (dynamicSpecRe.test(text)) {
+    const anyDeletionName = new RegExp(`\\b(?:${FS_EXTRA_DELETION_NAMES.map(escapeForRegExp).join('|')})\\b`);
+    if (anyDeletionName.test(text)) {
+      evidence.push('resolves a module specifier dynamically alongside a deletion name — unanalyzable, failing closed');
+    }
   }
 
   // Inline, with no binding at all: `(await import('node:fs/promises')).rm(dir)`
@@ -526,8 +604,14 @@ export const CAPABILITY_SIGNATURES = [
     // actually mean filesystem deletion (`Path(x).unlink()`,
     // `.unlink(missing_ok=True)`) because a bare `.unlink(` matched
     // `graph.unlink(nodeA, nodeB)` in ordinary graph code.
+    // ARGV-FORM SPAWN is here rather than in the shell entry below, because it
+    // is a JavaScript call and must not be subject to that entry's
+    // shell-context gate. `spawn('rm', ['-rf', dir])` deletes exactly as much as
+    // `rm -rf dir`, and every shell pattern missed it: they require whitespace
+    // after the command word, and here the next character is the closing quote.
+    // Found while verifying the shell-context gate, not reported by a lane.
     pattern:
-      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|removedirs|unlink|rmdir)\s*\(|\.unlink\s*\(\s*(?:\)|missing_ok)|\brmtree\s*\(|\bFileUtils\.rm_r?f?\b|\b(?:File|Dir)\.(?:delete|unlink|rmdir)\s*\()/,
+      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|removedirs|unlink|rmdir)\s*\(|\.unlink\s*\(\s*(?:\)|missing_ok)|\brmtree\s*\(|\bFileUtils\.rm_r?f?\b|\b(?:File|Dir)\.(?:delete|unlink|rmdir)\s*\(|(?:spawn|spawnSync|execFile|execFileSync|Start-Process)\s*\(?\s*['"](?:rm|rmdir|rd|del|erase|Remove-Item)['"])/,
     detect: (text) => analyzeFsDeletion(text).capable,
     note: 'deletes files with no undo',
   },
@@ -540,6 +624,22 @@ export const CAPABILITY_SIGNATURES = [
     // Same capability name as the entry above, so the two are one finding.
     name: 'destructive-filesystem',
     tier: 'T0',
+    // THIS ENTRY MATCHES SHELL COMMAND TEXT, so it only applies where shell
+    // command text can RUN — see `shellTextIsInert`. Two lanes reproduced the
+    // false positive independently: `export const Help = () => <code>rm
+    // cache.db</code>` and `export const tip = "Run del /f cache.db"` floored
+    // ordinary React components at T0.
+    //
+    // There is no content-only fix for that, and it is important to say why
+    // rather than to try a fifth clever pattern. Inside `<code>` the bytes are
+    // IDENTICAL to a real command line, so no rule reading the match or its
+    // surroundings can separate them; a line-position rule would have missed
+    // `execSync('rm -rf ' + dir)` and `then rm -rf "$dir"`, which is the
+    // fail-open treadmill that removed comment suppression from this module.
+    // What DOES separate them is the file: a `.tsx` cannot execute a string it
+    // merely renders. So the question asked is "can this file run a shell
+    // command at all", and it fails closed on every file type that can.
+    shellContext: true,
     // EXCLUSIONS USE HORIZONTAL WHITESPACE ONLY. `\s` matches a NEWLINE, so
     // `(?<!\bgit\s{1,8})` suppressed any `rm -rf` whose PREVIOUS line merely
     // ended in the word "git" — and a newline ends a shell command, so that `rm`
@@ -616,6 +716,38 @@ export const CAPABILITY_SIGNATURES = [
 ];
 
 /**
+ * File extensions where a shell command written in the source is INERT TEXT
+ * unless the file also spawns a process. Deliberately a short, closed list of
+ * JavaScript/TypeScript module types: every other extension — `.sh`, `.ps1`,
+ * `.py`, `.rb`, `.yml`, a Dockerfile, a Makefile, an unknown one — is treated
+ * as able to run the command, so the exclusion below fails closed.
+ */
+const SHELL_INERT_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+
+/**
+ * Evidence that a file can hand text to a shell. If ANY of this appears, the
+ * file is not inert and the shell signatures apply in full.
+ */
+const PROCESS_EXECUTION_TOKENS =
+  /(?:child_process|execSync|execFileSync|spawnSync|\bexecFile\s*\(|\bspawn\s*\(|\bexec\s*\(|\bshelljs\b|\bzx\b|Bun\.\$|Deno\.Command|Start-Process|\bsubprocess\b|os\.system|Process\.Start)/;
+
+/**
+ * True when shell command TEXT in this file cannot reach a shell.
+ *
+ * Fails closed twice over: an unknown or absent path is never inert, and any
+ * extension outside the closed list above is never inert. The only way to hide
+ * a real command here is to run it from a `.ts`/`.js` family file with no
+ * execution token anywhere in it, which requires an indirection through another
+ * module — the limit `AGENTS.md` already discloses.
+ */
+export function shellTextIsInert(path, text) {
+  if (typeof path !== 'string' || path.length === 0) return false;
+  const p = normalizePath(path).toLowerCase();
+  if (!SHELL_INERT_EXTENSIONS.some((ext) => p.endsWith(ext))) return false;
+  return !PROCESS_EXECUTION_TOKENS.test(text);
+}
+
+/**
  * Detect the capabilities present in a blob of source text.
  *
  * A signature may carry a `pattern`, a `detect(text)` analyzer, or both; either
@@ -623,13 +755,20 @@ export const CAPABILITY_SIGNATURES = [
  * decidable by one regex over raw text — filesystem deletion depends on what a
  * module binding RESOLVES to, which needs a second pass.
  *
+ * `path` is OPTIONAL and only ever used to WITHHOLD a signature that matches
+ * shell command text in a file that cannot run one. Omitting it applies every
+ * signature, so a caller that has no path loses no coverage.
+ *
  * @param {string} text
+ * @param {string} [path]
  * @returns {Array<{name:string, tier:string, note:string}>}
  */
-export function detectCapabilities(text) {
+export function detectCapabilities(text, path) {
   if (typeof text !== 'string' || text.length === 0) return [];
+  const inertShell = shellTextIsInert(path, text);
   const found = [];
   for (const sig of CAPABILITY_SIGNATURES) {
+    if (sig.shellContext && inertShell) continue;
     const matched = (sig.pattern && sig.pattern.test(text)) || (sig.detect && sig.detect(text));
     if (matched) {
       found.push({ name: sig.name, tier: sig.tier, note: sig.note });

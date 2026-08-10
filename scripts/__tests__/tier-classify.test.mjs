@@ -673,3 +673,115 @@ describe('versions are scanned separately, never concatenated', () => {
     expect(result.tier).not.toBe('T0');
   });
 });
+
+/**
+ * The two round-10 behaviours a case table cannot express, because both are
+ * about what a CHANGE did rather than what one file contains. Each spawns real
+ * git processes against a throwaway repository, so both carry an explicit
+ * timeout well above the 5s default (this suite runs fully parallel on Windows
+ * across ~25 worktrees, and a gate suite that goes red under load is a gate
+ * people stop believing).
+ */
+describe('entry points agree, and a new call path escalates', () => {
+  const CLASSIFIER = ['scripts/tier-classify.mjs'];
+  const DANGEROUS = "import { rm } from 'node:fs/promises';\nexport const purge = (d) => rm(d, { recursive: true });\n";
+
+  /** A throwaway repo carrying a real copy of the classifier. */
+  function makeRepo(label) {
+    const root = mkdtempSync(join(tmpdir(), `next-bar-tier-${label}-`));
+    const git = (...args) => execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    git('init', '-q', '-b', 'main', '.');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), '{"name":"probe"}\n');
+    for (const f of CLASSIFIER) writeFileSync(join(root, f), readFileSync(join(REPO_ROOT, f), 'utf8'));
+    for (const f of ['tier-classify-core.mjs', 'tier-capabilities.mjs', 'tier-glob.mjs', 'changed-paths-core.mjs']) {
+      writeFileSync(join(root, 'scripts', 'lib', f), readFileSync(join(REPO_ROOT, 'scripts', 'lib', f), 'utf8'));
+    }
+    const run = (args) =>
+      JSON.parse(
+        execFileSync('node', ['scripts/tier-classify.mjs', ...args, '--json'], {
+          cwd: root,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+          input: '',
+        }),
+      );
+    return { root, git, run };
+  }
+
+  it('grades a deleted-then-recreated path the same through stdin and --changed', () => {
+    // Reproduced by two lanes: the on-disk test alone did not call this a
+    // deletion, because the path exists again — so stdin graded the harmless
+    // replacement (T1) while --changed recovered the dangerous version (T0).
+    const { root, git, run } = makeRepo('divergence');
+    try {
+      writeFileSync(join(root, 'scripts', 'recreate.mjs'), DANGEROUS);
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      git('checkout', '-q', '-b', 'feature');
+      git('rm', '-q', 'scripts/recreate.mjs');
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      writeFileSync(join(root, 'scripts', 'recreate.mjs'), 'export const noop = () => {};\n');
+
+      const changed = run(['--changed', '--base', 'main']);
+      const piped = JSON.parse(
+        execFileSync('node', ['scripts/tier-classify.mjs', '--base', 'main', '--json'], {
+          cwd: root,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+          input: 'scripts/recreate.mjs\n',
+        }),
+      );
+      const tierOf = (r) => r.perPath.find((e) => e.path === 'scripts/recreate.mjs')?.tier;
+      expect(tierOf(changed)).toBe('T0');
+      expect(tierOf(piped)).toBe(tierOf(changed));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('escalates a NEWLY added import of a T0 file but not an existing one', () => {
+    // The architecture lane's finding: wiring an existing destructive primitive
+    // into a new call path leaves no risky token in the file that did it.
+    // Unioning EVERY imported file's capabilities was measured first and
+    // escalates ordinary UI, which criterion 11 forbids — so only what the
+    // change ADDED counts, and both halves are pinned here.
+    const { root, git, run } = makeRepo('newimport');
+    try {
+      mkdirSync(join(root, 'src', 'lib'), { recursive: true });
+      mkdirSync(join(root, 'src', 'components'), { recursive: true });
+      writeFileSync(join(root, 'src', 'lib', 'purge.ts'), DANGEROUS);
+      writeFileSync(join(root, 'src', 'lib', 'caller.ts'), 'export function handler() { return 1; }\n');
+      writeFileSync(
+        join(root, 'src', 'components', 'Btn.tsx'),
+        "import { purge } from '../lib/purge';\nexport const Btn = () => <button className='a' onClick={purge} />;\n",
+      );
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+
+      git('checkout', '-q', '-b', 'feature');
+      writeFileSync(
+        join(root, 'src', 'lib', 'caller.ts'),
+        "import { purge } from './purge';\nexport function handler() { return purge('/var/data'); }\n",
+      );
+      // Cosmetic edit only; the T0 import was already there.
+      writeFileSync(
+        join(root, 'src', 'components', 'Btn.tsx'),
+        "import { purge } from '../lib/purge';\nexport const Btn = () => <button className='b' onClick={purge} />;\n",
+      );
+      git('add', '-A');
+      git('commit', '-qm', 'feature');
+
+      const result = run(['--changed', '--base', 'main']);
+      const at = (p) => result.perPath.find((e) => e.path === p);
+      expect(at('src/lib/caller.ts').tier).toBe('T0');
+      expect(at('src/lib/caller.ts').reasons.join(' ')).toMatch(/newly imports T0 file/);
+      expect(at('src/components/Btn.tsx').tier).toBe('T1');
+      expect(at('src/components/Btn.tsx').reasons.join(' ')).not.toMatch(/newly imports/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});

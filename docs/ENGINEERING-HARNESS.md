@@ -17,10 +17,11 @@ whole point, so the local gate and the CI gate cannot drift apart.
 | Command | Runs | Use it when |
 |---|---|---|
 | `npm run verify:changed` | typecheck → unit tests → tier classification of **changed** paths | While working. The fast loop. |
-| `npm run verify:full` | check-env → typecheck → unit tests → production build → tier validation | Before handing work off for review. |
+| `npm run verify:full` | check-env → typecheck → unit tests → production build → tier validation → tier sweep | Before handing work off for review. |
 | `npm run test:e2e:gate` | Playwright against iPhone 13 + Pixel 7 | Before shipping anything interactive. |
 | `npm run tier-changed` | Classifies what you changed | To find out how much process a change needs. |
-| `npm run tier-validate` | Checks every tier-map rule against every tracked file | After editing `.claude/tier-map.json`. |
+| `npm run tier-validate` | Checks every tier-map **rule** against every tracked file | After editing `.claude/tier-map.json`. |
+| `npm run tier-sweep` | Classifies every tracked **file** and prints the T0/T1/T2 distribution | To see whether a signature change re-tiered the repository. |
 | `npm run tier-redproof` | Runs the adversarial cases against the **old** classifier | To prove a gate test is not coverage theater. |
 | `npm run check-env` | Validates environment variable shape | Standalone; also the first step of `verify:full`. |
 
@@ -63,7 +64,7 @@ The classifier is `scripts/tier-classify.mjs`. It has **zero runtime
 dependencies** (Node built-ins only), so it *can* run before `npm ci` and
 cannot be disabled by a dependency resolution failure. In the current CI
 workflow the tier classification step runs after `npm ci`, and `tier-validate`
-runs last inside `verify:full`.
+and `tier-sweep` run last inside `verify:full`.
 
 ### Capability-based, not path-based
 
@@ -115,8 +116,11 @@ what stops a codegen storm from paging anyone.
 runbook that *quotes* `delete from auth.users` is not treated as able to run
 it. This was measured: scanning prose as if it were code put 15 real
 documentation files at T0. The deliberate exception is agent policy —
-`AGENTS.md`, `CLAUDE.md`, `.claude/**` — which is floored by path, because
-instructions an agent follows genuinely can cause action.
+`AGENTS.md` and `CLAUDE.md` at any depth, the other well-known agent
+instruction filenames, and everything under `.claude/`, `.cursor/` and
+`.windsurf/` — which is floored by ROLE, because instructions an agent follows
+genuinely can cause action. See "What this deliberately costs" for why the role
+list is a list of files rather than a scan of prose.
 
 **Ambiguity fails closed.** If the classifier cannot establish that a change
 lacks a high-risk capability — the file is unreadable, or binary, and is not
@@ -141,8 +145,9 @@ fails closed at T0.
 
 ### What this deliberately costs
 
-Two accepted trade-offs, recorded so that the first time one fires it reads as
-policy rather than as a bug to be worked around:
+Accepted trade-offs, recorded so that the first time one fires it reads as
+policy rather than as a bug to be worked around. Each one below was reached by
+MEASURING the alternative against this repository, not by preference:
 
 - **Importing a deletion function counts, even without a call.** A module that
   names `rm` or `unlink` in its import list is floored T0 whether or not a call
@@ -153,13 +158,40 @@ policy rather than as a bug to be worked around:
   test-file exemption; a carve-out by path is itself a laundering vector, which
   is the reason this design does not classify by path in the first place.
 - **The analyzer resolves bindings, not values.** It follows what a module
-  specifier was bound to — aliases, destructuring, namespaces, defaults — and
-  stops there. `const nuke = fsp.rm` is caught because the member is
-  *referenced*; a deletion function passed through a parameter, stored in an
-  object, or reached via a computed specifier is not. Chasing those means
-  writing a JavaScript engine inside a zero-dependency gate that must run before
-  `npm ci`. The stopping point is deliberate; treat the classifier as a floor,
-  and raise the tier yourself when you know better.
+  specifier was bound to and stops there. Binding resolution is broader than it
+  looks and is meant to cover *ordinary code*, not just the tidy form: aliases,
+  destructuring, namespaces and defaults, `import`/`require`/`await import`,
+  assignment without a declaration keyword (`fsp = require('fs/promises')`), a
+  conditional or `try`/`catch` load, a parenthesized `await import`, and the
+  parameter of a `.then()` continuation. `const nuke = fsp.rm` is caught because
+  the member is *referenced*. A **computed** module specifier
+  (`require(mod)`) cannot be resolved by a text scan at all, so it fails closed:
+  a dynamic specifier alongside any deletion name is reported as capability.
+
+  A deletion function passed through a parameter or stored in an object is still
+  not followed. Chasing those means writing a JavaScript engine inside a
+  zero-dependency gate that must run before `npm ci`. The stopping point is
+  deliberate; treat the classifier as a floor, and raise the tier yourself when
+  you know better.
+
+- **A newly added import of a T0 file escalates the importer.** Capability
+  resolution stops at one module's own bindings, so calling a local wrapper —
+  `purgeAll()`, a command registry, a barrel re-export — leaves no risky token in
+  the file that introduced the call, and wiring an existing destructive primitive
+  into a new call path graded T1.
+
+  Only what the change **added** counts, and that boundary was chosen from a
+  measurement rather than taste. Unioning the capabilities of *every* imported
+  file promotes 15 files to T0 here, among them
+  `src/components/ShareNightButton.tsx`, `src/hooks/useRatings.ts` and
+  `src/app/settings/page.tsx` — so restyling a button would summon the
+  five-family panel, which acceptance criterion 11 forbids and which is exactly
+  the alert fatigue this design exists to avoid. Keying on the added import
+  escalates the change that creates the call path and leaves untouched the file
+  that has always had it. It runs in `--changed` mode only, because "added" has
+  no meaning in a sweep, and if git cannot produce a file's added lines the whole
+  file is treated as added — escalating, never lowering, and reported as a
+  warning rather than done silently.
 - **A commented-out deletion import counts as capability.** There is no comment
   suppression at all, and that is a deliberate, measured decision rather than an
   oversight.
@@ -190,6 +222,47 @@ policy rather than as a bug to be worked around:
   $path` *invokes* the cmdlet and the exclusion suppressed it. Every exclusion
   added to that branch has produced a fail-open; over-escalation is the
   direction this gate is allowed to be wrong in.
+
+- **Shell command text only counts where a shell can be reached.** Two reviewers
+  independently reproduced `export const Help = () => <code>rm cache.db</code>`
+  and `export const tip = "Run del /f cache.db"` flooring ordinary React files at
+  T0.
+
+  Inside `<code>` the bytes are *identical* to a real command line, so no rule
+  reading the match or its surroundings can separate them — and the obvious
+  near-misses are worse than the disease. A line-position rule would have missed
+  `execSync('rm -rf ' + dir)` and `then rm -rf "$dir"`; stripping JSX text and
+  template literals first is source rewriting, the exact class that removed
+  comment suppression from this module.
+
+  What genuinely separates them is the **file**: a `.tsx` cannot execute a string
+  it merely renders. So the shell signatures are withheld only from a closed list
+  of JavaScript/TypeScript extensions, and only when the file contains no
+  process-execution token (`child_process`, `execSync`, `spawn(`, `zx`,
+  `subprocess`, `Start-Process`, and the rest). Every other extension — `.sh`,
+  `.ps1`, `.py`, `.yml`, a Dockerfile, an unknown one — and every file with no
+  path supplied is treated as able to run the command. The exclusion therefore
+  fails closed twice over, and the only way past it is to reach a shell from a
+  `.ts` file that names no execution API at all.
+
+- **Instruction files are policy by ROLE, and the role list is not two names
+  long.** `AGENTS.md` and `CLAUDE.md` at any depth are T0, and so are
+  `AGENT.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.clinerules`,
+  `.github/copilot-instructions.md`, and everything under `.claude/`, `.cursor/`
+  and `.windsurf/`. Most of those paths do not exist here; they are **dormant on
+  purpose**, so the instruction file of the next agent tool someone adopts is
+  already covered rather than classifying as inert documentation. `tier-validate`
+  checks the tier *map* for dead rules, not these baked floors, so a dormant
+  floor costs nothing.
+
+  What this still does not catch is a section of an ordinary README addressed to
+  coding agents. The obvious remedy — floor any markdown whose prose contains an
+  agent-directed imperative — was **measured against this repository's 44 tracked
+  markdown files before being rejected**: it floors four genuine documents (a
+  blueprint, a continuation note, a night log, a work ledger) that merely
+  *describe* agent work. That is the same failure that once put 15 documentation
+  files at T0. Put instructions an agent must follow in a file whose role says
+  so.
 
 ### The tier map can escalate, never de-escalate
 
@@ -251,8 +324,9 @@ pretending to pass.
 - **verify** — first classifies the tier of the change itself
   (`node scripts/tier-classify.mjs --changed --base <ref>`), then runs
   `npm run verify:full`. The classification step is separate because
-  `verify:full` validates the tier *map*; it never looks at the diff in front
-  of it. The base is the target branch on a pull request and the event's
+  `verify:full` validates the tier *map* and sweeps every tracked file; neither
+  looks at the diff in front of it, and only `--changed` can see what a change
+  ADDED. The base is the target branch on a pull request and the event's
   before-SHA on a push, falling back to `HEAD~1` when that ref is unusable
   (new branch or rewritten history).
 - **e2e** — `npm run test:e2e:gate`, with the Playwright report uploaded as an

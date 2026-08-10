@@ -23,7 +23,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -162,6 +162,24 @@ const ROUND_PROOFS = [
       'capitalised Git rm is still excluded',
       'an unlink on a graph is not a filesystem delete',
       'an unreadable version among readable ones fails closed',
+    ]),
+  },
+  {
+    label: 'round-10',
+    rev: 'd631d2f',
+    cases: new Set([
+      'assignment-form require binds a deletion namespace',
+      'an optional dependency loaded in try/catch is still capability',
+      'a conditionally required module is still capability',
+      'a parenthesized await import binds a deletion namespace',
+      'destructuring assignment without a keyword is still capability',
+      'a then-continuation on a dynamic import is capability',
+      'a dynamic module specifier fails closed',
+      'argv-form spawn of rm is a deletion',
+      'a component rendering a shell command is not a deletion',
+      'help copy quoting a Windows delete is not a deletion',
+      'a Cursor rules file is agent policy',
+      'a Copilot instructions file is agent policy',
     ]),
   },
   {
@@ -392,8 +410,142 @@ if (oldMaterialized) {
 }
 rmSync(fixture, { recursive: true, force: true });
 
+// ---------------------------------------------------------------------------
+// ROUND-10 PIPELINE PROOF. Two behaviours are about what a CHANGE did, not what
+// one file contains, so neither can be expressed as a case-table entry and
+// neither is covered by the staged proofs above. They are proved the same way:
+// run the real CLI from the pre-change revision against a throwaway repository,
+// then the current one, and require them to disagree.
+// ---------------------------------------------------------------------------
+
+const PIPELINE_PROOF_REV = 'd631d2f';
+const CLI_SOURCES = [
+  'scripts/tier-classify.mjs',
+  'scripts/lib/tier-classify-core.mjs',
+  'scripts/lib/tier-capabilities.mjs',
+  'scripts/lib/tier-glob.mjs',
+  'scripts/lib/changed-paths-core.mjs',
+];
+const PURGE_SOURCE = "import { rm } from 'node:fs/promises';\nexport const purge = (d) => rm(d, { recursive: true });\n";
+
+/** A throwaway repo holding the classifier CLI as it stood at `rev`. */
+function materializeCli(rev, root) {
+  try {
+    for (const source of CLI_SOURCES) {
+      const text =
+        rev === null
+          ? readFileSync(join(REPO_ROOT, source), 'utf8')
+          : execFileSync('git', ['show', `${rev}:${source}`], {
+              cwd: REPO_ROOT,
+              encoding: 'utf8',
+              stdio: ['ignore', 'pipe', 'pipe'],
+              maxBuffer: 16 * 1024 * 1024,
+            });
+      mkdirSync(join(root, source.slice(0, source.lastIndexOf('/'))), { recursive: true });
+      writeFileSync(join(root, source), text);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runCli(root, args, stdin = '') {
+  return JSON.parse(
+    execFileSync('node', ['scripts/tier-classify.mjs', ...args, '--json'], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      input: stdin,
+      maxBuffer: 32 * 1024 * 1024,
+    }),
+  );
+}
+
+/** Build the fixture repo; the classifier itself is written in per revision. */
+function buildPipelineFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'next-bar-tier-pipeproof-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  mkdirSync(join(root, 'src', 'lib'), { recursive: true });
+  mkdirSync(join(root, 'src', 'components'), { recursive: true });
+  mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), '{"name":"redproof"}\n');
+  writeFileSync(join(root, 'src', 'lib', 'purge.ts'), PURGE_SOURCE);
+  writeFileSync(join(root, 'src', 'lib', 'caller.ts'), 'export function handler() { return 1; }\n');
+  writeFileSync(join(root, 'scripts', 'recreate.mjs'), PURGE_SOURCE);
+  git('init', '-q', '-b', 'main', '.');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'test');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+  git('checkout', '-q', '-b', 'feature');
+  // (a) delete a dangerous script and re-create the path with benign content
+  git('rm', '-q', 'scripts/recreate.mjs');
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  writeFileSync(join(root, 'scripts', 'recreate.mjs'), 'export const noop = () => {};\n');
+  // (b) wire an existing destructive primitive into a new call path
+  writeFileSync(
+    join(root, 'src', 'lib', 'caller.ts'),
+    "import { purge } from './purge';\nexport function handler() { return purge('/var/data'); }\n",
+  );
+  git('add', 'src/lib/caller.ts');
+  git('commit', '-qm', 'wire');
+  return root;
+}
+
+/** The two answers this proof compares, from one fixture and one CLI. */
+function pipelineAnswers(root) {
+  const piped = runCli(root, ['--base', 'main'], 'scripts/recreate.mjs\n');
+  const changed = runCli(root, ['--changed', '--base', 'main']);
+  const tierIn = (result, path) => result.perPath.find((e) => e.path === path)?.tier ?? '(absent)';
+  return {
+    stdinRecreated: tierIn(piped, 'scripts/recreate.mjs'),
+    changedRecreated: tierIn(changed, 'scripts/recreate.mjs'),
+    newCallPath: tierIn(changed, 'src/lib/caller.ts'),
+  };
+}
+
+let pipelineProofVerdict = 'SKIPPED';
+const beforeRoot = buildPipelineFixture();
+const afterRoot = buildPipelineFixture();
+try {
+  if (materializeCli(PIPELINE_PROOF_REV, beforeRoot) && materializeCli(null, afterRoot)) {
+    const before = pipelineAnswers(beforeRoot);
+    const after = pipelineAnswers(afterRoot);
+    process.stdout.write(
+      `\nRound-10 pipeline proof, real CLI over a throwaway repository\n\n` +
+        `  deleted-then-recreated via stdin   before (${PIPELINE_PROOF_REV}): ${before.stdinRecreated}` +
+        `   after: ${after.stdinRecreated}   (--changed says ${after.changedRecreated})\n` +
+        `  newly added import of a T0 file    before (${PIPELINE_PROOF_REV}): ${before.newCallPath}` +
+        `   after: ${after.newCallPath}\n`,
+    );
+    const improved =
+      before.stdinRecreated === 'T1' &&
+      before.changedRecreated === 'T0' &&
+      after.stdinRecreated === 'T0' &&
+      after.changedRecreated === 'T0' &&
+      before.newCallPath === 'T1' &&
+      after.newCallPath === 'T0';
+    if (!improved) {
+      process.stderr.write(
+        '\nred-proof FAILED: before this round stdin must under-grade a deleted-then-recreated path ' +
+          'that --changed grades T0, and a newly added import of a T0 file must not escalate. After ' +
+          'it, both entry points must agree and the new call path must be T0. They do not, so one of ' +
+          'these fixes is either absent or untested.\n',
+      );
+      process.exit(1);
+    }
+    pipelineProofVerdict = 'holds';
+    stagesProved += 1;
+  }
+} finally {
+  rmSync(beforeRoot, { recursive: true, force: true });
+  rmSync(afterRoot, { recursive: true, force: true });
+}
+
 process.stdout.write(
   `\n  deletion-grading proof: ${deletionProofVerdict}\n` +
+    `  round-10 pipeline proof: ${pipelineProofVerdict}\n` +
     `\nRED proof holds: ${stagesProved} staged proof(s) passed; every new-capability case fails before its change.\n`,
 );
 process.exit(0);

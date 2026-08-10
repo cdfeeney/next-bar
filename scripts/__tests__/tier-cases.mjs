@@ -742,6 +742,121 @@ export const TIER_CASES = [
     escalated: false,
     why: 'the command-position check did not exclude a leading dot',
   },
+
+  // --------------------------------------------------------------- Round-10
+  // Five lanes agreed the binding resolution stopped at the DECLARATION
+  // keyword. Every shape below is ordinary JavaScript, not an evasion, and
+  // every one of them graded T1 before this round.
+  {
+    name: 'assignment-form require binds a deletion namespace',
+    path: 'scripts/r10-assign.mjs',
+    contents: "let fsp;\nfsp = require('fs/promises');\nawait fsp.unlink(target);\n",
+    expect: 'T0',
+    why: 'the require pattern was anchored to const/let/var, so a hoisted declaration bound nothing',
+  },
+  {
+    name: 'an optional dependency loaded in try/catch is still capability',
+    path: 'scripts/r10-optional.mjs',
+    contents: "let fse;\ntry { fse = require('fs-extra'); } catch {}\nawait fse.remove('uploads');\n",
+    expect: 'T0',
+    why: 'the standard optional-dependency idiom has no declaration on the assignment',
+  },
+  {
+    name: 'a conditionally required module is still capability',
+    path: 'scripts/r10-ternary.mjs',
+    contents: "const fse = enabled ? require('fs-extra') : shim;\nawait fse.remove(target);\n",
+    expect: 'T0',
+    why: 'an expression between = and the call defeated the require pattern',
+  },
+  {
+    name: 'a parenthesized await import binds a deletion namespace',
+    path: 'scripts/r10-paren.mjs',
+    contents: "const fsp = (await import('fs/promises'));\nawait fsp.unlink(target);\n",
+    expect: 'T0',
+    why: 'the parenthesis sat between = and the import call',
+  },
+  {
+    name: 'destructuring assignment without a keyword is still capability',
+    path: 'scripts/r10-noKeyword.mjs',
+    contents: "let unlink;\n({ unlink } = require('fs'));\nunlink(p);\n",
+    expect: 'T0',
+    why: 'a destructuring assignment to an existing binding had no declaration keyword',
+  },
+  {
+    name: 'a then-continuation on a dynamic import is capability',
+    path: 'scripts/r10-then.mjs',
+    contents: "import('fs/promises').then(({ unlink }) => unlink(target));\n",
+    expect: 'T0',
+    why: 'the callback parameter is the binding, and no pattern read it',
+  },
+  {
+    name: 'a dynamic module specifier fails closed',
+    path: 'scripts/r10-computed.mjs',
+    contents: "const mod = 'node:fs/promises';\nconst { rm } = require(mod);\nrm(target);\n",
+    expect: 'T0',
+    why: 'a non-literal specifier cannot be resolved by a text scan, so it must over-escalate',
+  },
+  {
+    name: 'argv-form spawn of rm is a deletion',
+    path: 'scripts/r10-spawn.mjs',
+    contents: "import { spawn } from 'child_process';\nspawn('rm', ['-rf', dir]);\n",
+    expect: 'T0',
+    why: 'every shell pattern required whitespace after the command word, and here the next byte is a quote',
+  },
+  // The other direction: shell command TEXT in a file that cannot run one.
+  {
+    name: 'a component rendering a shell command is not a deletion',
+    path: 'src/components/R10Help.tsx',
+    contents: 'export const Help = () => <code>rm cache.db</code>;\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'the bytes are identical to a real command line, so only the file can tell them apart',
+  },
+  {
+    name: 'help copy quoting a Windows delete is not a deletion',
+    path: 'src/lib/r10-tips.ts',
+    contents: 'export const tip = "Run del /f cache.db";\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'a .ts file cannot execute a string it merely exports',
+  },
+  {
+    name: 'a shell command in a file that spawns processes still floors',
+    path: 'src/lib/r10-run.ts',
+    contents: "import { execSync } from 'node:child_process';\nexecSync('rm -rf ' + dir);\n",
+    expect: 'T0',
+    why: 'the shell-context gate must never withhold from a file that can reach a shell',
+  },
+  {
+    name: 'a shell command in a workflow file still floors',
+    path: '.github/workflows/r10.yml',
+    contents: 'jobs:\n  a:\n    steps:\n      - run: rm -rf dist\n',
+    expect: 'T0',
+    why: 'only a closed list of JS/TS extensions is ever treated as unable to run a command',
+  },
+  // Agent policy is a ROLE, and the role list is not two names long.
+  {
+    name: 'a Cursor rules file is agent policy',
+    path: '.cursorrules',
+    contents: 'You must never push to main.\n',
+    expect: 'T0',
+    why: 'the instruction file of the next agent tool adopted is executable policy',
+  },
+  {
+    name: 'a Copilot instructions file is agent policy',
+    path: '.github/copilot-instructions.md',
+    contents: 'Always run npm run verify:full before committing.\n',
+    expect: 'T0',
+    why: 'markdown is inert by default, and agent instructions are the exception',
+  },
+  {
+    name: 'a work ledger describing agent work stays inert',
+    path: 'docs/R10-LEDGER.md',
+    contents: 'The agent was told it must always run verify:full and never push to main.\n',
+    expect: 'T2',
+    escalated: false,
+    why: 'flooring prose that DESCRIBES agent rules once put 15 real documents at T0',
+  },
 ];
 
 /**

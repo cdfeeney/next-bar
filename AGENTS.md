@@ -103,6 +103,14 @@ no signature matches — SQL assembled at runtime, a delete behind an
 indirection — will not be caught. Treat the classifier as a floor, not a proof,
 and raise the tier yourself when you know better.
 
+One part of that gap is closed and it is worth knowing which. **Adding an import
+of a T0 file escalates the importing file to T0**, because wiring an existing
+destructive primitive into a new call path really does change what the code can
+do, and the file that does it holds no risky token of its own. Only a *newly
+added* import counts: a file that has always imported a privileged module keeps
+its tier when you edit it for unrelated reasons, so ordinary UI does not
+escalate. Calling a primitive you already imported is still invisible.
+
 If the classifier cannot establish that a change lacks a high-risk capability,
 it returns **T0 with `escalated: true`**.
 
@@ -182,9 +190,18 @@ runs these same scripts, and an inline copy silently drifts from the gate.
 | Command | What it runs |
 |---------|--------------|
 | `npm run verify:changed` | Fast gate: typecheck + unit tests + tier classification of changed paths |
-| `npm run verify:full` | check-env + typecheck + unit tests + production build + tier validation |
+| `npm run verify:full` | check-env + typecheck + unit tests + production build + tier validation + a tier sweep of every tracked file |
 | `npm run test:e2e:gate` | The canonical browser gate |
 | `npm run tier-changed` / `tier-validate` | Tier classification and tier-map validation |
+| `npm run tier-sweep` | Classifies **every tracked file** and prints the T0/T1/T2 distribution |
+
+`tier-validate` and `tier-sweep` answer different questions and neither replaces
+the other. Validation checks the tier **map** for rules that match no file; the
+sweep classifies the **files**. Only the sweep can show that a signature change
+re-tiered the repository, and its T0 count is the growth signal to watch: if it
+climbs steadily, the panel is getting more expensive and the pressure to weaken
+the gate is rising. Investigate the cause before anyone proposes lowering a
+floor.
 
 **E2E is deliberately excluded from `verify:full`.** Roughly 25 worktrees cannot
 run concurrent Playwright against port 3000, and making every doc-only change

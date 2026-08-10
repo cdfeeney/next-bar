@@ -220,7 +220,7 @@ function mapTierFor(path, compiledRules) {
  *   revision rather than the working tree.
  */
 export function classifyOnePath(rawPath, map, opts = {}) {
-  const { repoRoot = REPO_ROOT, contents, deletedPaths } = opts;
+  const { repoRoot = REPO_ROOT, contents, deletedPaths, newRiskyImports } = opts;
   const path = normalizePath(rawPath);
   const reasons = [];
   const isDeleted = toPathSet(deletedPaths).has(path);
@@ -259,7 +259,10 @@ export function classifyOnePath(rawPath, map, opts = {}) {
     // version can create or conceal a capability in another.
     const byName = new Map();
     for (const text of read.texts) {
-      for (const cap of detectCapabilities(text)) {
+      // The path goes in so a signature that matches shell COMMAND TEXT can be
+      // withheld from a file that cannot run one; see `shellTextIsInert`. Every
+      // other signature is path-independent.
+      for (const cap of detectCapabilities(text, path)) {
         if (!byName.has(cap.name)) byName.set(cap.name, cap);
       }
     }
@@ -301,6 +304,27 @@ export function classifyOnePath(rawPath, map, opts = {}) {
   if (baked) {
     tier = maxTier(tier, baked.tier);
     reasons.push(`baked-in floor ${baked.capability} (${baked.tier}) — not lowerable by the tier map`);
+  }
+
+  // 2b. A NEWLY ADDED import of a T0 file. Capability resolution stops at this
+  // module's own bindings, so calling a local wrapper — `purgeAll()`, a command
+  // registry, a re-export — leaves no risky token in the file that introduced
+  // the call. Wiring an existing destructive primitive into a new call path is
+  // a real change in what the code can do, and it graded T1.
+  //
+  // Only ADDED imports count, and that is the whole point of the design. See
+  // `collectAddedText`: unioning every imported file's capabilities was measured
+  // first and escalates ordinary UI that has always imported a server module,
+  // which acceptance criterion 11 forbids. This computes only what the change
+  // introduced, so it never re-tiers a file for an import it already had.
+  const riskyImports = newRiskyImports ? newRiskyImports[path] : undefined;
+  if (Array.isArray(riskyImports) && riskyImports.length > 0) {
+    tier = maxTier(tier, 'T0');
+    reasons.push(
+      `newly imports T0 file(s) ${riskyImports.slice(0, 3).join(', ')}${
+        riskyImports.length > 3 ? ` (+${riskyImports.length - 3} more)` : ''
+      } — a new call path to capability this file does not itself name`,
+    );
   }
 
   // 3. The project tier map may only escalate (the result is a maximum).

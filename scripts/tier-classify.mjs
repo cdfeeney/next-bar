@@ -22,14 +22,16 @@
  * Zero runtime dependencies — Node built-ins only.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { classifyPaths, loadTierMap, validateTierMap, REPO_ROOT } from './lib/tier-classify-core.mjs';
 import {
+  collectAddedText,
   collectChangedPaths,
   recoverDeletedContents,
   refExists,
+  resolveLocalImports,
   resolveRecoveryRevisions,
 } from './lib/changed-paths-core.mjs';
 import { normalizePath } from './lib/tier-glob.mjs';
@@ -102,10 +104,79 @@ function printHuman(result, source) {
   return lines.join('\n');
 }
 
+/** Source files whose imports are worth resolving. */
+const IMPORTABLE_SOURCE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/i;
+
+/**
+ * For each changed source file, the T0 repository files it NEWLY imports.
+ *
+ * Deleted paths are excluded: a file that no longer exists cannot introduce a
+ * call path. Targets are classified once, without this option, so the escalation
+ * is exactly one hop deep and cannot recurse.
+ *
+ * FAILS CLOSED. If git cannot produce a file's added text, the whole current
+ * file is treated as added, which can only escalate — never the reverse — and
+ * the substitution is reported as a warning rather than made silently.
+ */
+function computeNewRiskyImports(paths, deletedPaths, base, map) {
+  const importWarnings = [];
+  const deleted = new Set(deletedPaths.map((p) => normalizePath(p)));
+  const candidates = paths.map((p) => normalizePath(p)).filter((p) => IMPORTABLE_SOURCE.test(p) && !deleted.has(p));
+  if (candidates.length === 0) return { newRiskyImports: {}, importWarnings };
+
+  const { added, failures } = collectAddedText(candidates, { repoRoot: REPO_ROOT, base });
+  if (failures.length > 0) {
+    importWarnings.push(
+      `could not read added lines for ${failures.length} path(s); their whole content was treated as added ` +
+        `(escalating, never lowering): ${failures.slice(0, 3).join('; ')}`,
+    );
+  }
+
+  const importsByPath = {};
+  const allTargets = new Set();
+  for (const path of candidates) {
+    let text = added[path] ?? '';
+    if (text.length === 0 && failures.length > 0) {
+      try {
+        text = readFileSync(join(REPO_ROOT, path), 'utf8');
+      } catch {
+        text = '';
+      }
+    }
+    const targets = resolveLocalImports(path, text, { repoRoot: REPO_ROOT });
+    if (targets.length > 0) {
+      importsByPath[path] = targets;
+      for (const t of targets) allTargets.add(t);
+    }
+  }
+  if (allTargets.size === 0) return { newRiskyImports: {}, importWarnings };
+
+  // One classification pass over the targets, WITHOUT `newRiskyImports`, so a
+  // target is graded on its own content and the escalation stops at one hop.
+  const targetTiers = new Map(
+    classifyPaths([...allTargets], map, { repoRoot: REPO_ROOT }).perPath.map((e) => [e.path, e.tier]),
+  );
+  const newRiskyImports = {};
+  for (const [path, targets] of Object.entries(importsByPath)) {
+    const risky = targets.filter((t) => targetTiers.get(normalizePath(t)) === 'T0');
+    if (risky.length > 0) newRiskyImports[path] = risky;
+  }
+  return { newRiskyImports, importWarnings };
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const asJson = argv.includes('--json');
   const validate = argv.includes('--validate');
+  // `--summary` classifies every path it is given and prints only the tier
+  // counts. It exists because acceptance criterion 8 requires `verify:full` to
+  // perform "classification of all tracked files", and `--validate` does NOT
+  // classify anything — it only reports tier-map rules that match no file. Two
+  // lanes reported that gap independently. Printing 3,866 per-file records in a
+  // gate is unreadable, so the sweep reports the distribution, which is also the
+  // growth signal the architecture lane asked for: a T0 count that climbs is
+  // visible in every full verification run.
+  const summary = argv.includes('--summary');
 
   const { map, source, error } = loadTierMap(REPO_ROOT);
   if (source === 'error') {
@@ -133,7 +204,9 @@ async function main() {
   let input;
   let deletedPaths = [];
   let base = null;
-  if (argv.includes('--changed')) {
+  let stdinDeletionWarning = null;
+  const changedMode = argv.includes('--changed');
+  if (changedMode) {
     const collected = collectChangedPaths({ base: requestedBase, repoRoot: REPO_ROOT });
     if (collected.failures.length > 0) {
       process.stderr.write('tier-classify: cannot determine the changed set — refusing to report a tier.\n');
@@ -152,11 +225,33 @@ async function main() {
     }
   } else {
     input = parsePaths(await readStdin());
-    // No `--name-status` evidence on this path, but git still holds the other
-    // half of it: a path that is absent from the working tree AND present in a
-    // reachable revision is an evidenced deletion. Anything else stays
-    // unrecognised and keeps failing closed.
-    deletedPaths = input.filter((p) => !existsSync(join(REPO_ROOT, normalizePath(p))));
+    // A path that is absent from the working tree AND present in a reachable
+    // revision is an evidenced deletion.
+    const absentFromDisk = input.filter((p) => !existsSync(join(REPO_ROOT, normalizePath(p))));
+    // THAT IS NOT ENOUGH ON ITS OWN, and the gap was reproduced by two lanes.
+    // Deleting a dangerous file and RE-CREATING the same path with harmless
+    // content leaves the path present on disk, so the on-disk test alone did not
+    // call it a deletion and it graded on the replacement: the identical change
+    // returned T0 through `--changed` and T1 here. A reviewer reproducing a CI
+    // result by piping paths in would have seen a number CI never produced, and
+    // in the quieter direction.
+    //
+    // So git's `D` records are consulted here too, exactly as `--changed` does,
+    // and the two sets are unioned. Collection failure is NOT silent: it degrades
+    // to the on-disk test and says so, because a fail-open that reports nothing
+    // is the failure mode this whole file exists to avoid.
+    let evidencedDeletions = [];
+    const collected = collectChangedPaths({ base: requestedBase, repoRoot: REPO_ROOT });
+    if (collected.failures.length > 0) {
+      stdinDeletionWarning =
+        'stdin mode could not read git deletion records, so a deleted-then-recreated path may be ' +
+        `graded on its replacement: ${collected.failures.join('; ')}`;
+      process.stderr.write(`tier-classify: ${stdinDeletionWarning}\n`);
+    } else {
+      const declared = new Set(input.map((p) => normalizePath(p)));
+      evidencedDeletions = collected.deleted.filter((p) => declared.has(normalizePath(p)));
+    }
+    deletedPaths = [...new Set([...absentFromDisk, ...evidencedDeletions])];
     // `--base` is honoured here too. Without this the stdin path searched only
     // HEAD while `--changed` searched HEAD and the base, so the SAME deletion
     // graded T1 through one entry point and an ambiguous T0 through the other —
@@ -206,7 +301,17 @@ async function main() {
   // ALL deleted paths are declared, not just the recovered ones, so an
   // unrecoverable deletion reports why it is unanalyzable instead of looking
   // like a file that mysteriously went missing.
-  const result = classifyPaths(input, map, { repoRoot: REPO_ROOT, contents, deletedPaths });
+  // A NEWLY ADDED import of a T0 file escalates the importer. This needs the
+  // diff, so it runs only in `--changed` mode — the mode the gate and CI use.
+  // `--summary` and stdin have no notion of "added", and reporting a
+  // distribution over every tracked file is not a gate decision.
+  const { newRiskyImports, importWarnings } = changedMode
+    ? computeNewRiskyImports(input, deletedPaths, base, map)
+    : { newRiskyImports: undefined, importWarnings: [] };
+
+  const result = classifyPaths(input, map, { repoRoot: REPO_ROOT, contents, deletedPaths, newRiskyImports });
+  for (const warning of importWarnings) result.warnings.push(warning);
+  if (stdinDeletionWarning) result.warnings.push(stdinDeletionWarning);
   if (recovered.length > 0) {
     result.warnings.push(
       `${recovered.length} deleted path(s) classified from pre-deletion content in the base revision`,
@@ -216,6 +321,22 @@ async function main() {
     result.warnings.push(
       `${unrecoverable.length} deleted path(s) had no recoverable pre-deletion content — still failing closed`,
     );
+  }
+  if (summary) {
+    const counts = { T0: 0, T1: 0, T2: 0 };
+    for (const entry of result.perPath) counts[entry.tier] += 1;
+    const ambiguous = result.perPath.filter((entry) => entry.ambiguous).length;
+    if (asJson) {
+      process.stdout.write(
+        `${JSON.stringify({ counts, ambiguous, fileCount: result.perPath.length, tierMapSource: source }, null, 2)}\n`,
+      );
+    } else {
+      process.stdout.write(
+        `tier-sweep: ${result.perPath.length} path(s) classified (tier-map source: ${source})\n` +
+          `  T0 ${counts.T0}   T1 ${counts.T1}   T2 ${counts.T2}   ambiguous ${ambiguous}\n`,
+      );
+    }
+    process.exit(0);
   }
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ ...result, tierMapSource: source }, null, 2)}\n`);

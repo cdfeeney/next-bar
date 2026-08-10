@@ -31,7 +31,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 
 import { REPO_ROOT } from './tier-classify-core.mjs';
 import { normalizePath } from './tier-glob.mjs';
@@ -402,4 +402,143 @@ export function recoverDeletedContents(paths, opts = {}) {
   }
 
   return { contents, recovered, unrecoverable };
+}
+
+/**
+ * Module specifiers that resolve to a file INSIDE this repository.
+ *
+ * Only two forms are followed, because only two can name a repository file
+ * without consulting the module resolver: a relative specifier and this
+ * project's `@/` alias for `src/`. A bare specifier is a dependency and is
+ * ignored — following those means resolving `node_modules`, which this gate
+ * cannot do before `npm ci`.
+ */
+const LOCAL_IMPORT_SPECIFIER =
+  /(?:\bfrom\s*['"]([^'"\n]+)['"]|\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)|\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\))/g;
+
+/** Extension-less specifiers are resolved against these, in order. */
+const IMPORT_RESOLUTION_SUFFIXES = [
+  '',
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '/index.ts',
+  '/index.tsx',
+  '/index.js',
+];
+
+/**
+ * Resolve the repository files that `text` imports, as seen from `fromPath`.
+ *
+ * Returns only paths that actually exist, so an unresolvable specifier
+ * contributes nothing. That is a deliberate fail-OPEN and it is bounded: this
+ * function exists to ADD an escalation, never to remove one, so failing to
+ * resolve a specifier can only leave the tier where it already was.
+ */
+export function resolveLocalImports(fromPath, text, opts = {}) {
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+  if (typeof text !== 'string' || text.length === 0) return [];
+  const from = normalizePath(fromPath);
+  const fromDir = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '';
+  const found = new Set();
+  for (const match of text.matchAll(LOCAL_IMPORT_SPECIFIER)) {
+    const spec = match[1] || match[2] || match[3];
+    if (!spec) continue;
+    let joined;
+    if (spec.startsWith('@/')) joined = normalizePath(`src/${spec.slice(2)}`);
+    else if (spec.startsWith('.')) joined = normalizePath(posix.normalize(`${fromDir}/${spec}`));
+    else continue;
+    if (joined.startsWith('..')) continue; // escapes the repository root
+    for (const suffix of IMPORT_RESOLUTION_SUFFIXES) {
+      const candidate = `${joined}${suffix}`;
+      if (candidate !== from && existsSync(join(repoRoot, candidate))) {
+        found.add(candidate);
+        break;
+      }
+    }
+  }
+  return [...found];
+}
+
+/**
+ * The text ADDED to each path by this change — working-tree edits plus
+ * `base...HEAD` — keyed by path. An untracked file counts entirely as added.
+ *
+ * WHY ADDED TEXT AND NOT THE WHOLE FILE. The architecture lane reported that
+ * capability reached through a local indirection is invisible: a changed file
+ * that calls a wrapper holds no risky token, so no floor fires. Unioning the
+ * capabilities of EVERY imported file answers that, and was measured against
+ * this repository first: it promotes 15 files to T0, among them ordinary UI
+ * (`src/components/ShareNightButton.tsx`, `src/hooks/useRatings.ts`,
+ * `src/app/settings/page.tsx`). Acceptance criterion 11 requires ordinary UI to
+ * stay T1 un-escalated, so restyling a button would have summoned the
+ * five-family panel — the alert fatigue this design exists to avoid.
+ *
+ * The risk the lane actually named is WIRING a destructive primitive into a new
+ * call path. That is an ADDED import, not the presence of an old one. So the
+ * escalation keys on what the change introduced: adding
+ * `import { purgeAll } from './purge'` escalates, while editing the CSS of a
+ * file that has imported a privileged module all along does not.
+ *
+ * Failure is reported, never swallowed: `failures` non-empty means the added
+ * text is incomplete for those paths and the caller must fail closed.
+ */
+export function collectAddedText(paths, opts = {}) {
+  const repoRoot = opts.repoRoot ?? REPO_ROOT;
+  const base = opts.base ?? null;
+  const added = {};
+  const failures = [];
+  const run = (args, label) => {
+    try {
+      return execFileSync('git', args, {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    } catch (err) {
+      failures.push(`git ${label} failed: ${(err && err.message ? err.message : String(err)).split('\n')[0]}`);
+      return null;
+    }
+  };
+  const addedLinesOf = (out) =>
+    String(out ?? '')
+      .split('\n')
+      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+      .map((line) => line.slice(1))
+      .join('\n');
+
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    const path = normalizePath(raw);
+    const chunks = [];
+    // `:(literal)` for the same reason as everywhere else here: this app's
+    // routes are literally named `[handle]`, and a pathspec would glob them.
+    const spec = `:(literal)${path}`;
+    const worktree = run(['diff', '--unified=0', 'HEAD', '--', spec], `diff HEAD -- ${path}`);
+    if (worktree !== null) chunks.push(addedLinesOf(worktree));
+    if (base) {
+      const committed = run(['diff', '--unified=0', `${base}...HEAD`, '--', spec], `diff ${base}...HEAD -- ${path}`);
+      if (committed !== null) chunks.push(addedLinesOf(committed));
+    }
+    // An untracked file has no diff against HEAD at all, so its whole content is
+    // new. Without this the newest files — exactly where a new call path is most
+    // likely — would contribute no added text.
+    const absolute = join(repoRoot, path);
+    if (existsSync(absolute)) {
+      const tracked = run(['ls-files', '--error-unmatch', '--', spec], `ls-files ${path}`);
+      if (tracked === null) {
+        failures.pop(); // an untracked path is an expected miss here, not a git failure
+        try {
+          chunks.push(readFileSync(absolute, 'utf8'));
+        } catch {
+          failures.push(`could not read untracked ${path}`);
+        }
+      }
+    }
+    added[path] = chunks.join('\n');
+  }
+  return { added, failures };
 }
