@@ -5,8 +5,10 @@ configuration inspected, no SQL executed. The frozen migration worktree was **no
 modified — every migration below was read with `git show 99ff7b3:<path>`, and
 `git -C nb-prod-migrations-0042 status` is empty at HEAD `99ff7b3`.
 
-**This packet is NOT approved. It requires fresh independent review and attended Production identity
-verification before any window is opened.**
+**This packet is NOT approved. Before any window is opened it requires attended Production identity
+verification and fresh independent review of whatever §14b's Current review state block names as the
+unreviewed delta.** *(The verdict is repeated here and at §14 by design. The review state itself is
+not: it lives only in that block, so this sentence cannot go stale.)*
 
 ## 1. The exact intended migration set
 
@@ -723,9 +725,21 @@ migration, Production deployment, or TestFlight modification is authorized by th
    today and is not governed by requirement 6's ordering by cost. **Its inventory of disproved claims
    comes from outside this document:** the review panel's recorded findings for each candidate — the
    harness receipts under goal `g-e82c72a8-023a-4b49-bcd1-2826556d5175` and the commit messages that
-   cite them. Take that external list, and for each disproved claim confirm this file states it
-   nowhere as live text and that every surviving frozen occurrence carries the marker described in
-   §14b. Record the result per claim.
+   cite them. Take that external list and, for each disproved claim, first confirm this file states
+   it **nowhere as live text**. If the claim survives nowhere at all — corrected in place, no frozen
+   copy left — that is the whole check and it passes; no corrections entry is owed for a claim the
+   document no longer makes. If it **does** survive anywhere in frozen narration, confirm two more
+   things: that §14b's corrections list has an entry for it **naming every surviving place**, and
+   that each of those places carries the adjacent marker described there. A claim that survives in
+   frozen text but is absent from the corrections list, or whose entry omits one of its places, is a
+   **failure** — that is exactly the case the first version of this check could not see. Record the
+   result per claim.
+
+   **What this depends on, stated plainly.** The inventory lives outside this file, so a reader
+   holding only this document cannot complete the check; they can verify the corrections list is
+   internally consistent and every marker is in place, which is strictly weaker. That is the price of
+   an inventory this document's own editing cannot quietly shorten, and it is the right trade — but a
+   reader without the panel record should treat completeness as *unverified*, not as passed.
 
    *The first version checked §14b's corrections list against itself, so it passed whenever the list
    was internally consistent but short — and it was short: a paraphrase, "Round 9's four fixes are
@@ -733,36 +747,54 @@ migration, Production deployment, or TestFlight modification is authorized by th
    it. A list cannot be its own completeness proof. Sourcing the inventory from the panel record,
    which no round of editing this file can alter, is the whole of the fix.*
 
-**Which requirements gate what.** **Requirements 1–6 gate approval.** **Only requirement 7 gates
-closing document review**, because requirement 6's experiments need an attended Production window and
+**Which requirements gate what.** **All seven gate approval.** **Only requirement 7 gates closing
+document review**, because requirement 6's experiments need an attended Production window and
 conditioning review on them would make review unterminatable — the liveness failure the withdrawn
-zero-edit rule had. Requirements 1–6 are unchanged by this split and none of them is waived.
+zero-edit rule had. So the split is asymmetric on purpose and in one direction only: review can close
+on requirement 7 alone, while approval still needs 1–7 together. Requirement 7 is *not* dropped from
+the approval set — approving on a corrections list never checked for completeness would waste the
+one gate that is free to run. None of requirements 1–6 is waived or changed by the split.
 
 ## 14b. Claim ledger — read this instead of trusting the prose
 
 ### Current review state — the single mutable record
 
 Everything below this block is **frozen historical narration**: it records what a round found and
-believed at the time, it is never edited to match this block, and a fact a later round disproves is
-corrected here, dated, not in the history.
+believed at the time, its words are never rewritten, and a fact a later round disproves is corrected
+here, dated, not in the history. *(A later round may add a bracketed editorial marker beside a frozen
+paragraph — see the corrections list — because a marker is an adjacent signpost, not a change to the
+record. "Never rewritten" governs the narration's own words, which is the guarantee that matters.)*
 
-**This block is the one live status, and it is checkable against something outside this file.** Each
+**This block is the one *live* status, and it is checkable against something outside this file.** Each
 row cites a commit SHA or the panel record for goal `g-e82c72a8-023a-4b49-bcd1-2826556d5175`; nothing
-here rests on the document's own say-so. Prose elsewhere may describe review qualitatively — "every
-round has found something" — but no other place states a count, a panel identity, or a review status.
+here rests on the document's own say-so.
+
+The scope of that claim, stated exactly, because an earlier version of this sentence was over-broad
+and four review lanes caught it:
+
+- **Live** counts, panel identities and review statuses appear **only** here. No other place in the
+  document may state one.
+- **Past** ones appear freely below — frozen narration and dated corrections entries record what a
+  round found, over which candidate, and whether it reached quorum. Those are history, not status,
+  and they do not go stale.
+- **The approval verdict is deliberately repeated.** "NOT APPROVED" also appears in the front matter
+  and at §14 by design: it is the document's headline, it has never changed in any round, and a
+  reader must not have to reach §14b to find it. It is maintained in all three places together or
+  not at all.
+- **Qualitative prose** carrying no number — "every round has found something" — is unrestricted.
 
 | | |
 |---|---|
 | **Review status** | **OPEN.** The delta below has not been independently reviewed. |
 | **Approval status** | **NOT APPROVED** (§14). Unchanged by every round to date. |
-| Latest reviewed candidate | `74e17f6` — full five-family panel (Claude `claude-sonnet-5`, Codex `gpt-5.6-sol`, GLM-5.2, DeepSeek V4 Pro, Kimi K3 deep), quorum met, every lane bound to that candidate. Six findings open at the round cap; two panel findings across the cycle were refuted on repository evidence. |
-| Most recent unreviewed delta | the **round-17 repair** — this block, §14 requirement 7, and the corrections list below |
-| Rounds completed | **16.** Counted from the panel record, not from this file — per-round narration below stops after round 11, deliberately, because the meta-commentary had become the document's dominant defect surface. |
+| Latest reviewed candidate | `feb9a83` — full five-family panel (Claude `claude-sonnet-5`, Codex `gpt-5.6-sol`, GLM-5.2, DeepSeek V4 Pro, Kimi K3 deep), quorum met, every lane bound to that candidate. Nine findings, of which four were refuted on repository evidence; the rest are repaired in the delta below. |
+| Most recent unreviewed delta | the **round-18 repair** — the scope of this block's uniqueness claim, the front-matter review pointer, and §14 requirement 7's three-part check and approval gating |
+| Rounds completed | **17.** Counted from the panel record, not from this file — per-round narration below stops after round 11, deliberately, because the meta-commentary had become the document's dominant defect surface. |
 
 **On the two statuses.** They are separate and both are needed: document review can close while
-approval stays blocked, because requirement 7 gates review and requirements 1–6 gate approval. A
-reader who wants one word should read **NOT APPROVED** — no combination of review outcomes changes
-that without requirements 1–6.
+approval stays blocked, because requirement 7 alone gates closing review while **all seven** gate
+approval. Review closing is therefore necessary but nowhere near sufficient. A reader who wants one
+word should read **NOT APPROVED** — no combination of review outcomes changes that on its own.
 
 ### Dated corrections superseding frozen history — 2026-08-08
 
