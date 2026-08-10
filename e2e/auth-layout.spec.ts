@@ -80,6 +80,7 @@ const PAGE_COPY = {
   pkceSecurityNote:
     'For your security, that link only completes where it was requested. '
     + 'Ask for a fresh one here and it will work in this window.',
+  pkceResendButton: 'Send a new link',
 } as const;
 
 /** Criterion 17 for the page chrome: the eyebrow, heading and subheading are
@@ -342,9 +343,16 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
       PAGE_COPY.pkceSecurityNote,
     );
     await expect(banner).not.toContainText(/expired or was already used/i);
-    await expect(
-      banner.getByRole('button', { name: /send a new link/i }),
-    ).toBeVisible();
+    // The resend label is app-owned copy too. A case-insensitive PARTIAL regex
+    // let "Send a new link now" — or any casing — ship silently, the same gap
+    // criterion 17 forbids. `exact` pins the accessible name (the a11y
+    // contract) and toHaveText pins the rendered label. (santa round-6: GLM.)
+    const resend = banner.getByRole('button', {
+      name: PAGE_COPY.pkceResendButton,
+      exact: true,
+    });
+    await expect(resend).toBeVisible();
+    await expect(resend).toHaveText(PAGE_COPY.pkceResendButton);
 
     const g = await geometry(page);
     expectNoClipping(g);
