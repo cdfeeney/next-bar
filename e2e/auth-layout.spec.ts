@@ -77,6 +77,9 @@ const PAGE_COPY = {
   inboxHeading: 'Check your inbox.',
   callbackError: "Sign-in didn't complete. Please try again.",
   pkceGuidance: 'Finish on the same device and browser you started from.',
+  pkceSecurityNote:
+    'For your security, that link only completes where it was requested. '
+    + 'Ask for a fresh one here and it will work in this window.',
 } as const;
 
 /** Criterion 17 for the page chrome: the eyebrow, heading and subheading are
@@ -331,6 +334,13 @@ test.describe('/auth layout — one-screen fit, no clipping, no horizontal overf
     // The P0 distinction: same-device guidance, NOT "expired". Pinned exactly
     // rather than as a fragment (criterion 17). (santa round-5: Codex + GLM.)
     await expect(banner.locator('p').first()).toHaveText(PAGE_COPY.pkceGuidance);
+    // The banner renders TWO app-owned paragraphs. Pinning only .first() left the
+    // second one — the security rationale that tells the user WHY the link is
+    // device-bound — free to be reworded silently, which criterion 17 forbids.
+    // (santa round-6: Claude/FABLE + Codex, independently.)
+    await expect(banner.locator('p').nth(1)).toHaveText(
+      PAGE_COPY.pkceSecurityNote,
+    );
     await expect(banner).not.toContainText(/expired or was already used/i);
     await expect(
       banner.getByRole('button', { name: /send a new link/i }),
