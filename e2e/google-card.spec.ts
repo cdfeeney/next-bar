@@ -25,19 +25,22 @@ import { installLoopbackFixtures } from './helpers/catalogFixture';
 type Scenario = 'loaded' | 'delayed' | 'zero' | 'error' | 'unsupported';
 
 /**
- * How long the `delayed` mock waits, after build(), before signalling load.
+ * Gap between the reservation samples scenario 16 takes while the load is held
+ * open.
  *
- * Bounded at BOTH ends, which the previous one-line note left half-stated:
- *  - UPPER: comfortably under the component's 4s widget-load budget, or
- *    `delayed` degrades to the fallback instead of resolving to READY.
- *  - LOWER: this is the entire window in which scenario 16 can observe the
- *    reservation mid-flight. The clock starts at build(), which for a leading
- *    card that first paints inside the observer's 200px margin is BEFORE the
- *    reveal runs, not because of it. Scenario 16 retries its observation
- *    rather than racing this value once, but shrinking DELAY_MS still shrinks
- *    the window and will make it intermittent. (santa round 1: Claude/FABLE.)
+ * This replaced a `DELAY_MS` timer that the `delayed` mock used to wait out
+ * before signalling load. That timer made the pending window a race the test
+ * had to win, and all three external lanes found the same consequences in
+ * santa round 2: the samples could drift onto a host that had already gone
+ * `ready`, and a window caught late yielded too few samples to prove anything.
+ * The mock now HOLDS the load until the test releases it, so the window is as
+ * long as the measurements need and this value only sets their spacing.
+ *
+ * Keep the total (4 samples at this spacing) well inside the component's 4s
+ * budget for a mounted widget that never signals readiness, or the held widget
+ * gives up and renders the fallback mid-scenario.
  */
-const DELAY_MS = 1_200;
+const SAMPLE_INTERVAL_MS = 150;
 
 /**
  * Longer than EVERY budget `GooglePlacePhoto` can arm: `MAX_LOAD_MS` (11s =
@@ -61,6 +64,19 @@ const TARGET_RATIO = 21 / 9;
  */
 const GOOGLE_MEDIA_HOSTS =
   /maps\.googleapis\.com|maps\.gstatic\.com|places\.googleapis\.com|googleusercontent\.com/;
+
+/**
+ * ANY Google-owned host, billable or not.
+ *
+ * Wider than `GOOGLE_MEDIA_HOSTS` on purpose. That set answers "was a billable
+ * media request made"; this one answers "was Google contacted at all". A
+ * request to `www.google.com`, `maps.google.com` or `fonts.googleapis.com`
+ * matched neither the media set nor `/bar-photos`, so it was recorded as
+ * merely `blocked` and only printed — leaving criterion 19 green while an
+ * unexpected Google request had genuinely been attempted. (santa round 2:
+ * Codex.)
+ */
+const GOOGLE_ANY_HOST = /google\.com|googleapis\.com|gstatic\.com|googleusercontent\.com/;
 
 type Probe = {
   /** Every /bar-photos/ request observed. MUST stay empty (criterion 11). */
@@ -120,13 +136,40 @@ async function installGuards(page: Page): Promise<Probe> {
  */
 async function installWidget(page: Page, scenario: Scenario): Promise<void> {
   await page.addInitScript(
-    ({ mode, delayMs }) => {
+    ({ mode }) => {
       const w = window as unknown as Record<string, unknown>;
       w.__E2E_WIDGET = mode;
+
+      /**
+       * Widgets whose load is being HELD open, and the release that finishes
+       * them. Scenario 16 samples the reservation while a load is genuinely in
+       * flight, and a timer made that window a race the test had to win. An
+       * explicit release makes the "slow load" last exactly as long as the
+       * measurements need, so the scenario can no longer miss the window, drift
+       * to `ready` mid-measurement, or collect too few samples.
+       * (santa round 2: Codex, DeepSeek and GLM all flagged the timer race.)
+       */
+      w.__E2E_HELD = [] as Array<() => void>;
+      w.__E2E_RELEASE = (): number => {
+        const held = w.__E2E_HELD as Array<() => void>;
+        return held.splice(0).map((finish) => finish()).length;
+      };
+
+      /**
+       * Proof that the widget path actually RAN. `GooglePlacePhoto` sets
+       * `unavailable` synchronously — no observer, no build, no budget — when
+       * `isPlacesUiKitConfigured()` is false, and that renders exactly the same
+       * glyph-and-no-host DOM the fallback scenarios assert. Only `build()`
+       * reaches `importLibrary`, so this counter is what separates "the
+       * fallback we are testing" from "the widget never ran at all".
+       * (santa round 2: Claude/FABLE, GLM.)
+       */
+      w.__E2E_SDK_CALLS = 0;
 
       w.google = {
         maps: {
           importLibrary: async () => {
+            w.__E2E_SDK_CALLS = (w.__E2E_SDK_CALLS as number) + 1;
             if (mode === 'unsupported') {
               throw new Error('e2e: places library unavailable');
             }
@@ -141,37 +184,46 @@ async function installWidget(page: Page, scenario: Scenario): Promise<void> {
           // the component's own budget must carry it to the fallback.
           if (mode === 'error') return;
 
-          window.setTimeout(
-            () => {
-              if (mode !== 'zero') {
-                // THREE photos, not one: the "multi-photo lightbox handoff"
-                // scenario cannot mean anything if the widget only ever
-                // renders a single photo. (santa: Claude/FABLE M-1.)
-                for (let i = 0; i < 3; i += 1) {
-                  const media = document.createElement('div');
-                  media.setAttribute('data-e2e-widget-photo', String(i));
-                  media.style.height = '160px';
-                  media.style.background = '#334';
-                  this.appendChild(media);
-                }
-              }
-              // Stand-ins for the two things Google's own card supplies and
-              // that ours must therefore NOT duplicate.
-              const credit = document.createElement('div');
-              credit.setAttribute('data-e2e-widget-attribution', '');
-              credit.textContent = 'Google';
-              this.appendChild(credit);
+          // 'delayed': hold this load open until the test releases it. The
+          // element is appended by build(), so its mere presence is already
+          // proof the load is in flight; holding it means the reservation can
+          // be measured without racing a timer.
+          if (mode === 'delayed') {
+            (w.__E2E_HELD as Array<() => void>).push(() => this.finishLoad());
+            return;
+          }
 
-              const maps = document.createElement('a');
-              maps.setAttribute('data-e2e-widget-maps', '');
-              maps.href = 'https://www.google.com/maps/place/?q=place_id:e2e';
-              maps.textContent = 'View on Google Maps';
-              this.appendChild(maps);
+          window.setTimeout(() => this.finishLoad(), 0);
+        }
 
-              this.dispatchEvent(new Event('gmp-load'));
-            },
-            mode === 'delayed' ? delayMs : 0,
-          );
+        /** Populate the widget and signal readiness. Shared by both paths. */
+        finishLoad(): void {
+          if (mode !== 'zero') {
+            // THREE photos, not one: the "multi-photo lightbox handoff"
+            // scenario cannot mean anything if the widget only ever
+            // renders a single photo. (santa: Claude/FABLE M-1.)
+            for (let i = 0; i < 3; i += 1) {
+              const media = document.createElement('div');
+              media.setAttribute('data-e2e-widget-photo', String(i));
+              media.style.height = '160px';
+              media.style.background = '#334';
+              this.appendChild(media);
+            }
+          }
+          // Stand-ins for the two things Google's own card supplies and
+          // that ours must therefore NOT duplicate.
+          const credit = document.createElement('div');
+          credit.setAttribute('data-e2e-widget-attribution', '');
+          credit.textContent = 'Google';
+          this.appendChild(credit);
+
+          const maps = document.createElement('a');
+          maps.setAttribute('data-e2e-widget-maps', '');
+          maps.href = 'https://www.google.com/maps/place/?q=place_id:e2e';
+          maps.textContent = 'View on Google Maps';
+          this.appendChild(maps);
+
+          this.dispatchEvent(new Event('gmp-load'));
         }
       }
 
@@ -179,7 +231,7 @@ async function installWidget(page: Page, scenario: Scenario): Promise<void> {
         customElements.define('gmp-place-details-compact', FakeDetails);
       }
     },
-    { mode: scenario, delayMs: DELAY_MS },
+    { mode: scenario },
   );
 }
 
@@ -410,6 +462,16 @@ async function expectUniversalInvariants(
   expect(probe.google, `${label}: Google media request attempted`).toEqual([]);
   // Everything else non-loopback was refused rather than allowed out.
   console.log(`MEASURE ${label} blocked=${JSON.stringify(probe.blocked)}`);
+  // `GOOGLE_MEDIA_HOSTS` is deliberately the BILLABLE media set, so a request
+  // to any other Google host (www.google.com, maps.google.com, fonts.*) landed
+  // in `blocked` — aborted, but only ever LOGGED, so criterion 19 stayed green
+  // while an unexpected Google request had in fact been attempted. The fence
+  // still refuses it; this makes the attempt itself a failure.
+  // (santa round 2: Codex.)
+  expect(
+    probe.blocked.filter((url) => GOOGLE_ANY_HOST.test(url)),
+    `${label}: a Google host was contacted (refused by the fence, but attempted)`,
+  ).toEqual([]);
 
   // 10: no duplicate app-owned photo chrome beside the Google surface.
   expect(d!.ownedTiles, `${label}: duplicate app photo tile`).toBe(0);
@@ -648,57 +710,70 @@ test.describe('supported Google card', () => {
 
     // Wait until the widget is genuinely MID-BUILD, not merely `pending`.
     //
-    // The mock's custom element is constructed by build() and only dispatches
-    // gmp-load DELAY_MS later, so a host that is `pending` WHILE the widget
-    // element is present is proof that build() ran and the slow load is
-    // actually in flight. Waiting on `pending` alone was still vacuous: the
-    // post-paint re-render can hand back a fresh, NEVER-BUILT host that is
-    // also `pending`, and every measurement below — the 21/9 band and the
-    // universal compliance invariants — would then describe a widget that
-    // never ran. That is the same "no build, so no request, so green" trap
-    // this whole change exists to remove, surviving in the one scenario whose
-    // subject is the pending state. Caught independently by Codex, DeepSeek
-    // and GLM in santa round 1.
-    //
-    // Note the clock starts at build(), which for a leading card that first
-    // paints inside the observer's 200px margin is BEFORE this reveal runs,
-    // not because of it. Retrying the pair is what makes the observation
-    // reliable rather than a race against DELAY_MS.
-    const host = await revealCardUntil(page, async (h) => {
+    // The mock's element is constructed by build() and, in this mode, HELD
+    // until the test releases it. So `pending` together with the widget element
+    // present is positive proof that build() ran and the load is in flight.
+    // `pending` alone was vacuous: the post-paint re-render can hand back a
+    // fresh, NEVER-BUILT host that is also `pending`, and every measurement
+    // below would then describe a widget that never ran — the same "no build,
+    // so no request, so green" trap this change exists to remove, surviving in
+    // the one scenario whose subject is the pending state. (santa round 1:
+    // Codex, DeepSeek and GLM, independently.)
+    await revealCardUntil(page, async (h) => {
       await expect(h).toHaveAttribute('data-status', 'pending', { timeout: 1_000 });
       await expect(
         card(page).locator('gmp-place-details-compact'),
-        'widget element absent: this host never built, so the samples below would be vacuous',
+        'widget element absent: this host never built, so the samples would be vacuous',
       ).toHaveCount(1, { timeout: 1_000 });
     });
+
+    /**
+     * One reservation sample, valid ONLY if taken on a host that is still
+     * pending AND has actually built.
+     *
+     * Round 2 found that checking those conditions once, before the loop, was
+     * not enough: `revealCardUntil` hands back LIVE locators, so the re-render
+     * could swap in a different host and the samples would silently describe
+     * it instead. Re-asserting per sample closes that, and the retry absorbs
+     * the swap itself (a replacement is briefly present-but-not-yet-built)
+     * without ever accepting a sample from a widget that never ran.
+     */
+    const sampleHeld = async (label: string): Promise<number> => {
+      let height = 0;
+      await expect(async () => {
+        const s = await inspectCard(page);
+        expect(s, `${label}: no card`).not.toBeNull();
+        expect(s!.hostStatus, `${label}: host is not pending`).toBe('pending');
+        expect(s!.widgets, `${label}: sampled a host that never built`).toBe(1);
+        expectRatio(s!.mediaBand, label);
+        height = s!.mediaBand!.h;
+      }).toPass({ timeout: 5_000 });
+      return height;
+    };
+
     // While PENDING the reserved band must already be the 21/9 the loaded
     // and fallback states use — a differently-sized placeholder is the
     // layout jump criterion 4 forbids.
-    await expect(host).toHaveAttribute('data-status', 'pending');
-    const pending = await inspectCard(page);
-    console.log(`MEASURE delayed-pending ${JSON.stringify(pending)}`);
-    expectRatio(pending!.mediaBand, 'delayed/pending');
-
-    // Sample repeatedly across the wait: the height must not move.
-    const heights: number[] = [pending!.mediaBand!.h];
+    const heights: number[] = [await sampleHeld('delayed/pending')];
     for (let i = 0; i < 3; i += 1) {
-      await page.waitForTimeout(DELAY_MS / 4);
-      const s = await inspectCard(page);
-      if (s?.hostStatus === 'pending' && s.mediaBand) heights.push(s.mediaBand.h);
+      await page.waitForTimeout(SAMPLE_INTERVAL_MS);
+      heights.push(await sampleHeld(`delayed/held-${i + 1}`));
     }
     console.log(`MEASURE delayed-heights ${JSON.stringify(heights)}`);
-    // The loop above skips any sample whose host is not pending-with-a-band,
-    // so an early ready, an early fallback swap or an unmount would leave
-    // `heights` as just the t0 measurement and the stability check below would
-    // pass without observing the load at all. "Holds THROUGH a slow load" has
-    // to rest on more than one instant. (santa round 1: Claude/FABLE.)
-    expect(
-      heights.length,
-      'no mid-load samples were observed while pending: the hold is unproven',
-    ).toBeGreaterThanOrEqual(2);
+    // Every sample is now mandatory, so the set can no longer shrink silently
+    // to the single t0 measurement the way the old skip-on-mismatch loop
+    // allowed. (santa round 1: Claude/FABLE.)
     for (const h of heights) {
       expect(Math.abs(h - heights[0]), 'reserved height moved while pending').toBeLessThanOrEqual(1);
     }
+
+    // Release the held load and confirm it completes. A zero release count
+    // means nothing was ever held, so the "slow load" never engaged and
+    // everything above measured the wrong thing.
+    const released = await page.evaluate(
+      () => (window as unknown as { __E2E_RELEASE: () => number }).__E2E_RELEASE(),
+    );
+    expect(released, 'no widget was held: the slow load never engaged').toBeGreaterThanOrEqual(1);
 
     await revealCardReady(page);
     await expectUniversalInvariants(page, probe, 'delayed');
@@ -725,6 +800,21 @@ test.describe('supported Google card', () => {
       // (santa round 1: DeepSeek.)
       await expect(hostOf(card(page))).toHaveCount(0);
     });
+    // ...but that DOM alone does NOT prove the widget path ran.
+    // `GooglePlacePhoto` sets `unavailable` synchronously — no observer, no
+    // build, no budget — when `isPlacesUiKitConfigured()` is false, and that
+    // renders exactly this glyph-and-no-host state. On a server whose key
+    // inlining regressed, both fallback scenarios AND their criterion-19
+    // invariants would go green while the paths under test never executed.
+    // Only build() reaches the SDK, so this is the assertion that separates
+    // "the fallback we are testing" from "the widget never ran at all".
+    // (santa round 2: Claude/FABLE, GLM.)
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __E2E_SDK_CALLS: number }).__E2E_SDK_CALLS,
+      ),
+      'importLibrary was never called: the widget path never ran',
+    ).toBeGreaterThanOrEqual(1);
 
     const d = await inspectCard(page);
     console.log(`MEASURE error-fallback ${JSON.stringify(d)}`);
@@ -765,6 +855,21 @@ test.describe('supported Google card', () => {
       // (santa round 1: DeepSeek.)
       await expect(hostOf(card(page))).toHaveCount(0);
     });
+    // ...but that DOM alone does NOT prove the widget path ran.
+    // `GooglePlacePhoto` sets `unavailable` synchronously — no observer, no
+    // build, no budget — when `isPlacesUiKitConfigured()` is false, and that
+    // renders exactly this glyph-and-no-host state. On a server whose key
+    // inlining regressed, both fallback scenarios AND their criterion-19
+    // invariants would go green while the paths under test never executed.
+    // Only build() reaches the SDK, so this is the assertion that separates
+    // "the fallback we are testing" from "the widget never ran at all".
+    // (santa round 2: Claude/FABLE, GLM.)
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __E2E_SDK_CALLS: number }).__E2E_SDK_CALLS,
+      ),
+      'importLibrary was never called: the widget path never ran',
+    ).toBeGreaterThanOrEqual(1);
 
     const d = await inspectCard(page);
     console.log(`MEASURE unsupported ${JSON.stringify(d)}`);

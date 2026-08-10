@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
+// Shared with e2e/tools/fence-global-setup.ts so the canary can never probe a
+// different port than the one a run would reuse. See that module's header.
+import { e2eGooglePort, e2ePort } from './e2e/tools/e2e-ports';
 
 // Single source for the fence address — a split-coverage edit (browser fenced,
 // server not) is exactly the gap the fence exists to close. The proxy's own
@@ -17,7 +20,7 @@ const FENCE_PROXY = 'http://127.0.0.1:39555';
  * C:\Users\cdfee\projects\nb-overnight-20260807 while this worktree ran.
  * Defaults are unchanged, so a single-worktree run behaves exactly as before.
  */
-const E2E_PORT = process.env.E2E_PORT ?? '3000';
+const E2E_PORT = e2ePort();
 const BASE_URL = `http://localhost:${E2E_PORT}`;
 
 /**
@@ -35,7 +38,7 @@ const BASE_URL = `http://localhost:${E2E_PORT}`;
  * fake SDK before page scripts run. No live widget and no paid API is ever
  * invoked.
  */
-const E2E_GOOGLE_PORT = process.env.E2E_GOOGLE_PORT ?? '3100';
+const E2E_GOOGLE_PORT = e2eGooglePort();
 const GOOGLE_BASE_URL = `http://localhost:${E2E_GOOGLE_PORT}`;
 const GOOGLE_LIVE_ENV: Record<string, string> = {
   NEXT_PUBLIC_GOOGLE_MEDIA: '1',

@@ -18,6 +18,7 @@
 import { spawn } from 'node:child_process';
 import { createConnection } from 'node:net';
 import path from 'node:path';
+import { reusablePorts } from './e2e-ports';
 
 // Single source of truth: the proxy module exports its own contract.
 // Importing does NOT start the server (main-module guard in the .mjs).
@@ -142,22 +143,13 @@ async function assertReusedServerFenced(port: string, attempt = 0): Promise<void
   }
 }
 
-/**
- * The ports Playwright may REUSE. `webServer.reuseExistingServer` is true, so
- * the canary has to interrogate the servers this run would actually adopt —
- * which are the ports playwright.config.ts resolves, not a fixed 3000. These
- * two defaults are deliberately kept identical to that file's.
- *
- * Hardcoding 3000 was wrong in BOTH directions on a machine running more than
- * one worktree: it interrogated whatever unrelated project happened to hold
- * :3000 (aborting a run whose servers were on 3400/3401 and never went near
- * :3000) while never checking the ports this run really uses. That made the
- * whole suite's ability to start depend on unrelated processes.
- */
-const reusablePorts = (): string[] => [
-  process.env.E2E_PORT ?? '3000',
-  process.env.E2E_GOOGLE_PORT ?? '3100',
-];
+// The ports Playwright may REUSE come from the SAME module playwright.config.ts
+// resolves its webServer entries from, so the canary cannot drift away from the
+// servers a run actually adopts. See e2e/tools/e2e-ports.ts for why that
+// duplication was fail-open. Hardcoding 3000 here was wrong in both directions
+// on a machine running more than one worktree: it interrogated whatever
+// unrelated project happened to hold :3000 (aborting a run whose servers were
+// on 3400/3401) while never checking the ports the run really used.
 
 export default async function fenceGlobalSetup(): Promise<void> {
   const { BANNER, PORT } = await loadContract();
