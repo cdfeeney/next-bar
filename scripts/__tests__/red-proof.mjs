@@ -165,6 +165,23 @@ const ROUND_PROOFS = [
     ]),
   },
   {
+    label: 'round-14',
+    rev: '97e9db7',
+    cases: new Set([
+      'a nested destructure off require is capability',
+      'an object-literal default does not hide a later binding',
+      'a computed string key is still an imported name',
+      'a spread rest binds the remaining namespace',
+      'export star as is a re-export barrel',
+      'a CJS property barrel is capability',
+      'Object.assign with an intermediate argument is still a barrel',
+      'a parenthesized namespace is still the whole right-hand side',
+      'a local variable named exports is not a CJS barrel',
+      'a namespace guarded by an operator is not the destructured value',
+      'a clause is not bound to an unrelated later import',
+    ]),
+  },
+  {
     label: 'round-13',
     rev: '3d4ddc5',
     cases: new Set([

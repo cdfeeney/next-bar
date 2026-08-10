@@ -977,6 +977,96 @@ export const TIER_CASES = [
     escalated: false,
     why: 'the barrel rule matched any property named exports, which is an ordinary object assignment',
   },
+  // --------------------------------------------------------------- Round-14
+  // Four lanes reported the same root cause from four shapes: the shared clause
+  // capture `\{[^}]*\}` stops at the first closing brace, so every NESTED
+  // pattern was truncated mid-clause and never parsed. Braces nest; a pattern
+  // that cannot count them mis-reads all of these, so the capture was replaced
+  // with a depth-counting scanner rather than one alternative per shape.
+  {
+    name: 'a nested destructure off require is capability',
+    path: 'scripts/r14-nested.mjs',
+    contents: "const { promises: { rm } } = require('node:fs');\nawait rm(dir);\n",
+    expect: 'T0',
+    why: 'the clause capture truncated at the inner brace, so the outer pattern never matched at all',
+  },
+  {
+    name: 'an object-literal default does not hide a later binding',
+    path: 'scripts/r14-default.mjs',
+    contents: "const { options = { recursive: true }, rm } = require('fs/promises');\nrm(d);\n",
+    expect: 'T0',
+    why: 'the default value introduced a closing brace before the name that mattered',
+  },
+  {
+    name: 'a computed string key is still an imported name',
+    path: 'scripts/r14-computed.mjs',
+    contents: "const { ['rm']: nuke } = require('node:fs/promises');\nnuke(d);\n",
+    expect: 'T0',
+    why: "{ ['rm']: nuke } imports rm exactly as { rm: nuke } does",
+  },
+  {
+    name: 'a spread rest binds the remaining namespace',
+    path: 'scripts/r14-rest.mjs',
+    // `rest.rm(dir)` on purpose, not `rest.rmdirSync(...)`: the RED proof caught
+    // the first draft passing at the predecessor for an unrelated reason, because
+    // `rmdirSync(` matches a call-shaped signature on its own and proved nothing
+    // about the rest binding.
+    contents: "const { readFile, ...rest } = require('fs/promises');\nrest.rm(dir);\n",
+    expect: 'T0',
+    why: 'rest holds every member that was not named, deletion functions included',
+  },
+  {
+    name: 'export star as is a re-export barrel',
+    path: 'scripts/r14-starexport.mjs',
+    contents: "export * as fsp from 'node:fs/promises';\n",
+    expect: 'T0',
+    why: 'it binds no local name, so the member reference a namespace needs could never appear',
+  },
+  {
+    name: 'a CJS property barrel is capability',
+    path: 'scripts/r14-propbarrel.cjs',
+    contents: "exports.fse = require('fs-extra');\n",
+    expect: 'T0',
+    why: 're-exporting the module under one key forwards its deletion functions just as completely',
+  },
+  {
+    name: 'Object.assign with an intermediate argument is still a barrel',
+    path: 'scripts/r14-assign2.cjs',
+    contents: "Object.assign(module.exports, {}, require('fs-extra'));\n",
+    expect: 'T0',
+    why: 'the pattern required the require call to be the second argument exactly',
+  },
+  {
+    name: 'a parenthesized namespace is still the whole right-hand side',
+    path: 'scripts/r14-paren.mjs',
+    contents: "const fsp = require('node:fs/promises');\nconst { rm: nuke } = (fsp);\nnuke(d);\n",
+    expect: 'T0',
+    why: 'the member-chain lookahead rejected an ordinary wrapping paren',
+  },
+  {
+    name: 'a local variable named exports is not a CJS barrel',
+    path: 'src/lib/r14-localexports.ts',
+    contents: "function f() { const exports = require('node:fs'); return exports.readFileSync('x'); }\n",
+    expect: 'T1',
+    escalated: false,
+    why: 'a declared local binding is not the module export object',
+  },
+  {
+    name: 'a namespace guarded by an operator is not the destructured value',
+    path: 'src/lib/r14-guard.ts',
+    contents: "const fsp = require('node:fs/promises');\nconst { rm: safe } = fsp && safeApi;\nsafe();\n",
+    expect: 'T1',
+    escalated: false,
+    why: 'the destructured value is safeApi, so requiring the expression to END there is the point',
+  },
+  {
+    name: 'a clause is not bound to an unrelated later import',
+    path: 'src/lib/r14-unrelated.ts',
+    contents: 'let safe;\n({ rm: safe } = metadata);\nawait import(spec);\nsafe();\n',
+    expect: 'T1',
+    escalated: false,
+    why: 'letting the gap cross a newline associated a destructure with an import two statements away',
+  },
   {
     name: 'a work ledger describing agent work stays inert',
     path: 'docs/R10-LEDGER.md',

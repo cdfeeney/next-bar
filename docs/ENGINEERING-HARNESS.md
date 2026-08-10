@@ -160,9 +160,11 @@ MEASURING the alternative against this repository, not by preference:
 - **The analyzer resolves bindings, not values.** It follows what a module
   specifier was bound to and stops there. Binding resolution is broader than it
   looks and is meant to cover *ordinary code*, not just the tidy form: aliases,
-  destructuring (including off a resolved namespace, and off a dynamically
-  resolved module), namespaces and defaults, ESM and CJS re-export barrels
-  (`export *` and `module.exports = require(…)`),
+  destructuring — nested patterns, computed string keys, defaults, and a spread
+  rest, which binds every member that was not named — off a resolved namespace
+  and off a dynamically resolved module alike; namespaces and defaults; all four
+  re-export barrels (`export *`, `export * as`, `module.exports = require(…)`
+  including a single property, and `Object.assign(module.exports, …)`);
   `import`/`require`/`await import`,
   assignment without a declaration keyword (`fsp = require('fs/promises')`), a
   conditional or `try`/`catch` load, a parenthesized `await import`, and the
@@ -211,6 +213,17 @@ MEASURING the alternative against this repository, not by preference:
   `src/app/settings/page.tsx`, so restyling a button would summon the
   five-family panel — which acceptance criterion 11 forbids. Raise the tier
   yourself when you wire a destructive primitive into a new call path.
+- **Destructuring patterns are SCANNED, not matched.** Clause extraction counts
+  brace depth instead of using `{[^}]*}`, which stopped at the first closing
+  brace. Four reviewers reported that truncation from four different shapes in a
+  single round — a nested pattern, an object-literal default before the name that
+  mattered, a computed key, a braced default initializer — and each would have
+  been one more alternative in a growing list. Braces nest, so a pattern that
+  cannot count them mis-reads every nested case; counting depth ends the class
+  rather than the instances. The same scan reads a clause backwards from its
+  `=`, because a pattern cannot be captured forwards before you know where it
+  ends.
+
 - **A commented-out deletion import counts as capability.** There is no comment
   suppression at all, and that is a deliberate, measured decision rather than an
   oversight.
