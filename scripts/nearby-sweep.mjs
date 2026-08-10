@@ -36,6 +36,10 @@
  *   --nearby-only       Skip diversified Text Search
  *   --text-only         Skip Nearby Search
  *   --no-sla            Skip NY SLA enrichment
+ *   --sla-page-limit <n>  SLA rows per request (default 5000); the lane pages
+ *                         until a short page, so this is a page size, not a cap
+ *   --sla-max-rows <n>    Refuse rather than silently truncate past this many
+ *                         SLA rows for one region (default 200000)
  *   --county <name>     Restrict Google/SLA results to an NY county
  *   --env <path>        dotenv file (default .env.local)
  *
@@ -83,6 +87,7 @@ import {
 } from './lib/coverage-types.mjs';
 import { resolveIdentity } from './lib/coverage-identity.mjs';
 import { fetchJson } from './lib/google-fetch.mjs';
+import { pageAll } from './lib/page-all.mjs';
 
 const VALUE_OPTIONS = new Set([
   '--ack-cell',
@@ -99,6 +104,8 @@ const VALUE_OPTIONS = new Set([
   '--names',
   '--out',
   '--radius',
+  '--sla-max-rows',
+  '--sla-page-limit',
   '--step',
 ]);
 const BOOLEAN_OPTIONS = new Set([
@@ -248,6 +255,9 @@ const OUT = options.out ?? null;
 const COUNTY = options.county ?? null;
 const MANIFEST = options.manifest ?? null;
 const MAX_RESULT_COUNT = 20;
+/** Socrata page size for the SLA read, and the ceiling on how far we will page. */
+const SLA_PAGE_LIMIT = Number(options['sla-page-limit'] ?? 5000);
+const SLA_MAX_ROWS = Number(options['sla-max-rows'] ?? 200_000);
 if (![RADIUS, STEP, EXTENT, MIN_CELL].every((value) => Number.isFinite(value) && value > 0)) {
   console.error('radius, step, extent, and min-cell-meters must be positive numbers');
   process.exit(1);
@@ -537,13 +547,23 @@ async function fetchLicenses(region) {
       `within_box(georeference,${north},${west},${south},${east})`,
       COUNTY ? `premisescounty='${COUNTY.replaceAll("'", "''")}'` : null,
     ].filter(Boolean).join(' AND '),
-    '$limit': '5000',
+    '$limit': String(SLA_PAGE_LIMIT),
   });
-  const rows = await fetchJson(
-    `https://data.ny.gov/resource/9s3h-dpkz.json?${params}`,
-    undefined,
-    'NY SLA active-license read',
-  );
+  // A single capped request is indistinguishable from a complete answer, so this
+  // lane pages until a short page proves the source is exhausted.
+  const rows = await pageAll({
+    pageSize: SLA_PAGE_LIMIT,
+    maxRows: SLA_MAX_ROWS,
+    label: `NY SLA active-license read for ${region.label}`,
+    fetchPage: (offset) => {
+      params.set('$offset', String(offset));
+      return fetchJson(
+        `https://data.ny.gov/resource/9s3h-dpkz.json?${params}`,
+        undefined,
+        'NY SLA active-license read',
+      );
+    },
+  });
   return rows
     .filter((row) => Array.isArray(row.georeference?.coordinates))
     .map((row) => ({
@@ -607,6 +627,13 @@ const sweepConfig = {
   regions: regions.map((region) => ({ label: region.label, bbox: region.bbox })),
   textQueriesByRegion: regions.map((region) => textQueries(region.label)),
   seedNames,
+  // The SLA lane's scope belongs in the hash for the same reason the type list
+  // does: it changes what the run collects, so a resume that silently merges
+  // across a change to it reports one universe while holding another. Acceptance
+  // criterion 4 names SLA bbox/limit explicitly.
+  slaEnabled: !options['no-sla'],
+  slaPageLimit: SLA_PAGE_LIMIT,
+  slaMaxRows: SLA_MAX_ROWS,
 };
 const hash = configHash(sweepConfig);
 
