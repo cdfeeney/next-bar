@@ -165,6 +165,20 @@ const ROUND_PROOFS = [
     ]),
   },
   {
+    label: 'round-13',
+    rev: '3d4ddc5',
+    cases: new Set([
+      'an Object.assign CJS barrel is capability',
+      'a multiline destructure from a computed import is capability',
+      'a default initializer does not hide the imported name',
+      'a parenthesized namespace destructure is capability',
+      'a trailing comment does not hide a namespace destructure',
+      'a second declarator does not hide a namespace destructure',
+      'a namespace destructure through promises is capability',
+      'an exports property on another object is not a CJS barrel',
+    ]),
+  },
+  {
     label: 'round-12',
     rev: 'fd7b9cf',
     cases: new Set([
@@ -312,6 +326,14 @@ function loadClassifierAtRevision(rev) {
 }
 
 let stagesProved = 0;
+/**
+ * Stages that could not run. A SKIPPED stage used to `continue` and the script
+ * still exited 0 printing "RED proof holds" — so on a shallow clone, where NO
+ * predecessor revision is reachable, a run that proved nothing at all reported
+ * success. That is the coverage theater this file exists to prevent, one level
+ * up. Skips are collected and the exit status accounts for them.
+ */
+const skippedStages = [];
 for (const stage of ROUND_PROOFS) {
   const materialized = loadClassifierAtRevision(stage.rev);
   if (!materialized) {
@@ -319,6 +341,7 @@ for (const stage of ROUND_PROOFS) {
       `\n${stage.label} proof SKIPPED: revision ${stage.rev} is not reachable ` +
         '(shallow clone?), so that classifier cannot be materialized.\n',
     );
+    skippedStages.push(`${stage.label} (${stage.rev})`);
     continue;
   }
 
@@ -490,11 +513,12 @@ function runCli(root, args, stdin = '') {
 function buildPipelineFixture() {
   const root = mkdtempSync(join(tmpdir(), 'next-bar-tier-pipeproof-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
-  mkdirSync(join(root, 'src', 'lib'), { recursive: true });
-  mkdirSync(join(root, 'src', 'components'), { recursive: true });
+  // Only what this stage actually queries. `src/lib/purge.ts` and an empty
+  // `src/components` used to live here for the new-import escalation half of
+  // the proof; that rule was removed, and a fixture no stage reads invites the
+  // next contributor to assume it is part of what the proof exercises.
   mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
   writeFileSync(join(root, 'package.json'), '{"name":"redproof"}\n');
-  writeFileSync(join(root, 'src', 'lib', 'purge.ts'), PURGE_SOURCE);
   writeFileSync(join(root, 'scripts', 'recreate.mjs'), PURGE_SOURCE);
   git('init', '-q', '-b', 'main', '.');
   git('config', 'user.email', 'test@example.invalid');
@@ -562,7 +586,27 @@ try {
 
 process.stdout.write(
   `\n  deletion-grading proof: ${deletionProofVerdict}\n` +
-    `  round-10 pipeline proof: ${pipelineProofVerdict}\n` +
-    `\nRED proof holds: ${stagesProved} staged proof(s) passed; every new-capability case fails before its change.\n`,
+    `  round-10 pipeline proof: ${pipelineProofVerdict}\n`,
+);
+
+// A skipped stage is an UNKNOWN, not a pass. Reporting "RED proof holds" while
+// stages were silently skipped is exactly the shape of coverage theater this
+// script exists to detect in the suite it drives.
+const unproved = [
+  ...skippedStages,
+  ...(deletionProofVerdict === 'holds' ? [] : ['deletion-grading']),
+  ...(pipelineProofVerdict === 'holds' ? [] : ['round-10 pipeline']),
+];
+if (unproved.length > 0) {
+  process.stderr.write(
+    `\nred-proof INCOMPLETE: ${unproved.length} proof(s) did not run — ${unproved.join(', ')}.\n` +
+      'These revisions are unreachable here (a shallow clone cannot run this proof). Nothing is\n' +
+      'claimed about them, and an incomplete proof is not a passing one.\n',
+  );
+  process.exit(1);
+}
+
+process.stdout.write(
+  `\nRED proof holds: ${stagesProved} staged proof(s) passed; every new-capability case fails before its change.\n`,
 );
 process.exit(0);

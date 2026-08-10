@@ -202,16 +202,9 @@ export function collectChangedPaths(opts = {}) {
 }
 
 /**
- * Resolve the revisions a deleted path's prior content may live in.
+ * True when `ref` resolves to a commit in this repository.
  *
- * Three, not one, and every one is consulted:
- *   - `HEAD`        the file as it was before an uncommitted deletion
- *   - the merge base what the branch actually diverged from — `base...HEAD`
- *                   measures against this, so `git show <base tip>:<path>` and
- *                   the diff could otherwise disagree about what "base" means
- *   - the base tip  the branch this change targets
- *
- * @returns {string[]} deduped, in the order they should be reported
+ * @returns {boolean}
  */
 export function refExists(ref, opts = {}) {
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
@@ -228,6 +221,21 @@ export function refExists(ref, opts = {}) {
   }
 }
 
+/**
+ * Resolve the revisions a deleted path's prior content may live in.
+ *
+ * Three, not one, and every one is consulted:
+ *   - `HEAD`        the file as it was before an uncommitted deletion
+ *   - the merge base what the branch actually diverged from — `base...HEAD`
+ *                   measures against this, so `git show <base tip>:<path>` and
+ *                   the diff could otherwise disagree about what "base" means
+ *   - the base tip  the branch this change targets
+ *
+ * The tier is the highest any recovered version earns, so consulting all three
+ * is what stops a two-step laundering (commit a harmless rewrite, then delete).
+ *
+ * @returns {string[]} deduped, in the order they should be reported
+ */
 export function resolveRecoveryRevisions(opts = {}) {
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
   const revisions = ['HEAD'];

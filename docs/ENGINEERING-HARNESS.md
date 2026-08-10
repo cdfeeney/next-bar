@@ -267,6 +267,21 @@ MEASURING the alternative against this repository, not by preference:
   over-escalation costs zero files across all 3,866 tracked files, because
   nothing in this repository renders a destructive command as text.
 
+- **A destructive line QUOTED in a string still counts.** `const doc =
+  "module.exports = require('fs-extra')"` floors T0, exactly as a component
+  rendering `<code>rm cache.db</code>` does, and for the same reason: inside the
+  quotes the bytes are identical to the real thing, so nothing reading the match
+  or its surroundings can separate them.
+
+  The narrowings that suggest themselves — require the statement to be
+  line-leading, or skip text inside string literals — are the two shapes this
+  module has already been burned by. Line-leading misses
+  `if (flag) module.exports = require('fs-extra')`; skipping string content means
+  rewriting the source before scanning it, which is what four comment-suppression
+  rewrites did before they were deleted. A rule that LOWERS a verdict under some
+  condition is the class that has failed five times here, so this stays as
+  over-escalation.
+
 - **Instruction files are policy by ROLE, and the role list is not two names
   long.** `AGENTS.md` and `CLAUDE.md` at any depth are T0, and so are
   `AGENT.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.clinerules`,

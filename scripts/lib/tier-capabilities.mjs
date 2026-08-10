@@ -325,7 +325,11 @@ const IDENTIFIER = '[A-Za-z_$][A-Za-z0-9_$]*';
 function parseBindingClause(clause) {
   const pairs = [];
   for (const part of String(clause).split(',')) {
-    const token = part.trim();
+    // A DEFAULT INITIALIZER is not part of the binding. `{ rm: nuke = fallback }`
+    // binds `rm` exactly as `{ rm: nuke }` does, but the trailing `= fallback`
+    // made the whole token fail to parse, so the deletion name was never seen.
+    // Everything from the first `=` that is not `==`/`=>` is dropped.
+    const token = part.split(/=(?![=>])/)[0].trim();
     if (token.length === 0) continue;
     // `{ type rm }` is an inline type-only specifier: erased at compile time, so
     // it holds no runtime capability.
@@ -429,7 +433,7 @@ export function analyzeFsDeletion(text) {
   // expression prefix. The run cannot cross a line, so it can never reach past
   // the statement it belongs to.
   const requireRe = new RegExp(
-    `(?:\\b(?:const|let|var)\\s+)?\\(?\\s*(\\{[^}\\n]*\\}|${IDENTIFIER})\\s*\\)?\\s*=\\s*` +
+    `(?:\\b(?:const|let|var)\\s+)?\\(?\\s*(\\{[^}]*\\}|${IDENTIFIER})\\s*\\)?\\s*=\\s*` +
       `[^\\n=]{0,80}?(?:await\\s+)?(?:import|require)\\s*\\(\\s*${q}(${mod})${q}\\s*\\)`,
     'g',
   );
@@ -444,8 +448,18 @@ export function analyzeFsDeletion(text) {
   // binding group can capture. `module.exports = require('fs-extra')` forwards
   // every deletion function to whoever imports this module, and the importer's
   // own specifier is a local path, so neither file held capability.
+  // `exports` must be the MODULE's exports object, not any property that happens
+  // to be spelled that way: `loader.exports = require('node:fs')` is an ordinary
+  // object assignment and was reported as a barrel. The lookbehind rejects a
+  // dotted owner while still admitting bare `exports` and `module.exports`.
+  //
+  // `Object.assign(module.exports, require('fs-extra'))` copies the same
+  // functions onto the same object and is the other idiom in real use, so it is
+  // matched as a second alternative rather than left to a later round.
+  const exportsTarget = `(?<![.\\w$])(?:module\\s*\\.\\s*)?exports`;
   const cjsReexportRe = new RegExp(
-    `(?:module\\s*\\.\\s*)?exports\\s*=\\s*[^\\n=]{0,80}?(?:await\\s+)?(?:import|require)\\s*\\(\\s*${q}(${mod})${q}\\s*\\)`,
+    `(?:${exportsTarget}\\s*=\\s*[^\\n=]{0,80}?|Object\\s*\\.\\s*assign\\s*\\(\\s*${exportsTarget}\\s*,\\s*)` +
+      `(?:await\\s+)?(?:import|require)\\s*\\(\\s*${q}(${mod})${q}\\s*\\)`,
     'g',
   );
   for (const match of text.matchAll(cjsReexportRe)) {
@@ -466,7 +480,7 @@ export function analyzeFsDeletion(text) {
   const thenRe = new RegExp(
     `import\\s*\\(\\s*${q}(${mod})${q}\\s*\\)\\s*\\.\\s*then\\s*\\(\\s*(?:async\\s+)?` +
       `(?:function\\s*(?:${IDENTIFIER})?\\s*)?` +
-      `(?:\\(\\s*)?(\\{[^}\\n]*\\}|${IDENTIFIER})`,
+      `(?:\\(\\s*)?(\\{[^}]*\\}|${IDENTIFIER})`,
     'g',
   );
   for (const match of text.matchAll(thenRe)) {
@@ -507,7 +521,7 @@ export function analyzeFsDeletion(text) {
   // `nuke(`, which is no deletion name at all, so nothing fired. The clause is
   // read here instead: what is DESTRUCTURED from a dynamic specifier names the
   // imported function regardless of what it is renamed to.
-  const dynamicClauseRe = new RegExp(`(\\{[^}\\n]*\\})\\s*=\\s*[^\\n=]{0,80}?${dynamicSpec}`, 'g');
+  const dynamicClauseRe = new RegExp(`(\\{[^}]*\\})\\s*=\\s*[^=]{0,80}?${dynamicSpec}`, 'g');
   for (const match of text.matchAll(dynamicClauseRe)) {
     const imported = parseBindingClause(match[1].slice(1, -1)).map((b) => b.imported);
     const hit = imported.find((name) => FS_EXTRA_DELETION_NAMES.includes(name));
@@ -551,7 +565,18 @@ export function analyzeFsDeletion(text) {
       // `const fsp = require('node:fs/promises'); const { unlink: nuke } = fsp;`
       // reaches exactly the same function, and only the dotted form was read.
       // The clause names the imported member whatever it is renamed to.
-      const destructureRe = new RegExp(`(\\{[^}\\n]*\\})\\s*=\\s*${escapeForRegExp(ns)}\\s*(?:;|$)`, 'gm');
+      // NO STATEMENT TERMINATOR, which is the correction three lanes reported.
+      // Requiring `;` or end-of-line meant an ordinary `({ unlink } = fsp);`, a
+      // trailing comment, and a second declarator (`const { rm } = fsp, other
+      // = 1`) all evaded it. What actually matters is that the namespace is the
+      // WHOLE right-hand side rather than the head of a longer member chain,
+      // and a negative lookahead states exactly that. `.promises` is admitted
+      // between the two because `const { rm } = fs.promises` reaches the same
+      // function as the dotted `fs.promises.rm` that was already recognised.
+      const destructureRe = new RegExp(
+        `(\\{[^}]*\\})\\s*=\\s*${escapeForRegExp(ns)}\\s*(?:\\.\\s*promises\\s*)?(?![.\\w$])`,
+        'g',
+      );
       for (const hit of text.matchAll(destructureRe)) {
         const imported = parseBindingClause(hit[1].slice(1, -1)).map((b) => b.imported);
         const found = imported.find((name) => FS_EXTRA_DELETION_NAMES.includes(name));

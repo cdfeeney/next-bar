@@ -916,6 +916,67 @@ export const TIER_CASES = [
     expect: 'T0',
     why: 'only the dotted form fsp.unlink was read, though a destructure reaches the same function',
   },
+  // --------------------------------------------------------------- Round-13
+  // The three round-12 rules, attacked by five lanes. Every case below graded
+  // wrongly at 3d4ddc5, and every fix here ADDS capability except the last,
+  // which corrects a pattern that was matching something it never meant to.
+  {
+    name: 'an Object.assign CJS barrel is capability',
+    path: 'scripts/r13-assign.cjs',
+    contents: "Object.assign(module.exports, require('fs-extra'));\n",
+    expect: 'T0',
+    why: 'copying the namespace onto module.exports exposes the same deletion helpers as assigning it',
+  },
+  {
+    name: 'a multiline destructure from a computed import is capability',
+    path: 'scripts/r13-multiline.mjs',
+    contents: 'const {\n  rm: nuke,\n} = await import(spec);\nnuke(d);\n',
+    expect: 'T0',
+    why: 'the clause pattern refused any prettier-wrapped destructure',
+  },
+  {
+    name: 'a default initializer does not hide the imported name',
+    path: 'scripts/r13-default.mjs',
+    contents: 'const { rm: nuke = fallback } = await import(spec);\nnuke(d);\n',
+    expect: 'T0',
+    why: 'the trailing = fallback made the whole token fail to parse, losing the deletion name',
+  },
+  {
+    name: 'a parenthesized namespace destructure is capability',
+    path: 'scripts/r13-paren.mjs',
+    contents: "const fsp = require('node:fs/promises');\n({ unlink } = fsp);\nunlink(f);\n",
+    expect: 'T0',
+    why: 'requiring a ; or end-of-line terminator was defeated by the closing paren',
+  },
+  {
+    name: 'a trailing comment does not hide a namespace destructure',
+    path: 'scripts/r13-comment.mjs',
+    contents: "const fsp = require('node:fs/promises');\nconst { unlink } = fsp // drop\nunlink(f);\n",
+    expect: 'T0',
+    why: 'same terminator defect, reached by an ordinary trailing comment',
+  },
+  {
+    name: 'a second declarator does not hide a namespace destructure',
+    path: 'scripts/r13-comma.mjs',
+    contents: "const fsp = require('node:fs/promises');\nconst { rm } = fsp, other = 1;\nrm(d);\n",
+    expect: 'T0',
+    why: 'same terminator defect, reached by a comma',
+  },
+  {
+    name: 'a namespace destructure through promises is capability',
+    path: 'scripts/r13-promises.mjs',
+    contents: "const fs = require('node:fs');\nconst { rm: nuke } = fs.promises;\nnuke(d);\n",
+    expect: 'T0',
+    why: 'the dotted fs.promises.rm form was recognised while the destructure of the same object was not',
+  },
+  {
+    name: 'an exports property on another object is not a CJS barrel',
+    path: 'src/lib/r13-loader.ts',
+    contents: "loader.exports = require('node:fs');\nloader.exports.readFileSync(file);\n",
+    expect: 'T1',
+    escalated: false,
+    why: 'the barrel rule matched any property named exports, which is an ordinary object assignment',
+  },
   {
     name: 'a work ledger describing agent work stays inert',
     path: 'docs/R10-LEDGER.md',
