@@ -864,6 +864,57 @@ describe('every stuck cell keeps a lever', () => {
     expect(ackEligibility(after, 'q/0')).toMatchObject({ eligible: true });
   });
 
+  it('never re-records a failure against a waived child that still has an unsettled sibling', async () => {
+    // The mixed shape, and the one that actually bites. With a SINGLE
+    // geometry-less child, waiving it makes every child settled, so
+    // `resumeChildren` is never entered again and the ordering inside it cannot
+    // matter -- which is exactly why an earlier reproduction wrongly concluded
+    // the defect was not real. Give that waived child an unsettled SIBLING and
+    // the parent is pulled back into `resumeChildren` on the sibling's account,
+    // where the `!childCell` test fires before any Verdict is consulted.
+    const file = path.join(dir, 'corrupt-ack-with-sibling.jsonl');
+    const sibling = {
+      id: 'q/1',
+      kind: 'nearby',
+      depth: 1,
+      sideMeters: 180,
+      bbox: BBOX,
+      center: { latitude: 40.7215, longitude: -73.988 },
+      radiusMeters: 127,
+    };
+
+    const writer = openManifest(file);
+    writer.plan({ configHash: configHash({ t: 'corrupt-sibling' }), cells: [ROOT] });
+    writer.attempt({ cellId: ROOT.id, attemptN: 1, ok: true, count: CAP, capped: true });
+    writer.result(ROOT.id, [{ id: 'v-root' }]);
+    // 'q/0' is named with no geometry; 'q/1' is a real, still-unfinished cell.
+    writer.subdivide(ROOT.id, ['q/0', 'q/1'], [sibling]);
+    writer.ackTerminal('q/0', 'SUBDIVIDE record lost this child geometry', 'operator');
+    writer.done('q/0', 'ack_terminal', { reason: 'geometry unrecoverable' });
+    writer.close();
+
+    const countCorrupt = (state: any) =>
+      state.records.filter(
+        (record: any) =>
+          record.type === 'ATTEMPT' &&
+          record.cellId === 'q/0' &&
+          record.errorClass === MANIFEST_CORRUPT,
+      ).length;
+
+    // The sibling keeps failing, so the parent keeps re-entering resumeChildren.
+    const failSibling = async () => {
+      throw Object.assign(new Error('Google Nearby Search failed (429): Quota exceeded'), {
+        status: 429,
+      });
+    };
+
+    const first = await resume(file, failSibling);
+    const second = await resume(file, failSibling);
+
+    expect(countCorrupt(first)).toBe(0);
+    expect(countCorrupt(second)).toBe(0);
+  });
+
   it('converges once the unreconstructable child is waived', async () => {
     const file = path.join(dir, 'corrupt-ack.jsonl');
     seedMissingChildGeometry(file);

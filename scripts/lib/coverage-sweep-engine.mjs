@@ -268,6 +268,26 @@ async function resumeChildren(cell, known, ctx) {
     const childState = ctx.state?.cells?.get(childId);
     const childCell = childState?.cell;
     if (!childCell) {
+      // A waiver is a decision the operator already made, and re-recording a
+      // failure over it is not "failing loudly", it is arguing with them on
+      // every resume.
+      //
+      // This only bites in the MIXED shape, which is why it survived a round of
+      // review: with a single geometry-less child, waiving it settles every
+      // child, `resumeChildren` is never entered again, and the ordering here
+      // cannot matter. Give that waived child an unsettled SIBLING and the
+      // parent is dragged back in on the sibling's account, the `!childCell`
+      // test fires first, and a fresh MANIFEST_CORRUPT attempt is appended over
+      // the waiver -- forever, once per resume.
+      //
+      // `acknowledged` is the exact predicate, not `terminal`: an ACK is the
+      // only way a cell with no geometry can reach a terminal status at all,
+      // and a broader test would let a terminal-but-still-blocked child count
+      // as a finished outcome and settle its parent over unrecovered work.
+      if (classify(childState).acknowledged) {
+        outcomes.push('ack_terminal');
+        continue;
+      }
       // The SUBDIVIDE record is unusable; fail loudly rather than reporting a
       // clean run over a subdivision we cannot reconstruct.
       //

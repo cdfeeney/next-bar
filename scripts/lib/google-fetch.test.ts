@@ -67,6 +67,50 @@ describe('fetchJson error status', () => {
     expect(classifyError(server, server.status)).toBe('http5xx');
   });
 
+  it('keeps the status when the body fails to parse, so a WAF page is still http4xx', async () => {
+    // A permanent 403 behind a proxy or WAF returns an HTML error page, so
+    // `response.json()` throws. The response HAD arrived and its status was
+    // known; discarding it put the cell back in the unfixable-and-unwaivable
+    // state this module exists to prevent.
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON at position 0');
+      },
+    });
+
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl,
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Error & { status?: number };
+
+    expect(error.status).toBe(403);
+    expect(classifyError(error, error.status)).toBe('http4xx');
+    expect(BLOCKING_ERROR_CLASSES).not.toContain(classifyError(error, error.status));
+    // Permanent: not worth burning all four attempts on.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("trusts Google's own error.code over a 200 envelope", async () => {
+    // A gateway can wrap a real 403 in HTTP 200. Classifying by the envelope
+    // matched no numeric guard, fell through to blocking `network`, and threw
+    // at once because 200 is not retryable -- permanently stuck, no lever.
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ error: { code: 403, message: 'PERMISSION_DENIED: key blocked' } }),
+      }),
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Error & { status?: number };
+
+    expect(error.status).toBe(403);
+    expect(classifyError(error, error.status)).toBe('http4xx');
+  });
+
   it('leaves a genuine socket failure without a status, so it stays network', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
 
