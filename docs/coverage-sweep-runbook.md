@@ -191,6 +191,7 @@ promises that a retry might help:
 | `http4xx` | Google rejects this request and always will |
 | `manifest_corrupt` | a `SUBDIVIDE` names a child but carries no geometry for it, so there is nothing to search and no resume can supply it |
 | `types_exhausted` | Google rejected every `includedType` we know how to ask for, so there is nothing left to request |
+| `api_rejected` | the API answered, rejected the request, and the transport declined to retry it — the case where the envelope status matches none of the classifier's numeric guards, e.g. an HTTP 200 wrapping an error body |
 
 A cell whose **geometry is missing from the manifest entirely** is waivable for
 the same reason, and is granted ahead of the never-attempted refusal — it can

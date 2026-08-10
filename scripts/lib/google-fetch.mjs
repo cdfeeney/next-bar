@@ -33,11 +33,12 @@ const ATTEMPTS = 4;
  *   response ever arrived and no status exists. Where the body carries Google's
  *   own `error.code`, that code is preferred over the envelope status.
  *
- *   Known residual: a 200 whose error body has no numeric `code` still resolves
- *   to status 200, which no `classifyError` guard matches, so it classifies as
- *   `network`. Closing that needs a taxonomy change (a non-blocking permanent
- *   class, as `manifest_corrupt` and `types_exhausted` already are) rather than
- *   a transport change.
+ *   `permanent` is set whenever a response WAS received and the transport
+ *   declined to retry it. `classifyError` reads it only as a last resort, so a
+ *   rejection whose envelope status matches none of its numeric guards -- an
+ *   HTTP 200 wrapping an error body with no numeric `code` -- classifies as
+ *   `api_rejected` (non-blocking, waivable) instead of falling through to
+ *   `network` (blocking) and stranding the cell with no lever.
  */
 export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = defaultSleep } = {}) {
   let lastError;
@@ -63,8 +64,9 @@ export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = 
       // If `response` is undefined the socket genuinely failed and there is no
       // status to attach. That is the one case `network` is actually about.
       if (response) {
-        lastError = Object.assign(error, { status: response.status });
-        if (!RETRYABLE.has(response.status)) throw lastError;
+        const permanent = !RETRYABLE.has(response.status);
+        lastError = Object.assign(error, { status: response.status, permanent });
+        if (permanent) throw lastError;
       } else {
         lastError = error;
       }
@@ -91,8 +93,17 @@ export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = 
     // refused to waive it because "resume handles that", so the cell was
     // unfinishable and unwaivable at once. The `http4xx` branch was dead code
     // in production and the runbook's documented behaviour was false.
-    lastError = Object.assign(new Error(`${source} failed (${status}): ${detail}`), { status });
-    if (!RETRYABLE.has(status)) throw lastError;
+    // `permanent` is the transport stating its OWN judgement rather than making
+    // the classifier re-derive it from a status number. RETRYABLE is already the
+    // decision about whether another attempt is worth making; a status the
+    // classifier cannot key on (a 200 wrapping an error body) otherwise fell
+    // through to the blocking `network` default and stranded the cell.
+    const permanent = !RETRYABLE.has(status);
+    lastError = Object.assign(new Error(`${source} failed (${status}): ${detail}`), {
+      status,
+      permanent,
+    });
+    if (permanent) throw lastError;
     if (attempt === ATTEMPTS - 1) break;
     const delayMs = 250 * 3 ** attempt;
     console.warn(`${source} transient failure; retrying in ${delayMs}ms`);

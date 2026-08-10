@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { classifyError, BLOCKING_ERROR_CLASSES } from './coverage-manifest.mjs';
+import { API_REJECTED, classifyError, BLOCKING_ERROR_CLASSES } from './coverage-manifest.mjs';
 import { fetchJson } from './google-fetch.mjs';
 
 /**
@@ -109,6 +109,46 @@ describe('fetchJson error status', () => {
 
     expect(error.status).toBe(403);
     expect(classifyError(error, error.status)).toBe('http4xx');
+  });
+
+  it('classifies a 200 error body with no numeric code as waivable, not blocking', async () => {
+    // The last door into the "neither fixable nor waivable" state. A 200 wrapping
+    // an error body matches no numeric guard in classifyError, so it used to fall
+    // through to the blocking `network` default -- and because 200 is not
+    // retryable it threw at once, leaving the cell permanently stuck with the
+    // waiver refused on the promise that a retry might help.
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        // No numeric `code`, so there is nothing left to key a status on.
+        json: async () => ({ error: { message: 'request rejected' } }),
+      }),
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Error & { status?: number; permanent?: boolean };
+
+    expect(error.permanent).toBe(true);
+    const errorClass = classifyError(error, error.status);
+    expect(errorClass).toBe(API_REJECTED);
+    expect(BLOCKING_ERROR_CLASSES).not.toContain(errorClass);
+  });
+
+  it('does not mark a retryable failure permanent', async () => {
+    // The complement: marking everything permanent would hand the operator a
+    // waiver over geography a resume would have covered.
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+        json: async () => ({ error: { message: 'backend unavailable' } }),
+      }),
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Error & { status?: number; permanent?: boolean };
+
+    expect(error.permanent).toBe(false);
+    expect(classifyError(error, error.status)).toBe('http5xx');
   });
 
   it('leaves a genuine socket failure without a status, so it stays network', async () => {

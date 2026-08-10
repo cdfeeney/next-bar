@@ -83,6 +83,31 @@ export const TYPES_EXHAUSTED = 'types_exhausted';
 export const UNSUPPORTED_TYPE = 'unsupported_type';
 
 /**
+ * The API answered, rejected the request, and the transport refused to retry it.
+ *
+ * Non-blocking for the same reason as MANIFEST_CORRUPT and TYPES_EXHAUSTED: a
+ * retry cannot help, and here we know that from the transport itself rather than
+ * by inference. `RETRYABLE` is the transport's own judgement about which
+ * responses are worth another attempt; when it declines to retry one, resuming
+ * asks the identical question and gets the identical rejection.
+ *
+ * This exists because classification by HTTP status alone has a hole. A gateway
+ * can wrap a real rejection in an envelope whose status matches no guard in
+ * `classifyError` — the observed case is HTTP 200 carrying an error body — and
+ * such a status fell through to `network`, the BLOCKING default. That put the
+ * cell back in the state this whole taxonomy exists to prevent: unfixable by the
+ * engine because it will never succeed, and unwaivable by the operator because
+ * `ackEligibility` refuses a blocking class on the promise that a retry might
+ * help. Preferring the body's own `error.code` fixed the common shape; an error
+ * body with no numeric code had nothing left to key on, and this class is what
+ * catches it.
+ *
+ * Deliberately NOT added to BLOCKING_ERROR_CLASSES: it routes to the
+ * permanent-failure grant, which restores the lever.
+ */
+export const API_REJECTED = 'api_rejected';
+
+/**
  * One past the HIGHEST attempt number on record — not one past the COUNT.
  *
  * `unrecoveredBlocking` decides recovery by comparing `attemptN` values, so
@@ -134,6 +159,14 @@ export function classifyError(error, status) {
   }
   if (typeof status === 'number' && status >= 500) return 'http5xx';
   if (typeof status === 'number' && status >= 400) return 'http4xx';
+  // Asked LAST, so it can never shadow a status we can classify honestly, and
+  // FIRST among the fallthroughs, because `network` is the default for "we could
+  // not determine anything" and that default is blocking. A response-backed
+  // rejection the transport declined to retry is determined: it is permanent.
+  // Without this, an envelope status matching no guard above (HTTP 200 carrying
+  // an error body) landed in `network` and left the cell neither fixable nor
+  // waivable.
+  if (error?.permanent === true) return API_REJECTED;
   return 'network';
 }
 
