@@ -498,3 +498,94 @@ describe('the waiver distinguishes what a resume can fix from what it cannot', (
     expect(ackEligibility(state, 'n:0:0')).toMatchObject({ eligible: true });
   });
 });
+
+describe('non-cell lane units in the PLAN', () => {
+  // The seed-name and SLA lanes fetch real data and can fail or be truncated,
+  // but they wrote nothing to the manifest and were absent from the PLAN, so the
+  // invariant never asked anything of them and a run could report COMPLETE while
+  // a whole lane had silently failed. They are planned as units with no geometry
+  // -- `classify` reads records, not geometry, so it judges them on the same
+  // evidence rule as every cell.
+  const LANE_PLAN = {
+    type: 'PLAN',
+    configHash: 'abc',
+    cells: [
+      ...planCells,
+      { id: 'seed:bk', kind: 'seed', depth: 0 },
+      { id: 'sla:bk', kind: 'sla', depth: 0 },
+    ],
+  };
+  const cellsDone = [
+    ok('n:0:0', 3, false),
+    { type: 'DONE', cellId: 'n:0:0', terminalStatus: 'unsaturated' },
+    ok('n:0:1', 3, false),
+    { type: 'DONE', cellId: 'n:0:1', terminalStatus: 'unsaturated' },
+  ];
+
+  it('refuses COMPLETE while a lane unit has no terminal record', () => {
+    const report = completeness(build([LANE_PLAN, ...cellsDone]));
+    expect(report.complete).toBe(false);
+    expect(report.missing).toContain('seed:bk');
+    expect(report.missing).toContain('sla:bk');
+  });
+
+  it('refuses a lane DONE that no successful attempt backs', () => {
+    // A DONE is a claim; a successful ATTEMPT is the evidence. Lane units get no
+    // exemption from that rule.
+    const report = completeness(
+      build([
+        LANE_PLAN,
+        ...cellsDone,
+        { type: 'DONE', cellId: 'seed:bk', terminalStatus: 'unsaturated' },
+        { type: 'DONE', cellId: 'sla:bk', terminalStatus: 'unsaturated' },
+      ]),
+    );
+    expect(report.complete).toBe(false);
+    expect(report.missing).toEqual(expect.arrayContaining(['seed:bk', 'sla:bk']));
+  });
+
+  it('reaches COMPLETE once both lanes record evidence and a terminal status', () => {
+    const report = completeness(
+      build([
+        LANE_PLAN,
+        ...cellsDone,
+        ok('seed:bk', 12, false),
+        { type: 'DONE', cellId: 'seed:bk', terminalStatus: 'unsaturated' },
+        ok('sla:bk', 4200, false),
+        { type: 'DONE', cellId: 'sla:bk', terminalStatus: 'unsaturated' },
+      ]),
+    );
+    expect(report.complete).toBe(true);
+    expect(report.summary.plannedCells).toBe(4);
+  });
+
+  it('reports a capped seed lane as saturated, and leaves the operator a lever', () => {
+    // A full result page is a truncated answer: the seed's true match may simply
+    // have ranked below the cut, so this is knowably short rather than finished.
+    const state = build([
+      LANE_PLAN,
+      ...cellsDone,
+      ok('seed:bk', 9, true),
+      { type: 'DONE', cellId: 'seed:bk', terminalStatus: SATURATED_AT_FLOOR },
+      ok('sla:bk', 4200, false),
+      { type: 'DONE', cellId: 'sla:bk', terminalStatus: 'unsaturated' },
+    ]);
+    const report = completeness(state);
+    expect(report.complete).toBe(false);
+    expect(report.saturated).toContain('seed:bk');
+    expect(ackEligibility(state, 'seed:bk')).toMatchObject({ eligible: true });
+  });
+
+  it('keeps a budget-stopped lane blocking, because a raised budget fixes it', () => {
+    const state = build([
+      LANE_PLAN,
+      ...cellsDone,
+      { type: 'ATTEMPT', cellId: 'seed:bk', attemptN: 1, ok: false, errorClass: 'budget_exhausted' },
+      ok('sla:bk', 4200, false),
+      { type: 'DONE', cellId: 'sla:bk', terminalStatus: 'unsaturated' },
+    ]);
+    expect(completeness(state).complete).toBe(false);
+    // Blocking classes are not waivable: resume with a raised budget instead.
+    expect(ackEligibility(state, 'seed:bk')).toMatchObject({ eligible: false });
+  });
+});

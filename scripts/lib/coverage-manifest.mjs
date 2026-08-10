@@ -202,7 +202,15 @@ export function classifyError(error, status) {
  */
 function isQuotaRejection(error, status) {
   if (status !== 403) return false;
-  return /quota|rate.?limit|per day/i.test(String(error?.message ?? ''));
+  // Google's real wordings, not a guess at them. `Daily Limit Exceeded` and the
+  // `dailyLimitExceeded` / `userRateLimitExceeded` / `rateLimitExceeded` reason
+  // strings are what the Places API actually returns for an exhausted cap, and
+  // none of them matched `per day`, so a genuine daily quota was filed as a
+  // permanent `http4xx` and offered to the operator as a cell to waive. It
+  // reopens at midnight Pacific; waiving it discards real geography.
+  return /quota|rate.?limit|rateLimitExceeded|daily.?limit|per day/i.test(
+    String(error?.message ?? ''),
+  );
 }
 
 class ManifestWriter {

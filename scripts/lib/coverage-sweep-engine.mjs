@@ -66,6 +66,10 @@ export async function runSweep({
   manifest,
   state = null,
   maxCalls = Infinity,
+  // Returns requests actually billed so far. See the budget gate in `queryCell`:
+  // the engine's own `callsUsed` counts invocations, and the transport may issue
+  // several HTTP requests per invocation.
+  spent = null,
   maxResultCount = 20,
   subdivision = DEFAULT_SUBDIVISION,
   includedTypes = [],
@@ -76,6 +80,7 @@ export async function runSweep({
     manifest,
     state,
     maxCalls,
+    spent,
     maxResultCount,
     subdivision,
     includedTypes: [...includedTypes],
@@ -470,13 +475,19 @@ async function processCell(cell, ctx) {
 async function queryCell(cell, ctx, known) {
   const attemptN = nextAttempt(ctx, cell.id, known);
 
-  if (ctx.callsUsed >= ctx.maxCalls) {
+  // What the budget must gate is REQUESTS BILLED, not calls this engine made.
+  // The transport retries internally, so counting invocations let a run spend up
+  // to four times the operator's stated ceiling. `spent` is supplied by the
+  // caller that owns the real meter; without one this falls back to the old
+  // count, which is right only when the transport never retries (fixtures).
+  const spend = typeof ctx.spent === 'function' ? ctx.spent() : ctx.callsUsed;
+  if (spend >= ctx.maxCalls) {
     ctx.manifest.attempt({
       cellId: cell.id,
       attemptN,
       ok: false,
       errorClass: 'budget_exhausted',
-      message: `stopped before call ${ctx.callsUsed + 1}; budget is ${ctx.maxCalls}`,
+      message: `stopped before request ${spend + 1}; budget is ${ctx.maxCalls}`,
     });
     // The budget stops the CALL, not the data we already hold. Without this the
     // resumed queue silently loses places the manifest still records.

@@ -620,6 +620,38 @@ describe('budget and error paths', () => {
     expect(report.status).toBe('incomplete_failed');
   });
 
+  it('gates the budget on requests actually billed, not engine invocations', async () => {
+    // --max-calls is documented as a HARD Google call budget, but the engine
+    // counted one "call" per transport invocation while the transport retries
+    // internally, so a run could spend several times the operator's ceiling.
+    // Here every invocation costs 3 requests: a budget of 4 must stop after the
+    // SECOND invocation (6 spent), not run on to 4 invocations (12 spent).
+    const plan = cells();
+    const { writer, file } = manifestFor('budget-requests.jsonl', plan);
+    const billed = { requests: 0 };
+    const inner = transportFor(venues(12, 340)).transport;
+
+    const result = await sweep({
+      cells: plan,
+      manifest: writer,
+      subdivision: SUBDIVISION,
+      maxResultCount: CAP,
+      maxCalls: 4,
+      spent: () => billed.requests,
+      transport: async (cell: any) => {
+        billed.requests += 3; // the transport retried twice under the hood
+        return inner(cell);
+      },
+    });
+    writer.close();
+
+    expect(result.callsUsed).toBe(2);
+    expect(billed.requests).toBe(6);
+    const report = completeness(loadManifest(file));
+    expect(report.complete).toBe(false);
+    expect(report.status).toBe('incomplete_failed');
+  });
+
   it('classifies a quota error as blocking and names the cell', async () => {
     const plan = cells();
     const { writer, file } = manifestFor('quota.jsonl', plan);

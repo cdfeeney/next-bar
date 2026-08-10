@@ -193,6 +193,24 @@ promises that a retry might help:
 | `types_exhausted` | Google rejected every `includedType` we know how to ask for, so there is nothing left to request |
 | `api_rejected` | the API answered, rejected the request, and the transport declined to retry it — a non-retryable 5xx (501, 505–511, the Cloudflare 520–530 family), or an envelope status matching none of the classifier's numeric guards such as an HTTP 200 wrapping an error body |
 
+**Every lane is in the PLAN.** The seed-name and SLA lanes are not cells — there
+is no geometry to search and nothing to subdivide — but they are planned as
+units (`seed:<region>`, `sla:<region>`) and must reach a terminal `DONE` like
+anything else. They previously wrote nothing at all, so the invariant never
+asked anything of them and a run could print COMPLETE while a whole lane had
+failed. `classify` reads records rather than geometry, so a lane unit is judged
+on the same evidence rule as a cell: a `DONE` is a claim, a successful `ATTEMPT`
+is the evidence for it. A seed lane that hit its 5-result cap without a
+confident match records `saturated_at_floor` — knowably short, and waivable once
+the operator has checked those names by hand.
+
+**`--max-calls` counts requests, not cell visits.** The transport retries
+internally, so counting one "call" per cell visit let a run spend up to four
+times the stated ceiling. The budget now gates on requests actually billed, and
+a resume seeds its counter from the attempts already on record so the ceiling is
+plan-level rather than a fresh budget per pass. The SLA lane is deliberately not
+billed against it: that lane reads data.ny.gov, and this is a Google budget.
+
 **How the class is chosen.** Retryability is the *primary* axis and it comes from
 the transport, which is the only component that knows what actually happened.
 `classifyError` asks "would the transport try again?" before it looks at status

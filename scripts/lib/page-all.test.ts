@@ -62,4 +62,18 @@ describe('pageAll', () => {
       pageAll({ fetchPage: vi.fn(), pageSize: 0, maxRows: 100, label: 'test' }),
     ).rejects.toThrow(/pageSize must be a positive number/);
   });
+
+  it.each([NaN, undefined, 0, -1])(
+    'rejects a %s ceiling rather than silently disabling the guard',
+    async (maxRows) => {
+      // `offset + pageSize >= NaN` is always false, so an unvalidated ceiling
+      // switched off the refuse-at-ceiling behaviour this module exists for.
+      const fetchPage = vi.fn().mockResolvedValue(rowsOf(100));
+
+      await expect(
+        pageAll({ fetchPage, pageSize: 100, maxRows: maxRows as number, label: 'test' }),
+      ).rejects.toThrow(/maxRows must be a positive number/);
+      expect(fetchPage).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -20,6 +20,14 @@ export async function pageAll({ fetchPage, pageSize, maxRows, label }) {
   if (!Number.isFinite(pageSize) || pageSize <= 0) {
     throw new Error(`${label}: pageSize must be a positive number`);
   }
+  // `maxRows` went unvalidated while `pageSize` was checked, so a non-numeric
+  // --sla-max-rows made the ceiling comparison `offset + pageSize >= NaN`, which
+  // is always false. That silently disabled the refuse-at-ceiling guard -- the
+  // entire reason this module exists -- and left only the short-page exit to
+  // bound the loop. A guard that can be switched off by a typo is not a guard.
+  if (!Number.isFinite(maxRows) || maxRows <= 0) {
+    throw new Error(`${label}: maxRows must be a positive number`);
+  }
   const rows = [];
   for (let offset = 0; ; offset += pageSize) {
     const page = await fetchPage(offset);

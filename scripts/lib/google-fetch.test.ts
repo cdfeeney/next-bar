@@ -154,10 +154,11 @@ describe('fetchJson error status', () => {
     expect(classifyError(error, error.status)).toBe('http5xx');
   });
 
-  // A non-retryable 5xx: the transport will not try again, so the classifier
-  // must not file it as blocking http5xx and refuse the operator a waiver.
-  it.each([501, 505, 508, 511, 520])(
-    'keeps a non-retryable %i waivable instead of filing it as blocking http5xx',
+  // A genuinely permanent 5xx: the transport will not try again, so the
+  // classifier must not file it as blocking http5xx and refuse a waiver.
+  // 520 is deliberately NOT in this list -- see the transient case below.
+  it.each([501, 505, 506, 508, 510, 511])(
+    'keeps a permanent %i waivable instead of filing it as blocking http5xx',
     async (status) => {
       const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
         fetchImpl: vi.fn().mockResolvedValue({
@@ -197,6 +198,80 @@ describe('fetchJson error status', () => {
     expect(errorClass).toBe('http5xx');
     // Transient, so it must stay blocking -- a resume is the right answer.
     expect(BLOCKING_ERROR_CLASSES).toContain(errorClass);
+  });
+
+  // The other half, and the one a closed allowlist got wrong: the Cloudflare
+  // 520-530 family is emitted for exactly the transient origin/gateway trouble a
+  // retry is for. Treating them as permanent offered the operator a waiver over
+  // geography a resume would have collected -- silent data loss.
+  it.each([507, 520, 521, 522, 523, 524, 527, 530])(
+    'retries a transient gateway %i and keeps it blocking',
+    async (status) => {
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: false,
+        status,
+        statusText: 'gateway',
+        json: async () => ({ error: { message: 'origin trouble' } }),
+      });
+
+      const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+        fetchImpl,
+        sleep: noSleep,
+      }).catch((caught) => caught)) as Failure;
+
+      expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+      expect(error.retryable).toBe(true);
+      expect(BLOCKING_ERROR_CLASSES).toContain(classifyError(error, error.status));
+    },
+  );
+
+  it('does not let a torn final read erase the server errors before it', async () => {
+    // Three real 503s then one torn 200 threw an error carrying status 200 and
+    // retryable:false -- the outage erased, and the operator invited to waive a
+    // cell a resume would have cleared.
+    let n = 0;
+    const fetchImpl = vi.fn().mockImplementation(async () => {
+      n += 1;
+      if (n < 4) {
+        return { ok: false, status: 503, statusText: 's', json: async () => ({ error: { message: 'x' } }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => {
+          throw new SyntaxError('torn');
+        },
+      };
+    });
+
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl,
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Failure;
+
+    expect(error.retryable).toBe(true);
+    expect(BLOCKING_ERROR_CLASSES).toContain(classifyError(error, error.status));
+  });
+
+  it.each([
+    ['Quota exceeded per day', 'quota'],
+    ['Daily Limit Exceeded', 'quota'],
+    ['API key revoked', 'http4xx'],
+  ])('classifies a 403 saying %s as %s', async (message, expected) => {
+    // Google's real daily-cap wording is "Daily Limit Exceeded", which did not
+    // match `per day`, so a cap that reopens at midnight was filed permanent.
+    const error = (await fetchJson('https://x', {}, 'Google Nearby Search', {
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        json: async () => ({ error: { message } }),
+      }),
+      sleep: noSleep,
+    }).catch((caught) => caught)) as Failure;
+
+    expect(classifyError(error, error.status)).toBe(expected);
   });
 
   it.each([8, 14])(

@@ -67,7 +67,9 @@ import {
   ackEligibility,
   assertResumable,
   completeness,
+  API_REJECTED,
   MANIFEST_SCHEMA_VERSION,
+  SATURATED_AT_FLOOR,
   configHash,
   loadManifest,
   openManifest,
@@ -256,6 +258,8 @@ const COUNTY = options.county ?? null;
 const MANIFEST = options.manifest ?? null;
 const MAX_RESULT_COUNT = 20;
 /** Socrata page size for the SLA read, and the ceiling on how far we will page. */
+/** Result cap for one exact-name seed search; a full page means a truncated answer. */
+const SEED_MAX_RESULTS = 5;
 const SLA_PAGE_LIMIT = Number(options['sla-page-limit'] ?? 5000);
 const SLA_MAX_ROWS = Number(options['sla-max-rows'] ?? 200_000);
 if (![RADIUS, STEP, EXTENT, MIN_CELL].every((value) => Number.isFinite(value) && value > 0)) {
@@ -382,6 +386,7 @@ async function googleTransport(cell, includedTypes) {
         }),
       },
       'Google Nearby Search',
+      { onRequest: billRequest },
     );
   }
   return fetchJson(
@@ -405,6 +410,7 @@ async function googleTransport(cell, includedTypes) {
       }),
     },
     'Google Text Search',
+    { onRequest: billRequest },
   );
 }
 
@@ -444,8 +450,20 @@ function regionBias(bbox) {
 
 async function searchSeedNames(region, places, meter) {
   const bias = regionBias(region.bbox);
+  const unitId = `seed:${region.label}`;
+  let resolved = 0;
+  let sawCap = false;
+  let capturedBudgetStop = false;
   for (const requestedName of seedNames) {
     let best;
+    // Cap detection for THIS lane. Acceptance criterion 1 exempts no lane, and
+    // this one -- whose input is the operator's explicit list of bars believed
+    // missing -- had none at all: it asks for SEED_MAX_RESULTS and never looked
+    // at whether the page came back full. A seed whose true match ranks below
+    // the cut was dropped by the confidence filter below and the run still
+    // printed "all N seed names were searched". A full page is a truncated
+    // answer until proven otherwise, exactly as it is for a saturated cell.
+    let capped = false;
     // Generic names such as "Suite" and "Parlay Cafe" often resolve to a
     // hotel or unrelated business without an explicit bar-intent retry.
     for (const textQuery of [
@@ -454,11 +472,21 @@ async function searchSeedNames(region, places, meter) {
     ]) {
       // Gate every CALL, not every seed: each seed issues up to two searches,
       // so a per-seed check overshoots the documented hard stop.
-      if (meter.calls >= MAX_CALLS) {
+      if (meter.requests >= MAX_CALLS) {
         console.error(
           `call budget ${MAX_CALLS} exhausted during seed "${requestedName}"; remaining seeds were not searched`,
         );
         meter.seedBudgetStopped = true;
+        capturedBudgetStop = true;
+        // Blocking, and now visible to the invariant: a resume with a raised
+        // budget is exactly what fixes this.
+        manifest.attempt({
+          cellId: unitId,
+          attemptN: nextLaneAttempt(unitId),
+          ok: false,
+          errorClass: 'budget_exhausted',
+          message: `stopped during seed "${requestedName}"; budget is ${MAX_CALLS}`,
+        });
         return;
       }
       const json = await fetchJson(
@@ -473,13 +501,15 @@ async function searchSeedNames(region, places, meter) {
           },
           body: JSON.stringify({
             textQuery,
-            maxResultCount: 5,
+            maxResultCount: SEED_MAX_RESULTS,
             locationBias: { circle: bias },
           }),
         },
         'Google exact-name Search',
+        { onRequest: billRequest },
       );
       meter.calls += 1;
+      if ((json.places ?? []).length >= SEED_MAX_RESULTS) capped = true;
       const ranked = (json.places ?? [])
         .filter(
           (place) =>
@@ -515,13 +545,44 @@ async function searchSeedNames(region, places, meter) {
       }
       if ((best?.confidence ?? 0) >= 0.6 && best.barTyped) break;
     }
-    if (!best || best.confidence < 0.6) continue;
+    if (!best || best.confidence < 0.6) {
+      // No confident match AND the page was full: the match may simply have
+      // ranked below the cut, so this seed is unresolved-because-censored, not
+      // unresolved-because-absent. The run must not call itself COMPLETE over
+      // it. A short page is real evidence the seed is not there; a full one is
+      // not.
+      if (capped) {
+        sawCap = true;
+        meter.seedCapped.push(`${requestedName} (${region.label})`);
+      }
+      continue;
+    }
+    resolved += 1;
     mergeGooglePlace(places, best.place, {
       kind: 'seed',
       region: region.label,
       requestedName,
       confidence: best.confidence,
     });
+  }
+  if (capturedBudgetStop) return;
+  // The lane finished its list. Record the evidence, then the claim.
+  manifest.attempt({
+    cellId: unitId,
+    attemptN: nextLaneAttempt(unitId),
+    ok: true,
+    count: resolved,
+    capped: sawCap,
+  });
+  if (sawCap) {
+    // Searched, and knowably short: the same shape as a cell still saturated at
+    // the floor, and it carries the same lever — the operator can acknowledge it
+    // once they have checked those names by hand.
+    manifest.done(unitId, SATURATED_AT_FLOOR, {
+      reason: `${meter.seedCapped.length} seed name(s) returned a full ${SEED_MAX_RESULTS}-result page`,
+    });
+  } else {
+    manifest.done(unitId, 'unsaturated', { count: resolved, seeds: seedNames.length });
   }
 }
 
@@ -714,12 +775,89 @@ if (!options.resume) {
       center: cell.center,
       radiusMeters: cell.radiusMeters,
       ...(cell.query ? { query: cell.query } : {}),
-    })),
+    })).concat(laneUnits()),
   });
 }
 
+/**
+ * The seed-name and SLA lanes, as planned units the completeness invariant can
+ * see.
+ *
+ * They fetch real data and can fail or be truncated, but they wrote nothing to
+ * the manifest and were absent from the PLAN, so the invariant never asked
+ * anything of them: `--out` was not reconstructable from the manifest as
+ * acceptance criterion 5 claims, and a lane that failed outright left no
+ * acknowledgeable unit for the operator. Three review lanes reported it.
+ *
+ * They are NOT cells and are deliberately never handed to `runSweep` — there is
+ * no geometry to search and nothing to subdivide. They are units of work that
+ * must reach a terminal DONE like everything else in the PLAN. `classify` reads
+ * records rather than geometry, so it judges them on exactly the same evidence
+ * rule: a DONE is a claim, a successful ATTEMPT is the evidence for it.
+ */
+function laneUnits() {
+  const units = [];
+  for (const region of regions) {
+    if (seedNames.length > 0) {
+      units.push({ id: `seed:${region.label}`, kind: 'seed', depth: 0 });
+    }
+    if (!options['no-sla']) {
+      units.push({ id: `sla:${region.label}`, kind: 'sla', depth: 0 });
+    }
+  }
+  return units;
+}
+
+/**
+ * Bill one Google HTTP request against the budget.
+ *
+ * Passed to every Google `fetchJson` as `onRequest`, so a retried transient is
+ * counted as the several requests it really is. The SLA lane is deliberately
+ * NOT billed here: it reads data.ny.gov, and `--max-calls` is a Google budget.
+ */
+function billRequest() {
+  meter.requests += 1;
+}
+
+/**
+ * Requests already bought by earlier runs of this manifest.
+ *
+ * `callsUsed` restarted at zero on every resume, so a budget the operator meant
+ * as a ceiling could be re-spent in full by each pass. ATTEMPT records are the
+ * only durable evidence of spend; they under-count a retried attempt, so this
+ * errs toward letting the run continue rather than refusing work already paid
+ * for.
+ */
+function countRecordedAttempts(state) {
+  if (!state?.records) return 0;
+  return state.records.filter((record) => record.type === 'ATTEMPT').length;
+}
+
+/**
+ * One past the highest attempt already recorded for a lane unit.
+ *
+ * Same rule the engine uses for cells: `unrecoveredBlocking` and
+ * `ackEligibility` compare attempt NUMBERS, so a resume that reused 1 would
+ * write a record sorting before its own predecessor.
+ */
+function nextLaneAttempt(unitId) {
+  const recorded = (priorState?.records ?? []).filter(
+    (record) => record.type === 'ATTEMPT' && record.cellId === unitId,
+  );
+  const highest = recorded.reduce((max, record) => Math.max(max, record.attemptN ?? 0), 0);
+  return highest + 1;
+}
+
 const places = new Map();
-const meter = { calls: 0 };
+// `requests` is what the operator is actually billed for, and what --max-calls
+// gates. `calls` stays as the engine's per-cell invocation count for reporting.
+// A resume seeds `requests` from the attempts already on record so the budget is
+// a plan-level ceiling rather than a per-run one -- otherwise a run could be
+// resumed indefinitely, each pass buying a fresh full budget. Attempts are a
+// floor on requests (a retried attempt billed more than one), so this
+// under-counts rather than over-counts, and never refuses work the operator
+// already paid for.
+const meter = { calls: 0, requests: countRecordedAttempts(priorState), seedCapped: [] };
 const regionByKey = new Map(regions.map((region, index) => [String(index), region]));
 const sweep = await runSweep({
   cells: plannedCells,
@@ -727,6 +865,7 @@ const sweep = await runSweep({
   manifest,
   state: priorState,
   maxCalls: MAX_CALLS,
+  spent: () => meter.requests,
   maxResultCount: MAX_RESULT_COUNT,
   subdivision: { maxDepth: MAX_DEPTH, minCellMeters: MIN_CELL, branching: 4 },
   includedTypes: NEARBY_INCLUDED_TYPES,
@@ -748,9 +887,30 @@ for (const region of regions) {
 const licenseById = new Map();
 if (!options['no-sla']) {
   for (const region of regions) {
-    for (const license of await fetchLicenses(region)) {
+    const unitId = `sla:${region.label}`;
+    const attemptN = nextLaneAttempt(unitId);
+    let rows;
+    try {
+      rows = await fetchLicenses(region);
+    } catch (error) {
+      // A lane failure is now a recorded, acknowledgeable unit rather than an
+      // unexplained non-zero exit. `pageAll` refuses at its ceiling, which no
+      // resume fixes on its own, so this is non-blocking and keeps the lever.
+      manifest.attempt({
+        cellId: unitId,
+        attemptN,
+        ok: false,
+        errorClass: API_REJECTED,
+        message: error.message,
+      });
+      console.error(`  SLA lane failed for ${region.label}: ${error.message}`);
+      continue;
+    }
+    for (const license of rows) {
       licenseById.set(license.id, license);
     }
+    manifest.attempt({ cellId: unitId, attemptN, ok: true, count: rows.length, capped: false });
+    manifest.done(unitId, 'unsaturated', { rows: rows.length });
   }
 }
 const licenses = [...licenseById.values()];
@@ -948,6 +1108,15 @@ console.log(
 if (meter.seedBudgetStopped) {
   console.error('  status: INCOMPLETE_FAILED — the exact-name seed lane stopped on the call budget');
   console.error(`  resume with: --manifest ${MANIFEST} --resume (and raise --max-calls)`);
+  process.exitCode = 2;
+} else if (meter.seedCapped.length > 0) {
+  // Same rule the cell lanes live by: a saturated answer is not a finished one.
+  console.error(
+    `  status: INCOMPLETE_SATURATED — ${meter.seedCapped.length} seed name(s) returned a full ` +
+      `${SEED_MAX_RESULTS}-result page with no confident match, so the match may have ranked below the cut`,
+  );
+  console.error(`    ${meter.seedCapped.slice(0, 5).join(', ')}`);
+  console.error('    narrow these by adding the neighbourhood to the seed name, or verify them by hand');
   process.exitCode = 2;
 } else if (report.complete) {
   const writer = openManifest(MANIFEST);

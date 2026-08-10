@@ -16,14 +16,40 @@
  */
 
 /**
- * Statuses worth another attempt; everything else throws at once.
+ * Client errors worth another attempt. Everything else in the 4xx range is the
+ * server telling us the request itself is wrong, which a retry cannot fix.
  *
- * 408 and 425 are here because they are transient client errors. While every
- * non-member was treated as permanent, they were handed to the operator as
- * permanently-failed cells even though the very next attempt would likely have
- * succeeded — a waiver over geography that was still reachable.
+ * While every non-member was treated as permanent, these were handed to the
+ * operator as permanently-failed cells even though the very next attempt would
+ * likely have succeeded — a waiver over geography that was still reachable.
  */
-const RETRYABLE = Object.freeze(new Set([408, 425, 429, 500, 502, 503, 504]));
+const RETRYABLE_4XX = Object.freeze(new Set([408, 425, 429]));
+
+/**
+ * The 5xx statuses a retry genuinely cannot fix.
+ *
+ * 5xx is treated as retryable BY DEFAULT, with this as the exception list,
+ * rather than the other way round. A closed allowlist of {500,502,503,504} was
+ * the wrong shape: every other 5xx — including the whole Cloudflare 520-530
+ * family, which is emitted for exactly the transient origin/gateway trouble a
+ * retry is for, plus 507 Insufficient Storage — was marked non-retryable and
+ * offered to the operator as a permanently-failed cell. That is silent data
+ * loss: waiving geography a resume would have collected. Four review lanes
+ * found it independently.
+ *
+ * These six really are permanent: the server does not implement the method
+ * (501), refuses the protocol version (505), is misconfigured for content
+ * negotiation (506), detected a loop (508), demands an extension (510), or
+ * requires network authentication we are not going to satisfy mid-sweep (511).
+ */
+const PERMANENT_5XX = Object.freeze(new Set([501, 505, 506, 508, 510, 511]));
+
+/** Whether another attempt at this status could plausibly succeed. */
+function isRetryableStatus(status) {
+  if (typeof status !== 'number') return false;
+  if (status >= 500) return !PERMANENT_5XX.has(status);
+  return RETRYABLE_4XX.has(status);
+}
 
 /**
  * The smallest value we will accept from `body.error.code` as an HTTP status.
@@ -44,9 +70,11 @@ const MIN_HTTP_STATUS = 100;
  * healthy 200 envelope still resolved to status 200, which is not retryable, so
  * a temporary backend outage was handed to the operator as a permanently-failed
  * cell. The code has to inform retryability, not merely be refused as a status.
- * 4 DEADLINE_EXCEEDED, 8 RESOURCE_EXHAUSTED, 10 ABORTED, 14 UNAVAILABLE.
+ * 2 UNKNOWN, 4 DEADLINE_EXCEEDED, 8 RESOURCE_EXHAUSTED, 10 ABORTED,
+ * 13 INTERNAL, 14 UNAVAILABLE. Deliberately NOT 16 UNAUTHENTICATED or 7
+ * PERMISSION_DENIED, which no retry fixes and which must stay waivable.
  */
-const RETRYABLE_CANONICAL = Object.freeze(new Set([4, 8, 10, 14]));
+const RETRYABLE_CANONICAL = Object.freeze(new Set([2, 4, 8, 10, 13, 14]));
 
 const ATTEMPTS = 4;
 
@@ -70,12 +98,32 @@ const ATTEMPTS = 4;
  *   `api_rejected` (non-blocking, waivable) instead of falling through to
  *   `network` (blocking) and stranding the cell with no lever.
  */
-export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = defaultSleep } = {}) {
+export async function fetchJson(
+  url,
+  init,
+  source,
+  { fetchImpl = fetch, sleep = defaultSleep, onRequest = null } = {},
+) {
   let lastError;
+  // Counted so the torn-body downgrade below can tell "every read was torn" from
+  // "the last one happened to be". Without that distinction, three real 503s
+  // followed by one torn 200 threw an error carrying status 200 and
+  // retryable:false -- the 503s erased, a live outage reported as a permanently
+  // rejected cell, and the operator invited to waive it.
+  let tornAttempts = 0;
+  let attemptsMade = 0;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    attemptsMade += 1;
     let response;
     let body;
     try {
+      // Fired per HTTP REQUEST, not per fetchJson call. `--max-calls` is
+      // documented as a hard Google call budget, but the caller counted one
+      // "call" per invocation while this loop can issue ATTEMPTS of them, so a
+      // run could spend up to 4x the operator's stated ceiling on a retried
+      // transient. The meter has to be incremented where the request actually
+      // happens.
+      if (onRequest) onRequest();
       response = await fetchImpl(url, init);
       body = await response.json();
     } catch (error) {
@@ -103,7 +151,8 @@ export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = 
         // Only that optimism gets withdrawn on exhaustion below -- a genuinely
         // transient status keeps its promise.
         const torn = response.ok;
-        const retryable = torn || RETRYABLE.has(response.status);
+        if (torn) tornAttempts += 1;
+        const retryable = torn || isRetryableStatus(response.status);
         lastError = Object.assign(error, { status: response.status, retryable, torn });
         if (!retryable) throw lastError;
       } else {
@@ -143,7 +192,7 @@ export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = 
     // decision about whether another attempt is worth making, so saying it
     // directly is both truthful and exactly what `classifyError` needs.
     const retryable =
-      RETRYABLE.has(status) || (isCanonical && RETRYABLE_CANONICAL.has(apiCode));
+      isRetryableStatus(status) || (isCanonical && RETRYABLE_CANONICAL.has(apiCode));
     lastError = Object.assign(new Error(`${source} failed (${status}): ${detail}`), {
       status,
       retryable,
@@ -161,7 +210,12 @@ export async function fetchJson(url, init, source, { fetchImpl = fetch, sleep = 
   // RETRYABLE (a 503) keeps its promise: four fast attempts say nothing about a
   // resume minutes later, and treating it as permanent would waive geography a
   // retry could still reach.
-  if (lastError?.torn === true) {
+  // Only when EVERY attempt was torn. A run whose last read happened to tear,
+  // after real 5xx responses on the attempts before it, has seen a live server
+  // problem -- and downgrading on the strength of the final attempt alone threw
+  // an error carrying status 200 and `retryable:false`, erasing those 5xx and
+  // offering the operator a waiver over an outage a resume would have cleared.
+  if (lastError?.torn === true && tornAttempts === attemptsMade) {
     lastError.retryable = false;
   }
   throw lastError;
