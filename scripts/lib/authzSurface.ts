@@ -390,12 +390,40 @@ function scanSql(sql: string, blankBodies: boolean, origin = 'sql'): string {
       continue;
     }
 
+    // A double-quoted IDENTIFIER. Postgres allows any character inside one,
+    // including a semicolon or an apostrophe: `create function public."f;g"()`
+    // and `public."owner's_fn"` are both legal. The scanner used to lex only
+    // literals and dollar quotes, so the `;` in the first read as a statement
+    // boundary (leaving the following body unblanked, and its DDL counted as
+    // real access) and the apostrophe in the second opened a string that never
+    // closed — which now THROWS, taking the whole derivation down on valid SQL.
+    // The module's own identifier pattern accepts quoted names, so not lexing
+    // them here was an internal contradiction. `""` is an escaped quote.
+    if (sql[i] === '"') {
+      const start = i;
+      i += 1;
+      let closed = false;
+      while (i < sql.length) {
+        if (sql[i] === '"' && sql[i + 1] === '"') { i += 2; continue; }
+        if (sql[i] === '"') { i += 1; closed = true; break; }
+        i += 1;
+      }
+      if (!closed) throw new Error(`${origin}: a quoted identifier is never closed`);
+      out += sql.slice(start, i);
+      continue;
+    }
+
     // A quoted literal. Postgres doubles an embedded quote; an E'' string ALSO
     // honours backslash escapes, so `E'it\'s'` does not end at that quote.
     // Treating it as if it did closed the string early and re-opened a bogus one
     // at the true terminator, which swallowed the rest of the line — including a
     // trailing `-- auth.uid()` comment that then counted as a caller check.
-    if (sql[i] === "'" || (/[eE]/.test(sql[i]) && sql[i + 1] === "'" && !/[A-Za-z0-9_]/.test(sql[i - 1] ?? ''))) {
+    //
+    // The preceding-character guard must exclude `$` as well as the ASCII word
+    // characters: an unquoted identifier may contain `$`, so `foo$e'a'` ends in
+    // an `e` that is part of a NAME, not an E-string prefix. Reading it as one
+    // consumed the closing quote and threw on perfectly valid SQL.
+    if (sql[i] === "'" || (/[eE]/.test(sql[i]) && sql[i + 1] === "'" && !/[A-Za-z0-9_$]/.test(sql[i - 1] ?? ''))) {
       const escapes = sql[i] !== "'";
       const start = i;
       i += escapes ? 2 : 1;

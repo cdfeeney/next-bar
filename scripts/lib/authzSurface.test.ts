@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -1033,6 +1033,82 @@ describe('scanner edge cases (cycle-2 review)', () => {
     expect(bodyCalls - declaration).toBe(2);
     expect(source).toContain('export type StatementSql');
     expect(source).toContain('export type FunctionBodySql');
+
+    // The brand stops an ANNOTATED misuse at compile time, but a caller in
+    // another module could infer the type and scan it for statements. No
+    // production module outside this one may import the body stripper at all;
+    // this test file is the only other legitimate consumer.
+    const roots = ['scripts', 'src'];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!/\.(ts|mts|tsx)$/.test(entry.name)) continue;
+        const rel = path.relative(process.cwd(), full).replace(/\\/g, '/');
+        if (rel === 'scripts/lib/authzSurface.ts' || rel === 'scripts/lib/authzSurface.test.ts') continue;
+        // Only an IMPORT of OUR stripper counts. `catalogBootstrap.ts` and
+        // `migrationPlan.ts` each define a private helper of the same name for
+        // unrelated purposes; those are not this module's text and are fine.
+        const text = readFileSync(full, 'utf8');
+        const imports = /import\s*\{[^}]*\bstripSqlComments\b[^}]*\}\s*from\s*['"][^'"]*authzSurface['"]/;
+        if (imports.test(text)) offenders.push(rel);
+      }
+    };
+    for (const root of roots) walk(path.resolve(process.cwd(), root));
+    expect(offenders).toEqual([]);
+  });
+
+  it('lexes a double-quoted identifier, so its punctuation is inert', () => {
+    // Codex and GLM, independently. Postgres allows any character inside a
+    // quoted identifier, and this module's own name pattern accepts them - but
+    // the scanner did not lex them. A `;` inside one read as a statement
+    // boundary, leaving the following body unblanked and its DDL counted as
+    // real migration-time access; an apostrophe inside one opened a string that
+    // never closed and THREW, taking the whole derivation down on valid SQL.
+    const semi = `create function public."f;g"() returns void as $$
+      begin
+        execute 'grant all on table public.t to anon';
+      end;
+      $$ language plpgsql;
+    `;
+    expect(stripSqlCommentsAndBodies(semi)).not.toContain('grant all on table public.t');
+
+    const apostrophe = `create function public."owner's_fn"() returns void as $$
+      begin perform 1; end;
+      $$ language plpgsql;
+    `;
+    expect(() => stripSqlCommentsAndBodies(apostrophe)).not.toThrow();
+    expect(stripSqlCommentsAndBodies(apostrophe)).not.toContain('perform 1');
+
+    // An identifier that genuinely never closes is still malformed.
+    expect(() => stripSqlCommentsAndBodies('select * from "unclosed;\n'))
+      .toThrow(/quoted identifier is never closed/);
+  });
+
+  it('does not read an identifier ending in $e as an E-string prefix', () => {
+    // Codex. An unquoted Postgres identifier may contain `$`, so the trailing
+    // `e` of `foo$e` is part of a NAME. Reading it as an E-string prefix made
+    // the scanner treat a backslash as an escape, swallow the closing quote and
+    // throw on valid SQL - taking every derivation with it.
+    // The backslash is load-bearing: it only misbehaves once the scanner
+    // believes it is inside an E-string and starts honouring escapes, which
+    // swallows the closing quote.
+    const sql = `create domain foo$e as text;
+      select foo$e'a\\';
+      grant all on table public.t to anon;
+    `;
+    expect(() => stripSqlCommentsAndBodies(sql)).not.toThrow();
+    expect(stripSqlCommentsAndBodies(sql)).toContain('grant all on table public.t to anon');
+
+    // A real E-string is still recognised: its backslash escape must not end it.
+    const [fn] = functionsDefined(fake(`create or replace function public.f() returns void as $$
+      begin
+        perform E'it\\'s harmless'; -- auth.uid()
+      end;
+      $$ language plpgsql security definer set search_path = public;
+    `));
+    expect(fn?.usesAuthUid).toBe(false);
   });
 });
 
