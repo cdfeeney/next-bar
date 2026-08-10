@@ -8,6 +8,24 @@ import { defineConfig, devices } from '@playwright/test';
 const FENCE_PROXY = 'http://127.0.0.1:39555';
 
 /**
+ * The dev-server port this run owns.
+ *
+ * Hardcoding :3000 makes the suite's ability to START depend on unrelated
+ * processes: `webServer.reuseExistingServer` is true, so a foreign server
+ * holding :3000 is either silently adopted (the suite then passes or fails on
+ * code this run never changed) or aborts the run outright. Observed
+ * 2026-08-10: :3000 was held by an unrelated D:\projects\skill-foundry dev
+ * server while this worktree needed to run.
+ *
+ * `E2E_PORT` is the repository-standard override and this default is unchanged,
+ * so a single-worktree run behaves exactly as before. The fence resolves the
+ * same variable (e2e/tools/fence-global-setup.ts) — the two must never drift,
+ * or the canary would interrogate a port the tests do not use.
+ */
+const E2E_PORT = process.env.E2E_PORT ?? '3000';
+const BASE_URL = `http://localhost:${E2E_PORT}`;
+
+/**
  * Stub Supabase credentials for worktrees with no `.env.local`.
  *
  * The signed-OUT auth specs (auth-page, auth-cross-context, and the
@@ -62,7 +80,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: BASE_URL,
     // Network fence (overnight scope 2026-08-05): every non-loopback request
     // from a test browser is sent to the local refuse-all logging proxy
     // (e2e/tools/fence-proxy.mjs); loopback bypasses it. Tests must pass with
@@ -81,7 +99,7 @@ export default defineConfig({
       cookies: [],
       origins: [
         {
-          origin: 'http://localhost:3000',
+          origin: BASE_URL,
           localStorage: [{ name: 'next-bar:age-ack:v1', value: '1' }],
         },
       ],
@@ -191,8 +209,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
+    command: `npm run dev -- --port ${E2E_PORT}`,
+    url: BASE_URL,
     reuseExistingServer: true,
     timeout: 120_000,
     // Server-side half of the network fence: the dev server's own outbound
