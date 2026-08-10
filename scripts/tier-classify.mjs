@@ -22,16 +22,15 @@
  * Zero runtime dependencies — Node built-ins only.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { classifyPaths, loadTierMap, validateTierMap, REPO_ROOT } from './lib/tier-classify-core.mjs';
 import {
-  collectAddedText,
   collectChangedPaths,
+  newLocalImports,
   recoverDeletedContents,
   refExists,
-  resolveLocalImports,
   resolveRecoveryRevisions,
 } from './lib/changed-paths-core.mjs';
 import { normalizePath } from './lib/tier-glob.mjs';
@@ -114,9 +113,16 @@ const IMPORTABLE_SOURCE = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/i;
  * call path. Targets are classified once, without this option, so the escalation
  * is exactly one hop deep and cannot recurse.
  *
- * FAILS CLOSED. If git cannot produce a file's added text, the whole current
- * file is treated as added, which can only escalate — never the reverse — and
- * the substitution is reported as a warning rather than made silently.
+ * "Newly" is a SET DIFFERENCE between the imports of the previous version and
+ * the imports of the current one — see `newLocalImports` for why reading diff
+ * lines was wrong in four separate ways. A path whose previous version cannot be
+ * read has every import counted as new, which escalates, and is named in a
+ * warning rather than passed over.
+ *
+ * This runs for BOTH input modes. Restricting it to `--changed` made the two
+ * entry points disagree — the defect this file had already been fixed for once,
+ * in the other direction — because a reviewer piping the same path in got T1
+ * where the gate said T0.
  */
 function computeNewRiskyImports(paths, deletedPaths, base, map) {
   const importWarnings = [];
@@ -124,30 +130,17 @@ function computeNewRiskyImports(paths, deletedPaths, base, map) {
   const candidates = paths.map((p) => normalizePath(p)).filter((p) => IMPORTABLE_SOURCE.test(p) && !deleted.has(p));
   if (candidates.length === 0) return { newRiskyImports: {}, importWarnings };
 
-  const { added, failures } = collectAddedText(candidates, { repoRoot: REPO_ROOT, base });
-  if (failures.length > 0) {
+  const { added: importsByPath, unreadableBase } = newLocalImports(candidates, { repoRoot: REPO_ROOT, base });
+  if (unreadableBase.length > 0) {
     importWarnings.push(
-      `could not read added lines for ${failures.length} path(s); their whole content was treated as added ` +
-        `(escalating, never lowering): ${failures.slice(0, 3).join('; ')}`,
+      `${unreadableBase.length} path(s) had no readable previous version, so every import they hold now was ` +
+        `treated as newly added (escalating, never lowering): ${unreadableBase.slice(0, 3).join(', ')}`,
     );
   }
 
-  const importsByPath = {};
   const allTargets = new Set();
-  for (const path of candidates) {
-    let text = added[path] ?? '';
-    if (text.length === 0 && failures.length > 0) {
-      try {
-        text = readFileSync(join(REPO_ROOT, path), 'utf8');
-      } catch {
-        text = '';
-      }
-    }
-    const targets = resolveLocalImports(path, text, { repoRoot: REPO_ROOT });
-    if (targets.length > 0) {
-      importsByPath[path] = targets;
-      for (const t of targets) allTargets.add(t);
-    }
+  for (const targets of Object.values(importsByPath)) {
+    for (const t of targets) allTargets.add(t);
   }
   if (allTargets.size === 0) return { newRiskyImports: {}, importWarnings };
 
@@ -301,13 +294,14 @@ async function main() {
   // ALL deleted paths are declared, not just the recovered ones, so an
   // unrecoverable deletion reports why it is unanalyzable instead of looking
   // like a file that mysteriously went missing.
-  // A NEWLY ADDED import of a T0 file escalates the importer. This needs the
-  // diff, so it runs only in `--changed` mode — the mode the gate and CI use.
-  // `--summary` and stdin have no notion of "added", and reporting a
-  // distribution over every tracked file is not a gate decision.
-  const { newRiskyImports, importWarnings } = changedMode
-    ? computeNewRiskyImports(input, deletedPaths, base, map)
-    : { newRiskyImports: undefined, importWarnings: [] };
+  // A NEWLY ADDED import of a T0 file escalates the importer, in BOTH input
+  // modes, so the two cannot disagree. It is skipped only for `--summary`: a
+  // whole-repository distribution is not a gate decision, and resolving the
+  // previous version of all 3,866 tracked files would spawn a git process per
+  // file to answer a question the sweep does not ask.
+  const { newRiskyImports, importWarnings } = summary
+    ? { newRiskyImports: undefined, importWarnings: [] }
+    : computeNewRiskyImports(input, deletedPaths, base, map);
 
   const result = classifyPaths(input, map, { repoRoot: REPO_ROOT, contents, deletedPaths, newRiskyImports });
   for (const warning of importWarnings) result.warnings.push(warning);

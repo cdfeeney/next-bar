@@ -259,10 +259,7 @@ export function classifyOnePath(rawPath, map, opts = {}) {
     // version can create or conceal a capability in another.
     const byName = new Map();
     for (const text of read.texts) {
-      // The path goes in so a signature that matches shell COMMAND TEXT can be
-      // withheld from a file that cannot run one; see `shellTextIsInert`. Every
-      // other signature is path-independent.
-      for (const cap of detectCapabilities(text, path)) {
+      for (const cap of detectCapabilities(text)) {
         if (!byName.has(cap.name)) byName.set(cap.name, cap);
       }
     }

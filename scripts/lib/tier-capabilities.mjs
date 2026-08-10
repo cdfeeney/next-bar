@@ -393,6 +393,15 @@ export function analyzeFsDeletion(text) {
     if (/^\s*type\b/.test(clause)) continue;
     const namespaced = new RegExp(`\\*\\s*as\\s+(${IDENTIFIER})`).exec(clause);
     if (namespaced) namespaces.add(namespaced[1]);
+    // `export * from 'node:fs/promises'` binds NO name here and forwards every
+    // deletion function to whoever imports this module. Two lanes reported it:
+    // the barrel graded T1, and so did its importer, because the importer's
+    // specifier is a local path rather than an fs module. A bare star is
+    // therefore capability on its own — there is nothing else it could be.
+    if (/^\s*\*\s*$/.test(clause)) {
+      evidence.push(`re-exports all of '${moduleSpecifier}', including its deletion functions`);
+      continue;
+    }
     const named = /\{([^}]*)\}/.exec(clause);
     if (named) recordClause(named[1], moduleSpecifier);
     // A bare leading identifier is a default import — namespace-like in practice.
@@ -437,8 +446,12 @@ export function analyzeFsDeletion(text) {
   // parameter list is read as a binding clause when it destructures, and as a
   // namespace when it is a bare identifier — the same two rules used everywhere
   // else in this function.
+  // `function` and `async function` continuations count too. Matching only the
+  // arrow form captured the literal word `function` as the namespace name, so
+  // `.then(function ({ unlink }) { … })` bound nothing at all.
   const thenRe = new RegExp(
-    `import\\s*\\(\\s*${q}(${mod})${q}\\s*\\)\\s*\\.\\s*then\\s*\\(\\s*(?:async\\s*)?` +
+    `import\\s*\\(\\s*${q}(${mod})${q}\\s*\\)\\s*\\.\\s*then\\s*\\(\\s*(?:async\\s+)?` +
+      `(?:function\\s*(?:${IDENTIFIER})?\\s*)?` +
       `(?:\\(\\s*)?(\\{[^}\\n]*\\}|${IDENTIFIER})`,
     'g',
   );
@@ -457,11 +470,21 @@ export function analyzeFsDeletion(text) {
   // file is reported as capability; the cost is over-escalating a file that
   // computes a module path and separately mentions `remove`, which is the
   // direction this gate is allowed to be wrong in.
+  //
+  // The deletion name must appear in a CALL or MEMBER position, not merely
+  // anywhere in the file. `remove` is an ordinary English word and an ordinary
+  // method name, and the unrestricted form graded
+  // `await import(mod); export const label = 'remove';` at T0 — a false-positive
+  // channel a reviewer correctly predicted would get this rule deleted rather
+  // than narrowed. Requiring a call site costs only the case where a computed
+  // specifier binds a deletion function that is never called anywhere in the
+  // file, which cannot delete anything from this module.
   const dynamicSpecRe = new RegExp(`(?:\\bimport|\\brequire)\\s*\\(\\s*(?!\\s*${q})[^)\\n]{1,120}\\)`, 'g');
   if (dynamicSpecRe.test(text)) {
-    const anyDeletionName = new RegExp(`\\b(?:${FS_EXTRA_DELETION_NAMES.map(escapeForRegExp).join('|')})\\b`);
-    if (anyDeletionName.test(text)) {
-      evidence.push('resolves a module specifier dynamically alongside a deletion name — unanalyzable, failing closed');
+    const names = FS_EXTRA_DELETION_NAMES.map(escapeForRegExp).join('|');
+    const calledDeletionName = new RegExp(`(?:\\.\\s*)?\\b(?:${names})\\s*\\(`);
+    if (calledDeletionName.test(text)) {
+      evidence.push('resolves a module specifier dynamically and calls a deletion name — unanalyzable, failing closed');
     }
   }
 
@@ -604,14 +627,15 @@ export const CAPABILITY_SIGNATURES = [
     // actually mean filesystem deletion (`Path(x).unlink()`,
     // `.unlink(missing_ok=True)`) because a bare `.unlink(` matched
     // `graph.unlink(nodeA, nodeB)` in ordinary graph code.
-    // ARGV-FORM SPAWN is here rather than in the shell entry below, because it
-    // is a JavaScript call and must not be subject to that entry's
-    // shell-context gate. `spawn('rm', ['-rf', dir])` deletes exactly as much as
+    // ARGV-FORM SPAWN. `spawn('rm', ['-rf', dir])` deletes exactly as much as
     // `rm -rf dir`, and every shell pattern missed it: they require whitespace
     // after the command word, and here the next character is the closing quote.
-    // Found while verifying the shell-context gate, not reported by a lane.
+    // The spawn wrapper may also take the command as the FIRST ARRAY ELEMENT
+    // (`Bun.spawn(['rm', '-rf', dir])`), so both call shapes are matched and the
+    // wrapper name is not required to be one this list knows — an unrecognised
+    // wrapper still matches on the quoted command word in argument position.
     pattern:
-      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|removedirs|unlink|rmdir)\s*\(|\.unlink\s*\(\s*(?:\)|missing_ok)|\brmtree\s*\(|\bFileUtils\.rm_r?f?\b|\b(?:File|Dir)\.(?:delete|unlink|rmdir)\s*\(|(?:spawn|spawnSync|execFile|execFileSync|Start-Process)\s*\(?\s*['"](?:rm|rmdir|rd|del|erase|Remove-Item)['"])/,
+      /(?:\bfs\.(?:promises\.)?(?:rm|rmSync|rmdir|rmdirSync|unlink|unlinkSync)\b|\b(?:unlinkSync|rmSync|rmdirSync)\s*\(|\b(?:rm|rmdir|unlink)\s*\([^)]*\{[^}]*(?:recursive|force)\s*:\s*true|\brimraf\b|\[System\.IO\.(?:Directory|File)\]::Delete\b|\bshutil\.rmtree\s*\(|\bos\.(?:remove|removedirs|unlink|rmdir)\s*\(|\.unlink\s*\(\s*(?:\)|missing_ok)|\brmtree\s*\(|\bFileUtils\.rm_r?f?\b|\b(?:File|Dir)\.(?:delete|unlink|rmdir)\s*\(|\(\s*\[?\s*['"](?:rm|rmdir|rd|del|erase|Remove-Item)['"]\s*,)/,
     detect: (text) => analyzeFsDeletion(text).capable,
     note: 'deletes files with no undo',
   },
@@ -624,22 +648,27 @@ export const CAPABILITY_SIGNATURES = [
     // Same capability name as the entry above, so the two are one finding.
     name: 'destructive-filesystem',
     tier: 'T0',
-    // THIS ENTRY MATCHES SHELL COMMAND TEXT, so it only applies where shell
-    // command text can RUN — see `shellTextIsInert`. Two lanes reproduced the
-    // false positive independently: `export const Help = () => <code>rm
-    // cache.db</code>` and `export const tip = "Run del /f cache.db"` floored
-    // ordinary React components at T0.
+    // NO CONTEXT GATE. A previous round added one — shell signatures were
+    // withheld from `.ts`/`.tsx`-family files that named no process-execution
+    // API — to stop `<code>rm cache.db</code>` flooring ordinary React files at
+    // T0. THREE INDEPENDENT LANES BROKE IT IN THE NEXT ROUND, all the same way:
     //
-    // There is no content-only fix for that, and it is important to say why
-    // rather than to try a fifth clever pattern. Inside `<code>` the bytes are
-    // IDENTICAL to a real command line, so no rule reading the match or its
-    // surroundings can separate them; a line-position rule would have missed
-    // `execSync('rm -rf ' + dir)` and `then rm -rf "$dir"`, which is the
-    // fail-open treadmill that removed comment suppression from this module.
-    // What DOES separate them is the file: a `.tsx` cannot execute a string it
-    // merely renders. So the question asked is "can this file run a shell
-    // command at all", and it fails closed on every file type that can.
-    shellContext: true,
+    //   import { run } from './runner';
+    //   run('rm -rf /srv/data');            // `run` delegates to execSync
+    //
+    // names no execution token, so the gate declared the file inert and a real
+    // destructive command graded T1 — a shape that had been T0 before the gate
+    // existed. `execa` and `Bun.spawn` did the same, and every repair is
+    // another name on a list that the next popular library falls off.
+    //
+    // That is the FIFTH exclusion in this module whose safety rested on a
+    // negative text check, and the fifth to be broken by a reviewer. The
+    // precedent set when comment suppression was deleted applies exactly: an
+    // exclusion here is not narrowed, it is removed. A component that renders a
+    // destructive command as text floors T0, and that over-escalation is
+    // recorded in `docs/ENGINEERING-HARNESS.md` alongside the others. It cost
+    // zero files when measured across all 3,866 tracked files, because no file
+    // in this repository renders one.
     // EXCLUSIONS USE HORIZONTAL WHITESPACE ONLY. `\s` matches a NEWLINE, so
     // `(?<!\bgit\s{1,8})` suppressed any `rm -rf` whose PREVIOUS line merely
     // ended in the word "git" — and a newline ends a shell command, so that `rm`
@@ -716,38 +745,6 @@ export const CAPABILITY_SIGNATURES = [
 ];
 
 /**
- * File extensions where a shell command written in the source is INERT TEXT
- * unless the file also spawns a process. Deliberately a short, closed list of
- * JavaScript/TypeScript module types: every other extension — `.sh`, `.ps1`,
- * `.py`, `.rb`, `.yml`, a Dockerfile, a Makefile, an unknown one — is treated
- * as able to run the command, so the exclusion below fails closed.
- */
-const SHELL_INERT_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
-
-/**
- * Evidence that a file can hand text to a shell. If ANY of this appears, the
- * file is not inert and the shell signatures apply in full.
- */
-const PROCESS_EXECUTION_TOKENS =
-  /(?:child_process|execSync|execFileSync|spawnSync|\bexecFile\s*\(|\bspawn\s*\(|\bexec\s*\(|\bshelljs\b|\bzx\b|Bun\.\$|Deno\.Command|Start-Process|\bsubprocess\b|os\.system|Process\.Start)/;
-
-/**
- * True when shell command TEXT in this file cannot reach a shell.
- *
- * Fails closed twice over: an unknown or absent path is never inert, and any
- * extension outside the closed list above is never inert. The only way to hide
- * a real command here is to run it from a `.ts`/`.js` family file with no
- * execution token anywhere in it, which requires an indirection through another
- * module — the limit `AGENTS.md` already discloses.
- */
-export function shellTextIsInert(path, text) {
-  if (typeof path !== 'string' || path.length === 0) return false;
-  const p = normalizePath(path).toLowerCase();
-  if (!SHELL_INERT_EXTENSIONS.some((ext) => p.endsWith(ext))) return false;
-  return !PROCESS_EXECUTION_TOKENS.test(text);
-}
-
-/**
  * Detect the capabilities present in a blob of source text.
  *
  * A signature may carry a `pattern`, a `detect(text)` analyzer, or both; either
@@ -755,20 +752,17 @@ export function shellTextIsInert(path, text) {
  * decidable by one regex over raw text — filesystem deletion depends on what a
  * module binding RESOLVES to, which needs a second pass.
  *
- * `path` is OPTIONAL and only ever used to WITHHOLD a signature that matches
- * shell command text in a file that cannot run one. Omitting it applies every
- * signature, so a caller that has no path loses no coverage.
+ * Every signature applies to every file. There is deliberately no per-file
+ * exclusion: five have been tried in this module and reviewers broke all five,
+ * always by making the exclusion believe something was inert when it was not.
  *
  * @param {string} text
- * @param {string} [path]
  * @returns {Array<{name:string, tier:string, note:string}>}
  */
-export function detectCapabilities(text, path) {
+export function detectCapabilities(text) {
   if (typeof text !== 'string' || text.length === 0) return [];
-  const inertShell = shellTextIsInert(path, text);
   const found = [];
   for (const sig of CAPABILITY_SIGNATURES) {
-    if (sig.shellContext && inertShell) continue;
     const matched = (sig.pattern && sig.pattern.test(text)) || (sig.detect && sig.detect(text));
     if (matched) {
       found.push({ name: sig.name, tier: sig.tier, note: sig.note });

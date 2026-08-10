@@ -784,4 +784,57 @@ describe('entry points agree, and a new call path escalates', () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it('sees a side-effect import, ignores quote churn, and answers the same through stdin', () => {
+    // Three reviewer findings in one fixture, because each spawns git processes.
+    //   - `import './purge'` has no `from` clause and was invisible to the
+    //     resolver, though importing a module purely for its load-time effect is
+    //     the strongest form of wiring there is.
+    //   - Re-quoting an existing import made the whole line look newly added
+    //     back when this was computed from diff lines, escalating a file that
+    //     gained nothing. Comparing resolved import SETS makes formatting inert.
+    //   - The escalation ran only in `--changed` mode, so the same path graded
+    //     T0 through the gate and T1 through a pipe.
+    const { root, git, run } = makeRepo('importshapes');
+    try {
+      mkdirSync(join(root, 'src', 'lib'), { recursive: true });
+      mkdirSync(join(root, 'src', 'components'), { recursive: true });
+      writeFileSync(join(root, 'src', 'lib', 'purge.ts'), DANGEROUS);
+      writeFileSync(join(root, 'src', 'lib', 'sideeffect.ts'), 'export const a = 1;\n');
+      writeFileSync(
+        join(root, 'src', 'components', 'Btn.tsx'),
+        "import { purge } from '../lib/purge';\nexport const Btn = () => <button className='a' onClick={purge} />;\n",
+      );
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+
+      git('checkout', '-q', '-b', 'feature');
+      writeFileSync(join(root, 'src', 'lib', 'sideeffect.ts'), "import './purge';\nexport const a = 1;\n");
+      // Single quotes to double quotes, and nothing else that matters.
+      writeFileSync(
+        join(root, 'src', 'components', 'Btn.tsx'),
+        'import { purge } from "../lib/purge";\nexport const Btn = () => <button className="b" onClick={purge} />;\n',
+      );
+      git('add', '-A');
+      git('commit', '-qm', 'feature');
+
+      const changed = run(['--changed', '--base', 'main']);
+      const piped = JSON.parse(
+        execFileSync('node', ['scripts/tier-classify.mjs', '--base', 'main', '--json'], {
+          cwd: root,
+          encoding: 'utf8',
+          stdio: ['pipe', 'pipe', 'pipe'],
+          input: 'src/lib/sideeffect.ts\nsrc/components/Btn.tsx\n',
+        }),
+      );
+      const tierIn = (result, p) => result.perPath.find((e) => e.path === p)?.tier;
+      expect(tierIn(changed, 'src/lib/sideeffect.ts')).toBe('T0');
+      expect(tierIn(changed, 'src/components/Btn.tsx')).toBe('T1');
+      // Both entry points, both directions.
+      expect(tierIn(piped, 'src/lib/sideeffect.ts')).toBe('T0');
+      expect(tierIn(piped, 'src/components/Btn.tsx')).toBe('T1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

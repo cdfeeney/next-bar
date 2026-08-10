@@ -180,6 +180,17 @@ MEASURING the alternative against this repository, not by preference:
   the file that introduced the call, and wiring an existing destructive primitive
   into a new call path graded T1.
 
+  "Newly imported" is a SET DIFFERENCE between the imports of the previous
+  version and the imports of the current one — not a reading of diff lines. The
+  first implementation did read diff lines and was wrong in four separate ways
+  reviewers demonstrated: an added line whose own text begins with `++` renders
+  as `+++…` and was discarded as a file header; re-quoting an existing import
+  made the line look added and escalated a file that gained nothing; a partial
+  git failure skipped the fail-closed fallback while the warning claimed the
+  opposite; and the tier came to depend on the SHAPE of history, so a squash, a
+  rebase or a shallow clone changed the verdict for identical content. Comparing
+  resolved import sets makes formatting, ordering and history irrelevant.
+
   Only what the change **added** counts, and that boundary was chosen from a
   measurement rather than taste. Unioning the capabilities of *every* imported
   file promotes 15 files to T0 here, among them
@@ -188,10 +199,22 @@ MEASURING the alternative against this repository, not by preference:
   five-family panel, which acceptance criterion 11 forbids and which is exactly
   the alert fatigue this design exists to avoid. Keying on the added import
   escalates the change that creates the call path and leaves untouched the file
-  that has always had it. It runs in `--changed` mode only, because "added" has
-  no meaning in a sweep, and if git cannot produce a file's added lines the whole
-  file is treated as added — escalating, never lowering, and reported as a
-  warning rather than done silently.
+  that has always had it. Side-effect imports (`import './purge'`) count too —
+  importing a module purely for what it does at load time is the strongest form
+  of wiring there is.
+
+  It runs in **both** input modes, so the gate and a reviewer piping the same
+  path in cannot disagree; only `--summary` skips it, because a whole-repository
+  distribution is not a gate decision. If a file's previous version cannot be
+  read — a brand-new file, a shallow clone, an unresolvable base — every import
+  it holds now counts as new, which escalates, and the affected paths are named
+  in a warning rather than passed over.
+
+  Two limits, stated rather than implied. The escalation is exactly **one hop**:
+  in a chain A → B → C where only C is intrinsically T0, B escalates but A does
+  not. And a file whose *existing* import becomes T0 in the same change is not
+  itself escalated — though that change set still contains the newly dangerous
+  file, so the change as a whole is T0 regardless.
 - **A commented-out deletion import counts as capability.** There is no comment
   suppression at all, and that is a deliberate, measured decision rather than an
   oversight.
@@ -223,27 +246,30 @@ MEASURING the alternative against this repository, not by preference:
   added to that branch has produced a fail-open; over-escalation is the
   direction this gate is allowed to be wrong in.
 
-- **Shell command text only counts where a shell can be reached.** Two reviewers
-  independently reproduced `export const Help = () => <code>rm cache.db</code>`
-  and `export const tip = "Run del /f cache.db"` flooring ordinary React files at
-  T0.
+- **A file that merely DISPLAYS a destructive command is floored T0.** A React
+  component rendering `<code>rm cache.db</code>`, or a string `"Run del /f
+  cache.db"`, grades T0 even though neither can execute anything.
 
-  Inside `<code>` the bytes are *identical* to a real command line, so no rule
-  reading the match or its surroundings can separate them — and the obvious
-  near-misses are worse than the disease. A line-position rule would have missed
-  `execSync('rm -rf ' + dir)` and `then rm -rf "$dir"`; stripping JSX text and
-  template literals first is source rewriting, the exact class that removed
-  comment suppression from this module.
+  This was fixed once and the fix was reverted, which is worth recording. Round
+  10 withheld the shell signatures from JS/TS files that named no
+  process-execution API — a file-level check rather than a content one, and it
+  looked sound. Three lanes broke it in the next round with one shape:
 
-  What genuinely separates them is the **file**: a `.tsx` cannot execute a string
-  it merely renders. So the shell signatures are withheld only from a closed list
-  of JavaScript/TypeScript extensions, and only when the file contains no
-  process-execution token (`child_process`, `execSync`, `spawn(`, `zx`,
-  `subprocess`, `Start-Process`, and the rest). Every other extension — `.sh`,
-  `.ps1`, `.py`, `.yml`, a Dockerfile, an unknown one — and every file with no
-  path supplied is treated as able to run the command. The exclusion therefore
-  fails closed twice over, and the only way past it is to reach a shell from a
-  `.ts` file that names no execution API at all.
+  ```ts
+  import { run } from './runner';
+  run('rm -rf /srv/data');        // run() delegates to execSync
+  ```
+
+  That names no execution token, so the gate called the file inert and a real
+  destructive command graded T1 — a shape that had been **T0 before the gate
+  existed**. `execa` and `Bun.spawn` did the same, and each repair is one more
+  name on a list the next popular library falls off.
+
+  That was the fifth exclusion in this module whose safety rested on a negative
+  check, and the fifth a reviewer broke. The precedent from comment suppression
+  applies exactly: an exclusion here is not narrowed, it is removed. The
+  over-escalation costs zero files across all 3,866 tracked files, because
+  nothing in this repository renders a destructive command as text.
 
 - **Instruction files are policy by ROLE, and the role list is not two names
   long.** `AGENTS.md` and `CLAUDE.md` at any depth are T0, and so are

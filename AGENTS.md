@@ -107,9 +107,15 @@ One part of that gap is closed and it is worth knowing which. **Adding an import
 of a T0 file escalates the importing file to T0**, because wiring an existing
 destructive primitive into a new call path really does change what the code can
 do, and the file that does it holds no risky token of its own. Only a *newly
-added* import counts: a file that has always imported a privileged module keeps
-its tier when you edit it for unrelated reasons, so ordinary UI does not
-escalate. Calling a primitive you already imported is still invisible.
+added* import counts — measured by comparing the imports of the previous version
+with those of the current one, so reformatting and re-quoting change nothing. A
+file that has always imported a privileged module keeps its tier when you edit it
+for unrelated reasons, so ordinary UI does not escalate.
+
+Three limits worth knowing: calling a primitive you already imported is still
+invisible; the escalation is one hop, so in a chain A → B → C only B escalates;
+and if the previous version of a file cannot be read, every import it holds now
+counts as new, which over-escalates on purpose and says so in a warning.
 
 If the classifier cannot establish that a change lacks a high-risk capability,
 it returns **T0 with `escalated: true`**.

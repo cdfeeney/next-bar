@@ -803,22 +803,26 @@ export const TIER_CASES = [
     expect: 'T0',
     why: 'every shell pattern required whitespace after the command word, and here the next byte is a quote',
   },
-  // The other direction: shell command TEXT in a file that cannot run one.
+  // REVERSED IN ROUND 11, deliberately. Round 10 withheld the shell signatures
+  // from JS/TS files that named no process-execution API, so these two stayed
+  // T1. Three lanes then broke that gate with `import { run } from './runner';
+  // run('rm -rf /srv/data')`, which named no token and graded T1 although it
+  // really deletes — a shape that had been T0 before the gate existed. The gate
+  // was removed rather than narrowed, so these over-escalate again and that is
+  // now a recorded accepted cost.
   {
-    name: 'a component rendering a shell command is not a deletion',
+    name: 'a component rendering a shell command over-escalates to T0',
     path: 'src/components/R10Help.tsx',
     contents: 'export const Help = () => <code>rm cache.db</code>;\n',
-    expect: 'T1',
-    escalated: false,
-    why: 'the bytes are identical to a real command line, so only the file can tell them apart',
+    expect: 'T0',
+    why: 'the bytes are identical to a real command line, and every file-level check tried was a fail-open',
   },
   {
-    name: 'help copy quoting a Windows delete is not a deletion',
+    name: 'help copy quoting a Windows delete over-escalates to T0',
     path: 'src/lib/r10-tips.ts',
     contents: 'export const tip = "Run del /f cache.db";\n',
-    expect: 'T1',
-    escalated: false,
-    why: 'a .ts file cannot execute a string it merely exports',
+    expect: 'T0',
+    why: 'same reversal: over-escalation is the direction this gate is allowed to be wrong in',
   },
   {
     name: 'a shell command in a file that spawns processes still floors',
@@ -848,6 +852,45 @@ export const TIER_CASES = [
     contents: 'Always run npm run verify:full before committing.\n',
     expect: 'T0',
     why: 'markdown is inert by default, and agent instructions are the exception',
+  },
+  // --------------------------------------------------------------- Round-11
+  // The round-10 mechanisms, attacked by five lanes. Every case below graded
+  // wrongly at d779e63.
+  {
+    name: 'a barrel re-exporting all of fs/promises is capability',
+    path: 'scripts/r11-barrel.mjs',
+    contents: "export * from 'node:fs/promises';\n",
+    expect: 'T0',
+    why: 'a bare star binds no name and forwards every deletion function to its importers',
+  },
+  {
+    name: 'a then-continuation written as a function expression is capability',
+    path: 'scripts/r11-then-fn.mjs',
+    contents: "import('node:fs/promises').then(function ({ unlink }) { return unlink(target); });\n",
+    expect: 'T0',
+    why: 'matching only the arrow form captured the word "function" as the namespace name',
+  },
+  {
+    name: 'a spawn wrapper taking the command in an array is a deletion',
+    path: 'scripts/r11-bun.ts',
+    contents: "Bun.spawn(['rm', '-rf', '/tmp/x']);\n",
+    expect: 'T0',
+    why: 'the argv form was anchored to a known wrapper list that the next library falls off',
+  },
+  {
+    name: 'a wrapper that hands a command to a helper still floors',
+    path: 'src/lib/r11-wrapper.ts',
+    contents: "import { run } from './runner';\nrun('rm -rf /srv/data');\n",
+    expect: 'T0',
+    why: 'the round-10 context gate declared this inert although the helper delegates to execSync',
+  },
+  {
+    name: 'a dynamic specifier beside a mere mention of a deletion word is not capability',
+    path: 'src/lib/r11-mention.ts',
+    contents: "const mod = './x';\nawait import(mod);\nexport const label = 'remove';\n",
+    expect: 'T1',
+    escalated: false,
+    why: 'remove is an ordinary word; the fail-closed rule now requires a call position',
   },
   {
     name: 'a work ledger describing agent work stays inert',

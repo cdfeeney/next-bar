@@ -165,8 +165,25 @@ const ROUND_PROOFS = [
     ]),
   },
   {
+    label: 'round-11',
+    rev: 'd779e63',
+    cases: new Set([
+      'a barrel re-exporting all of fs/promises is capability',
+      'a then-continuation written as a function expression is capability',
+      'a spawn wrapper taking the command in an array is a deletion',
+      'a wrapper that hands a command to a helper still floors',
+      'a dynamic specifier beside a mere mention of a deletion word is not capability',
+      'a component rendering a shell command over-escalates to T0',
+      'help copy quoting a Windows delete over-escalates to T0',
+    ]),
+  },
+  {
     label: 'round-10',
     rev: 'd631d2f',
+    // The two shell-context cases that were in this set are gone: round 11
+    // REVERSED them when the context gate was removed as a fail-open, so they no
+    // longer describe a round-10 improvement. They are proved by the round-11
+    // stage above instead.
     cases: new Set([
       'assignment-form require binds a deletion namespace',
       'an optional dependency loaded in try/catch is still capability',
@@ -176,8 +193,6 @@ const ROUND_PROOFS = [
       'a then-continuation on a dynamic import is capability',
       'a dynamic module specifier fails closed',
       'argv-form spawn of rm is a deletion',
-      'a component rendering a shell command is not a deletion',
-      'help copy quoting a Windows delete is not a deletion',
       'a Cursor rules file is agent policy',
       'a Copilot instructions file is agent policy',
     ]),
@@ -493,15 +508,24 @@ function buildPipelineFixture() {
   return root;
 }
 
-/** The two answers this proof compares, from one fixture and one CLI. */
+/**
+ * The answers this proof compares, from one fixture and one CLI.
+ *
+ * `stdinNewCallPath` is the round-11 addition: the escalation used to be
+ * computed only in `--changed` mode, so the same file graded T0 through the gate
+ * and T1 through a pipe, and this proof stayed green because it only ever piped
+ * the deleted path. A reviewer pointed out that a proof which never exercises the
+ * disagreement cannot detect it.
+ */
 function pipelineAnswers(root) {
-  const piped = runCli(root, ['--base', 'main'], 'scripts/recreate.mjs\n');
+  const piped = runCli(root, ['--base', 'main'], 'scripts/recreate.mjs\nsrc/lib/caller.ts\n');
   const changed = runCli(root, ['--changed', '--base', 'main']);
   const tierIn = (result, path) => result.perPath.find((e) => e.path === path)?.tier ?? '(absent)';
   return {
     stdinRecreated: tierIn(piped, 'scripts/recreate.mjs'),
     changedRecreated: tierIn(changed, 'scripts/recreate.mjs'),
     newCallPath: tierIn(changed, 'src/lib/caller.ts'),
+    stdinNewCallPath: tierIn(piped, 'src/lib/caller.ts'),
   };
 }
 
@@ -517,7 +541,11 @@ try {
         `  deleted-then-recreated via stdin   before (${PIPELINE_PROOF_REV}): ${before.stdinRecreated}` +
         `   after: ${after.stdinRecreated}   (--changed says ${after.changedRecreated})\n` +
         `  newly added import of a T0 file    before (${PIPELINE_PROOF_REV}): ${before.newCallPath}` +
-        `   after: ${after.newCallPath}\n`,
+        `   after: ${after.newCallPath}
+` +
+        `  the SAME import seen via stdin     before (${PIPELINE_PROOF_REV}): ${before.stdinNewCallPath}` +
+          `   after: ${after.stdinNewCallPath}
+`,
     );
     const improved =
       before.stdinRecreated === 'T1' &&
@@ -525,7 +553,11 @@ try {
       after.stdinRecreated === 'T0' &&
       after.changedRecreated === 'T0' &&
       before.newCallPath === 'T1' &&
-      after.newCallPath === 'T0';
+      after.newCallPath === 'T0' &&
+      // The import escalation was --changed-only before this round, so the same
+      // file graded T1 through a pipe; now both entry points must agree.
+      before.stdinNewCallPath === 'T1' &&
+      after.stdinNewCallPath === 'T0';
     if (!improved) {
       process.stderr.write(
         '\nred-proof FAILED: before this round stdin must under-grade a deleted-then-recreated path ' +

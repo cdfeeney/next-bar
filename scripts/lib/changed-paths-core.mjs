@@ -414,7 +414,7 @@ export function recoverDeletedContents(paths, opts = {}) {
  * cannot do before `npm ci`.
  */
 const LOCAL_IMPORT_SPECIFIER =
-  /(?:\bfrom\s*['"]([^'"\n]+)['"]|\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)|\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\))/g;
+  /(?:\bfrom\s*['"]([^'"\n]+)['"]|\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)|\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)|\bimport\s+['"]([^'"\n]+)['"])/g;
 
 /** Extension-less specifiers are resolved against these, in order. */
 const IMPORT_RESOLUTION_SUFFIXES = [
@@ -445,7 +445,11 @@ export function resolveLocalImports(fromPath, text, opts = {}) {
   const fromDir = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '';
   const found = new Set();
   for (const match of text.matchAll(LOCAL_IMPORT_SPECIFIER)) {
-    const spec = match[1] || match[2] || match[3];
+    // The fourth alternative is a SIDE-EFFECT import (`import './purge'`),
+    // which has no `from` clause. A reviewer reproduced it: importing a module
+    // purely for what it does at load time is the strongest form of wiring, and
+    // it was the one form this resolver could not see.
+    const spec = match[1] || match[2] || match[3] || match[4];
     if (!spec) continue;
     let joined;
     if (spec.startsWith('@/')) joined = normalizePath(`src/${spec.slice(2)}`);
@@ -463,82 +467,79 @@ export function resolveLocalImports(fromPath, text, opts = {}) {
   return [...found];
 }
 
+
 /**
- * The text ADDED to each path by this change — working-tree edits plus
- * `base...HEAD` — keyed by path. An untracked file counts entirely as added.
+ * The repository files each path imports NOW that it did not import BEFORE.
  *
- * WHY ADDED TEXT AND NOT THE WHOLE FILE. The architecture lane reported that
- * capability reached through a local indirection is invisible: a changed file
- * that calls a wrapper holds no risky token, so no floor fires. Unioning the
- * capabilities of EVERY imported file answers that, and was measured against
- * this repository first: it promotes 15 files to T0, among them ordinary UI
- * (`src/components/ShareNightButton.tsx`, `src/hooks/useRatings.ts`,
- * `src/app/settings/page.tsx`). Acceptance criterion 11 requires ordinary UI to
- * stay T1 un-escalated, so restyling a button would have summoned the
- * five-family panel — the alert fatigue this design exists to avoid.
+ * WHY A SET DIFFERENCE AND NOT A DIFF. The first implementation collected the
+ * lines git reported as added and resolved imports out of them. Four reviewers
+ * found the same class of problem in it, and they were right on every count:
  *
- * The risk the lane actually named is WIRING a destructive primitive into a new
- * call path. That is an ADDED import, not the presence of an old one. So the
- * escalation keys on what the change introduced: adding
- * `import { purgeAll } from './purge'` escalates, while editing the CSS of a
- * file that has imported a privileged module all along does not.
+ *   - an added line whose own text begins with `++` renders as `+++…` and was
+ *     discarded as if it were a diff file header;
+ *   - re-quoting an existing import made the whole line look added and
+ *     spuriously escalated a file that gained nothing;
+ *   - a partial failure (worktree diff succeeded, `base...HEAD` diff failed)
+ *     silently skipped the fail-closed fallback while the warning claimed the
+ *     opposite;
+ *   - and the whole idea made the tier depend on the SHAPE of history, so a
+ *     squash, a rebase or a shallow clone changed the verdict for identical
+ *     content, and a reviewer piping paths in could not reproduce CI.
  *
- * Failure is reported, never swallowed: `failures` non-empty means the added
- * text is incomplete for those paths and the caller must fail closed.
+ * None of that is fixable by parsing diffs more carefully, because "what lines
+ * did git print" was never the question. The question is which files this module
+ * imports now that it did not import before, and that is answered by resolving
+ * the imports of both versions and subtracting. Re-quoting, reformatting,
+ * reordering and re-indenting all produce the same set, and the answer no longer
+ * depends on how the history was recorded.
+ *
+ * FAILS CLOSED. If the previous version cannot be read — a brand-new file, a
+ * shallow clone, an unresolvable base — every import it has now counts as new,
+ * which escalates. `unreadableBase` names those paths so the caller can say so
+ * rather than implying a comparison happened.
+ *
+ * @returns {{added: Record<string,string[]>, unreadableBase: string[]}}
  */
-export function collectAddedText(paths, opts = {}) {
+export function newLocalImports(paths, opts = {}) {
   const repoRoot = opts.repoRoot ?? REPO_ROOT;
   const base = opts.base ?? null;
   const added = {};
-  const failures = [];
-  const run = (args, label) => {
-    try {
-      return execFileSync('git', args, {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        maxBuffer: 64 * 1024 * 1024,
-      });
-    } catch (err) {
-      failures.push(`git ${label} failed: ${(err && err.message ? err.message : String(err)).split('\n')[0]}`);
-      return null;
-    }
-  };
-  const addedLinesOf = (out) =>
-    String(out ?? '')
-      .split('\n')
-      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
-      .map((line) => line.slice(1))
-      .join('\n');
+  const unreadableBase = [];
+
+  // The previous version is the base tip when there is one, else HEAD. Both are
+  // tried, and the FIRST that yields text wins: on a branch, `base` is what the
+  // change is measured against; with no base, HEAD is the only prior state.
+  const revisions = base ? [base, 'HEAD'] : ['HEAD'];
 
   for (const raw of Array.isArray(paths) ? paths : []) {
     const path = normalizePath(raw);
-    const chunks = [];
-    // `:(literal)` for the same reason as everywhere else here: this app's
-    // routes are literally named `[handle]`, and a pathspec would glob them.
-    const spec = `:(literal)${path}`;
-    const worktree = run(['diff', '--unified=0', 'HEAD', '--', spec], `diff HEAD -- ${path}`);
-    if (worktree !== null) chunks.push(addedLinesOf(worktree));
-    if (base) {
-      const committed = run(['diff', '--unified=0', `${base}...HEAD`, '--', spec], `diff ${base}...HEAD -- ${path}`);
-      if (committed !== null) chunks.push(addedLinesOf(committed));
-    }
-    // An untracked file has no diff against HEAD at all, so its whole content is
-    // new. Without this the newest files — exactly where a new call path is most
-    // likely — would contribute no added text.
     const absolute = join(repoRoot, path);
-    if (existsSync(absolute)) {
-      const tracked = run(['ls-files', '--error-unmatch', '--', spec], `ls-files ${path}`);
-      if (tracked === null) {
-        failures.pop(); // an untracked path is an expected miss here, not a git failure
-        try {
-          chunks.push(readFileSync(absolute, 'utf8'));
-        } catch {
-          failures.push(`could not read untracked ${path}`);
-        }
+    if (!existsSync(absolute)) continue; // a deleted path introduces nothing
+    let current;
+    try {
+      current = readFileSync(absolute, 'utf8');
+    } catch {
+      continue; // unreadable on disk; the classifier fails closed on it anyway
+    }
+    const now = resolveLocalImports(path, current, { repoRoot });
+    if (now.length === 0) continue;
+
+    let before = null;
+    for (const rev of revisions) {
+      const result = readBlobAtRevision(repoRoot, rev, path);
+      if (result.status === 'text') {
+        before = resolveLocalImports(path, result.text, { repoRoot });
+        break;
       }
     }
-    added[path] = chunks.join('\n');
+    if (before === null) {
+      unreadableBase.push(path);
+      added[path] = now;
+      continue;
+    }
+    const priorSet = new Set(before);
+    const fresh = now.filter((target) => !priorSet.has(target));
+    if (fresh.length > 0) added[path] = fresh;
   }
-  return { added, failures };
+  return { added, unreadableBase };
 }
