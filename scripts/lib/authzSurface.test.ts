@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ANON_EXECUTABLE_FUNCTIONS,
@@ -33,6 +34,7 @@ import {
   privilegeStatements,
   readMigrations,
   stripSqlComments,
+  stripSqlCommentsAndBodies,
   tableGrants,
   tablesCreated,
   tablesRelyingOnDefaultGrants,
@@ -919,13 +921,118 @@ describe('stripSqlComments', () => {
     const sql = `
       create or replace function public.quoted_fn() returns void as $$
       begin
-        execute 'select ''a--b'', ''c/*d'';
+        execute 'select ''a--b'', ''c/*d''';
       end;
       $$ language plpgsql security definer set search_path = public;
     `;
     const [fn] = functionsDefined(fake(sql));
     expect(fn?.isSecurityDefiner).toBe(true);
     expect(fn?.pinsSearchPath).toBe(true);
+  });
+});
+
+describe('scanner edge cases (cycle-2 review)', () => {
+  it('does not mistake a semicolon inside a literal for a statement boundary', () => {
+    // Codex and DeepSeek, independently. The body-blanking decision used to look
+    // BACKWARDS with out.lastIndexOf(';'), so a `;` inside a default value
+    // started the slice mid-literal, lost the words `create function`, and left
+    // the body UNBLANKED — its `grant` was then counted as real, migration-time
+    // access that no database will ever have.
+    const sql = `create function public.f(p text default ';') returns void as $$
+      begin
+        execute 'grant all on table public.t to anon';
+      end;
+      $$ language plpgsql;
+    `;
+    expect(stripSqlCommentsAndBodies(sql)).not.toContain('grant all on table public.t');
+
+    // A do-block in the same shape must STILL be preserved - the marker has to
+    // be exact in both directions, not merely conservative.
+    const doBlock = `insert into public.t(x) values (';');
+      do $$
+      begin
+        alter table public.saves rename to saves_v01_legacy;
+      end
+      $$;
+    `;
+    expect(legacyRenames(fake(doBlock)).get('saves')).toBe('saves_v01_legacy');
+  });
+
+  it('blanks a body length-preservingly, terminated or not', () => {
+    // DeepSeek. Callers order create/drop/revoke events by regex match offset
+    // within a file, so a replacement even one byte short shifts every later
+    // match. The never-closed case used to be short by one tag length.
+    const closed = `create function public.f() returns void as $$
+      begin perform 1; end;
+      $$ language plpgsql;
+    `;
+    const open = `create function public.f() returns void as $$
+      begin perform 1; end;
+    `;
+    expect(stripSqlCommentsAndBodies(closed)).toHaveLength(closed.length);
+    expect(stripSqlCommentsAndBodies(open)).toHaveLength(open.length);
+  });
+
+  it('THROWS on an unclosed block comment instead of swallowing what follows', () => {
+    // DeepSeek. Inside a function body this silently deleted a REAL auth.uid()
+    // call, so a gated definer was reported as ungated. Malformed SQL is a stop.
+    const sql = `create function public.f() returns boolean as $$
+      /* trace note
+      return auth.uid() is not null;
+      $$ language sql;
+    `;
+    expect(() => functionsDefined(fake(sql))).toThrow(/block comment is never closed/);
+    expect(() => stripSqlCommentsAndBodies('select 1; /* open')).toThrow(/never closed/);
+  });
+
+  it('THROWS on an unclosed quoted literal', () => {
+    expect(() => stripSqlCommentsAndBodies("select 'unterminated;\n")).toThrow(/never closed/);
+  });
+
+  it('honours backslash escapes in an E-string, so a trailing comment stays a comment', () => {
+    // Codex. The scanner closed E'it\'s' at the escaped quote and re-opened a
+    // bogus string at the true terminator, which swallowed the rest of the line
+    // - including a trailing `-- auth.uid()` that then counted as a caller check
+    // on a function that had none. Fail-OPEN on the one gate a definer has left.
+    const sql = `create or replace function public.f() returns void as $$
+      begin
+        perform E'it\\'s harmless'; -- auth.uid()
+      end;
+      $$ language plpgsql security definer set search_path = public;
+    `;
+    const [fn] = functionsDefined(fake(sql));
+    expect(fn?.isSecurityDefiner).toBe(true);
+    expect(fn?.usesAuthUid).toBe(false);
+
+    // Positive control: a real call in the same shape is still credited.
+    const gated = `create or replace function public.f() returns void as $$
+      begin
+        perform E'it\\'s harmless';
+        if auth.uid() is null then raise exception 'no'; end if;
+      end;
+      $$ language plpgsql security definer set search_path = public;
+    `;
+    expect(functionsDefined(fake(gated))[0]?.usesAuthUid).toBe(true);
+  });
+
+  it('keeps the body stripper out of every statement-level derivation', () => {
+    // GLM: two same-typed strippers let a future maintainer feed non-blanked
+    // text to a statement-level derivation and silently count function-body DDL.
+    // The brands make that a compile error, and this pins the call sites so the
+    // guarantee is checked rather than merely intended.
+    const source = readFileSync(
+      path.resolve(process.cwd(), 'scripts', 'lib', 'authzSurface.ts'),
+      'utf8',
+    );
+    const bodyCalls = [...source.matchAll(/stripSqlComments\(/g)].length;
+    const declaration = [...source.matchAll(/export function stripSqlComments\(/g)].length;
+    expect(declaration).toBe(1);
+    // Exactly two callers, both inside functionsDefined: the file scan and the
+    // body re-scan for auth.uid(). Any third is a statement-level derivation
+    // reaching for the wrong text.
+    expect(bodyCalls - declaration).toBe(2);
+    expect(source).toContain('export type StatementSql');
+    expect(source).toContain('export type FunctionBodySql');
   });
 });
 

@@ -337,6 +337,30 @@ describe('runbook / migration cross-check', () => {
     expect(checksum(sample)).toBe(
       createHash('sha256').update('select 1;', 'utf8').digest('hex'),
     );
+
+    // The documented command and the runner that WRITES the ledger must share
+    // one checksum implementation. If they ever import different ones, Check 7
+    // starts comparing two different hashes and every migration reads as drift
+    // — which this runbook classifies as stop-and-escalate.
+    const script = readFileSync(
+      path.resolve(process.cwd(), 'scripts', 'migration-checksums.mts'),
+      'utf8',
+    );
+    const runner = readFileSync(
+      path.resolve(process.cwd(), 'scripts', 'apply-migrations.ts'),
+      'utf8',
+    );
+    expect(script).toContain("from '../src/lib/migrationPlan'");
+    expect(runner).toContain("from '../src/lib/migrationPlan'");
+    expect(script).toMatch(/import \{ checksum \}/);
+
+    // And the real normalization is line-ending sensitive in exactly one
+    // direction: CRLF and LF forms of the same migration hash identically,
+    // which is why a raw file hash cannot reproduce the ledger.
+    const lf = 'create table t();\nselect 1;\n';
+    expect(checksum(lf.replace(/\n/g, '\r\n'))).toBe(checksum(lf));
+    expect(createHash('sha256').update(lf.replace(/\n/g, '\r\n'), 'utf8').digest('hex'))
+      .not.toBe(checksum(lf));
   });
 
   it('names the functions expected to carry a PUBLIC execute grant', () => {

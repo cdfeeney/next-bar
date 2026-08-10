@@ -166,7 +166,7 @@ export function legacySchemaTables(schemaSql: string, files: MigrationFile[]): s
 export function legacyRenames(files: MigrationFile[]): Map<string, string> {
   const out = new Map<string, string>();
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     for (const m of sql.matchAll(
       /alter\s+table\s+(?:if\s+exists\s+)?public\.([a-z0-9_]+)\s+rename\s+to\s+([a-z0-9_]+)/gi,
     )) {
@@ -276,7 +276,7 @@ export function unmodelledObjectStatements(
     /\balter\s+table\s+[^;]*\bforce\s+row\s+level\s+security\b[^;]*/gi,
   ];
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     for (const re of patterns) {
       let m: RegExpExecArray | null;
       while ((m = re.exec(sql)) !== null) {
@@ -286,6 +286,24 @@ export function unmodelledObjectStatements(
   }
   return out;
 }
+
+declare const STATEMENT_SQL: unique symbol;
+declare const FUNCTION_BODY_SQL: unique symbol;
+
+/**
+ * Migration text safe to scan for STATEMENTS: comments removed and every
+ * `create function` body blanked out.
+ *
+ * The two strippers used to return a bare `string`, so nothing stopped a future
+ * derivation from reaching for the wrong one and silently counting DDL that
+ * lives inside a function body. These brands make that a COMPILE error instead
+ * of a wrong number: a statement-level derivation annotates its text as
+ * `StatementSql`, which only `stripSqlCommentsAndBodies` produces.
+ */
+export type StatementSql = string & { readonly [STATEMENT_SQL]: true };
+
+/** Migration text with bodies PRESERVED. Only `functionsDefined` may use this. */
+export type FunctionBodySql = string & { readonly [FUNCTION_BODY_SQL]: true };
 
 /**
  * Strip `--` line comments and block comments so they cannot mask or fake a match.
@@ -307,8 +325,8 @@ export function unmodelledObjectStatements(
  * dollar-quoted body is data, not a comment, and is left alone. Postgres block
  * comments nest, so the depth counter matches the server's own rule.
  */
-export function stripSqlComments(sql: string): string {
-  return scanSql(sql, false);
+export function stripSqlComments(sql: string, origin = 'sql'): FunctionBodySql {
+  return scanSql(sql, false, origin) as FunctionBodySql;
 }
 
 /**
@@ -325,13 +343,23 @@ export function stripSqlComments(sql: string): string {
  * Every statement-level derivation here uses this variant. `functionsDefined`
  * is the deliberate exception: it needs the body to decide `usesAuthUid`.
  */
-export function stripSqlCommentsAndBodies(sql: string): string {
-  return scanSql(sql, true);
+export function stripSqlCommentsAndBodies(sql: string, origin = 'sql'): StatementSql {
+  return scanSql(sql, true, origin) as StatementSql;
 }
 
-function scanSql(sql: string, blankBodies: boolean): string {
+function scanSql(sql: string, blankBodies: boolean, origin = 'sql'): string {
   let out = '';
   let i = 0;
+  // Where the CURRENT statement starts in `out`. Tracked as the scan runs rather
+  // than recovered afterwards with `out.lastIndexOf(';')`, because a semicolon
+  // inside a preserved string literal is not a statement boundary. A header like
+  // `create function f(p text default ';') ... as $$ ... $$` defeated the
+  // backwards search: the slice began inside the literal, lost the words
+  // `create function`, and the body was left UNBLANKED and scanned as top-level
+  // SQL — so a `grant` written inside it was counted as real, inventing access.
+  // Only a semicolon the scanner emits at top level moves this marker.
+  let statementStart = 0;
+
   while (i < sql.length) {
     const two = sql.slice(i, i + 2);
 
@@ -343,6 +371,7 @@ function scanSql(sql: string, blankBodies: boolean): string {
     }
 
     if (two === '/*') {
+      // Postgres block comments nest, so the depth counter matches the server.
       let depth = 1;
       i += 2;
       while (i < sql.length && depth > 0) {
@@ -350,19 +379,34 @@ function scanSql(sql: string, blankBodies: boolean): string {
         if (sql.slice(i, i + 2) === '*/') { depth -= 1; i += 2; continue; }
         i += 1;
       }
+      if (depth > 0) {
+        // An unclosed block comment used to swallow everything after it in
+        // silence. In a function body that meant a REAL `auth.uid()` call
+        // disappeared and the function was reported as having no caller check.
+        // Malformed SQL is a stop, not a silent deletion.
+        throw new Error(`${origin}: a /* block comment is never closed`);
+      }
       out += ' ';
       continue;
     }
 
-    // A single-quoted literal. Postgres escapes an embedded quote by doubling it.
-    if (sql[i] === "'") {
+    // A quoted literal. Postgres doubles an embedded quote; an E'' string ALSO
+    // honours backslash escapes, so `E'it\'s'` does not end at that quote.
+    // Treating it as if it did closed the string early and re-opened a bogus one
+    // at the true terminator, which swallowed the rest of the line — including a
+    // trailing `-- auth.uid()` comment that then counted as a caller check.
+    if (sql[i] === "'" || (/[eE]/.test(sql[i]) && sql[i + 1] === "'" && !/[A-Za-z0-9_]/.test(sql[i - 1] ?? ''))) {
+      const escapes = sql[i] !== "'";
       const start = i;
-      i += 1;
+      i += escapes ? 2 : 1;
+      let closed = false;
       while (i < sql.length) {
+        if (escapes && sql[i] === '\\') { i += 2; continue; }
         if (sql[i] === "'" && sql[i + 1] === "'") { i += 2; continue; }
-        if (sql[i] === "'") { i += 1; break; }
+        if (sql[i] === "'") { i += 1; closed = true; break; }
         i += 1;
       }
+      if (!closed) throw new Error(`${origin}: a quoted literal is never closed`);
       out += sql.slice(start, i);
       continue;
     }
@@ -382,14 +426,23 @@ function scanSql(sql: string, blankBodies: boolean): string {
       //
       // Keep the delimiters either way: `functionsDefined` locates a body by its
       // opening tag, and blanking that too would hide the body's existence.
-      const statement = out.slice(out.lastIndexOf(';') + 1);
+      const statement = out.slice(statementStart);
       const isFunctionBody = /\bcreate\s+(?:or\s+replace\s+)?function\b/i.test(statement);
-      out += blankBodies && isFunctionBody
-        ? tag + ' '.repeat(Math.max(0, end - i - tag.length * 2)) + (close === -1 ? '' : tag)
-        : sql.slice(i, end);
+      if (blankBodies && isFunctionBody) {
+        // Exactly length-preserving in BOTH cases. Callers order create/drop/
+        // revoke events by regex match offset within a file, so a replacement
+        // even one byte short would shift every later match. The unterminated
+        // case used to be short by one tag length.
+        const inner = Math.max(0, end - i - tag.length * (close === -1 ? 1 : 2));
+        out += tag + ' '.repeat(inner) + (close === -1 ? '' : tag);
+      } else {
+        out += sql.slice(i, end);
+      }
       i = end;
       continue;
     }
+
+    if (sql[i] === ';') statementStart = out.length + 1;
 
     out += sql[i];
     i += 1;
@@ -412,7 +465,7 @@ export function readMigrations(dir: string = MIGRATIONS_DIR): MigrationFile[] {
 export function tablesCreated(files: MigrationFile[]): TableDef[] {
   const out: TableDef[] = [];
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     const re = /create\s+table\s+(?:if\s+not\s+exists\s+)?public\.([a-z0-9_]+)/gi;
     let m: RegExpExecArray | null;
     while ((m = re.exec(sql)) !== null) {
@@ -426,7 +479,7 @@ export function tablesCreated(files: MigrationFile[]): TableDef[] {
 export function tablesWithRlsEnabled(files: MigrationFile[]): Set<string> {
   const out = new Set<string>();
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     const re =
       /alter\s+table\s+(?:if\s+exists\s+)?public\.([a-z0-9_]+)\s+enable\s+row\s+level\s+security/gi;
     let m: RegExpExecArray | null;
@@ -492,7 +545,7 @@ const dropFunctionRe = () =>
 export function functionsDefined(files: MigrationFile[]): FunctionDef[] {
   const out: FunctionDef[] = [];
   for (const file of files) {
-    const sql = stripSqlComments(file.sql);
+    const sql: FunctionBodySql = stripSqlComments(file.sql, file.name);
     // Split on each function definition start, keeping what follows.
     const starts = [...sql.matchAll(createFunctionRe())];
     for (let i = 0; i < starts.length; i += 1) {
@@ -537,7 +590,9 @@ export function functionsDefined(files: MigrationFile[]): FunctionDef[] {
         // body is carried through verbatim so it can be inspected at all, which
         // means a merely COMMENTED `auth.uid()` would otherwise satisfy the one
         // gate a SECURITY DEFINER function has left after it bypasses RLS.
-        usesAuthUid: /\bauth\.uid\s*\(/i.test(stripSqlComments(bodyText)),
+        usesAuthUid: /\bauth\.uid\s*\(/i.test(
+          stripSqlComments(bodyText, `${file.name}: body of ${normalizeIdentifier(start[1])}`),
+        ),
         returnsTrigger: /\breturns\s+trigger\b/i.test(attributeText),
       });
     }
@@ -570,7 +625,7 @@ function endOfStatement(text: string): string {
 export function liveFunctions(files: MigrationFile[]): FunctionDef[] {
   const live = new Map<string, FunctionDef>();
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     const events: { at: number; kind: 'create' | 'drop'; name: string }[] = [];
     for (const m of sql.matchAll(createFunctionRe())) {
       events.push({ at: m.index ?? 0, kind: 'create', name: normalizeIdentifier(m[1]) });
@@ -604,7 +659,7 @@ export function liveFunctions(files: MigrationFile[]): FunctionDef[] {
 export function liveFunctionOverloadConflicts(files: MigrationFile[]): string[] {
   const dropped = new Set<string>();
   for (const file of files) {
-    for (const m of stripSqlCommentsAndBodies(file.sql).matchAll(
+    for (const m of stripSqlCommentsAndBodies(file.sql, file.name).matchAll(
       new RegExp(`drop\\s+function\\s+(?:if\\s+exists\\s+)?${QUALIFIED_IDENT}\\s*\\(([^)]*)\\)`, 'gi'),
     )) {
       dropped.add(`${normalizeIdentifier(m[1])}(${m[2].replace(/\s+/g, ' ').trim()})`);
@@ -612,7 +667,7 @@ export function liveFunctionOverloadConflicts(files: MigrationFile[]): string[] 
   }
   const signatures = new Map<string, Set<string>>();
   for (const file of files) {
-    for (const m of stripSqlCommentsAndBodies(file.sql).matchAll(
+    for (const m of stripSqlCommentsAndBodies(file.sql, file.name).matchAll(
       new RegExp(`create\\s+(?:or\\s+replace\\s+)?function\\s+${QUALIFIED_IDENT}\\s*\\(([^)]*)\\)`, 'gi'),
     )) {
       const name = normalizeIdentifier(m[1]);
@@ -656,7 +711,7 @@ export function functionsWithoutPublicRevoke(files: MigrationFile[]): string[] {
   // deployed function is callable by anon.
   const revoked = new Set<string>();
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     type Event = { at: number; kind: 'drop' | 'revoke'; name: string };
     const events: Event[] = [];
 
@@ -715,7 +770,7 @@ export const FUNCTIONS_WITHOUT_PUBLIC_REVOKE = [
 export function policyStatements(files: MigrationFile[]): PolicyStatement[] {
   const out: PolicyStatement[] = [];
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     const re =
       /\b(create|drop)\s+policy\s+(?:if\s+(?:not\s+)?exists\s+)?("[^"]*"|[a-z0-9_]+)\s+on\s+(?:public\.)?([a-z0-9_]+)/gi;
     let m: RegExpExecArray | null;
@@ -816,7 +871,7 @@ export function tableGrants(
 ): { table: string; roles: string[]; file: string }[] {
   const out: { table: string; roles: string[]; file: string }[] = [];
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     const re =
       /grant\s+[^;]*?\s+on\s+(?:table\s+)?public\.([a-z0-9_]+)\s+to\s+([^;]+);/gi;
     let m: RegExpExecArray | null;
@@ -847,7 +902,7 @@ export function tableGrants(
 export function privilegeStatements(files: MigrationFile[]): PrivilegeStatement[] {
   const out: PrivilegeStatement[] = [];
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     const re =
       /\b(grant|revoke)\s+([^;]*?)\s+on\s+(?:table\s+)?public\.([a-z0-9_]+)\s+(?:to|from)\s+([^;]+?);/gi;
     let m: RegExpExecArray | null;
@@ -1073,7 +1128,7 @@ export function unmodelableGrantStatements(
     /\balter\s+default\s+privileges\b[^;]*/gi,
   ];
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     for (const re of patterns) {
       let m: RegExpExecArray | null;
       while ((m = re.exec(sql)) !== null) {
@@ -1090,7 +1145,7 @@ export function functionGrants(
 ): { function: string; roles: string[]; file: string }[] {
   const out: { function: string; roles: string[]; file: string }[] = [];
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     // Same shared identifier pattern as the definition, drop and revoke scans.
     // Leaving this one narrow let a function be RECOGNISED by the census while
     // its grant to `anon` was invisible — a new anonymous entry point that the
@@ -1172,7 +1227,7 @@ export function policyDefinitions(
   const live = policiesByTable(files);
   const out: { table: string; policy: string; file: string; sql: string }[] = [];
   for (const file of files) {
-    const sql = stripSqlCommentsAndBodies(file.sql);
+    const sql: StatementSql = stripSqlCommentsAndBodies(file.sql, file.name);
     const re =
       /\bcreate\s+policy\s+("[^"]*"|[a-z0-9_]+)\s+on\s+(?:public\.)?([a-z0-9_]+)/gi;
     let m: RegExpExecArray | null;
