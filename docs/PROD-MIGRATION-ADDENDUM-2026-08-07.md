@@ -718,107 +718,76 @@ migration, Production deployment, or TestFlight modification is authorized by th
    parallel and neither substitutes for the other.** *(Disambiguation added 2026-08-08 after a
    reviewer read the two rules as contradicting each other; the round count was moved out of this
    bullet in the same pass, having read "six" through rounds 8, 9 and 10.)*
-7. **The frozen-history completeness check.** *(Added 2026-08-10.)* A **document** check, deliberately
-   **not** part of requirement 6: it needs no database, no Production access and no window, so it is
-   runnable today and it is not governed by requirement 6's ordering by cost. For every claim a later
-   round has disproved, confirm that §14b's dated-corrections list **enumerates every occurrence by
-   location**, that each enumerated frozen occurrence carries its adjacent editorial marker, and that
-   each live occurrence has actually been corrected. Grep is a secondary net only — it misses
-   Markdown emphasis inside a phrase and any paraphrase — so the enumeration, not the search, is the
-   artifact being checked. **Record the result** (the occurrence list, and the outcome per
-   occurrence) in the round's findings record, so the next round verifies coverage mechanically
-   rather than taking a declaration on trust. *(Requirement 7 exists because the Kimi and GLM lanes
-   independently observed that the corrections mechanism had no completeness invariant, and because
-   the first version of the sweep — a plain grep, filed under requirement 6 — both missed a real
-   occurrence and sat behind three checks that cannot run before a window.)*
+7. **The frozen-history completeness check.** *(Added 2026-08-10, rewritten 2026-08-11.)* A
+   **document** check needing no database, no Production access and no window, so it is runnable
+   today and is not governed by requirement 6's ordering by cost. **Its inventory of disproved claims
+   comes from outside this document:** the review panel's recorded findings for each candidate — the
+   harness receipts under goal `g-e82c72a8-023a-4b49-bcd1-2826556d5175` and the commit messages that
+   cite them. Take that external list, and for each disproved claim confirm this file states it
+   nowhere as live text and that every surviving frozen occurrence carries the marker described in
+   §14b. Record the result per claim.
 
-**Which of these gates document review.** Requirement 7 does; requirements 2, 3, 5 and 6 do not.
-Requirement 6's experiments cannot run before an attended Production window, so making document
-review wait on them would make it unterminatable — the same liveness failure the withdrawn zero-edit
-rule had. §14b's stopping rule is therefore conditioned on **requirement 7 only**. Requirement 6
-remains mandatory before *approval*; it is simply not a precondition for closing *review*.
+   *The first version checked §14b's corrections list against itself, so it passed whenever the list
+   was internally consistent but short — and it was short: a paraphrase, "Round 9's four fixes are
+   the last edits to this document", went unlisted and undetected until an external reviewer found
+   it. A list cannot be its own completeness proof. Sourcing the inventory from the panel record,
+   which no round of editing this file can alter, is the whole of the fix.*
+
+**Which requirements gate what.** **Requirements 1–6 gate approval.** **Only requirement 7 gates
+closing document review**, because requirement 6's experiments need an attended Production window and
+conditioning review on them would make review unterminatable — the liveness failure the withdrawn
+zero-edit rule had. Requirements 1–6 are unchanged by this split and none of them is waived.
 
 ## 14b. Claim ledger — read this instead of trusting the prose
 
-**Reading path, and an honest note on this section's size — added 2026-08-10.** An operator
-preparing a window needs four things, in this order: the **gating verdict** (§14, NOT APPROVED), the
-**claim ledger** (below), the **Current review state** block, and the **dated corrections**. Those
-are the operational surface and they are bounded. Everything after them — the round-by-round
-narration and its findings tables — is **audit trail**, written for whoever asks *how* this document
-reached its conclusions, and it is not required reading before a window.
-
-That trail grows monotonically and nothing in it may be deleted, so it will keep outgrowing the part
-an operator must read. Two lanes have now flagged that as the mechanism's real long-run cost. The
-answer is deliberately **not** to prune it. Instead, a falsifiable trigger: **when the audit trail
-exceeds roughly two-thirds of this file, it moves wholesale into a companion document** —
-`PROD-MIGRATION-ADDENDUM-2026-08-07-review-history.md` — leaving §14, §14b's ledger, this block and
-the dated corrections here, with a pointer. Moving text unchanged into a companion file preserves the
-append-only guarantee exactly; it is a relocation, not an edit. The trigger is stated so a later
-round can check it mechanically rather than arguing about when the document got too long.
-
 ### Current review state — the single mutable record
 
-**Scope of this block, narrowed 2026-08-08.** It is the single mutable record of exactly three
-things: the **round count**, the **identity of the latest panel**, and **which delta is currently
-unreviewed**. Nothing else in this document may state those three facts as a live claim.
+Everything below this block is **frozen historical narration**: it records what a round found and
+believed at the time, it is never edited to match this block, and a fact a later round disproves is
+corrected here, dated, not in the history.
 
-Three things are deliberately **outside** that scope, because an earlier version of this sentence
-claimed them and was over-broad:
+**This block is the one live status, and it is checkable against something outside this file.** Each
+row cites a commit SHA or the panel record for goal `g-e82c72a8-023a-4b49-bcd1-2826556d5175`; nothing
+here rests on the document's own say-so. Prose elsewhere may describe review qualitatively — "every
+round has found something" — but no other place states a count, a panel identity, or a review status.
 
-- **The gating verdict.** "NOT APPROVED" is fixed document scaffolding and appears at the head of the
-  document and at §14. It is not round-tracking prose, it has never changed in any round, and it is
-  not maintained here.
-- **Qualitative generalisations** such as "every review round has found a real defect". These carry
-  no number and cannot go stale against a count.
-- **Frozen historical narration.** Every round paragraph below records what one round found *and
-  believed at the time*. Those are **append-only and must never be edited to match this block** —
-  including when a later round proves them wrong. A superseding fact belongs here, dated, not in the
-  history.
+| | |
+|---|---|
+| **Review status** | **OPEN.** The delta below has not been independently reviewed. |
+| **Approval status** | **NOT APPROVED** (§14). Unchanged by every round to date. |
+| Latest reviewed candidate | `74e17f6` — full five-family panel (Claude `claude-sonnet-5`, Codex `gpt-5.6-sol`, GLM-5.2, DeepSeek V4 Pro, Kimi K3 deep), quorum met, every lane bound to that candidate. Six findings open at the round cap; two panel findings across the cycle were refuted on repository evidence. |
+| Most recent unreviewed delta | the **round-17 repair** — this block, §14 requirement 7, and the corrections list below |
+| Rounds completed | **16.** Counted from the panel record, not from this file — per-round narration below stops after round 11, deliberately, because the meta-commentary had become the document's dominant defect surface. |
 
-Three separate propagation defects (rounds 9, 10 and 11) came from a *live* fact being asserted in
-more than one place, so there is now exactly one live place for each of the three.
-
-| | | |
-|---|---|---|
-| Rounds completed | **15** | |
-| Rounds that found a real defect | **15 — every one, including the last** | |
-| Latest panel | Round 15, over candidate `51da763` | Full five-family — Claude `claude-sonnet-5`, Codex `gpt-5.6-sol`, GLM-5.2, DeepSeek V4 Pro, Kimi K3 deep. **Quorum met**, no lane missing, every lane's run bound to that candidate. One DeepSeek High was **refuted on repository evidence** and is recorded as such below. |
-| **Most recent unreviewed delta** | **the round-16 repair** — the §10 RPC call-site citation; the corrections list moving from grep to enumeration-by-location, gaining the round-11 occurrence of round 9's descriptor and an entry for round 13; adjacent editorial markers at each enumerated frozen occurrence; §14 requirement 7 and the stopping rule's decoupling from requirement 6; and §14b's reading path and companion-file trigger | |
-| Gating status | **NOT APPROVED** (§14). Unchanged by every round to date. | |
+**On the two statuses.** They are separate and both are needed: document review can close while
+approval stays blocked, because requirement 7 gates review and requirements 1–6 gate approval. A
+reader who wants one word should read **NOT APPROVED** — no combination of review outcomes changes
+that without requirements 1–6.
 
 ### Dated corrections superseding frozen history — 2026-08-08
 
-Facts that later rounds proved wrong live here. The round paragraphs below are **not** edited to
-match them.
+Facts that later rounds proved wrong live here; the round paragraphs below are not edited to match
+them. **The rule, in one sentence:** an entry names what is false and lists every place it still
+appears, and each such place keeps a bracketed editorial line immediately after it — a signpost added
+by a later round, never part of the record, so the narration's own words stay untouched while a
+reader arriving directly still sees that the claim is dead.
 
-**Completeness is a requirement of this list, not a courtesy.** A round that disproves a claim
-appearing in frozen narration must append an entry here that **enumerates every occurrence by
-location**, not only the one it happened to be reading. An entry that corrects one site and silently
-leaves a second is the same propagation defect this mechanism exists to end, relocated from the
-history into the corrections. The check that enforces this is **§14 requirement 7**. Entries state
-*what* is false and *where* it appears; they carry no round count, because the count is live and
-lives only in the table above.
+This list is **not** its own completeness proof, and does not claim to be. What makes it complete is
+**§14 requirement 7**, which takes its inventory from the panel record outside this file and checks
+this list against it. Searching this file for a claim's text is a weak net: it misses Markdown
+emphasis inside a phrase, and it cannot match a paraphrase at all — both have already happened here.
 
-**Enumerate by location, and do not trust a grep — added 2026-08-10.** An earlier version of this
-rule said to grep the file for the disproved claim's text. That is necessary and **not sufficient**,
-and the gap is not theoretical: the round-11 findings table writes round 9's descriptor as `third and
-**final** full panel`, with Markdown emphasis inside the phrase, so a search for the plain string
-misses it — which is exactly how the first version of this list shipped one occurrence short. A grep
-also cannot match a paraphrase. So each entry below **lists its occurrences explicitly**, and the
-list of occurrences — not the search that found them — is what a later round verifies.
-
-**A frozen occurrence carries an adjacent marker.** Naming occurrences only in this list still leaves
-a reader who arrives directly at a frozen paragraph with no local signal. Each occurrence enumerated
-below therefore also carries a bracketed editorial line **immediately after the paragraph it
-concerns**. That line is *not part of the record*: the narration's own words are never altered, which
-is the whole of the append-only guarantee. It is a signpost added by a later round, and it says so.
-
-- **Round 9's heading calls itself "third and final full panel". It was not final** — later rounds
-  followed. Occurrences: the round-9 heading itself, and the round-11 findings table row that quotes
-  the descriptor as `third and **final** full panel` while recording that it carried a stale round
-  count. Both are frozen and neither is edited. The heading is preserved verbatim because it records
-  what round 9 contemporaneously believed, and that mistaken belief is exactly what the audit trail
-  exists to show. *(Round 12 edited that heading to "third full panel"; the edit has been reverted.
+- **Round 9's heading calls itself "third and final full panel", and round 9 believed its own edits
+  were the last. Neither was true** — later rounds and later candidates followed. Occurrences, all
+  frozen and none edited: the round-9 heading itself; the round-11 findings table row quoting the
+  descriptor as `third and **final** full panel` while recording that it carried a stale round count;
+  and — as a **paraphrase**, which is why two searches missed it — round 9's own disclosure
+  blockquote, *"Round 9's four fixes are the last edits to this document"*. That blockquote already
+  labels itself SUPERSEDED and points at round 10, so the claim was never live; it is listed here
+  because requirement 7 counts occurrences, not whether each one happens to be self-aware. The
+  heading is preserved verbatim because it records what round 9 contemporaneously believed, and that
+  mistaken belief is exactly what the audit trail exists to show. *(Round 12 edited that heading to
+  "third full panel"; the edit has been reverted.
   The Codex lane held it violated the append-only rule for frozen narration; the GLM lane held
   "final" was a live descriptor and correctly editable. **Operator decision 2026-08-08: preserve
   frozen historical narration and carry the correction here instead.** The dispute is resolved, not
@@ -851,16 +820,12 @@ is the whole of the append-only guarantee. It is a signpost added by a later rou
   which is reached only after `:196-206` returns `unauthorized()` on a falsy id). The bucket is
   therefore unreachable on that path. An earlier round rejected the same claim on the same evidence;
   it is recorded here so a third round does not have to re-derive it.
-- **Round 13 has no narrative record below, and that is a gap this list closes, not a miscount —
-  added 2026-08-10.** Rounds 12, 13 and 14 were not given narrative paragraphs; the practice of
-  writing one per round stopped after round 11, deliberately, because the meta-commentary had become
-  the document's dominant defect surface. Round 13 ran a full five-family panel over candidate
-  `4f4850f` and **did not reach quorum** — GLM, DeepSeek and Kimi all failed on routed-provider
-  authentication (403 / exit 4 / exit 5) — while the Claude and Codex lanes that did report found the
-  defects the round-14 repair then fixed. It is counted in the round total above on that basis. The
-  table above names only the *latest* panel, so recording round 13 anywhere else would put a second
-  live claim about panel identity outside the single mutable record; this entry is historical, dated,
-  and states no current fact.
+- **Round 13's outcome, which has no narrative record below — added 2026-08-10.** It ran a
+  five-family panel over candidate `4f4850f` and **did not reach quorum**: GLM, DeepSeek and Kimi all
+  failed on routed-provider authentication (403 / exit 4 / exit 5), while the Claude and Codex lanes
+  that did report found the defects the round-14 repair then fixed. Recorded here because it is
+  historical and states no current fact; the block above names only the *latest* panel, and a second
+  live claim about panel identity outside that block is exactly what this mechanism forbids.
 
 ---
 
@@ -1011,6 +976,11 @@ the mechanism it describes — and neither error is more forgivable than the oth
 > diff only… and should not re-review the document from scratch. All four are safety-monotone."*
 > An independent coordination audit reopened the item on exactly that admission, and round 10
 > reviewed the round-9 state. **The scoping instruction was unsafe and is withdrawn** — see round 10.
+
+*[Editorial marker added 2026-08-11, not part of the round-9 record: "the last edits to this
+document" above was wrong — many later rounds edited it. This is the paraphrased occurrence of round
+9's finality claim; see "Dated corrections superseding frozen history" in §14b. The quote is left
+exactly as round 9 wrote it.]*
 
 **Round 10 (2026-08-08, fourth full panel — the review round 9 declared it had no budget for).**
 Commissioned by an independent coordination audit, not by this document. Full five-family panel over
