@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reconcile, type BaselineBar } from './reconcile';
+import { reconcile, normalizeLegacy, type BaselineBar } from './reconcile';
 import type { NormalizedCandidate } from './types';
 
 /**
@@ -159,5 +159,46 @@ describe('reconcile', () => {
     });
     expect(result.keyDivergence).toBe(0);
     expect(result.keyDivergenceExamples).toHaveLength(0);
+  });
+
+  it('detects intra-batch key divergence (baseline-only comparison misses this)', () => {
+    // Real pair from the frozen 2026-08-05 report: "The Houndstooth Pub"
+    // (osm:node/2709479288) and "Houndstooth Pub" (osm:node/5087643578),
+    // both Midtown, neither in baseline. Census keys differ ("the" is kept);
+    // apply-side keys collide ("the" is stripped). A baseline-only
+    // divergence check sees both as "fresh" under both normalizers and
+    // never flags the pair — this test pins the fix that catches it.
+    const baseline: BaselineBar[] = [];
+    const result = reconcile({
+      candidates: [
+        candidate({ externalId: 'osm:node/2709479288', name: 'The Houndstooth Pub', neighborhood: 'Midtown' }),
+        candidate({ externalId: 'osm:node/5087643578', name: 'Houndstooth Pub', neighborhood: 'Midtown' }),
+      ],
+      baseline,
+      reportGeneratedAt: REPORT_GENERATED_AT,
+    });
+    expect(result.keyDivergence).toBe(1);
+    expect(result.keyDivergenceExamples[0].name).toBe('Houndstooth Pub');
+    expect(result.keyDivergenceExamples[0].censusKeyFresh).toBe(true);
+    expect(result.keyDivergenceExamples[0].applyKeyFresh).toBe(false);
+    // Fold behavior must stay exactly as before: first entry accepted,
+    // second rejected as an apply-side name+neighborhood duplicate.
+    expect(result.newInserts).toHaveLength(1);
+    expect(result.newInserts[0].externalId).toBe('osm:node/2709479288');
+    expect(result.nameHoodCollisions).toHaveLength(1);
+    expect(result.nameHoodCollisions[0].externalId).toBe('osm:node/5087643578');
+    expect(result.idCollisions).toHaveLength(0);
+  });
+
+  it('pins normalizeLegacy against known apply.ts behavior (drift tripwire)', () => {
+    // apply.ts's copy is unexported and out of scope to edit for this goal,
+    // so it can't be imported directly. These vectors characterize its
+    // actual documented behavior (lowercase; strip ' . & '; strip whole
+    // words "and"/"the"; collapse whitespace; diacritics untouched) so a
+    // future edit to either copy that breaks the mirror fails loudly here.
+    expect(normalizeLegacy('The Dead Rabbit')).toBe('dead rabbit');
+    expect(normalizeLegacy("Sam and Dave's")).toBe('sam daves');
+    expect(normalizeLegacy('Rum & Coke’s Bar')).toBe('rum cokes bar');
+    expect(normalizeLegacy('Tía Pol')).toBe('tía pol');
   });
 });

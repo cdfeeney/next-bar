@@ -28,7 +28,17 @@ Wrote `scripts/census/out/run-2026-08-05T00-25-06-752Z/reconcile.json` and
 | Validation rejects | 865 |
 | **Projected total** (baseline + new inserts) | **825** |
 | **Reaches 1,200?** | **NO** |
-| Key divergence (census `dedupeKey` vs apply `normalizeLegacy` disagree) | 6 |
+| Key divergence (census `dedupeKey` vs apply `normalizeLegacy` disagree) | 7 |
+
+**Santa round-1 correction:** the divergence check originally compared each candidate only against
+the *baseline*'s keys, missing pairs that diverge against each other within the same batch. The
+frozen report contains both "The Houndstooth Pub" (`osm:node/2709479288`) and "Houndstooth Pub"
+(`osm:node/5087643578`), both Midtown, neither in baseline: their census keys differ (`the` kept)
+but their apply keys collide (`the` stripped), so the second is silently rejected by the real
+apply-side fold — a genuine divergence the baseline-only check never saw. `reconcile()` now
+computes divergence against the same growing sets the accept/reject fold uses, catching intra-batch
+cases; the count moved from the originally reported 6 to the correct 7. See
+`scripts/census/reconcile.ts` and its regression test for the mechanism.
 
 ## Baseline honesty gate
 
@@ -69,7 +79,7 @@ is real and its cause is named, not a failure to fix here.
 strips punctuation; neighborhood trimmed+lowercased) and `scripts/census/apply.ts`'s
 `normalizeLegacy` (lowercases, strips `'’.&`, removes the whole words "and"/"the";
 neighborhood compared **raw**, no trim/lowercase) are two different functions guarding
-the same table. **6 of 1,382** candidates in this run are classified differently —
+the same table. **7 of 1,382** candidates in this run are classified differently —
 fresh under one key, a duplicate under the other:
 
 | Name | Neighborhood | census-fresh | apply-fresh |
@@ -79,14 +89,21 @@ fresh under one key, a duplicate under the other:
 | Full Shilling | FiDi | yes | no |
 | Ten Bells | LES | yes | no |
 | Rum House | Midtown | yes | no |
+| Houndstooth Pub | Midtown | yes | no |
 | Hoptimist | UWS | yes | no |
+
+The 7th row ("Houndstooth Pub") is an **intra-batch** divergence: it and "The Houndstooth
+Pub" (also Midtown, neither in baseline) collide under the apply-side key but not the
+census-side key. A baseline-only comparison cannot see this — `reconcile()` now compares
+divergence against the same sets the accept/reject fold grows as it runs, so a same-batch
+pair is caught the moment the second one would be folded in as a duplicate.
 
 The dry-run `fresh: 1382` / `alreadyInCatalog: 0` in the frozen report (structural — it
 compared against `catalog: []`, `scripts/census/run-census.mts:105`) never predicted
 this: it is the first reconciliation this candidate set has ever undergone against any
 baseline. Fixing the divergence between the two normalizers is explicitly **out of
-scope** for this goal — quantifying it (6 candidates, both directions represented) is
-the deliverable.
+scope** for this goal — quantifying it (7 candidates, both directions represented, plus
+one intra-batch case) is the deliverable.
 
 ## Attended gates still outstanding before any apply
 
@@ -97,7 +114,7 @@ the deliverable.
    cannot supply — see the `ponytail:` comment in `scripts/census/reconcile.ts`.
 3. Decide whether to fix the SLA adapter's borough-vs-neighborhood gap (the 865
    validation rejects) before a real apply, since that is the dominant loss.
-4. Reconcile or explicitly accept the 6-candidate key divergence before trusting a real
+4. Reconcile or explicitly accept the 7-candidate key divergence before trusting a real
    apply's fresh/existing split.
 5. Explicit operator authorization to run `--apply` against Staging, per the
    sidecar/provenance gate in `scripts/census/apply.ts`.
@@ -119,11 +136,17 @@ the deliverable.
 
 ## Verification run
 
-- `npx vitest run scripts/census src/lib/catalogServer` — **63 passed** (3 files),
-  including the 9 new `scripts/census/reconcile.test.ts` cases (id collision,
-  name+neighborhood collision, boundary-validation reject, projected-total arithmetic,
-  empty baseline, and two independent key-divergence cases — word-stripping and
-  diacritics — each verified to be detected in the right direction).
+- `npx vitest run scripts/census src/lib/catalogServer` — **65 passed** (3 files),
+  including 11 `scripts/census/reconcile.test.ts` cases (id collision, name+neighborhood
+  collision, boundary-validation reject, projected-total arithmetic, empty baseline, two
+  independent baseline-vs-candidate key-divergence cases — word-stripping and diacritics —
+  an intra-batch divergence regression pinning the Santa round-1 fix, and a
+  `normalizeLegacy` characterization test guarding against drift from `apply.ts`'s copy).
+- `npx tsc --noEmit` — exit 0.
 - `npx tsx scripts/census/reconcile-preflight.mts --run run-2026-08-05T00-25-06-752Z` —
   exit 0, wrote `reconcile.json` + `reconcile.md`; numbers above are that run's verbatim
-  output.
+  output (`reconcile.json` now also includes the full `newInserts` array and
+  `maxPossibleTotal`).
+- Fail-closed CLI paths verified: `--run nonexistent-run-id` → exit 1; `--run
+  "../../../etc"` → exit 1 (rejected as an unsafe run directory name); `--run` with no
+  following value → exit 1 (previously silently fell back to the default run).

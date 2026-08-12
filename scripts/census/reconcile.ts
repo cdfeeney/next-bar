@@ -56,8 +56,11 @@ export interface ReconcileResult {
 // Reproduced verbatim from scripts/census/apply.ts's (unexported, local)
 // normalizeLegacy — the goal forbids editing apply.ts's dedupe semantics, so
 // the apply-side key is duplicated here to compute divergence against it.
-// Keep in sync by hand if apply.ts's normalizer ever changes.
-function normalizeLegacy(s: string): string {
+// Keep in sync by hand if apply.ts's normalizer ever changes — exported so
+// reconcile.test.ts can pin it against known apply.ts output with
+// characterization tests (apply.ts's copy can't be imported directly: it is
+// unexported and out of scope to edit for this goal).
+export function normalizeLegacy(s: string): string {
   return s
     .toLowerCase()
     .replace(/['’.&]/g, '')
@@ -117,16 +120,38 @@ export function reconcile(input: ReconcileInput): ReconcileResult {
   const { candidates, baseline } = input;
   const lastVerified = input.reportGeneratedAt.slice(0, 10);
 
-  // Key divergence: classify every candidate against the baseline under both
-  // normalizers independently of the sequential bucketing below, so a
-  // divergence is reported even when the candidate would be rejected for an
-  // unrelated reason (e.g. id collision) first.
-  const censusBaselineKeys = new Set(baseline.map((b) => dedupeKey(b.name, b.neighborhood)));
-  const applyBaselineKeys = new Set(baseline.map((b) => nameHoodKeyLegacy(b.name, b.neighborhood)));
+  // Single pass, mirroring applyCurated's real order (validation, then id
+  // collision, then name+neighborhood collision) with each accepted
+  // candidate updating the running "existing" sets — so intra-batch
+  // collisions are caught exactly as a real apply run would catch them.
+  //
+  // Key divergence is computed inline, against the SAME growing sets: the
+  // apply-side set (existingNameHood) already only gains an entry when a
+  // candidate is accepted, matching what a real apply commits to the table.
+  // The census-side set (censusSeenKeys) gains an entry for every candidate
+  // processed, accepted or not — mirroring dedupe.ts's RunDeduper, which
+  // registers "every sighting, including rejected duplicates" (see its
+  // doc comment). Comparing a candidate against baseline-only sets (the
+  // prior approach) missed same-batch pairs like the frozen report's "The
+  // Houndstooth Pub" / "Houndstooth Pub" (Midtown, neither in baseline):
+  // their census keys differ but their apply keys collide, so the second
+  // is silently rejected by the fold while baseline-only divergence saw
+  // both as "fresh" and never flagged the pair.
+  const existingIds = new Set(baseline.map((b) => b.id));
+  const existingNameHood = new Set(baseline.map((b) => nameHoodKeyLegacy(b.name, b.neighborhood)));
+  const censusSeenKeys = new Set(baseline.map((b) => dedupeKey(b.name, b.neighborhood)));
+
+  const newInserts: NormalizedCandidate[] = [];
+  const idCollisions: RejectedCandidate[] = [];
+  const nameHoodCollisions: RejectedCandidate[] = [];
+  const validationRejects: RejectedCandidate[] = [];
   const keyDivergenceExamples: KeyDivergenceEntry[] = [];
+
   for (const c of candidates) {
-    const censusKeyFresh = !censusBaselineKeys.has(dedupeKey(c.name, c.neighborhood));
-    const applyKeyFresh = !applyBaselineKeys.has(nameHoodKeyLegacy(c.name, c.neighborhood));
+    const censusKey = dedupeKey(c.name, c.neighborhood);
+    const nh = nameHoodKeyLegacy(c.name, c.neighborhood);
+    const censusKeyFresh = !censusSeenKeys.has(censusKey);
+    const applyKeyFresh = !existingNameHood.has(nh);
     if (censusKeyFresh !== applyKeyFresh) {
       keyDivergenceExamples.push({
         externalId: c.externalId,
@@ -136,21 +161,8 @@ export function reconcile(input: ReconcileInput): ReconcileResult {
         applyKeyFresh,
       });
     }
-  }
+    censusSeenKeys.add(censusKey);
 
-  // Sequential fold mirroring applyCurated's real order — validation, then
-  // id collision, then name+neighborhood collision — with each accepted
-  // candidate updating the running "existing" set so intra-batch collisions
-  // are caught exactly as a real apply run would catch them.
-  const existingIds = new Set(baseline.map((b) => b.id));
-  const existingNameHood = new Set(baseline.map((b) => nameHoodKeyLegacy(b.name, b.neighborhood)));
-
-  const newInserts: NormalizedCandidate[] = [];
-  const idCollisions: RejectedCandidate[] = [];
-  const nameHoodCollisions: RejectedCandidate[] = [];
-  const validationRejects: RejectedCandidate[] = [];
-
-  for (const c of candidates) {
     const id = idFromExternalId(c.externalId);
     const row = toRow(c, id, lastVerified);
     const reject = (bucket: RejectedCandidate[], reason: string) =>
@@ -164,7 +176,6 @@ export function reconcile(input: ReconcileInput): ReconcileResult {
       reject(idCollisions, `id collision: ${id}`);
       continue;
     }
-    const nh = nameHoodKeyLegacy(c.name, c.neighborhood);
     if (existingNameHood.has(nh)) {
       reject(nameHoodCollisions, 'name+neighborhood duplicate (apply-side key)');
       continue;

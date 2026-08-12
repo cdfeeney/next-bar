@@ -24,8 +24,16 @@ const TARGET_TOTAL = 1200;
 const args = process.argv.slice(2);
 function flagValue(name: string): string | null {
   const i = args.indexOf(name);
-  return i !== -1 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : null;
+  if (i === -1) return null;
+  const value = args[i + 1];
+  if (!value || value.startsWith('--')) {
+    fail(`${name} was given without a value`);
+  }
+  return value;
 }
+
+// A safe run directory name: no path separators, no "..", no leading dot.
+const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 interface FrozenReport {
   runId: string;
@@ -54,10 +62,12 @@ interface ReconcileOutput {
   idCollisionsCount: number;
   nameHoodCollisionsCount: number;
   validationRejectsCount: number;
+  maxPossibleTotal: number;
   projectedTotal: number;
   target: number;
   reaches1200: boolean;
   keyDivergence: number;
+  newInserts: unknown;
   idCollisions: unknown;
   nameHoodCollisions: unknown;
   validationRejects: unknown;
@@ -66,6 +76,11 @@ interface ReconcileOutput {
 
 function main(): void {
   const runId = flagValue('--run') ?? DEFAULT_RUN_ID;
+  // No path separators or ".." reach this regex, so join(OUT_DIR, runId)
+  // below can never resolve outside OUT_DIR.
+  if (!SAFE_RUN_ID.test(runId)) {
+    fail(`--run "${runId}" is not a safe run directory name (letters, digits, dot, underscore, hyphen only)`);
+  }
   const runDir = join(OUT_DIR, runId);
   const reportPath = join(runDir, 'report.json');
 
@@ -116,10 +131,12 @@ function main(): void {
     idCollisionsCount: result.idCollisions.length,
     nameHoodCollisionsCount: result.nameHoodCollisions.length,
     validationRejectsCount: result.validationRejects.length,
+    maxPossibleTotal: result.baselineCount + result.candidateCount,
     projectedTotal: result.projectedTotal,
     target: TARGET_TOTAL,
     reaches1200: result.reaches1200,
     keyDivergence: result.keyDivergence,
+    newInserts: result.newInserts,
     idCollisions: result.idCollisions,
     nameHoodCollisions: result.nameHoodCollisions,
     validationRejects: result.validationRejects,
@@ -138,9 +155,13 @@ function main(): void {
 }
 
 function renderMarkdown(o: ReconcileOutput): string {
-  const shortfallLines =
-    o.reaches1200
-      ? ''
+  const shortfallLines = o.reaches1200
+    ? ''
+    : o.maxPossibleTotal < o.target
+      ? `\n**Shortfall:** projected total ${o.projectedTotal} is ${o.target - o.projectedTotal} short of ${o.target}. ` +
+        `Even with zero dedupe/validation losses, this run has only ${o.maxPossibleTotal} candidates available ` +
+        `(baseline ${o.baselineCount} + candidates ${o.candidateCount}) — ${o.target - o.maxPossibleTotal} short of ` +
+        `${o.target} regardless of losses. This run does not have enough distinct candidates to close the gap.\n`
       : `\n**Shortfall:** projected total ${o.projectedTotal} is ${o.target - o.projectedTotal} short of ${o.target}. ` +
         `Of ${o.candidateCount} candidates, ${o.idCollisionsCount} were dropped as id collisions, ` +
         `${o.nameHoodCollisionsCount} as name+neighborhood duplicates, and ${o.validationRejectsCount} failed ` +
