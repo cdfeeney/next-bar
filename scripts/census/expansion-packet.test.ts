@@ -183,13 +183,11 @@ describe('buildExpansionPacket', () => {
     const candidates = [candidate({ externalId: 'sla:dup', name: 'Attaboy' })];
 
     // Act
-    const uncorrected = buildExpansionPacket({
+    const withCorrection = buildExpansionPacket({
       candidates,
       baseline,
       reportGeneratedAt: REPORT_GENERATED_AT,
       geo: GEO,
-      // Empty vocabulary ⇒ nothing is "known", but the stubbed snap also
-      // declines, so the candidate keeps its raw label: the pre-correction state.
       knownNeighborhoods: KNOWN_HOODS,
     });
     const withoutCorrection = buildExpansionPacket({
@@ -203,9 +201,9 @@ describe('buildExpansionPacket', () => {
     // Assert
     expect(withoutCorrection.validationRejects).toHaveLength(1);
     expect(withoutCorrection.nameHoodCollisions).toHaveLength(0);
-    expect(uncorrected.nameHoodCollisions).toHaveLength(1);
-    expect(uncorrected.validationRejects).toHaveLength(0);
-    expect(uncorrected.projectedTotal).toBe(baseline.length);
+    expect(withCorrection.nameHoodCollisions).toHaveLength(1);
+    expect(withCorrection.validationRejects).toHaveLength(0);
+    expect(withCorrection.projectedTotal).toBe(baseline.length);
   });
 
   it('accounts for every candidate in exactly one bucket', () => {
