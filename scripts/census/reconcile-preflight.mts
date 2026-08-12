@@ -16,36 +16,20 @@ import { join } from 'node:path';
 import { bars } from '../../src/lib/bars';
 import { reconcile, type BaselineBar } from './reconcile';
 import type { NormalizedCandidate } from './types';
+import { flagValue, makeFail, requireSafeRunId, type Fail } from './runArgs';
 
 const DEFAULT_RUN_ID = 'run-2026-08-05T00-25-06-752Z';
 const OUT_DIR = 'scripts/census/out';
 const TARGET_TOTAL = 1200;
 
 const args = process.argv.slice(2);
-function flagValue(name: string): string | null {
-  const occurrences = args.filter((a) => a === name).length;
-  if (occurrences > 1) {
-    fail(`${name} was given more than once`);
-  }
-  const i = args.indexOf(name);
-  if (i === -1) return null;
-  const value = args[i + 1];
-  if (!value || value.startsWith('--')) {
-    fail(`${name} was given without a value`);
-  }
-  return value;
-}
-
-// A safe run directory name: no path separators, no "..", no leading dot.
-const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-// Windows reserved device names resolve to a device, not a regular file, even
-// as a path component — refuse them explicitly rather than rely on fs calls
-// to fail safely on every platform this might ever run on.
-const RESERVED_WINDOWS_NAMES = new Set([
-  'con', 'prn', 'aux', 'nul',
-  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
-  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
-]);
+// Hardening (safe run-id, no duplicate/empty --run, reserved Windows device
+// names) now lives in ./runArgs so expansion-packet-cli.mts reuses the exact
+// same reviewed parser rather than re-inventing a weaker one.
+// The explicit `: Fail` annotation is load-bearing: TypeScript only treats a
+// call to a const-bound function as never-returning (so `report` is definitely
+// assigned after a `fail(...)` branch) when the const carries an explicit type.
+const fail: Fail = makeFail('reconcile-preflight');
 
 interface FrozenReport {
   runId: string;
@@ -53,11 +37,6 @@ interface FrozenReport {
   configHash?: string;
   generatedAt: string;
   candidates: NormalizedCandidate[];
-}
-
-function fail(message: string): never {
-  console.error(`reconcile-preflight REFUSED: ${message}`);
-  process.exit(1);
 }
 
 interface ReconcileOutput {
@@ -87,15 +66,9 @@ interface ReconcileOutput {
 }
 
 function main(): void {
-  const runId = flagValue('--run') ?? DEFAULT_RUN_ID;
-  // No path separators or ".." reach this regex, so join(OUT_DIR, runId)
-  // below can never resolve outside OUT_DIR.
-  if (!SAFE_RUN_ID.test(runId)) {
-    fail(`--run "${runId}" is not a safe run directory name (letters, digits, dot, underscore, hyphen only)`);
-  }
-  if (RESERVED_WINDOWS_NAMES.has(runId.toLowerCase())) {
-    fail(`--run "${runId}" is a reserved Windows device name`);
-  }
+  // No path separators or ".." survive requireSafeRunId, so join(OUT_DIR,
+  // runId) below can never resolve outside OUT_DIR.
+  const runId = requireSafeRunId(flagValue(args, '--run', fail) ?? DEFAULT_RUN_ID, fail);
   const runDir = join(OUT_DIR, runId);
   const reportPath = join(runDir, 'report.json');
 
