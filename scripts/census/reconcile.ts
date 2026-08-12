@@ -137,6 +137,22 @@ export function reconcile(input: ReconcileInput): ReconcileResult {
   // their census keys differ but their apply keys collide, so the second
   // is silently rejected by the fold while baseline-only divergence saw
   // both as "fresh" and never flagged the pair.
+  //
+  // Santa round-2 note (GLM + Kimi, independently): because censusSeenKeys
+  // registers every candidate unconditionally while existingNameHood only
+  // registers accepted ones, a divergence entry can fire for a reason that
+  // is NOT the two normalizer functions disagreeing on a name -- it can be
+  // a side effect of an earlier same-batch candidate being rejected for an
+  // unrelated reason (failed validation, id collision), which suppresses
+  // the apply-side registration but not the census-side one. This is
+  // intentional, not a bug: it faithfully mirrors how the two REAL
+  // pipelines actually differ in scope (dedupe.ts's RunDeduper tracks
+  // "ever seen"; apply.ts's applyCurated tracks "actually inserted"), and
+  // keyDivergence is purely informational for an attended human reviewer --
+  // nothing in this repo gates on it automatically. Splitting the two
+  // causes apart is a legitimate follow-up, not required here (fixing the
+  // divergence itself is explicitly out of scope for this goal -- only
+  // quantifying it is).
   const existingIds = new Set(baseline.map((b) => b.id));
   const existingNameHood = new Set(baseline.map((b) => nameHoodKeyLegacy(b.name, b.neighborhood)));
   const censusSeenKeys = new Set(baseline.map((b) => dedupeKey(b.name, b.neighborhood)));

@@ -40,6 +40,15 @@ computes divergence against the same growing sets the accept/reject fold uses, c
 cases; the count moved from the originally reported 6 to the correct 7. See
 `scripts/census/reconcile.ts` and its regression test for the mechanism.
 
+**Santa round-2 note:** `keyDivergence` counts two distinct real effects together — genuine
+disagreement between the two normalizer functions, and cases where an earlier same-batch candidate
+was rejected for an unrelated reason (failed validation, id collision), which suppresses the
+apply-side "seen" registration but not the census-side one. Both are real, accurate reflections of
+how the two production pipelines actually differ in scope (census-side dedup tracks "ever seen";
+apply-side tracks "actually inserted") — this is not a wrong number, just a coarser one than a full
+root-cause breakdown. This metric is informational for the attended review below; nothing in this
+repository gates automatically on it.
+
 ## Baseline honesty gate
 
 The offline baseline is the static catalog (**403 rows**), not the recorded Staging

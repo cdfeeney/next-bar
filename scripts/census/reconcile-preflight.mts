@@ -23,6 +23,10 @@ const TARGET_TOTAL = 1200;
 
 const args = process.argv.slice(2);
 function flagValue(name: string): string | null {
+  const occurrences = args.filter((a) => a === name).length;
+  if (occurrences > 1) {
+    fail(`${name} was given more than once`);
+  }
   const i = args.indexOf(name);
   if (i === -1) return null;
   const value = args[i + 1];
@@ -34,6 +38,14 @@ function flagValue(name: string): string | null {
 
 // A safe run directory name: no path separators, no "..", no leading dot.
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// Windows reserved device names resolve to a device, not a regular file, even
+// as a path component — refuse them explicitly rather than rely on fs calls
+// to fail safely on every platform this might ever run on.
+const RESERVED_WINDOWS_NAMES = new Set([
+  'con', 'prn', 'aux', 'nul',
+  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
+]);
 
 interface FrozenReport {
   runId: string;
@@ -80,6 +92,9 @@ function main(): void {
   // below can never resolve outside OUT_DIR.
   if (!SAFE_RUN_ID.test(runId)) {
     fail(`--run "${runId}" is not a safe run directory name (letters, digits, dot, underscore, hyphen only)`);
+  }
+  if (RESERVED_WINDOWS_NAMES.has(runId.toLowerCase())) {
+    fail(`--run "${runId}" is a reserved Windows device name`);
   }
   const runDir = join(OUT_DIR, runId);
   const reportPath = join(runDir, 'report.json');
