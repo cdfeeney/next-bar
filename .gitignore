@@ -20,3 +20,6 @@ scripts/data/
 .site-cache/
 .osm-cache/
 scripts/census/out/
+
+# Harness review-panel receipts (product-worktree harness infrastructure, not source)
+.harness-receipts/
