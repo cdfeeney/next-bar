@@ -4,35 +4,34 @@ import path from 'node:path';
 import { config as dotenv } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import {
-  curateManhattanCandidates,
-  type OsmNode,
-  type SlaLicense,
+  parseFivePm,
+  reconcilePlaces,
+  selectPlace,
+  type GooglePlace,
+  type Rejection,
   type StagingBar,
+  type ValidatedPlace,
 } from './census/manhattan-curation';
-import type { NormalizedCandidate } from './census/types';
 
 const PROJECT_REF = 'wqxovhiovgcijmfzxgby';
+const SOURCE_URL = 'https://5pm.nyc/best-happy-hours-manhattan/';
 const VERIFIED_DATE = '2026-08-13';
-const packetPath = path.resolve(
-  'scripts/census/out/run-2026-08-05T00-25-06-752Z/expansion-packet.json',
-);
-const outDir = path.resolve(
-  'docs/release-artifacts/v7-manhattan-staging-2026-08-13',
-);
-const envPath = path.resolve(process.argv[2] ?? '.env.local');
+const outDir = path.resolve('docs/release-artifacts/v7-manhattan-staging-2026-08-13-v2');
+const stagingEnvPath = path.resolve(process.argv[2] ?? '.env.local');
+const googleEnvPath = path.resolve(process.argv[3] ?? process.argv[2] ?? '.env.local');
+const FIELD_MASK = [
+  'places.id',
+  'places.displayName',
+  'places.formattedAddress',
+  'places.location',
+  'places.addressComponents',
+  'places.primaryType',
+  'places.types',
+  'places.businessStatus',
+].join(',');
 
-function sha256(value: string | Buffer): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, {
-    headers: { 'User-Agent': 'NextBar attended Manhattan curation/1.0' },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`read-only source returned HTTP ${response.status}`);
-  return response.json() as Promise<T>;
-}
+const sha256 = (value: string | Buffer): string =>
+  createHash('sha256').update(value).digest('hex');
 
 function writeJson(name: string, value: unknown): string {
   const text = `${JSON.stringify(value, null, 2)}\n`;
@@ -40,156 +39,169 @@ function writeJson(name: string, value: unknown): string {
   return sha256(text);
 }
 
-function sqlLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
+async function fetchPlace(
+  source: ReturnType<typeof parseFivePm>[number],
+  apiKey: string,
+): Promise<GooglePlace[]> {
+  const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': FIELD_MASK,
+    },
+    body: JSON.stringify({
+      textQuery: `${source.name}, ${source.address}`,
+      maxResultCount: 3,
+      locationBias: {
+        rectangle: {
+          low: { latitude: 40.68, longitude: -74.03 },
+          high: { latitude: 40.89, longitude: -73.90 },
+        },
+      },
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`Google Places returned HTTP ${response.status}`);
+  const body = await response.json() as { places?: GooglePlace[] };
+  return body.places ?? [];
 }
 
 async function main(): Promise<void> {
-  if (fs.existsSync(outDir) && fs.readdirSync(outDir).length > 0) {
+  if (fs.existsSync(path.join(outDir, 'manifest.json'))) {
     throw new Error(`refusing to overwrite immutable output: ${outDir}`);
   }
-  if (!fs.existsSync(packetPath)) throw new Error(`missing reviewed packet: ${packetPath}`);
-
-  dotenv({ path: envPath, quiet: true });
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  dotenv({ path: stagingEnvPath, quiet: true });
+  // `override:false` preserves the already-loaded staging identity while adding the Google key.
+  dotenv({ path: googleEnvPath, quiet: true, override: false });
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) throw new Error('staging URL and anon key are required');
-  const host = new URL(supabaseUrl).hostname;
-  if (host !== `${PROJECT_REF}.supabase.co`) {
-    throw new Error(`refusing non-staging Supabase host: ${host}`);
-  }
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!url || !anonKey || !apiKey) throw new Error('staging read and Google Places credentials are required');
+  if (new URL(url).hostname !== `${PROJECT_REF}.supabase.co`) throw new Error('refusing non-staging Supabase host');
 
-  const packetText = fs.readFileSync(packetPath, 'utf8');
-  const packet = JSON.parse(packetText) as {
-    newInserts: NormalizedCandidate[];
-    newInsertsCount: number;
-  };
-  if (packet.newInserts.length !== 1286 || packet.newInsertsCount !== 1286) {
-    throw new Error('reviewed candidate pool identity/count mismatch');
-  }
+  const sourceResponse = await fetch(SOURCE_URL, { signal: AbortSignal.timeout(60_000) });
+  if (!sourceResponse.ok) throw new Error(`5PM returned HTTP ${sourceResponse.status}`);
+  const sourceHtml = await sourceResponse.text();
+  const sources = parseFivePm(sourceHtml);
+  if (sources.length !== 1516) throw new Error(`5PM completeness mismatch: expected 1516, got ${sources.length}`);
 
-  const osmIds = packet.newInserts
-    .filter((candidate) => candidate.provider === 'osm')
-    .map((candidate) => candidate.externalId.match(/^osm:node\/(\d+)$/)?.[1])
-    .filter((id): id is string => Boolean(id));
-  const osmUrl = `https://api.openstreetmap.org/api/0.6/nodes.json?nodes=${osmIds.join(',')}`;
-  const classes = ['Additional Bar', 'Club', 'Cabaret', 'Night Club', 'Bottle Club'];
-  const where = `premisescounty='New York' AND description in(${classes.map((item) => `'${item}'`).join(',')})`;
-  const slaUrl = 'https://data.ny.gov/resource/9s3h-dpkz.json?'
-    + new URLSearchParams({
-      '$limit': '5000',
-      '$order': 'licensepermitid',
-      '$where': where,
-    });
-
-  // Exactly one request per public source. There is deliberately no retry loop.
-  const [osm, sla] = await Promise.all([
-    getJson<{ elements?: OsmNode[] }>(osmUrl),
-    getJson<SlaLicense[]>(slaUrl),
-  ]);
-  if ((osm.elements?.length ?? 0) !== osmIds.length) {
-    throw new Error(`OSM completeness mismatch: expected ${osmIds.length}, got ${osm.elements?.length ?? 0}`);
-  }
-  if (sla.length >= 5000) throw new Error('SLA result hit the request cap; pagination required');
-
-  const supabase = createClient(supabaseUrl, anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const countResult = await supabase.from('bars').select('id', { count: 'exact', head: true });
-  if (countResult.error || countResult.count === null) {
-    throw new Error(`staging count failed: ${countResult.error?.message ?? 'missing count'}`);
-  }
+  const supabase = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const count = await supabase.from('bars').select('id', { count: 'exact', head: true });
+  if (count.error || count.count === null) throw new Error(`staging count failed: ${count.error?.message}`);
   const staging: StagingBar[] = [];
   let pages = 0;
   for (let from = 0; ; from += 1000) {
-    const result = await supabase
-      .from('bars')
-      .select('id,name,neighborhood,address,lat,lng')
-      .order('id', { ascending: true })
-      .range(from, from + 999);
+    const result = await supabase.from('bars')
+      .select('id,name,neighborhood,address,lat,lng,place_id')
+      .order('id', { ascending: true }).range(from, from + 999);
     if (result.error || !result.data) throw new Error(`staging page failed: ${result.error?.message}`);
     staging.push(...result.data as StagingBar[]);
     pages++;
     if (result.data.length < 1000) break;
   }
-  if (staging.length !== countResult.count) {
-    throw new Error(`staging pagination mismatch: count ${countResult.count}, rows ${staging.length}`);
+  if (staging.length !== count.count) throw new Error('staging pagination count mismatch');
+
+  fs.mkdirSync(outDir, { recursive: true });
+  const preservedPath = path.join(outDir, 'places-results.partial.json');
+  const resumePath = path.join(outDir, 'places-results.resume.ndjson');
+  const preserved = fs.existsSync(preservedPath)
+    ? JSON.parse(fs.readFileSync(preservedPath, 'utf8')) as Array<{ source: typeof sources[number]; places: GooglePlace[] }>
+    : [];
+  const resumed = fs.existsSync(resumePath)
+    ? fs.readFileSync(resumePath, 'utf8').split(/\r?\n/).filter(Boolean)
+      .map((line) => JSON.parse(line) as { source: typeof sources[number]; places: GooglePlace[] })
+    : [];
+  const responses = [...preserved, ...resumed];
+  const sourceKey = (source: typeof sources[number]) => `${source.name}\n${source.address}`;
+  responses.forEach((row, index) => {
+    if (sourceKey(row.source) !== sourceKey(sources[index])) {
+      throw new Error(`preserved Google response does not match source row ${index + 1}`);
+    }
+  });
+  if (responses.length > sources.length) throw new Error('preserved Google responses exceed source rows');
+
+  // Sequential 2 QPS; every successful response is durably appended before the next call. No retries.
+  for (let index = responses.length; index < sources.length; index++) {
+    const source = sources[index];
+    const places = await fetchPlace(source, apiKey);
+    const row = { source, places };
+    fs.appendFileSync(resumePath, `${JSON.stringify(row)}\n`);
+    responses.push(row);
+    if ((index + 1) % 100 === 0) process.stdout.write(`validated ${index + 1}/${sources.length}\n`);
+    if (index + 1 < sources.length) await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  const retrievedAt = new Date().toISOString();
-  const result = curateManhattanCandidates({
-    candidates: packet.newInserts,
-    osmNodes: osm.elements ?? [],
-    slaLicenses: sla,
-    staging,
-    verifiedDate: VERIFIED_DATE,
-  });
-  const reasonCounts = Object.fromEntries(
-    [...new Set(result.rejected.map((item) => item.reason))]
-      .sort()
-      .map((reason) => [reason, result.rejected.filter((item) => item.reason === reason).length]),
-  );
+  const validated: ValidatedPlace[] = [];
+  const rejected: Rejection[] = [];
+  for (const row of responses) {
+    const selected = selectPlace(row.source, row.places);
+    if (selected.place) validated.push({ source: row.source, place: selected.place });
+    else rejected.push({ name: row.source.name, address: row.source.address, reason: selected.reason! });
+  }
+
+  const result = reconcilePlaces({ validated, rejected, staging, verifiedDate: VERIFIED_DATE });
+  if (result.curated.length + result.unchanged.length + result.rejected.length !== sources.length) {
+    throw new Error('candidate accounting mismatch');
+  }
 
   fs.mkdirSync(outDir, { recursive: true });
   const hashes: Record<string, string> = {};
+  hashes['source-snapshot.json'] = writeJson('source-snapshot.json', sources);
+  hashes['places-results.json'] = writeJson('places-results.json', responses);
   hashes['curated-payload.json'] = writeJson('curated-payload.json', result.curated);
-  hashes['accepted-evidence.json'] = writeJson('accepted-evidence.json', result.evidence);
+  hashes['accepted-evidence.json'] = writeJson('accepted-evidence.json', validated);
+  hashes['unchanged.json'] = writeJson('unchanged.json', result.unchanged);
   hashes['rejections.json'] = writeJson('rejections.json', result.rejected);
   hashes['prewrite-update-backup.json'] = writeJson('prewrite-update-backup.json', []);
   hashes['staging-baseline.json'] = writeJson('staging-baseline.json', {
     projectRef: PROJECT_REF,
-    host,
-    retrievedAt,
-    exactCount: countResult.count,
+    retrievedAt: new Date().toISOString(),
+    exactCount: count.count,
     paginatedRows: staging.length,
     pages,
     duplicateIds: staging.length - new Set(staging.map((row) => row.id)).size,
   });
 
-  const ids = result.curated.map((row) => sqlLiteral(row.id)).join(', ');
-  const rollback = `-- Generated before apply. Run only after a successful application of this exact payload.\nBEGIN;\nDO $$\nBEGIN\n  IF (SELECT count(*) FROM public.bars WHERE source = 'census' AND id IN (${ids})) <> ${result.curated.length} THEN\n    RAISE EXCEPTION 'rollback target mismatch';\n  END IF;\nEND $$;\nDELETE FROM public.bars WHERE source = 'census' AND id IN (${ids});\nCOMMIT;\n`;
+  const ids = result.curated.map((row) => `'${row.id.replaceAll("'", "''")}'`).join(', ');
+  const rollback = `-- Generated before apply; exact insert-only rollback.\nBEGIN;\nDO $$ BEGIN\n  IF (SELECT count(*) FROM public.bars WHERE source='census' AND id IN (${ids})) <> ${result.curated.length} THEN\n    RAISE EXCEPTION 'rollback target mismatch';\n  END IF;\nEND $$;\nDELETE FROM public.bars WHERE source='census' AND id IN (${ids});\nCOMMIT;\n`;
   fs.writeFileSync(path.join(outDir, 'rollback.sql'), rollback, { flag: 'wx' });
   hashes['rollback.sql'] = sha256(rollback);
 
+  const reasonCounts = Object.fromEntries([...new Set(result.rejected.map((row) => row.reason))]
+    .sort().map((reason) => [reason, result.rejected.filter((row) => row.reason === reason).length]));
   const manifest = {
     projectRef: PROJECT_REF,
-    retrievedAt,
-    catalogGoal: 'g-779223ab-a469-4fc8-bad7-6623c186db67',
-    catalogCandidate: '6a9ff0fa8b4edfdaecc328d7916b922dbf0eeba485c262ef07063a2a70fe8127',
-    catalogCommit: '8cbb8a64730d61e4ed0a2f8a90491ba2be42107d',
-    packetSha256: sha256(packetText),
-    candidatePool: packet.newInserts.length,
-    stagingBaseline: countResult.count,
+    source: SOURCE_URL,
+    sourceRows: sources.length,
+    googlePlacesCalls: sources.length,
+    preservedGoogleResponses: preserved.length,
+    resumedGoogleCalls: responses.length - preserved.length,
+    googleFieldMask: FIELD_MASK,
+    stagingBaseline: count.count,
     inserts: result.curated.length,
     updates: 0,
-    unchanged: 0,
+    unchanged: result.unchanged.length,
     rejects: result.rejected.length,
-    projectedStagingCount: countResult.count + result.curated.length,
-    reasonCounts,
+    projectedStagingCount: count.count + result.curated.length,
     exactInsertIds: result.curated.map((row) => row.id),
+    reasonCounts,
     hashes,
-    sourceReads: {
-      osm: { requested: osmIds.length, returned: osm.elements?.length ?? 0, url: 'OpenStreetMap API v0.6 multi-fetch' },
-      sla: { returned: sla.length, dataset: 'Current Liquor Authority Active Licenses (9s3h-dpkz)' },
-      staging: { projectRef: PROJECT_REF, rows: staging.length, pages },
-    },
     writePerformed: false,
   };
   writeJson('manifest.json', manifest);
-  const markdown = `# V7 Manhattan staging apply packet\n\n- Project: \`${PROJECT_REF}\`\n- Fresh staging baseline: **${countResult.count}** rows (${pages} page)\n- Reviewed candidate pool: **${packet.newInserts.length}**\n- Exact inserts: **${result.curated.length}**\n- Exact updates: **0**\n- Unchanged: **0**\n- Rejects: **${result.rejected.length}**\n- Projected staging count: **${countResult.count + result.curated.length}**\n- Payload SHA-256: \`${hashes['curated-payload.json']}\`\n- Rollback SHA-256: \`${hashes['rollback.sql']}\`\n- Database write performed: **no**\n\nAll accepted rows have a current named OpenStreetMap bar record and exactly one current active NY SLA license at the same address within 50 metres. Price tier 2 is an explicit conservative editorial assignment; no paid price provider was contacted. See \`rejections.json\` for complete candidate accounting.\n`;
-  fs.writeFileSync(path.join(outDir, 'README.md'), markdown, { flag: 'wx' });
-
+  fs.writeFileSync(path.join(outDir, 'README.md'), `# V7 Manhattan staging apply packet v2\n\n- 5PM Manhattan source rows: **${sources.length}**\n- Google Places calls: **${sources.length}** (no retries)\n- Fresh staging baseline: **${count.count}**\n- Exact inserts: **${result.curated.length}**\n- Exact updates: **0**\n- Already present: **${result.unchanged.length}**\n- Rejected after Google validation: **${result.rejected.length}**\n- Projected staging count: **${count.count + result.curated.length}**\n- Payload SHA-256: \`${hashes['curated-payload.json']}\`\n- Database write performed: **no**\n`, { flag: 'wx' });
   console.log(JSON.stringify({
-    projectRef: PROJECT_REF,
-    stagingBaseline: countResult.count,
-    candidatePool: packet.newInserts.length,
+    sourceRows: sources.length,
+    googlePlacesCalls: sources.length,
+    stagingBaseline: count.count,
     inserts: result.curated.length,
     updates: 0,
+    unchanged: result.unchanged.length,
     rejects: result.rejected.length,
-    projectedStagingCount: countResult.count + result.curated.length,
+    projectedStagingCount: count.count + result.curated.length,
     payloadSha256: hashes['curated-payload.json'],
     rollbackSha256: hashes['rollback.sql'],
-    output: outDir,
     writePerformed: false,
   }, null, 2));
 }

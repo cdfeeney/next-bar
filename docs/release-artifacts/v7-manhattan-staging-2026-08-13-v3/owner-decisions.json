@@ -1,0 +1,97 @@
+{
+  "approvedPlaceIds": [
+    "ChIJ6-dvhvjzwokRvijkh52fhiQ",
+    "ChIJC-0-t_lYwokRaleYQX_GVOk",
+    "ChIJHzArVstZwokRwS4dyVXt2jA",
+    "ChIJKTZTKKVZwokRxEIWK4ln3HA",
+    "ChIJKYbKCABZwokRt6RlaEpSEP4",
+    "ChIJMXyIpYpZwokR34KDxt5BROI",
+    "ChIJM_yFLxRawokR4OUO3XdR5Yw",
+    "ChIJN-93ZsBZwokRpyoeLj9bzqQ",
+    "ChIJO851nKf2wokRt0FnUtV9omg",
+    "ChIJ_4J9M7BZwokRWbBbGRl-TGY",
+    "ChIJ_abIqHtZwokRLWbw0G-lzu8",
+    "ChIJb-R6YVhZwokR0G353ivsIRc",
+    "ChIJhcLI8rn3wokR0x3EH2I_zeI",
+    "ChIJldB8qZNZwokRYwDAq_cgDro",
+    "ChIJsVWcZ-xZwokRht1UHKE3DYA"
+  ],
+  "approvedSourceRows": [
+    {
+      "sourceName": "Deja Vu",
+      "sourceAddress": "394 West St, New York, NY 10014, USA",
+      "placeId": "ChIJsVWcZ-xZwokRht1UHKE3DYA"
+    },
+    {
+      "sourceName": "Fellini",
+      "sourceAddress": "420 W 14th St, New York, NY 10014",
+      "placeId": "ChIJKYbKCABZwokRt6RlaEpSEP4"
+    },
+    {
+      "sourceName": "Mad Dog & Beans Mexican Cantina",
+      "sourceAddress": "83 Pearl Street, New York",
+      "placeId": "ChIJM_yFLxRawokR4OUO3XdR5Yw"
+    },
+    {
+      "sourceName": "Matrix Lounge",
+      "sourceAddress": "325 Lenox Ave, New York, NY 10027",
+      "placeId": "ChIJhcLI8rn3wokR0x3EH2I_zeI"
+    },
+    {
+      "sourceName": "Quin Bar",
+      "sourceAddress": "30 Hudson Yards, New York, NY 10001",
+      "placeId": "ChIJHzArVstZwokRwS4dyVXt2jA"
+    },
+    {
+      "sourceName": "Playhouse Bar",
+      "sourceAddress": "100 7th Ave S, New York, NY 10014",
+      "placeId": "ChIJMXyIpYpZwokR34KDxt5BROI"
+    },
+    {
+      "sourceName": "StEight",
+      "sourceAddress": "116 Eldridge St, New York, NY 10002",
+      "placeId": "ChIJldB8qZNZwokRYwDAq_cgDro"
+    },
+    {
+      "sourceName": "South Soho Bar",
+      "sourceAddress": "191 Centre St, New York, NY 10013",
+      "placeId": "ChIJb-R6YVhZwokR0G353ivsIRc"
+    },
+    {
+      "sourceName": "Tabu",
+      "sourceAddress": "229 B Dyckman Street, New York",
+      "placeId": "ChIJ6-dvhvjzwokRvijkh52fhiQ"
+    },
+    {
+      "sourceName": "The Monkey Room",
+      "sourceAddress": "685 W 193rd St, New York",
+      "placeId": "ChIJO851nKf2wokRt0FnUtV9omg"
+    },
+    {
+      "sourceName": "The Watering Hole",
+      "sourceAddress": "389 8th Ave, New York, NY 10001, USA",
+      "placeId": "ChIJ_4J9M7BZwokRWbBbGRl-TGY"
+    },
+    {
+      "sourceName": "Café Flor",
+      "sourceAddress": "218 8th Avenue, New York",
+      "placeId": "ChIJ_abIqHtZwokRLWbw0G-lzu8"
+    },
+    {
+      "sourceName": "One Star",
+      "sourceAddress": "147 West 24th Street, New York",
+      "placeId": "ChIJKTZTKKVZwokRxEIWK4ln3HA"
+    },
+    {
+      "sourceName": "The Bridge Bar",
+      "sourceAddress": "1335 6th Ave, New York, NY 10019, USA",
+      "placeId": "ChIJC-0-t_lYwokRaleYQX_GVOk"
+    },
+    {
+      "sourceName": "Le Bain",
+      "sourceAddress": "444 W 13th St, New York, NY 10014",
+      "placeId": "ChIJN-93ZsBZwokRpyoeLj9bzqQ"
+    }
+  ],
+  "checkpoint": "D:/ClaudeData/NextBar/checkpoints/V7-MANHATTAN-OWNER-DECISIONS-2026-08-13.md"
+}

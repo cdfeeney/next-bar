@@ -1,0 +1,332 @@
+[
+  {
+    "name": "2 Sisters 4 Brothers",
+    "address": "355 E 116th St, New York, NY 10029",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "4West Lounge",
+    "address": "303 West 127th Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Alexander Hamilton Tavern",
+    "address": "96 Greenwich Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Au Bar 56",
+    "address": "235 W 56th St, New York, NY 10019, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Bar Sella",
+    "address": "134 4th Ave, New York, NY 10003",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Bar314",
+    "address": "3143 Broadway, New York, NY 10027",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "BarChef New York",
+    "address": "21 W 35th St, New York, NY 10018, United States",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Black Hound Bar & Lounge",
+    "address": "301 South End Avenue, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Blaggards Pub",
+    "address": "8 West 38th Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Boqueria",
+    "address": "53 W 19th St, New York, NY 10011",
+    "reason": "duplicate 5PM Google place ID ChIJU5lPOaNZwokRcouF_2LqEow"
+  },
+  {
+    "name": "Bowery Bungalow NYC",
+    "address": "359 West Broadway, New York",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Broadway 49",
+    "address": "1605 Broadway, New York, NY 10019",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "by & by",
+    "address": "644 10th Ave, New York, NY 10036",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Cafe Evergreen",
+    "address": "1367 1st Avenue, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Carnegie Diner & Cafe",
+    "address": "1262 Broadway Located on the lobby level of Martinique, on Broadway, 49 W 32nd St, New York, NY 10001, USA",
+    "reason": "name+neighborhood duplicate"
+  },
+  {
+    "name": "Chinato",
+    "address": "108 Stanton St, New York, NY 10002, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "City Tavern & Table",
+    "address": "629 W 57th St, New York, NY 10019, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Clinton Hall",
+    "address": "Penthouse, 16 W 36th St., New York, NY 10018, USA",
+    "reason": "name+neighborhood duplicate"
+  },
+  {
+    "name": "Cloud Social Rooftop Bar",
+    "address": "6 W 32nd St, New York, NY 10001, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Corkbuzz Wine Studio",
+    "address": "75 9th Ave, New York, NY 10011, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Cowboy Tom's",
+    "address": "120 Orchard St, New York, NY 10002",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "DOM",
+    "address": "287 Park Ave S, New York, NY 10010, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Gnocchi House Bar",
+    "address": "1431 1st Avenue, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Heidi's House by the side of the road",
+    "address": "308 E 78th St, New York, NY 10075, USA",
+    "reason": "duplicate 5PM Google place ID ChIJE9I-Pr9YwokRQh5-2GjSd-A"
+  },
+  {
+    "name": "Henry & The Lions",
+    "address": "405 West 23rd Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Hi Life Bar & Grill",
+    "address": "477 Amsterdam Avenue, New York",
+    "reason": "duplicate 5PM Google place ID ChIJyTJKxYVYwokR6Xgqq38yAi4"
+  },
+  {
+    "name": "Hole In The Wall",
+    "address": "15 Cliff Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "J.Bespoke",
+    "address": "121 East 27th Street, New York",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Killers Kiss Bar",
+    "address": "1415 2nd Ave, New York, NY 10021, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Koloman",
+    "address": "16 W 29th St, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Little Rascal",
+    "address": "163 Elizabeth Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Lolita Bar",
+    "address": "266 Broome Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Manitoba's",
+    "address": "34 Avenue B, New York, NY 10009, USA",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Manzo",
+    "address": "200 5th Avenue, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Maya Modern Mexican Kitchen",
+    "address": "1191 1st Ave, New York, NY 10065, USA",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "MexiBBQ",
+    "address": "127A W 43rd St, New York, NY 10036, USA",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Mista Oh",
+    "address": "41 W 24th St, New York, NY 10010",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Monkey Room",
+    "address": "589 Fort Washington Ave, New York, NY 10033, USA",
+    "reason": "id already exists"
+  },
+  {
+    "name": "Nizuc",
+    "address": "485 10th Ave, New York, NY 10018, USA",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Nocciola Ristorante",
+    "address": "237 E 116th St, New York, NY 10029",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Nowhere Bar",
+    "address": "322 E 14th St, New York, NY 10003",
+    "reason": "duplicate 5PM Google place ID ChIJZ1fMFZ5ZwokRkYrV85CZorY"
+  },
+  {
+    "name": "Nubeluz Rooftop bar",
+    "address": "29 W 28th St, New York, NY 10001",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Oculus Beer Garden",
+    "address": "33 Vesey St, New York, NY 10282",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Olde City",
+    "address": "201 8th Avenue, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Oso",
+    "address": "1618 Amsterdam Ave, New York, NY 10031",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Pardon My French",
+    "address": "103 Avenue B, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Penthouse on Park",
+    "address": "420 Park Avenue South, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "PHD Terrace at Dream Midtown",
+    "address": "210 W 55th St, New York, NY 10019, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Rose Hill Irish Pub",
+    "address": "58 E 34th St, New York, NY 10016, USA",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Schilling Restaurant & Bar",
+    "address": "109 Washington Street, New York",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Shades of Green Pub",
+    "address": "125 E 15th St, New York, NY 10003",
+    "reason": "duplicate 5PM Google place ID ChIJ2eM5P59ZwokRs3fdpoaBK48"
+  },
+  {
+    "name": "Skinny's Cantina On The Hudson",
+    "address": "701 W 133rd St, New York, NY 10027, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Somtum Der",
+    "address": "85 Avenue A, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "T.B.D.",
+    "address": "TBD Bar, New York, NY 10036, USA",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Tartinery The Shack",
+    "address": "Brookfield Place North Cove Marina, 250 Vesey St, New York, NY 10281, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "The Distillery",
+    "address": "686 Broadway, New York, NY 10012, USA",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "The Globe",
+    "address": "158 E 23rd St, New York, NY 10010",
+    "reason": "duplicate 5PM Google place ID ChIJiUxll6BZwokRgDgDzwAscN0"
+  },
+  {
+    "name": "The Ivy Room",
+    "address": "420 Park Ave S P2, New York, NY 10016",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "The Jane",
+    "address": "113 Jane St, New York, NY 10014, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "The Junction",
+    "address": "329 Lexington Avenue, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "The Lambs Club",
+    "address": "132 West 44th Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "The Milling Room",
+    "address": "446 Columbus Ave, New York, NY 10024, USA",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Villa Mosconi Restaurant",
+    "address": "69 MacDougal Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "Vinateria",
+    "address": "2211 Frederick Douglass Blvd, New York, NY 10026, USA",
+    "reason": "Google Places identity/type match is ambiguous"
+  },
+  {
+    "name": "Vino &...",
+    "address": "101 Liberty Street, New York",
+    "reason": "Google Places does not report an operational business"
+  },
+  {
+    "name": "YOGI by Barnjoo",
+    "address": "816 6th Ave, New York, NY 10001",
+    "reason": "Google Places does not report an operational business"
+  }
+]

@@ -1,36 +1,25 @@
-import { haversineMiles } from '../../src/lib/distance';
+import { JSDOM } from 'jsdom';
 import { normalizeLegacy } from './reconcile';
 import type { CuratedCandidate } from './apply';
-import type { NormalizedCandidate } from './types';
 
-const ALLOWED_AMENITIES = new Set(['bar', 'pub', 'biergarten', 'nightclub']);
-const NON_MANHATTAN_HOODS = new Set([
-  'Bushwick',
-  'Fort Greene',
-  'Gowanus',
-  'Hoboken',
-  'Jersey City',
-  'Long Island City',
-  'LIC',
-]);
-const METERS_PER_MILE = 1609.344;
-
-export interface OsmNode {
-  id: number;
-  lat: number;
-  lon: number;
-  timestamp?: string;
-  visible?: boolean;
-  tags?: Record<string, string>;
+export interface FivePmBar {
+  name: string;
+  neighborhood: string;
+  address: string;
+  category: string;
+  website: string | null;
+  verifiedHappyHour: boolean;
 }
 
-export interface SlaLicense {
-  licensepermitid?: string;
-  premisescounty?: string;
-  description?: string;
-  legalname?: string;
-  actualaddressofpremises?: string;
-  georeference?: { coordinates?: [number, number] };
+export interface GooglePlace {
+  id: string;
+  displayName?: { text?: string };
+  formattedAddress?: string;
+  location?: { latitude?: number; longitude?: number };
+  addressComponents?: Array<{ longText?: string; shortText?: string; types?: string[] }>;
+  primaryType?: string;
+  types?: string[];
+  businessStatus?: string;
 }
 
 export interface StagingBar {
@@ -40,220 +29,227 @@ export interface StagingBar {
   address: string | null;
   lat: number;
   lng: number;
+  place_id: string | null;
 }
 
-export interface AcceptedEvidence {
-  externalId: string;
-  osmUrl: string;
-  osmTimestamp: string | null;
-  slaLicenseId: string;
-  slaUrl: string;
-  slaClass: string;
-  slaLegalName: string;
-  addressMatch: string;
-  coordinateDistanceMeters: number;
-  openStatus: 'corroborated-current';
-  openStatusBasis: string;
-  dedupResult: 'new';
-  priceTierBasis: string;
+export interface ValidatedPlace {
+  source: FivePmBar;
+  place: GooglePlace;
 }
 
 export interface Rejection {
-  externalId: string;
   name: string;
+  address: string;
   reason: string;
 }
 
-export interface CurationResult {
-  curated: CuratedCandidate[];
-  evidence: AcceptedEvidence[];
-  rejected: Rejection[];
+const HOOD_MAP: Record<string, string> = {
+  'Battery Park': 'Battery Park City',
+  'Financial District': 'FiDi',
+  'Lower East Side': 'LES',
+  'Upper East Side': 'UES',
+  'Upper West Side': 'UWS',
+  'Herald Square': 'Midtown',
+  'Hudson Yards': 'Chelsea',
+  'Koreatown': 'Midtown',
+  'Little Italy': 'Chinatown',
+  'Meatpacking District': 'West Village',
+  'Midtown East': 'Midtown',
+  'Murray Hill': 'Kips Bay',
+  'NoLIta': 'SoHo',
+  'NoMad': 'Flatiron',
+  'Times Square': 'Midtown',
+  'Turtle Bay': 'Midtown',
+  'Two Bridges': 'LES',
+  'Union Square': 'Greenwich Village',
+};
+const CUSTOMER_FACING_TYPES = new Set([
+  'bar', 'bar_and_grill', 'brewpub', 'cafe', 'cocktail_bar', 'coffee_shop',
+  'event_venue', 'food', 'hotel', 'live_music_venue', 'lodging', 'lounge_bar',
+  'night_club', 'pub', 'restaurant', 'sports_bar', 'wine_bar',
+]);
+
+export function parseFivePm(html: string): FivePmBar[] {
+  const document = new JSDOM(html).window.document;
+  return [...document.querySelectorAll<HTMLElement>('.nb-card')].map((card) => {
+    const share = card.querySelector<HTMLButtonElement>('button[data-share]')?.dataset.share;
+    if (!share) throw new Error('5PM card is missing data-share');
+    const parsed = JSON.parse(share) as { name?: string; neighborhood?: string; address?: string };
+    const categoryLine = card.querySelector<HTMLElement>('div[style*="margin-top:2px"]')?.textContent ?? '';
+    const website = [...card.querySelectorAll<HTMLAnchorElement>('a[href]')]
+      .map((anchor) => anchor.href)
+      .find((href) => href.startsWith('http') && !href.includes('google.com/maps')) ?? null;
+    if (!parsed.name || !parsed.neighborhood || !parsed.address) {
+      throw new Error('5PM card is missing name, neighborhood, or address');
+    }
+    return {
+      name: parsed.name,
+      neighborhood: parsed.neighborhood,
+      address: parsed.address,
+      category: categoryLine.split('·')[0].trim(),
+      website,
+      verifiedHappyHour: card.dataset.impVer === '1',
+    };
+  });
 }
 
-export function normalizeAddress(value: string): string {
+const tokens = (value: string): Set<string> => new Set(
+  normalizeLegacy(value.replace(/[’']s\b/gi, ''))
+    .replace(/\bnew york\b|\bnyc\b|\brestaurant\b|\bbar\b/g, '')
+    .split(/\s+/)
+    .filter(Boolean),
+);
+
+function similarity(a: string, b: string): number {
+  const left = tokens(a);
+  const right = tokens(b);
+  if (!left.size || !right.size) return 0;
+  const overlap = [...left].filter((token) => right.has(token)).length;
+  return overlap / Math.min(left.size, right.size);
+}
+
+function normalizeAddress(value: string): string {
   return value
-    .toUpperCase()
-    .replace(/\bWEST\b/g, 'W')
-    .replace(/\bEAST\b/g, 'E')
-    .replace(/\bNORTH\b/g, 'N')
-    .replace(/\bSOUTH\b/g, 'S')
-    .replace(/\bSTREET\b/g, 'ST')
-    .replace(/\bAVENUE\b/g, 'AVE')
-    .replace(/\bBOULEVARD\b/g, 'BLVD')
-    .replace(/\bROAD\b/g, 'RD')
-    .replace(/\bPLACE\b/g, 'PL')
-    .replace(/\bLANE\b/g, 'LN')
-    .replace(/\bDRIVE\b/g, 'DR')
-    .replace(/[^A-Z0-9]/g, '');
-}
-
-function displayAddress(tags: Record<string, string>): string | null {
-  const number = tags['addr:housenumber']?.trim();
-  const street = tags['addr:street']?.trim();
-  return number && street ? `${number} ${street}` : null;
-}
-
-function canonicalName(value: string): string {
-  return normalizeLegacy(value)
-    .replace(/\bnew york city\b|\bnew york\b|\bnyc\b/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(first|1st)\b/g, '1st')
+    .replace(/\b(second|2nd)\b/g, '2nd')
+    .replace(/\b(third|3rd)\b/g, '3rd')
+    .replace(/\b(fourth|4th)\b/g, '4th')
+    .replace(/\b(fifth|5th)\b/g, '5th')
+    .replace(/\b(sixth|6th)\b/g, '6th')
+    .replace(/\b(seventh|7th)\b/g, '7th')
+    .replace(/\b(eighth|8th)\b/g, '8th')
+    .replace(/\b(ninth|9th)\b/g, '9th')
+    .replace(/\b(tenth|10th)\b/g, '10th')
+    .replace(/\b(eleventh|11th)\b/g, '11th')
+    .replace(/\b(twelfth|12th)\b/g, '12th')
+    .replace(/\bwest\b/g, 'w').replace(/\beast\b/g, 'e')
+    .replace(/\bnorth\b/g, 'n').replace(/\bsouth\b/g, 's')
+    .replace(/\bavenue\b/g, 'ave').replace(/\bstreet\b/g, 'st')
+    .replace(/\bboulevard\b/g, 'blvd').replace(/\broad\b/g, 'rd')
+    .replace(/\blane\b/g, 'ln').replace(/\bplace\b/g, 'pl')
+    .replace(/\bjunior\b/g, 'jr').replace(/\bsaint\b/g, 'st')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function tokenSimilarity(a: string, b: string): number {
-  const left = new Set(canonicalName(a).split(' ').filter(Boolean));
-  const right = new Set(canonicalName(b).split(' ').filter(Boolean));
-  if (left.size === 0 || right.size === 0) return 0;
-  const overlap = [...left].filter((token) => right.has(token)).length;
-  return overlap / Math.max(left.size, right.size);
+function addressMatches(source: FivePmBar, place: GooglePlace): boolean {
+  const sourceStreet = normalizeAddress(source.address).split(/\bnew york\b/)[0].trim();
+  if (sourceStreet && normalizeAddress(place.formattedAddress ?? '').includes(sourceStreet)) return true;
+  const component = (type: string) => place.addressComponents?.find((item) => item.types?.includes(type));
+  const number = component('street_number')?.longText;
+  const route = component('route');
+  if (!number || !route) return false;
+  const sourceAddress = ` ${normalizeAddress(source.address)} `;
+  const numberMatches = sourceAddress.includes(` ${normalizeAddress(number)} `);
+  const routeMatches = [route.longText, route.shortText]
+    .filter((value): value is string => Boolean(value))
+    .some((value) => sourceAddress.includes(` ${normalizeAddress(value)} `));
+  return numberMatches && routeMatches;
 }
 
-function duplicateOf(candidate: NormalizedCandidate, staging: readonly StagingBar[]): StagingBar | null {
-  const candidateName = canonicalName(candidate.name);
-  for (const row of staging) {
-    if (row.id === idFromExternalId(candidate.externalId)) return row;
-    if (candidateName === canonicalName(row.name) && candidate.neighborhood === row.neighborhood) {
-      return row;
-    }
-    const meters = haversineMiles(candidate, row) * METERS_PER_MILE;
-    const sameAddress = candidate.address && row.address
-      ? normalizeAddress(candidate.address) === normalizeAddress(row.address)
-      : false;
-    if ((sameAddress || meters <= 30) && tokenSimilarity(candidate.name, row.name) >= 0.5) {
-      return row;
-    }
+function isManhattan(place: GooglePlace): boolean {
+  return place.addressComponents?.some((component) =>
+    component.longText === 'New York County'
+    && component.types?.includes('administrative_area_level_2'),
+  ) ?? false;
+}
+
+function isCustomerFacing(source: FivePmBar, place: GooglePlace): boolean {
+  return (place.types ?? []).some((type) => CUSTOMER_FACING_TYPES.has(type))
+    || /bar|pub|lounge|club|brew|tavern/i.test(source.category);
+}
+
+export function selectPlace(source: FivePmBar, places: readonly GooglePlace[]):
+  { place: GooglePlace | null; reason: string | null } {
+  const ranked = places
+    .filter((place) => place.businessStatus === 'OPERATIONAL')
+    .filter(isManhattan)
+    .filter((place) => isCustomerFacing(source, place))
+    .map((place) => {
+      const nameScore = similarity(source.name, place.displayName?.text ?? '');
+      return { place, nameScore, addressMatches: addressMatches(source, place) };
+    })
+    .filter((match) => match.nameScore >= 0.35 && match.addressMatches)
+    .sort((a, b) => b.nameScore - a.nameScore);
+  if (ranked[0]) return { place: ranked[0].place, reason: null };
+  if (places.length === 0) return { place: null, reason: 'Google Places returned no match' };
+  if (!places.some((place) => place.businessStatus === 'OPERATIONAL')) {
+    return { place: null, reason: 'Google Places does not report an operational business' };
   }
-  return null;
+  if (!places.some(isManhattan)) return { place: null, reason: 'Google Places match is not in New York County' };
+  return { place: null, reason: 'Google Places identity/type match is ambiguous' };
 }
 
-function idFromExternalId(externalId: string): string {
-  return externalId
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60) || 'x';
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
 
-function amenityBlurb(name: string, amenity: string, neighborhood: string): string {
-  const kind = amenity === 'nightclub' ? 'nightclub' : amenity === 'pub' ? 'pub' : 'bar';
-  return `${name} is a ${kind} in ${neighborhood}.`;
+function tagsFor(source: FivePmBar, place: GooglePlace): string[] {
+  const text = `${source.category} ${(place.types ?? []).join(' ')}`.toLowerCase();
+  return [
+    /pub|tavern|brewpub/.test(text) && 'pub',
+    /brew|beer/.test(text) && 'beer',
+    /wine/.test(text) && 'wine',
+    /cocktail/.test(text) && 'cocktail',
+    /night.?club|dance/.test(text) && 'dance',
+    /lounge/.test(text) && 'lounge',
+    /rooftop/.test(text) && 'rooftop',
+    /restaurant/.test(text) && 'restaurant-bar',
+  ].filter((tag): tag is string => Boolean(tag));
 }
 
-export function curateManhattanCandidates(input: {
-  candidates: readonly NormalizedCandidate[];
-  osmNodes: readonly OsmNode[];
-  slaLicenses: readonly SlaLicense[];
+export function reconcilePlaces(input: {
+  validated: readonly ValidatedPlace[];
+  rejected: readonly Rejection[];
   staging: readonly StagingBar[];
   verifiedDate: string;
-}): CurationResult {
-  const nodes = new Map(input.osmNodes.map((node) => [node.id, node]));
-  const licensesByAddress = new Map<string, SlaLicense[]>();
-  for (const license of input.slaLicenses) {
-    if (license.premisescounty !== 'New York' || !license.actualaddressofpremises) continue;
-    const key = normalizeAddress(license.actualaddressofpremises);
-    licensesByAddress.set(key, [...(licensesByAddress.get(key) ?? []), license]);
-  }
-
+}): { curated: CuratedCandidate[]; unchanged: StagingBar[]; rejected: Rejection[] } {
+  const stagingPlaces = new Map(input.staging.filter((row) => row.place_id).map((row) => [row.place_id!, row]));
+  const seen = new Set<string>();
   const curated: CuratedCandidate[] = [];
-  const evidence: AcceptedEvidence[] = [];
-  const rejected: Rejection[] = [];
-
-  const reject = (candidate: NormalizedCandidate, reason: string) => {
-    rejected.push({ externalId: candidate.externalId, name: candidate.name, reason });
-  };
-
-  for (const candidate of input.candidates) {
-    if (NON_MANHATTAN_HOODS.has(candidate.neighborhood)) {
-      reject(candidate, 'outside Manhattan');
+  const unchanged: StagingBar[] = [];
+  const rejected = [...input.rejected];
+  for (const item of input.validated) {
+    const { source, place } = item;
+    if (seen.has(place.id)) {
+      rejected.push({ name: source.name, address: source.address, reason: `duplicate 5PM Google place ID ${place.id}` });
       continue;
     }
-    if (candidate.provider !== 'osm') {
-      reject(candidate, 'legal-entity-only SLA record; no verified customer-facing identity');
+    seen.add(place.id);
+    const existing = stagingPlaces.get(place.id);
+    if (existing) {
+      unchanged.push(existing);
       continue;
     }
-
-    const nodeId = Number(candidate.externalId.match(/^osm:node\/(\d+)$/)?.[1]);
-    const node = nodes.get(nodeId);
-    if (!node || node.visible === false) {
-      reject(candidate, 'OSM venue missing or not currently visible');
+    const lat = place.location?.latitude;
+    const lng = place.location?.longitude;
+    const name = place.displayName?.text;
+    const address = place.formattedAddress;
+    if (lat === undefined || lng === undefined || !name || !address) {
+      rejected.push({ name: source.name, address: source.address, reason: 'Google Places match lacks required discovery fields' });
       continue;
     }
-    const tags = node.tags ?? {};
-    const amenity = tags.amenity;
-    if (!amenity || !ALLOWED_AMENITIES.has(amenity) || !tags.name || tags.disused || tags.abandoned) {
-      reject(candidate, 'current OSM record is not an active named bar venue');
-      continue;
-    }
-    const address = displayAddress(tags);
-    if (!address) {
-      reject(candidate, 'current OSM record lacks a verifiable street address');
-      continue;
-    }
-    const candidateAtCurrentLocation = { ...candidate, name: tags.name, address, lat: node.lat, lng: node.lon };
-    const matches = (licensesByAddress.get(normalizeAddress(address)) ?? []).filter((license) => {
-      const coordinates = license.georeference?.coordinates;
-      if (!coordinates) return false;
-      return haversineMiles(candidateAtCurrentLocation, { lat: coordinates[1], lng: coordinates[0] })
-        * METERS_PER_MILE <= 50;
-    });
-    if (matches.length === 0) {
-      reject(candidate, 'no unique current active SLA license at the same address');
-      continue;
-    }
-    if (matches.length !== 1) {
-      reject(candidate, 'multiple current active SLA licenses at the same address');
-      continue;
-    }
-    const duplicate = duplicateOf(candidateAtCurrentLocation, input.staging);
-    if (duplicate) {
-      reject(candidate, `already represented in staging as ${duplicate.id}`);
-      continue;
-    }
-
-    const license = matches[0];
-    const coordinates = license.georeference!.coordinates!;
-    const id = idFromExternalId(candidate.externalId);
+    const neighborhood = HOOD_MAP[source.neighborhood] ?? source.neighborhood;
     curated.push({
-      id,
-      externalId: candidate.externalId,
-      name: tags.name,
-      neighborhood: candidate.neighborhood,
+      id: slug(`google-${place.id}`),
+      externalId: `google:${place.id}`,
+      name,
+      neighborhood,
       address,
-      lat: node.lat,
-      lng: node.lon,
+      lat,
+      lng,
       priceTier: 2,
-      tags: amenity === 'pub' ? ['pub'] : amenity === 'nightclub' ? ['dance'] : [],
-      blurb: amenityBlurb(tags.name, amenity, candidate.neighborhood),
+      tags: tagsFor(source, place),
+      blurb: `${name} is a ${source.category.toLowerCase()} in ${source.neighborhood}.`,
       lastVerified: input.verifiedDate,
-    });
-    evidence.push({
-      externalId: candidate.externalId,
-      osmUrl: `https://www.openstreetmap.org/node/${node.id}`,
-      osmTimestamp: node.timestamp ?? null,
-      slaLicenseId: license.licensepermitid!,
-      slaUrl: `https://data.ny.gov/resource/9s3h-dpkz.json?licensepermitid=${encodeURIComponent(license.licensepermitid!)}`,
-      slaClass: license.description ?? '',
-      slaLegalName: license.legalname ?? '',
-      addressMatch: normalizeAddress(address),
-      coordinateDistanceMeters: Number((
-        haversineMiles(candidateAtCurrentLocation, { lat: coordinates[1], lng: coordinates[0] })
-        * METERS_PER_MILE
-      ).toFixed(1)),
-      openStatus: 'corroborated-current',
-      openStatusBasis: 'Current named OSM bar record plus current active NY SLA license at the same address.',
-      dedupResult: 'new',
-      priceTierBasis: 'Conservative operator editorial tier (2); no paid price provider used.',
+      placeId: place.id,
+      businessStatus: place.businessStatus ?? 'OPERATIONAL',
     });
   }
-
   curated.sort((a, b) => a.id.localeCompare(b.id));
-  evidence.sort((a, b) => a.externalId.localeCompare(b.externalId));
-  rejected.sort((a, b) => a.externalId.localeCompare(b.externalId));
-  if (curated.length + rejected.length !== input.candidates.length) {
-    throw new Error('curation accounting mismatch');
-  }
-  if (curated.length > 50) {
-    throw new Error(`curated batch has ${curated.length} rows; a single atomic insert is limited to 50`);
-  }
-  return { curated, evidence, rejected };
+  unchanged.sort((a, b) => a.id.localeCompare(b.id));
+  rejected.sort((a, b) => a.name.localeCompare(b.name) || a.address.localeCompare(b.address));
+  return { curated, unchanged, rejected };
 }

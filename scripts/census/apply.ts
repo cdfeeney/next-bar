@@ -41,6 +41,8 @@ export interface CuratedCandidate {
   tags: string[];
   blurb: string;
   lastVerified: string;
+  placeId?: string;
+  businessStatus?: string;
 }
 
 export type ApplyRefusal =
@@ -120,7 +122,7 @@ const normalizeLegacy = (s: string): string =>
 
 /**
  * Paginated existing-rows read (PostgREST silently caps at 1,000), id and
- * name+neighborhood dedup, then one atomic insert of at most 50 rows.
+ * name+neighborhood dedup, then one atomic insert.
  * Database errors fail the entire batch; row-by-row fallback would make the
  * reviewed payload and its rollback counts untruthful.
  */
@@ -155,8 +157,8 @@ export async function applyCurated(
       hours: null,
       blurb: c.blurb,
       address: c.address,
-      place_id: null,
-      business_status: null,
+      place_id: c.placeId ?? null,
+      business_status: c.businessStatus ?? null,
       photo_count: 0,
       photo_attributions: null,
       reviews: null,
@@ -181,7 +183,6 @@ export async function applyCurated(
     accepted.push(row);
   }
 
-  if (accepted.length > 50) throw new Error(`atomic batch limit exceeded: ${accepted.length}`);
   if (accepted.length > 0) {
     const { error } = await client.insert(accepted);
     if (error) throw new Error(`atomic insert failed: ${error.message}`);
