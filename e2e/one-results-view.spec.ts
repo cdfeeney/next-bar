@@ -3,9 +3,8 @@
  *
  * QA-6 (2026-07-27): the ONE Next Bar results view. Both home entry
  * paths (manual seed-bar and location-first auto) land on a results
- * surface carrying the SAME control set: vibe tweak, distance chips, an
- * OPTIONAL neighborhood picker, 5 suggestions, and a "Run it again"
- * refresh that deals the next batch.
+ * surface carrying vibe tweak, distance chips, 5 suggestions, and a
+ * "Run it again" refresh. Neighborhood browsing belongs on Map.
  *
  * Fixed clock (Fri 11pm local — the distance-open-now pattern): the live
  * surfaces hard-filter KNOWN-closed bars, so exact-count assertions are
@@ -21,7 +20,7 @@ const cardsOf = (page: import('@playwright/test').Page) =>
   page.locator('article').filter({ hasText: /Vibe match/i });
 
 test.describe('QA-6 — the one results view', () => {
-  test('manual results: 5 bars, full control set, hood override re-ranks in place', async ({
+  test('manual results: 5 bars with distance and vibe controls, no neighborhoods', async ({
     page,
   }) => {
     await denyGeolocation(page.context());
@@ -35,44 +34,20 @@ test.describe('QA-6 — the one results view', () => {
     const cards = cardsOf(page);
     await expect(cards).toHaveCount(5);
 
-    // The whole control set on ONE surface.
+    // Next Bar owns distance and vibe. Neighborhood browsing lives on Map.
     const radiusGroup = page.getByRole('group', { name: 'Search radius' });
     await expect(radiusGroup).toBeVisible();
     await expect(
       page.getByRole('button', { name: /Tweak the vibe/i }),
     ).toBeVisible();
-    const hoodGroup = page.getByRole('group', { name: 'Neighborhood' });
-    await expect(hoodGroup).toBeVisible();
+    await expect(page.getByRole('group', { name: 'Neighborhood' })).toHaveCount(0);
 
     // Manual entry defaults to Walkable ("at a bar" implies the next one
-    // is walkable); the anchor chip is the default hood state.
+    // is walkable).
     await expect(
       radiusGroup.getByRole('button', { name: 'Walkable' }),
     ).toHaveAttribute('aria-pressed', 'true');
-    await expect(
-      hoodGroup.getByRole('button', { name: 'Near here' }),
-    ).toHaveAttribute('aria-pressed', 'true');
-
-    // Picking a hood re-ranks IN PLACE (the URL and screen never change),
-    // says so in the location label, and WIDENS the radius to Anywhere —
-    // "In Williamsburg" means the whole hood, not a 1.5mi disc around its
-    // centroid.
-    await hoodGroup
-      .getByRole('button', { name: 'Williamsburg', exact: true })
-      .click();
-    await expect(page.getByText('In Williamsburg')).toBeVisible();
-    await expect(
-      radiusGroup.getByRole('button', { name: 'Anywhere' }),
-    ).toHaveAttribute('aria-pressed', 'true');
-    await expect(cards).toHaveCount(5);
     await expect(page).toHaveURL('/');
-
-    // Tapping the selected hood again returns to the anchor (optional,
-    // never traps).
-    await hoodGroup
-      .getByRole('button', { name: 'Williamsburg', exact: true })
-      .click();
-    await expect(page.getByText('In Williamsburg')).toHaveCount(0);
   });
 
   test('run it again deals a fresh batch — no bar from the first five repeats', async ({
@@ -107,7 +82,7 @@ test.describe('QA-6 — the one results view', () => {
     await expect(cards).toHaveCount(5);
   });
 
-  test('location-first auto results enter on WALKABLE (closest first) with the full control set', async ({
+  test('location-first auto results enter on WALKABLE without seed or neighborhood controls', async ({
     page,
     context,
   }) => {
@@ -129,10 +104,10 @@ test.describe('QA-6 — the one results view', () => {
       radiusGroup.getByRole('button', { name: 'Walkable' }),
     ).toHaveAttribute('aria-pressed', 'true');
 
-    // The compact escape appears exactly ONCE (operator: minimal text).
+    // The seed-bar escape and neighborhood chips do not clutter Next Bar.
     await expect(
       page.getByRole('button', { name: 'Pick my bar' }),
-    ).toHaveCount(1);
+    ).toHaveCount(0);
     await expect(
       page.getByRole('button', { name: /Tweak the vibe/i }),
     ).toBeVisible();
@@ -140,17 +115,7 @@ test.describe('QA-6 — the one results view', () => {
       page.getByRole('button', { name: /Run it again/i }),
     ).toBeVisible();
 
-    const hoodGroup = page.getByRole('group', { name: 'Neighborhood' });
-    await expect(
-      hoodGroup.getByRole('button', { name: 'Near me' }),
-    ).toHaveAttribute('aria-pressed', 'true');
-
-    // Hood override wins over the geo anchor and says so.
-    await hoodGroup
-      .getByRole('button', { name: 'Greenpoint', exact: true })
-      .click();
-    await expect(page.getByText('In Greenpoint')).toBeVisible();
-    await expect(cards).toHaveCount(5);
+    await expect(page.getByRole('group', { name: 'Neighborhood' })).toHaveCount(0);
   });
 
   test('PLANNING phase: every card carries a Send share; at night it does not', async ({

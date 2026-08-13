@@ -250,7 +250,7 @@ test.describe('/map Find Bar filters (QA2)', () => {
 
     // Pick one neighborhood — the map must drop to that hood's bars only.
     const filters = page.getByTestId('findbar-filters');
-    await filters.getByTestId('vibe-filter-toggle').click();
+    await expect(filters.getByRole('group', { name: 'Filter by distance' })).toHaveCount(0);
     await filters.getByRole('button', { name: /^Lower East Side$/ }).click();
 
     await expect
@@ -265,5 +265,10 @@ test.describe('/map Find Bar filters (QA2)', () => {
       .poll(async () => markers.count(), { timeout: 15_000 })
       .toBe(allCount);
     await expect(page.getByTestId('filter-count')).toHaveCount(0);
+
+    // Map reuses the same six-axis vibe editor as Next Bar.
+    await filters.getByTestId('vibe-filter-toggle').click();
+    await expect(filters.getByRole('heading', { name: 'Tweak the vibe' })).toBeVisible();
+    await expect(filters.getByRole('button', { name: 'Sound' })).toBeVisible();
   });
 });

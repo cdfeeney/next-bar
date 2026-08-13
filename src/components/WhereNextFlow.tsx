@@ -5,7 +5,6 @@ import dynamic from 'next/dynamic';
 import type {
   Bar,
   Coords,
-  Neighborhood,
   Radius,
   VibeProfile,
   VibeTag,
@@ -26,16 +25,11 @@ import { useNightRefresh } from '@/hooks/useIntent';
 import { deriveNightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
 import { loadPhaseOverride } from '@/lib/phaseOverride';
-import {
-  RADIUS_ANYWHERE,
-  RADIUS_WALK,
-  RESULTS_COUNT,
-} from '@/lib/constants';
+import { RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
 import { advanceShownIds, nextWiderRadius } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
 import DistanceChips from '@/components/DistanceChips';
-import ResultsHoodChips from '@/components/ResultsHoodChips';
 import VibeTweak from '@/components/VibeTweak';
 import ResultsView from '@/components/ResultsView';
 
@@ -228,12 +222,7 @@ export default function WhereNextFlow() {
   // re-ranks live. Walking default.
   const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
 
-  // QA-6 one results view: an OPTIONAL neighborhood override (null = rank
-  // around the location anchor) and the run-it-again shown-history. The
-  // history excludes already-shown bars so refresh deals the NEXT batch;
-  // any change of search context (new seed, radius, hood, vibe) starts a
-  // fresh deal.
-  const [resultsHood, setResultsHood] = useState<Neighborhood | null>(null);
+  // The history excludes already-shown bars so refresh deals the NEXT batch.
   const [shownIds, setShownIds] = useState<readonly string[]>([]);
   const lastRankedRef = useRef<string[]>([]);
   // True once the user taps the distance chips themselves — the
@@ -268,21 +257,11 @@ export default function WhereNextFlow() {
   const handleRadiusChange = useCallback((next: Radius): void => {
     radiusTouchedRef.current = true;
     setSelectedRadius(next);
-    setShownIds([]);
-  }, []);
-  const handleHoodChange = useCallback((next: Neighborhood | null): void => {
-    setResultsHood(next);
-    setShownIds([]);
-    // Review MED: "In Harlem" must mean the WHOLE hood — a walking cap
-    // measured from the hood's centroid silently drops edge bars. Picking
-    // a hood widens the radius chip to Anywhere (visible state change;
-    // the user can still narrow it again afterwards).
-    if (next !== null) {
-      setSelectedRadius({ kind: 'anywhere', maxMiles: RADIUS_ANYWHERE });
-    }
+    // Widening alone kept the same five closest bars, which looked like a
+    // dead button. A distance choice now deals a fresh matching batch.
+    setShownIds(lastRankedRef.current);
   }, []);
   const resetResultsControls = useCallback((): void => {
-    setResultsHood(null);
     setShownIds([]);
   }, []);
 
@@ -488,24 +467,9 @@ export default function WhereNextFlow() {
 
   if (step.kind === 'autoResults') {
     const coords = step.coords;
-    const goPickBar = () => {
-      geo.reset();
-      resetResultsControls();
-      setStep({ kind: 'pickBar' });
-    };
     return (
       <main>
-        {/* QA1 row, copy tightened 2026-07-27 (operator: "too much
-            text") — the escape keeps its chip but says just "Pick my
-            bar". Both min-h-44. */}
-        <div className="px-6 pt-4 flex flex-wrap items-center justify-center gap-2">
-          <button
-            type="button"
-            onClick={goPickBar}
-            className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
-          >
-            Pick my bar
-          </button>
+        <div className="px-6 pt-4 flex items-center justify-center">
           <button
             type="button"
             onClick={() => setStep({ kind: 'tweakVibeAuto', coords })}
@@ -514,33 +478,20 @@ export default function WhereNextFlow() {
             Tweak the vibe
           </button>
         </div>
-        {/* QA-6 one results view: the SAME control set as the manual
-            results — optional hood override + distance chips. */}
         <div className="px-6 pt-3">
-          <ResultsHoodChips
-            value={resultsHood}
-            onChange={handleHoodChange}
-            anchorLabel="Near me"
+          <DistanceChips
+            value={selectedRadius}
+            onChange={handleRadiusChange}
           />
-          <div className="mt-3">
-            <DistanceChips
-              value={selectedRadius}
-              onChange={handleRadiusChange}
-            />
-          </div>
         </div>
         <ResultsView
           profile={autoProfile}
-          location={
-            resultsHood
-              ? { kind: 'neighborhood', neighborhood: resultsHood }
-              : {
-                  kind: 'coords',
-                  coords,
-                  band: geo.accuracyBand,
-                  snappedTo: geo.snappedNeighborhood,
-                }
-          }
+          location={{
+            kind: 'coords',
+            coords,
+            band: geo.accuracyBand,
+            snappedTo: geo.snappedNeighborhood,
+          }}
           maxMiles={selectedRadius.maxMiles}
           maxResults={RESULTS_COUNT}
           hideClosedNow
@@ -661,17 +612,7 @@ export default function WhereNextFlow() {
       <section className="px-6 py-6 text-center">
         <p className="text-muted text-sm mb-1">From {step.seedBar.name}</p>
         <p className="font-display text-2xl mb-4">Next bars</p>
-        {/* E2.1: the radius fine-tune lives HERE now — one screen, live
-            re-rank, walking default. E3.2: distance is two intent chips
-            + the Anywhere escape, not units. QA-6: plus the optional
-            hood override — the same control set as the location results. */}
-        <div className="mb-3">
-          <ResultsHoodChips
-            value={resultsHood}
-            onChange={handleHoodChange}
-            anchorLabel="Near here"
-          />
-        </div>
+        {/* Distance stays on Next Bar; neighborhood browsing belongs on Map. */}
         <DistanceChips value={selectedRadius} onChange={handleRadiusChange} />
         <div className="mt-3">
           <button
@@ -691,16 +632,12 @@ export default function WhereNextFlow() {
       </section>
       <ResultsView
         profile={seedProfile}
-        location={
-          resultsHood
-            ? { kind: 'neighborhood', neighborhood: resultsHood }
-            : {
-                kind: 'coords',
-                coords: userCoordsForView,
-                band: geo.accuracyBand,
-                snappedTo: geo.snappedNeighborhood,
-              }
-        }
+        location={{
+          kind: 'coords',
+          coords: userCoordsForView,
+          band: geo.accuracyBand,
+          snappedTo: geo.snappedNeighborhood,
+        }}
         maxMiles={selectedRadius.maxMiles}
         maxResults={RESULTS_COUNT}
         excludeIds={manualExcludeIds}

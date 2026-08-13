@@ -229,7 +229,6 @@ export default function MapPage(): JSX.Element {
         <FindBarFilterChips
           filters={filters}
           onChange={setFilters}
-          hasLocation={coords !== null}
         />
       </header>
 

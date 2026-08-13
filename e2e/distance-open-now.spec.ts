@@ -51,17 +51,23 @@ test.describe('E3.2 distance chips', () => {
     // The deleted vocabulary never renders.
     await expect(group.getByText(/Short Uber|Walking/)).toHaveCount(0);
 
-    // Tapping a chip re-ranks in place: same URL, same screen, results
-    // still present.
+    const walkBatch = await cards.locator('h3').allTextContents();
     await cab.click();
     await expect(cab).toHaveAttribute('aria-pressed', 'true');
     await expect(walkable).toHaveAttribute('aria-pressed', 'false');
-    await expect(cards.first()).toBeVisible();
+    await expect.poll(async () => {
+      const next = await cards.locator('h3').allTextContents();
+      return next.filter((name) => walkBatch.includes(name)).length;
+    }).toBe(0);
     await expect(page).toHaveURL('/');
 
+    const cabBatch = await cards.locator('h3').allTextContents();
     await anywhere.click();
     await expect(anywhere).toHaveAttribute('aria-pressed', 'true');
-    await expect(cards.first()).toBeVisible();
+    await expect.poll(async () => {
+      const next = await cards.locator('h3').allTextContents();
+      return next.filter((name) => cabBatch.includes(name)).length;
+    }).toBe(0);
   });
 });
 
