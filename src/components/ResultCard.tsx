@@ -4,7 +4,8 @@ import { useCallback, useState } from 'react';
 import type { Bar, VibeTag } from '@/types';
 import { vibeMatchBadge } from '@/lib/matching';
 import { leadCopy } from '@/lib/travelTime';
-import { barImageUrls } from '@/lib/barVisual';
+import { barVisual } from '@/lib/barVisual';
+import { needsGoogleAttribution, resolveMedia } from '@/lib/mediaPolicy';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { displayHood } from '@/lib/hoodDisplay';
 import ShareButton from '@/components/ShareButton';
@@ -12,6 +13,8 @@ import OpenNowBadge from '@/components/OpenNowBadge';
 import BarVisualTile from '@/components/BarVisualTile';
 import BarLightbox from '@/components/BarLightbox';
 import RatingBadge from '@/components/RatingBadge';
+import GoogleAttribution from '@/components/GoogleAttribution';
+import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 
 type ResultCardProps = {
   bar: Bar;
@@ -47,11 +50,37 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
   const [heroFailed, setHeroFailed] = useState(false);
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
 
-  const photos = barImageUrls(bar);
+  const decision = resolveMedia(bar);
+  const photos = decision.source === 'glyph' || decision.source === 'google-live'
+    ? []
+    : decision.urls;
   const showHero = photos.length > 0 && !heroFailed;
+  const isGoogleLive = decision.source === 'google-live';
+  const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    `${bar.name} ${bar.address}`,
+  )}`;
+  const fallbackVisual = barVisual(bar);
 
   return (
     <article className="bg-surface border border-border rounded-3xl overflow-hidden flex flex-col">
+      {isGoogleLive ? (
+        <GooglePlacePhotoLazy
+          placeId={decision.placeId}
+          surface="result-card"
+          fallback={(
+            <div className="relative w-full aspect-[21/9] flex items-center justify-center" style={{ backgroundColor: fallbackVisual.bg, color: fallbackVisual.fg }}>
+              <span aria-hidden="true" className="font-display text-4xl">{fallbackVisual.glyph}</span>
+              <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-12 flex items-end justify-between gap-3 bg-gradient-to-t from-black/85 via-black/40 to-transparent text-white">
+                <div className="min-w-0">
+                  <h3 className="font-display text-lg leading-snug">{bar.name}</h3>
+                  <p className="text-[11px] uppercase tracking-wider">{displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}</p>
+                </div>
+                <a href={mapsHref} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs font-display min-h-[44px] inline-flex items-center">Open in Maps</a>
+              </div>
+            </div>
+          )}
+        />
+      ) : null}
       {showHero ? (
         <div className="relative">
           <button
@@ -100,8 +129,12 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
         </div>
       ) : null}
 
+      {showHero && needsGoogleAttribution(decision) ? (
+        <GoogleAttribution bar={bar} label="Photo via Google" className="px-4 pt-2" />
+      ) : null}
+
       <div className="p-4 pt-3 flex flex-col gap-2">
-        {!showHero ? (
+        {!showHero && !isGoogleLive ? (
           <div className="flex items-start gap-3">
             <button
               type="button"
@@ -140,6 +173,11 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
           <div className="flex items-center gap-2 flex-wrap">
             <OpenNowBadge bar={bar} />
             <RatingBadge barId={bar.id} />
+            {isGoogleLive ? (
+              <button type="button" onClick={() => setLightboxOpen(true)} className="text-xs text-accent font-display min-h-[44px] inline-flex items-center">
+                Hours
+              </button>
+            ) : null}
           </div>
           {showShare ? (
             <ShareButton
@@ -149,16 +187,14 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
               ariaLabel={`Send ${bar.name} to friends`}
             />
           ) : null}
-          <a
-            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-              `${bar.lat},${bar.lng}`,
-            )}`}
+          {!isGoogleLive ? <a
+            href={mapsHref}
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4 shrink-0"
           >
             Maps →
-          </a>
+          </a> : null}
         </div>
       </div>
 

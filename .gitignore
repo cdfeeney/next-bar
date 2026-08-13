@@ -14,3 +14,5 @@ tsconfig.tsbuildinfo
 
 # Generated ingestion candidates (regenerable via scripts/ingest-bars.ts)
 scripts/data/
+.env.local
+.env.*.local
