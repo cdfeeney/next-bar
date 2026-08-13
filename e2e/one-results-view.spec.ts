@@ -12,7 +12,7 @@
  * only deterministic under a mocked clock.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/catalogTest';
 import { denyGeolocation, grantGeolocation } from './helpers/geo';
 
 const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00'); // Fri 11pm — bars open

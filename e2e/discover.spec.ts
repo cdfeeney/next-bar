@@ -10,7 +10,8 @@
  *   - a saved bar stays gone across a reload.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { test, expect } from './helpers/catalogTest';
 import { denyGeolocation } from './helpers/geo';
 
 const WANT_TO_GO_KEY = 'next-bar:list:want-to-go:v1';
@@ -26,6 +27,9 @@ async function readWantToGo(page: Page): Promise<WantToGoEntry[] | null> {
 
 /** The current top card's bar id + displayed name. */
 async function topCard(page: Page): Promise<{ id: string; name: string }> {
+  await expect(
+    page.getByText(/Loading the Manhattan catalog/),
+  ).toHaveCount(0);
   const card = page.getByTestId('discover-card');
   await expect(card).toBeVisible({ timeout: 15_000 });
   const id = await card.getAttribute('data-bar-id');

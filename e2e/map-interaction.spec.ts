@@ -10,7 +10,7 @@
  *     grey), plus the legend chip row and the no-profile quiz hint.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/catalogTest';
 
 /** How many bars the map's suggested tier may surface (useSuggestions). */
 const MAP_SUGGESTION_COUNT = 10;

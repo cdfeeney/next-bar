@@ -5,7 +5,8 @@
  * remove it, and confirm the list survives a reload (localStorage).
  */
 
-import { test, expect, type Locator } from '@playwright/test';
+import type { Locator } from '@playwright/test';
+import { test, expect } from './helpers/catalogTest';
 
 /**
  * WebKit (iPhone 13): `.fill()` on a controlled input can race React

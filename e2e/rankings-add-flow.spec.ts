@@ -27,7 +27,8 @@
  * auth-page.spec.ts).
  */
 
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
+import { test, expect } from './helpers/catalogTest';
 import { denyGeolocation } from './helpers/geo';
 
 async function typeInto(input: Locator, value: string): Promise<void> {

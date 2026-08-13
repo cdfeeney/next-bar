@@ -31,5 +31,6 @@ This is a deterministic same-row payload-shape comparison, not a claim about com
 - Full unit/component suite: 68 files, 942 tests passed.
 - TypeScript and the production Next.js build passed.
 - The production bundle guard found zero generated Places IDs in 46 client chunks.
-- Chromium mobile flows: 23 of 26 passed. Three legacy assertions require a Supabase-backed browser fixture: two expect five offline Williamsburg/Greenpoint results, and one expects bundled Places photo metadata. Restoring that data to the emergency bundle would reverse this change.
-- The iPhone/WebKit project could not start because its expected local Playwright WebKit executable is not installed. No browser was downloaded.
+- The test-only Supabase fixture now serves the same thin discovery and lazy-detail shapes without credentials or backend traffic. The three catalog/photo assertions that originally failed now pass on Chromium and WebKit.
+- Matching Playwright WebKit 2287 is installed at `D:\PlaywrightBrowsers\webkit-2287`; its temporary directory was also kept on D:.
+- Final browser gate remains blocked under the zero-retry policy: Chromium passed 25 of 26, with the unchanged map-drag transform assertion failing; WebKit passed 25 of 26, with the unchanged map-filter clear count observing the pre-swap 39-marker baseline before the 403-row fixture swap. No candidate was frozen.
