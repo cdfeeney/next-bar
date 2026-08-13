@@ -19,13 +19,13 @@ export type BarsTableRow = {
   neighborhood: string;
   price_tier: number;
   hours: WeeklyHours | null;
-  blurb: string;
-  address: string;
-  place_id: string | null;
+  blurb?: string | null;
+  address?: string | null;
+  place_id?: string | null;
   business_status: string | null;
-  photo_count: number;
-  photo_attributions: string[] | null;
-  reviews: Bar['reviews'] | null;
+  photo_count?: number | null;
+  photo_attributions?: string[] | null;
+  reviews?: Bar['reviews'] | null;
   last_verified: string;
 };
 
@@ -84,7 +84,7 @@ export function rowToBar(row: BarsTableRow): Bar | null {
     ...(row.business_status
       ? { businessStatus: row.business_status as Bar['businessStatus'] }
       : {}),
-    ...(row.photo_count > 0 ? { photoCount: row.photo_count } : {}),
+    ...((row.photo_count ?? 0) > 0 ? { photoCount: row.photo_count ?? 0 } : {}),
     ...(row.photo_attributions
       ? { photoAttributions: row.photo_attributions }
       : {}),
@@ -94,15 +94,11 @@ export function rowToBar(row: BarsTableRow): Bar | null {
 
 /**
  * Map + validate a fetched row set. The whole batch is REJECTED (null)
- * when it is empty or implausibly small versus the static fallback — a
- * truncated fetch must never shrink the catalog under the user.
+ * when any row is invalid, it is implausibly small, or ids collide.
  */
-export function rowsToCatalog(
-  rows: BarsTableRow[],
-  staticCount: number,
-): Bar[] | null {
+export function rowsToCatalog(rows: BarsTableRow[]): Bar[] | null {
   const mapped = rows.map(rowToBar).filter((b): b is Bar => b !== null);
-  if (mapped.length < Math.min(staticCount, 100)) return null;
+  if (mapped.length !== rows.length || mapped.length < 100) return null;
   const ids = new Set(mapped.map((b) => b.id));
   if (ids.size !== mapped.length) return null; // dup ids = corrupt import
   return mapped;

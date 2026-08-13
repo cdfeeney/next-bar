@@ -525,18 +525,6 @@ export const extraBars: Bar[] = [
     lastVerified: INGESTED,
   },
   {
-    id: 'westlight',
-    name: 'Westlight',
-    neighborhood: 'Williamsburg',
-    address: '111 N 12th St, 22nd fl',
-    lat: 40.7223,
-    lng: -73.9568,
-    priceTier: 4,
-    tags: ['rooftop', 'cocktail', 'instagrammable', 'date', 'splurge'],
-    blurb: '22nd-floor rooftop at The William Vale. Skyline-for-days, global small plates.',
-    lastVerified: INGESTED,
-  },
-  {
     id: 'brooklyn-bowl',
     name: 'Brooklyn Bowl',
     neighborhood: 'Williamsburg',

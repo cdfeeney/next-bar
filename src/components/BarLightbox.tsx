@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
 import { barImageUrls } from '@/lib/barVisual';
-import { fetchBarReviews } from '@/lib/barReviews';
+import { fetchBarDetails, type BarDetails } from '@/lib/barReviews';
 import { weekHoursRows } from '@/lib/openNow';
 import { displayHood } from '@/lib/hoodDisplay';
 import OpenNowBadge from '@/components/OpenNowBadge';
@@ -34,29 +34,38 @@ export default function BarLightbox({
   bar: Bar;
   onClose: () => void;
 }): JSX.Element {
-  const photoUrls = barImageUrls(bar);
+  const [details, setDetails] = useState<BarDetails | undefined>(undefined);
+  const [detailStatus, setDetailStatus] = useState<
+    'loading' | 'ready' | 'unavailable'
+  >('loading');
+  const displayBar = details ? { ...bar, ...details } : bar;
+  const photoUrls = barImageUrls(displayBar);
   const [activePhoto, setActivePhoto] = useState(0);
-  // Reviews are NOT in the catalog payload any more (they were 155 KB of
-  // it) — imported bars fetch theirs when their lightbox opens. Bundle
-  // bars already carry sidecar reviews and skip the query entirely.
-  const [lateReviews, setLateReviews] = useState<Bar['reviews']>(undefined);
+  // Heavy detail fields are absent from the initial catalog payload and
+  // load only for the bar the user opens.
   useEffect(() => {
-    // Drop the previous bar's fetched reviews FIRST. Today ResultCard
+    // Drop the previous bar's fetched details FIRST. Today ResultCard
     // unmounts the lightbox on close so this can't bite, but any future
     // caller that keeps it mounted and swaps `bar` would otherwise
-    // attribute one bar's review quote to a different bar.
-    setLateReviews(undefined);
-    if (bar.reviews?.[0]) return;
+    // attribute one bar's details to a different bar.
+    setDetails(undefined);
+    setDetailStatus('loading');
     let cancelled = false;
     void (async () => {
-      const fetched = await fetchBarReviews(bar.id);
-      if (!cancelled && fetched?.[0]) setLateReviews(fetched);
+      const fetched = await fetchBarDetails(bar.id);
+      if (cancelled) return;
+      if (fetched) {
+        setDetails(fetched);
+        setDetailStatus('ready');
+      } else {
+        setDetailStatus('unavailable');
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [bar.id, bar.reviews]);
-  const reviews = bar.reviews?.[0] ? bar.reviews : lateReviews;
+  }, [bar.id]);
+  const reviews = displayBar.reviews;
   const trackRef = useRef<HTMLDivElement | null>(null);
   // Scroll-snap position → active dot (passive listener; index from the
   // nearest slide edge).
@@ -69,7 +78,7 @@ export default function BarLightbox({
     };
     track.addEventListener('scroll', onScroll, { passive: true });
     return () => track.removeEventListener('scroll', onScroll);
-  }, []);
+  }, [photoUrls.length]);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   // Ref-carried close handler (Opus review): ResultCard passes an inline
@@ -126,7 +135,9 @@ export default function BarLightbox({
   }, [bar]);
 
   const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-    `${bar.name} ${bar.address}`,
+    displayBar.address
+      ? `${bar.name} ${displayBar.address}`
+      : `${bar.lat},${bar.lng}`,
   )}`;
 
   return (
@@ -179,8 +190,8 @@ export default function BarLightbox({
             </div>
             <figcaption className="flex items-center justify-between text-[10px] text-muted px-3 py-1.5">
               <span>
-                {(bar.photoAttributions?.[activePhoto] || bar.photoAttribution)
-                  ? `Photo: ${bar.photoAttributions?.[activePhoto] || bar.photoAttribution} · Google`
+                {(displayBar.photoAttributions?.[activePhoto] || displayBar.photoAttribution)
+                  ? `Photo: ${displayBar.photoAttributions?.[activePhoto] || displayBar.photoAttribution} · Google`
                   : 'Photo · Google'}
               </span>
               {photoUrls.length > 1 ? (
@@ -205,12 +216,20 @@ export default function BarLightbox({
             {bar.name}
           </h2>
           <div className="flex items-center gap-3">
-            <p className="text-muted text-xs">{bar.address}</p>
+            <p className="text-muted text-xs">{displayBar.address}</p>
             <OpenNowBadge bar={bar} />
           </div>
         </div>
 
-        <p className="text-sm italic">{bar.blurb}</p>
+        {detailStatus === 'loading' ? (
+          <p role="status" className="text-xs text-muted">Loading details…</p>
+        ) : detailStatus === 'unavailable' ? (
+          <p role="alert" className="text-xs text-muted">
+            Extra details are unavailable right now.
+          </p>
+        ) : null}
+
+        {displayBar.blurb ? <p className="text-sm italic">{displayBar.blurb}</p> : null}
 
         {reviews?.[0] ? (
           <p className="text-xs text-muted">

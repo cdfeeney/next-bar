@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "db:migrate": "tsx scripts/apply-migrations.ts"
+    "db:migrate": "tsx scripts/apply-migrations.ts",
+    "check:catalog-bundle": "node scripts/check-client-catalog-bundle.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.0",

@@ -51,16 +51,22 @@ describe('rowsToCatalog batch guard', () => {
     Array.from({ length: n }, (_, i) => goodRow({ id: `bar-${i}` }));
 
   test('a plausible batch maps', () => {
-    expect(rowsToCatalog(many(150), 400)?.length).toBe(150);
+    expect(rowsToCatalog(many(150))?.length).toBe(150);
   });
 
   test('an implausibly small batch is rejected wholesale (truncated fetch must not shrink the catalog)', () => {
-    expect(rowsToCatalog(many(5), 400)).toBeNull();
+    expect(rowsToCatalog(many(5))).toBeNull();
   });
 
   test('duplicate ids reject the batch (corrupt import)', () => {
     const rows = many(150);
     rows[1] = goodRow({ id: 'bar-0' });
-    expect(rowsToCatalog(rows, 400)).toBeNull();
+    expect(rowsToCatalog(rows)).toBeNull();
+  });
+
+  test('one invalid row rejects the whole batch', () => {
+    const rows = many(150);
+    rows[75] = goodRow({ id: 'not valid' });
+    expect(rowsToCatalog(rows)).toBeNull();
   });
 });

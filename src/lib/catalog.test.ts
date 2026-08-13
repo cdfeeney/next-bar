@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import type { Bar, VibeTag } from '@/types';
-import { bars } from '@/lib/bars';
+import { coreBars } from '@/lib/bars.core';
 import { jaccard, matches } from '@/lib/matching';
 import {
   TAG_VOCABULARY,
@@ -68,23 +68,25 @@ function syntheticBars(count: number, rand: () => number): Bar[] {
 
 afterEach(() => {
   // Tests that swap the catalog must leave the module store on the real
-  // static catalog for the rest of this file.
-  replaceCatalog(bars);
+  // emergency catalog for the rest of this file.
+  act(() => {
+    replaceCatalog(coreBars);
+  });
 });
 
 describe('catalog accessor', () => {
-  it('getBars() resolves instantly with the full static catalog', async () => {
+  it('getBars() resolves instantly with the tiny emergency catalog', async () => {
     const result = await getBars();
-    expect(result).toBe(bars);
+    expect(result).toBe(coreBars);
     expect(result.length).toBeGreaterThan(0);
   });
 
   it('getBarsSnapshot() returns the same array synchronously', () => {
-    expect(getBarsSnapshot()).toBe(bars);
+    expect(getBarsSnapshot()).toBe(coreBars);
   });
 
   it('getBarById() resolves every catalog id and misses unknown ids', () => {
-    for (const bar of bars) {
+    for (const bar of coreBars) {
       expect(getBarById(bar.id)).toBe(bar);
     }
     expect(getBarById('definitely-not-a-bar')).toBeUndefined();
@@ -92,18 +94,18 @@ describe('catalog accessor', () => {
 
   it('useBars() returns the catalog synchronously (no loading flash)', () => {
     const { result } = renderHook(() => useBars());
-    expect(result.current).toBe(bars);
+    expect(result.current).toBe(coreBars);
   });
 
   it('useBars() re-renders subscribers when the catalog is replaced', () => {
     const { result } = renderHook(() => useBars());
-    const next = bars.slice(0, 3);
+    const next = coreBars.slice(0, 3);
     act(() => {
       replaceCatalog(next);
     });
     expect(result.current).toBe(next);
     // getBarById / getTagMask follow the swap too — the accessor is one store.
-    expect(getBarById(bars[bars.length - 1].id)).toBeUndefined();
+    expect(getBarById(coreBars[coreBars.length - 1].id)).toBeUndefined();
     expect(getTagMask(next[0].id)).toBe(tagsToMask(next[0].tags));
   });
 });
@@ -119,7 +121,7 @@ describe('tag bitmasks', () => {
   });
 
   it('precomputes a mask for every bar matching its tag list', () => {
-    for (const bar of bars) {
+    for (const bar of coreBars) {
       expect(getTagMask(bar.id)).toBe(tagsToMask(bar.tags));
     }
     expect(getTagMask('definitely-not-a-bar')).toBeUndefined();

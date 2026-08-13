@@ -1,18 +1,17 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { getBarsSnapshot, replaceCatalog } from '@/lib/catalog';
+import { replaceCatalog } from '@/lib/catalog';
 import { rowsToCatalog, type BarsTableRow } from '@/lib/catalogServer';
 
 /**
  * Server-backed catalog refresh (0019 swap — mass-import prerequisite).
  * Mounted once in the root layout; AFTER hydration (Codex addendum: a
  * pre-hydration swap makes SSR/browser snapshots mismatch) it fetches the
- * `bars` table and swaps it in via replaceCatalog. The static bundle
- * catalog stays the synchronous fallback: fetch failure, validation
- * failure, or an implausibly small row set all leave today's behavior
- * untouched. This is what lets import batches land bars WITHOUT a deploy.
+ * `bars` table and swaps it in via replaceCatalog. The bundled
+ * fallback is only the tiny curated core. Fetch or validation failure
+ * reports that degraded state instead of pretending the full catalog loaded.
  *
  * PHONE SPEED (operator 2026-07-27): `select('*')` pulled 833 KB on every
  * load. Two of those columns the app never reads at all (created_at,
@@ -22,9 +21,9 @@ import { rowsToCatalog, type BarsTableRow } from '@/lib/catalogServer';
  * column (photos blob, embeddings) can't silently re-inflate this fetch.
  */
 
-/** Exactly the columns rowToBar consumes, minus on-demand `reviews`. */
+/** Discovery/map/matching fields only; presentation details load on open. */
 const CATALOG_COLUMNS =
-  'id,name,lat,lng,tags,neighborhood,price_tier,hours,blurb,address,place_id,business_status,photo_count,photo_attributions,last_verified';
+  'id,name,lat,lng,tags,neighborhood,price_tier,hours,business_status,last_verified';
 
 /**
  * PostgREST caps EVERY response at 1,000 rows — silently, with a 200 and
@@ -35,10 +34,14 @@ const CATALOG_COLUMNS =
  */
 const PAGE = 1000;
 
-export default function CatalogRefresh(): null {
+export default function CatalogRefresh(): JSX.Element | null {
+  const [status, setStatus] = useState<'loading' | 'ready' | 'fallback'>('loading');
   useEffect(() => {
     const supabase = getBrowserSupabase();
-    if (!supabase) return;
+    if (!supabase) {
+      setStatus('fallback');
+      return;
+    }
     let cancelled = false;
     void (async () => {
       const all: BarsTableRow[] = [];
@@ -51,17 +54,38 @@ export default function CatalogRefresh(): null {
           // pages can overlap or skip.
           .order('id', { ascending: true })
           .range(from, from + PAGE - 1);
-        if (cancelled || error || !Array.isArray(data)) return; // fallback: static
+        if (cancelled) return;
+        if (error || !Array.isArray(data)) {
+          setStatus('fallback');
+          return;
+        }
         all.push(...(data as BarsTableRow[]));
         if (data.length < PAGE) break;
       }
-      const next = rowsToCatalog(all, getBarsSnapshot().length);
-      if (cancelled || next === null) return;
+      const next = rowsToCatalog(all);
+      if (cancelled) return;
+      if (next === null) {
+        setStatus('fallback');
+        return;
+      }
       replaceCatalog(next);
-    })();
+      setStatus('ready');
+    })().catch(() => {
+      if (!cancelled) setStatus('fallback');
+    });
     return () => {
       cancelled = true;
     };
   }, []);
-  return null;
+  if (status === 'ready') return null;
+  return (
+    <p
+      role={status === 'loading' ? 'status' : 'alert'}
+      className="fixed inset-x-4 bottom-[calc(76px+env(safe-area-inset-bottom))] z-[1400] mx-auto max-w-md rounded-full border border-border bg-surface/95 px-4 py-2 text-center text-xs text-muted shadow-lg"
+    >
+      {status === 'loading'
+        ? 'Loading the Manhattan catalog…'
+        : 'Catalog refresh unavailable — showing the emergency set.'}
+    </p>
+  );
 }

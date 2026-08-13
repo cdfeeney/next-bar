@@ -6,13 +6,12 @@
  * docs/BARS-TABLE-SCHEMA.md) is a change to THIS file only.
  *
  * Shape today:
- *   - The cache is initialized synchronously from the static import, so
- *     `getBars()` resolves instantly and `useBars()` renders with data on
- *     the first paint (no loading flash).
+ *   - The cache starts with only the tiny curated core emergency set.
+ *     CatalogRefresh replaces it from Supabase after hydration.
  *   - `getBars()` is async FROM DAY ONE so call sites are already shaped
- *     for a server-backed catalog.
+ *     for the server-backed catalog.
  *   - `useBars()` subscribes via useSyncExternalStore; `replaceCatalog()`
- *     is the future refresh entry point that notifies every subscriber.
+ *     is the refresh entry point that notifies every subscriber.
  *   - Per-bar tag BITMASKS over the global VibeTag vocabulary are
  *     precomputed at load for the future matching perf path (B7).
  *     `matching.ts` still uses its set-based jaccard — do not rewire it
@@ -25,7 +24,7 @@
  */
 
 import type { Bar, VibeTag } from '@/types';
-import { bars as staticBars } from '@/lib/bars';
+import { coreBars } from '@/lib/bars.core';
 
 // ---------------------------------------------------------------------------
 // Global tag vocabulary → bit positions.
@@ -147,13 +146,12 @@ function buildState(bars: Bar[]): CatalogState {
   };
 }
 
-let state: CatalogState = buildState(staticBars);
+let state: CatalogState = buildState(coreBars);
 const listeners = new Set<() => void>();
 
 /**
  * The catalog, async from day one. Resolves instantly from the module
- * cache today; when the server-backed catalog lands, this becomes the
- * fetch-with-static-fallback seam (see docs/BARS-TABLE-SCHEMA.md).
+ * cache today; CatalogRefresh replaces the emergency set after hydration.
  */
 export function getBars(): Promise<Bar[]> {
   return Promise.resolve(state.bars);

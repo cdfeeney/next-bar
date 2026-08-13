@@ -151,7 +151,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
           ) : null}
           <a
             href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-              `${bar.name} ${bar.address}`,
+              `${bar.lat},${bar.lng}`,
             )}`}
             target="_blank"
             rel="noopener noreferrer"

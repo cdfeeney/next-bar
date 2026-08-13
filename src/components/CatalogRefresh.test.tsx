@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import CatalogRefresh from './CatalogRefresh';
 
@@ -12,6 +12,8 @@ import CatalogRefresh from './CatalogRefresh';
 
 const ranges: Array<[number, number]> = [];
 let totalRows = 0;
+let pageError = false;
+const selectedColumns: string[] = [];
 
 function makeRow(i: number) {
   return {
@@ -39,16 +41,22 @@ const replaced: unknown[][] = [];
 vi.mock('@/lib/supabase/client', () => ({
   getBrowserSupabase: () => ({
     from: () => ({
-      select: () => ({
+      select: (columns: string) => {
+        selectedColumns.push(columns);
+        return {
         order: () => ({
           range: (from: number, to: number) => {
             ranges.push([from, to]);
+            if (pageError) {
+              return Promise.resolve({ data: null, error: { message: 'boom' } });
+            }
             const page = [];
             for (let i = from; i <= to && i < totalRows; i++) page.push(makeRow(i));
             return Promise.resolve({ data: page, error: null });
           },
         }),
-      }),
+      };
+      },
     }),
   }),
 }));
@@ -66,6 +74,8 @@ describe('CatalogRefresh paging (PostgREST 1,000-row cap)', () => {
   beforeEach(() => {
     ranges.length = 0;
     replaced.length = 0;
+    selectedColumns.length = 0;
+    pageError = false;
   });
 
   test('fetches EVERY row when the catalog exceeds 1,000', async () => {
@@ -78,6 +88,9 @@ describe('CatalogRefresh paging (PostgREST 1,000-row cap)', () => {
       [1000, 1999],
     ]);
     expect(replaced[0]).toHaveLength(1265);
+    expect(selectedColumns[0]).toBe(
+      'id,name,lat,lng,tags,neighborhood,price_tier,hours,business_status,last_verified',
+    );
   });
 
   test('stops after one request when the catalog is under a page', async () => {
@@ -99,5 +112,14 @@ describe('CatalogRefresh paging (PostgREST 1,000-row cap)', () => {
       [2000, 2999],
     ]);
     expect(replaced[0]).toHaveLength(2000);
+  });
+
+  test('reports a failed refresh and keeps the emergency catalog', async () => {
+    pageError = true;
+    render(<CatalogRefresh />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Catalog refresh unavailable',
+    );
+    expect(replaced).toHaveLength(0);
   });
 });

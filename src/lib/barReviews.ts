@@ -1,43 +1,100 @@
 import type { Bar } from '@/types';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 
-/**
- * On-demand Google-review fetch for ONE bar.
- *
- * Why this exists: `reviews` is 155 KB of the 833 KB the catalog refresh
- * used to pull on every single page load — for a field rendered in
- * exactly one place, the lightbox, for whichever single bar the user
- * opened. Fetching it per-bar-on-open moves that weight off the phone's
- * critical path entirely; the cost is one tiny query when a card is
- * expanded, by which point the app is already interactive.
- *
- * Static-bundle bars keep their sidecar reviews and never reach here.
- */
+/** Heavy fields fetched only when one bar is opened. */
+export type BarDetails = Pick<Bar, 'address' | 'blurb'> &
+  Partial<
+    Pick<
+      Bar,
+      'googlePlaceId' | 'photoCount' | 'photoAttributions' | 'reviews'
+    >
+  >;
+
+type DetailRow = {
+  address?: unknown;
+  blurb?: unknown;
+  place_id?: unknown;
+  photo_count?: unknown;
+  photo_attributions?: unknown;
+  reviews?: unknown;
+};
 
 const ID_RE = /^[a-z0-9-]{1,60}$/;
-const cache = new Map<string, Bar['reviews']>();
+const cache = new Map<string, BarDetails | undefined>();
 
-export async function fetchBarReviews(id: string): Promise<Bar['reviews']> {
+function rowToDetails(row: DetailRow): BarDetails | undefined {
+  if (
+    (row.address != null && typeof row.address !== 'string') ||
+    (row.blurb != null && typeof row.blurb !== 'string') ||
+    (row.place_id != null && typeof row.place_id !== 'string') ||
+    (row.photo_count != null &&
+      (!Number.isInteger(row.photo_count) || (row.photo_count as number) < 0)) ||
+    (row.photo_attributions != null &&
+      (!Array.isArray(row.photo_attributions) ||
+        !row.photo_attributions.every((value) => typeof value === 'string'))) ||
+    (row.reviews != null &&
+      (!Array.isArray(row.reviews) ||
+        !row.reviews.every(
+          (review) =>
+            review != null &&
+            typeof review === 'object' &&
+            typeof (review as { text?: unknown }).text === 'string' &&
+            typeof (review as { author?: unknown }).author === 'string' &&
+            typeof (review as { rating?: unknown }).rating === 'number',
+        )))
+  ) {
+    return undefined;
+  }
+
+  return {
+    address: typeof row.address === 'string' ? row.address : '',
+    blurb: typeof row.blurb === 'string' ? row.blurb : '',
+    ...(typeof row.place_id === 'string'
+      ? { googlePlaceId: row.place_id }
+      : {}),
+    ...(typeof row.photo_count === 'number' && row.photo_count > 0
+      ? { photoCount: row.photo_count }
+      : {}),
+    ...(Array.isArray(row.photo_attributions)
+      ? { photoAttributions: row.photo_attributions as string[] }
+      : {}),
+    ...(Array.isArray(row.reviews)
+      ? { reviews: row.reviews as Bar['reviews'] }
+      : {}),
+  };
+}
+
+export async function fetchBarDetails(id: string): Promise<BarDetails | undefined> {
   if (!ID_RE.test(id)) return undefined;
-  // has(), not get() !== undefined: a bar with NO reviews caches as
-  // `undefined`, and a value-based check would treat that hit as a miss
-  // and re-query it on every single open.
   if (cache.has(id)) return cache.get(id);
 
   const supabase = getBrowserSupabase();
   if (!supabase) return undefined;
-  const { data, error } = await supabase
-    .from('bars')
-    .select('reviews')
-    .eq('id', id)
-    .maybeSingle();
-  if (error || !data) return undefined;
+  let result;
+  try {
+    result = await supabase
+      .from('bars')
+      .select('address,blurb,place_id,photo_count,photo_attributions,reviews')
+      .eq('id', id)
+      .maybeSingle();
+  } catch {
+    return undefined;
+  }
+  const { data, error } = result;
+  if (error) return undefined;
+  if (!data) {
+    cache.set(id, undefined);
+    return undefined;
+  }
 
-  const reviews = (data as { reviews: Bar['reviews'] }).reviews ?? undefined;
-  // Cache the miss too — a bar with no reviews shouldn't re-query on
-  // every open.
-  cache.set(id, reviews);
-  return reviews;
+  const details = rowToDetails(data as DetailRow);
+  cache.set(id, details);
+  return details;
+}
+
+/** Back-compatible review accessor; shares the single detail query/cache. */
+export async function fetchBarReviews(id: string): Promise<Bar['reviews']> {
+  return (await fetchBarDetails(id))?.reviews;
 }
 
 /** Test seam. */

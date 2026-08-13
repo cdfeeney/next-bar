@@ -470,4 +470,30 @@ export const coreBars: Bar[] = [
     blurb: 'Scotch list deeper than the Hudson. Order something peaty.',
     lastVerified: PLACEHOLDER_VERIFIED,
   },
+  // Demo/history safety: these two records are part of the small emergency
+  // set so every seeded social reference resolves before Supabase hydrates.
+  {
+    id: 'rudys-bar-and-grill',
+    name: "Rudy's Bar & Grill",
+    neighborhood: "Hell's Kitchen",
+    address: '627 9th Ave, New York, NY 10036',
+    lat: 40.7600196,
+    lng: -73.9917726,
+    priceTier: 1,
+    tags: ['dive', 'cheap', 'locals', 'buzzy', 'old-nyc'],
+    blurb: 'Free hot dogs with cheap pitchers. Pure dive.',
+    lastVerified: PLACEHOLDER_VERIFIED,
+  },
+  {
+    id: 'westlight',
+    name: 'Westlight',
+    neighborhood: 'Williamsburg',
+    address: '111 N 12th St, 22nd fl',
+    lat: 40.7223,
+    lng: -73.9568,
+    priceTier: 4,
+    tags: ['rooftop', 'cocktail', 'instagrammable', 'date', 'splurge'],
+    blurb: '22nd-floor rooftop at The William Vale. Skyline-for-days, global small plates.',
+    lastVerified: '2026-06-26',
+  },
 ];
