@@ -19,6 +19,7 @@ import { userSubmissionAdapter } from './providers/userSubmission';
 import { runCensus } from './runner';
 import {
   applyCurated,
+  assertProjectRef,
   checkApplyPreconditions,
   type ApplySidecar,
   type BarsWriteClient,
@@ -846,5 +847,19 @@ describe('apply preconditions (the sole write path refuses first)', () => {
     ]);
     expect(inserts.flat().map((r) => r.id)).toEqual(['fresh-bar']);
     expect(inserts.flat()[0].source).toBe('census');
+  });
+
+  it('fails closed on the wrong project and on an atomic insert error', async () => {
+    expect(() => assertProjectRef(
+      'https://production.supabase.co',
+      'wqxovhiovgcijmfzxgby',
+    )).toThrow('refusing Supabase host');
+    const client: BarsWriteClient = {
+      selectExisting: async () => ({ data: [], error: null }),
+      insert: async () => ({ error: { message: 'fixture refusal' } }),
+    };
+    await expect(applyCurated(client, curated, () => true)).rejects.toThrow(
+      'atomic insert failed: fixture refusal',
+    );
   });
 });

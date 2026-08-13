@@ -19,6 +19,7 @@ import { config as dotenv } from 'dotenv';
 import { refuseIfUnattended } from '../loop-guard.mjs';
 import {
   applyCurated,
+  assertProjectRef,
   checkApplyPreconditions,
   type ApplySidecar,
   type CuratedCandidate,
@@ -148,6 +149,7 @@ async function runApply(curatedPath: string): Promise<void> {
     console.error('apply needs NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY');
     process.exit(2);
   }
+  assertProjectRef(url, 'wqxovhiovgcijmfzxgby');
   const { createClient } = await import('@supabase/supabase-js');
   const { rowToBar } = await import('../../src/lib/catalogServer');
   const admin = createClient(url, key, {

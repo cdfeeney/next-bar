@@ -1,0 +1,85 @@
+{
+  "projectRef": "wqxovhiovgcijmfzxgby",
+  "retrievedAt": "2026-08-13T18:01:57.217Z",
+  "catalogGoal": "g-779223ab-a469-4fc8-bad7-6623c186db67",
+  "catalogCandidate": "6a9ff0fa8b4edfdaecc328d7916b922dbf0eeba485c262ef07063a2a70fe8127",
+  "catalogCommit": "8cbb8a64730d61e4ed0a2f8a90491ba2be42107d",
+  "packetSha256": "8e151036e3b878af56c67a7e86c16fe27be409321409705eff0a83b7ab28ecdd",
+  "candidatePool": 1286,
+  "stagingBaseline": 412,
+  "inserts": 33,
+  "updates": 0,
+  "unchanged": 0,
+  "rejects": 1253,
+  "projectedStagingCount": 445,
+  "reasonCounts": {
+    "OSM venue missing or not currently visible": 13,
+    "already represented in staging as lucindas": 1,
+    "already represented in staging as somewhere-nowhere-nyc": 1,
+    "current OSM record lacks a verifiable street address": 109,
+    "legal-entity-only SLA record; no verified customer-facing identity": 859,
+    "multiple current active SLA licenses at the same address": 20,
+    "no unique current active SLA license at the same address": 245,
+    "outside Manhattan": 5
+  },
+  "exactInsertIds": [
+    "osm-node-10874836805",
+    "osm-node-12982612201",
+    "osm-node-13375040754",
+    "osm-node-13550914367",
+    "osm-node-13567251701",
+    "osm-node-1706037451",
+    "osm-node-2542549644",
+    "osm-node-2555126634",
+    "osm-node-2555128954",
+    "osm-node-2567557167",
+    "osm-node-2702802602",
+    "osm-node-2703424308",
+    "osm-node-2709479288",
+    "osm-node-3618200208",
+    "osm-node-3676873363",
+    "osm-node-3822484904",
+    "osm-node-4113144390",
+    "osm-node-4319001989",
+    "osm-node-4832284232",
+    "osm-node-4848257931",
+    "osm-node-4947754523",
+    "osm-node-5812743217",
+    "osm-node-5957624985",
+    "osm-node-5978792897",
+    "osm-node-5981570885",
+    "osm-node-6222318519",
+    "osm-node-6367931785",
+    "osm-node-6622046385",
+    "osm-node-7097867545",
+    "osm-node-7159193384",
+    "osm-node-7951261386",
+    "osm-node-8272848251",
+    "osm-node-9978637391"
+  ],
+  "hashes": {
+    "curated-payload.json": "49152d2792ffdaed7ac56f47df6788f9cf67dbf51c74b409a6e59e6553dce6b3",
+    "accepted-evidence.json": "2efad695047d1098b4059c9a29b7b07cd84288f2e7251ee25e3a8fdeb48c9eac",
+    "rejections.json": "32cd27f056491a5953260610f5543c6d81543565b807f105776386611ec2140a",
+    "prewrite-update-backup.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "staging-baseline.json": "885b82cb02cfcf728a18343c1a928f3ff7ba4e8973baa118abf22e0fe254f4bc",
+    "rollback.sql": "68f2706d28ec2776bdff01f64832fe25005ad3c537f2fde6c2cb1826fe5716d2"
+  },
+  "sourceReads": {
+    "osm": {
+      "requested": 409,
+      "returned": 409,
+      "url": "OpenStreetMap API v0.6 multi-fetch"
+    },
+    "sla": {
+      "returned": 1566,
+      "dataset": "Current Liquor Authority Active Licenses (9s3h-dpkz)"
+    },
+    "staging": {
+      "projectRef": "wqxovhiovgcijmfzxgby",
+      "rows": 412,
+      "pages": 1
+    }
+  },
+  "writePerformed": false
+}

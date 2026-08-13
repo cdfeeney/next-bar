@@ -103,6 +103,13 @@ export interface BarsWriteClient {
   insert(rows: Array<Record<string, unknown>>): Promise<{ error: { message: string } | null }>;
 }
 
+export function assertProjectRef(url: string, expectedRef: string): void {
+  const host = new URL(url).hostname;
+  if (host !== `${expectedRef}.supabase.co`) {
+    throw new Error(`refusing Supabase host ${host}; expected ${expectedRef}.supabase.co`);
+  }
+}
+
 const normalizeLegacy = (s: string): string =>
   s
     .toLowerCase()
@@ -112,12 +119,10 @@ const normalizeLegacy = (s: string): string =>
     .trim();
 
 /**
- * Ported from scripts/import-bars.mts (proven in the 2026-07 mass import):
- * paginated existing-rows read (PostgREST silently caps at 1,000), id and
- * name+neighborhood dedup, chunked insert with row-by-row fallback so one
- * bad row is NAMED instead of killing the batch. `validateRow` is injected
- * (the CLI passes catalogServer's rowToBar) to keep this module free of app
- * imports for testing.
+ * Paginated existing-rows read (PostgREST silently caps at 1,000), id and
+ * name+neighborhood dedup, then one atomic insert of at most 50 rows.
+ * Database errors fail the entire batch; row-by-row fallback would make the
+ * reviewed payload and its rollback counts untruthful.
  */
 export async function applyCurated(
   client: BarsWriteClient,
@@ -176,19 +181,10 @@ export async function applyCurated(
     accepted.push(row);
   }
 
-  let inserted = 0;
-  for (let i = 0; i < accepted.length; i += 50) {
-    const chunk = accepted.slice(i, i + 50);
-    const { error } = await client.insert(chunk);
-    if (!error) {
-      inserted += chunk.length;
-      continue;
-    }
-    for (const row of chunk) {
-      const { error: rowErr } = await client.insert([row]);
-      if (rowErr) rejected.push({ id: String(row.id), reason: rowErr.message });
-      else inserted++;
-    }
+  if (accepted.length > 50) throw new Error(`atomic batch limit exceeded: ${accepted.length}`);
+  if (accepted.length > 0) {
+    const { error } = await client.insert(accepted);
+    if (error) throw new Error(`atomic insert failed: ${error.message}`);
   }
-  return { inserted, rejected };
+  return { inserted: accepted.length, rejected };
 }
