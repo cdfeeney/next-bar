@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
-import { barImageUrls } from '@/lib/barVisual';
+import { barVisual } from '@/lib/barVisual';
 import { fetchBarDetails, type BarDetails } from '@/lib/barReviews';
+import { resolveMedia } from '@/lib/mediaPolicy';
 import { weekHoursRows } from '@/lib/openNow';
 import { displayHood } from '@/lib/hoodDisplay';
 import OpenNowBadge from '@/components/OpenNowBadge';
+import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 
 /**
  * U2-2: photo headliner. Tapping a card's photo opens this full-screen
@@ -39,7 +41,10 @@ export default function BarLightbox({
     'loading' | 'ready' | 'unavailable'
   >('loading');
   const displayBar = details ? { ...bar, ...details } : bar;
-  const photoUrls = barImageUrls(displayBar);
+  const media = resolveMedia(displayBar);
+  const photoUrls =
+    media.source === 'glyph' || media.source === 'google-live' ? [] : media.urls;
+  const fallbackVisual = barVisual(displayBar);
   const [activePhoto, setActivePhoto] = useState(0);
   // Heavy detail fields are absent from the initial catalog payload and
   // load only for the bar the user opens.
@@ -167,7 +172,27 @@ export default function BarLightbox({
           </button>
         </div>
 
-        {photoUrls.length > 0 ? (
+        {media.source === 'google-live' ? (
+          <figure className="rounded-3xl border border-border">
+            <GooglePlacePhotoLazy
+              placeId={media.placeId}
+              surface="bar-lightbox"
+              fallback={(
+                <div
+                  className="relative w-full aspect-[21/9] rounded-3xl flex items-center justify-center"
+                  style={{
+                    backgroundColor: fallbackVisual.bg,
+                    color: fallbackVisual.fg,
+                  }}
+                >
+                  <span aria-hidden="true" className="font-display text-5xl">
+                    {fallbackVisual.glyph}
+                  </span>
+                </div>
+              )}
+            />
+          </figure>
+        ) : photoUrls.length > 0 ? (
           <figure className="rounded-3xl overflow-hidden border border-border">
             {/* U2-2 carousel (photos-multi ingest): CSS scroll-snap — swipe
                 on touch, scroll on desktop, no library. */}

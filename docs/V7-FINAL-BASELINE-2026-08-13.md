@@ -11,6 +11,7 @@ this release.
 - Supabase-first catalog delivery; no generated Places catalog in client chunks.
 - 1,667 staging venues: 1,519 Manhattan, 109 Brooklyn, 39 Queens.
 - Google Places UI Kit runtime photos with the existing runtime kill switch.
+- Home result cards and Map bar lightboxes both use the live Google photo path.
 - Map search, marker tiers, location behavior, and the expanded Manhattan map.
 - Map controls now show `Tweak the vibe` as one collapsed disclosure.
 - `Walkable`, `Worth a cab`, and `Anywhere` remain visible and wrap within the
@@ -27,7 +28,7 @@ this release.
 
 ## Verification snapshot
 
-- Unit tests: 1,022 / 1,022 passed.
+- Unit tests: 1,023 / 1,023 passed.
 - TypeScript: passed (`tsc --noEmit`).
 - Production build: passed; root first-load JS 193 KB.
 - Focused Pixel 7 flows: 16 / 16 passed, retries 0.
