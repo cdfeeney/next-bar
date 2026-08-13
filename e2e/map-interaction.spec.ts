@@ -248,10 +248,17 @@ test.describe('/map Find Bar filters (QA2)', () => {
     const allCount = await markers.count();
     expect(allCount).toBeGreaterThan(0);
 
-    // Pick one neighborhood — the map must drop to that hood's bars only.
+    // Neighborhood is a row inside the same accordion as every vibe axis.
     const filters = page.getByTestId('findbar-filters');
     await expect(filters.getByRole('group', { name: 'Filter by distance' })).toHaveCount(0);
-    await filters.getByRole('button', { name: /^Lower East Side$/ }).click();
+    await filters.getByTestId('vibe-filter-toggle').click();
+    await expect(filters.getByRole('heading', { name: 'Tweak the vibe' })).toBeVisible();
+    await expect(filters.getByRole('button', { name: 'Sound' })).toBeVisible();
+    await filters.getByRole('button', { name: 'Neighborhood' }).click();
+    await filters.getByRole('group', { name: 'Neighborhood' })
+      .getByRole('button', { name: /^Lower East Side$/ })
+      .click();
+    await filters.getByRole('button', { name: 'Apply' }).click();
 
     await expect
       .poll(async () => markers.count(), { timeout: 15_000 })
@@ -266,9 +273,8 @@ test.describe('/map Find Bar filters (QA2)', () => {
       .toBe(allCount);
     await expect(page.getByTestId('filter-count')).toHaveCount(0);
 
-    // Map reuses the same six-axis vibe editor as Next Bar.
+    // Reopening preserves the neighborhood as a formatted accordion summary.
     await filters.getByTestId('vibe-filter-toggle').click();
-    await expect(filters.getByRole('heading', { name: 'Tweak the vibe' })).toBeVisible();
-    await expect(filters.getByRole('button', { name: 'Sound' })).toBeVisible();
+    await expect(filters.getByRole('button', { name: 'Neighborhood' })).toContainText('Anywhere');
   });
 });
