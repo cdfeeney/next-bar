@@ -27,7 +27,7 @@ function makeRow(i: number) {
     hours: null,
     blurb: 'A bar.',
     address: '1 Main St',
-    place_id: null,
+    place_id: `place-${i}`,
     business_status: null,
     photo_count: 0,
     photo_attributions: null,
@@ -88,8 +88,9 @@ describe('CatalogRefresh paging (PostgREST 1,000-row cap)', () => {
       [1000, 1999],
     ]);
     expect(replaced[0]).toHaveLength(1265);
+    expect(replaced[0][0]).toMatchObject({ googlePlaceId: 'place-0' });
     expect(selectedColumns[0]).toBe(
-      'id,name,lat,lng,tags,neighborhood,price_tier,hours,business_status,last_verified',
+      'id,name,lat,lng,tags,neighborhood,price_tier,hours,place_id,business_status,last_verified',
     );
   });
 

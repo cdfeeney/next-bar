@@ -23,7 +23,7 @@ import { rowsToCatalog, type BarsTableRow } from '@/lib/catalogServer';
 
 /** Discovery/map/matching fields only; presentation details load on open. */
 const CATALOG_COLUMNS =
-  'id,name,lat,lng,tags,neighborhood,price_tier,hours,business_status,last_verified';
+  'id,name,lat,lng,tags,neighborhood,price_tier,hours,place_id,business_status,last_verified';
 
 /**
  * PostgREST caps EVERY response at 1,000 rows — silently, with a 200 and
