@@ -16,6 +16,9 @@
 
 import { test, expect } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
+import { bars } from '../src/lib/bars';
+import { haversineMiles } from '../src/lib/distance';
+import { RADIUS_CAB, RADIUS_WALK } from '../src/lib/constants';
 
 const LATE_EVENING = new Date('2026-07-24T23:00:00'); // Fri 11pm — bars open
 const EARLY_MORNING = new Date('2026-07-27T09:00:00'); // Mon 9am — bars closed
@@ -27,6 +30,21 @@ async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
   const cards = page.locator('article').filter({ hasText: /Vibe match/i });
   await expect(cards.first()).toBeVisible();
   return cards;
+}
+
+async function expectDistanceBand(
+  cards: import('@playwright/test').Locator,
+  minExclusive: number | null,
+  maxInclusive: number | null,
+) {
+  const seed = bars.find((bar) => bar.id === 'attaboy')!;
+  for (const heading of await cards.locator('h3').allTextContents()) {
+    const name = heading.replace(/^\d+\.\s*/, '');
+    const bar = bars.find((candidate) => candidate.name === name)!;
+    const miles = haversineMiles(seed, bar);
+    if (minExclusive !== null) expect(miles).toBeGreaterThan(minExclusive);
+    if (maxInclusive !== null) expect(miles).toBeLessThanOrEqual(maxInclusive);
+  }
 }
 
 test.describe('E3.2 distance chips', () => {
@@ -47,6 +65,7 @@ test.describe('E3.2 distance chips', () => {
     await expect(walkable).toHaveAttribute('aria-pressed', 'true');
     await expect(cab).toHaveAttribute('aria-pressed', 'false');
     await expect(anywhere).toHaveAttribute('aria-pressed', 'false');
+    await expectDistanceBand(cards, null, RADIUS_WALK);
 
     // The deleted vocabulary never renders.
     await expect(group.getByText(/Short Uber|Walking/)).toHaveCount(0);
@@ -59,6 +78,7 @@ test.describe('E3.2 distance chips', () => {
       const next = await cards.locator('h3').allTextContents();
       return next.filter((name) => walkBatch.includes(name)).length;
     }).toBe(0);
+    await expectDistanceBand(cards, RADIUS_WALK, RADIUS_CAB);
     await expect(page).toHaveURL('/');
 
     const cabBatch = await cards.locator('h3').allTextContents();
@@ -68,6 +88,7 @@ test.describe('E3.2 distance chips', () => {
       const next = await cards.locator('h3').allTextContents();
       return next.filter((name) => cabBatch.includes(name)).length;
     }).toBe(0);
+    await expectDistanceBand(cards, RADIUS_CAB, null);
   });
 });
 

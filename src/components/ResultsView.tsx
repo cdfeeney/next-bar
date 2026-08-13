@@ -24,6 +24,7 @@ type ResolvedLocation =
 type ResultsViewProps = {
   profile: VibeProfile;
   location: ResolvedLocation;
+  minMilesExclusive?: number | null;
   maxMiles: number | null;
   excludeIds?: string[];
   maxResults?: number;
@@ -46,6 +47,7 @@ type ResultsViewProps = {
 export default function ResultsView({
   profile,
   location,
+  minMilesExclusive,
   maxMiles,
   excludeIds,
   maxResults,
@@ -130,6 +132,7 @@ export default function ResultsView({
         profile,
         coords: userCoords,
         preferredNeighborhoods,
+        minMilesExclusive,
         maxMiles,
         bars: pool,
         excludeIds: effectiveExcludeIds,
@@ -139,7 +142,7 @@ export default function ResultsView({
         // filter — quiz/planning surfaces (no hideClosedNow) never bias.
         biasNow: filterNow ?? undefined,
       }),
-    [profile, userCoords, preferredNeighborhoods, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow],
+    [profile, userCoords, preferredNeighborhoods, minMilesExclusive, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow],
   );
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own

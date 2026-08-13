@@ -57,6 +57,8 @@ export type MatchesArgs = {
   profile: VibeProfile;
   coords: Coords | null;
   preferredNeighborhoods: ManhattanNeighborhood[];
+  /** Exclusive lower edge for a distance band; null keeps nearby bars. */
+  minMilesExclusive?: number | null;
   maxMiles: number | null;
   bars: Bar[];
   excludeIds?: string[];
@@ -129,6 +131,7 @@ export function matches(args: MatchesArgs): Bar[] {
     profile,
     coords,
     preferredNeighborhoods,
+    minMilesExclusive = null,
     maxMiles,
     bars,
     excludeIds,
@@ -152,8 +155,14 @@ export function matches(args: MatchesArgs): Bar[] {
     pool = pool.filter((b) => allowed.has(b.neighborhood));
   }
 
-  if (coords && maxMiles !== null) {
-    pool = pool.filter((b) => haversineMiles(coords, b) <= maxMiles);
+  if (coords && (minMilesExclusive !== null || maxMiles !== null)) {
+    pool = pool.filter((b) => {
+      const miles = haversineMiles(coords, b);
+      return (
+        (minMilesExclusive === null || miles > minMilesExclusive) &&
+        (maxMiles === null || miles <= maxMiles)
+      );
+    });
   }
 
   const cap = maxResults ?? MAX_RESULTS;

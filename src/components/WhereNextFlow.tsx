@@ -25,7 +25,7 @@ import { useNightRefresh } from '@/hooks/useIntent';
 import { deriveNightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
 import { loadPhaseOverride } from '@/lib/phaseOverride';
-import { RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
+import { RADIUS_CAB, RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
 import { advanceShownIds, nextWiderRadius } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -221,6 +221,12 @@ export default function WhereNextFlow() {
   // Radius fine-tune lives on the results surface (E2.1) — changing it
   // re-ranks live. Walking default.
   const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
+  const minMilesExclusive =
+    selectedRadius.kind === 'cab'
+      ? RADIUS_WALK
+      : selectedRadius.kind === 'anywhere'
+        ? RADIUS_CAB
+        : null;
 
   // The history excludes already-shown bars so refresh deals the NEXT batch.
   const [shownIds, setShownIds] = useState<readonly string[]>([]);
@@ -492,6 +498,7 @@ export default function WhereNextFlow() {
             band: geo.accuracyBand,
             snappedTo: geo.snappedNeighborhood,
           }}
+          minMilesExclusive={minMilesExclusive}
           maxMiles={selectedRadius.maxMiles}
           maxResults={RESULTS_COUNT}
           hideClosedNow
@@ -638,6 +645,7 @@ export default function WhereNextFlow() {
           band: geo.accuracyBand,
           snappedTo: geo.snappedNeighborhood,
         }}
+        minMilesExclusive={minMilesExclusive}
         maxMiles={selectedRadius.maxMiles}
         maxResults={RESULTS_COUNT}
         excludeIds={manualExcludeIds}

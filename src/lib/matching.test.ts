@@ -197,6 +197,21 @@ describe('matches() — filters', () => {
     expect(result.map((b) => b.id)).toEqual(['near']);
   });
 
+  it('minMilesExclusive with coords removes nearer bars', () => {
+    const near = makeBar({ id: 'near', lat: 40.7550, lng: -73.9840 });
+    const far = makeBar({ id: 'far', lat: 40.7060, lng: -74.0090 });
+    const result = matches({
+      profile: baseProfile([]),
+      coords: { lat: 40.7550, lng: -73.9840 },
+      preferredNeighborhoods: [],
+      minMilesExclusive: 1.5,
+      maxMiles: 4,
+      bars: [near, far],
+      now: NOW,
+    });
+    expect(result.map((b) => b.id)).toEqual(['far']);
+  });
+
   it('maxMiles set but coords === null is a no-op (no radius filter applied)', () => {
     const near = makeBar({
       id: 'near',
