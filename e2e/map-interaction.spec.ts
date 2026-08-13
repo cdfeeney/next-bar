@@ -10,10 +10,16 @@
  *     grey), plus the legend chip row and the no-profile quiz hint.
  */
 
+import type { Page } from '@playwright/test';
 import { test, expect } from './helpers/catalogTest';
 
 /** How many bars the map's suggested tier may surface (useSuggestions). */
 const MAP_SUGGESTION_COUNT = 10;
+
+async function gotoLoadedMap(page: Page): Promise<void> {
+  await page.goto('/map');
+  await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0);
+}
 
 /**
  * Seeds a saved vibe-quiz profile before the app boots, so /map computes a
@@ -40,7 +46,7 @@ const COARSE_FAR = { latitude: 51.5074, longitude: -0.1278, accuracy: 3000 };
 
 test.describe('/map interaction', () => {
   test('renders bar markers', async ({ page }) => {
-    await page.goto('/map');
+    await gotoLoadedMap(page);
     await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
     // Leaflet attribution confirms the map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
@@ -56,7 +62,7 @@ test.describe('/map interaction', () => {
     page,
     browserName,
   }) => {
-    await page.goto('/map');
+    await gotoLoadedMap(page);
     const container = page.locator('.leaflet-container');
     await expect(container).toBeVisible({ timeout: 15_000 });
 
@@ -101,7 +107,7 @@ test.describe('/map interaction', () => {
   }) => {
     await context.grantPermissions(['geolocation']);
     await context.setGeolocation(NYC);
-    await page.goto('/map');
+    await gotoLoadedMap(page);
 
     // U2-4 auto-resume: granted permission → the map locates on mount.
     await expect(page.getByText(/Showing your location on the map/i)).toBeVisible(
@@ -119,7 +125,7 @@ test.describe('/map interaction', () => {
   }) => {
     await context.grantPermissions(['geolocation']);
     await context.setGeolocation(COARSE_FAR);
-    await page.goto('/map');
+    await gotoLoadedMap(page);
 
     // U2-4: the auto-resume attempt runs on mount; a coarse fix must still
     // surface its explanation, not leave a silent gap.
@@ -135,7 +141,7 @@ test.describe('/map interaction', () => {
 
 test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)', () => {
   test('legend chip row renders all three tiers', async ({ page }) => {
-    await page.goto('/map');
+    await gotoLoadedMap(page);
     const legend = page.getByTestId('map-legend');
     await expect(legend).toBeVisible();
     await expect(legend).toContainText('Suggested');
@@ -149,7 +155,7 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
     page,
   }) => {
     await page.addInitScript(SEED_PROFILE_SCRIPT);
-    await page.goto('/map');
+    await gotoLoadedMap(page);
 
     // Map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
@@ -178,7 +184,7 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
   test('no profile: suggested dots STILL show (empty-profile fallback), quiz hint links to /quiz (UX-C)', async ({
     page,
   }) => {
-    await page.goto('/map');
+    await gotoLoadedMap(page);
 
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,
@@ -208,7 +214,7 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
   test('map search flies to the picked bar and opens its popup (UX-C)', async ({
     page,
   }) => {
-    await page.goto('/map');
+    await gotoLoadedMap(page);
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,
     });
@@ -232,7 +238,7 @@ test.describe('/map Find Bar filters (QA2)', () => {
   test('a neighborhood chip narrows the markers; Clear restores them', async ({
     page,
   }) => {
-    await page.goto('/map');
+    await gotoLoadedMap(page);
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,
     });

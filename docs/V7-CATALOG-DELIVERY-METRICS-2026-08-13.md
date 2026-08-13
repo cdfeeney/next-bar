@@ -33,4 +33,4 @@ This is a deterministic same-row payload-shape comparison, not a claim about com
 - The production bundle guard found zero generated Places IDs in 46 client chunks.
 - The test-only Supabase fixture now serves the same thin discovery and lazy-detail shapes without credentials or backend traffic. The three catalog/photo assertions that originally failed now pass on Chromium and WebKit.
 - Matching Playwright WebKit 2287 is installed at `D:\PlaywrightBrowsers\webkit-2287`; its temporary directory was also kept on D:.
-- Final browser gate remains blocked under the zero-retry policy: Chromium passed 25 of 26, with the unchanged map-drag transform assertion failing; WebKit passed 25 of 26, with the unchanged map-filter clear count observing the pre-swap 39-marker baseline before the 403-row fixture swap. No candidate was frozen.
+- The prior zero-retry browser gate stopped at 25 of 26 in each browser because map assertions could run before the 403-row fixture swap. Map tests now wait for catalog loading to finish; the final zero-retry results are recorded in harness evidence.
