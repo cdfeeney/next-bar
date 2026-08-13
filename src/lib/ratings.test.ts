@@ -70,6 +70,15 @@ describe('ratings lib', () => {
     assertNoRatingLogs();
   });
 
+  it('setRating stores an exact numeric score', () => {
+    setRating('bar-1', 'loved', 9.3);
+    expect(loadRatings()[0]).toMatchObject({
+      barId: 'bar-1',
+      rating: 'loved',
+      score: 9.3,
+    });
+  });
+
   it('setRating twice for the same barId overwrites (length stays 1)', () => {
     setRating('bar-1', 'liked');
     setRating('bar-1', 'pass');

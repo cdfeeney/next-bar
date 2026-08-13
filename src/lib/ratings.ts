@@ -77,7 +77,11 @@ export function getRating(barId: string): Rating | null {
   return found ? found.rating : null;
 }
 
-export function setRating(barId: string, rating: Rating): void {
+export function setRating(
+  barId: string,
+  rating: Rating,
+  score?: number,
+): void {
   if (typeof window === 'undefined') return;
   const current = loadRatings();
   // Same-tier re-tap keeps the pairwise-derived score (refinement survives);
@@ -86,9 +90,13 @@ export function setRating(barId: string, rating: Rating): void {
   // by the server path in useRatings/ratings.server).
   const prev = current.find((r) => r.barId === barId);
   const keptScore =
-    prev !== undefined && prev.rating === rating && typeof prev.score === 'number'
-      ? prev.score
-      : undefined;
+    typeof score === 'number'
+      ? score
+      : prev !== undefined &&
+          prev.rating === rating &&
+          typeof prev.score === 'number'
+        ? prev.score
+        : undefined;
   const next: BarRating = {
     barId,
     rating,

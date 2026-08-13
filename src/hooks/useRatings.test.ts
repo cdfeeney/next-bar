@@ -448,6 +448,28 @@ describe('useRatings — server mode', () => {
     );
   });
 
+  it('setRating syncs a direct numeric score through the existing rating row', async () => {
+    fetchServerRatingsMock.mockResolvedValueOnce([]);
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+    const { result } = renderHook(() => useRatings());
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+
+    act(() => {
+      result.current.setRating('attaboy', 'loved', 9.3);
+    });
+
+    expect(upsertServerRatingMock).toHaveBeenCalledWith(
+      fakeSupabase,
+      'user-1',
+      'attaboy',
+      'loved',
+      9.3,
+    );
+    expect(result.current.ratings).toEqual([
+      expect.objectContaining({ barId: 'attaboy', rating: 'loved', score: 9.3 }),
+    ]);
+  });
+
   it('clearRating in server mode goes through deleteServerRating (not localStorage)', async () => {
     fetchServerRatingsMock.mockResolvedValueOnce([
       { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },

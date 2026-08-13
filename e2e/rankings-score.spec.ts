@@ -16,7 +16,7 @@
  *   - The 0.0–10.0 visual column not rendering when score is present
  *   - The tentative ~midpoint number (N6b: EVERY bar shows its number)
  *     vanishing or rendering as a firm score for unscored bars
- *   - The "Rank as you compare" hint vanishing for unscored bars
+ *   - The legacy-score recovery hint vanishing for unscored bars
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -78,9 +78,9 @@ test.describe('/rankings — score column + sort', () => {
     await expect(second).toContainText('Death & Co');
     await expect(second.getByText('~9.0')).toBeVisible();
     await expect(
-      second.getByLabel(/tentative score 9\.0 out of 10/i),
+      second.getByLabel(/legacy estimated score 9\.0 out of 10/i),
     ).toBeVisible();
-    await expect(second.getByText(/rank as you compare/i)).toBeVisible();
+    await expect(second.getByText(/add again to set an exact score/i)).toBeVisible();
   });
 
   test('sorts scored bars by score descending regardless of rated-at order', async ({

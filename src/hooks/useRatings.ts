@@ -83,7 +83,7 @@ export function broadcastServerRatingSet(entry: BarRating): void {
 export type UseRatingsReturn = {
   ratings: BarRating[];
   getRating: (barId: string) => Rating | null;
-  setRating: (barId: string, rating: Rating) => void;
+  setRating: (barId: string, rating: Rating, score?: number) => void;
   clearRating: (barId: string) => void;
 };
 
@@ -245,7 +245,7 @@ export function useRatings(): UseRatingsReturn {
   );
 
   const setRating = useCallback(
-    (barId: string, rating: Rating): void => {
+    (barId: string, rating: Rating, score?: number): void => {
       const nextEntry: BarRating = {
         barId,
         rating,
@@ -264,9 +264,11 @@ export function useRatings(): UseRatingsReturn {
           const tierChanged =
             prevEntry !== undefined && prevEntry.rating !== rating;
           const keptScore =
-            !tierChanged && typeof prevEntry?.score === 'number'
-              ? prevEntry.score
-              : undefined;
+            typeof score === 'number'
+              ? score
+              : !tierChanged && typeof prevEntry?.score === 'number'
+                ? prevEntry.score
+                : undefined;
           const entry: BarRating =
             keptScore === undefined ? nextEntry : { ...nextEntry, score: keptScore };
 
@@ -277,13 +279,13 @@ export function useRatings(): UseRatingsReturn {
           });
           // Write-through localStorage cache so usePairwise + sign-out
           // fallback stay coherent with server-mode writes (B0.3).
-          setRatingLib(barId, rating);
+          setRatingLib(barId, rating, score);
           void upsertServerRating(
             supabase,
             auth.user.id,
             barId,
             rating,
-            tierChanged ? null : undefined,
+            typeof score === 'number' ? score : tierChanged ? null : undefined,
           );
           // Notify every OTHER mounted useRatings instance (self-receipt is
           // an idempotent re-apply of the optimistic update above).
@@ -293,7 +295,7 @@ export function useRatings(): UseRatingsReturn {
       }
 
       // Local mode (or server fell through).
-      setRatingLib(barId, rating);
+      setRatingLib(barId, rating, score);
       setRatings(loadRatings());
     },
     [auth],

@@ -6,18 +6,31 @@
  * via useLists (localStorage); server sync joins the D1 Supabase pass.
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import BarPicker from '@/components/BarPicker';
+import WantToGoList from '@/components/WantToGoList';
 import { useLists } from '@/hooks/useLists';
+import { useRatings } from '@/hooks/useRatings';
+import { useWantToGo } from '@/hooks/useWantToGo';
 import type { BarList } from '@/lib/lists';
 import { barById } from '@/lib/demo';
 
 export default function ListsPage(): JSX.Element {
   const { lists, createList, deleteList, addBarToList, removeBarFromList } =
     useLists();
+  const { ratings } = useRatings();
+  const { entries: wantEntries, remove: removeWant, pruneRated } = useWantToGo();
   const [draftName, setDraftName] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
+  const ratedIds = useMemo(
+    () => new Set(ratings.map((rating) => rating.barId)),
+    [ratings],
+  );
+
+  useEffect(() => {
+    if (wantEntries.some((entry) => ratedIds.has(entry.barId))) pruneRated(ratedIds);
+  }, [wantEntries, ratedIds, pruneRated]);
 
   const submitCreate = (): void => {
     const created = createList(draftName);
@@ -46,6 +59,11 @@ export default function ListsPage(): JSX.Element {
           it with bars. Lists live on this device for now.
         </p>
       </header>
+
+      <section className="pb-8">
+        <h2 className="font-display text-xl text-center mb-4">Want to go</h2>
+        <WantToGoList entries={wantEntries} onRemove={removeWant} />
+      </section>
 
       <section className="max-w-md mx-auto px-6">
         <form

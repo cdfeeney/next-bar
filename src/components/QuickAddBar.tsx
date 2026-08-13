@@ -1,101 +1,64 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Bar } from '@/types';
 import type { Rating } from '@/types/ratings';
 import { useRatings } from '@/hooks/useRatings';
-import { usePairwise } from '@/hooks/usePairwise';
 import { getBarById } from '@/lib/catalog';
 import BarPicker from '@/components/BarPicker';
-import PairwiseSheet from '@/components/PairwiseSheet';
 
-type Stage = 'idle' | 'pick-bar' | 'pick-tier';
+type Stage = 'idle' | 'pick-bar' | 'pick-score';
 
-type TierOption = {
-  rating: Rating;
-  label: string;
-  hint: string;
-};
+function ratingForScore(score: number): Rating {
+  if (score >= 8) return 'loved';
+  if (score >= 5) return 'liked';
+  return 'pass';
+}
 
-const TIER_OPTIONS: TierOption[] = [
-  { rating: 'loved', label: 'Loved', hint: 'One of my favorites' },
-  { rating: 'liked', label: 'Liked', hint: 'Solid — would go back' },
-  { rating: 'pass', label: 'Pass', hint: 'Not for me' },
-];
-
-const TIER_BUTTON_CLASSES: Record<Rating, string> = {
-  loved: 'border-accent bg-accent text-bg',
-  liked: 'border-accent text-accent bg-surface',
-  pass: 'border-border text-muted bg-surface',
-};
-
-/**
- * B4 quick-add flow on /rankings: "+ Add a bar" → BarPicker search →
- * tier pick → the pairwise comparison CHAIN (binary insert) runs via
- * usePairwise + PairwiseSheet. Works identically anonymous and signed-in —
- * the hook owns both persistence paths.
- *
- * Mount exactly ONE instance per page (the /rankings header xor its empty
- * state) — each instance owns its own usePairwise prompt state.
- */
+/** Numeric-first ranking: pick a bar, then enter its exact 0-10 score. */
 export default function QuickAddBar({
   initialBarId,
   onInitialConsumed,
 }: {
-  /**
-   * U2-3 deep link: arrive with a bar preselected (from "Rank it →" on a
-   * suggestion card or the lightbox) and open straight at the tier pick.
-   */
   initialBarId?: string;
-  /**
-   * MUST clear the parent's initialBarId. The rankings page mounts one
-   * QuickAddBar in the empty state and a different one once ratings
-   * exist — rating the deep-linked bar swaps instances, and a still-set
-   * initialBarId would re-arm the sheet on the fresh instance (caught by
-   * pairwise-flow e2e).
-   */
   onInitialConsumed?: () => void;
 } = {}): JSX.Element {
   const [stage, setStage] = useState<Stage>('idle');
   const [selectedBar, setSelectedBar] = useState<Bar | null>(null);
+  const [score, setScore] = useState('');
   const consumedInitialRef = useRef(false);
+  const { setRating } = useRatings();
 
   useEffect(() => {
     if (!initialBarId || consumedInitialRef.current) return;
     consumedInitialRef.current = true;
     onInitialConsumed?.();
     const bar = getBarById(initialBarId);
-    if (!bar) return; // unknown id in the URL — fall through to idle
+    if (!bar) return;
     setSelectedBar(bar);
-    setStage('pick-tier');
+    setStage('pick-score');
   }, [initialBarId, onInitialConsumed]);
-  const { setRating } = useRatings();
-  const {
-    pendingPrompt,
-    requestPrompt,
-    addComparison,
-    dismissPrompt,
-    sessionProgress,
-  } = usePairwise();
 
   const isModalOpen = stage !== 'idle';
 
-  // Escape closes the picker modal (parity with PairwiseSheet). Body
-  // scroll-lock also matches the sheet so the rankings list doesn't
-  // scroll behind the overlay.
+  const closeModal = (): void => {
+    setStage('idle');
+    setSelectedBar(null);
+    setScore('');
+  };
+
   useEffect(() => {
     if (!isModalOpen) return;
-
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
     function handleKeyDown(event: KeyboardEvent): void {
       if (event.key === 'Escape') {
         event.preventDefault();
-        setStage('idle');
-        setSelectedBar(null);
+        closeModal();
       }
     }
+
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
@@ -103,34 +66,13 @@ export default function QuickAddBar({
     };
   }, [isModalOpen]);
 
-  // Resolve the pending prompt's ids into Bar objects for PairwiseSheet —
-  // same pattern as RatingControl.
-  const promptPair = useMemo(() => {
-    if (!pendingPrompt) return null;
-    const justRated = getBarById(pendingPrompt.justRatedBarId);
-    const peer = getBarById(pendingPrompt.peerBarId);
-    if (!justRated || !peer) return null;
-    return { justRated, peer, tier: pendingPrompt.tier };
-  }, [pendingPrompt]);
-
-  const handlePick = (bar: Bar): void => {
-    setSelectedBar(bar);
-    setStage('pick-tier');
-  };
-
-  const handleTier = (rating: Rating): void => {
+  const saveScore = (): void => {
     if (!selectedBar) return;
-    // setRating writes through the localStorage cache synchronously in
-    // both modes, so requestPrompt's loadRatings() sees the new bar.
-    setRating(selectedBar.id, rating);
-    requestPrompt(selectedBar.id, rating);
-    setStage('idle');
-    setSelectedBar(null);
-  };
-
-  const closeModal = (): void => {
-    setStage('idle');
-    setSelectedBar(null);
+    const parsed = Number(score);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 10) return;
+    const rounded = Math.round(parsed * 10) / 10;
+    setRating(selectedBar.id, ratingForScore(rounded), rounded);
+    closeModal();
   };
 
   return (
@@ -155,7 +97,7 @@ export default function QuickAddBar({
               <h2 className="font-display text-2xl leading-tight">
                 {stage === 'pick-bar'
                   ? 'Add a bar'
-                  : `How was ${selectedBar?.name ?? 'it'}?`}
+                  : `Score ${selectedBar?.name ?? 'this bar'}`}
               </h2>
               <button
                 type="button"
@@ -168,44 +110,54 @@ export default function QuickAddBar({
 
             {stage === 'pick-bar' ? (
               <div className="flex-1 overflow-y-auto min-h-0">
-                <BarPicker onPick={handlePick} />
+                <BarPicker
+                  onPick={(bar) => {
+                    setSelectedBar(bar);
+                    setStage('pick-score');
+                  }}
+                />
               </div>
             ) : (
-              <div className="flex flex-col gap-3 pt-4">
-                {TIER_OPTIONS.map((option) => (
-                  <button
-                    key={option.rating}
-                    type="button"
-                    onClick={() => handleTier(option.rating)}
-                    className={[
-                      'w-full text-left rounded-3xl p-5 border transition-colors',
-                      'min-h-[44px] touch-manipulation',
-                      TIER_BUTTON_CLASSES[option.rating],
-                    ].join(' ')}
-                  >
-                    <p className="font-display text-xl leading-tight">
-                      {option.label}
-                    </p>
-                    <p className="text-xs mt-1 opacity-80">{option.hint}</p>
-                  </button>
-                ))}
-              </div>
+              <form
+                className="flex flex-col gap-4 pt-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  saveScore();
+                }}
+              >
+                <label htmlFor="bar-score" className="font-display text-sm">
+                  Your score
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    id="bar-score"
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    max="10"
+                    step="0.1"
+                    required
+                    autoFocus
+                    value={score}
+                    onChange={(event) => setScore(event.target.value)}
+                    placeholder="9.3"
+                    className="min-w-0 flex-1 bg-surface border border-border rounded-2xl px-4 py-3 text-2xl font-display tabular-nums focus:border-accent outline-none"
+                  />
+                  <span className="text-muted font-display">/ 10</span>
+                </div>
+                <p className="text-xs text-muted">
+                  Use one decimal if you want. Ties are allowed.
+                </p>
+                <button
+                  type="submit"
+                  className="w-full rounded-full bg-accent px-5 py-3 min-h-[44px] font-display text-bg touch-manipulation"
+                >
+                  Save score
+                </button>
+              </form>
             )}
           </div>
         </div>
-      ) : null}
-
-      {promptPair ? (
-        <PairwiseSheet
-          justRated={promptPair.justRated}
-          peer={promptPair.peer}
-          tier={promptPair.tier}
-          onPick={(winnerBarId, loserBarId) =>
-            addComparison(winnerBarId, loserBarId)
-          }
-          onSkip={dismissPrompt}
-          progress={sessionProgress ?? undefined}
-        />
       ) : null}
     </>
   );

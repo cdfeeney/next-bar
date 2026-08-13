@@ -4,39 +4,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
-import { useWantToGo } from '@/hooks/useWantToGo';
 import { sortRatingsByScore, tierMidpoint } from '@/lib/pairwise';
 import { seedSampleNight } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
 import { useBars } from '@/lib/useBars';
 import { displayHood } from '@/lib/hoodDisplay';
 import QuickAddBar from '@/components/QuickAddBar';
-import WantToGoList from '@/components/WantToGoList';
 import type { Bar } from '@/types';
-import type { BarRating, Rating } from '@/types/ratings';
-
-type FilterValue = 'all' | Rating | 'want';
-
-const FILTER_OPTIONS: ReadonlyArray<{ value: FilterValue; label: string }> = [
-  { value: 'all', label: 'All' },
-  { value: 'loved', label: 'Loved' },
-  { value: 'liked', label: 'Liked' },
-  { value: 'pass', label: 'Pass' },
-  // QA5-S2: saved-for-later bars — a LIST view, not a rating tier.
-  { value: 'want', label: 'Want to go' },
-];
-
-const RATING_LABEL: Record<Rating, string> = {
-  loved: 'Loved',
-  liked: 'Liked',
-  pass: 'Pass',
-};
-
-const RATING_BADGE_CLASSES: Record<Rating, string> = {
-  loved: 'bg-accent text-bg',
-  liked: 'bg-surface border border-accent text-accent',
-  pass: 'bg-surface border border-border text-muted',
-};
+import type { BarRating } from '@/types/ratings';
 
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -59,7 +34,6 @@ export default function RankingsPage(): JSX.Element {
   useBars();
   const { ratings } = useRatings();
   const auth = useAuth();
-  const [filter, setFilter] = useState<FilterValue>('all');
   // U2-3 deep link (?add=<barId> from "Rank it →" on suggestion cards):
   // read once from location.search on mount — window-only, so no
   // useSearchParams/Suspense prerender dance — then strip the param so a
@@ -93,26 +67,7 @@ export default function RankingsPage(): JSX.Element {
     return result;
   }, [ratings]);
 
-  const visibleEntries = useMemo(() => {
-    if (filter === 'all' || filter === 'want') return sortedEntries;
-    return sortedEntries.filter((e) => e.rating.rating === filter);
-  }, [sortedEntries, filter]);
-
   const hasNoRatings = ratings.length === 0;
-
-  // QA5-S2 "Want to go" list. Rated bars leave the list automatically
-  // ("Been — rank it" completes → the bar now lives in the rankings
-  // proper): the guard makes the effect terminate — pruneRated rewrites
-  // entries, the rerun then finds nothing rated and bails.
-  const { entries: wantEntries, remove: removeWant, pruneRated } = useWantToGo();
-  const ratedIds = useMemo(
-    () => new Set(ratings.map((r) => r.barId)),
-    [ratings],
-  );
-  useEffect(() => {
-    if (!wantEntries.some((e) => ratedIds.has(e.barId))) return;
-    pruneRated(ratedIds);
-  }, [wantEntries, ratedIds, pruneRated]);
 
   return (
     <main className="min-h-screen">
@@ -120,11 +75,9 @@ export default function RankingsPage(): JSX.Element {
         <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
           Your nights, ranked
         </p>
-        <h1 className="font-display text-3xl md:text-4xl mb-2">Rankings</h1>
+        <h1 className="font-display text-3xl md:text-4xl mb-2">Bar Rankings</h1>
         <p className="text-muted text-sm max-w-md mx-auto">
-          Bars you&apos;ve rated, ordered by your personal 0–10 score.
-          A ~score is tentative — it sits at your tier&apos;s midpoint and
-          firms up as you answer comparison prompts.
+          Add a bar and enter your own score from 0 to 10.
         </p>
         <Link
           href="/lists"
@@ -141,38 +94,7 @@ export default function RankingsPage(): JSX.Element {
         ) : null}
       </header>
 
-      <div
-        role="group"
-        aria-label="Filter by rating"
-        className="flex flex-wrap gap-2 justify-center px-6 my-6"
-      >
-        {FILTER_OPTIONS.map((opt) => {
-          const isActive = filter === opt.value;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              aria-pressed={isActive}
-              onClick={() => setFilter(opt.value)}
-              className={[
-                'min-h-[44px] touch-manipulation px-4 py-2 rounded-full',
-                'font-display text-sm border transition-colors',
-                isActive
-                  ? 'bg-accent text-bg border-accent'
-                  : 'bg-surface border-border text-muted hover:text-text',
-              ].join(' ')}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {filter === 'want' ? (
-        // Want-to-go is a list, not a tier — it renders regardless of
-        // whether any ratings exist yet.
-        <WantToGoList entries={wantEntries} onRemove={removeWant} />
-      ) : hasNoRatings ? (
+      {hasNoRatings ? (
         <section className="flex flex-col items-center justify-center text-center px-6 py-[120px]">
           <h2 className="font-display text-2xl mb-2">Nothing here yet.</h2>
           <p className="text-muted text-sm mb-6 max-w-sm">
@@ -199,12 +121,10 @@ export default function RankingsPage(): JSX.Element {
         </section>
       ) : (
         <section className="max-w-2xl mx-auto px-6 flex flex-col gap-4">
-          {visibleEntries.length === 0 ? (
-            <p className="text-muted text-center">
-              No bars rated {filter} yet.
-            </p>
+          {sortedEntries.length === 0 ? (
+            <p className="text-muted text-center">No bars ranked yet.</p>
           ) : (
-            visibleEntries.map(({ rating, bar }, idx) => {
+            sortedEntries.map(({ rating, bar }, idx) => {
               const hasScore = typeof rating.score === 'number';
               return (
                 <article
@@ -234,7 +154,7 @@ export default function RankingsPage(): JSX.Element {
                         // reads as provisional, firming up via comparisons.
                         <span
                           className="font-display text-2xl tabular-nums text-muted"
-                          aria-label={`Tentative score ${tierMidpoint(rating.rating).toFixed(1)} out of 10 — firms up as you compare`}
+                          aria-label={`Legacy estimated score ${tierMidpoint(rating.rating).toFixed(1)} out of 10`}
                         >
                           ~{tierMidpoint(rating.rating).toFixed(1)}
                         </span>
@@ -248,17 +168,9 @@ export default function RankingsPage(): JSX.Element {
                     <span className="text-muted text-xs uppercase tracking-wider">
                       {displayHood(bar.neighborhood)}
                     </span>
-                    <span
-                      className={[
-                        'text-xs font-display px-2 py-0.5 rounded-full',
-                        RATING_BADGE_CLASSES[rating.rating],
-                      ].join(' ')}
-                    >
-                      {RATING_LABEL[rating.rating]}
-                    </span>
                     {!hasScore ? (
                       <span className="text-muted text-xs italic">
-                        Rank as you compare
+                        Add again to set an exact score
                       </span>
                     ) : null}
                   </div>

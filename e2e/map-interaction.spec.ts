@@ -250,6 +250,7 @@ test.describe('/map Find Bar filters (QA2)', () => {
 
     // Pick one neighborhood — the map must drop to that hood's bars only.
     const filters = page.getByTestId('findbar-filters');
+    await filters.getByTestId('vibe-filter-toggle').click();
     await filters.getByRole('button', { name: /^Lower East Side$/ }).click();
 
     await expect
