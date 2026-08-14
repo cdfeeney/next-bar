@@ -19,6 +19,9 @@ describe('lockBodyScroll', () => {
     unlock();
     expect(document.body.style.overflow).toBe('auto');
     expect(document.body.style.position).toBe('');
-    expect(scrollTo).toHaveBeenCalledWith(0, 240);
+    // behavior: 'instant' is load-bearing, not cosmetic — globals.css sets
+    // `html { scroll-behavior: smooth }`, which would otherwise ANIMATE the
+    // restore and leave the page mid-glide after an overlay closes.
+    expect(scrollTo).toHaveBeenCalledWith({ top: 240, left: 0, behavior: 'instant' });
   });
 });

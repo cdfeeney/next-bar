@@ -19,6 +19,13 @@ export function lockBodyScroll(): () => void {
 
   return () => {
     Object.assign(body.style, previous);
-    if (window.scrollY !== scrollY) window.scrollTo(0, scrollY);
+    // `behavior: 'instant'` overrides the global `html { scroll-behavior:
+    // smooth }`. Without it the restore ANIMATES back to the saved offset:
+    // the user watches the page glide after closing an overlay, and anything
+    // reading scrollY before the animation finishes sees a partial value
+    // (measured 223 of an expected 398).
+    if (window.scrollY !== scrollY) {
+      window.scrollTo({ top: scrollY, left: 0, behavior: 'instant' });
+    }
   };
 }

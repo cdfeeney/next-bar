@@ -85,7 +85,9 @@ export default function PairwiseSheet({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       unlockScroll();
-      previouslyFocused?.focus?.();
+      // preventScroll: see BarLightbox — focus() would otherwise override the
+      // scroll position unlockScroll() just restored.
+      previouslyFocused?.focus?.({ preventScroll: true });
     };
   }, [onSkip]);
 

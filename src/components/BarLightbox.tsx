@@ -132,7 +132,10 @@ export default function BarLightbox({
     return () => {
       window.removeEventListener('keydown', onKey);
       unlockScroll();
-      opener?.focus();
+      // preventScroll: focus() otherwise scrolls the opener back into view and
+      // overrides the position unlockScroll() just restored (observed landing
+      // ~43px short in native-shell-contract.spec.ts).
+      opener?.focus({ preventScroll: true });
     };
   }, [bar]);
 
