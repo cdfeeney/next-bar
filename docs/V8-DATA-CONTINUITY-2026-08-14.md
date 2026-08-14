@@ -21,6 +21,16 @@ that the planned V8 tables have been applied.
 
 ## V7 browser-storage inventory
 
+This table is enforced, not advisory. `src/lib/storageInventory.test.ts` fails
+the build when a `next-bar:` storage key appears in `src/` with no row here,
+when a row names a key no longer present in `src/` (the mechanical proof that
+no V7 key was renamed away), and when any frozen V7 key loses its read path.
+
+Two `next-bar:`-prefixed strings are deliberately absent below because they are
+`window` CustomEvent names carrying no data at rest —
+`next-bar:ratings:server-update` and `next-bar:pairwise:local-update`. The guard
+classifies them explicitly; adding a third broadcast is a deliberate edit there.
+
 | Exact key | Storage | Current purpose and owner | V8 continuity rule |
 | --- | --- | --- | --- |
 | `next-bar:age-ack:v1` | local | Device-only age acknowledgement | Preserve; never sync. |
@@ -58,9 +68,24 @@ that the planned V8 tables have been applied.
 
 ## Verification boundary
 
-`e2e/v7-continuity.spec.ts` is the offline install-over guard for exact V7
-keys, Bar 54, tied numeric scores, named lists, vibe profile, night history,
-navigation, and reload. Authentication, existing `shared_nights`, cross-device
-sync, notification registration, force-close, and the physical install-over
-remain attended/server-backed release gates; an offline fixture cannot prove
-them.
+What is mechanically proven, and by what:
+
+| Claim | Proof |
+| --- | --- |
+| Every storage key has exactly one owner row; no V7 key renamed or dropped | `src/lib/storageInventory.test.ts` |
+| Ratings merge rule (server-wins union, never latch on failure) | `src/lib/ratings.server.test.ts` |
+| Pairwise merge rule (union by exact tuple, append-only, re-answers survive) | `src/lib/pairwise.server.test.ts` |
+| Ties stay exactly tied through local→server→local, including ranking and reconcile | `src/lib/tiePreservation.test.ts` |
+| Cross-account cache ownership and residue wipe | `src/lib/accountCache.test.ts` |
+| Every V7 key survives navigation, reload, and force-close/reopen | `e2e/v7-continuity.spec.ts` |
+| The public shared-night route writes no local key | `e2e/v7-continuity.spec.ts` |
+
+Run the Playwright continuity spec against a production build
+(`PLAYWRIGHT_RELEASE=1`). The Next dev server's cold-compile navigation race
+(CLAUDE.md) is not a product defect but it does make the dev run flaky.
+
+Still outside any offline fixture, and therefore attended or server-backed
+release gates: authentication, real `shared_nights` rows and their rendering
+(`e2e/night-page.spec.ts` needs a configured Supabase client), cross-device
+sync, notification registration, and the physical V7→V8 install-over on a real
+device.
