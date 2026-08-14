@@ -82,14 +82,16 @@ new visual-direction bakeoff. Exploratory screenshots remain unapproved.
 ## 5. Account and database continuity
 
 - [ ] Finish cross-device sync for vibe profile and all named lists.
-- [ ] Inventory every local storage key and its Supabase owner/table.
-- [ ] Define per-object merge rules and last-write/conflict behavior.
+- [x] Inventory every local storage key and its Supabase owner/table in
+  `docs/V8-DATA-CONTINUITY-2026-08-14.md`.
+- [x] Define per-object merge rules and last-write/conflict behavior in the
+  continuity contract.
 - [ ] Keep staging and production schemas migration-compatible and versioned.
 - [ ] Promote catalog/content separately from private user/account data.
 - [ ] Never reseed, truncate, overwrite, or replace the production user tables.
 - [ ] Add update tests from the exact V7 TestFlight build to the V8 candidate.
-- [x] Add the offline V7 continuity fixture for ratings, tied scores, named lists,
-  and night history across navigation and reload.
+- [x] Add the offline V7 continuity fixture for Bar 54, ratings, tied scores,
+  named lists, vibe profile, and night history across navigation and reload.
 - [ ] Verify Tester 1 / Conor Feeney retains Bar 54, lists, scores, night history,
   shared nights, profile, and authentication after update and force-close.
 - [ ] Add rollback and backup-restoration evidence before production migration.
