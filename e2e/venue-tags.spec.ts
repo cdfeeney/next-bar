@@ -12,12 +12,26 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+// catalogTest serves the FULL bars catalog from a mocked Supabase route, so a
+// named venue's tag set is fixed rather than whatever the emergency core set
+// happens to hold.
+import { test as catalogTest } from './helpers/catalogTest';
 import { denyGeolocation } from './helpers/geo';
+import { bars } from '../src/lib/bars';
+import { displayTag, topVenueTags } from '../src/lib/tagDisplay';
 
 const OVERFLOW_TOLERANCE_PX = 1;
 
+// Fixed clock (Fri 11pm local), the same pattern photo-card.spec.ts and
+// one-results-view.spec.ts use: the results surface hard-filters KNOWN-closed
+// bars, so an exact-count assertion is only deterministic under a mocked
+// clock. Without this the toHaveCount(5) below passes on a Friday evening and
+// fails on a Sunday morning — a flake, and the goal requires zero retries.
+const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
+
 async function openLightbox(page: Page) {
   await denyGeolocation(page.context());
+  await page.clock.setFixedTime(FRIDAY_NIGHT);
   await page.goto('/');
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).click();
@@ -81,8 +95,41 @@ test.describe('venue tags in the bar lightbox', () => {
     ).toBeLessThan(actionBox!.y);
   });
 
+  // The priority ORDER is proved as a unit in src/lib/tagDisplay.test.ts, but
+  // nothing there notices if the COMPONENT renders the right five in the wrong
+  // order — reversing venueTags before .map() keeps every unit test green.
+  // So compare the rendered labels against what the real rule returns for
+  // whichever venue the lightbox opened. catalogTest serves the full `bars`
+  // catalog, so the imported array is the same data the app rendered.
+  catalogTest('renders exactly what the priority rule returns, in order', async ({ page }) => {
+    await denyGeolocation(page.context());
+    await page.clock.setFixedTime(FRIDAY_NIGHT);
+    await page.goto('/');
+    await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
+    await page.getByRole('button', { name: /Attaboy/ }).click();
+    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    await cards.first().getByRole('button', { name: /See photos and hours/i }).click();
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+
+    const name = await dialog.getByRole('heading', { level: 2 }).innerText();
+    const bar = bars.find((candidate) => candidate.name === name);
+    expect(bar, `lightbox opened "${name}", which is not in the served catalog`).toBeTruthy();
+
+    const expected = topVenueTags(bar!.tags).map(displayTag);
+    expect(expected.length, 'fixture bar carries no displayable tags').toBeGreaterThan(0);
+    await expect(dialog.locator('[data-venue-tags] li')).toHaveText(expected);
+
+    // Any tag the rule dropped must genuinely be absent, not merely reordered.
+    for (const dropped of bar!.tags.filter((t) => !topVenueTags(bar!.tags).includes(t))) {
+      await expect(dialog.locator('[data-venue-tags]')).not.toContainText(displayTag(dropped));
+    }
+  });
+
   test('tags do not crowd the result card behind the lightbox', async ({ page }) => {
     await denyGeolocation(page.context());
+    await page.clock.setFixedTime(FRIDAY_NIGHT);
     await page.goto('/');
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();

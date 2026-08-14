@@ -145,8 +145,16 @@ export const MAX_VENUE_TAGS = 5;
  * widened by a caller passing a bigger number.
  */
 export function topVenueTags(tags: readonly VibeTag[]): VibeTag[] {
+  // hasOwn, not `in`: `in` walks the prototype chain, so 'toString' reads as a
+  // ranked tag. Today it survives only because it is equally "in"
+  // PRICE_TAG_GLYPHS and gets dropped — determinism resting on two lookups
+  // sharing a prototype is a trap for whoever edits one of them. An unranked
+  // tag reaching the comparator would make it return NaN, and a NaN comparator
+  // leaves order engine-defined, which is exactly what criterion 3 forbids.
   return [...new Set(tags)]
-    .filter((tag) => tag in TAG_PRIORITY && !(tag in PRICE_TAG_GLYPHS))
+    .filter(
+      (tag) => Object.hasOwn(TAG_PRIORITY, tag) && !Object.hasOwn(PRICE_TAG_GLYPHS, tag),
+    )
     .sort((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b])
     .slice(0, MAX_VENUE_TAGS);
 }

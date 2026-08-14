@@ -127,6 +127,15 @@ describe('topVenueTags — deterministic five-tag priority (V8-5)', () => {
     expect(topVenueTags(['pub', 'karaoke' as VibeTag])).toEqual(['pub']);
   });
 
+  it('drops inherited Object keys instead of ranking them (DeepSeek review)', () => {
+    // `in` would report these as ranked tags via the prototype chain; an
+    // unranked tag reaching the comparator yields NaN and an engine-defined
+    // order, which would break the determinism criterion.
+    for (const inherited of ['toString', 'constructor', 'hasOwnProperty', 'valueOf']) {
+      expect(topVenueTags(['pub', inherited as VibeTag]), inherited).toEqual(['pub']);
+    }
+  });
+
   it('renders through displayTag, so no chip can leak a raw enum', () => {
     expect(topVenueTags(SEVEN_TAGS).map(displayTag)).toEqual([
       'Cocktails',
