@@ -6,6 +6,14 @@ attended approval.
 
 ## 1. Image-led interface refresh
 
+- [ ] Treat the physical iPhone as a native-app surface, not a responsive web
+  page: remove visible browser-style scrollbars and accidental scroll rails.
+- [ ] Audit every screen for unwanted horizontal scroll, nested scrolling,
+  rubber-band/overscroll behavior, fixed-nav movement, and clipped safe areas.
+- [ ] Keep scrolling only where the product deliberately needs it; filters,
+  sheets, cards, and tab content should not expose desktop-web affordances.
+- [ ] Validate the keyboard, bottom navigation, lightboxes, and sheets in the
+  Capacitor WebView rather than approving them from desktop browser sizing.
 - [ ] Collect and label the operator-provided reference images.
 - [ ] Map each reference to an existing Next Bar surface before changing code.
 - [ ] Define the V8 visual tokens for cards, overlays, motion, spacing, and type.

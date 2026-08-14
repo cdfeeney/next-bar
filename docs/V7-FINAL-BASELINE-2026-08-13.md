@@ -75,7 +75,10 @@ deferred until a later version (currently expected around V11).
 - [x] Deploy the frozen V7 code candidate to the staging Vercel project.
 - [ ] Confirm Map has no horizontal page overflow on the physical iPhone.
 - [x] Confirm `Tweak the vibe` and all three distance bands in focused automation.
-- [ ] On Tester 1 / Conor Feeney, confirm Bar 54 and existing account data remain.
+- [x] On Tester 1 / Conor Feeney, confirm authentication remains valid and Bar
+  54 is still present (operator verified 2026-08-13).
+- [ ] Confirm the remaining existing lists, scores, night history, and shared
+  state on Tester 1.
 - [ ] Add two bars with the same numeric score and confirm both retain it.
 - [ ] Force-close/reopen and confirm sign-in, Bar 54, lists, and numeric scores.
 - [x] Clear obsolete V7 fixtures and run both complete device matrices.
