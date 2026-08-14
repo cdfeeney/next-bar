@@ -59,6 +59,10 @@ deferred until a later version (currently expected around V11).
   distance correlation could not be extracted reliably because Places UI Kit
   lazily mounts identity inside its widget; the deterministic local Playwright
   band assertion is the current exact evidence.
+- Deployed staging read-only WebKit smoke: 8 / 9 passed, retries 0. Pages, OG
+  images, and Supabase reachability passed. `/api/health` returned `ok: true`
+  and `supabase: ok`, but an empty build SHA; staging therefore still needs
+  self-identifying release metadata before the TestFlight baseline is frozen.
 
 ## Promotion state
 
@@ -80,6 +84,7 @@ deferred until a later version (currently expected around V11).
 - [ ] Force-close/reopen and confirm sign-in, Bar 54, lists, and numeric scores.
 - [ ] Clear the two obsolete fixtures and four WebKit-only harness failures,
   then rerun the complete staging smoke suite against the deployed candidate.
+- [ ] Set/restore the staging build SHA and confirm `/api/health` reports it.
 - [ ] Upload a new TestFlight build without changing the movable Vercel alias.
 - [ ] Repeat the physical-phone continuity check on that TestFlight build.
 - [ ] Freeze V7 as the internal TestFlight baseline for V8. Do not submit V7 to
