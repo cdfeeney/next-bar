@@ -4,6 +4,12 @@ V8 begins only after V7 is frozen and rolling out. Work stays staging-first and
 must not change the production alias or production database without separate
 attended approval.
 
+Authoritative product requirements: `docs/V8-PRD-2026-08-13.md`.
+
+Design lock status: the native interaction contract is locked. The final visual
+art direction remains gated on the operator's labeled reference images; no
+overnight lane may apply an app-wide visual restyle before that selection.
+
 ## 1. Image-led interface refresh
 
 - [ ] Treat the physical iPhone as a native-app surface, not a responsive web

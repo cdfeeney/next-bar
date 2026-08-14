@@ -70,8 +70,11 @@ deferred until a later version (currently expected around V11).
 - Staging alias: `https://next-bar-staging.vercel.app`
 - Internal TestFlight upload: version/build `1.0 (7)`, GitHub run
   `31760573887`, successful from the integrated V7 source commit with the
-  staging alias as its server URL. Apple processing/phone availability remains
-  an attended check.
+  staging alias as its server URL.
+- Physical upgrade: the operator installed `1.0 (7)` over the existing V6 app
+  without uninstalling it and confirmed that the existing account remained
+  signed in. This is direct evidence that the V7 update did not clear the
+  installed authentication state.
 - No App Store submission, production database write, Vercel production-project
   change, or Supabase migration was performed.
 
@@ -94,6 +97,10 @@ deferred until a later version (currently expected around V11).
   deployed commit prefix.
 - [x] Upload V7 `1.0 (7)` to internal TestFlight without changing the movable
   Vercel alias.
-- [ ] Repeat the physical-phone continuity check on that TestFlight build.
-- [ ] Freeze V7 as the internal TestFlight baseline for V8. Do not submit V7 to
+- [x] Install `1.0 (7)` over V6 without uninstalling and confirm the existing
+  account remains signed in (operator verified 2026-08-13).
+- [ ] Complete the deeper V7-to-V8 continuity fixture: lists, scores, night
+  history, shared state, and tied numeric scores. Authentication continuity is
+  verified; these additional objects are not claimed as physically rechecked.
+- [x] Freeze V7 as the internal TestFlight baseline for V8. Do not submit V7 to
   App Store review or public production.

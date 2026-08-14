@@ -62,3 +62,34 @@ part of workspace cleanup.
 - Remaining registered worktrees contain private environment files, active
   edits, or the current/canonical release checkout. Consolidate their credentials
   and edits explicitly before removing them.
+
+## Cleanup health and ongoing hygiene
+
+Cleanup is healthy when work is preserved and the visible workspace becomes
+smaller; a low folder count by itself is not proof. The current evidence is:
+
+- 39 registered worktrees reduced to 15.
+- 23 checkout folders removed without force.
+- Two verified Git bundles preserve all refs, including the named cleanup
+  stashes.
+- The remaining 15 are intentionally held because they contain private
+  environment files, user edits, or the active release/canonical checkouts.
+- Claude Agent View had no stored harness goals. Its 13 stale blocked sessions
+  were stopped and removed through `claude rm`; `claude agents --json` returned
+  an empty list afterward. Conversation transcripts remain locally resumable.
+
+Going forward:
+
+1. `D:/projects/next-bar` is the canonical checkout.
+2. One release integration branch exists at a time (`release/v8`).
+3. A task worktree exists only while that task is active.
+4. Before removal, require a clean tree or named preservation, no live lease,
+   no private environment file that exists nowhere else, and a reachable commit
+   or verified bundle.
+5. After merge or abandonment, remove the worktree and retire the Agent View row
+   in the same handoff.
+6. Run one inventory at the start and end of each overnight run; do not create a
+   cleanup worktree merely to run cleanup.
+
+The final 15-to-1 reduction is a separate attended pass. It must preserve the
+local `main` edits and centralize ignored credentials before deleting folders.
