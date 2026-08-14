@@ -5,6 +5,7 @@ import { useRatings } from './useRatings';
 
 const KEY = 'next-bar:ratings:v1';
 const MERGED_KEY = 'next-bar:ratings:merged-for:v1';
+const OWNER_KEY = 'next-bar:account:owner:v1';
 
 function looksLikeRating(arg: unknown): boolean {
   if (arg === null || typeof arg !== 'object') return false;
@@ -384,10 +385,15 @@ describe('useRatings — server mode', () => {
     expect(result.current.getRating('attaboy')).toBe('loved');
   });
 
-  it('latches the ownership flag on hydrate even when NO merge ran (santa round-3)', async () => {
+  it('marks cache ownership on hydrate even when NO merge ran (santa round-3)', async () => {
     // Sign-in on a device with no local data: the fetch populates the
-    // write-through cache — the flag must mark ownership anyway, or the
-    // cache reads as anonymous and a later account would merge it.
+    // write-through cache — ownership must be marked anyway, or the cache
+    // reads as anonymous and a later account would merge it.
+    //
+    // Ownership moved to its own key in the V8-2 review. It used to be the
+    // merged-for latch, which ALSO meant "import finished" — so latching it
+    // here silently marked a failed import done and killed its retry. The
+    // guarantee this test protects is unchanged; only its carrier moved.
     fetchServerRatingsMock.mockResolvedValueOnce([
       { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
     ]);
@@ -398,8 +404,33 @@ describe('useRatings — server mode', () => {
 
     expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
     await waitFor(() =>
-      expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1'),
+      expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1'),
     );
+    // And the import is NOT claimed to have happened — nothing was imported.
+    expect(window.localStorage.getItem(MERGED_KEY)).toBeNull();
+  });
+
+  it('retries the import on the next sign-in after a failed merge', async () => {
+    // The defect the ownership split fixes: a failed import followed by a
+    // successful fetch used to latch merged-for anyway, so the retry never
+    // came — and the later residue wipe deleted the un-uploaded rows.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    mergeLocalRatingsToServerMock.mockResolvedValueOnce(null); // import failed
+    fetchServerRatingsMock.mockResolvedValueOnce([]);
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() =>
+      expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1'),
+    );
+    // Owned (so the guards fire) but NOT marked imported (so it retries).
+    expect(window.localStorage.getItem(MERGED_KEY)).toBeNull();
   });
 
   it("never merges another account's cached ratings into this one (cross-account guard)", async () => {

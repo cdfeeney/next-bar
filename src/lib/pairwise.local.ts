@@ -60,15 +60,30 @@ export function writeComparisons(items: PairwiseComparison[]): void {
 }
 
 /**
- * Transcript row identity: the exact (winner, loser, comparedAt) tuple.
+ * Transcript row identity: the (winner, loser, instant) tuple.
  *
  * One definition, used by both the local union below and the server merge in
  * `pairwise.server.ts`. A genuine re-answer carries a fresh `comparedAt`, so
- * it is a DIFFERENT row and survives dedup; only byte-identical tuples
+ * it is a DIFFERENT row and survives dedup; only rows naming the same instant
  * collapse.
+ *
+ * The instant is compared as epoch milliseconds, NOT as the raw string. The
+ * client writes `new Date().toISOString()` ("…T23:50:00.000Z"), but
+ * `compared_at` is `timestamptz` (migration 0002) and PostgREST hands the
+ * stored value back in Postgres ISO form ("…T23:50:00+00:00"). Those spell
+ * the same instant and never byte-match, so a string key silently treats every
+ * already-synced row as new: the hydrate union keeps a second copy of the
+ * whole transcript, and a merge retry re-uploads it into an append-only
+ * table. Both review lanes caught this; every fake in the unit tests had
+ * masked it by echoing the client's own spelling back.
+ *
+ * An unparseable timestamp falls back to the raw string rather than collapsing
+ * every such row onto a single NaN key.
  */
 export function comparisonKey(c: PairwiseComparison): string {
-  return `${c.winnerBarId}|${c.loserBarId}|${c.comparedAt}`;
+  const instant = Date.parse(c.comparedAt);
+  const stamp = Number.isNaN(instant) ? `raw:${c.comparedAt}` : String(instant);
+  return `${c.winnerBarId}|${c.loserBarId}|${stamp}`;
 }
 
 /**

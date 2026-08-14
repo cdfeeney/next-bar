@@ -27,13 +27,41 @@ const PAIRWISE_MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
 // ownership latch to track — a wipe just re-seeds the demo circle.
 const FOLLOWS_KEY = 'next-bar:follows:v1';
 
+/**
+ * Which account this device cache belongs to.
+ *
+ * Split out from the `:merged-for:` latches (V8-2 review): those meant BOTH
+ * "the cache belongs to X" and "X's one-time import finished", so latching
+ * ownership after a successful hydrate also marked the import done. A single
+ * failed import was therefore never retried, and once the session later
+ * expired `clearResidualAccountCache` wiped the never-uploaded rows for good.
+ *
+ * Now the meanings are separate: this key is ownership, and a `:merged-for:`
+ * key means only that the import completed. The guards below still honour the
+ * old latches so a device upgrading from V7/early-V8 — which has merged-for
+ * and no owner key — keeps its cross-account protection.
+ */
+const OWNER_KEY = 'next-bar:account:owner:v1';
+
 const ALL_KEYS = [
   RATINGS_KEY,
   RATINGS_MERGED_KEY,
   PAIRWISE_KEY,
   PAIRWISE_MERGED_KEY,
   FOLLOWS_KEY,
+  OWNER_KEY,
 ] as const;
+
+/** Record that this cache holds `userId`'s data. Safe to call repeatedly. */
+export function writeCacheOwner(userId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(OWNER_KEY, userId);
+  } catch {
+    // Private mode / quota — the merged-for latches remain as a fallback
+    // owner signal, so the guards below still fire.
+  }
+}
 
 /**
  * Monotonic wipe counter. An async hydrate captures the epoch when it
@@ -70,6 +98,7 @@ export function clearResidualAccountCache(): boolean {
   if (typeof window === 'undefined') return false;
   try {
     const hadOwner =
+      window.localStorage.getItem(OWNER_KEY) !== null ||
       window.localStorage.getItem(RATINGS_MERGED_KEY) !== null ||
       window.localStorage.getItem(PAIRWISE_MERGED_KEY) !== null;
     if (hadOwner) clearAccountCache();
@@ -94,6 +123,7 @@ export function guardAgainstForeignCache(currentUserId: string): boolean {
   if (typeof window === 'undefined') return false;
   try {
     const owners = [
+      window.localStorage.getItem(OWNER_KEY),
       window.localStorage.getItem(RATINGS_MERGED_KEY),
       window.localStorage.getItem(PAIRWISE_MERGED_KEY),
     ];

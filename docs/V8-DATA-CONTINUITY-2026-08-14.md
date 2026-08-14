@@ -51,6 +51,7 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | `next-bar:intent:v1` | local | Expiring tonight intent | Preserve through the current night; V8 Night membership/status becomes server-owned. |
 | `next-bar:night-vibe:v1` | local | Expiring per-night vibe selection | Preserve through the current night; server sync is not required. |
 | `next-bar:list:want-to-go:v1` | local | Want-to-Go entries | Preserve; fold into the named-list server owner without renaming this V7 source key. |
+| `next-bar:account:owner:v1` | local | V8 addition: which account this device cache belongs to | **Local-only, never synced** — a device-side marker holding a server user ID. Written on every successful signed-in hydrate; wiped with the rest of the account cache on sign-out or a foreign-account signal. Not a V7 key. |
 | `next-bar:saved:v1` | local | Legacy saved-bar store; `src/lib/saved.ts` still reads it, no UI calls it | **Local-only, never synced.** Preserve unread data; if it is ever retired, migrate it into the named-list owner deliberately — never silently delete it. |
 
 ## Server ownership and conflict rules
@@ -66,34 +67,44 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | Shared nights | Existing `shared_nights` | No browser-storage import: the server row and bearer token already are the durable state. | Server row wins. Row presence is explicit sharing consent; unshare deletes it and invalidates the token. |
 | Notification devices | Planned native-device table from the notifications goal; existing `push_subscriptions` remains web-only and dark | Register only after authenticated native permission succeeds. | Device token is unique. Latest authenticated registration transfers that token to the current user; sign-out/revoke deletes it. Never merge credentials through localStorage. |
 
-## Known divergences (found by the V8-2 review panel, not yet fixed)
+## Import-retry and ownership (fixed during the V8-2 review)
 
-Recorded here because this document's job is to state the real rule, not the
-intended one. Both need an attended decision — they change behaviour on the
-cross-account/privacy path, which is outside this goal's "inventory and
-codification" scope.
+The V8-2 panel found one defect wearing three faces, all on the sign-in import
+path. Recorded here because this document is the contract of record for how
+account data reaches the server.
 
-1. **The merge latch and the ownership marker are the same key.**
-   `next-bar:ratings:merged-for:v1` means both "this cache belongs to user X"
-   (read by the foreign/residual cache guards) and "the one-time import for X
-   finished". `useRatings` deliberately latches it after any successful hydrate
-   so the cache is never ownerless — but that also marks the import done. So if
-   the import fails and the following fetch succeeds, the retry never happens
-   and those local-only ratings are never uploaded. They remain readable on the
-   device and are lost only if the cache is later cleared. Splitting the two
-   meanings needs a separate owner key and a rewrite of the guards that two
-   prior review rounds hardened; do not do it casually.
+**The latch meant two things at once.** `next-bar:ratings:merged-for:v1` (and
+its pairwise twin) meant both "this cache belongs to user X" — read by the
+foreign/residual cache guards — and "X's one-time import finished". The hooks
+deliberately latched it after *any* successful hydrate so the cache was never
+ownerless, which also marked the import done. A single transient import
+failure was therefore never retried, and the loss was not hypothetical: when
+the session later expired, `useAuth` calls `clearResidualAccountCache`, which
+wipes the account cache *because* the latch is present — deleting rows that
+had never reached the server.
 
-2. **Hydrate can keep a local rating the server never receives.** Consequence
-   of the same-bar rule above: the upload skips a bar the server already has,
-   then `mergeFreshest` restores the newer local row into state and cache. The
-   device shows a value the server does not have, indefinitely, with no
-   pending-write record. Ratings written *after* sign-in are unaffected — they
-   upsert normally.
+Fixed by splitting the meanings. `next-bar:account:owner:v1` now carries
+ownership and is written on every successful hydrate; a `:merged-for:` key
+means only that the import completed, so a failed import retries on the next
+sign-in. The guards read the owner key **and** the legacy latches, so a device
+upgrading from V7/early-V8 keeps its cross-account protection.
 
-`usePairwise` had the sharper version of (1) — a failed upload followed by a
-successful fetch **replaced** the local transcript and destroyed the rows that
-never uploaded. That one is fixed: hydrate now unions via `unionTranscripts`.
+**The pairwise transcript was destroyed outright.** A failed upload followed by
+a successful fetch *replaced* local state and storage with the server
+transcript. Fixed: hydrate unions via `unionTranscripts` and re-reads the cache
+at union time, so a comparison answered while the fetch was in flight also
+survives.
+
+**Row identity ignored timestamp spelling.** `compared_at` is `timestamptz`, so
+PostgREST returns `…+00:00` where the client wrote `…Z`. The tuple key compared
+those as strings, so every already-synced row looked new: the union kept a
+second copy of the whole transcript and a retry would re-upload it into an
+append-only table. `comparisonKey` now compares the parsed instant.
+
+**Still true, and intended:** hydrate keeps the *freshest* rating per bar, so a
+local row newer than the server's wins in local state and cache even though the
+upload step skipped that bar (server-wins on insert). Ratings written after
+sign-in upsert normally.
 
 ## Verification boundary
 

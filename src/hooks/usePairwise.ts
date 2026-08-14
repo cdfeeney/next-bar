@@ -28,7 +28,11 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { broadcastServerRatingSet } from '@/hooks/useRatings';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { getCacheEpoch, guardAgainstForeignCache } from '@/lib/accountCache';
+import {
+  getCacheEpoch,
+  guardAgainstForeignCache,
+  writeCacheOwner,
+} from '@/lib/accountCache';
 
 const COMPARISONS_BROADCAST = 'next-bar:pairwise:local-update';
 const MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
@@ -175,18 +179,24 @@ export function usePairwise(): UsePairwiseReturn {
       // null = fetch failed — keep the local transcript rather than
       // pretending the user has never compared anything.
       if (!cancelled && server !== null) {
-        // Union, never replace (Codex review): if the upload above FAILED
-        // while this fetch succeeded, replacing state and cache with the
-        // server transcript silently destroyed the comparisons that never
-        // made it up — permanent loss of an append-only record. Keep any
-        // local tuple the server does not have; the merge retries next
-        // sign-in because its flag was not latched.
-        const retained = unionTranscripts(server, local);
+        // Union, never replace: if the upload above FAILED while this fetch
+        // succeeded, replacing state and cache with the server transcript
+        // silently destroyed the comparisons that never made it up —
+        // permanent loss of an append-only record. Keep any local tuple the
+        // server does not have; the merge retries on the next sign-in
+        // because its flag was not latched.
+        //
+        // Re-read rather than reusing the pre-fetch snapshot: a comparison
+        // answered WHILE this fetch was in flight is already in the cache,
+        // and unioning against the stale snapshot would drop it from both
+        // state and storage (mirrors the same re-read in useRatings).
+        const retained = unionTranscripts(server, loadComparisons());
         setComparisons(retained);
         if (getCacheEpoch() === epoch) {
-          // OWNERSHIP marker (santa round-3, mirrors useRatings): latch the
-          // flag even when no merge ran — the guards key off it.
-          writeMergedFlag(userId);
+          // Ownership is its OWN marker now. Latching merged-for here used
+          // to double as the ownership signal, which silently marked a
+          // failed import "done" and killed its retry.
+          writeCacheOwner(userId);
           // Write-through the transcript cache (Codex review): without it a
           // later failed fetch falls back to an empty/stale transcript.
           writeComparisons(retained);

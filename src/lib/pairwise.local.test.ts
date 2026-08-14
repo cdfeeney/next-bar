@@ -126,3 +126,38 @@ describe('unionTranscripts', () => {
     expect(local).toEqual([localOnly]);
   });
 });
+
+describe('comparisonKey timestamp normalization', () => {
+  // compared_at is timestamptz (migration 0002): PostgREST returns the stored
+  // instant in Postgres ISO form, never the client's toISOString() spelling.
+  // A string key made every already-synced row look new.
+  it('treats the same instant as one row across ISO spellings', () => {
+    const clientWrote = comp('a', 'b', '2026-08-12T23:50:00.000Z');
+    const serverReturned = comp('a', 'b', '2026-08-12T23:50:00+00:00');
+    expect(comparisonKey(serverReturned)).toBe(comparisonKey(clientWrote));
+  });
+
+  it('treats an offset spelling of the same instant as one row', () => {
+    const v7Local = comp('a', 'b', '2026-08-12T23:50:00-04:00');
+    const serverReturned = comp('a', 'b', '2026-08-13T03:50:00+00:00');
+    expect(comparisonKey(serverReturned)).toBe(comparisonKey(v7Local));
+  });
+
+  it('still separates genuinely different instants', () => {
+    expect(comparisonKey(comp('a', 'b', '2026-08-12T23:50:00Z'))).not.toBe(
+      comparisonKey(comp('a', 'b', '2026-08-12T23:50:01Z')),
+    );
+  });
+
+  it('does not collapse distinct unparseable timestamps onto one key', () => {
+    expect(comparisonKey(comp('a', 'b', 'garbage-1'))).not.toBe(
+      comparisonKey(comp('a', 'b', 'garbage-2')),
+    );
+  });
+
+  it('unionTranscripts does not duplicate a row the server re-spelled', () => {
+    const local = comp('a', 'b', '2026-08-12T23:50:00.000Z');
+    const server = comp('a', 'b', '2026-08-12T23:50:00+00:00');
+    expect(unionTranscripts([server], [local])).toEqual([server]);
+  });
+});

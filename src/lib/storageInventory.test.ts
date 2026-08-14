@@ -75,23 +75,39 @@ const V7_KEYS = [
   'next-bar:saved:v1',
 ] as const;
 
-const KEY_PATTERN = /next-bar:[A-Za-z0-9:_-]+/g;
+/**
+ * Keys must appear as a QUOTED string literal. Matching bare text let a key
+ * stay "present" via a prose comment, which is the same false-pass the
+ * runtime-only scan was meant to close.
+ *
+ * Known and accepted limitation: a delete-only site (a `removeItem` call, or
+ * a wipe list like `accountCache.ALL_KEYS`) is still a literal, so it counts
+ * as presence. Distinguishing read from write sites needs real parsing, which
+ * is more machinery than this guard earns.
+ */
+const KEY_PATTERN = /['"`](next-bar:[A-Za-z0-9:_-]+)['"`]/g;
 
 /**
- * A `next-bar:` prefix NOT followed by a complete literal key — i.e. one
- * built by interpolation or concatenation. `KEY_PATTERN` cannot see such a
- * key, so it would silently bypass the inventory; refuse the construct
- * instead of pretending to cover it.
+ * A `next-bar` prefix that does NOT continue into a complete literal key —
+ * i.e. one assembled by interpolation or concatenation. Neither form is
+ * visible to `KEY_PATTERN`, so such a key would bypass the inventory
+ * silently. Refuse the construct rather than pretend to cover it.
  */
-const COMPUTED_KEY_PATTERN = /next-bar:(?![A-Za-z0-9:_-])/g;
+const COMPUTED_KEY_PATTERN = /next-bar(?::(?![A-Za-z0-9:_-])|['"`]\s*[+,)])/g;
 
-/** Runtime sources only — a test fixture is not a key's read path. */
+/**
+ * Runtime sources only — a test fixture is not a key's read path. `.js`/`.jsx`
+ * are included because `allowJs` is on, so a future plain-JS module under
+ * `src/` would otherwise be invisible to this guard.
+ */
 function sourceFilesUnder(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     const p = path.join(dir, name);
     if (statSync(p).isDirectory()) out.push(...sourceFilesUnder(p));
-    else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p)) out.push(p);
+    else if (/\.(tsx?|jsx?)$/.test(p) && !/\.test\.(tsx?|jsx?)$/.test(p)) {
+      out.push(p);
+    }
   }
   return out;
 }
@@ -102,9 +118,9 @@ function literalsInSrc(): Map<string, string[]> {
   for (const file of sourceFilesUnder(SRC_DIR)) {
     const rel = path.relative(REPO_ROOT, file).split(path.sep).join('/');
     for (const match of readFileSync(file, 'utf8').matchAll(KEY_PATTERN)) {
-      const where = found.get(match[0]) ?? [];
+      const where = found.get(match[1]) ?? [];
       if (!where.includes(rel)) where.push(rel);
-      found.set(match[0], where);
+      found.set(match[1], where);
     }
   }
   return found;

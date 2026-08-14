@@ -17,7 +17,11 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { isSeededDemoRating } from '@/lib/demo/seed';
-import { getCacheEpoch, guardAgainstForeignCache } from '@/lib/accountCache';
+import {
+  getCacheEpoch,
+  guardAgainstForeignCache,
+  writeCacheOwner,
+} from '@/lib/accountCache';
 
 /**
  * Hydrate-race repair: prefer whichever entry is fresher per bar. A rating
@@ -222,12 +226,14 @@ export function useRatings(): UseRatingsReturn {
         // (including rows written on other devices) so usePairwise and the
         // sign-out fallback read current data.
         writeRatings(merged);
-        // OWNERSHIP marker, not just merge bookkeeping (santa round-3): the
-        // cache now holds THIS account's data, so latch the flag even when
-        // no merge ran (sign-in with no local data). Without it the cache
-        // is indistinguishable from anonymous data and the foreign/residual
-        // guards would let a later account merge it as its own.
-        writeMergedFlag(userId);
+        // Ownership gets its OWN key (V8-2 review). The cache now holds THIS
+        // account's data and must never look anonymous, or the foreign and
+        // residual guards would let a later account merge it. That signal
+        // used to be the merged-for latch — which also meant "import done",
+        // so one failed import was never retried and, when the session later
+        // expired, clearResidualAccountCache wiped the rows that had never
+        // reached the server. Ownership here, import bookkeeping above.
+        writeCacheOwner(userId);
       }
     })();
 
