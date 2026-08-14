@@ -36,7 +36,14 @@ export function lockBodyScroll(): () => void {
     const root = document.documentElement;
     const previousScrollBehavior = root.style.scrollBehavior;
     root.style.scrollBehavior = 'auto';
-    window.scrollTo(0, scrollY);
-    root.style.scrollBehavior = previousScrollBehavior;
+    try {
+      window.scrollTo(0, scrollY);
+    } finally {
+      // finally, not a trailing statement: if scrollTo ever throws, the
+      // inline 'auto' would leak onto the root and silently disable smooth
+      // scrolling for the rest of the session. Restoring is cheap; leaking is
+      // permanent and invisible.
+      root.style.scrollBehavior = previousScrollBehavior;
+    }
   };
 }

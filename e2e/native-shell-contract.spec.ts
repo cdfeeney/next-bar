@@ -258,8 +258,11 @@ test.describe('V8 native interaction contract', () => {
         0,
       );
 
-      // A route change must not leave the nav detached either.
-      await page.goto(route === '/rankings' ? '/friends' : '/rankings');
+      // A route change must not leave the nav detached either. Navigate by
+      // TAPPING the tab rather than goto(): that is the real transition
+      // criterion 5 describes, and a goto races the client-side router.
+      await nav.getByRole('link', { name: route === '/rankings' ? 'Social' : 'Rankings' }).click();
+      await expect(page).toHaveURL(route === '/rankings' ? /\/friends$/ : /\/rankings$/);
       await settle(page);
       const navAfterRoute = await nav.boundingBox();
       expect(navAfterRoute?.y, `${route}: nav moved after a route change`).toBeCloseTo(
@@ -291,6 +294,55 @@ test.describe('V8 native interaction contract', () => {
     // Without the opener capture the autoFocus input unmounts and focus falls
     // to <body>, dumping a screen-reader user at the top of the document.
     await expect(opener).toBeFocused();
+  });
+
+  test('the photo carousel is tagged and offers an accessible non-swipe path', async ({
+    page,
+  }) => {
+    // The [data-carousel] exemption above is an escape hatch from the
+    // no-horizontal-scroller rule. Left unchecked it would let any sideways
+    // strip pass by tagging itself, so assert the other half of criterion 5:
+    // a tagged carousel must be operable WITHOUT swiping.
+    await denyGeolocation(page.context());
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
+    await page.getByRole('button', { name: /Attaboy/ }).click();
+    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    await expect(cards).toHaveCount(5);
+    await cards.first().getByRole('button', { name: /See photos and hours/i }).press('Enter');
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+
+    const carousel = dialog.locator('[data-carousel]');
+    if ((await carousel.count()) === 0) {
+      // Single-photo (or glyph) bars render no track at all — nothing to
+      // operate, so the criterion is satisfied vacuously and honestly.
+      return;
+    }
+
+    // Every horizontally-scrolling element inside the dialog must be tagged.
+    const untagged = await dialog.evaluate((root, tolerance) => {
+      const found: string[] = [];
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
+        if (el.scrollWidth <= el.clientWidth + tolerance) continue;
+        if (!['auto', 'scroll'].includes(getComputedStyle(el).overflowX)) continue;
+        if (el.closest('[data-carousel]')) continue;
+        found.push(el.className || el.tagName);
+      }
+      return found;
+    }, OVERFLOW_TOLERANCE_PX);
+    expect(untagged, `untagged horizontal scrollers in the lightbox: ${untagged.join(' | ')}`)
+      .toHaveLength(0);
+
+    // ...and the non-swipe controls exist and are real 44px targets.
+    for (const label of [/previous photo/i, /next photo/i]) {
+      const control = dialog.getByRole('button', { name: label });
+      await expect(control, `carousel is swipe-only: no ${label} control`).toHaveCount(1);
+      const box = await control.boundingBox();
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+    }
   });
 
   // Criterion 9's reduced-motion half. globals.css carries the rules; nothing

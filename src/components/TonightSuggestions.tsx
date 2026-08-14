@@ -17,7 +17,7 @@
  * message, not a silent no-op.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import BarPicker from '@/components/BarPicker';
 import BarVisualTile from '@/components/BarVisualTile';
 import { useAuth } from '@/hooks/useAuth';
@@ -50,6 +50,7 @@ export default function TonightSuggestions(): JSX.Element | null {
   const [yourRsvpBarId, setYourRsvpBarId] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const night = nycNightKey();
@@ -62,7 +63,23 @@ export default function TonightSuggestions(): JSX.Element | null {
     if (!pickerOpen) return;
     const opener = document.activeElement as HTMLElement | null;
     const unlockScroll = lockBodyScroll();
+
+    // Escape must dismiss, and focus must ENTER the dialog. Without both, a
+    // keyboard user is parked on the opener behind an aria-modal overlay with
+    // no way out but hunting for Close — the same contract the other two
+    // overlays already keep. BarPicker has no autoFocus, so move focus here.
+    closeRef.current?.focus({ preventScroll: true });
+
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setPickerOpen(false);
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
     return () => {
+      window.removeEventListener('keydown', handleKeyDown);
       unlockScroll();
       opener?.focus?.({ preventScroll: true });
     };
@@ -294,13 +311,14 @@ export default function TonightSuggestions(): JSX.Element | null {
               </h2>
               <button
                 type="button"
+                ref={closeRef}
                 onClick={() => setPickerOpen(false)}
                 className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
               >
                 Close
               </button>
             </header>
-            <div className="flex-1 overflow-y-auto min-h-0">
+            <div className="flex-1 overflow-y-auto min-h-0 scrollbar-none">
               <BarPicker onPick={(bar) => void handlePick(bar)} />
             </div>
           </div>

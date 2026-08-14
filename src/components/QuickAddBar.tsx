@@ -117,7 +117,7 @@ export default function QuickAddBar({
             </header>
 
             {stage === 'pick-bar' ? (
-              <div className="flex-1 overflow-y-auto min-h-0">
+              <div className="flex-1 overflow-y-auto min-h-0 scrollbar-none">
                 <BarPicker
                   onPick={(bar) => {
                     setSelectedBar(bar);

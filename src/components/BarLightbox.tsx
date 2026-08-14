@@ -83,6 +83,14 @@ export default function BarLightbox({
     track.addEventListener('scroll', onScroll, { passive: true });
     return () => track.removeEventListener('scroll', onScroll);
   }, [photoUrls.length]);
+  // The non-swipe path: drive the same scroll-snap track the swipe uses, so
+  // there is one source of truth for which photo is showing.
+  const scrollToPhoto = (index: number): void => {
+    const track = trackRef.current;
+    if (!track) return;
+    const clamped = Math.max(0, Math.min(index, photoUrls.length - 1));
+    track.scrollTo({ left: clamped * track.clientWidth, behavior: 'smooth' });
+  };
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   // Ref-carried close handler (Opus review): ResultCard passes an inline
@@ -151,7 +159,7 @@ export default function BarLightbox({
       role="dialog"
       aria-modal="true"
       aria-label={`${bar.name} details`}
-      className="fixed inset-0 z-[1500] bg-bg/95 backdrop-blur-sm overflow-y-auto overscroll-contain"
+      className="fixed inset-0 z-[1500] bg-bg/95 backdrop-blur-sm overflow-y-auto overscroll-contain scrollbar-none"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -198,6 +206,11 @@ export default function BarLightbox({
                 on touch, scroll on desktop, no library. */}
             <div
               ref={trackRef}
+              // data-carousel marks this as the ONE intentional horizontal
+              // scroller (V8 contract 5); native-shell-contract.spec.ts fails
+              // any untagged one, and requires a tagged one to carry the
+              // non-swipe controls below.
+              data-carousel
               className="flex overflow-x-auto snap-x snap-mandatory scrollbar-none"
               style={{ scrollbarWidth: 'none' }}
               aria-label={`${bar.name} photos, ${photoUrls.length} total`}
@@ -220,16 +233,40 @@ export default function BarLightbox({
                   : 'Photo · Google'}
               </span>
               {photoUrls.length > 1 ? (
-                <span className="flex items-center gap-1.5" aria-hidden>
-                  {photoUrls.map((url, i) => (
-                    <span
-                      key={url}
-                      className={[
-                        'inline-block h-1.5 w-1.5 rounded-full transition-colors',
-                        i === activePhoto ? 'bg-accent' : 'bg-border',
-                      ].join(' ')}
-                    />
-                  ))}
+                // Contract 5: a carousel needs an accessible NON-SWIPE path.
+                // The dots alone are decorative (aria-hidden) and unreachable
+                // by keyboard, so pair them with real Prev/Next buttons that
+                // drive the same scroll-snap track.
+                <span className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => scrollToPhoto(activePhoto - 1)}
+                    disabled={activePhoto === 0}
+                    aria-label="Previous photo"
+                    className="min-h-[44px] min-w-[44px] touch-manipulation rounded-full text-muted disabled:opacity-40 hover:text-text"
+                  >
+                    ‹
+                  </button>
+                  <span className="flex items-center gap-1.5" aria-hidden>
+                    {photoUrls.map((url, i) => (
+                      <span
+                        key={url}
+                        className={[
+                          'inline-block h-1.5 w-1.5 rounded-full transition-colors',
+                          i === activePhoto ? 'bg-accent' : 'bg-border',
+                        ].join(' ')}
+                      />
+                    ))}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => scrollToPhoto(activePhoto + 1)}
+                    disabled={activePhoto === photoUrls.length - 1}
+                    aria-label="Next photo"
+                    className="min-h-[44px] min-w-[44px] touch-manipulation rounded-full text-muted disabled:opacity-40 hover:text-text"
+                  >
+                    ›
+                  </button>
                 </span>
               ) : null}
             </figcaption>

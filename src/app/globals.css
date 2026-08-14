@@ -12,6 +12,13 @@ html, body {
 html::-webkit-scrollbar,
 body::-webkit-scrollbar { display: none; }
 
+/* Hiding the page's rail is not enough: an overlay's own scroll container
+   renders a browser-style rail inside the WebView too, which is exactly the
+   desktop-web affordance the V8 contract forbids. `scrollbar-none` was already
+   being used as a class name with no rule behind it — this is that rule. */
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
 /* Brand kit 2026-07-23: Poppins headlines are Bold. font-display only sets the
    family, so give it the brand weight here (base layer — explicit font-*
    utilities still override). */
