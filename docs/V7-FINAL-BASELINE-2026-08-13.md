@@ -32,7 +32,7 @@ deferred until a later version (currently expected around V11).
 
 ## Verification snapshot
 
-- Unit tests: 1,024 / 1,024 passed.
+- Unit tests: 1,025 / 1,025 passed.
 - TypeScript: passed (`tsc --noEmit`).
 - Production build: passed; root first-load JS 195 KB on Vercel.
 - Focused distance-band Pixel 7 flow: 1 / 1 passed, retries 0. The test checks
@@ -41,35 +41,31 @@ deferred until a later version (currently expected around V11).
 - Earlier focused V7 flows: 16 / 16 passed, retries 0.
 - Matching WebKit 2287 is installed under `D:/PlaywrightBrowsers`; no browser
   files were installed on C:.
-- Full sharded Pixel 7 sweep (148 tests): 102 passed, 44 intentionally skipped,
-  2 failed, retries 0. Both failures are obsolete fixtures: the shared-night
-  mock names a removed catalog ID, and the photo test still expects three
-  cached `<img>` elements instead of the V7 Places UI Kit surface.
-- Full sharded iPhone 13/WebKit sweep (148 tests): 98 passed, 44 intentionally
-  skipped, 6 failed, retries 0. The two obsolete fixtures repeat there. The
-  other four are WebKit-only navigation/layout races; the same flows pass on
-  Pixel. The separate Midtown flow timed out under parallel load after visibly
-  rendering ten correct results, then passed once in isolation in 18.7 seconds
-  with retries 0.
+- Full sharded Pixel 7 sweep (148 tests): 104 passed, 44 intentionally skipped,
+  0 failed, retries 0.
+- Full sharded iPhone 13/WebKit sweep (148 tests): 102 passed, 44 intentionally
+  skipped, 2 parallel-load failures, retries 0. Both failures are documented
+  Next dev-server/WebKit navigation races and each passed once serially with
+  retries 0; no functional product failure reproduced.
 - One stale heading assertion was corrected from `Rankings` to the shipped
   `Bar Rankings`; its focused WebKit check passed 1 / 1 with retries 0.
-- The complete cross-browser gate is therefore measured but not green. Product
-  code was not changed to hide the remaining harness debt.
+- The complete functional cross-browser coverage is green, but the four-worker
+  WebKit harness is not: its two navigation races remain explicit rather than
+  being hidden with retries or product-code changes.
 - Public staging renders five cards for each distance selection. Exact public
   distance correlation could not be extracted reliably because Places UI Kit
   lazily mounts identity inside its widget; the deterministic local Playwright
   band assertion is the current exact evidence.
-- Deployed staging read-only WebKit smoke: 8 / 9 passed, retries 0. Pages, OG
-  images, and Supabase reachability passed. `/api/health` returned `ok: true`
-  and `supabase: ok`, but an empty build SHA; staging therefore still needs
-  self-identifying release metadata before the TestFlight baseline is frozen.
+- Deployed staging read-only WebKit smoke: 9 / 9 passed, retries 0. Pages, OG
+  images, Supabase reachability, and build identity passed. `/api/health`
+  reports `7959007b5ca3`, the deployed commit prefix.
 
 ## Promotion state
 
 - Local integration worktree: `D:/harness-worktrees/nb-v7-integration-20260813`
 - Branch: `harness/nb-v7-integration-20260813`
-- Deployed staging commit: `6ee4885e8dd6d4cfa2b57ff54d5962c4c51bcd2c`
-- Staging deployment: `dpl_Ai5jzfm3Y3ikmWj7dadPxWpf3M68`
+- Deployed staging commit: `7959007b5ca3853391334d16542a65386a7744a6`
+- Staging deployment: `dpl_6onbFMFk9VbHKeHcjsrFv2WrKZ5t`
 - Staging alias: `https://next-bar-staging.vercel.app`
 - No TestFlight upload, App Store submission, production database write, Vercel
   production-project change, or Supabase migration was performed.
@@ -82,9 +78,12 @@ deferred until a later version (currently expected around V11).
 - [ ] On Tester 1 / Conor Feeney, confirm Bar 54 and existing account data remain.
 - [ ] Add two bars with the same numeric score and confirm both retain it.
 - [ ] Force-close/reopen and confirm sign-in, Bar 54, lists, and numeric scores.
-- [ ] Clear the two obsolete fixtures and four WebKit-only harness failures,
-  then rerun the complete staging smoke suite against the deployed candidate.
-- [ ] Set/restore the staging build SHA and confirm `/api/health` reports it.
+- [x] Clear obsolete V7 fixtures and run both complete device matrices.
+- [ ] Remove the two remaining four-worker WebKit navigation races without
+  retries; both already pass serially and do not reproduce as product failures.
+- [x] Run the complete deployed staging smoke suite (9 / 9, retries 0).
+- [x] Restore staging build identity and confirm `/api/health` reports the
+  deployed commit prefix.
 - [ ] Upload a new TestFlight build without changing the movable Vercel alias.
 - [ ] Repeat the physical-phone continuity check on that TestFlight build.
 - [ ] Freeze V7 as the internal TestFlight baseline for V8. Do not submit V7 to
