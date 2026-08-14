@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "profile": {
+    "name": "Next Bar operator",
+    "goal": "Learn to design and run evidence-backed growth experiments for one dense nightlife market",
+    "currency": "USD"
+  },
+  "nodes": [
+    {
+      "id": "avatar-offer",
+      "name": "One avatar and one offer",
+      "branch": "growth",
+      "prerequisites": [],
+      "status": "active",
+      "mastery_test": "Define one organizer, one moment of pain, one promised outcome, and one activation event without notes, then earn a clear preference from at least three intended users",
+      "proof": "Dated avatar-offer test table with exact user responses"
+    },
+    {
+      "id": "concierge-learning",
+      "name": "Concierge customer learning",
+      "branch": "growth",
+      "prerequisites": [
+        "avatar-offer"
+      ],
+      "status": "locked",
+      "mastery_test": "Deliver ten manual group plans and accurately classify the recurring objections and decision moments",
+      "proof": "Anonymized ten-session evidence log"
+    },
+    {
+      "id": "proof-content",
+      "name": "Proof-led content",
+      "branch": "growth",
+      "prerequisites": [
+        "concierge-learning"
+      ],
+      "status": "locked",
+      "mastery_test": "Create three proof-promise-plan cases for the same organizer and identify which produces the most qualified planner starts",
+      "proof": "Three source-linked cases plus qualified-action comparison"
+    },
+    {
+      "id": "measured-distribution",
+      "name": "Measured distribution",
+      "branch": "growth",
+      "prerequisites": [
+        "proof-content"
+      ],
+      "status": "locked",
+      "mastery_test": "Run one bounded channel experiment and diagnose its largest drop-off from reach through activation",
+      "proof": "Conversation-to-activation funnel report"
+    },
+    {
+      "id": "referral-retention",
+      "name": "Referral and repeat loop",
+      "branch": "growth",
+      "prerequisites": [
+        "measured-distribution"
+      ],
+      "status": "locked",
+      "mastery_test": "Show that at least one organizer creates a recipient vote and later activates again, then explain the causal uncertainty",
+      "proof": "Share-to-vote receipt and delayed repeat-use receipt"
+    }
+  ],
+  "sessions": [],
+  "value_events": []
+}
