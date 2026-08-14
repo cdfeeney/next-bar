@@ -64,11 +64,16 @@ deferred until a later version (currently expected around V11).
 
 - Local integration worktree: `D:/harness-worktrees/nb-v7-integration-20260813`
 - Branch: `harness/nb-v7-integration-20260813`
+- Integrated V7 source commit: `2ce81c158bd4bc8c99d2aed138cfb042488c099a`
 - Deployed staging commit: `7959007b5ca3853391334d16542a65386a7744a6`
 - Staging deployment: `dpl_6onbFMFk9VbHKeHcjsrFv2WrKZ5t`
 - Staging alias: `https://next-bar-staging.vercel.app`
-- No TestFlight upload, App Store submission, production database write, Vercel
-  production-project change, or Supabase migration was performed.
+- Internal TestFlight upload: version/build `1.0 (7)`, GitHub run
+  `31760573887`, successful from the integrated V7 source commit with the
+  staging alias as its server URL. Apple processing/phone availability remains
+  an attended check.
+- No App Store submission, production database write, Vercel production-project
+  change, or Supabase migration was performed.
 
 ## Final attended release checklist
 
@@ -87,7 +92,8 @@ deferred until a later version (currently expected around V11).
 - [x] Run the complete deployed staging smoke suite (9 / 9, retries 0).
 - [x] Restore staging build identity and confirm `/api/health` reports the
   deployed commit prefix.
-- [ ] Upload a new TestFlight build without changing the movable Vercel alias.
+- [x] Upload V7 `1.0 (7)` to internal TestFlight without changing the movable
+  Vercel alias.
 - [ ] Repeat the physical-phone continuity check on that TestFlight build.
 - [ ] Freeze V7 as the internal TestFlight baseline for V8. Do not submit V7 to
   App Store review or public production.

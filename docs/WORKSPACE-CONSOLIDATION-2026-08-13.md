@@ -36,3 +36,16 @@ folders.
 
 No database, Vercel production project, TestFlight, or App Store operation is
 part of workspace cleanup.
+
+## Progress
+
+- Integrated V7 branch pushed to GitHub at `2ce81c1`.
+- V8 design/growth inputs committed and pushed on
+  `feat/phase1-compliance-media` at `53eaaea`.
+- Internal TestFlight `1.0 (7)` upload completed successfully in GitHub run
+  `31760573887`.
+- Removed two clean worktree checkouts whose commits were already contained in
+  remote V7: `nb-v7-catalog-delivery-20260813` and
+  `expansion-packet-g779223`.
+- Dirty, locked, private-environment-bearing, and unintegrated worktrees remain
+  untouched pending explicit preservation.
