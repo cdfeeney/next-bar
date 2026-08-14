@@ -60,6 +60,44 @@ export function writeComparisons(items: PairwiseComparison[]): void {
 }
 
 /**
+ * Transcript row identity: the exact (winner, loser, comparedAt) tuple.
+ *
+ * One definition, used by both the local union below and the server merge in
+ * `pairwise.server.ts`. A genuine re-answer carries a fresh `comparedAt`, so
+ * it is a DIFFERENT row and survives dedup; only byte-identical tuples
+ * collapse.
+ */
+export function comparisonKey(c: PairwiseComparison): string {
+  return `${c.winnerBarId}|${c.loserBarId}|${c.comparedAt}`;
+}
+
+/**
+ * Server transcript plus any local rows the server does not have, in replay
+ * order (`comparedAt`, then original position as a stable tiebreak).
+ *
+ * Used on sign-in hydrate: if the upload failed but the fetch succeeded,
+ * overwriting local state with the server's rows destroys the comparisons
+ * that never made it up. The transcript is append-only, so union is the only
+ * safe reconciliation — the failed merge retries on the next sign-in.
+ */
+export function unionTranscripts(
+  server: ReadonlyArray<PairwiseComparison>,
+  local: ReadonlyArray<PairwiseComparison>,
+): PairwiseComparison[] {
+  const seen = new Set(server.map(comparisonKey));
+  const extra = local.filter((c) => {
+    const key = comparisonKey(c);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (extra.length === 0) return [...server];
+  return [...server, ...extra].sort(
+    (a, b) => Date.parse(a.comparedAt) - Date.parse(b.comparedAt),
+  );
+}
+
+/**
  * Append a single comparison to the stored list. Returns the new full
  * list so callers can recompute scores without a follow-up read.
  *

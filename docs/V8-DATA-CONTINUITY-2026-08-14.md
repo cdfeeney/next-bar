@@ -36,35 +36,64 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | `next-bar:age-ack:v1` | local | Device-only age acknowledgement | Preserve; never sync. |
 | `next-bar:install-nudge-dismissed:v1` | local | Device-only install prompt state | Preserve; never sync. |
 | `next-bar:handle-nudge-dismissed:v1` | local | Device-only account prompt state | Preserve; never sync. |
-| `next-bar:onboarding-prompted:v1` | session | Per-tab onboarding prompt state | Preserve name; expiry with the tab is intentional. |
+| `next-bar:onboarding-prompted:v1` | session | Per-tab onboarding prompt state | **Local-only, never synced.** Preserve the name; expiry with the tab is intentional. |
 | `next-bar:night-phase-override:v1` | local | Development/demo phase override | Preserve; never sync or ship as account data. |
 | `next-bar:demo:seeded:v1` | local | Demo-rating seed marker | Preserve; never merge into a signed-in account. |
 | `next-bar:demo:seeded-ids:v1` | local | IDs written by the demo seed | Preserve; never merge into a signed-in account. |
 | `next-bar:follows:v1` | local | Signed-out demo follows | Signed-in owner is existing `follows`; server replaces demo state and demo rows never merge. |
 | `next-bar:ratings:v1` | local | Rating tier, numeric score, and `ratedAt` cache | Signed-in owner is existing `ratings`; retain as the V7 cache/write-through shape. |
-| `next-bar:ratings:merged-for:v1` | local | Account ownership/one-time merge latch | Preserve exact user ID; set only after a successful merge. |
+| `next-bar:ratings:merged-for:v1` | local | Account ownership/one-time merge latch | **Local-only, never synced** — it is a device-side latch naming a server user ID, not account data. Preserve the exact ID. See the ownership/retry caveat below. |
 | `next-bar:pairwise:v1` | local | Append-only comparison transcript | Signed-in owner is existing `pairwise_comparisons`; retain as the V7 cache shape. |
-| `next-bar:pairwise:merged-for:v1` | local | Account ownership/one-time merge latch | Preserve exact user ID; set only after a successful merge. |
+| `next-bar:pairwise:merged-for:v1` | local | Account ownership/one-time merge latch | **Local-only, never synced** — device-side latch naming a server user ID. Preserve the exact ID. See the ownership/retry caveat below. |
 | `next-bar:lists:v1` | local | Named lists and ordered bar IDs | Remains readable in V8; planned server owner is `account_content_state` key `lists`. |
 | `next-bar:profile:v1` | local | Vibe profile plus `savedAt` | Remains readable in V8; planned server owner is owner-only `vibe_profiles`. |
 | `next-bar:night-log:v1` | local | Current/most-recent night visits | Remains readable in V8; V8 Night Out persistence must import it into the canonical night owner. |
 | `next-bar:intent:v1` | local | Expiring tonight intent | Preserve through the current night; V8 Night membership/status becomes server-owned. |
 | `next-bar:night-vibe:v1` | local | Expiring per-night vibe selection | Preserve through the current night; server sync is not required. |
 | `next-bar:list:want-to-go:v1` | local | Want-to-Go entries | Preserve; fold into the named-list server owner without renaming this V7 source key. |
-| `next-bar:saved:v1` | local | Legacy saved-bar store; currently has no runtime caller | Preserve unread data; migrate deliberately if retired, never silently delete it. |
+| `next-bar:saved:v1` | local | Legacy saved-bar store; `src/lib/saved.ts` still reads it, no UI calls it | **Local-only, never synced.** Preserve unread data; if it is ever retired, migrate it into the named-list owner deliberately — never silently delete it. |
 
 ## Server ownership and conflict rules
 
 | Account object | One server owner | Initial V7 import | Later conflicts |
 | --- | --- | --- | --- |
 | Authentication | Supabase Auth | Existing refresh/session state remains untouched. | Supabase token refresh and revocation are authoritative. |
-| Ratings and numeric scores | Existing `ratings`, one row per user/bar | Current merge inserts only bars absent on the server; the server row wins a same-bar collision. | Existing strict `updated_at` LWW trigger; equal timestamps keep the stored row. Score is part of that row, and equal scores on different bars remain valid ties. |
-| Pairwise ranking transcript | Existing `pairwise_comparisons` | Union by exact `(winner, loser, comparedAt)` tuple. | Append-only; replay by `compared_at`, then row ID. Never replace the transcript with derived scores. |
+| Ratings and numeric scores | Existing `ratings`, one row per user/bar | Upload (`mergeLocalRatingsToServer`) inserts only bars absent on the server: the server row wins a same-bar collision. Hydrate (`mergeFreshest` in `useRatings`) then takes the newer `ratedAt` of the two, so a local row newer than the server's wins **in local state and cache** even though the upload skipped it — see the divergence note below. | Existing strict `updated_at` LWW trigger; equal timestamps keep the stored row. Score is part of that row, and equal scores on different bars remain valid ties. |
+| Pairwise ranking transcript | Existing `pairwise_comparisons` | Union by exact `(winner, loser, comparedAt)` tuple — deduped against the server set **and** within the local list. | Append-only; replay by `compared_at`, then row ID. Hydrate unions server with local (`unionTranscripts`) and never replaces, so a failed upload cannot destroy un-uploaded rows. Never replace the transcript with derived scores. |
 | Named lists and Want to Go | Planned owner-only `account_content_state`, domain `lists` | Union unrelated list IDs. For the same ID, newer `updatedAt` wins; an exact tie keeps the server value. | Per-list LWW. Deletes require timestamped tombstones so an offline device cannot resurrect a deleted list. |
 | Vibe profile | Planned owner-only `vibe_profiles` | Compare local `savedAt` with server `saved_at`; newer wins and an exact tie keeps the server value. | Strict LWW. A clear must delete the server row successfully before clearing the local cache. Invalid or failed server reads never overwrite valid local data. |
 | Night history | Canonical V8 Night Out tables introduced by the Night Out goal | Import the valid `next-bar:night-log:v1` night once. Merge distinct visits by stable timestamp and bar ID; retain all server-only nights. | Server owns membership and lifecycle. Visit/event inserts are idempotent; status changes use server timestamps. |
 | Shared nights | Existing `shared_nights` | No browser-storage import: the server row and bearer token already are the durable state. | Server row wins. Row presence is explicit sharing consent; unshare deletes it and invalidates the token. |
 | Notification devices | Planned native-device table from the notifications goal; existing `push_subscriptions` remains web-only and dark | Register only after authenticated native permission succeeds. | Device token is unique. Latest authenticated registration transfers that token to the current user; sign-out/revoke deletes it. Never merge credentials through localStorage. |
+
+## Known divergences (found by the V8-2 review panel, not yet fixed)
+
+Recorded here because this document's job is to state the real rule, not the
+intended one. Both need an attended decision — they change behaviour on the
+cross-account/privacy path, which is outside this goal's "inventory and
+codification" scope.
+
+1. **The merge latch and the ownership marker are the same key.**
+   `next-bar:ratings:merged-for:v1` means both "this cache belongs to user X"
+   (read by the foreign/residual cache guards) and "the one-time import for X
+   finished". `useRatings` deliberately latches it after any successful hydrate
+   so the cache is never ownerless — but that also marks the import done. So if
+   the import fails and the following fetch succeeds, the retry never happens
+   and those local-only ratings are never uploaded. They remain readable on the
+   device and are lost only if the cache is later cleared. Splitting the two
+   meanings needs a separate owner key and a rewrite of the guards that two
+   prior review rounds hardened; do not do it casually.
+
+2. **Hydrate can keep a local rating the server never receives.** Consequence
+   of the same-bar rule above: the upload skips a bar the server already has,
+   then `mergeFreshest` restores the newer local row into state and cache. The
+   device shows a value the server does not have, indefinitely, with no
+   pending-write record. Ratings written *after* sign-in are unaffected — they
+   upsert normally.
+
+`usePairwise` had the sharper version of (1) — a failed upload followed by a
+successful fetch **replaced** the local transcript and destroyed the rows that
+never uploaded. That one is fixed: hydrate now unions via `unionTranscripts`.
 
 ## Verification boundary
 

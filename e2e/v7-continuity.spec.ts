@@ -6,12 +6,9 @@
  * inventory in `docs/V8-DATA-CONTINUITY-2026-08-14.md` lists, seeded with
  * valid V7-shaped values, plus the session-scoped onboarding flag.
  *
- * The two `:merged-for:v1` flags are deliberately NOT in the fixture: they
- * exist only after a sign-in, and the residue rule that reads them needs a
- * configured Supabase client, which this offline fixture has none of (auth
- * resolves `unavailable`). That rule is unit-tested directly in
- * `src/lib/accountCache.test.ts`; asserting it here would only prove that
- * nothing ran.
+ * The fixture covers every inventoried localStorage key, including the two
+ * `:merged-for:v1` ownership latches — see the note beside them below for why
+ * that is sound with no Supabase env configured.
  *
  * Survival is asserted across navigation, reload, and a simulated
  * force-close/reopen (close the tab, open a new one in the same context —
@@ -83,6 +80,15 @@ const V7_LOCAL: Record<string, string> = {
   'next-bar:saved:v1': JSON.stringify([
     { barId: 'attaboy', savedAt: '2026-08-12T20:30:00-04:00' },
   ]),
+  // Account-ownership latches. A V7 user who ever signed in has these, so a
+  // faithful install-over fixture carries them. They are safe to assert here
+  // because this fixture runs with no Supabase env: `useAuth` resolves
+  // `unavailable` and the residue rule that reads them never executes. If
+  // someone adds `.env.local`, auth resolves signed-out, the residue wipe
+  // fires, and this test fails loudly — that is correct behaviour being
+  // reported, not a broken fixture. See `src/lib/accountCache.test.ts`.
+  'next-bar:ratings:merged-for:v1': 'v7-user-11111111-2222-3333-4444-555555555555',
+  'next-bar:pairwise:merged-for:v1': 'v7-user-11111111-2222-3333-4444-555555555555',
   'next-bar:age-ack:v1': '1',
   'next-bar:install-nudge-dismissed:v1': '1',
   'next-bar:handle-nudge-dismissed:v1': '1',
@@ -94,18 +100,30 @@ const V7_LOCAL: Record<string, string> = {
 
 const ONBOARDING_KEY = 'next-bar:onboarding-prompted:v1';
 
-/** Seed once per tab, before any app code runs. */
+/**
+ * Seed ONCE per tab, before any app code runs.
+ *
+ * The seeded-sentinel is load-bearing, not tidiness: `addInitScript` runs on
+ * every navigation and every reload, so an unguarded seeder silently restores
+ * V7_LOCAL right before the survival assertions — masking exactly the deletion
+ * or mutation this spec exists to catch. Removing this guard turned the whole
+ * file into a tautology once already; the Codex lane caught it.
+ */
+const SEEDED_SENTINEL = 'v7-continuity-seeded';
+
 async function seedV7Install(page: Page): Promise<void> {
   await denyGeolocation(page.context());
   await page.clock.setFixedTime(new Date('2026-08-13T09:00:00-04:00'));
   await page.addInitScript(
-    ({ local, onboardingKey }) => {
+    ({ local, onboardingKey, sentinel }) => {
+      if (sessionStorage.getItem(sentinel)) return;
       for (const [key, value] of Object.entries(local)) {
         localStorage.setItem(key, value);
       }
       sessionStorage.setItem(onboardingKey, '1');
+      sessionStorage.setItem(sentinel, '1');
     },
-    { local: V7_LOCAL, onboardingKey: ONBOARDING_KEY },
+    { local: V7_LOCAL, onboardingKey: ONBOARDING_KEY, sentinel: SEEDED_SENTINEL },
   );
 }
 

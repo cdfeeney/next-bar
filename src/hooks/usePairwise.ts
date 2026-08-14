@@ -6,6 +6,7 @@ import { loadRatings, writeRatings } from '@/lib/ratings';
 import {
   appendComparison,
   loadComparisons,
+  unionTranscripts,
   writeComparisons,
 } from '@/lib/pairwise.local';
 import {
@@ -174,21 +175,28 @@ export function usePairwise(): UsePairwiseReturn {
       // null = fetch failed — keep the local transcript rather than
       // pretending the user has never compared anything.
       if (!cancelled && server !== null) {
-        setComparisons(server);
+        // Union, never replace (Codex review): if the upload above FAILED
+        // while this fetch succeeded, replacing state and cache with the
+        // server transcript silently destroyed the comparisons that never
+        // made it up — permanent loss of an append-only record. Keep any
+        // local tuple the server does not have; the merge retries next
+        // sign-in because its flag was not latched.
+        const retained = unionTranscripts(server, local);
+        setComparisons(retained);
         if (getCacheEpoch() === epoch) {
           // OWNERSHIP marker (santa round-3, mirrors useRatings): latch the
           // flag even when no merge ran — the guards key off it.
           writeMergedFlag(userId);
           // Write-through the transcript cache (Codex review): without it a
           // later failed fetch falls back to an empty/stale transcript.
-          writeComparisons(server);
+          writeComparisons(retained);
           // Self-healing pass (Codex review): persisted scores are a
           // denormalization of (ratings, transcript) and can drift — tier
           // changes shrink a tier without re-interpolating, and a partial
           // fire-and-forget failure diverges them. Repair from the
           // authoritative transcript on every hydrate.
           const cached = loadRatings();
-          const corrected = reconcileScores(cached, server);
+          const corrected = reconcileScores(cached, retained);
           const repaired = corrected.filter(
             (r, i) => r !== cached[i],
           );

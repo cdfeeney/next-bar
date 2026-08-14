@@ -224,6 +224,18 @@ describe('mergeLocalComparisonsToServer', () => {
     ]);
   });
 
+  it('collapses an exact duplicate inside the LOCAL transcript to one insert', async () => {
+    // The server set alone is not enough to dedupe against: a local list
+    // holding the same tuple twice inserted it twice and skewed replay.
+    const { client, calls } = fakeSupabase({ selectData: [] });
+    await expect(
+      mergeLocalComparisonsToServer(client, 'user-a', [A, A, B], null),
+    ).resolves.toBe(2);
+    const rows = calls.insert[0] as Array<{ winner_bar_id: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.winner_bar_id)).toEqual(['attaboy', 'bar-54']);
+  });
+
   it('preserves the local comparedAt rather than stamping merge time', async () => {
     const { client, calls } = fakeSupabase({ selectData: [] });
     await mergeLocalComparisonsToServer(client, 'user-a', [A], null);

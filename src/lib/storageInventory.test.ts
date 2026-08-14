@@ -19,6 +19,13 @@ import { describe, expect, it } from 'vitest';
  * Plus a frozen V7 baseline: the exact keys a V7 install has on disk. Those
  * may never leave `src/` without a tested forward migration, so they are
  * asserted by literal name rather than by whatever the doc happens to say.
+ *
+ * Only RUNTIME sources count as a key's read path — `*.test.ts` is excluded.
+ * Both review lanes caught the same hole here: scanning tests made the
+ * doc → src and V7-baseline directions tautological, because this file's own
+ * `V7_KEYS` array (and any fixture that seeds a key) kept every literal
+ * "present in src/" even after its last production reader was deleted. A
+ * guard that cannot fail is worse than no guard, because it is advertised.
  */
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
@@ -70,17 +77,26 @@ const V7_KEYS = [
 
 const KEY_PATTERN = /next-bar:[A-Za-z0-9:_-]+/g;
 
+/**
+ * A `next-bar:` prefix NOT followed by a complete literal key — i.e. one
+ * built by interpolation or concatenation. `KEY_PATTERN` cannot see such a
+ * key, so it would silently bypass the inventory; refuse the construct
+ * instead of pretending to cover it.
+ */
+const COMPUTED_KEY_PATTERN = /next-bar:(?![A-Za-z0-9:_-])/g;
+
+/** Runtime sources only — a test fixture is not a key's read path. */
 function sourceFilesUnder(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     const p = path.join(dir, name);
     if (statSync(p).isDirectory()) out.push(...sourceFilesUnder(p));
-    else if (/\.tsx?$/.test(p)) out.push(p);
+    else if (/\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p)) out.push(p);
   }
   return out;
 }
 
-/** Every `next-bar:` literal appearing anywhere under `src/`. */
+/** Every `next-bar:` literal appearing in runtime code under `src/`. */
 function literalsInSrc(): Map<string, string[]> {
   const found = new Map<string, string[]>();
   for (const file of sourceFilesUnder(SRC_DIR)) {
@@ -94,10 +110,20 @@ function literalsInSrc(): Map<string, string[]> {
   return found;
 }
 
-/** Keys carrying an inventory row, read from the doc's backtick cells. */
+/**
+ * Keys carrying a SUBSTANTIVE inventory row.
+ *
+ * Every one of the three cells after the key must be non-blank, so a row can
+ * only satisfy the guard by actually naming the storage, the owner, and the
+ * continuity rule. Matching on key presence alone let a placeholder row
+ * (`| \`next-bar:x:v1\` | | | |`) count as "documented", which is precisely
+ * the unaccounted-for key criterion 1 exists to prevent.
+ */
 function keysInInventory(): string[] {
   const doc = readFileSync(INVENTORY_DOC, 'utf8');
-  const rows = doc.matchAll(/^\|\s*`(next-bar:[^`]+)`\s*\|/gm);
+  const rows = doc.matchAll(
+    /^\|\s*`(next-bar:[^`]+)`\s*\|\s*\S[^|]*\|\s*\S[^|]*\|\s*\S[^|]*\|/gm,
+  );
   return [...rows].map((row) => row[1]);
 }
 
@@ -166,5 +192,20 @@ describe('V7→V8 storage-key inventory', () => {
     const used = literalsInSrc();
     const stale = BROADCAST_EVENTS.filter((name) => !used.has(name));
     expect(stale, 'remove the exemption when the broadcast goes away').toEqual([]);
+  });
+
+  it('no storage key is built by interpolation, which the scan cannot see', () => {
+    const offenders: string[] = [];
+    for (const file of sourceFilesUnder(SRC_DIR)) {
+      const src = readFileSync(file, 'utf8');
+      if (COMPUTED_KEY_PATTERN.test(src)) {
+        offenders.push(path.relative(REPO_ROOT, file).split(path.sep).join('/'));
+      }
+      COMPUTED_KEY_PATTERN.lastIndex = 0;
+    }
+    expect(
+      offenders,
+      'write the key as one literal — a computed key silently bypasses this inventory',
+    ).toEqual([]);
   });
 });
