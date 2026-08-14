@@ -316,7 +316,7 @@ export default function ResultsView({
                 }
                 setUndoTarget(null);
               }}
-              className="min-h-[36px] touch-manipulation px-3 rounded-full text-sm font-display text-accent hover:bg-bg transition-colors"
+              className="min-h-[44px] touch-manipulation px-3 rounded-full text-sm font-display text-accent hover:bg-bg transition-colors"
             >
               Undo
             </button>

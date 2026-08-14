@@ -122,7 +122,7 @@ export default function FindFriends({
                   aria-pressed={following || pending}
                   onClick={() => toggleFollow(r.handle)}
                   className={[
-                    'shrink-0 min-h-[36px] touch-manipulation px-4 rounded-full text-sm font-display border transition-colors',
+                    'shrink-0 min-h-[44px] touch-manipulation px-4 rounded-full text-sm font-display border transition-colors',
                     following || pending
                       ? 'bg-transparent border-border text-muted hover:text-text'
                       : 'bg-accent border-accent text-bg',

@@ -21,6 +21,21 @@ import { denyGeolocation } from './helpers/geo';
 /** The five canonical tabs. Each must satisfy the contract at both sizes. */
 const TAB_ROUTES = ['/', '/map', '/rankings', '/friends', '/settings'] as const;
 
+/**
+ * Other surfaces a real user reaches. They get the cheap geometry checks at the
+ * compact size — the contract is about the whole shell, not only the tab bar,
+ * and these are exactly where an unnoticed sideways scroll tends to appear.
+ */
+const SECONDARY_ROUTES = [
+  '/discover',
+  '/lists',
+  '/tried',
+  '/friends/consensus',
+  '/u/claire',
+  '/auth',
+  '/join',
+] as const;
+
 /** Compact iPhone (13/14/15) and large iPhone (Pro Max class). */
 const VIEWPORTS = [
   { name: 'compact iPhone', width: 390, height: 844 },
@@ -80,6 +95,18 @@ test.describe('V8 native interaction contract', () => {
           geometry.innerWidth - geometry.clientWidth,
           `${route} reserves a visible scrollbar gutter`,
         ).toBeLessThanOrEqual(OVERFLOW_TOLERANCE_PX);
+
+        // The gutter check alone is VACUOUS on mobile engines, where scrollbars
+        // overlay content and steal no width — deleting the hiding CSS would
+        // still measure zero. Assert the suppression itself so removing it
+        // fails here rather than silently on a device.
+        const scrollbarWidth = await page.evaluate(
+          () => getComputedStyle(document.documentElement).scrollbarWidth || '',
+        );
+        expect(
+          scrollbarWidth,
+          `${route}: html scrollbar-width is "${scrollbarWidth}", so a native rail can render`,
+        ).toBe('none');
       });
 
       test(`${route} has exactly one vertical scroll owner on ${viewport.name}`, async ({
@@ -112,6 +139,21 @@ test.describe('V8 native interaction contract', () => {
           owners,
           `${route} has ${owners.length} nested vertical scroll owners besides the page: ${owners.join(' | ')}`,
         ).toHaveLength(0);
+
+        // "Zero nested owners" is only half the criterion, and on its own it is
+        // VACUOUS: a route that disabled page scrolling entirely, or rendered
+        // nothing, would also report zero. Assert the page itself is still the
+        // owner — neither html nor body may suppress vertical scrolling.
+        const rootOverflowY = await page.evaluate(() => ({
+          html: getComputedStyle(document.documentElement).overflowY,
+          body: getComputedStyle(document.body).overflowY,
+        }));
+        for (const [el, value] of Object.entries(rootOverflowY)) {
+          expect(
+            ['hidden', 'clip'].includes(value),
+            `${route}: <${el}> has overflow-y: ${value}, which takes scroll ownership away from the page`,
+          ).toBe(false);
+        }
       });
 
       test(`${route} exposes no accidental horizontal scroll strip on ${viewport.name}`, async ({
@@ -171,6 +213,129 @@ test.describe('V8 native interaction contract', () => {
       expect(
         scrollWidth,
         `${route} overflows horizontally at 125% text size (${scrollWidth} > ${clientWidth})`,
+      ).toBeLessThanOrEqual(clientWidth + OVERFLOW_TOLERANCE_PX);
+    });
+  }
+
+  // Both scrollable tab routes, not just one: pinning is per-layout, and a
+  // regression on Rankings says nothing about the Social layout.
+  for (const route of ['/rankings', '/friends'] as const) {
+    test(`${route} keeps header and bottom nav anchored through overscroll and route change`, async ({
+      page,
+    }) => {
+      await denyGeolocation(page.context());
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(route);
+      await settle(page);
+
+      const nav = page.getByRole('navigation', { name: 'Primary' });
+      await expect(nav).toBeVisible();
+
+      // Criterion 5 names the HEADER too. Measure the page's first heading's
+      // nearest sticky/fixed ancestor if there is one, else the heading itself:
+      // either way its viewport y must not drift when the page overscrolls.
+      const headerY = () =>
+        page.evaluate(() => {
+          const heading = document.querySelector('h1');
+          if (!heading) return null;
+          let el: HTMLElement | null = heading as HTMLElement;
+          while (el) {
+            const pos = getComputedStyle(el).position;
+            if (pos === 'fixed' || pos === 'sticky') break;
+            el = el.parentElement;
+          }
+          return (el ?? heading).getBoundingClientRect().top;
+        });
+
+      const navBefore = await nav.boundingBox();
+      const headerBefore = await headerY();
+      expect(navBefore).not.toBeNull();
+
+      await page.evaluate(() => window.scrollTo(0, -1200));
+      await settle(page);
+      expect(await headerY(), `${route}: header moved on top overscroll`).toBeCloseTo(
+        headerBefore!,
+        0,
+      );
+
+      // A route change must not leave the nav detached either.
+      await page.goto(route === '/rankings' ? '/friends' : '/rankings');
+      await settle(page);
+      const navAfterRoute = await nav.boundingBox();
+      expect(navAfterRoute?.y, `${route}: nav moved after a route change`).toBeCloseTo(
+        navBefore!.y,
+        0,
+      );
+    });
+  }
+
+  test('the rankings quick-add sheet returns focus to its opener on close', async ({ page }) => {
+    // The second live overlay. It locks scroll like the lightbox, so it owes
+    // the same focus contract — and it is on a different route, so the
+    // lightbox test cannot cover it.
+    await denyGeolocation(page.context());
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/rankings');
+    await settle(page);
+
+    const opener = page.getByRole('button', { name: /add a bar/i }).first();
+    await expect(opener).toBeVisible();
+    await opener.press('Enter');
+
+    const sheet = page.getByRole('dialog');
+    await expect(sheet).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(sheet).toHaveCount(0);
+
+    // Without the opener capture the autoFocus input unmounts and focus falls
+    // to <body>, dumping a screen-reader user at the top of the document.
+    await expect(opener).toBeFocused();
+  });
+
+  // Criterion 9's reduced-motion half. globals.css carries the rules; nothing
+  // proved they take effect, so deleting that block was a silent regression.
+  test('prefers-reduced-motion suppresses transitions and smooth scrolling', async ({ page }) => {
+    await denyGeolocation(page.context());
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/rankings');
+    await settle(page);
+
+    const motion = await page.evaluate(() => {
+      const nav = document.querySelector('nav a') as HTMLElement | null;
+      return {
+        scrollBehavior: getComputedStyle(document.documentElement).scrollBehavior,
+        navTransitionMs: nav
+          ? Number.parseFloat(getComputedStyle(nav).transitionDuration || '0') * 1000
+          : null,
+      };
+    });
+
+    expect(motion.scrollBehavior, 'smooth scrolling survives reduced-motion').toBe('auto');
+    expect(
+      motion.navTransitionMs,
+      `nav transition is ${motion.navTransitionMs}ms under reduced motion`,
+    ).toBeLessThanOrEqual(1);
+  });
+
+  // Secondary surfaces: the cheap geometry half of the contract. A sideways
+  // scroll here is just as broken as one on a tab route.
+  for (const route of SECONDARY_ROUTES) {
+    test(`${route} has no horizontal overflow (secondary surface)`, async ({ page }) => {
+      await denyGeolocation(page.context());
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(route);
+      await settle(page);
+
+      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+
+      expect(
+        scrollWidth,
+        `${route} scrolls horizontally (${scrollWidth} > ${clientWidth})`,
       ).toBeLessThanOrEqual(clientWidth + OVERFLOW_TOLERANCE_PX);
     });
   }
@@ -255,10 +420,24 @@ test.describe('V8 native interaction contract', () => {
     expect(lockedOffset, 'body scroll lock did not engage when the dialog opened').not.toBeNull();
 
     // Contract 4: the page behind the overlay is locked — scrolling the
-    // backdrop must not move it.
+    // backdrop must not move it. Assert the real GEOMETRY of an element behind
+    // the dialog, not only body.style.top: the style string would sit still
+    // even if the page moved underneath it, which makes that check alone
+    // vacuous.
+    const backdropY = () =>
+      page.evaluate(() => document.querySelector('article')?.getBoundingClientRect().top ?? null);
+    const backdropBefore = await backdropY();
+    expect(backdropBefore, 'need a background element to observe').not.toBeNull();
+
     await page.evaluate(() => window.scrollBy(0, 600));
     await settle(page);
-    expect(await readLockedOffset(), 'page scrolled while the lightbox was open').toBe(lockedOffset);
+    expect(await readLockedOffset(), 'lock offset changed while the lightbox was open').toBe(
+      lockedOffset,
+    );
+    expect(await backdropY(), 'the page behind the lightbox actually moved').toBeCloseTo(
+      backdropBefore!,
+      0,
+    );
 
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);

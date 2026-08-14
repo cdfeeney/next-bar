@@ -23,6 +23,7 @@ import BarVisualTile from '@/components/BarVisualTile';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
+import { lockBodyScroll } from '@/lib/bodyScrollLock';
 import { getBarById } from '@/lib/catalog';
 import { nycNightKey } from '@/lib/nightKey';
 import {
@@ -52,6 +53,20 @@ export default function TonightSuggestions(): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const night = nycNightKey();
+
+  // The suggest picker is a full-screen role="dialog": it owes the same
+  // contract as the other overlays — lock the page behind it, and hand focus
+  // back to whatever opened it. preventScroll so focus() cannot override the
+  // scroll position the unlock just restored.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const unlockScroll = lockBodyScroll();
+    return () => {
+      unlockScroll();
+      opener?.focus?.({ preventScroll: true });
+    };
+  }, [pickerOpen]);
 
   const refresh = useCallback(async () => {
     if (auth.status !== 'signed-in') return;

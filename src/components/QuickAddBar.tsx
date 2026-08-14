@@ -50,6 +50,11 @@ export default function QuickAddBar({
 
   useEffect(() => {
     if (!isModalOpen) return;
+    // Capture the opener BEFORE the autoFocus input below steals focus, so
+    // closing can hand it back. Without this the focused input unmounts and
+    // focus drops to <body>, which sends a screen-reader user to the top of
+    // the document (the same contract the other two overlays already keep).
+    const opener = document.activeElement as HTMLElement | null;
     const unlockScroll = lockBodyScroll();
 
     function handleKeyDown(event: KeyboardEvent): void {
@@ -63,6 +68,9 @@ export default function QuickAddBar({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       unlockScroll();
+      // preventScroll: see bodyScrollLock — focus() would otherwise re-scroll
+      // the opener into view and override the position just restored.
+      opener?.focus?.({ preventScroll: true });
     };
   }, [isModalOpen]);
 
