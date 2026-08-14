@@ -6,9 +6,11 @@ attended approval.
 
 Authoritative product requirements: `docs/V8-PRD-2026-08-13.md`.
 
-Design lock status: the native interaction contract is locked. The final visual
-art direction remains gated on the operator's labeled reference images; no
-overnight lane may apply an app-wide visual restyle before that selection.
+Design lock status: the native interaction contract and visual system are locked
+by `docs/design-reference/README.md` and
+`docs/CLAUDE-DESIGN-RECOVERY-2026-08-12.md`. Use exactly
+`Map / Rankings / Next Bar? / Social / Account`; do not create a sixth tab or a
+new visual-direction bakeoff. Exploratory screenshots remain unapproved.
 
 ## 1. Image-led interface refresh
 
@@ -20,13 +22,13 @@ overnight lane may apply an app-wide visual restyle before that selection.
   sheets, cards, and tab content should not expose desktop-web affordances.
 - [ ] Validate the keyboard, bottom navigation, lightboxes, and sheets in the
   Capacitor WebView rather than approving them from desktop browser sizing.
-- [ ] Collect and label the operator-provided reference images.
-- [ ] Map each reference to an existing Next Bar surface before changing code.
-- [ ] Define the V8 visual tokens for cards, overlays, motion, spacing, and type.
-- [ ] Redesign one representative bar card and lightbox first.
+- [x] Preserve and label the 13 approved and three exploratory reference images.
+- [x] Map every approved reference to its Next Bar surface in the design index.
+- [x] Record the locked visual tokens and five-tab IA in the recovery record.
+- [ ] Apply the approved card and lightbox designs without creating new directions.
 - [ ] Preserve Google Places UI Kit attribution and no-photo-cache policy.
 - [ ] Validate reduced motion, contrast, 44px touch targets, and text scaling.
-- [ ] Apply the approved system to Home, Map, Rankings, Lists, and Friends.
+- [ ] Apply the approved system to Map, Rankings, Next Bar?, Social, and Account.
 - [ ] Verify compact iPhone, large iPhone, Android, landscape, and desktop.
 
 ## 2. Venue tags and expansion
@@ -46,6 +48,8 @@ overnight lane may apply an app-wide visual restyle before that selection.
 - [ ] Add branded Open Graph art for invitation links and shared nights.
 - [ ] Add tasteful share/invite transitions using the approved V8 motion system.
 - [ ] Support native share sheet, copy link, and recipient landing state.
+- [ ] Keep invite-recipient visuals behind founder approval; anonymous links only
+  preview explicitly shared plan data until that decision is recorded.
 - [ ] Preserve attribution and avoid embedding private account data in previews.
 - [ ] Make join, accept, decline, and `Not tonight` states explicit.
 - [ ] Add bar suggestions and voting to the invitation timeline.
@@ -55,7 +59,7 @@ overnight lane may apply an app-wide visual restyle before that selection.
 
 ## 4. Native invitation notifications
 
-- [ ] Decide the minimum V8 notifications: invited to a night, invite accepted,
+- [x] Limit V8 notifications to: invited to a night, invite accepted,
   bar suggested, and plan changed.
 - [ ] Add an explicit in-app notification preference screen before prompting iOS.
 - [ ] Request iOS permission only after a user performs a notification-relevant
@@ -84,6 +88,8 @@ overnight lane may apply an app-wide visual restyle before that selection.
 - [ ] Promote catalog/content separately from private user/account data.
 - [ ] Never reseed, truncate, overwrite, or replace the production user tables.
 - [ ] Add update tests from the exact V7 TestFlight build to the V8 candidate.
+- [x] Add the offline V7 continuity fixture for ratings, tied scores, named lists,
+  and night history across navigation and reload.
 - [ ] Verify Tester 1 / Conor Feeney retains Bar 54, lists, scores, night history,
   shared nights, profile, and authentication after update and force-close.
 - [ ] Add rollback and backup-restoration evidence before production migration.
