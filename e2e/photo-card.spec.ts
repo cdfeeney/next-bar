@@ -50,7 +50,9 @@ test.describe('Hero result card', () => {
       .click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator('img')).toHaveCount(3);
+    // Places UI Kit owns its media; V7 must not render cached app-owned images.
+    await expect(dialog.locator('img')).toHaveCount(0);
+    await expect(dialog.getByRole('heading', { name: 'Hours' })).toBeVisible();
   });
 
   test('photo-fallback NEGATIVE: blocked photos degrade to glyph tiles, zero imgs', async ({

@@ -17,7 +17,7 @@ const NIGHT_ROW = {
   handle: 'conor_f',
   display_name: 'Conor F',
   night: '2026-07-25',
-  bar_ids: ['attaboy', 'mister-paradise'],
+  bar_ids: ['attaboy', 'death-and-co'],
   loved_bar_id: 'attaboy',
   shared_at: '2026-07-26T15:00:00Z',
 };
@@ -48,7 +48,7 @@ test.describe('E4.4 shared-night page', () => {
     const rows = page.locator('ol li');
     await expect(rows).toHaveCount(2);
     await expect(rows.nth(0)).toContainText('Attaboy');
-    await expect(rows.nth(1)).toContainText('Mister Paradise');
+    await expect(rows.nth(1)).toContainText('Death & Co');
 
     // Signed-out recipient: the join CTA leads, and the link can travel
     // onward.

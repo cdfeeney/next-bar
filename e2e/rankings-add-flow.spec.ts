@@ -7,15 +7,6 @@ async function typeInto(input: Locator, value: string): Promise<void> {
   await expect(input).toHaveValue(value);
 }
 
-async function clearStorage(page: Page): Promise<void> {
-  await denyGeolocation(page.context());
-  await page.goto('/');
-  await page.evaluate(() => {
-    window.localStorage.clear();
-    window.localStorage.setItem('next-bar:age-ack:v1', '1');
-  });
-}
-
 async function addScore(page: Page, name: string, score: string): Promise<void> {
   await page.getByRole('button', { name: '+ Add a bar' }).click();
   const dialog = page.getByRole('dialog', { name: 'Add a bar' });
@@ -28,7 +19,7 @@ async function addScore(page: Page, name: string, score: string): Promise<void> 
 }
 
 test.describe('/rankings numeric-first flow', () => {
-  test.beforeEach(async ({ page }) => clearStorage(page));
+  test.beforeEach(async ({ context }) => denyGeolocation(context));
 
   test('accepts exact scores, permits ties, and sorts descending', async ({ page }) => {
     await page.goto('/rankings');

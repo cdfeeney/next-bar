@@ -62,8 +62,8 @@ export async function GET(): Promise<NextResponse> {
       // against git for the smoke check, without handing out the exact
       // full revision for version-targeted reconnaissance.
       sha: (
-        process.env.VERCEL_GIT_COMMIT_SHA ??
-        process.env.NEXT_PUBLIC_BUILD_SHA ??
+        process.env.VERCEL_GIT_COMMIT_SHA ||
+        process.env.NEXT_PUBLIC_BUILD_SHA ||
         'dev'
       ).slice(0, 12),
       at: new Date().toISOString(),

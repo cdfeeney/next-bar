@@ -28,7 +28,7 @@ test.describe('E4.2/E4.5 recap home', () => {
             night,
             visits: [
               { barId: 'attaboy', at: `${night}T22:30:00-04:00` },
-              { barId: 'mister-paradise', at: `${night}T23:45:00-04:00` },
+              { barId: 'death-and-co', at: `${night}T23:45:00-04:00` },
             ],
           }),
         );
@@ -63,9 +63,9 @@ test.describe('E4.2/E4.5 recap home', () => {
     const rows = recap.locator('ol li');
     await expect(rows).toHaveCount(2);
     await expect(rows.nth(0)).toContainText('Attaboy');
-    await expect(rows.nth(1)).toContainText('Mister Paradise');
+    await expect(rows.nth(1)).toContainText('Death & Co');
 
-    // Mister Paradise is unrated → the rank CTA leads.
+    // Death & Co is unrated → the rank CTA leads.
     await expect(
       recap.getByRole('link', { name: /Rank last night/i }),
     ).toHaveAttribute('href', '/rankings');

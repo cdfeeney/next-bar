@@ -1,17 +1,8 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
 
-async function clearStorage(page: Page): Promise<void> {
-  await denyGeolocation(page.context());
-  await page.goto('/');
-  await page.evaluate(() => {
-    window.localStorage.clear();
-    window.localStorage.setItem('next-bar:age-ack:v1', '1');
-  });
-}
-
 test.describe('legacy ranking deep links', () => {
-  test.beforeEach(async ({ page }) => clearStorage(page));
+  test.beforeEach(async ({ context }) => denyGeolocation(context));
 
   test('opens numeric score entry and consumes the add parameter', async ({ page }) => {
     await page.goto('/rankings?add=attaboy');
