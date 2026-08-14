@@ -80,8 +80,8 @@ export default function CatalogRefresh(): JSX.Element | null {
   if (status === 'ready') return null;
   return (
     <p
-      role={status === 'loading' ? 'status' : 'alert'}
-      className="fixed inset-x-4 bottom-[calc(76px+env(safe-area-inset-bottom))] z-[1400] mx-auto max-w-md rounded-full border border-border bg-surface/95 px-4 py-2 text-center text-xs text-muted shadow-lg"
+      role="status"
+      className="pointer-events-none fixed inset-x-4 bottom-[calc(76px+env(safe-area-inset-bottom))] z-[1400] mx-auto max-w-md rounded-full border border-border bg-surface/95 px-4 py-2 text-center text-xs text-muted shadow-lg"
     >
       {status === 'loading'
         ? 'Loading the Manhattan catalog…'

@@ -49,9 +49,14 @@ deferred until a later version (currently expected around V11).
   retries 0; no functional product failure reproduced.
 - One stale heading assertion was corrected from `Rankings` to the shipped
   `Bar Rankings`; its focused WebKit check passed 1 / 1 with retries 0.
-- The complete functional cross-browser coverage is green, but the four-worker
-  WebKit harness is not: its two navigation races remain explicit rather than
-  being hidden with retries or product-code changes.
+- The earlier four-worker WebKit failures came from Next dev-server route
+  compilation forcing full-page reloads during navigation. Release evidence now
+  sets `PLAYWRIGHT_RELEASE=1`, which runs `next build` / `next start`; the
+  four-worker iPhone app-shell pack passed 13 / 13 with retries 0.
+- Focused release-mode iPhone closure checks passed 4 / 4 with retries 0: Home
+  and Map have no document-level horizontal overflow, visible Home buttons meet
+  the 44px minimum, and the V7 continuity fixture retains ratings, tied scores,
+  a named list, and night history across navigation and reload.
 - Public staging renders five cards for each distance selection. Exact public
   distance correlation could not be extracted reliably because Places UI Kit
   lazily mounts identity inside its widget; the deterministic local Playwright
@@ -82,6 +87,7 @@ deferred until a later version (currently expected around V11).
 
 - [x] Deploy the frozen V7 code candidate to the staging Vercel project.
 - [ ] Confirm Map has no horizontal page overflow on the physical iPhone.
+- [x] Add and pass a release-mode WebKit guard for document-level Map overflow.
 - [x] Confirm `Tweak the vibe` and all three distance bands in focused automation.
 - [x] On Tester 1 / Conor Feeney, confirm authentication remains valid and Bar
   54 is still present (operator verified 2026-08-13).
@@ -89,9 +95,11 @@ deferred until a later version (currently expected around V11).
   state on Tester 1.
 - [ ] Add two bars with the same numeric score and confirm both retain it.
 - [ ] Force-close/reopen and confirm sign-in, Bar 54, lists, and numeric scores.
+- [x] Add and pass a V7 continuity fixture covering tied numeric scores, a named
+  list, night history, navigation, and reload without changing storage keys.
 - [x] Clear obsolete V7 fixtures and run both complete device matrices.
-- [ ] Remove the two remaining four-worker WebKit navigation races without
-  retries; both already pass serially and do not reproduce as product failures.
+- [x] Remove Next dev-server compilation from the release gate and pass the
+  iPhone app-shell pack 13 / 13 under four workers with retries 0.
 - [x] Run the complete deployed staging smoke suite (9 / 9, retries 0).
 - [x] Restore staging build identity and confirm `/api/health` reports the
   deployed commit prefix.

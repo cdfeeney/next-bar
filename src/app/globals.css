@@ -2,7 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body { height: 100%; }
+html, body {
+  height: 100%;
+  max-width: 100%;
+  overflow-x: clip;
+}
 
 /* Brand kit 2026-07-23: Poppins headlines are Bold. font-display only sets the
    family, so give it the brand weight here (base layer — explicit font-*

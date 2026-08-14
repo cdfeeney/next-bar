@@ -118,7 +118,7 @@ describe('CatalogRefresh paging (PostgREST 1,000-row cap)', () => {
   test('reports a failed refresh and keeps the emergency catalog', async () => {
     pageError = true;
     render(<CatalogRefresh />);
-    expect(await screen.findByRole('alert')).toHaveTextContent(
+    expect(await screen.findByRole('status')).toHaveTextContent(
       'Catalog refresh unavailable',
     );
     expect(replaced).toHaveLength(0);

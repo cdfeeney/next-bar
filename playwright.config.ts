@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const releaseMode = process.env.PLAYWRIGHT_RELEASE === '1';
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
@@ -38,9 +40,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run dev',
+    command: releaseMode ? 'npm run build && npm run start' : 'npm run dev',
     url: 'http://localhost:3000',
-    reuseExistingServer: true,
+    reuseExistingServer: !releaseMode,
     timeout: 120_000,
   },
 });

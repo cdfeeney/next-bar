@@ -28,6 +28,17 @@ test.describe('Mobile a11y — home page', () => {
     expect(hasHorizontalScroll).toBe(false);
   });
 
+  test('no horizontal scroll on map', async ({ page }) => {
+    await page.goto('/map');
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible();
+
+    const hasHorizontalScroll = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth + 1,
+    );
+    expect(hasHorizontalScroll).toBe(false);
+  });
+
   test('all visible buttons are at least 44px tall', async ({ page }) => {
     await page.goto('/');
     await expect(

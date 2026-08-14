@@ -111,11 +111,13 @@ test.describe('App-shell smoke', () => {
   test('/settings renders signed-out account card', async ({ page }) => {
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: /^Settings$/ })).toBeVisible();
-    // Auth state resolves to signed-out for fresh contexts; expect the
-    // Sign-in CTA, not the email + Sign-out row.
-    await expect(page.getByRole('link', { name: /Sign in/i })).toBeVisible({
-      timeout: 10_000,
-    });
+    // A configured build resolves signed-out to the CTA; an intentionally
+    // unconfigured local build resolves to its explicit unavailable state.
+    await expect(
+      page
+        .getByRole('link', { name: /Sign in/i })
+        .or(page.getByText(/Sign-in is unavailable on this build/i)),
+    ).toBeVisible({ timeout: 10_000 });
     await expectNoConsoleErrors(page, '/settings');
   });
 
