@@ -35,13 +35,15 @@ const TABS: Tab[] = [
   },
   {
     href: '/friends',
-    label: 'Friends',
+    // V8 canonical IA (V8-PRD-2026-08-13): the tab reads "Social"; the route
+    // stays /friends so every existing link, test, and share target keeps working.
+    label: 'Social',
     isActive: (pathname) =>
       pathname.startsWith('/friends') || pathname.startsWith('/u/'),
   },
   {
     href: '/settings',
-    label: 'Settings',
+    label: 'Account',
     isActive: (pathname) => pathname.startsWith('/settings'),
   },
 ];
@@ -72,7 +74,7 @@ export default function BottomNav(): JSX.Element | null {
       aria-label="Primary"
       className="fixed bottom-0 left-0 right-0 z-[1000] bg-bg/95 backdrop-blur border-t border-border pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
     >
-      <ul className="flex justify-around items-end">
+      <ul className="mx-auto flex max-w-lg items-end justify-around">
         {TABS.map((tab) => {
           const active = tab.isActive(pathname);
 
@@ -106,7 +108,9 @@ export default function BottomNav(): JSX.Element | null {
                 aria-current={active ? 'page' : undefined}
                 className={[
                   'flex flex-col items-center justify-center gap-1 min-h-[44px] min-w-[56px] px-2 py-1 touch-manipulation rounded-lg font-display text-[11px] uppercase tracking-wider transition-colors text-center',
-                  active ? 'text-accent' : 'text-muted',
+                  active
+                    ? 'border border-accent/60 bg-accent/10 text-accent'
+                    : 'border border-transparent text-muted',
                 ].join(' ')}
               >
                 <span className="relative">

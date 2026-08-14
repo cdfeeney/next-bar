@@ -41,10 +41,10 @@ test.describe('Bottom nav', () => {
     await nav.getByRole('link', { name: 'Rankings' }).click();
     await expect(page).toHaveURL(/\/rankings$/);
 
-    await nav.getByRole('link', { name: 'Friends' }).click();
+    await nav.getByRole('link', { name: 'Social' }).click();
     await expect(page).toHaveURL(/\/friends$/);
 
-    await nav.getByRole('link', { name: 'Settings' }).click();
+    await nav.getByRole('link', { name: 'Account' }).click();
     await expect(page).toHaveURL(/\/settings$/);
 
     await nav.getByRole('link', { name: 'Next Bar?' }).click();

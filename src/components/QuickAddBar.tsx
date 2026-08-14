@@ -5,6 +5,7 @@ import type { Bar } from '@/types';
 import type { Rating } from '@/types/ratings';
 import { useRatings } from '@/hooks/useRatings';
 import { getBarById } from '@/lib/catalog';
+import { lockBodyScroll } from '@/lib/bodyScrollLock';
 import BarPicker from '@/components/BarPicker';
 
 type Stage = 'idle' | 'pick-bar' | 'pick-score';
@@ -49,8 +50,7 @@ export default function QuickAddBar({
 
   useEffect(() => {
     if (!isModalOpen) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlockScroll = lockBodyScroll();
 
     function handleKeyDown(event: KeyboardEvent): void {
       if (event.key === 'Escape') {
@@ -62,7 +62,7 @@ export default function QuickAddBar({
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = prevOverflow;
+      unlockScroll();
     };
   }, [isModalOpen]);
 

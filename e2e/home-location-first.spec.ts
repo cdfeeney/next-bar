@@ -55,8 +55,8 @@ test.describe('Home — location-first', () => {
     await expect(links.nth(0)).toHaveText(/Map/i);
     await expect(links.nth(1)).toHaveText(/Rankings/i);
     await expect(links.nth(2)).toHaveText(/Next Bar\?/i);
-    await expect(links.nth(3)).toHaveText(/Friends/i);
-    await expect(links.nth(4)).toHaveText(/Settings/i);
+    await expect(links.nth(3)).toHaveText(/Social/i);
+    await expect(links.nth(4)).toHaveText(/Account/i);
 
     // The center action is visibly enlarged vs a sibling tab.
     const primaryBox = await links.nth(2).boundingBox();

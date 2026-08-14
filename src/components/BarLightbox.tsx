@@ -8,6 +8,7 @@ import { fetchBarDetails, type BarDetails } from '@/lib/barReviews';
 import { resolveMedia } from '@/lib/mediaPolicy';
 import { weekHoursRows } from '@/lib/openNow';
 import { displayHood } from '@/lib/hoodDisplay';
+import { lockBodyScroll } from '@/lib/bodyScrollLock';
 import OpenNowBadge from '@/components/OpenNowBadge';
 import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 
@@ -18,10 +19,8 @@ import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
  * today; when the ingest starts storing multiple photoRefs this becomes a
  * swipeable carousel without changing the entry point.
  *
- * Scroll-lock note: plain save/restore is safe here because no overlay
- * ever NESTS inside the lightbox — "Rank it" navigates to /rankings,
- * unmounting this first (reviewed; revisit with a lock-counter if an
- * in-place sheet is ever added).
+ * Scroll lock is shared with the other overlays and restores both body
+ * styles and the page position when the dialog closes.
  *
  * A11y (Opus review): dialog semantics; Escape + backdrop close; focus
  * moves to ✕ on open, Tab CYCLES inside the dialog (minimal trap), and
@@ -129,12 +128,10 @@ export default function BarLightbox({
       }
     };
     window.addEventListener('keydown', onKey);
-    // Lock background scroll while open.
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlockScroll = lockBodyScroll();
     return () => {
       window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
+      unlockScroll();
       opener?.focus();
     };
   }, [bar]);

@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import type { Bar } from '@/types';
 import type { Rating } from '@/types/ratings';
 import { displayHood } from '@/lib/hoodDisplay';
+import { lockBodyScroll } from '@/lib/bodyScrollLock';
 
 const TIER_LABEL: Record<Rating, string> = {
   loved: 'Loved',
@@ -71,8 +72,7 @@ export default function PairwiseSheet({
     const previouslyFocused = document.activeElement as HTMLElement | null;
     firstButtonRef.current?.focus();
 
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlockScroll = lockBodyScroll();
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
@@ -84,7 +84,7 @@ export default function PairwiseSheet({
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = prevOverflow;
+      unlockScroll();
       previouslyFocused?.focus?.();
     };
   }, [onSkip]);
