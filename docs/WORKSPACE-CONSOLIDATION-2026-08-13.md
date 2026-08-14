@@ -49,3 +49,16 @@ part of workspace cleanup.
   `expansion-packet-g779223`.
 - Dirty, locked, private-environment-bearing, and unintegrated worktrees remain
   untouched pending explicit preservation.
+- Verified full-ref backup:
+  `D:/ClaudeData/NextBar/checkpoints/NEXTBAR-WORKTREES-BACKUP-2026-08-13.bundle`.
+- Verified backup after preserving four additional edit sets as named stashes:
+  `D:/ClaudeData/NextBar/checkpoints/NEXTBAR-WORKTREES-BACKUP-WITH-STASHES-2026-08-13.bundle`.
+- Registered worktrees reduced from 39 to 15; 23 obsolete checkout folders were
+  removed without `--force`. Branches remain in Git and the verified bundles.
+- Windows unregistered but could not fully remove the previously identified
+  locked `nb-overnight-20260807` directory. Its changes are in the named stash
+  `workspace-cleanup:nb-overnight-20260807:2026-08-13`; the directory remains on
+  C intentionally rather than being force-deleted.
+- Remaining registered worktrees contain private environment files, active
+  edits, or the current/canonical release checkout. Consolidate their credentials
+  and edits explicitly before removing them.
