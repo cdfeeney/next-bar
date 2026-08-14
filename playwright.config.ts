@@ -2,6 +2,11 @@ import { defineConfig, devices } from '@playwright/test';
 
 const releaseMode = process.env.PLAYWRIGHT_RELEASE === '1';
 
+// Port is overridable so two worktrees of this repo can run e2e at the same
+// time. Defaults to 3000, so nothing changes unless PORT is set.
+const port = Number(process.env.PORT ?? 3000);
+const baseURL = `http://localhost:${port}`;
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
@@ -11,7 +16,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     // Pre-acknowledge the 21+ age gate (H1) for every spec — the overlay
@@ -23,7 +28,7 @@ export default defineConfig({
       cookies: [],
       origins: [
         {
-          origin: 'http://localhost:3000',
+          origin: baseURL,
           localStorage: [{ name: 'next-bar:age-ack:v1', value: '1' }],
         },
       ],
@@ -40,8 +45,10 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: releaseMode ? 'npm run build && npm run start' : 'npm run dev',
-    url: 'http://localhost:3000',
+    command: releaseMode
+      ? `npm run build && npm run start -- --port ${port}`
+      : `npm run dev -- --port ${port}`,
+    url: baseURL,
     reuseExistingServer: !releaseMode,
     timeout: 120_000,
   },
