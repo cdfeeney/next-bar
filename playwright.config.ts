@@ -2,6 +2,14 @@ import { defineConfig, devices } from '@playwright/test';
 
 const releaseMode = process.env.PLAYWRIGHT_RELEASE === '1';
 
+// Port 3000 with reuseExistingServer is right for a single checkout, but when
+// two worktrees of this repo run suites at once the second one silently
+// ATTACHES TO THE FIRST ONE'S dev server and tests the other branch's code —
+// observed as a spec passing, then failing unchanged minutes later. Pin
+// PLAYWRIGHT_PORT to get a private server; unset, behavior is unchanged.
+const port = process.env.PLAYWRIGHT_PORT ?? '3000';
+const baseURL = `http://localhost:${port}`;
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
@@ -11,7 +19,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     // Pre-acknowledge the 21+ age gate (H1) for every spec — the overlay
@@ -23,7 +31,7 @@ export default defineConfig({
       cookies: [],
       origins: [
         {
-          origin: 'http://localhost:3000',
+          origin: baseURL,
           localStorage: [{ name: 'next-bar:age-ack:v1', value: '1' }],
         },
       ],
@@ -40,9 +48,13 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: releaseMode ? 'npm run build && npm run start' : 'npm run dev',
-    url: 'http://localhost:3000',
-    reuseExistingServer: !releaseMode,
+    command: releaseMode
+      ? `npm run build && npm run start -- --port ${port}`
+      : `npm run dev -- --port ${port}`,
+    url: baseURL,
+    // A pinned port means "give me my own server" — reusing whatever already
+    // listens there would defeat the isolation it was pinned for.
+    reuseExistingServer: !releaseMode && !process.env.PLAYWRIGHT_PORT,
     timeout: 120_000,
   },
 });

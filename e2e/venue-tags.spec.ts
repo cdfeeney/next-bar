@@ -1,0 +1,150 @@
+/**
+ * venue-tags.spec.ts — V8-5: at most five customer-facing tags at the bottom
+ * of the bar lightbox (docs/V8-PRD-2026-08-13.md §"P1: venue presentation and
+ * expansion", docs/V8-CHECKLIST-2026-08-13.md §2).
+ *
+ * The priority rule itself is proved in src/lib/tagDisplay.test.ts — that is a
+ * pure function and belongs in a unit test. What only a browser can answer is
+ * whether the chips actually land at the BOTTOM of the lightbox, stay off the
+ * result card, and don't reintroduce the sideways scroll strip the goal-1
+ * overflow contract forbids. Both phone sizes are exercised via the config's
+ * iPhone 13 / Pixel 7 projects, so every assertion here is viewport-agnostic.
+ */
+
+import { test, expect, type Page } from '@playwright/test';
+import { denyGeolocation } from './helpers/geo';
+
+const OVERFLOW_TOLERANCE_PX = 1;
+
+async function openLightbox(page: Page) {
+  await denyGeolocation(page.context());
+  await page.goto('/');
+  await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
+  await page.getByRole('button', { name: /Attaboy/ }).click();
+  const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+  await expect(cards).toHaveCount(5);
+  await cards.first().getByRole('button', { name: /See photos and hours/i }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+test.describe('venue tags in the bar lightbox', () => {
+  test('shows at most five tags, and never a raw enum or the word "pricey"', async ({
+    page,
+  }) => {
+    const dialog = await openLightbox(page);
+    const chips = dialog.locator('[data-venue-tags] li');
+
+    const count = await chips.count();
+    expect(count, 'the lightbox renders no tags at all').toBeGreaterThan(0);
+    expect(count, 'more than five tags reached the lightbox').toBeLessThanOrEqual(5);
+
+    const labels = await chips.allInnerTexts();
+    for (const label of labels) {
+      // displayTag() output is human-cased; a raw kebab enum means some render
+      // site bypassed it.
+      expect(label).not.toMatch(/^[a-z0-9]+(-[a-z0-9]+)+$/);
+      expect(label.toLowerCase()).not.toContain('pricey');
+      // Price is already in the eyebrow — a "$$" chip would just repeat it.
+      expect(label.trim()).not.toMatch(/^\$+$/);
+    }
+  });
+
+  test('tags sit at the bottom of the lightbox, below the hours and above the actions', async ({
+    page,
+  }) => {
+    const dialog = await openLightbox(page);
+    const tags = dialog.locator('[data-venue-tags]');
+    await expect(tags).toHaveCount(1);
+
+    const tagsBox = await tags.boundingBox();
+    const actionBox = await dialog.getByRole('link', { name: /Rank it/i }).boundingBox();
+
+    expect(tagsBox).not.toBeNull();
+    expect(actionBox).not.toBeNull();
+    // The hours card renders only for bars that carry hours — the emergency
+    // core set used offline does not. Check for it rather than waiting on it
+    // (boundingBox() would block until the 30s test timeout); when it IS
+    // there, the tags must come after it.
+    const hours = dialog.getByRole('heading', { name: 'Hours' });
+    const hoursBox = (await hours.count()) > 0 ? await hours.boundingBox() : null;
+    if (hoursBox) {
+      expect(
+        tagsBox!.y,
+        'tags render above the hours card instead of at the bottom',
+      ).toBeGreaterThan(hoursBox.y);
+    }
+    expect(
+      tagsBox!.y,
+      'tags render below the action row — the approved design keeps the actions last',
+    ).toBeLessThan(actionBox!.y);
+  });
+
+  test('tags do not crowd the result card behind the lightbox', async ({ page }) => {
+    await denyGeolocation(page.context());
+    await page.goto('/');
+    await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
+    await page.getByRole('button', { name: /Attaboy/ }).click();
+    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    await expect(cards).toHaveCount(5);
+    // The chip row belongs to the lightbox only (checklist §2: "without
+    // crowding the result card").
+    await expect(page.locator('[data-venue-tags]')).toHaveCount(0);
+  });
+
+  // The goal-1 overflow contract is written against the compact/large iPhone
+  // range specifically, so set those sizes rather than relying on the config's
+  // iPhone 13 / Pixel 7 projects — same reasoning as native-shell-contract.
+  for (const viewport of [
+    { name: 'compact iPhone', width: 390, height: 844 },
+    { name: 'large iPhone', width: 430, height: 932 },
+  ]) {
+    test(`tags introduce no horizontal overflow or scroll strip on ${viewport.name}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const dialog = await openLightbox(page);
+      await expect(dialog.locator('[data-venue-tags] li').first()).toBeVisible();
+
+      // Contract 2: the shell never scrolls horizontally.
+      const geometry = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      expect(
+        geometry.scrollWidth,
+        `lightbox with tags scrolls horizontally (${geometry.scrollWidth} > ${geometry.clientWidth})`,
+      ).toBeLessThanOrEqual(geometry.clientWidth + OVERFLOW_TOLERANCE_PX);
+
+      // Contract 5: the tagged photo carousel is the ONE allowed sideways
+      // scroller. A chip row that overflows instead of wrapping would show up
+      // here as an untagged strip.
+      const untagged = await dialog.evaluate((root, tolerance) => {
+        const found: string[] = [];
+        for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
+          if (el.scrollWidth <= el.clientWidth + tolerance) continue;
+          if (!['auto', 'scroll'].includes(getComputedStyle(el).overflowX)) continue;
+          if (el.closest('[data-carousel]')) continue;
+          found.push(el.className || el.tagName);
+        }
+        return found;
+      }, OVERFLOW_TOLERANCE_PX);
+      expect(
+        untagged,
+        `untagged horizontal scrollers in the lightbox: ${untagged.join(' | ')}`,
+      ).toHaveLength(0);
+
+      // The chip row itself must wrap, not clip: every chip stays inside the
+      // dialog's width.
+      const dialogBox = await dialog.boundingBox();
+      for (const chip of await dialog.locator('[data-venue-tags] li').all()) {
+        const box = await chip.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x + box!.width).toBeLessThanOrEqual(
+          dialogBox!.x + dialogBox!.width + OVERFLOW_TOLERANCE_PX,
+        );
+      }
+    });
+  }
+});
