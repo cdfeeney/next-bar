@@ -345,6 +345,88 @@ test.describe('V8 native interaction contract', () => {
     }
   });
 
+  test('an overlay opened at the very top restores to the top on close', async ({ page }) => {
+    // The scrollY === 0 case the main lock test cannot reach: it deliberately
+    // scrolls first, so the unlock's `window.scrollY === scrollY` early-return
+    // was never exercised at its boundary. If the browser re-applies a stale
+    // offset after position:fixed is removed, this is where it shows.
+    await denyGeolocation(page.context());
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
+    await page.getByRole('button', { name: /Attaboy/ }).click();
+    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    await expect(cards).toHaveCount(5);
+
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await settle(page);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
+    const opener = cards.first().getByRole('button', { name: /See photos and hours/i });
+    await opener.press('Enter');
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await settle(page);
+
+    expect(
+      await page.evaluate(() => window.scrollY),
+      'page did not return to the top after an overlay opened at scrollY 0',
+    ).toBe(0);
+  });
+
+  test('carousel controls do not animate under prefers-reduced-motion', async ({ page }) => {
+    // The Prev/Next controls exist to satisfy the non-swipe contract, so they
+    // must not themselves violate the reduced-motion contract. An explicit
+    // ScrollToOptions behavior is NOT overridden by CSS scroll-behavior, which
+    // is exactly the trap this asserts against.
+    await denyGeolocation(page.context());
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
+    await page.getByRole('button', { name: /Attaboy/ }).click();
+    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    await expect(cards).toHaveCount(5);
+    await cards.first().getByRole('button', { name: /See photos and hours/i }).press('Enter');
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+
+    const next = dialog.getByRole('button', { name: /next photo/i });
+    if ((await next.count()) === 0) return; // single-photo bar: nothing to animate
+
+    // Record every scrollTo the control issues and assert none asks to animate.
+    const behaviors = await dialog.evaluate((root) => {
+      const track = root.querySelector('[data-carousel]') as HTMLElement | null;
+      if (!track) return [];
+      const seen: string[] = [];
+      const original = track.scrollTo.bind(track);
+      (track as unknown as { scrollTo: unknown }).scrollTo = (...args: unknown[]) => {
+        const opts = args[0];
+        if (opts && typeof opts === 'object') {
+          seen.push(String((opts as ScrollToOptions).behavior ?? 'auto'));
+        }
+        return (original as (...a: unknown[]) => void)(...args);
+      };
+      (window as unknown as { __carouselBehaviors: string[] }).__carouselBehaviors = seen;
+      return seen;
+    });
+    expect(behaviors).toBeDefined();
+
+    await next.click();
+    await settle(page);
+
+    const observed = await page.evaluate(
+      () => (window as unknown as { __carouselBehaviors: string[] }).__carouselBehaviors ?? [],
+    );
+    expect(
+      observed.filter((b) => b === 'smooth'),
+      `carousel requested smooth scrolling under reduced motion: ${JSON.stringify(observed)}`,
+    ).toHaveLength(0);
+  });
+
   // Criterion 9's reduced-motion half. globals.css carries the rules; nothing
   // proved they take effect, so deleting that block was a silent regression.
   test('prefers-reduced-motion suppresses transitions and smooth scrolling', async ({ page }) => {

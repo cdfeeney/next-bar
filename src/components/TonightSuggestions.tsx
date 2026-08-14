@@ -24,6 +24,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
 import { lockBodyScroll } from '@/lib/bodyScrollLock';
+import { cycleFocusWithin } from '@/lib/focusTrap';
 import { getBarById } from '@/lib/catalog';
 import { nycNightKey } from '@/lib/nightKey';
 import {
@@ -51,6 +52,7 @@ export default function TonightSuggestions(): JSX.Element | null {
   const [loadFailed, setLoadFailed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const night = nycNightKey();
@@ -74,7 +76,11 @@ export default function TonightSuggestions(): JSX.Element | null {
       if (event.key === 'Escape') {
         event.preventDefault();
         setPickerOpen(false);
+        return;
       }
+      // Same Tab cycle the lightbox uses: without it, Tab walks out of an
+      // aria-modal dialog into content it declares nonexistent.
+      cycleFocusWithin(dialogRef.current, event);
     }
 
     window.addEventListener('keydown', handleKeyDown);
@@ -299,6 +305,7 @@ export default function TonightSuggestions(): JSX.Element | null {
 
       {pickerOpen ? (
         <div
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-label="Suggest a bar"

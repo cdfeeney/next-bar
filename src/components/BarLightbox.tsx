@@ -9,6 +9,7 @@ import { resolveMedia } from '@/lib/mediaPolicy';
 import { weekHoursRows } from '@/lib/openNow';
 import { displayHood } from '@/lib/hoodDisplay';
 import { lockBodyScroll } from '@/lib/bodyScrollLock';
+import { cycleFocusWithin } from '@/lib/focusTrap';
 import OpenNowBadge from '@/components/OpenNowBadge';
 import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 
@@ -89,7 +90,18 @@ export default function BarLightbox({
     const track = trackRef.current;
     if (!track) return;
     const clamped = Math.max(0, Math.min(index, photoUrls.length - 1));
-    track.scrollTo({ left: clamped * track.clientWidth, behavior: 'smooth' });
+    // An EXPLICIT ScrollToOptions behavior is not overridden by CSS
+    // scroll-behavior, and the reduced-motion rule targets <html> (the property
+    // does not inherit to this track). Hard-coding 'smooth' would make the very
+    // control added for the non-swipe contract violate the reduced-motion one,
+    // so ask the media query directly.
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    track.scrollTo({
+      left: clamped * track.clientWidth,
+      behavior: reduceMotion ? 'auto' : 'smooth',
+    });
   };
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -114,26 +126,10 @@ export default function BarLightbox({
         onCloseRef.current();
         return;
       }
-      // Minimal focus trap (Opus review): Tab cycles within the dialog.
-      if (e.key === 'Tab' && dialogRef.current) {
-        const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled])',
-        );
-        if (focusables.length === 0) return;
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        const active = document.activeElement;
-        if (!e.shiftKey && active === last) {
-          e.preventDefault();
-          first.focus();
-        } else if (e.shiftKey && active === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!dialogRef.current.contains(active)) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
+      // Minimal focus trap (Opus review): Tab cycles within the dialog. Now
+      // shared with the other two aria-modal overlays via cycleFocusWithin —
+      // triplicating this is how they drifted apart.
+      cycleFocusWithin(dialogRef.current, e);
     };
     window.addEventListener('keydown', onKey);
     const unlockScroll = lockBodyScroll();
@@ -238,12 +234,15 @@ export default function BarLightbox({
                 // by keyboard, so pair them with real Prev/Next buttons that
                 // drive the same scroll-snap track.
                 <span className="flex items-center gap-2">
+                  {/* aria-disabled, not disabled: a focused button that becomes
+                      `disabled` at an end drops focus to <body>, so a keyboard
+                      user paging to the last photo loses their place. */}
                   <button
                     type="button"
                     onClick={() => scrollToPhoto(activePhoto - 1)}
-                    disabled={activePhoto === 0}
+                    aria-disabled={activePhoto === 0}
                     aria-label="Previous photo"
-                    className="min-h-[44px] min-w-[44px] touch-manipulation rounded-full text-muted disabled:opacity-40 hover:text-text"
+                    className="min-h-[44px] min-w-[44px] touch-manipulation rounded-full text-muted aria-disabled:opacity-40 hover:text-text"
                   >
                     ‹
                   </button>
@@ -261,9 +260,9 @@ export default function BarLightbox({
                   <button
                     type="button"
                     onClick={() => scrollToPhoto(activePhoto + 1)}
-                    disabled={activePhoto === photoUrls.length - 1}
+                    aria-disabled={activePhoto === photoUrls.length - 1}
                     aria-label="Next photo"
-                    className="min-h-[44px] min-w-[44px] touch-manipulation rounded-full text-muted disabled:opacity-40 hover:text-text"
+                    className="min-h-[44px] min-w-[44px] touch-manipulation rounded-full text-muted aria-disabled:opacity-40 hover:text-text"
                   >
                     ›
                   </button>

@@ -6,6 +6,7 @@ import type { Rating } from '@/types/ratings';
 import { useRatings } from '@/hooks/useRatings';
 import { getBarById } from '@/lib/catalog';
 import { lockBodyScroll } from '@/lib/bodyScrollLock';
+import { cycleFocusWithin } from '@/lib/focusTrap';
 import BarPicker from '@/components/BarPicker';
 
 type Stage = 'idle' | 'pick-bar' | 'pick-score';
@@ -28,6 +29,7 @@ export default function QuickAddBar({
   const [selectedBar, setSelectedBar] = useState<Bar | null>(null);
   const [score, setScore] = useState('');
   const consumedInitialRef = useRef(false);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const { setRating } = useRatings();
 
   useEffect(() => {
@@ -61,7 +63,11 @@ export default function QuickAddBar({
       if (event.key === 'Escape') {
         event.preventDefault();
         closeModal();
+        return;
       }
+      // Same Tab cycle the lightbox uses: without it, Tab walks out of an
+      // aria-modal dialog into content it declares nonexistent.
+      cycleFocusWithin(dialogRef.current, event);
     }
 
     window.addEventListener('keydown', handleKeyDown);
@@ -95,6 +101,7 @@ export default function QuickAddBar({
 
       {isModalOpen ? (
         <div
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-label="Add a bar"
