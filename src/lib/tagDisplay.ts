@@ -132,19 +132,21 @@ if (new Set(Object.values(TAG_PRIORITY)).size !== Object.keys(TAG_PRIORITY).leng
 export const MAX_VENUE_TAGS = 5;
 
 /**
- * The tags a venue shows, highest priority first, capped at `limit`.
+ * The tags a venue shows, highest priority first, never more than
+ * MAX_VENUE_TAGS.
  *
  * Deterministic by construction: duplicates collapse, price tags and any tag
  * the server catalog invents outside the vocabulary drop out, and the
  * survivors are ordered by TAG_PRIORITY — which is total, so the result
  * depends only on the tag set, not on its input order.
+ *
+ * There is deliberately no `limit` parameter: the five-tag cap is the rule
+ * itself, not a decision each call site gets to make, so it cannot be
+ * widened by a caller passing a bigger number.
  */
-export function topVenueTags(
-  tags: readonly VibeTag[],
-  limit: number = MAX_VENUE_TAGS,
-): VibeTag[] {
+export function topVenueTags(tags: readonly VibeTag[]): VibeTag[] {
   return [...new Set(tags)]
     .filter((tag) => tag in TAG_PRIORITY && !(tag in PRICE_TAG_GLYPHS))
     .sort((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b])
-    .slice(0, limit);
+    .slice(0, MAX_VENUE_TAGS);
 }

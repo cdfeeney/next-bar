@@ -77,6 +77,18 @@ describe('topVenueTags — deterministic five-tag priority (V8-5)', () => {
     expect(topVenueTags([...TAG_VOCABULARY])).toHaveLength(MAX_VENUE_TAGS);
   });
 
+  it('caps at five even when a caller tries to ask for more', () => {
+    // The cap is the rule, not a per-call-site option: topVenueTags takes no
+    // limit argument, so an extra argument cannot widen it (Codex review).
+    const askForMore = topVenueTags as (
+      tags: readonly VibeTag[],
+      limit?: number,
+    ) => VibeTag[];
+    expect(askForMore([...TAG_VOCABULARY], 6)).toHaveLength(MAX_VENUE_TAGS);
+    expect(askForMore([...TAG_VOCABULARY], -1)).toHaveLength(MAX_VENUE_TAGS);
+    expect(topVenueTags.length, 'topVenueTags grew a second parameter').toBe(1);
+  });
+
   it('is invariant under input order — the same set always yields the same five', () => {
     const expected = topVenueTags(SEVEN_TAGS);
     for (let seed = 1; seed <= 50; seed += 1) {
