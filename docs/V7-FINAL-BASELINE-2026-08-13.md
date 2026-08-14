@@ -39,10 +39,22 @@ deferred until a later version (currently expected around V11).
   every returned bar against the actual band boundaries.
 - Focused Map Pixel 7 flows: 9 / 9 passed, retries 0.
 - Earlier focused V7 flows: 16 / 16 passed, retries 0.
-- Complete two-device Playwright attempt exceeded the five-minute command limit
-  before producing a final report. This gate remains open; focused green runs
-  are not a substitute for its final result.
-- WebKit/iPhone automation: not run; matching WebKit executable is absent.
+- Matching WebKit 2287 is installed under `D:/PlaywrightBrowsers`; no browser
+  files were installed on C:.
+- Full sharded Pixel 7 sweep (148 tests): 102 passed, 44 intentionally skipped,
+  2 failed, retries 0. Both failures are obsolete fixtures: the shared-night
+  mock names a removed catalog ID, and the photo test still expects three
+  cached `<img>` elements instead of the V7 Places UI Kit surface.
+- Full sharded iPhone 13/WebKit sweep (148 tests): 98 passed, 44 intentionally
+  skipped, 6 failed, retries 0. The two obsolete fixtures repeat there. The
+  other four are WebKit-only navigation/layout races; the same flows pass on
+  Pixel. The separate Midtown flow timed out under parallel load after visibly
+  rendering ten correct results, then passed once in isolation in 18.7 seconds
+  with retries 0.
+- One stale heading assertion was corrected from `Rankings` to the shipped
+  `Bar Rankings`; its focused WebKit check passed 1 / 1 with retries 0.
+- The complete cross-browser gate is therefore measured but not green. Product
+  code was not changed to hide the remaining harness debt.
 - Public staging renders five cards for each distance selection. Exact public
   distance correlation could not be extracted reliably because Places UI Kit
   lazily mounts identity inside its widget; the deterministic local Playwright
@@ -66,7 +78,8 @@ deferred until a later version (currently expected around V11).
 - [ ] On Tester 1 / Conor Feeney, confirm Bar 54 and existing account data remain.
 - [ ] Add two bars with the same numeric score and confirm both retain it.
 - [ ] Force-close/reopen and confirm sign-in, Bar 54, lists, and numeric scores.
-- [ ] Run the complete staging smoke suite against the deployed candidate.
+- [ ] Clear the two obsolete fixtures and four WebKit-only harness failures,
+  then rerun the complete staging smoke suite against the deployed candidate.
 - [ ] Upload a new TestFlight build without changing the movable Vercel alias.
 - [ ] Repeat the physical-phone continuity check on that TestFlight build.
 - [ ] Freeze V7 as the internal TestFlight baseline for V8. Do not submit V7 to
