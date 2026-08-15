@@ -2,7 +2,7 @@ import type { VibeTag } from '@/types';
 
 /**
  * tagDisplay — THE single place a VibeTag becomes user-visible text
- * (E0.1, locked decision 2). The 33-tag data vocabulary is untouched;
+ * (E0.1, locked decision 2). The 35-tag data vocabulary is untouched;
  * this is display only. Price tags render as the glyph ladder — the
  * word "pricey" must never reach the UI. Components render tags ONLY
  * through displayTag(); tagDisplay.test.ts enforces that with a source

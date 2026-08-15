@@ -101,17 +101,10 @@ test.describe('venue tags in the bar lightbox', () => {
   // So compare the rendered labels against what the real rule returns for
   // whichever venue the lightbox opened. catalogTest serves the full `bars`
   // catalog, so the imported array is the same data the app rendered.
+  // openLightbox takes a Page, so it works under either fixture — no need to
+  // re-inline the seed steps here.
   catalogTest('renders exactly what the priority rule returns, in order', async ({ page }) => {
-    await denyGeolocation(page.context());
-    await page.clock.setFixedTime(FRIDAY_NIGHT);
-    await page.goto('/');
-    await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
-    await page.getByRole('button', { name: /Attaboy/ }).click();
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
-    await cards.first().getByRole('button', { name: /See photos and hours/i }).click();
-
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
+    const dialog = await openLightbox(page);
 
     const name = await dialog.getByRole('heading', { level: 2 }).innerText();
     const bar = bars.find((candidate) => candidate.name === name);
