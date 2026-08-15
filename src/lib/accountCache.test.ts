@@ -9,6 +9,7 @@ import {
   getDirtyRatingEntries,
   getDirtyRatingIds,
   guardAgainstForeignCache,
+  isSealDeferred,
   markRatingDirty,
   readCacheOwner,
   sealAccountCacheOnSignOut,
@@ -265,6 +266,32 @@ describe('cache ownership is separate from the import latch', () => {
     markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     sealAccountCacheOnSignOut();
     expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+  });
+
+  it('a deferred seal is remembered until the pending ack completes the clear (cycle-3)', () => {
+    // The ack callback consults this flag instead of React state — the auth
+    // change reaches hook refs one render late, and an ack in that gap used
+    // to skip the deferred cleanup entirely.
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    sealAccountCacheOnSignOut();
+    expect(isSealDeferred()).toBe(true);
+    // The ack lands: journal empties, the deferred clear now succeeds.
+    ackRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    expect(clearResidualAccountCache()).toBe(true);
+    expect(isSealDeferred()).toBe(false);
+    expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+  });
+
+  it('a clean seal or a new owner claim clears the deferred flag', () => {
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    sealAccountCacheOnSignOut();
+    expect(isSealDeferred()).toBe(true);
+    writeCacheOwner('user-a'); // session claims ownership again
+    expect(isSealDeferred()).toBe(false);
   });
 
   it('account deletion destroys everything: account cache, owner, AND personal keys (round-4)', () => {

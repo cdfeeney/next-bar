@@ -101,6 +101,9 @@ const DATA_KEYS = ALL_KEYS.filter((key) => key !== OWNER_KEY);
  */
 export function writeCacheOwner(userId: string): void {
   if (typeof window === 'undefined') return;
+  // A session claiming ownership supersedes any deferred sign-out cleanup —
+  // the pending rows now belong to a live session again.
+  sealDeferredPendingAcks = false;
   try {
     window.localStorage.setItem(OWNER_KEY, userId);
   } catch {
@@ -238,6 +241,7 @@ export function getCacheEpoch(): number {
 export function clearAccountCache(): void {
   if (typeof window === 'undefined') return;
   cacheEpoch += 1;
+  sealDeferredPendingAcks = false;
   try {
     for (const key of ALL_KEYS) window.localStorage.removeItem(key);
   } catch {
@@ -313,7 +317,9 @@ export function clearResidualAccountCache(): boolean {
     // when a DIFFERENT account signs in next — removing it here made
     // post-sign-out devices look anonymous and handed the previous user's
     // lists/profile/night history to the next account.
-    return !ratingsPending && !pairwisePending;
+    const fullyCleared = !ratingsPending && !pairwisePending;
+    if (fullyCleared) sealDeferredPendingAcks = false;
+    return fullyCleared;
   } catch {
     return false;
   }
@@ -336,12 +342,26 @@ export function clearResidualAccountCache(): boolean {
  * pending rows retry-upload; different account → the foreign guard wipes
  * account data AND the personal keys.
  */
+/**
+ * True between a seal that had to KEEP pending data and the moment the cache
+ * is fully cleared or re-owned. An in-flight write's ack callback consults
+ * this instead of React state (cycle-3 panel, Codex): the auth change
+ * propagates to hook refs one render late, so an ack landing in that
+ * microtask gap used to skip the deferred cleanup and synced data lingered
+ * until the next launch — contradicting the documented contract.
+ */
+let sealDeferredPendingAcks = false;
+
+export function isSealDeferred(): boolean {
+  return sealDeferredPendingAcks;
+}
+
 export function sealAccountCacheOnSignOut(): void {
   if (typeof window === 'undefined') return;
   // Always bump: any in-flight hydrate belongs to the session that just
   // ended and must abandon its writes, wipe or no wipe.
   cacheEpoch += 1;
-  clearResidualAccountCache();
+  sealDeferredPendingAcks = !clearResidualAccountCache();
 }
 
 /**

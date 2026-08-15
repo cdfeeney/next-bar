@@ -24,6 +24,7 @@ import {
   getCacheEpoch,
   getDirtyRatingEntries,
   guardAgainstForeignCache,
+  isSealDeferred,
   markRatingDirty,
   readCacheOwner,
   writeCacheOwner,
@@ -496,8 +497,12 @@ export function useRatings(): UseRatingsReturn {
                 // seal deliberately kept the row for its pending ack; the
                 // ack just landed, so run the residual clear now instead of
                 // leaving synced account data visible until the next launch
-                // (round-4, Codex).
-                if (modeRef.current !== 'server') clearResidualAccountCache();
+                // (round-4, Codex). isSealDeferred covers the microtask gap
+                // where the auth change has not yet reached modeRef
+                // (cycle-3, Codex).
+                if (modeRef.current !== 'server' || isSealDeferred()) {
+                  clearResidualAccountCache();
+                }
               }
             });
           writeChainsRef.current.set(barId, chainPrev.then(chainTask, chainTask));
@@ -541,7 +546,9 @@ export function useRatings(): UseRatingsReturn {
             deleteServerRating(supabase, userId, barId, stamp).then((ok) => {
               if (ok) {
                 ackRatingDirty(barId, stamp);
-                if (modeRef.current !== 'server') clearResidualAccountCache();
+                if (modeRef.current !== 'server' || isSealDeferred()) {
+                  clearResidualAccountCache();
+                }
               }
             });
           writeChainsRef.current.set(barId, chainPrev.then(chainTask, chainTask));
