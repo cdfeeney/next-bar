@@ -284,6 +284,20 @@ describe('cache ownership is separate from the import latch', () => {
     expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
   });
 
+  it('a cross-tab/expiry sign-out defers exactly like the button seal (cycle-3 closing, both lanes)', () => {
+    // useAuth's non-button sign-out paths call clearResidualAccountCache
+    // directly — the flag must be set THERE, or the ack-vs-auth-transition
+    // gap re-opens for every sign-out that is not the button.
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    expect(clearResidualAccountCache()).toBe(false); // pending kept
+    expect(isSealDeferred()).toBe(true);
+    ackRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    expect(clearResidualAccountCache()).toBe(true);
+    expect(isSealDeferred()).toBe(false);
+  });
+
   it('a clean seal or a new owner claim clears the deferred flag', () => {
     seedFullCache('user-a');
     writeCacheOwner('user-a');

@@ -287,6 +287,7 @@ export function clearResidualAccountCache(): boolean {
   if (typeof window === 'undefined') return false;
   try {
     const owner = window.localStorage.getItem(OWNER_KEY);
+    // Ownerless caches have nothing deferred — the flag stays untouched.
     if (owner === null) return false;
     // Granular, per-surface (round-4 panel, Codex): one pending ratings row
     // must not keep the whole otherwise-synced cache visible. Each surface
@@ -318,7 +319,13 @@ export function clearResidualAccountCache(): boolean {
     // post-sign-out devices look anonymous and handed the previous user's
     // lists/profile/night history to the next account.
     const fullyCleared = !ratingsPending && !pairwisePending;
-    if (fullyCleared) sealDeferredPendingAcks = false;
+    // The deferred flag is managed HERE, not only in the sign-out button's
+    // seal (cycle-3 closing panel, Claude + Codex converged on this): a
+    // cross-tab or expiry sign-out reaches this function directly, and
+    // leaving the flag unset re-opened the exact ack-vs-auth-transition gap
+    // the flag exists to close. Every sign-out flavor that must KEEP
+    // pending data now defers, whatever path led here.
+    sealDeferredPendingAcks = !fullyCleared;
     return fullyCleared;
   } catch {
     return false;
@@ -359,9 +366,11 @@ export function isSealDeferred(): boolean {
 export function sealAccountCacheOnSignOut(): void {
   if (typeof window === 'undefined') return;
   // Always bump: any in-flight hydrate belongs to the session that just
-  // ended and must abandon its writes, wipe or no wipe.
+  // ended and must abandon its writes, wipe or no wipe. The deferred flag
+  // is managed inside clearResidualAccountCache so every sign-out flavor
+  // (button, expiry, cross-tab) gets identical semantics.
   cacheEpoch += 1;
-  sealDeferredPendingAcks = !clearResidualAccountCache();
+  clearResidualAccountCache();
 }
 
 /**
