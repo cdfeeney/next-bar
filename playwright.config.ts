@@ -8,13 +8,14 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   fullyParallel: true,
   retries: process.env.CI ? 2 : 0,
-  // Release mode is the ZERO-RETRY gate, so it must be deterministic. Every
-  // worker now hydrates the full bars catalog from Supabase on load, and six
-  // of them against one server starved it: bias-smoke hung for 1.5m and
-  // vibe-vote timed out at 16s, while both pass in isolation in under 3s.
-  // Capping the gate run trades a little wall-clock for a result that means
-  // something; dev keeps full parallelism.
-  workers: process.env.CI ? 1 : releaseMode ? 3 : undefined,
+  // Release mode is the ZERO-RETRY gate, so it runs exactly as CI does: one
+  // worker. Every page load hydrates the full bars catalog from Supabase, so
+  // parallel workers starve the single server — bias-smoke needs 8.8s alone
+  // and blew its 90s slow-timeout on BOTH engines at six workers and again at
+  // three, and vibe-vote timed out at 16s where it needs 2.9s. A gate that
+  // reports contention as failure tells you nothing about the code, so the
+  // gate mirrors CI and dev keeps full parallelism.
+  workers: process.env.CI || releaseMode ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: 'http://localhost:3000',
