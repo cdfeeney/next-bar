@@ -366,6 +366,13 @@ export function useRatings(): UseRatingsReturn {
         }
       }
 
+      // Epoch gate for the transcript merge too (cycle-5 round-2, Claude —
+      // the one call site the epoch-stop fix missed): a clear-all landing
+      // during an earlier await in this block would otherwise let this merge
+      // re-insert the entire just-cleared comparison history server-side,
+      // permanently (the local transcript is removed after, so no later pass
+      // deletes the resurrected rows).
+      if (getCacheEpoch() !== epoch) return;
       // V7 pairwise transcript continuity. One-time per (browser, user):
       // append-only rows deduped server-side by exact tuple, so latch-gating
       // cannot strand data (nothing writes the local transcript anymore) and
