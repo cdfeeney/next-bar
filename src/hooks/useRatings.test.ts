@@ -480,6 +480,32 @@ describe('useRatings — server mode', () => {
     expect(getDirtyRatingIds()).toEqual(['attaboy']);
   });
 
+  it('a future-stamped cached row from a skewed device does not suppress its own deletion (cycle-2 closing, Claude)', async () => {
+    // Device B (clock +30m) rated bar X; this device cached it with the
+    // future stamp; B then deleted X server-side. The unbounded freshness
+    // clause kept resurrecting X here until the local clock caught up — the
+    // upper bound drops it: not journaled, not within this flight's window.
+    const future = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([{ barId: 'attaboy', rating: 'loved', ratedAt: future }]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    fetchServerRatingsMock.mockResolvedValue([]); // X deleted server-side
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(result.current.getRating('attaboy')).toBeNull();
+    });
+    // And the write-through cache no longer holds the ghost either.
+    const cached = JSON.parse(window.localStorage.getItem(KEY) ?? '[]');
+    expect(
+      cached.some((r: { barId: string }) => r.barId === 'attaboy'),
+    ).toBe(false);
+  });
+
   it('a failed retry keeps the row journaled for the next sign-in', async () => {
     window.localStorage.setItem(
       KEY,

@@ -371,13 +371,21 @@ export function useRatings(): UseRatingsReturn {
             e.op,
           ]),
         );
+        // The freshness clause is bounded on BOTH ends (cycle-2 closing
+        // panel, Claude): stamps round-trip through the server, so a
+        // clock-skewed-ahead device's rating carries a FUTURE ratedAt — an
+        // unbounded `>= fetchStartedAt` retained such a row on every hydrate
+        // and suppressed its legitimate cross-device deletion until the
+        // local clock caught up. A write made by THIS tab during the flight
+        // is, by construction, stamped between fetch start and now.
+        const hydrateNow = Date.now();
         const localRows = loadRatings().filter((r) => !isSeededDemoRating(r));
         const keepLocal = importedNow
-          ? localRows.filter(
-              (r) =>
-                dirtyUnion.get(r.barId) === 'u' ||
-                Date.parse(r.ratedAt) >= fetchStartedAt,
-            )
+          ? localRows.filter((r) => {
+              if (dirtyUnion.get(r.barId) === 'u') return true;
+              const stamp = Date.parse(r.ratedAt);
+              return stamp >= fetchStartedAt && stamp <= hydrateNow;
+            })
           : localRows;
         const merged = mergeFreshest(server, keepLocal).filter(
           // A journaled signed-in DELETE whose server delete hasn't acked
