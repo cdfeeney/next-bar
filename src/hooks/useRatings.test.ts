@@ -302,6 +302,31 @@ describe('useRatings — server mode', () => {
     expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1');
   });
 
+  it('a pre-journal latch triggers ONE era reconcile — old-build stranded rows re-upload (final panel, Codex)', async () => {
+    // v0.5 latched on hydrate, not upload completion: an upgrading device
+    // can hold latch==user beside rows the old build never uploaded and the
+    // journal never knew. Until the era marker names the user, the import
+    // path runs once more (insert-only, server-wins, idempotent).
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    // Stale v0.5 latch, deliberately NO journal-era marker.
+    window.localStorage.setItem(MERGED_KEY, 'user-1'); // upgrade moment
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(mergeLocalRatingsToServerMock).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(window.localStorage.getItem('next-bar:journal-era:v1')).toBe('user-1');
+    });
+  });
+
   it('does NOT re-merge when the latch is set and the journal is clean (V8-2 round-3)', async () => {
     // Round-2 re-merged everything on every sign-in to fix stranded rows;
     // round-3 correctly flagged that as resurrection — a row deleted on
@@ -315,6 +340,7 @@ describe('useRatings — server mode', () => {
       ]),
     );
     window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
     renderHook(() => useRatings());
@@ -338,6 +364,7 @@ describe('useRatings — server mode', () => {
       ]),
     );
     window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
     // dante is clean — it must NOT re-upload
     markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
@@ -369,6 +396,7 @@ describe('useRatings — server mode', () => {
     // spares a rating re-created later on another device (round-4, Codex).
     window.localStorage.setItem(KEY, JSON.stringify([]));
     window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
     markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z', 'd');
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
@@ -392,6 +420,7 @@ describe('useRatings — server mode', () => {
     // made on another device.
     window.localStorage.setItem(KEY, JSON.stringify([]));
     window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
     markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z', 'u');
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
@@ -491,6 +520,7 @@ describe('useRatings — server mode', () => {
       JSON.stringify([{ barId: 'attaboy', rating: 'loved', ratedAt: future }]),
     );
     window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
     fetchServerRatingsMock.mockResolvedValue([]); // X deleted server-side
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
@@ -514,6 +544,7 @@ describe('useRatings — server mode', () => {
       ]),
     );
     window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
     markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     upsertServerRatingMock.mockResolvedValue(false); // server never acks
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
@@ -898,7 +929,8 @@ describe('useRatings — server mode', () => {
         { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
       ]),
     );
-    window.localStorage.setItem(MERGED_KEY, 'user-1'); // no first-sign-in merge
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1'); // no first-sign-in merge
     fetchServerRatingsMock.mockResolvedValue(null); // hydrate failed
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 

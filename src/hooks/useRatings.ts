@@ -54,6 +54,17 @@ function mergeFreshest(
 
 const KEY = 'next-bar:ratings:v1';
 const MERGED_KEY = 'next-bar:ratings:merged-for:v1';
+// One-time journal-era reconciliation marker (final panel, Codex high): a
+// v0.5-era build latched MERGED_KEY on HYDRATE, not on upload completion, so
+// an upgrading device can carry a matching latch alongside rows whose
+// fire-and-forget upserts failed under the old build — rows the journal has
+// no entries for. Until this marker names the current user, one extra
+// insert-only merge runs (server-wins, idempotent) to pick those rows up.
+// Deliberately NOT in the account-cache wipe sets: it is a device-level
+// continuity record like the age-ack, and wiping it with the cache would
+// re-run the reconcile (and its bounded resurrection window) on every
+// sign-in cycle.
+const JOURNAL_ERA_KEY = 'next-bar:journal-era:v1';
 // The pairwise UI was deliberately unwired in the U2 batch (rank-on-rankings
 // replaced it), which orphaned usePairwise's one-time V7 transcript import —
 // it never ran in production (V8-2 round-3, Codex). The import lives HERE now,
@@ -231,8 +242,17 @@ export function useRatings(): UseRatingsReturn {
       // EVERY pass, import included (round-4 panel: the import's server-wins
       // skip must not strip a skipped-but-newer row's protection). Untouched
       // rows never re-upload, so deletions made elsewhere stay deleted.
+      // A latch from a pre-journal build is NOT proof the upload finished
+      // (final panel, Codex): the old code latched on hydrate. Until the
+      // era marker names this user, treat the import as still owed — the
+      // merge is insert-only and server-wins, so re-running it once is safe
+      // and picks up any rows the old build stranded. The resurrection
+      // window this opens is a single reconcile per (device, user), bounded
+      // against the permanent silent loss it prevents.
+      const eraReconciled =
+        window.localStorage.getItem(JOURNAL_ERA_KEY) === userId;
       const alreadyImported =
-        window.localStorage.getItem(MERGED_KEY) === userId;
+        eraReconciled && window.localStorage.getItem(MERGED_KEY) === userId;
       if (!alreadyImported) {
         if (mergeableRatings.length > 0) {
           const inserted = await mergeLocalRatingsToServer(
@@ -244,6 +264,7 @@ export function useRatings(): UseRatingsReturn {
           // merge (null) must retry next sign-in, not be marked done.
           if (inserted !== null && getCacheEpoch() === epoch) {
             writeMergedFlag(userId);
+            writeEraFlag(userId);
             // Ack journal entries ONLY for rows the merge actually INSERTED
             // (round-4, Claude + Codex corroborated), and per-row WITH the
             // stamp of the snapshot row that was uploaded (round-5, Claude):
@@ -261,6 +282,7 @@ export function useRatings(): UseRatingsReturn {
           // for every account that first signed in on an empty device, and
           // the residual wipe never fires for them again (V8-2 round-2).
           writeMergedFlag(userId);
+          writeEraFlag(userId);
         }
       }
       {
@@ -586,5 +608,14 @@ function writePairwiseMergedFlag(userId: string): void {
     window.localStorage.setItem(PAIRWISE_MERGED_KEY, userId);
   } catch {
     // Non-fatal — the transcript import re-runs next sign-in.
+  }
+}
+
+function writeEraFlag(userId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(JOURNAL_ERA_KEY, userId);
+  } catch {
+    // Non-fatal — the reconcile just re-runs next sign-in (idempotent).
   }
 }
