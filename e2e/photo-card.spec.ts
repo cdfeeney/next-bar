@@ -14,6 +14,18 @@ import { denyGeolocation } from './helpers/geo';
 // live-clock counts nondeterministic).
 const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
 
+/**
+ * The legacy re-hosted Google photo files are behind a kill switch
+ * (src/lib/mediaPolicy.ts). It is OFF by default — CI has no .env.local — and
+ * ON for anyone whose .env.local still sets it, which is what the operator's
+ * machine ships. The lightbox therefore renders zero images in one state and
+ * the cached carousel in the other, so assert the policy that has to hold in
+ * BOTH rather than the one that happens to hold in CI: the app never hotlinks
+ * Google, and attribution is always on screen. playwright.config.ts loads
+ * .env.local so this reads the same value the server was built with.
+ */
+const legacyPhotosEnabled = process.env.NEXT_PUBLIC_LEGACY_PHOTOS === '1';
+
 async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
   await page.clock.setFixedTime(FRIDAY_NIGHT);
   await page.goto('/');
@@ -51,7 +63,18 @@ test.describe('Hero result card', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     // Places UI Kit owns its media; V7 must not render cached app-owned images.
-    await expect(dialog.locator('img')).toHaveCount(0);
+    const images = dialog.locator('img');
+    if (legacyPhotosEnabled) {
+      await expect(images.first()).toBeVisible();
+      const sources = await images.evaluateAll((nodes) =>
+        nodes.map((node) => (node as HTMLImageElement).getAttribute('src') ?? ''),
+      );
+      // Re-encoded files served from our own domain — never a Google CDN URL.
+      for (const src of sources) expect(src).toMatch(/^\/bar-photos\//);
+      await expect(dialog.getByText(/· Google$/)).toBeVisible();
+    } else {
+      await expect(images).toHaveCount(0);
+    }
     await expect(dialog.getByRole('heading', { name: 'Hours' })).toBeVisible();
   });
 

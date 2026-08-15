@@ -1,4 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
+import { config as loadEnvFile } from 'dotenv';
+
+// Next inlines NEXT_PUBLIC_* from .env.local at build time, so a spec that
+// asserts on a flag-controlled surface has to read the same file or it is
+// asserting against a build it cannot see. (photo-card.spec.ts, legacy photos.)
+loadEnvFile({ path: '.env.local' });
 
 const releaseMode = process.env.PLAYWRIGHT_RELEASE === '1';
 
