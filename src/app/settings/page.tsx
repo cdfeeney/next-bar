@@ -11,7 +11,11 @@ import ClaimHandle from '@/components/ClaimHandle';
 import DisplayNameEditor from '@/components/DisplayNameEditor';
 import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
 import { fetchOutgoingRequests } from '@/lib/follows.server';
-import { destroyAccountDataOnDeletion, getCacheEpoch } from '@/lib/accountCache';
+import {
+  abandonInFlightSyncs,
+  destroyAccountDataOnDeletion,
+  getCacheEpoch,
+} from '@/lib/accountCache';
 import { requestAccountDeletion } from '@/lib/accountDeletion';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
@@ -183,9 +187,19 @@ export default function SettingsPage(): JSX.Element {
         let comparisonsOk = false;
         let ratingsOk = false;
         try {
-          // Settle every pending same-tab write first (cycle-4 round-2,
-          // Codex): a delayed write-through landing AFTER the server delete
-          // silently restored the row the user just cleared everything for.
+          // Stop new sync enqueues FIRST (cycle-5 panel, both lanes): the
+          // sign-in retry loop checks the epoch per entry, so bumping it
+          // here prevents writes from being enqueued AFTER the drain
+          // snapshot below — those landed after the server delete and
+          // restored rows the user had just cleared.
+          abandonInFlightSyncs();
+          // Then settle every already-pending same-tab write (cycle-4
+          // round-2, Codex): a delayed write-through landing AFTER the
+          // server delete silently restored the cleared row. Two passes:
+          // the first settles queued tasks, the second catches a task that
+          // was mid-enqueue when the first snapshot was taken. Bounded, so
+          // a user tapping ratings during the clear cannot livelock it.
+          await drainBarWrites();
           await drainBarWrites();
           comparisonsOk = await deleteAllServerComparisons(
             supabase,

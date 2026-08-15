@@ -238,6 +238,18 @@ export function getCacheEpoch(): number {
   return cacheEpoch;
 }
 
+/**
+ * Abandon every in-flight sync loop without touching stored data (cycle-5
+ * panel, Claude + Codex converged on the drain gap): Settings "Clear ALL
+ * bar ratings" bumps the epoch FIRST, so a concurrently running sign-in
+ * retry loop (which checks the epoch per entry) stops enqueueing before the
+ * drain snapshots the chains — otherwise its stale upserts landed after the
+ * server delete and restored cleared rows.
+ */
+export function abandonInFlightSyncs(): void {
+  cacheEpoch += 1;
+}
+
 export function clearAccountCache(): void {
   if (typeof window === 'undefined') return;
   cacheEpoch += 1;

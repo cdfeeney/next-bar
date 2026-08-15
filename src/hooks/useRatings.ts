@@ -315,6 +315,12 @@ export function useRatings(): UseRatingsReturn {
           if (readCacheOwner() !== null && readCacheOwner() !== userId) return;
           const local = loadRatings().filter((r) => !isSeededDemoRating(r));
           for (const entry of dirtyEntries) {
+            // Epoch check per entry (cycle-5 panel, Claude + Codex): a
+            // clear-all (abandonInFlightSyncs) or sign-out wipe landing
+            // mid-loop must stop FURTHER enqueues — writes enqueued after
+            // the drain snapshot landed after the server delete and
+            // restored the rows the user had just cleared.
+            if (getCacheEpoch() !== epoch) break;
             const row = local.find((r) => r.barId === entry.barId);
             if (entry.op === 'd') {
               // A journaled signed-in DELETE. The stamp guards it: the
