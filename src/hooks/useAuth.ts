@@ -20,6 +20,25 @@ const LOADING: AuthState = { status: 'loading', user: null, session: null };
 const SIGNED_OUT: AuthState = { status: 'signed-out', user: null, session: null };
 const UNAVAILABLE: AuthState = { status: 'unavailable', user: null, session: null };
 
+/**
+ * The last account THIS TAB rendered as signed-in — module-level so it spans
+ * hook instances and survives sign-out, for the tab's whole lifetime.
+ *
+ * Why (cycle-2 panel, Claude): the wipe→reload rule keyed only on
+ * guardAgainstForeignCache, whose residue signals are consumed by whichever
+ * tab wipes FIRST. A background tab receiving the cross-tab SIGNED_IN after
+ * that finds nothing foreign, skips the reload, and keeps rendering the
+ * previous account's data from React state. An account SWITCH in a tab that
+ * has ever rendered another account is reason to reload by itself, whatever
+ * the storage says.
+ */
+let lastSignedInUserId: string | null = null;
+
+/** Test-only: module state would otherwise leak between vitest cases. */
+export function __resetAuthTabMemoryForTests(): void {
+  lastSignedInUserId = null;
+}
+
 export function useAuth(): AuthState & { signOut: () => Promise<void> } {
   const [state, setState] = useState<AuthState>(LOADING);
 
@@ -42,15 +61,21 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
         // a deep-linked first mount after sign-in — rendered the previous
         // account's personal FOREIGN_ONLY_KEYS unguarded. Idempotent; the
         // hooks' own calls remain as defense in depth.
-        if (guardAgainstForeignCache(session.user.id)) {
+        const switchedUser =
+          lastSignedInUserId !== null && lastSignedInUserId !== session.user.id;
+        if (guardAgainstForeignCache(session.user.id) || switchedUser) {
           // The wipe cleared storage, but any surface already mounted in
           // THIS tab still holds the previous account's data in React state
           // (new-cycle panel, Codex high + Claude medium corroborated). The
           // device demonstrably changed hands — a hard reload is the clean
-          // slate. No loop: post-reload there is no residue to wipe.
+          // slate. `switchedUser` covers the multi-tab variant: another tab
+          // already consumed the residue signals, so the guard alone stays
+          // quiet here. No loop: post-reload there is no residue and the
+          // tab has not rendered any account yet.
           window.location.reload();
           return;
         }
+        lastSignedInUserId = session.user.id;
         // CLAIM ownership at the lifecycle too (new-cycle panel, Codex):
         // personal keys written by non-ratings surfaces stayed ownerless
         // when no ratings hook ever mounted, so the seal no-oped and the
@@ -72,11 +97,14 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
       if (session) {
         // Same lifecycle guard as getSession above — a sign-in completing in
         // THIS tab must wipe a foreign cache before any surface renders it,
-        // and the same wipe → reload / claim-owner rules apply.
-        if (guardAgainstForeignCache(session.user.id)) {
+        // and the same wipe/switch → reload / claim-owner rules apply.
+        const switchedUser =
+          lastSignedInUserId !== null && lastSignedInUserId !== session.user.id;
+        if (guardAgainstForeignCache(session.user.id) || switchedUser) {
           window.location.reload();
           return;
         }
+        lastSignedInUserId = session.user.id;
         writeCacheOwner(session.user.id);
         setState({ status: 'signed-in', user: session.user, session });
       } else {

@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useAuth } from './useAuth';
+import { __resetAuthTabMemoryForTests, useAuth } from './useAuth';
 
 /**
  * The foreign-cache guard belongs to the sign-in LIFECYCLE (V8-2 final
@@ -44,6 +44,7 @@ describe('useAuth sign-in lifecycle guard', () => {
     authChangeHandler = null;
     sessionResult = { data: { session: null } };
     reloadSpy.mockClear();
+    __resetAuthTabMemoryForTests();
     // jsdom's location.reload is non-configurable on the instance — replace
     // the whole location object so the wipe→reload path is observable.
     Object.defineProperty(window, 'location', {
@@ -94,6 +95,25 @@ describe('useAuth sign-in lifecycle guard', () => {
     expect(reloadSpy).not.toHaveBeenCalled();
     expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
     expect(window.localStorage.getItem(LISTS_KEY)).not.toBeNull();
+  });
+
+  it('an account SWITCH in this tab reloads even when another tab already consumed the residue (cycle-2, Claude)', async () => {
+    // Tab 1 rendered A; tab 2 wiped OWNER_KEY and reloaded itself; tab 1
+    // then receives the cross-tab SIGNED_IN(B) with NO foreign signals left
+    // in storage. The guard passes — the tab-lifetime user memory is what
+    // forces the reload, or A's data stays on screen from React state.
+    sessionResult = { data: { session: sessionFor('user-a') } };
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.status).toBe('signed-in'));
+    expect(reloadSpy).not.toHaveBeenCalled();
+
+    // Cross-tab sign-out then B's sign-in — storage is already clean.
+    authChangeHandler?.('SIGNED_OUT', null);
+    await waitFor(() => expect(result.current.status).toBe('signed-out'));
+    window.localStorage.clear();
+
+    authChangeHandler?.('SIGNED_IN', sessionFor('user-b'));
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalled());
   });
 
   it('an anonymous cache is left for the first-sign-in merge, and the lifecycle CLAIMS ownership', async () => {

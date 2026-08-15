@@ -336,8 +336,15 @@ export function useRatings(): UseRatingsReturn {
       // acked while the fetch is in flight vanishes from the live journal,
       // and hydrating from the pre-write snapshot then reverted it. The
       // union of before/after snapshots keeps any row that was journaled at
-      // ANY point during the flight.
+      // ANY point during the flight. A write created AND acked entirely
+      // inside the flight escapes both snapshots (cycle-2 panel, Codex) —
+      // `fetchStartedAt` catches it: any local row stamped after the fetch
+      // began is newer than the snapshot by construction and is retained.
+      // Remaining accepted transient: a DELETE created+acked entirely
+      // in-flight can re-render for one fetch cycle; the next hydrate heals
+      // it and no data is lost (documented in V8-DATA-CONTINUITY).
       const dirtyAtFetchStart = getDirtyRatingEntries();
+      const fetchStartedAt = Date.now();
       const server = await fetchServerRatings(supabase);
       // null = fetch FAILED (not "no ratings") — keep whatever we have
       // rather than blanking state / wiping the localStorage cache (B0.3).
@@ -366,7 +373,11 @@ export function useRatings(): UseRatingsReturn {
         );
         const localRows = loadRatings().filter((r) => !isSeededDemoRating(r));
         const keepLocal = importedNow
-          ? localRows.filter((r) => dirtyUnion.get(r.barId) === 'u')
+          ? localRows.filter(
+              (r) =>
+                dirtyUnion.get(r.barId) === 'u' ||
+                Date.parse(r.ratedAt) >= fetchStartedAt,
+            )
           : localRows;
         const merged = mergeFreshest(server, keepLocal).filter(
           // A journaled signed-in DELETE whose server delete hasn't acked

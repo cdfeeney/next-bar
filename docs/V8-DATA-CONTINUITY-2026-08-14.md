@@ -109,8 +109,25 @@ whose ack lands AFTER the seal triggers the residual clear from its own ack call
 data does not linger until the next launch. Same-bar server writes are serialized client-side (a
 per-bar promise chain in `useRatings`), so a rate followed by a fast clear can no longer arrive at
 the server out of order and resurrect the cleared row; migration `0020_pairwise_tuple_unique.sql`
-(additive, idempotent, awaiting attended apply) makes the concurrent pairwise import
-database-idempotent.
+(schema-additive with an exact-duplicate dedup, idempotent, awaiting attended apply) makes the
+concurrent pairwise import database-idempotent.
+
+**Account switches reload the tab (cycle-2 panel).** A wipe by
+`guardAgainstForeignCache` hard-reloads the wiping tab, and `useAuth` keeps a
+tab-lifetime memory of the last signed-in account so a background tab
+receiving a cross-tab account switch reloads too — storage alone cannot say
+so, because the first tab's wipe consumes the residue signals. React state
+holding the previous account's data never survives an account change.
+`useAuth` also CLAIMS the owner marker on every signed-in transition, so
+personal keys written by non-ratings surfaces are never ownerless.
+
+**Accepted hydrate transient (cycle-2 panel, Codex):** an upsert created and
+acked entirely inside a hydrate fetch's flight window is retained by the
+`fetchStartedAt` freshness check; the symmetrical DELETE case can re-render
+the cleared bar for one fetch cycle before the next hydrate heals it. No data
+is lost or resurrected server-side — the delete already acked — and closing
+the window entirely would require reconciling hydrate state against every
+in-flight mutation, which this contract deliberately trades away.
 
 Two consequences, both accepted and named rather than hidden:
 
