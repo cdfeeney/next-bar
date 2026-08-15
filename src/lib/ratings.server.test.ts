@@ -159,11 +159,40 @@ describe('upsertServerRating', () => {
     expect(parsed).toBeLessThanOrEqual(after);
   });
 
-  it('does not throw on Supabase error (writes are fire-and-forget)', async () => {
+  it('does not throw on Supabase error — resolves false so the dirty journal keeps the row', async () => {
+    // V8-2 round-3: the swallowed failure is exactly what mis-classified an
+    // unsynced row as disposable. The boolean is the ack the journal needs.
     const { client } = fakeSupabase({ upsertError: { message: 'RLS denied' } });
     await expect(
       upsertServerRating(client, 'user-1', 'attaboy', 'loved'),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
+  });
+
+  it('resolves true on a server ack', async () => {
+    const { client } = fakeSupabase({});
+    await expect(
+      upsertServerRating(client, 'user-1', 'attaboy', 'loved'),
+    ).resolves.toBe(true);
+  });
+
+  it('a retry carries the caller-supplied timestamp instead of now', async () => {
+    // Sign-in retries of journaled writes must not stamp a fresh updated_at —
+    // that would win the LWW race against a genuinely newer change made on
+    // another device while this write sat unacked.
+    const { client, calls } = fakeSupabase({});
+    await upsertServerRating(
+      client,
+      'user-1',
+      'attaboy',
+      'loved',
+      undefined,
+      '2026-05-10T00:00:00.000Z',
+    );
+    const { row } = calls.upsert[0];
+    expect(row).toMatchObject({
+      rated_at: '2026-05-10T00:00:00.000Z',
+      updated_at: '2026-05-10T00:00:00.000Z',
+    });
   });
 });
 
@@ -181,11 +210,11 @@ describe('deleteServerRating', () => {
     ]);
   });
 
-  it('does not throw on Supabase error', async () => {
+  it('does not throw on Supabase error — resolves false so the journal keeps the delete pending', async () => {
     const { client } = fakeSupabase({ deleteError: { message: 'RLS denied' } });
     await expect(
       deleteServerRating(client, 'user-1', 'attaboy'),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 });
 

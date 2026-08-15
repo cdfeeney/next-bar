@@ -11,7 +11,7 @@ import ClaimHandle from '@/components/ClaimHandle';
 import DisplayNameEditor from '@/components/DisplayNameEditor';
 import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
 import { fetchOutgoingRequests } from '@/lib/follows.server';
-import { getCacheEpoch } from '@/lib/accountCache';
+import { clearAccountCache, getCacheEpoch } from '@/lib/accountCache';
 import { requestAccountDeletion } from '@/lib/accountDeletion';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
@@ -146,14 +146,18 @@ export default function SettingsPage(): JSX.Element {
       setDeleteState('failed');
       return;
     }
-    // The auth user is gone server-side. signOut() clears the local
-    // session AND the account cache (useAuth owns that coupling), then a
-    // hard redirect lands on a clean signed-out home. try/finally (Opus
-    // review): the redirect must happen even if signOut throws — the
-    // account no longer exists, staying on a signed-in-looking page lies.
+    // The auth user is gone server-side. signOut() now SEALS the cache
+    // (V8-2 round-3) — right for an ordinary sign-out, wrong here: this
+    // owner can never return, so sealed rows would sit forever and the
+    // surviving owner marker would describe an account that no longer
+    // exists. Account deletion is the one sign-out that hard-destroys the
+    // cache, owner included. try/finally (Opus review): the redirect must
+    // happen even if signOut throws — the account no longer exists, staying
+    // on a signed-in-looking page lies.
     try {
       await auth.signOut();
     } finally {
+      clearAccountCache();
       window.location.assign('/');
     }
   };

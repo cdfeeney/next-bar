@@ -9,11 +9,13 @@
  * its own server account (cross-account contamination + privacy leak).
  *
  * Two layers of defense:
- *   1. `clearAccountCache()` — called on explicit sign-out.
+ *   1. `sealAccountCacheOnSignOut()` — explicit sign-out clears synced data,
+ *      keeps anything unsynced, and always keeps the owner marker.
  *   2. `guardAgainstForeignCache(userId)` — called when a user signs IN; if
- *      either merged-for flag names a DIFFERENT user, the cache is someone
+ *      any ownership signal names a DIFFERENT user, the cache is someone
  *      else's residue (e.g. session expired without our sign-out button) and
- *      is wiped before any merge can read it.
+ *      is wiped — account data AND personal keys — before any merge can
+ *      read it.
  */
 
 const RATINGS_KEY = 'next-bar:ratings:v1';
@@ -44,14 +46,39 @@ const FOLLOWS_KEY = 'next-bar:follows:v1';
  */
 const OWNER_KEY = 'next-bar:account:owner:v1';
 
+/**
+ * Unacked-write journal (V8-2 round-3, Codex + DeepSeek): the `:merged-for:`
+ * latch only proves the ONE-TIME import finished — it says nothing about a
+ * later fire-and-forget write-through whose server upsert failed. Those rows
+ * exist nowhere else, yet the latch made them look disposable. Every local
+ * write increments its bar's entry here; a confirmed server ack decrements
+ * it. A non-empty journal blocks the residual/sign-out wipe exactly like a
+ * pending import, and sign-in retries exactly these rows (no blind re-merge,
+ * so deletions made on another device stay deleted).
+ *
+ * Shape: JSON `Record<barId, count>`. A count (not a boolean) so two writes
+ * racing one ack cannot mark the second write clean.
+ */
+const DIRTY_KEY = 'next-bar:dirty:v1';
+
 const ALL_KEYS = [
   RATINGS_KEY,
   RATINGS_MERGED_KEY,
   PAIRWISE_KEY,
   PAIRWISE_MERGED_KEY,
   FOLLOWS_KEY,
+  DIRTY_KEY,
   OWNER_KEY,
 ] as const;
+
+/**
+ * Account-data keys — everything wiped by a seal/residual clear. OWNER_KEY is
+ * deliberately NOT here: the seal keeps ownership latched so a later foreign
+ * sign-in still wipes the personal FOREIGN_ONLY_KEYS (V8-2 round-3: removing
+ * the owner at sign-out made the next account inherit the previous user's
+ * lists, profile, and night history).
+ */
+const DATA_KEYS = ALL_KEYS.filter((key) => key !== OWNER_KEY);
 
 /**
  * Record that this cache holds `userId`'s data. Safe to call repeatedly.
@@ -69,6 +96,88 @@ export function writeCacheOwner(userId: string): void {
     // Private mode / quota — the merged-for latches remain as a fallback
     // owner signal, so the guards below still fire.
   }
+}
+
+/**
+ * The current cache owner, or null for an anonymous device. Exported for the
+ * hooks' async sign-in blocks: the synchronous foreign-cache guard runs at
+ * effect start, but ownership can change while a merge/fetch is in flight —
+ * re-checking against this before any upload closes the mid-flight
+ * cross-account race (V8-2 round-3, DeepSeek critical).
+ */
+export function readCacheOwner(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(OWNER_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function readDirtyJournal(): Record<string, number> {
+  const raw = window.localStorage.getItem(DIRTY_KEY);
+  if (raw === null) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'number' && v > 0) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeDirtyJournal(journal: Record<string, number>): void {
+  try {
+    if (Object.keys(journal).length === 0) {
+      window.localStorage.removeItem(DIRTY_KEY);
+    } else {
+      window.localStorage.setItem(DIRTY_KEY, JSON.stringify(journal));
+    }
+  } catch {
+    // Quota / private mode — non-fatal. An unrecorded dirty mark degrades to
+    // the pre-journal behavior (the row is protected only until the latch
+    // matches), never to a new loss class.
+  }
+}
+
+/** A local write whose server ack has not landed yet. Call BEFORE the write. */
+export function markRatingDirty(barId: string): void {
+  if (typeof window === 'undefined') return;
+  const journal = readDirtyJournal();
+  journal[barId] = (journal[barId] ?? 0) + 1;
+  writeDirtyJournal(journal);
+}
+
+/** A confirmed server ack for one write. Decrements; racing writes keep it dirty. */
+export function ackRatingDirty(barId: string): void {
+  if (typeof window === 'undefined') return;
+  const journal = readDirtyJournal();
+  const count = journal[barId] ?? 0;
+  if (count <= 1) delete journal[barId];
+  else journal[barId] = count - 1;
+  writeDirtyJournal(journal);
+}
+
+/**
+ * Authoritative clear after a sign-in retry or first import uploaded these
+ * rows — removes the entries outright, whatever their count.
+ */
+export function clearRatingsDirty(barIds: readonly string[]): void {
+  if (typeof window === 'undefined') return;
+  const journal = readDirtyJournal();
+  for (const id of barIds) delete journal[id];
+  writeDirtyJournal(journal);
+}
+
+export function getDirtyRatingIds(): string[] {
+  if (typeof window === 'undefined') return [];
+  return Object.keys(readDirtyJournal());
 }
 
 /**
@@ -119,6 +228,17 @@ function hasPendingImport(owner: string): boolean {
 }
 
 /**
+ * Anything in this cache that exists nowhere else: a never-imported payload
+ * (latch mismatch) OR an individual write whose server ack never landed
+ * (dirty journal — the round-3 gap: latch === owner said "synced" while a
+ * failed fire-and-forget upsert said otherwise).
+ */
+function hasPendingSync(owner: string): boolean {
+  if (hasPendingImport(owner)) return true;
+  return Object.keys(readDirtyJournal()).length > 0;
+}
+
+/**
  * Does this key hold at least one row? Parsed, not string-matched: a
  * pretty-printed or whitespace-padded `[ ]` is still empty, and a corrupt
  * payload has no rows worth blocking a wipe for. Sentinel string comparison
@@ -157,12 +277,43 @@ export function clearResidualAccountCache(): boolean {
   try {
     const owner = window.localStorage.getItem(OWNER_KEY);
     if (owner === null) return false;
-    if (hasPendingImport(owner)) return false;
-    clearAccountCache();
+    if (hasPendingSync(owner)) return false;
+    cacheEpoch += 1;
+    // DATA_KEYS, not ALL_KEYS: the owner marker survives the clear (V8-2
+    // round-3). Ownership is what lets guardAgainstForeignCache() wipe the
+    // personal FOREIGN_ONLY_KEYS when a DIFFERENT account signs in next —
+    // removing it here made post-sign-out devices look anonymous and handed
+    // the previous user's lists/profile/night history to the next account.
+    for (const key of DATA_KEYS) window.localStorage.removeItem(key);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Explicit sign-out: SEAL the cache, never destroy it (V8-2 round-3 — all
+ * four reviewers converged here). Unconditional `clearAccountCache()` had two
+ * defects:
+ *
+ *   1. It ignored pending imports/unacked writes, permanently destroying
+ *      rows that had never reached the server.
+ *   2. It removed the owner marker, so the personal FOREIGN_ONLY_KEYS were
+ *      inherited by whoever signed in next (they were never in ALL_KEYS, and
+ *      the foreign guard had no owner signal left to fire on).
+ *
+ * Semantics now: synced data is cleared (same signed-out UX as before),
+ * anything unsynced is kept under the still-latched owner, and the owner
+ * marker ALWAYS survives. The next sign-in resolves it: same account → its
+ * pending rows retry-upload; different account → the foreign guard wipes
+ * account data AND the personal keys.
+ */
+export function sealAccountCacheOnSignOut(): void {
+  if (typeof window === 'undefined') return;
+  // Always bump: any in-flight hydrate belongs to the session that just
+  // ended and must abandon its writes, wipe or no wipe.
+  cacheEpoch += 1;
+  clearResidualAccountCache();
 }
 
 /**

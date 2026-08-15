@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  ackRatingDirty,
   clearAccountCache,
+  clearRatingsDirty,
   clearResidualAccountCache,
   getCacheEpoch,
+  getDirtyRatingIds,
   guardAgainstForeignCache,
+  markRatingDirty,
+  readCacheOwner,
+  sealAccountCacheOnSignOut,
   writeCacheOwner,
 } from './accountCache';
 
@@ -80,6 +86,23 @@ describe('clearResidualAccountCache', () => {
     expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
     expect(window.localStorage.getItem(PAIRWISE_KEY)).toBeNull();
     expect(window.localStorage.getItem(FOLLOWS_KEY)).toBeNull();
+    // The owner marker SURVIVES the residual clear (V8-2 round-3): it is what
+    // lets a later foreign sign-in wipe the personal FOREIGN_ONLY_KEYS.
+    // Removing it made post-expiry devices look anonymous.
+    expect(readCacheOwner()).toBe('user-a');
+  });
+
+  it('never wipes over a non-empty dirty journal — those writes were never acked', () => {
+    // Round-3: latch === owner said "synced" while a failed fire-and-forget
+    // upsert said otherwise. The journal is the tiebreaker.
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    markRatingDirty('attaboy');
+    expect(clearResidualAccountCache()).toBe(false);
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+    // Acked → disposable again.
+    ackRatingDirty('attaboy');
+    expect(clearResidualAccountCache()).toBe(true);
   });
 
   it('never wipes ratings whose import never completed — those rows exist nowhere else', () => {
@@ -196,6 +219,80 @@ describe('cache ownership is separate from the import latch', () => {
     writeCacheOwner('user-a');
     expect(clearResidualAccountCache()).toBe(true);
     expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+  });
+
+  it('sign-out seal: clears synced data but keeps the owner marker', () => {
+    // Round-3, all four lanes: removing the owner at sign-out handed the
+    // personal FOREIGN_ONLY_KEYS to whoever signed in next.
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    sealAccountCacheOnSignOut();
+    expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+    expect(readCacheOwner()).toBe('user-a');
+    // The surviving owner is exactly what makes the next foreign sign-in
+    // wipe the personal keys.
+    window.localStorage.setItem('next-bar:lists:v1', '[{"id":"faves"}]');
+    expect(guardAgainstForeignCache('user-b')).toBe(true);
+    expect(window.localStorage.getItem('next-bar:lists:v1')).toBeNull();
+  });
+
+  it('sign-out seal: keeps rows whose import never completed', () => {
+    // Round-3 (Claude high): explicit sign-out destroyed local rows that had
+    // never reached the server. Sealed instead: kept under the latched owner.
+    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    writeCacheOwner('user-a');
+    sealAccountCacheOnSignOut();
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+    expect(readCacheOwner()).toBe('user-a');
+  });
+
+  it('sign-out seal: keeps rows with an unacked write even when latched', () => {
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    markRatingDirty('attaboy');
+    sealAccountCacheOnSignOut();
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+  });
+
+  it('sign-out seal: no-op on an anonymous device, but always bumps the epoch', () => {
+    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    const before = getCacheEpoch();
+    sealAccountCacheOnSignOut();
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+    expect(getCacheEpoch()).toBeGreaterThan(before);
+  });
+
+  it('a foreign sign-in wipes the dirty journal with the rest of the cache', () => {
+    writeCacheOwner('user-a');
+    markRatingDirty('attaboy');
+    expect(guardAgainstForeignCache('user-b')).toBe(true);
+    expect(getDirtyRatingIds()).toEqual([]);
+  });
+
+  it('mark/ack round-trips and racing writes stay dirty until the last ack', () => {
+    markRatingDirty('attaboy');
+    markRatingDirty('attaboy'); // second tap while first upsert in flight
+    ackRatingDirty('attaboy'); // first ack must NOT mark the second write clean
+    expect(getDirtyRatingIds()).toEqual(['attaboy']);
+    ackRatingDirty('attaboy');
+    expect(getDirtyRatingIds()).toEqual([]);
+  });
+
+  it('clearRatingsDirty removes entries outright whatever their count', () => {
+    markRatingDirty('attaboy');
+    markRatingDirty('attaboy');
+    markRatingDirty('dante');
+    clearRatingsDirty(['attaboy']);
+    expect(getDirtyRatingIds()).toEqual(['dante']);
+  });
+
+  it('a corrupt journal reads as empty instead of jamming the wipe', () => {
+    window.localStorage.setItem('next-bar:dirty:v1', '{not json');
+    expect(getDirtyRatingIds()).toEqual([]);
+    writeCacheOwner('user-a');
+    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    window.localStorage.setItem(RATINGS_MERGED_KEY, 'user-a');
+    expect(clearResidualAccountCache()).toBe(true);
   });
 
   it('clearAccountCache removes the owner key too', () => {

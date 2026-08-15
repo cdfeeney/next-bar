@@ -51,7 +51,8 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | `next-bar:intent:v1` | local | Expiring tonight intent | Preserve through the current night; V8 Night membership/status becomes server-owned. |
 | `next-bar:night-vibe:v1` | local | Expiring per-night vibe selection | Preserve through the current night; server sync is not required. |
 | `next-bar:list:want-to-go:v1` | local | Want-to-Go entries | Preserve; fold into the named-list server owner without renaming this V7 source key. |
-| `next-bar:account:owner:v1` | local | V8 addition: which account this device cache belongs to | **Local-only, never synced** — a device-side marker holding a server user ID. Written on every successful signed-in hydrate and on every server-mode write-through, before the data it describes; wiped with the rest of the account cache on sign-out or a foreign-account signal, but never while an import is still pending. Not a V7 key. |
+| `next-bar:account:owner:v1` | local | V8 addition: which account this device cache belongs to | **Local-only, never synced** — a device-side marker holding a server user ID. Written on every successful signed-in hydrate and on every server-mode write-through, before the data it describes. **Survives sign-out and the residual clear** (the seal, V8-2 round-3): it is what lets a later foreign sign-in wipe the personal keys. Removed only by a foreign-account wipe, which installs the new owner's session in its place. Not a V7 key. |
+| `next-bar:dirty:v1` | local | V8 addition: unacked-write journal (`Record<barId, count>`) | **Local-only, never synced** — device-side sync bookkeeping, not account data. Incremented before every local rating write, decremented on the matching server ack. Non-empty blocks the sign-out/residual wipe exactly like a pending import, and the next sign-in retries exactly these rows. Wiped with the account cache on a foreign sign-in. Not a V7 key. |
 | `next-bar:saved:v1` | local | Legacy saved-bar store; `src/lib/saved.ts` still reads it, no UI calls it | **Local-only, never synced.** Preserve unread data; if it is ever retired, migrate it into the named-list owner deliberately — never silently delete it. |
 
 ## Server ownership and conflict rules
@@ -64,6 +65,7 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | Named lists and Want to Go | Planned owner-only `account_content_state`, domain `lists` | Union unrelated list IDs. For the same ID, newer `updatedAt` wins; an exact tie keeps the server value. | Per-list LWW. Deletes require timestamped tombstones so an offline device cannot resurrect a deleted list. |
 | Vibe profile | Planned owner-only `vibe_profiles` | Compare local `savedAt` with server `saved_at`; newer wins and an exact tie keeps the server value. | Strict LWW. A clear must delete the server row successfully before clearing the local cache. Invalid or failed server reads never overwrite valid local data. |
 | Night history | Canonical V8 Night Out tables introduced by the Night Out goal | Import the valid `next-bar:night-log:v1` night once. Merge distinct visits by stable timestamp and bar ID; retain all server-only nights. | Server owns membership and lifecycle. Visit/event inserts are idempotent; status changes use server timestamps. |
+| Follows | Existing `follows` (RPC-backed) | **No import, by design:** signed-out follows are demo-circle seed data, never real profiles, so nothing local merges into an account. On sign-in the server set replaces demo state. | Server authoritative. The local key is wiped by the foreign-sign-in guard (it is in `ALL_KEYS`) and reseeded by the demo layer signed-out. |
 | Shared nights | Existing `shared_nights` | No browser-storage import: the server row and bearer token already are the durable state. | Server row wins. Row presence is explicit sharing consent; unshare deletes it and invalidates the token. |
 | Notification devices | Planned native-device table from the notifications goal; existing `push_subscriptions` remains web-only and dark | Register only after authenticated native permission succeeds. | Device token is unique. Latest authenticated registration transfers that token to the current user; sign-out/revoke deletes it. Never merge credentials through localStorage. |
 
@@ -95,8 +97,9 @@ deliberate:**
 
 | Guard | Reads | Why |
 | --- | --- | --- |
-| `guardAgainstForeignCache(currentUserId)` — a user signs IN | owner key **and** both legacy `:merged-for:` latches | A current account id makes ownership unambiguous, so a device upgrading from V7/early-V8 keeps full cross-account protection. |
-| `clearResidualAccountCache()` — resolved signed-out | owner key **only** | A legacy latch is an import sentinel, not proof the cache is disposable. Treating it as ownership erased V7 data during an install-over before the user signed back in. |
+| `guardAgainstForeignCache(currentUserId)` — a user signs IN | owner key **and** both legacy `:merged-for:` latches | A current account id makes ownership unambiguous, so a device upgrading from V7/early-V8 keeps full cross-account protection. Wipes account data AND the personal `FOREIGN_ONLY_KEYS`, owner included — the new session installs its own. |
+| `clearResidualAccountCache()` — resolved signed-out | owner key **only**, then the pending check (latch mismatch OR non-empty dirty journal) | A legacy latch is an import sentinel, not proof the cache is disposable. Treating it as ownership erased V7 data during an install-over before the user signed back in. Clears `DATA_KEYS` only — the owner marker survives so a later foreign sign-in still fires. |
+| `sealAccountCacheOnSignOut()` — explicit sign-out | same as the residual clear, plus an unconditional epoch bump | The sign-out button and a session expiry must have identical data semantics; only the epoch bump (abandoning in-flight hydrates) is unconditional. |
 
 Two consequences, both accepted and named rather than hidden:
 
@@ -115,18 +118,53 @@ Two consequences, both accepted and named rather than hidden:
   hooks write the owner key after a successful *fetch* even when that session's
   *upload* failed, so an expiry still destroyed never-uploaded rows.)
 
-**The import runs on every sign-in, not only the first.** The `:merged-for:`
-latch is now an optimisation record, not a gate. Short-circuiting on it stranded
-everything written after it was set — rows rated while signed out, and any row
-whose fire-and-forget upsert failed — and the residue wipe then deleted exactly
-those rows because the latch claimed the import was done (V8-2 round-2, Claude
-and Codex). `mergeLocalRatingsToServer` is insert-only and skips bars the server
-already holds; `mergeLocalComparisonsToServer` dedupes by `comparisonKey`. Both
-are therefore idempotent, so re-running them costs one round trip and cannot
-duplicate a row. When there is nothing local to import the latch is written
-anyway — the import is vacuously complete, and leaving it unset made
-`hasPendingImport()` report a pending import forever for every account that
-first signed in on an empty device.
+**The one-time import is gated on the latch; everything after it is driven by
+the dirty journal (V8-2 round-3).** Round-2's "re-merge everything on every
+sign-in" fixed the stranded-row loss but created resurrection: a row deleted on
+another device is absent from the server, so a blind insert-only re-merge
+re-uploaded it forever. The two requirements are reconciled by
+`next-bar:dirty:v1`, a per-bar unacked-write counter maintained by
+`accountCache` (`markRatingDirty` before every local write in BOTH modes,
+`ackRatingDirty` on the confirmed server ack — `upsertServerRating` /
+`deleteServerRating` now return an explicit success boolean):
+
+- **Latch mismatch** (first sign-in for this user, or a prior import failed):
+  full insert-only `mergeLocalRatingsToServer`, latch on success, journal
+  entries for the uploaded rows cleared in bulk. When there is nothing local
+  to import the latch is written anyway — the import is vacuously complete,
+  and leaving it unset made the pending check report a pending import forever
+  for every account that first signed in on an empty device (round-2).
+- **Latch matches:** ONLY journaled rows retry — a dirty id with a local row
+  re-upserts carrying the row's own `ratedAt` (so a genuinely newer write from
+  another device still wins LWW); a dirty id with no local row is an unacked
+  DELETE and retries as one. Untouched rows never re-upload, so deletions made
+  elsewhere stay deleted.
+- **Hydrate is dirty-aware:** after the latch, only journaled local rows
+  survive `mergeFreshest` over the server snapshot (a tap during the in-flight
+  fetch marks dirty, preserving the old race protection), and a journaled
+  delete suppresses its server row instead of resurrecting it in state.
+- Rows rated while signed OUT on an owned device journal too, so they survive
+  the residual wipe and upload on the owner's next sign-in.
+
+**Sign-out seals; it never destroys (V8-2 round-3, all four lanes).**
+`signOut()` calls `sealAccountCacheOnSignOut()`: synced account data is
+cleared (same signed-out UX as before), anything pending — unimported payload
+or non-empty journal — is kept, and the owner marker ALWAYS survives. The next
+sign-in resolves the seal: the same account retries its pending rows; a
+different account triggers the foreign wipe, which clears account data and the
+personal keys. The old unconditional wipe both destroyed never-uploaded rows
+and, by removing the owner marker, handed the personal `FOREIGN_ONLY_KEYS` to
+the next account. One deliberate exception: **account deletion** hard-destroys
+the cache (`clearAccountCache`, owner included) after signing out — that owner
+can never return, so sealing for them would be a lie.
+
+**The pairwise transcript import lives on the ratings sign-in path.** The
+pairwise UI was deliberately unwired in the U2 batch (rank-on-rankings), which
+orphaned `usePairwise`'s import — it never ran in production (round-3, Codex).
+The one-time local→server transcript merge now runs from `useRatings`' auth
+effect, latch-gated: the transcript is append-only with exact-tuple server
+dedup and has no remaining production writer, so once-per-user cannot strand
+data and re-running cannot resurrect any.
 
 **A foreign sign-in clears more than the account cache.** `ALL_KEYS` covers the
 ratings/pairwise/follows surface, and an ordinary sign-out clears only that:
@@ -149,10 +187,12 @@ those as strings, so every already-synced row looked new: the union kept a
 second copy of the whole transcript and a retry would re-upload it into an
 append-only table. `comparisonKey` now compares the parsed instant.
 
-**Still true, and intended:** hydrate keeps the *freshest* rating per bar, so a
-local row newer than the server's wins in local state and cache even though the
-upload step skipped that bar (server-wins on insert). Ratings written after
-sign-in upsert normally.
+**Still true, and intended:** before the import latches, hydrate keeps the
+*freshest* rating per bar, so a local row newer than the server's wins in local
+state and cache even though the upload step skipped that bar (server-wins on
+insert). After the latch, that freshest-wins retention applies only to
+journaled (unacked) rows — see the dirty-journal contract above. Ratings
+written after sign-in upsert normally.
 
 ## Verification boundary
 
@@ -164,7 +204,8 @@ What is mechanically proven, and by what:
 | Ratings merge rule (server-wins union, never latch on failure) | `src/lib/ratings.server.test.ts` |
 | Pairwise merge rule (union by exact tuple, append-only, re-answers survive) | `src/lib/pairwise.server.test.ts` |
 | Ties stay exactly tied through local→server→local, including ranking and reconcile | `src/lib/tiePreservation.test.ts` |
-| Cross-account cache ownership and residue wipe | `src/lib/accountCache.test.ts` |
+| Cross-account cache ownership, residue wipe, sign-out seal, and the dirty journal | `src/lib/accountCache.test.ts` |
+| Latch-gated import, dirty-row retry, and dirty-aware hydrate | `src/hooks/useRatings.test.ts` |
 | Every V7 key survives navigation, reload, and force-close/reopen | `e2e/v7-continuity.spec.ts` |
 | The public shared-night route writes no local key | `e2e/v7-continuity.spec.ts` |
 

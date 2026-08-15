@@ -59,6 +59,15 @@ export async function fetchServerRatings(
  *   - null → explicitly clears the score (tier CHANGED: the old score was
  *     interpolated inside the old tier's band and is meaningless now).
  *   - number → writes that score.
+ *
+ * `at`: the row's own timestamp, for sign-in retries of journaled writes
+ * (V8-2 round-3). A retry must carry the ORIGINAL ratedAt, not "now" — a
+ * fresh timestamp would win the LWW race against a genuinely newer change
+ * made on another device while this one's write sat unacked.
+ *
+ * Returns true only when the server acknowledged the write — the dirty
+ * journal is cleared on exactly this signal, so a swallowed failure can no
+ * longer classify an unsynced row as disposable.
  */
 export async function upsertServerRating(
   supabase: SupabaseClient,
@@ -66,19 +75,21 @@ export async function upsertServerRating(
   barId: string,
   rating: Rating,
   score?: number | null,
-): Promise<void> {
-  const now = new Date().toISOString();
-  await supabase.from('ratings').upsert(
+  at?: string,
+): Promise<boolean> {
+  const stamp = at ?? new Date().toISOString();
+  const { error } = await supabase.from('ratings').upsert(
     {
       user_id: userId,
       bar_id: barId,
       tier: rating,
-      rated_at: now,
-      updated_at: now,
+      rated_at: stamp,
+      updated_at: stamp,
       ...(score === undefined ? {} : { score }),
     },
     { onConflict: 'user_id,bar_id' },
   );
+  return error === null;
 }
 
 /**
@@ -111,16 +122,18 @@ export async function updateServerScores(
   );
 }
 
+/** Returns true only on server ack — see upsertServerRating. */
 export async function deleteServerRating(
   supabase: SupabaseClient,
   userId: string,
   barId: string,
-): Promise<void> {
-  await supabase
+): Promise<boolean> {
+  const { error } = await supabase
     .from('ratings')
     .delete()
     .eq('user_id', userId)
     .eq('bar_id', barId);
+  return error === null;
 }
 
 /**

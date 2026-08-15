@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BarRating } from '@/types/ratings';
+import { getDirtyRatingIds, markRatingDirty } from '@/lib/accountCache';
 import { useRatings } from './useRatings';
 
 const KEY = 'next-bar:ratings:v1';
@@ -215,9 +216,15 @@ vi.mock('@/lib/supabase/client', () => ({
 
 vi.mock('@/lib/ratings.server', () => ({
   fetchServerRatings: vi.fn(() => Promise.resolve([])),
-  upsertServerRating: vi.fn(() => Promise.resolve()),
-  deleteServerRating: vi.fn(() => Promise.resolve()),
+  upsertServerRating: vi.fn(() => Promise.resolve(true)),
+  deleteServerRating: vi.fn(() => Promise.resolve(true)),
   mergeLocalRatingsToServer: vi.fn(() => Promise.resolve(0)),
+}));
+
+// The V7 pairwise transcript import moved onto this sign-in path (the
+// pairwise UI is unwired) — mock its IO so these tests stay network-free.
+vi.mock('@/lib/pairwise.server', () => ({
+  mergeLocalComparisonsToServer: vi.fn(() => Promise.resolve(0)),
 }));
 
 // Pull the mocked symbols after vi.mock so they're typed as the mock fns.
@@ -267,8 +274,8 @@ describe('useRatings — server mode', () => {
     getBrowserSupabaseMock.mockReturnValue(fakeSupabase);
     fetchServerRatingsMock.mockResolvedValue([]);
     mergeLocalRatingsToServerMock.mockResolvedValue(0);
-    upsertServerRatingMock.mockResolvedValue(undefined);
-    deleteServerRatingMock.mockResolvedValue(undefined);
+    upsertServerRatingMock.mockResolvedValue(true);
+    deleteServerRatingMock.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -295,12 +302,12 @@ describe('useRatings — server mode', () => {
     expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1');
   });
 
-  it('DOES re-merge on a later mount even with the latch already set', async () => {
-    // Was "does NOT re-merge … (MERGED_KEY honored)". That short-circuit lost
-    // data (V8-2 round-2): anything written after the latch — rows rated while
-    // signed out, or a row whose fire-and-forget upsert failed — was never
-    // uploaded, and the residue wipe then deleted it because the latch said
-    // the import was done. The merge is insert-only, so re-running is safe.
+  it('does NOT re-merge when the latch is set and the journal is clean (V8-2 round-3)', async () => {
+    // Round-2 re-merged everything on every sign-in to fix stranded rows;
+    // round-3 correctly flagged that as resurrection — a row deleted on
+    // another device is absent from the server, so a blind insert-only
+    // re-merge re-uploads it forever. Post-latch, only JOURNALED rows retry
+    // (next test); an untouched cache re-uploads nothing.
     window.localStorage.setItem(
       KEY,
       JSON.stringify([
@@ -315,7 +322,83 @@ describe('useRatings — server mode', () => {
     await waitFor(() => {
       expect(fetchServerRatingsMock).toHaveBeenCalled();
     });
-    expect(mergeLocalRatingsToServerMock).toHaveBeenCalled();
+    expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
+    expect(upsertServerRatingMock).not.toHaveBeenCalled();
+  });
+
+  it('retries ONLY journaled rows once the latch is set — upsert with the row’s own ratedAt', async () => {
+    // The dirty journal is how a failed fire-and-forget write survives: the
+    // sign-in retry re-upserts exactly those rows, carrying the original
+    // ratedAt so a genuinely newer write from another device wins LWW.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+        { barId: 'dante', rating: 'liked', ratedAt: '2026-05-11T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    markRatingDirty('attaboy'); // dante is clean — it must NOT re-upload
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(upsertServerRatingMock).toHaveBeenCalledTimes(1);
+    });
+    expect(upsertServerRatingMock).toHaveBeenCalledWith(
+      fakeSupabase,
+      'user-1',
+      'attaboy',
+      'loved',
+      undefined,
+      '2026-05-10T00:00:00.000Z',
+    );
+    expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
+    // Acked by the retry → journal entry cleared.
+    await waitFor(() => {
+      expect(getDirtyRatingIds()).toEqual([]);
+    });
+  });
+
+  it('a journaled id with no local row retries as a server DELETE', async () => {
+    // The unacked-delete case: clearRating journaled the id, removed the
+    // local row, and the fire-and-forget delete never acked.
+    window.localStorage.setItem(KEY, JSON.stringify([]));
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    markRatingDirty('attaboy');
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(deleteServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+      );
+    });
+    expect(upsertServerRatingMock).not.toHaveBeenCalled();
+  });
+
+  it('a failed retry keeps the row journaled for the next sign-in', async () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    markRatingDirty('attaboy');
+    upsertServerRatingMock.mockResolvedValue(false); // server never acks
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(upsertServerRatingMock).toHaveBeenCalled();
+    });
+    expect(getDirtyRatingIds()).toEqual(['attaboy']);
   });
 
   it('a genuinely anonymous cache (no merged-for flag) DOES merge on first sign-in', async () => {

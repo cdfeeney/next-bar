@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
-  clearAccountCache,
   clearResidualAccountCache,
+  sealAccountCacheOnSignOut,
 } from '@/lib/accountCache';
 
 export type AuthState =
@@ -67,10 +67,11 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     await supabase.auth.signOut();
-    // The write-through cache holds THIS account's server data — it must not
-    // survive into the next session on a shared browser (cross-account
-    // contamination; see lib/accountCache.ts).
-    clearAccountCache();
+    // SEAL, don't destroy (V8-2 round-3): synced data is cleared, unsynced
+    // rows are kept under the still-latched owner, and the owner marker
+    // survives so a different account signing in later still triggers the
+    // foreign wipe of the personal keys. See lib/accountCache.ts.
+    sealAccountCacheOnSignOut();
   };
 
   return { ...state, signOut };
