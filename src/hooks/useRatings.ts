@@ -101,6 +101,32 @@ function broadcastServerUpdate(detail: ServerBroadcastDetail): void {
 }
 
 /**
+ * Per-bar serialization of server writes — MODULE level (cycle-4 round-2,
+ * Codex ×2): per-hook-instance chains ordered only one component's writes.
+ * A sign-in RETRY or a second mounted instance could still interleave with
+ * an interactive clear on the same bar, and Settings' clear-all could not
+ * await writes issued by other components. One tab-wide map fixes all
+ * three: every server mutation for a bar enqueues here, and clear-all
+ * drains the whole map before deleting server-side.
+ */
+const barWriteChains = new Map<string, Promise<unknown>>();
+
+function enqueueBarWrite(
+  barId: string,
+  task: () => Promise<unknown>,
+): Promise<unknown> {
+  const prev = barWriteChains.get(barId) ?? Promise.resolve();
+  const next = prev.then(task, task);
+  barWriteChains.set(barId, next);
+  return next;
+}
+
+/** Settle every pending same-tab server write. Used by Settings clear-all. */
+export function drainBarWrites(): Promise<unknown> {
+  return Promise.allSettled([...barWriteChains.values()]);
+}
+
+/**
  * Publish a server-mode rating entry to every mounted useRatings instance.
  * Exported for usePairwise (B0.4), which writes transcript-derived scores
  * outside this hook but must keep in-tab rankings state coherent.
@@ -140,13 +166,6 @@ export function useRatings(): UseRatingsReturn {
   // authoritative prev-value source inside callbacks.
   const ratingsRef = useRef<BarRating[]>([]);
   ratingsRef.current = ratings;
-  // Per-bar serialization of server writes (round-4 panel, Codex): a rate
-  // followed by a fast clear are independent fetches and can arrive out of
-  // order — the late upsert then re-creates the row the delete removed
-  // (deletes leave no tombstone for the LWW trigger). Chaining per bar makes
-  // this client emit same-bar mutations in order; cross-device ordering
-  // remains LWW's job.
-  const writeChainsRef = useRef<Map<string, Promise<unknown>>>(new Map());
 
   // Storage listener — always on, regardless of auth state. When in local
   // mode, this is how cross-instance updates propagate (one ResultCard's
@@ -301,26 +320,27 @@ export function useRatings(): UseRatingsReturn {
               // A journaled signed-in DELETE. The stamp guards it: the
               // server only removes a row not newer than the delete, so a
               // rating re-created on another device survives (round-4,
-              // Codex).
-              const ok = await deleteServerRating(
-                supabase,
-                userId,
-                entry.barId,
-                entry.stamp,
+              // Codex). Enqueued on the shared per-bar chain (cycle-4
+              // round-2, Codex): an unchained retry could interleave with
+              // an interactive write on the same bar.
+              const ok = await enqueueBarWrite(entry.barId, () =>
+                deleteServerRating(supabase, userId, entry.barId, entry.stamp),
               );
-              if (ok) ackRatingDirty(entry.barId, entry.stamp);
+              if (ok === true) ackRatingDirty(entry.barId, entry.stamp);
             } else if (row) {
               // Upsert intent with a live row — retry with the row's own
               // ratedAt so a genuinely newer write elsewhere wins LWW.
-              const ok = await upsertServerRating(
-                supabase,
-                userId,
-                entry.barId,
-                row.rating,
-                typeof row.score === 'number' ? row.score : undefined,
-                row.ratedAt,
+              const ok = await enqueueBarWrite(entry.barId, () =>
+                upsertServerRating(
+                  supabase,
+                  userId,
+                  entry.barId,
+                  row.rating,
+                  typeof row.score === 'number' ? row.score : undefined,
+                  row.ratedAt,
+                ),
               );
-              if (ok) ackRatingDirty(entry.barId, entry.stamp);
+              if (ok === true) ackRatingDirty(entry.barId, entry.stamp);
             } else {
               // Upsert intent with no local row: the row was since removed
               // locally (local-mode clear withdraws intent). Never replay a
@@ -515,9 +535,7 @@ export function useRatings(): UseRatingsReturn {
           // coherent with server-mode writes (B0.3).
           setRatingLib(barId, rating, score);
           const userId = auth.user.id;
-          const chainPrev =
-            writeChainsRef.current.get(barId) ?? Promise.resolve();
-          const chainTask = () =>
+          void enqueueBarWrite(barId, () =>
             upsertServerRating(
               supabase,
               userId,
@@ -539,8 +557,8 @@ export function useRatings(): UseRatingsReturn {
                   clearResidualAccountCache();
                 }
               }
-            });
-          writeChainsRef.current.set(barId, chainPrev.then(chainTask, chainTask));
+            }),
+          );
           // Notify every OTHER mounted useRatings instance (self-receipt is
           // an idempotent re-apply of the optimistic update above).
           broadcastServerUpdate({ kind: 'set', entry });
@@ -575,9 +593,7 @@ export function useRatings(): UseRatingsReturn {
           // Write-through cache (B0.3) — see setRating.
           clearRatingLib(barId);
           const userId = auth.user.id;
-          const chainPrev =
-            writeChainsRef.current.get(barId) ?? Promise.resolve();
-          const chainTask = () =>
+          void enqueueBarWrite(barId, () =>
             deleteServerRating(supabase, userId, barId, stamp).then((ok) => {
               if (ok) {
                 ackRatingDirty(barId, stamp);
@@ -585,8 +601,8 @@ export function useRatings(): UseRatingsReturn {
                   clearResidualAccountCache();
                 }
               }
-            });
-          writeChainsRef.current.set(barId, chainPrev.then(chainTask, chainTask));
+            }),
+          );
           broadcastServerUpdate({ kind: 'clear', barId });
           return;
         }

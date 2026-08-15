@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRatings } from '@/hooks/useRatings';
+import { drainBarWrites, useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
 import { loadProfile, clearProfile } from '@/lib/storedProfile';
 import { useEffect, useState } from 'react';
@@ -183,6 +183,10 @@ export default function SettingsPage(): JSX.Element {
         let comparisonsOk = false;
         let ratingsOk = false;
         try {
+          // Settle every pending same-tab write first (cycle-4 round-2,
+          // Codex): a delayed write-through landing AFTER the server delete
+          // silently restored the row the user just cleared everything for.
+          await drainBarWrites();
           comparisonsOk = await deleteAllServerComparisons(
             supabase,
             auth.user.id,
