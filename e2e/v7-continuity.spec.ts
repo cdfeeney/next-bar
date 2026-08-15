@@ -80,13 +80,10 @@ const V7_LOCAL: Record<string, string> = {
   'next-bar:saved:v1': JSON.stringify([
     { barId: 'attaboy', savedAt: '2026-08-12T20:30:00-04:00' },
   ]),
-  // Account-ownership latches. A V7 user who ever signed in has these, so a
-  // faithful install-over fixture carries them. They are safe to assert here
-  // because this fixture runs with no Supabase env: `useAuth` resolves
-  // `unavailable` and the residue rule that reads them never executes. If
-  // someone adds `.env.local`, auth resolves signed-out, the residue wipe
-  // fires, and this test fails loudly — that is correct behaviour being
-  // reported, not a broken fixture. See `src/lib/accountCache.test.ts`.
+  // Import sentinels. A V7 user who ever signed in has these, so a faithful
+  // install-over fixture carries them. They must survive even when Supabase is
+  // configured but no session exists; ownership is now tracked separately by
+  // `next-bar:account:owner:v1`. See `src/lib/accountCache.test.ts`.
   'next-bar:ratings:merged-for:v1': 'v7-user-11111111-2222-3333-4444-555555555555',
   'next-bar:pairwise:merged-for:v1': 'v7-user-11111111-2222-3333-4444-555555555555',
   'next-bar:age-ack:v1': '1',

@@ -59,11 +59,12 @@ describe('clearAccountCache', () => {
 describe('clearResidualAccountCache', () => {
   beforeEach(() => window.localStorage.clear());
 
-  it('wipes the cache when a merged-for flag shows a past sign-in (expired session residue)', () => {
+  it('preserves a V7 upgrade whose import sentinels predate explicit ownership', () => {
     seedFullCache('user-a');
-    expect(clearResidualAccountCache()).toBe(true);
-    expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
-    expect(window.localStorage.getItem(PAIRWISE_KEY)).toBeNull();
+    expect(clearResidualAccountCache()).toBe(false);
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+    expect(window.localStorage.getItem(PAIRWISE_KEY)).not.toBeNull();
+    expect(window.localStorage.getItem(FOLLOWS_KEY)).not.toBeNull();
   });
 
   it('leaves a genuinely anonymous cache alone (no flags → no past sign-in)', () => {

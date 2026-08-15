@@ -37,9 +37,10 @@ const FOLLOWS_KEY = 'next-bar:follows:v1';
  * expired `clearResidualAccountCache` wiped the never-uploaded rows for good.
  *
  * Now the meanings are separate: this key is ownership, and a `:merged-for:`
- * key means only that the import completed. The guards below still honour the
- * old latches so a device upgrading from V7/early-V8 — which has merged-for
- * and no owner key — keeps its cross-account protection.
+ * key means only that the import completed. The sign-in guard below still
+ * honours old latches, so a V7/early-V8 cache cannot merge into a different
+ * account; signed-out cleanup requires the explicit owner key so an upgrade
+ * does not erase the user's V7 data before they sign back in.
  */
 const OWNER_KEY = 'next-bar:account:owner:v1';
 
@@ -89,18 +90,17 @@ export function clearAccountCache(): void {
 /**
  * Wipe residue left by a signed-in session that ended WITHOUT our sign-out
  * button (refresh-token expiry, revocation, SDK sign-out in another tab).
- * Gated on the merged-for flags: they exist only after a sign-in, so a
- * genuinely anonymous browser — which resolves to signed-out on every
- * mount — never has its local ratings wiped by this.
+ * Gated on the explicit owner key. Legacy merged-for keys are import
+ * sentinels, not proof that a signed-out cache is disposable: treating them
+ * as ownership erased V7 data during an install-over before the user signed
+ * back in. They remain a fallback in guardAgainstForeignCache(), where a
+ * current account id makes the ownership decision unambiguous.
  * Returns true when residue was cleared.
  */
 export function clearResidualAccountCache(): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    const hadOwner =
-      window.localStorage.getItem(OWNER_KEY) !== null ||
-      window.localStorage.getItem(RATINGS_MERGED_KEY) !== null ||
-      window.localStorage.getItem(PAIRWISE_MERGED_KEY) !== null;
+    const hadOwner = window.localStorage.getItem(OWNER_KEY) !== null;
     if (hadOwner) clearAccountCache();
     return hadOwner;
   } catch {
