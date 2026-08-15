@@ -63,9 +63,21 @@ async function fulfillCatalog(route: Route): Promise<void> {
   });
 }
 
+/** The bars-table route pattern, so callers register exactly the same one. */
+export const CATALOG_ROUTE = /\/rest\/v1\/bars(\?|$)/;
+
+/**
+ * Exported for specs that build their own Supabase stub instead of using the
+ * fixture below. A spec that blanket-routes `**\/rest\/v1\/**` to `[]` starves
+ * CatalogRefresh, and rowsToCatalog rejects a short list (<100 rows), so the
+ * app silently falls back to the tiny `coreBars` set — any assertion naming a
+ * non-core bar then fails for a reason that has nothing to do with the test.
+ */
+export { fulfillCatalog };
+
 export const test = base.extend({
   page: async ({ page }, use) => {
-    await page.route(/\/rest\/v1\/bars(\?|$)/, fulfillCatalog);
+    await page.route(CATALOG_ROUTE, fulfillCatalog);
     await use(page);
   },
 });

@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test, expect, type Page, type Route } from '@playwright/test';
+import { CATALOG_ROUTE, fulfillCatalog } from './helpers/catalogTest';
 
 const USER_ID = '11111111-2222-3333-4444-555555555555';
 const FRIEND = {
@@ -105,6 +106,12 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
 
   await page.route('**/rest/v1/**', fulfillJson(200, []));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
+  // Serve the real bars table. The catch-all above would answer CatalogRefresh
+  // with [], and rowsToCatalog rejects anything under 100 rows, so the app
+  // falls back to the tiny `coreBars` set — which contains attaboy but NOT
+  // mood-ring. That is why the dance-winner assertion below could never pass:
+  // the bar it names did not exist in the catalog the app had loaded.
+  await page.route(CATALOG_ROUTE, fulfillCatalog);
   if (opts.youRatings) {
     await page.route('**/rest/v1/ratings**', fulfillJson(200, opts.youRatings));
   }

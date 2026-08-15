@@ -8,7 +8,13 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   fullyParallel: true,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Release mode is the ZERO-RETRY gate, so it must be deterministic. Every
+  // worker now hydrates the full bars catalog from Supabase on load, and six
+  // of them against one server starved it: bias-smoke hung for 1.5m and
+  // vibe-vote timed out at 16s, while both pass in isolation in under 3s.
+  // Capping the gate run trades a little wall-clock for a result that means
+  // something; dev keeps full parallelism.
+  workers: process.env.CI ? 1 : releaseMode ? 3 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: 'http://localhost:3000',
