@@ -34,6 +34,9 @@ test.describe('Bottom nav', () => {
 
     const nav = page.getByRole('navigation', { name: 'Primary' });
     await expect(nav).toBeVisible();
+    // Exactly five — a sixth tab is explicitly out of scope for V8, and the
+    // label walk below would happily pass with an extra one wedged in.
+    await expect(nav.getByRole('link')).toHaveCount(5);
 
     await nav.getByRole('link', { name: 'Map' }).click();
     await expect(page).toHaveURL(/\/map$/);
