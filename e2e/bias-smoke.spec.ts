@@ -22,11 +22,13 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     // (night-loop N1): the page reaches the right state, the budget just
     // runs out. test.slow() = 3× the project timeout.
     test.slow();
-    // ...and since the 0019 catalog swap every page load also pulls the full
-    // bars table from Supabase, which pushed this past even 3×. Measured 8.8s
-    // with the server to itself versus >90s sharing it. The assertion below is
-    // unchanged — this only buys the walk enough budget to reach it.
-    test.setTimeout(180_000);
+    // NOTE: raising this to 180s was tried and did NOT help — the run then
+    // burned 3.0m and died with "Target page, context or browser has been
+    // closed". Under parallel load this test is starved out, not merely slow,
+    // so a bigger budget buys nothing. It passes in 8.8s with the server to
+    // itself. The real cause is that every page load refetches the whole bars
+    // table (0019 catalog swap), which is what makes the suite
+    // concurrency-fragile; fixing that belongs to the catalog, not here.
     await page.goto('/quiz');
 
     // First-load compile of /quiz can take >10s under concurrent worker load.
