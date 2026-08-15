@@ -13,7 +13,9 @@ export default defineConfig({
   // workers starve the single server: at six workers vibe-vote timed out at
   // 16s where it needs 2.9s. Three workers fixed that and finish 402 tests in
   // ~8.7m. One worker was tried and is NOT viable — it did not finish inside
-  // a 60-minute bound. Dev keeps full parallelism.
+  // a 60-minute bound; two was measurably WORSE than three. Dev keeps full
+  // parallelism. The one test that still felt this (bias-smoke) carries its
+  // own enlarged budget rather than serialising the whole suite for it.
   workers: process.env.CI ? 1 : releaseMode ? 3 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {

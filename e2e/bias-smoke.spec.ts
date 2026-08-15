@@ -22,13 +22,18 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     // (night-loop N1): the page reaches the right state, the budget just
     // runs out. test.slow() = 3× the project timeout.
     test.slow();
-    // NOTE: raising this to 180s was tried and did NOT help — the run then
-    // burned 3.0m and died with "Target page, context or browser has been
-    // closed". Under parallel load this test is starved out, not merely slow,
-    // so a bigger budget buys nothing. It passes in 8.8s with the server to
-    // itself. The real cause is that every page load refetches the whole bars
-    // table (0019 catalog swap), which is what makes the suite
-    // concurrency-fragile; fixing that belongs to the catalog, not here.
+    // Do NOT raise this budget further to chase a failure here. Both 180s and
+    // 300s were tried and neither helped, because the cost is not in this
+    // test: a long session of killed Playwright runs leaves orphaned
+    // WebKitNetworkProcess handles behind (138 were counted, unkillable —
+    // taskkill reports "no running instance"), and once the host is in that
+    // state browser contexts fail to launch at all
+    // ("browser.newContext: Error setting storage state", "timeout while
+    // setting up context"). On a healthy host this passes in 5.6-14s, and the
+    // teardown snapshot from the failures shows the page already in the
+    // CORRECT final state — "Your next 10 bars", first card "1. Lantern's
+    // Keep, Midtown, Vibe match 6/6". If this fails, check the host for
+    // orphaned browser processes before touching the test.
     await page.goto('/quiz');
 
     // First-load compile of /quiz can take >10s under concurrent worker load.
