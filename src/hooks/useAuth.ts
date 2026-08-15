@@ -7,6 +7,7 @@ import {
   clearResidualAccountCache,
   guardAgainstForeignCache,
   sealAccountCacheOnSignOut,
+  writeCacheOwner,
 } from '@/lib/accountCache';
 
 export type AuthState =
@@ -41,7 +42,20 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
         // a deep-linked first mount after sign-in — rendered the previous
         // account's personal FOREIGN_ONLY_KEYS unguarded. Idempotent; the
         // hooks' own calls remain as defense in depth.
-        guardAgainstForeignCache(session.user.id);
+        if (guardAgainstForeignCache(session.user.id)) {
+          // The wipe cleared storage, but any surface already mounted in
+          // THIS tab still holds the previous account's data in React state
+          // (new-cycle panel, Codex high + Claude medium corroborated). The
+          // device demonstrably changed hands — a hard reload is the clean
+          // slate. No loop: post-reload there is no residue to wipe.
+          window.location.reload();
+          return;
+        }
+        // CLAIM ownership at the lifecycle too (new-cycle panel, Codex):
+        // personal keys written by non-ratings surfaces stayed ownerless
+        // when no ratings hook ever mounted, so the seal no-oped and the
+        // next account inherited them.
+        writeCacheOwner(session.user.id);
         setState({ status: 'signed-in', user: session.user, session });
       } else {
         // A session that ended while the app was closed (expiry/revocation)
@@ -57,8 +71,13 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
       if (cancelled) return;
       if (session) {
         // Same lifecycle guard as getSession above — a sign-in completing in
-        // THIS tab must wipe a foreign cache before any surface renders it.
-        guardAgainstForeignCache(session.user.id);
+        // THIS tab must wipe a foreign cache before any surface renders it,
+        // and the same wipe → reload / claim-owner rules apply.
+        if (guardAgainstForeignCache(session.user.id)) {
+          window.location.reload();
+          return;
+        }
+        writeCacheOwner(session.user.id);
         setState({ status: 'signed-in', user: session.user, session });
       } else {
         // Non-button sign-outs (expiry, revocation, another tab's SDK

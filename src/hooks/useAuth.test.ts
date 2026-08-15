@@ -37,27 +37,39 @@ vi.mock('@/lib/supabase/client', () => ({
 }));
 
 describe('useAuth sign-in lifecycle guard', () => {
+  const reloadSpy = vi.fn();
+
   beforeEach(() => {
     window.localStorage.clear();
     authChangeHandler = null;
     sessionResult = { data: { session: null } };
+    reloadSpy.mockClear();
+    // jsdom's location.reload is non-configurable on the instance — replace
+    // the whole location object so the wipe→reload path is observable.
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, reload: reloadSpy },
+    });
   });
 
-  it('an existing session for a DIFFERENT user wipes the foreign cache on mount', async () => {
-    // User A's residue, personal keys included.
+  it('an existing session for a DIFFERENT user wipes the foreign cache and hard-reloads', async () => {
+    // User A's residue, personal keys included. The reload (not setState) is
+    // the contract: storage is wiped but an already-mounted surface still
+    // holds A's data in React state — only a clean slate removes it
+    // (new-cycle panel, Codex + Claude corroborated).
     window.localStorage.setItem(OWNER_KEY, 'user-a');
     window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
     window.localStorage.setItem(LISTS_KEY, '[{"id":"faves"}]');
     sessionResult = { data: { session: sessionFor('user-b') } };
 
-    const { result } = renderHook(() => useAuth());
-    await waitFor(() => expect(result.current.status).toBe('signed-in'));
+    renderHook(() => useAuth());
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalled());
 
     expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
     expect(window.localStorage.getItem(LISTS_KEY)).toBeNull();
   });
 
-  it('a sign-in completing via onAuthStateChange wipes a foreign cache too', async () => {
+  it('a sign-in completing via onAuthStateChange wipes a foreign cache and reloads too', async () => {
     const { result } = renderHook(() => useAuth());
     await waitFor(() => expect(result.current.status).toBe('signed-out'));
 
@@ -65,12 +77,12 @@ describe('useAuth sign-in lifecycle guard', () => {
     window.localStorage.setItem(LISTS_KEY, '[{"id":"faves"}]');
 
     authChangeHandler?.('SIGNED_IN', sessionFor('user-b'));
-    await waitFor(() => expect(result.current.status).toBe('signed-in'));
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalled());
 
     expect(window.localStorage.getItem(LISTS_KEY)).toBeNull();
   });
 
-  it('the same user signing back in keeps their own cache', async () => {
+  it('the same user signing back in keeps their cache, no reload', async () => {
     window.localStorage.setItem(OWNER_KEY, 'user-a');
     window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
     window.localStorage.setItem(LISTS_KEY, '[{"id":"faves"}]');
@@ -79,11 +91,15 @@ describe('useAuth sign-in lifecycle guard', () => {
     const { result } = renderHook(() => useAuth());
     await waitFor(() => expect(result.current.status).toBe('signed-in'));
 
+    expect(reloadSpy).not.toHaveBeenCalled();
     expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
     expect(window.localStorage.getItem(LISTS_KEY)).not.toBeNull();
   });
 
-  it('an anonymous cache (no ownership signal) is left for the first-sign-in merge', async () => {
+  it('an anonymous cache is left for the first-sign-in merge, and the lifecycle CLAIMS ownership', async () => {
+    // The claim is the other half of the fix (new-cycle panel, Codex):
+    // without it, personal keys written by non-ratings surfaces stayed
+    // ownerless, the seal no-oped, and the next account inherited them.
     window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
     sessionResult = { data: { session: sessionFor('user-b') } };
 
@@ -91,5 +107,6 @@ describe('useAuth sign-in lifecycle guard', () => {
     await waitFor(() => expect(result.current.status).toBe('signed-in'));
 
     expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+    expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-b');
   });
 });
