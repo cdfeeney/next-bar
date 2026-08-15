@@ -446,6 +446,40 @@ describe('useRatings — server mode', () => {
     });
   });
 
+  it('the import ack is stamp-exact — a tap landing mid-merge keeps its newer protection (round-5, Claude)', async () => {
+    // The T1 row is uploaded by the import; while the merge is in flight the
+    // user taps the same bar again (T2 entry replaces T1's). The import's
+    // ack carries T1's stamp, so it must NOT clear the T2 entry.
+    const t1 = '2026-06-01T00:00:00.000Z';
+    const t2 = '2026-06-01T00:00:05.000Z';
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([{ barId: 'attaboy', rating: 'loved', ratedAt: t1 }]),
+    );
+    markRatingDirty('attaboy', t1);
+    let resolveMerge!: (v: string[]) => void;
+    mergeLocalRatingsToServerMock.mockReturnValue(
+      new Promise((res) => {
+        resolveMerge = res;
+      }),
+    );
+    upsertServerRatingMock.mockResolvedValue(false); // T2 write never acks
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+    await waitFor(() => expect(mergeLocalRatingsToServerMock).toHaveBeenCalled());
+
+    // Mid-merge tap: newer entry replaces the journal slot.
+    markRatingDirty('attaboy', t2);
+    act(() => resolveMerge(['attaboy'])); // import inserted the T1 snapshot
+
+    await waitFor(() =>
+      expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1'),
+    );
+    // The T2 entry survived the import's T1-stamped ack.
+    expect(getDirtyRatingIds()).toEqual(['attaboy']);
+  });
+
   it('a failed retry keeps the row journaled for the next sign-in', async () => {
     window.localStorage.setItem(
       KEY,

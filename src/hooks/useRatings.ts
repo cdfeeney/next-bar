@@ -243,12 +243,16 @@ export function useRatings(): UseRatingsReturn {
           // merge (null) must retry next sign-in, not be marked done.
           if (inserted !== null && getCacheEpoch() === epoch) {
             writeMergedFlag(userId);
-            // Clear journal entries ONLY for rows the merge actually
-            // INSERTED (round-4, Claude + Codex corroborated): a row the
-            // server-wins merge SKIPPED may be the user's newer signed-out
-            // re-rating — its journal entry survives and the retry loop
-            // below upserts it under LWW.
-            clearRatingsDirty(inserted);
+            // Ack journal entries ONLY for rows the merge actually INSERTED
+            // (round-4, Claude + Codex corroborated), and per-row WITH the
+            // stamp of the snapshot row that was uploaded (round-5, Claude):
+            // a barId-only clear violated the stamp invariant — a tap landing
+            // while the merge was in flight replaces the entry with a newer
+            // stamp, and that newer write's protection must survive this ack.
+            for (const barId of inserted) {
+              const uploaded = mergeableRatings.find((r) => r.barId === barId);
+              if (uploaded) ackRatingDirty(barId, uploaded.ratedAt);
+            }
           }
         } else if (getCacheEpoch() === epoch) {
           // Nothing to import: the one-time import is vacuously complete.
@@ -268,7 +272,6 @@ export function useRatings(): UseRatingsReturn {
           // effect start and here.
           if (readCacheOwner() !== null && readCacheOwner() !== userId) return;
           const local = loadRatings().filter((r) => !isSeededDemoRating(r));
-          const stale: string[] = [];
           for (const entry of dirtyEntries) {
             const row = local.find((r) => r.barId === entry.barId);
             if (entry.op === 'd') {
@@ -300,11 +303,10 @@ export function useRatings(): UseRatingsReturn {
               // locally (local-mode clear withdraws intent). Never replay a
               // delete that was not made signed-in (round-4, Claude:
               // anonymous clears must not erase the account's server data).
-              stale.push(entry.barId);
+              // Ack by THIS entry's stamp (round-5, Claude): a tap re-rating
+              // the bar mid-loop creates a newer entry that must survive.
+              ackRatingDirty(entry.barId, entry.stamp);
             }
-          }
-          if (stale.length > 0 && getCacheEpoch() === epoch) {
-            clearRatingsDirty(stale);
           }
         }
       }
