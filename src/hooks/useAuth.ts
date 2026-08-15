@@ -5,6 +5,7 @@ import type { Session, User } from '@supabase/supabase-js';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
   clearResidualAccountCache,
+  guardAgainstForeignCache,
   sealAccountCacheOnSignOut,
 } from '@/lib/accountCache';
 
@@ -34,6 +35,13 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
       if (cancelled) return;
       const session = data.session;
       if (session) {
+        // The foreign-cache guard belongs to the sign-in LIFECYCLE, not to
+        // whichever data hook happens to mount first (V8-2 final panel,
+        // Codex): useRatings runs it too, but a page without useRatings —
+        // a deep-linked first mount after sign-in — rendered the previous
+        // account's personal FOREIGN_ONLY_KEYS unguarded. Idempotent; the
+        // hooks' own calls remain as defense in depth.
+        guardAgainstForeignCache(session.user.id);
         setState({ status: 'signed-in', user: session.user, session });
       } else {
         // A session that ended while the app was closed (expiry/revocation)
@@ -48,6 +56,9 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
       if (cancelled) return;
       if (session) {
+        // Same lifecycle guard as getSession above — a sign-in completing in
+        // THIS tab must wipe a foreign cache before any surface renders it.
+        guardAgainstForeignCache(session.user.id);
         setState({ status: 'signed-in', user: session.user, session });
       } else {
         // Non-button sign-outs (expiry, revocation, another tab's SDK
