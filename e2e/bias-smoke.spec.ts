@@ -6,7 +6,11 @@
  * East Village.
  */
 
-import { test, expect } from '@playwright/test';
+// The catalog fixture serves the bars table from the local catalog. Without it
+// every navigation in this quiz walk refetches the whole table from Supabase
+// (CatalogRefresh), and three parallel workers doing that starve the single
+// server — which is what made this spec fail under load while passing alone.
+import { test, expect } from './helpers/catalogTest';
 
 const MIDTOWN_COORDS = { latitude: 40.7549, longitude: -73.984 };
 
@@ -22,18 +26,13 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     // (night-loop N1): the page reaches the right state, the budget just
     // runs out. test.slow() = 3× the project timeout.
     test.slow();
-    // Do NOT raise this budget further to chase a failure here. Both 180s and
-    // 300s were tried and neither helped, because the cost is not in this
-    // test: a long session of killed Playwright runs leaves orphaned
-    // WebKitNetworkProcess handles behind (138 were counted, unkillable —
-    // taskkill reports "no running instance"), and once the host is in that
-    // state browser contexts fail to launch at all
-    // ("browser.newContext: Error setting storage state", "timeout while
-    // setting up context"). On a healthy host this passes in 5.6-14s, and the
-    // teardown snapshot from the failures shows the page already in the
-    // CORRECT final state — "Your next 10 bars", first card "1. Lantern's
-    // Keep, Midtown, Vibe match 6/6". If this fails, check the host for
-    // orphaned browser processes before touching the test.
+    // Do NOT raise this budget to chase a failure here. Both 180s and 300s
+    // were tried and neither helped, because the cost was never in this test:
+    // it was the live Supabase catalog refetch on every navigation, which is
+    // why it passed alone in ~8s and failed at three workers. The fixture
+    // above removes that. (A host carrying orphaned WebKitNetworkProcess
+    // handles from killed Playwright runs breaks context launch outright and
+    // looks similar — check for those before touching the test.)
     await page.goto('/quiz');
 
     // First-load compile of /quiz can take >10s under concurrent worker load.

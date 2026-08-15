@@ -52,8 +52,19 @@ async function fulfillCatalog(route: Route): Promise<void> {
     return;
   }
 
-  const offset = Number(url.searchParams.get('offset') ?? 0);
-  const limit = Number(url.searchParams.get('limit') ?? 1000);
+  // supabase-js `.range(from, to)` sends a PostgREST **Range header**, not
+  // offset/limit query params, and CatalogRefresh pages exactly that way.
+  // Reading only the params re-served page one forever, and the caller's
+  // `data.length < PAGE` loop therefore never terminated — a deterministic
+  // hang for any spec whose page mounts CatalogRefresh.
+  const rangeHeader = route.request().headers()['range'] ?? '';
+  const range = /^(?:items=)?(\d+)-(\d+)$/.exec(rangeHeader.trim());
+  const offset = range
+    ? Number(range[1])
+    : Number(url.searchParams.get('offset') ?? 0);
+  const limit = range
+    ? Number(range[2]) - Number(range[1]) + 1
+    : Number(url.searchParams.get('limit') ?? 1000);
   const page = rows.slice(offset, offset + limit).map((value) => project(value, columns));
   await route.fulfill({
     status: 200,
