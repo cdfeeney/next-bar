@@ -186,7 +186,6 @@ export function useRatings(): UseRatingsReturn {
     const mergeableRatings = loadRatings().filter(
       (r) => !isSeededDemoRating(r),
     );
-    const alreadyMergedFor = readMergedFlag();
 
     let cancelled = false;
     // Epoch guard: if a cache wipe (sign-out) lands while this async block
@@ -195,9 +194,14 @@ export function useRatings(): UseRatingsReturn {
     // just-wiped cache (routed review finding).
     const epoch = getCacheEpoch();
     void (async () => {
-      // First-sign-in merge: only re-runs if this browser hasn't merged
-      // for this user yet. Idempotent on the server side via insert-only.
-      if (mergeableRatings.length > 0 && alreadyMergedFor !== userId) {
+      // Upload local rows on EVERY sign-in, not only the first (V8-2 round-2:
+      // Claude and Codex both found the loss). The old `alreadyMergedFor !==
+      // userId` short-circuit meant anything written after the latch — rows
+      // rated while signed out, or a row whose fire-and-forget upsert failed —
+      // was never uploaded, and the residue wipe then deleted it because the
+      // latch said the import was done. The merge is insert-only and skips
+      // bars the server already has, so re-running it is cheap and idempotent.
+      if (mergeableRatings.length > 0) {
         const merged = await mergeLocalRatingsToServer(
           supabase,
           userId,
@@ -206,6 +210,12 @@ export function useRatings(): UseRatingsReturn {
         // Only latch the flag on a run that actually completed — a failed
         // merge (null) must retry next sign-in, not be marked done.
         if (merged !== null && getCacheEpoch() === epoch) writeMergedFlag(userId);
+      } else if (getCacheEpoch() === epoch) {
+        // Nothing to import: the one-time import is vacuously complete. Latch
+        // it, or hasPendingImport() reports a pending import forever for every
+        // account that first signed in on an empty device, and the residual
+        // wipe never fires for them again (Claude, V8-2 round-2).
+        writeMergedFlag(userId);
       }
       const server = await fetchServerRatings(supabase);
       // null = fetch FAILED (not "no ratings") — keep whatever we have
@@ -222,10 +232,6 @@ export function useRatings(): UseRatingsReturn {
           loadRatings().filter((r) => !isSeededDemoRating(r)),
         );
         setRatings(merged);
-        // Hydrate the localStorage cache with the authoritative rows
-        // (including rows written on other devices) so usePairwise and the
-        // sign-out fallback read current data.
-        writeRatings(merged);
         // Ownership gets its OWN key (V8-2 review). The cache now holds THIS
         // account's data and must never look anonymous, or the foreign and
         // residual guards would let a later account merge it. That signal
@@ -233,7 +239,15 @@ export function useRatings(): UseRatingsReturn {
         // so one failed import was never retried and, when the session later
         // expired, clearResidualAccountCache wiped the rows that had never
         // reached the server. Ownership here, import bookkeeping above.
+        //
+        // BEFORE the data write (V8-2 round-2, Codex + DeepSeek): if the tab
+        // dies or storage fills between the two, account data with no owner
+        // key reads as anonymous and the next account merges it.
         writeCacheOwner(userId);
+        // Hydrate the localStorage cache with the authoritative rows
+        // (including rows written on other devices) so usePairwise and the
+        // sign-out fallback read current data.
+        writeRatings(merged);
       }
     })();
 
@@ -340,15 +354,6 @@ export function useRatings(): UseRatingsReturn {
   );
 
   return { ratings, getRating, setRating, clearRating };
-}
-
-function readMergedFlag(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(MERGED_KEY);
-  } catch {
-    return null;
-  }
 }
 
 function writeMergedFlag(userId: string): void {

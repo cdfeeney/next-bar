@@ -125,6 +125,31 @@ describe('unionTranscripts', () => {
     expect(server).toEqual([s1]);
     expect(local).toEqual([localOnly]);
   });
+
+  it('collapses duplicates inside the SERVER list too', () => {
+    // pairwise_comparisons has no uniqueness constraint (migration 0002), so
+    // an interrupted historical merge can leave the same tuple twice. Copying
+    // the server array wholesale double-counted it in replay.
+    expect(unionTranscripts([s1, s1, s2], [])).toEqual([s1, s2]);
+  });
+
+  it('sorts an unparseable comparedAt to the end deterministically', () => {
+    // A NaN comparator leaves order implementation-defined, so one malformed
+    // row could reshuffle score-bearing history on every rebuild.
+    const bad = comp('x', 'y', 'not-a-date');
+    const early = comp('a', 'b', '2026-05-19T00:00:00.000Z');
+    const out = unionTranscripts([s1], [bad, early]);
+    expect(out.map((c) => c.comparedAt)).toEqual([
+      '2026-05-19T00:00:00.000Z',
+      '2026-05-20T00:00:00.000Z',
+      'not-a-date',
+    ]);
+    // Same inputs in a different order produce the same replay order.
+    const again = unionTranscripts([s1], [early, bad]);
+    expect(again.map((c) => c.comparedAt)).toEqual(
+      out.map((c) => c.comparedAt),
+    );
+  });
 });
 
 describe('comparisonKey timestamp normalization', () => {

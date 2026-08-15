@@ -115,6 +115,28 @@ Two consequences, both accepted and named rather than hidden:
   hooks write the owner key after a successful *fetch* even when that session's
   *upload* failed, so an expiry still destroyed never-uploaded rows.)
 
+**The import runs on every sign-in, not only the first.** The `:merged-for:`
+latch is now an optimisation record, not a gate. Short-circuiting on it stranded
+everything written after it was set — rows rated while signed out, and any row
+whose fire-and-forget upsert failed — and the residue wipe then deleted exactly
+those rows because the latch claimed the import was done (V8-2 round-2, Claude
+and Codex). `mergeLocalRatingsToServer` is insert-only and skips bars the server
+already holds; `mergeLocalComparisonsToServer` dedupes by `comparisonKey`. Both
+are therefore idempotent, so re-running them costs one round trip and cannot
+duplicate a row. When there is nothing local to import the latch is written
+anyway — the import is vacuously complete, and leaving it unset made
+`hasPendingImport()` report a pending import forever for every account that
+first signed in on an empty device.
+
+**A foreign sign-in clears more than the account cache.** `ALL_KEYS` covers the
+ratings/pairwise/follows surface, and an ordinary sign-out clears only that:
+the device owner's named lists, Want to Go, vibe profile, night log, night
+vibe, tonight intent and saved bars are their own data and must survive
+signing out. On a **foreign** sign-in the owner signal already names a
+different account, so the device has demonstrably changed hands and those keys
+are wiped too — leaving the previous user's lists and night history on screen
+would be a privacy leak, not continuity (V8-2 round-2, GLM).
+
 **The pairwise transcript was destroyed outright.** A failed upload followed by
 a successful fetch *replaced* local state and storage with the server
 transcript. Fixed: hydrate unions via `unionTranscripts` and re-reads the cache

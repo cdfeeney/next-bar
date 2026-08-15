@@ -158,14 +158,17 @@ export function usePairwise(): UsePairwiseReturn {
     // cached transcript must be wiped, never merged into this one.
     guardAgainstForeignCache(userId);
     const local = loadComparisons();
-    const alreadyMergedFor = readMergedFlag();
 
     let cancelled = false;
     // Epoch guard — see useRatings: abandon writes if a wipe landed while
     // this block was in flight (sign-out race).
     const epoch = getCacheEpoch();
     void (async () => {
-      if (local.length > 0 && alreadyMergedFor !== userId) {
+      // Every sign-in, not only the first — see the same change in useRatings.
+      // The merge dedupes by comparisonKey against the server transcript, so
+      // re-running it inserts nothing that is already up there; short-circuiting
+      // on the latch stranded anything appended after it was written.
+      if (local.length > 0) {
         const merged = await mergeLocalComparisonsToServer(
           supabase,
           userId,
@@ -174,6 +177,9 @@ export function usePairwise(): UsePairwiseReturn {
         );
         // Latch only on a completed run — a failed merge must retry.
         if (merged !== null && getCacheEpoch() === epoch) writeMergedFlag(userId);
+      } else if (getCacheEpoch() === epoch) {
+        // Nothing to import — vacuously complete. See useRatings.
+        writeMergedFlag(userId);
       }
       const server = await fetchServerComparisons(supabase);
       // null = fetch failed — keep the local transcript rather than
@@ -443,15 +449,6 @@ export function usePairwise(): UsePairwiseReturn {
     dismissPrompt,
     sessionProgress,
   };
-}
-
-function readMergedFlag(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(MERGED_KEY);
-  } catch {
-    return null;
-  }
 }
 
 function writeMergedFlag(userId: string): void {

@@ -265,7 +265,7 @@ describe('usePairwise — server mode (B0.4)', () => {
     expect(insertServerComparisonMock).not.toHaveBeenCalled();
   });
 
-  it('merges the local transcript once per user, then serves the server transcript', async () => {
+  it('merges the local transcript on every mount, then serves the server transcript', async () => {
     const local: PairwiseComparison[] = [
       { winnerBarId: 'a', loserBarId: 'b', comparedAt: '2026-05-20T00:00:00.000Z' },
     ];
@@ -282,10 +282,13 @@ describe('usePairwise — server mode (B0.4)', () => {
     expect(mergeLocalComparisonsToServerMock.mock.calls[0][2]).toEqual(local);
     unmount();
 
-    // Second mount for the same user: merge flag prevents a re-merge.
+    // Second mount for the same user re-runs the merge (V8-2 round-2). The
+    // latch used to short-circuit it, which stranded every comparison
+    // appended after the latch was written; the merge dedupes by
+    // comparisonKey, so re-running inserts nothing already on the server.
     const second = renderHook(() => usePairwise());
     await waitFor(() => expect(second.result.current.comparisons).toHaveLength(2));
-    expect(mergeLocalComparisonsToServerMock).toHaveBeenCalledTimes(1);
+    expect(mergeLocalComparisonsToServerMock).toHaveBeenCalledTimes(2);
   });
 
   it('requestPrompt works while signed in (the old gate is gone)', async () => {

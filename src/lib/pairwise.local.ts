@@ -99,17 +99,38 @@ export function unionTranscripts(
   server: ReadonlyArray<PairwiseComparison>,
   local: ReadonlyArray<PairwiseComparison>,
 ): PairwiseComparison[] {
-  const seen = new Set(server.map(comparisonKey));
-  const extra = local.filter((c) => {
+  const seen = new Set<string>();
+  // Dedupe the SERVER side too. `pairwise_comparisons` has no uniqueness
+  // constraint (migration 0002), so an interrupted historical merge can leave
+  // the same tuple twice; copying the array wholesale kept both and
+  // double-counted it in replay (Codex, V8-2 round-2).
+  const keep = (c: PairwiseComparison): boolean => {
     const key = comparisonKey(c);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
-  if (extra.length === 0) return [...server];
-  return [...server, ...extra].sort(
-    (a, b) => Date.parse(a.comparedAt) - Date.parse(b.comparedAt),
-  );
+  };
+  const base = server.filter(keep);
+  const extra = local.filter(keep);
+  if (extra.length === 0) return base;
+  return [...base, ...extra].sort(byInstant);
+}
+
+/**
+ * Replay order. Unparseable `comparedAt` sorts last, deterministically:
+ * returning NaN from a comparator leaves the order implementation-defined,
+ * which would let a single malformed row reshuffle score-bearing history on
+ * every rebuild (DeepSeek, V8-2 round-2).
+ */
+function byInstant(a: PairwiseComparison, b: PairwiseComparison): number {
+  const ta = Date.parse(a.comparedAt);
+  const tb = Date.parse(b.comparedAt);
+  const aBad = Number.isNaN(ta);
+  const bBad = Number.isNaN(tb);
+  if (aBad && bBad) return 0;
+  if (aBad) return 1;
+  if (bBad) return -1;
+  return ta - tb;
 }
 
 /**

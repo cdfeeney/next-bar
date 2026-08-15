@@ -113,13 +113,26 @@ function hasPendingImport(owner: string): boolean {
     [PAIRWISE_KEY, PAIRWISE_MERGED_KEY],
   ] as const;
   return pairs.some(([dataKey, mergedKey]) => {
-    const raw = window.localStorage.getItem(dataKey);
-    // An absent, empty, or empty-array payload has nothing to lose.
-    if (raw === null || raw === '' || raw === '[]' || raw === 'null') {
-      return false;
-    }
+    if (!hasRows(dataKey)) return false;
     return window.localStorage.getItem(mergedKey) !== owner;
   });
+}
+
+/**
+ * Does this key hold at least one row? Parsed, not string-matched: a
+ * pretty-printed or whitespace-padded `[ ]` is still empty, and a corrupt
+ * payload has no rows worth blocking a wipe for. Sentinel string comparison
+ * missed both and could jam the wipe permanently (DeepSeek, V8-2 round-2).
+ */
+function hasRows(dataKey: string): boolean {
+  const raw = window.localStorage.getItem(dataKey);
+  if (raw === null) return false;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -153,15 +166,39 @@ export function clearResidualAccountCache(): boolean {
 }
 
 /**
+ * Local-only keys that are nevertheless PERSONAL: one user's named lists,
+ * Want to Go, vibe profile, night history, night vibe, tonight intent, and
+ * saved bars. They are deliberately NOT in ALL_KEYS, because an ordinary
+ * sign-out must not delete the device owner's own data — that is the
+ * continuity rule this goal exists to protect.
+ *
+ * A FOREIGN sign-in is different, and only that path wipes these: the owner
+ * signal already names a different account, so the device has demonstrably
+ * changed hands and leaving the previous user's lists and night history on
+ * screen is a privacy leak, not continuity (GLM, V8-2 round-2).
+ */
+const FOREIGN_ONLY_KEYS = [
+  'next-bar:lists:v1',
+  'next-bar:list:want-to-go:v1',
+  'next-bar:profile:v1',
+  'next-bar:night-log:v1',
+  'next-bar:night-vibe:v1',
+  'next-bar:intent:v1',
+  'next-bar:saved:v1',
+] as const;
+
+/**
  * Wipe the cache if it demonstrably belongs to a different account.
  * Returns true when a foreign cache was cleared.
  *
- * A cache with NO merged-for flag is genuine anonymous data (pre-first-sign-in)
- * and is left alone — merging that into the signing-in account is the intended
- * first-sign-in behavior. This is sound because the hooks latch the flag as an
- * OWNERSHIP marker on every server hydrate (not only after a merge) — see the
- * santa round-3 fix in useRatings/usePairwise; a signed-in account can never
- * leave flag-less data in the cache.
+ * A cache with NO ownership signal at all is genuine anonymous data
+ * (pre-first-sign-in) and is left alone — merging that into the signing-in
+ * account is the intended first-sign-in behavior. Soundness rests on the hooks
+ * writing the dedicated owner key (`writeCacheOwner`) on every successful
+ * hydrate AND on every server-mode write-through, before the data it
+ * describes, so a signed-in account cannot leave ownerless data behind. The
+ * `:merged-for:` latches are read here only as a legacy fallback, for a device
+ * upgrading from V7/early-V8 that has them but no owner key.
  */
 export function guardAgainstForeignCache(currentUserId: string): boolean {
   if (typeof window === 'undefined') return false;
@@ -174,7 +211,12 @@ export function guardAgainstForeignCache(currentUserId: string): boolean {
     const isForeign = owners.some(
       (owner) => owner !== null && owner !== currentUserId,
     );
-    if (isForeign) clearAccountCache();
+    if (isForeign) {
+      clearAccountCache();
+      for (const key of FOREIGN_ONLY_KEYS) {
+        window.localStorage.removeItem(key);
+      }
+    }
     return isForeign;
   } catch {
     return false;

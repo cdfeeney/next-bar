@@ -295,7 +295,12 @@ describe('useRatings — server mode', () => {
     expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1');
   });
 
-  it('does NOT re-merge on a second mount for the same user (MERGED_KEY honored)', async () => {
+  it('DOES re-merge on a later mount even with the latch already set', async () => {
+    // Was "does NOT re-merge … (MERGED_KEY honored)". That short-circuit lost
+    // data (V8-2 round-2): anything written after the latch — rows rated while
+    // signed out, or a row whose fire-and-forget upsert failed — was never
+    // uploaded, and the residue wipe then deleted it because the latch said
+    // the import was done. The merge is insert-only, so re-running is safe.
     window.localStorage.setItem(
       KEY,
       JSON.stringify([
@@ -307,11 +312,10 @@ describe('useRatings — server mode', () => {
 
     renderHook(() => useRatings());
 
-    // Server fetch still runs to load the current rating set; merge does not.
     await waitFor(() => {
       expect(fetchServerRatingsMock).toHaveBeenCalled();
     });
-    expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
+    expect(mergeLocalRatingsToServerMock).toHaveBeenCalled();
   });
 
   it('a genuinely anonymous cache (no merged-for flag) DOES merge on first sign-in', async () => {
@@ -406,8 +410,13 @@ describe('useRatings — server mode', () => {
     await waitFor(() =>
       expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1'),
     );
-    // And the import is NOT claimed to have happened — nothing was imported.
-    expect(window.localStorage.getItem(MERGED_KEY)).toBeNull();
+    // The import is latched as vacuously complete — there was nothing to
+    // import. Leaving it null made hasPendingImport() report a pending import
+    // forever for every account that first signed in on an empty device, so
+    // the residual wipe never fired for them again (V8-2 round-2).
+    await waitFor(() =>
+      expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1'),
+    );
   });
 
   it('retries the import on the next sign-in after a failed merge', async () => {

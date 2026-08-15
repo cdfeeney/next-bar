@@ -160,6 +160,12 @@ test('V7 Bar 54, tied scores, lists, vibe profile, and night history survive nav
 
   // Every inventoried local key is byte-identical after the whole tour.
   await expect(readLocal(page)).resolves.toEqual(V7_LOCAL);
+  // …and the session-scoped key survives WITHIN the tab. Only the reopen test
+  // asserts it is gone, so without this a code path that deletes it on first
+  // navigation would satisfy both specs (Codex, V8-2 round-2).
+  await expect(
+    page.evaluate((key) => sessionStorage.getItem(key), ONBOARDING_KEY),
+  ).resolves.toBe('1');
 });
 
 test('every V7 key survives a force-close and reopen; the session-scoped flag does not', async ({
@@ -205,10 +211,15 @@ test('the shared-night surface never writes to V7 local storage', async ({ page 
   await seedV7Install(page);
 
   const response = await page.goto(`/u/conor_f/night/${token}`);
-  // The route must actually SERVE. Without this the assertion below passes
-  // just as happily on a 500 that never ran a line of shared-night code, so
-  // "writes no local key" would prove nothing (Codex, V8-2 round-1).
-  expect(response?.status()).toBeLessThan(500);
+  // The route must actually SERVE, and its own code must actually RUN.
+  // Without both, the storage assertion below passes just as happily on a 500
+  // — or on a deleted route's 404 — having never executed a line of
+  // shared-night code, so "writes no local key" would prove nothing
+  // (Codex, V8-2 rounds 1 and 2). With no Supabase configured the page
+  // resolves to its terminal "gone" state, which is the shared-night
+  // component rendering.
+  expect(response?.status()).toBe(200);
+  await expect(page.getByRole('heading', { name: /this night isn't here/i })).toBeVisible();
   await expect(readLocal(page)).resolves.toEqual(V7_LOCAL);
 
   // And back into the app: local history is still the LOCAL night, not the

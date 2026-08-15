@@ -111,6 +111,20 @@ describe('clearResidualAccountCache', () => {
     expect(clearResidualAccountCache()).toBe(true);
     expect(window.localStorage.getItem(FOLLOWS_KEY)).toBeNull();
   });
+
+  it('a whitespace or pretty-printed empty array is still empty', () => {
+    // String-comparing against '[]' missed these and jammed the wipe forever.
+    window.localStorage.setItem(RATINGS_KEY, '[\n  \n]');
+    window.localStorage.setItem(PAIRWISE_KEY, '  [ ]  ');
+    writeCacheOwner('user-a');
+    expect(clearResidualAccountCache()).toBe(true);
+  });
+
+  it('a corrupt payload is not treated as rows worth blocking a wipe for', () => {
+    window.localStorage.setItem(RATINGS_KEY, '{not json');
+    writeCacheOwner('user-a');
+    expect(clearResidualAccountCache()).toBe(true);
+  });
 });
 
 describe('guardAgainstForeignCache', () => {
@@ -188,6 +202,31 @@ describe('cache ownership is separate from the import latch', () => {
     writeCacheOwner('user-a');
     clearAccountCache();
     expect(window.localStorage.getItem(OWNER_KEY)).toBeNull();
+  });
+
+  it('a foreign sign-in also clears the previous user’s lists, profile, and night history', () => {
+    // Not in ALL_KEYS on purpose: an ordinary sign-out must keep the device
+    // owner's own data. A foreign sign-in is the one path where the device has
+    // demonstrably changed hands.
+    window.localStorage.setItem('next-bar:lists:v1', '[{"id":"faves"}]');
+    window.localStorage.setItem('next-bar:profile:v1', '{"archetype":"x"}');
+    window.localStorage.setItem('next-bar:night-log:v1', '{"night":"2026-08-12"}');
+    window.localStorage.setItem('next-bar:saved:v1', '[{"barId":"attaboy"}]');
+    writeCacheOwner('user-a');
+    expect(guardAgainstForeignCache('user-b')).toBe(true);
+    expect(window.localStorage.getItem('next-bar:lists:v1')).toBeNull();
+    expect(window.localStorage.getItem('next-bar:profile:v1')).toBeNull();
+    expect(window.localStorage.getItem('next-bar:night-log:v1')).toBeNull();
+    expect(window.localStorage.getItem('next-bar:saved:v1')).toBeNull();
+  });
+
+  it('an ordinary sign-out keeps the device owner’s lists and night history', () => {
+    window.localStorage.setItem('next-bar:lists:v1', '[{"id":"faves"}]');
+    window.localStorage.setItem('next-bar:night-log:v1', '{"night":"2026-08-12"}');
+    writeCacheOwner('user-a');
+    clearAccountCache();
+    expect(window.localStorage.getItem('next-bar:lists:v1')).not.toBeNull();
+    expect(window.localStorage.getItem('next-bar:night-log:v1')).not.toBeNull();
   });
 
   it('still honours a legacy device that has only the old latches', () => {
