@@ -3,8 +3,13 @@ import { defineConfig, devices } from '@playwright/test';
 const releaseMode = process.env.PLAYWRIGHT_RELEASE === '1';
 
 // Port is overridable so two worktrees of this repo can run e2e at the same
-// time. Defaults to 3000, so nothing changes unless PORT is set.
-const port = Number(process.env.PORT ?? 3000);
+// time. Defaults to 3000, so nothing changes unless it is set.
+//
+// Both spellings are accepted (V8-2 round-1, Claude + GLM): a run recorded as
+// `PLAYWRIGHT_PORT=3612` silently fell back to 3000, and in dev mode
+// `reuseExistingServer` then tests whatever server another worktree already
+// has on 3000 — a false green with no error to notice.
+const port = Number(process.env.PLAYWRIGHT_PORT ?? process.env.PORT ?? 3000);
 const baseURL = `http://localhost:${port}`;
 
 export default defineConfig({

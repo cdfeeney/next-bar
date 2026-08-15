@@ -283,15 +283,19 @@ export function useRatings(): UseRatingsReturn {
             const filtered = prev.filter((r) => r.barId !== barId);
             return [...filtered, entry];
           });
-          // Write-through localStorage cache so usePairwise + sign-out
-          // fallback stay coherent with server-mode writes (B0.3).
-          setRatingLib(barId, rating, score);
           // Mark ownership on the WRITE, not only after a successful hydrate
           // (V8-2 round-3 review): a signed-in session whose every hydrate
           // fetch fails still writes account data here, and without an owner
           // key that data looks anonymous — clearResidualAccountCache would
           // not fire on expiry and the next account would merge it in.
+          //
+          // BEFORE the data write (V8-2 round-1, DeepSeek): if storage is
+          // failing, an owner with no data is harmless, data with no owner is
+          // the cross-account leak.
           writeCacheOwner(auth.user.id);
+          // Write-through localStorage cache so usePairwise + sign-out
+          // fallback stay coherent with server-mode writes (B0.3).
+          setRatingLib(barId, rating, score);
           void upsertServerRating(
             supabase,
             auth.user.id,
@@ -319,9 +323,10 @@ export function useRatings(): UseRatingsReturn {
         const supabase = getBrowserSupabase();
         if (supabase) {
           setRatings((prev) => prev.filter((r) => r.barId !== barId));
+          // Owner before data — see setRating.
+          writeCacheOwner(auth.user.id);
           // Write-through cache (B0.3) — see setRating.
           clearRatingLib(barId);
-          writeCacheOwner(auth.user.id);
           void deleteServerRating(supabase, auth.user.id, barId);
           broadcastServerUpdate({ kind: 'clear', barId });
           return;

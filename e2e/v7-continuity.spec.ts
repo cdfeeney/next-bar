@@ -204,7 +204,11 @@ test('the shared-night surface never writes to V7 local storage', async ({ page 
   const token = '123e4567-e89b-42d3-a456-426614174000';
   await seedV7Install(page);
 
-  await page.goto(`/u/conor_f/night/${token}`);
+  const response = await page.goto(`/u/conor_f/night/${token}`);
+  // The route must actually SERVE. Without this the assertion below passes
+  // just as happily on a 500 that never ran a line of shared-night code, so
+  // "writes no local key" would prove nothing (Codex, V8-2 round-1).
+  expect(response?.status()).toBeLessThan(500);
   await expect(readLocal(page)).resolves.toEqual(V7_LOCAL);
 
   // And back into the app: local history is still the LOCAL night, not the

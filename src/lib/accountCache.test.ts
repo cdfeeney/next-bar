@@ -72,6 +72,45 @@ describe('clearResidualAccountCache', () => {
     expect(clearResidualAccountCache()).toBe(false);
     expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
   });
+
+  it('wipes an owned cache whose imports all completed', () => {
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    expect(clearResidualAccountCache()).toBe(true);
+    expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+    expect(window.localStorage.getItem(PAIRWISE_KEY)).toBeNull();
+    expect(window.localStorage.getItem(FOLLOWS_KEY)).toBeNull();
+  });
+
+  it('never wipes ratings whose import never completed — those rows exist nowhere else', () => {
+    // The reported loss: the upload failed (no latch) but the fetch succeeded,
+    // so the hydrate wrote the owner key. Expiry must not delete the rows.
+    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    writeCacheOwner('user-a');
+    expect(clearResidualAccountCache()).toBe(false);
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+    // The owner key stays, so a foreign sign-in still wipes this cache.
+    expect(guardAgainstForeignCache('user-b')).toBe(true);
+    expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+  });
+
+  it('never wipes a pairwise transcript whose import never completed', () => {
+    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    window.localStorage.setItem(RATINGS_MERGED_KEY, 'user-a');
+    window.localStorage.setItem(PAIRWISE_KEY, '[{"winnerBarId":"a"}]');
+    writeCacheOwner('user-a');
+    expect(clearResidualAccountCache()).toBe(false);
+    expect(window.localStorage.getItem(PAIRWISE_KEY)).not.toBeNull();
+  });
+
+  it('an empty payload is not a pending import — it has nothing to lose', () => {
+    window.localStorage.setItem(RATINGS_KEY, '[]');
+    window.localStorage.setItem(PAIRWISE_KEY, '[]');
+    window.localStorage.setItem(FOLLOWS_KEY, '["claire"]');
+    writeCacheOwner('user-a');
+    expect(clearResidualAccountCache()).toBe(true);
+    expect(window.localStorage.getItem(FOLLOWS_KEY)).toBeNull();
+  });
 });
 
 describe('guardAgainstForeignCache', () => {
@@ -133,8 +172,13 @@ describe('cache ownership is separate from the import latch', () => {
     expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
   });
 
-  it('an owner key alone counts as residue on a signed-out resolution', () => {
+  it('an owner key counts as residue once the import that owns it completed', () => {
+    // Was "an owner key ALONE counts as residue" — that encoded the round-1
+    // defect. Data present with no matching latch has never reached the
+    // server, so it is a pending import, not disposable residue; the latch is
+    // what makes the wipe safe.
     window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    window.localStorage.setItem(RATINGS_MERGED_KEY, 'user-a');
     writeCacheOwner('user-a');
     expect(clearResidualAccountCache()).toBe(true);
     expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();

@@ -51,7 +51,7 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | `next-bar:intent:v1` | local | Expiring tonight intent | Preserve through the current night; V8 Night membership/status becomes server-owned. |
 | `next-bar:night-vibe:v1` | local | Expiring per-night vibe selection | Preserve through the current night; server sync is not required. |
 | `next-bar:list:want-to-go:v1` | local | Want-to-Go entries | Preserve; fold into the named-list server owner without renaming this V7 source key. |
-| `next-bar:account:owner:v1` | local | V8 addition: which account this device cache belongs to | **Local-only, never synced** — a device-side marker holding a server user ID. Written on every successful signed-in hydrate; wiped with the rest of the account cache on sign-out or a foreign-account signal. Not a V7 key. |
+| `next-bar:account:owner:v1` | local | V8 addition: which account this device cache belongs to | **Local-only, never synced** — a device-side marker holding a server user ID. Written on every successful signed-in hydrate and on every server-mode write-through, before the data it describes; wiped with the rest of the account cache on sign-out or a foreign-account signal, but never while an import is still pending. Not a V7 key. |
 | `next-bar:saved:v1` | local | Legacy saved-bar store; `src/lib/saved.ts` still reads it, no UI calls it | **Local-only, never synced.** Preserve unread data; if it is ever retired, migrate it into the named-list owner deliberately — never silently delete it. |
 
 ## Server ownership and conflict rules
@@ -60,7 +60,7 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | --- | --- | --- | --- |
 | Authentication | Supabase Auth | Existing refresh/session state remains untouched. | Supabase token refresh and revocation are authoritative. |
 | Ratings and numeric scores | Existing `ratings`, one row per user/bar | Upload (`mergeLocalRatingsToServer`) inserts only bars absent on the server: the server row wins a same-bar collision. Hydrate (`mergeFreshest` in `useRatings`) then takes the newer `ratedAt` of the two, so a local row newer than the server's wins **in local state and cache** even though the upload skipped it — see the divergence note below. | Existing strict `updated_at` LWW trigger; equal timestamps keep the stored row. Score is part of that row, and equal scores on different bars remain valid ties. |
-| Pairwise ranking transcript | Existing `pairwise_comparisons` | Union by exact `(winner, loser, comparedAt)` tuple — deduped against the server set **and** within the local list. | Append-only; replay by `compared_at`, then row ID. Hydrate unions server with local (`unionTranscripts`) and never replaces, so a failed upload cannot destroy un-uploaded rows. Never replace the transcript with derived scores. |
+| Pairwise ranking transcript | Existing `pairwise_comparisons` | Union by exact `(winner, loser, comparedAt)` tuple — deduped against the server set **and** within the local list. | Append-only; replay by `compared_at`, then row ID. Hydrate unions server with local (`unionTranscripts`) and never replaces, so a failed upload cannot destroy un-uploaded rows. Never replace the transcript with derived scores. **Deletion is not a merge outcome:** the union deliberately has no way to observe a server-side removal, so Settings → "Clear ALL bar ratings" (the only deletion path) clears server rows *and* the local transcript on the device that runs it, and a second signed-in device keeps its own copy until it runs the same control. A cross-device propagating delete needs timestamped tombstones and is out of scope here. |
 | Named lists and Want to Go | Planned owner-only `account_content_state`, domain `lists` | Union unrelated list IDs. For the same ID, newer `updatedAt` wins; an exact tie keeps the server value. | Per-list LWW. Deletes require timestamped tombstones so an offline device cannot resurrect a deleted list. |
 | Vibe profile | Planned owner-only `vibe_profiles` | Compare local `savedAt` with server `saved_at`; newer wins and an exact tie keeps the server value. | Strict LWW. A clear must delete the server row successfully before clearing the local cache. Invalid or failed server reads never overwrite valid local data. |
 | Night history | Canonical V8 Night Out tables introduced by the Night Out goal | Import the valid `next-bar:night-log:v1` night once. Merge distinct visits by stable timestamp and bar ID; retain all server-only nights. | Server owns membership and lifecycle. Visit/event inserts are idempotent; status changes use server timestamps. |
@@ -84,10 +84,36 @@ wipes the account cache *because* the latch is present — deleting rows that
 had never reached the server.
 
 Fixed by splitting the meanings. `next-bar:account:owner:v1` now carries
-ownership and is written on every successful hydrate; a `:merged-for:` key
+ownership and is written on every successful hydrate **and** on every
+server-mode write-through (before the data it describes, so failing storage
+leaves a stale owner rather than ownerless account data); a `:merged-for:` key
 means only that the import completed, so a failed import retries on the next
-sign-in. The guards read the owner key **and** the legacy latches, so a device
-upgrading from V7/early-V8 keeps its cross-account protection.
+sign-in.
+
+**Which guard reads which signal — they are not the same, and the difference is
+deliberate:**
+
+| Guard | Reads | Why |
+| --- | --- | --- |
+| `guardAgainstForeignCache(currentUserId)` — a user signs IN | owner key **and** both legacy `:merged-for:` latches | A current account id makes ownership unambiguous, so a device upgrading from V7/early-V8 keeps full cross-account protection. |
+| `clearResidualAccountCache()` — resolved signed-out | owner key **only** | A legacy latch is an import sentinel, not proof the cache is disposable. Treating it as ownership erased V7 data during an install-over before the user signed back in. |
+
+Two consequences, both accepted and named rather than hidden:
+
+- A device that upgrades carrying **only** the legacy latches (it signed in
+  under an older build and its session has already expired) no longer has that
+  data wiped on a signed-out resolution, so the previous account's ratings stay
+  readable **locally** on that device until someone signs in. Nothing can reach
+  another account: the sign-in guard still wipes on a foreign id. The first
+  successful signed-in hydrate writes the owner key and the device converges to
+  normal behaviour.
+- `clearResidualAccountCache()` additionally **refuses to wipe over a pending
+  import** — account data present whose matching `:merged-for:` latch is not
+  the owner has never reached the server, so wiping it is permanent loss. The
+  owner key is left in place in that case, so a foreign sign-in still wipes.
+  (Found in the V8-2 round-1 panel by Codex and Claude independently: the
+  hooks write the owner key after a successful *fetch* even when that session's
+  *upload* failed, so an expiry still destroyed never-uploaded rows.)
 
 **The pairwise transcript was destroyed outright.** A failed upload followed by
 a successful fetch *replaced* local state and storage with the server

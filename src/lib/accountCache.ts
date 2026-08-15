@@ -53,7 +53,14 @@ const ALL_KEYS = [
   OWNER_KEY,
 ] as const;
 
-/** Record that this cache holds `userId`'s data. Safe to call repeatedly. */
+/**
+ * Record that this cache holds `userId`'s data. Safe to call repeatedly.
+ *
+ * Callers write this BEFORE the data it describes. If storage is failing
+ * (quota, private mode) that ordering leaves a stale owner rather than
+ * ownerless account data — a stale owner is caught by
+ * guardAgainstForeignCache(), ownerless data is not.
+ */
 export function writeCacheOwner(userId: string): void {
   if (typeof window === 'undefined') return;
   try {
@@ -88,6 +95,34 @@ export function clearAccountCache(): void {
 }
 
 /**
+ * True when the cache still holds account data whose one-time import never
+ * completed for `owner` — the `:merged-for:` latch is written only by a merge
+ * that actually finished, so data present without a matching latch exists
+ * NOWHERE ELSE yet.
+ *
+ * Load-bearing (V8-2 round-1, Codex + Claude independently): the ownership
+ * split moved the residue wipe onto the owner key, but the hooks write the
+ * owner key after a successful FETCH even when that session's UPLOAD failed.
+ * A user who then never opened the app signed-in again before the session
+ * expired lost those rows permanently on the next launch — the exact loss
+ * class this whole goal gates on.
+ */
+function hasPendingImport(owner: string): boolean {
+  const pairs = [
+    [RATINGS_KEY, RATINGS_MERGED_KEY],
+    [PAIRWISE_KEY, PAIRWISE_MERGED_KEY],
+  ] as const;
+  return pairs.some(([dataKey, mergedKey]) => {
+    const raw = window.localStorage.getItem(dataKey);
+    // An absent, empty, or empty-array payload has nothing to lose.
+    if (raw === null || raw === '' || raw === '[]' || raw === 'null') {
+      return false;
+    }
+    return window.localStorage.getItem(mergedKey) !== owner;
+  });
+}
+
+/**
  * Wipe residue left by a signed-in session that ended WITHOUT our sign-out
  * button (refresh-token expiry, revocation, SDK sign-out in another tab).
  * Gated on the explicit owner key. Legacy merged-for keys are import
@@ -95,14 +130,23 @@ export function clearAccountCache(): void {
  * as ownership erased V7 data during an install-over before the user signed
  * back in. They remain a fallback in guardAgainstForeignCache(), where a
  * current account id makes the ownership decision unambiguous.
+ *
+ * Never wipes over a pending import (see above). The owner key is deliberately
+ * LEFT IN PLACE in that case, so guardAgainstForeignCache() still wipes this
+ * cache the moment a different account signs in — deferring the wipe trades no
+ * cross-account protection away, only the signed-out visibility of the owner's
+ * own un-uploaded rows on their own device.
+ *
  * Returns true when residue was cleared.
  */
 export function clearResidualAccountCache(): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    const hadOwner = window.localStorage.getItem(OWNER_KEY) !== null;
-    if (hadOwner) clearAccountCache();
-    return hadOwner;
+    const owner = window.localStorage.getItem(OWNER_KEY);
+    if (owner === null) return false;
+    if (hasPendingImport(owner)) return false;
+    clearAccountCache();
+    return true;
   } catch {
     return false;
   }

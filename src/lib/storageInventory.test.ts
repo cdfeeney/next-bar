@@ -80,12 +80,18 @@ const V7_KEYS = [
  * stay "present" via a prose comment, which is the same false-pass the
  * runtime-only scan was meant to close.
  *
+ * The character class includes `.` because it must (Codex + GLM, V8-2
+ * round-1): the closing quote has to follow the match immediately, so a key
+ * spelled `next-bar:new.v1` did not match AT ALL — it was invisible to the
+ * src → doc direction rather than merely truncated, and shipped unaccounted
+ * for.
+ *
  * Known and accepted limitation: a delete-only site (a `removeItem` call, or
  * a wipe list like `accountCache.ALL_KEYS`) is still a literal, so it counts
  * as presence. Distinguishing read from write sites needs real parsing, which
  * is more machinery than this guard earns.
  */
-const KEY_PATTERN = /['"`](next-bar:[A-Za-z0-9:_-]+)['"`]/g;
+const KEY_PATTERN = /['"`](next-bar:[A-Za-z0-9:._-]+)['"`]/g;
 
 /**
  * A `next-bar` prefix that does NOT continue into a complete literal key —
