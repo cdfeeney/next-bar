@@ -309,6 +309,11 @@ export function usePairwise(): UsePairwiseReturn {
           // fetch still has a usable fallback (Codex review).
           setComparisons((prev) => [...prev, newComparison]);
           appendComparison(newComparison);
+          // Ownership on the WRITE — see useRatings.setRating. This branch
+          // write-throughs both the transcript (here) and the ratings cache
+          // (below), so a session that never completed a hydrate must still
+          // leave the owner key behind.
+          writeCacheOwner(userId);
           // Tell every OTHER mounted usePairwise instance (Codex B4 review —
           // server mode previously never broadcast, so sibling RatingControls
           // built chains from incomplete transcripts).

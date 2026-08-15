@@ -5,6 +5,7 @@ import { usePairwise } from './usePairwise';
 
 const RATINGS_KEY = 'next-bar:ratings:v1';
 const COMPARISONS_KEY = 'next-bar:pairwise:v1';
+const OWNER_KEY = 'next-bar:account:owner:v1';
 
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: vi.fn(() => ({
@@ -334,5 +335,24 @@ describe('usePairwise — server mode (B0.4)', () => {
     // Optimistic transcript state, prompt dismissed.
     expect(result.current.comparisons).toHaveLength(1);
     expect(result.current.pendingPrompt).toBeNull();
+  });
+
+  // V8-2 round-3 review (medium) — mirrors the useRatings pair: ownership was
+  // latched only after a successful hydrate, so a session whose every fetch
+  // fails left account transcript + score rows looking anonymous.
+  it('addComparison marks cache ownership even when the hydrate fetch failed', async () => {
+    fetchServerComparisonsMock.mockResolvedValue(null); // hydrate failed
+    seedRatings([rating('a', 'loved'), rating('b', 'loved')]);
+
+    const { result } = renderHook(() => usePairwise());
+    await waitFor(() => expect(fetchServerComparisonsMock).toHaveBeenCalled());
+    expect(window.localStorage.getItem(OWNER_KEY)).toBeNull();
+
+    act(() => {
+      result.current.addComparison('a', 'b');
+    });
+
+    expect(readComparisons()).toHaveLength(1); // account data did land locally
+    expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1');
   });
 });

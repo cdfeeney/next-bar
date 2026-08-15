@@ -637,4 +637,46 @@ describe('useRatings — server mode', () => {
     const stored = JSON.parse(window.localStorage.getItem(KEY) ?? '[]');
     expect(stored).toHaveLength(1);
   });
+
+  // V8-2 round-3 review (medium): ownership was latched only after a
+  // SUCCESSFUL hydrate. A signed-in session whose every fetch fails still
+  // write-throughs account rows to KEY; with no owner key that data reads as
+  // anonymous, so clearResidualAccountCache never fires on expiry and the
+  // next account merges the first one's ratings into its own.
+  it('setRating marks cache ownership even when the hydrate fetch failed', async () => {
+    fetchServerRatingsMock.mockResolvedValue(null); // hydrate failed
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+    expect(window.localStorage.getItem(OWNER_KEY)).toBeNull();
+
+    act(() => {
+      result.current.setRating('attaboy', 'loved');
+    });
+
+    expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1');
+  });
+
+  it('clearRating marks cache ownership even when the hydrate fetch failed', async () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1'); // no first-sign-in merge
+    fetchServerRatingsMock.mockResolvedValue(null); // hydrate failed
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+    expect(window.localStorage.getItem(OWNER_KEY)).toBeNull();
+
+    act(() => {
+      result.current.clearRating('attaboy');
+    });
+
+    expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1');
+  });
 });
