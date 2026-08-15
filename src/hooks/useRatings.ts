@@ -111,6 +111,22 @@ function broadcastServerUpdate(detail: ServerBroadcastDetail): void {
  */
 const barWriteChains = new Map<string, Promise<unknown>>();
 
+/**
+ * BULK server syncs in flight (cycle-5 round-2, Codex — the last member of
+ * the stale-write-after-clear-all class): the first-import / era-reconcile
+ * merges are not per-bar chained, so the drain below could not see them and
+ * an already-started import landed its inserts after clear-all's server
+ * delete. Every bulk server write registers here for its flight.
+ */
+const pendingBulkSyncs = new Set<Promise<unknown>>();
+
+function trackBulkSync<T>(p: Promise<T>): Promise<T> {
+  pendingBulkSyncs.add(p);
+  const drop = () => pendingBulkSyncs.delete(p);
+  p.then(drop, drop);
+  return p;
+}
+
 function enqueueBarWrite(
   barId: string,
   task: () => Promise<unknown>,
@@ -121,9 +137,12 @@ function enqueueBarWrite(
   return next;
 }
 
-/** Settle every pending same-tab server write. Used by Settings clear-all. */
+/**
+ * Settle every pending same-tab server write — per-bar chains AND bulk
+ * imports. Used by Settings clear-all.
+ */
 export function drainBarWrites(): Promise<unknown> {
-  return Promise.allSettled([...barWriteChains.values()]);
+  return Promise.allSettled([...barWriteChains.values(), ...pendingBulkSyncs]);
 }
 
 /**
@@ -274,10 +293,8 @@ export function useRatings(): UseRatingsReturn {
         eraReconciled && window.localStorage.getItem(MERGED_KEY) === userId;
       if (!alreadyImported) {
         if (mergeableRatings.length > 0) {
-          const inserted = await mergeLocalRatingsToServer(
-            supabase,
-            userId,
-            mergeableRatings,
+          const inserted = await trackBulkSync(
+            mergeLocalRatingsToServer(supabase, userId, mergeableRatings),
           );
           // Only latch the flag on a run that actually completed — a failed
           // merge (null) must retry next sign-in, not be marked done.
@@ -380,11 +397,8 @@ export function useRatings(): UseRatingsReturn {
       if (window.localStorage.getItem(PAIRWISE_MERGED_KEY) !== userId) {
         const transcript = loadComparisons();
         if (transcript.length > 0) {
-          const pwMerged = await mergeLocalComparisonsToServer(
-            supabase,
-            userId,
-            transcript,
-            null,
+          const pwMerged = await trackBulkSync(
+            mergeLocalComparisonsToServer(supabase, userId, transcript, null),
           );
           if (pwMerged !== null && getCacheEpoch() === epoch) {
             writePairwiseMergedFlag(userId);
