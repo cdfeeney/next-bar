@@ -17,7 +17,11 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: true,
-  retries: process.env.CI ? 2 : 0,
+  // Zero everywhere (V8-2 round-4, Codex): the acceptance gate is "full
+  // suite green with zero retries", and CI silently retrying twice made CI
+  // green mean something weaker than the local gate. The one documented
+  // cold-compile flake is handled by a warmed re-run, not by retries.
+  retries: 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {

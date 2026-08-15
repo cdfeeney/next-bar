@@ -105,6 +105,13 @@ export async function mergeLocalComparisonsToServer(
 
   if (toInsert.length === 0) return 0;
 
+  // Concurrency note (V8-2 round-4, Codex): two tabs importing at once can
+  // both pass the dedupe above. Migration 0020 adds the unique tuple index
+  // that makes the race harmless — the losing batch errors, this returns
+  // null, the latch stays unset, and the next sign-in dedupes against the
+  // winner's rows and converges. Until 0020 is applied the window remains
+  // (documented residual), but replay is still deterministic because
+  // identical tuples sort identically.
   const { error } = await supabase.from('pairwise_comparisons').insert(toInsert);
   if (error) return null;
   return toInsert.length;

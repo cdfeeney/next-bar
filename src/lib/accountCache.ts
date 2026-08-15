@@ -51,15 +51,26 @@ const OWNER_KEY = 'next-bar:account:owner:v1';
  * latch only proves the ONE-TIME import finished — it says nothing about a
  * later fire-and-forget write-through whose server upsert failed. Those rows
  * exist nowhere else, yet the latch made them look disposable. Every local
- * write increments its bar's entry here; a confirmed server ack decrements
- * it. A non-empty journal blocks the residual/sign-out wipe exactly like a
- * pending import, and sign-in retries exactly these rows (no blind re-merge,
- * so deletions made on another device stay deleted).
+ * write records its bar here; a confirmed server ack clears it. A non-empty
+ * journal blocks the residual/sign-out wipe exactly like a pending import,
+ * and sign-in retries exactly these rows (no blind re-merge, so deletions
+ * made on another device stay deleted).
  *
- * Shape: JSON `Record<barId, count>`. A count (not a boolean) so two writes
- * racing one ack cannot mark the second write clean.
+ * Shape: JSON `Record<barId, {s: stamp, op: 'u'|'d'}>` — the STAMP of the
+ * latest local write (its ratedAt / delete time) and whether the pending
+ * intent is an upsert or a delete. Stamps, not counts (V8-2 round-4 panel,
+ * Codex): localStorage read-modify-write is not atomic across tabs, so two
+ * racing writes could collapse one count and the older ack then erased the
+ * newer write's protection. With stamps, an ack clears the entry only when
+ * it matches the exact write it acknowledges; a newer write's entry (later
+ * stamp, last-writer-wins on the single key) survives an older ack.
+ * `op: 'd'` entries are created ONLY by signed-in deletes — an anonymous
+ * device's local clear must never replay as a server delete against an
+ * account's real data (round-4 panel, Claude).
  */
 const DIRTY_KEY = 'next-bar:dirty:v1';
+
+export type DirtyEntry = { barId: string; stamp: string; op: 'u' | 'd' };
 
 const ALL_KEYS = [
   RATINGS_KEY,
@@ -114,17 +125,29 @@ export function readCacheOwner(): string | null {
   }
 }
 
-function readDirtyJournal(): Record<string, number> {
-  const raw = window.localStorage.getItem(DIRTY_KEY);
-  if (raw === null) return {};
+type JournalValue = { s: string; op: 'u' | 'd' };
+
+function readDirtyJournal(): Record<string, JournalValue> {
   try {
+    // getItem itself is inside the try (round-4 panel, Codex): with storage
+    // access disabled it THROWS, and an uncaught throw here aborted the
+    // caller's write path after its optimistic state update.
+    const raw = window.localStorage.getItem(DIRTY_KEY);
+    if (raw === null) return {};
     const parsed: unknown = JSON.parse(raw);
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return {};
     }
-    const out: Record<string, number> = {};
+    const out: Record<string, JournalValue> = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === 'number' && v > 0) out[k] = v;
+      if (
+        v !== null &&
+        typeof v === 'object' &&
+        typeof (v as JournalValue).s === 'string' &&
+        ((v as JournalValue).op === 'u' || (v as JournalValue).op === 'd')
+      ) {
+        out[k] = v as JournalValue;
+      }
     }
     return out;
   } catch {
@@ -132,7 +155,7 @@ function readDirtyJournal(): Record<string, number> {
   }
 }
 
-function writeDirtyJournal(journal: Record<string, number>): void {
+function writeDirtyJournal(journal: Record<string, JournalValue>): void {
   try {
     if (Object.keys(journal).length === 0) {
       window.localStorage.removeItem(DIRTY_KEY);
@@ -146,33 +169,52 @@ function writeDirtyJournal(journal: Record<string, number>): void {
   }
 }
 
-/** A local write whose server ack has not landed yet. Call BEFORE the write. */
-export function markRatingDirty(barId: string): void {
+/**
+ * A local write whose server ack has not landed yet. Call BEFORE the write,
+ * with the write's own stamp (the row's ratedAt, or the delete time).
+ * Last-writer-wins per bar: a newer write overwrites the entry, so an older
+ * in-flight ack (stamp mismatch) cannot clear the newer write's protection.
+ */
+export function markRatingDirty(
+  barId: string,
+  stamp: string,
+  op: 'u' | 'd' = 'u',
+): void {
   if (typeof window === 'undefined') return;
   const journal = readDirtyJournal();
-  journal[barId] = (journal[barId] ?? 0) + 1;
-  writeDirtyJournal(journal);
-}
-
-/** A confirmed server ack for one write. Decrements; racing writes keep it dirty. */
-export function ackRatingDirty(barId: string): void {
-  if (typeof window === 'undefined') return;
-  const journal = readDirtyJournal();
-  const count = journal[barId] ?? 0;
-  if (count <= 1) delete journal[barId];
-  else journal[barId] = count - 1;
+  journal[barId] = { s: stamp, op };
   writeDirtyJournal(journal);
 }
 
 /**
- * Authoritative clear after a sign-in retry or first import uploaded these
- * rows — removes the entries outright, whatever their count.
+ * A confirmed server ack for one specific write. Clears the entry ONLY when
+ * the stamp still matches that write — a newer local write has replaced the
+ * entry and must keep its protection (round-4 panel, Codex ×2).
  */
+export function ackRatingDirty(barId: string, stamp: string): void {
+  if (typeof window === 'undefined') return;
+  const journal = readDirtyJournal();
+  const entry = journal[barId];
+  if (entry === undefined || entry.s !== stamp) return;
+  delete journal[barId];
+  writeDirtyJournal(journal);
+}
+
+/** Drop entries outright (local delete withdrew the intent; stale no-row entries). */
 export function clearRatingsDirty(barIds: readonly string[]): void {
   if (typeof window === 'undefined') return;
   const journal = readDirtyJournal();
   for (const id of barIds) delete journal[id];
   writeDirtyJournal(journal);
+}
+
+export function getDirtyRatingEntries(): DirtyEntry[] {
+  if (typeof window === 'undefined') return [];
+  return Object.entries(readDirtyJournal()).map(([barId, v]) => ({
+    barId,
+    stamp: v.s,
+    op: v.op,
+  }));
 }
 
 export function getDirtyRatingIds(): string[] {
@@ -201,41 +243,6 @@ export function clearAccountCache(): void {
   } catch {
     // Private mode / quota — non-fatal; the sign-in guard is the backstop.
   }
-}
-
-/**
- * True when the cache still holds account data whose one-time import never
- * completed for `owner` — the `:merged-for:` latch is written only by a merge
- * that actually finished, so data present without a matching latch exists
- * NOWHERE ELSE yet.
- *
- * Load-bearing (V8-2 round-1, Codex + Claude independently): the ownership
- * split moved the residue wipe onto the owner key, but the hooks write the
- * owner key after a successful FETCH even when that session's UPLOAD failed.
- * A user who then never opened the app signed-in again before the session
- * expired lost those rows permanently on the next launch — the exact loss
- * class this whole goal gates on.
- */
-function hasPendingImport(owner: string): boolean {
-  const pairs = [
-    [RATINGS_KEY, RATINGS_MERGED_KEY],
-    [PAIRWISE_KEY, PAIRWISE_MERGED_KEY],
-  ] as const;
-  return pairs.some(([dataKey, mergedKey]) => {
-    if (!hasRows(dataKey)) return false;
-    return window.localStorage.getItem(mergedKey) !== owner;
-  });
-}
-
-/**
- * Anything in this cache that exists nowhere else: a never-imported payload
- * (latch mismatch) OR an individual write whose server ack never landed
- * (dirty journal — the round-3 gap: latch === owner said "synced" while a
- * failed fire-and-forget upsert said otherwise).
- */
-function hasPendingSync(owner: string): boolean {
-  if (hasPendingImport(owner)) return true;
-  return Object.keys(readDirtyJournal()).length > 0;
 }
 
 /**
@@ -277,15 +284,36 @@ export function clearResidualAccountCache(): boolean {
   try {
     const owner = window.localStorage.getItem(OWNER_KEY);
     if (owner === null) return false;
-    if (hasPendingSync(owner)) return false;
+    // Granular, per-surface (round-4 panel, Codex): one pending ratings row
+    // must not keep the whole otherwise-synced cache visible. Each surface
+    // clears independently; only a surface with data that exists nowhere
+    // else survives.
+    const ratingsPending =
+      (hasRows(RATINGS_KEY) &&
+        window.localStorage.getItem(RATINGS_MERGED_KEY) !== owner) ||
+      Object.keys(readDirtyJournal()).length > 0;
+    const pairwisePending =
+      hasRows(PAIRWISE_KEY) &&
+      window.localStorage.getItem(PAIRWISE_MERGED_KEY) !== owner;
     cacheEpoch += 1;
-    // DATA_KEYS, not ALL_KEYS: the owner marker survives the clear (V8-2
-    // round-3). Ownership is what lets guardAgainstForeignCache() wipe the
-    // personal FOREIGN_ONLY_KEYS when a DIFFERENT account signs in next —
-    // removing it here made post-sign-out devices look anonymous and handed
-    // the previous user's lists/profile/night history to the next account.
-    for (const key of DATA_KEYS) window.localStorage.removeItem(key);
-    return true;
+    if (!ratingsPending) {
+      for (const key of [RATINGS_KEY, RATINGS_MERGED_KEY, DIRTY_KEY]) {
+        window.localStorage.removeItem(key);
+      }
+    }
+    if (!pairwisePending) {
+      for (const key of [PAIRWISE_KEY, PAIRWISE_MERGED_KEY]) {
+        window.localStorage.removeItem(key);
+      }
+    }
+    // Follows are server-authoritative demo state — never pending.
+    window.localStorage.removeItem(FOLLOWS_KEY);
+    // The owner marker ALWAYS survives (V8-2 round-3). Ownership is what
+    // lets guardAgainstForeignCache() wipe the personal FOREIGN_ONLY_KEYS
+    // when a DIFFERENT account signs in next — removing it here made
+    // post-sign-out devices look anonymous and handed the previous user's
+    // lists/profile/night history to the next account.
+    return !ratingsPending && !pairwisePending;
   } catch {
     return false;
   }
@@ -314,6 +342,25 @@ export function sealAccountCacheOnSignOut(): void {
   // ended and must abandon its writes, wipe or no wipe.
   cacheEpoch += 1;
   clearResidualAccountCache();
+}
+
+/**
+ * Account DELETION — the one flow that hard-destroys everything, personal
+ * keys included (round-4 panel, Claude + Codex): the deleted owner can never
+ * return, so sealing would preserve data forever, and `clearAccountCache`
+ * alone removed the ownership signal while LEAVING the personal
+ * FOREIGN_ONLY_KEYS — the next account then passed the foreign guard and
+ * inherited the deleted user's lists, night history, and vibe profile. The
+ * strongest erase action must leave the least residue.
+ */
+export function destroyAccountDataOnDeletion(): void {
+  if (typeof window === 'undefined') return;
+  clearAccountCache();
+  try {
+    for (const key of FOREIGN_ONLY_KEYS) window.localStorage.removeItem(key);
+  } catch {
+    // Private mode / quota — the account-cache wipe above already ran.
+  }
 }
 
 /**

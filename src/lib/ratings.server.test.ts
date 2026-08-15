@@ -32,18 +32,29 @@ function fakeSupabase(opts: {
     upsert: [] as Array<{ row: unknown; options: unknown }>,
     delete: 0,
     eq: [] as Array<{ column: string; value: unknown }>,
+    lte: [] as Array<{ column: string; value: unknown }>,
   };
 
   const deleteChain = {
     eq(column: string, value: unknown) {
       calls.eq.push({ column, value });
-      // ratings.server.ts chains .eq(...).eq(...) before awaiting.
+      // ratings.server.ts chains .eq(...).eq(...)[.lte(...)] before awaiting.
       return Object.assign(
         Promise.resolve<WriteResult>({ error: opts.deleteError ?? null }),
         {
           eq(column2: string, value2: unknown) {
             calls.eq.push({ column: column2, value: value2 });
-            return Promise.resolve<WriteResult>({ error: opts.deleteError ?? null });
+            return Object.assign(
+              Promise.resolve<WriteResult>({ error: opts.deleteError ?? null }),
+              {
+                lte(column3: string, value3: unknown) {
+                  calls.lte.push({ column: column3, value: value3 });
+                  return Promise.resolve<WriteResult>({
+                    error: opts.deleteError ?? null,
+                  });
+                },
+              },
+            );
           },
         },
       );
@@ -216,6 +227,27 @@ describe('deleteServerRating', () => {
       deleteServerRating(client, 'user-1', 'attaboy'),
     ).resolves.toBe(false);
   });
+
+  it('a stamped delete adds the LWW guard — only rows not newer than the stamp die', async () => {
+    // Round-4 (Codex): a journaled-delete retry without this guard erased a
+    // rating the user re-created on another device after the delete.
+    const { client, calls } = fakeSupabase({});
+    await deleteServerRating(
+      client,
+      'user-1',
+      'attaboy',
+      '2026-05-10T00:00:00.000Z',
+    );
+    expect(calls.lte).toEqual([
+      { column: 'updated_at', value: '2026-05-10T00:00:00.000Z' },
+    ]);
+  });
+
+  it('an unstamped delete issues no lte filter (current-intent delete)', async () => {
+    const { client, calls } = fakeSupabase({});
+    await deleteServerRating(client, 'user-1', 'attaboy');
+    expect(calls.lte).toEqual([]);
+  });
 });
 
 describe('deleteAllServerRatings', () => {
@@ -247,12 +279,12 @@ describe('mergeLocalRatingsToServer', () => {
     { barId: 'employees-only', rating: 'pass', ratedAt: '2026-05-15T00:00:00.000Z' },
   ];
 
-  it('returns 0 immediately when there are no local ratings (no DB roundtrip)', async () => {
+  it('returns [] immediately when there are no local ratings (no DB roundtrip)', async () => {
     const { client, calls } = fakeSupabase({ selectData: [] });
 
     const inserted = await mergeLocalRatingsToServer(client, 'user-1', []);
 
-    expect(inserted).toBe(0);
+    expect(inserted).toEqual([]);
     // No select happened — we short-circuited.
     expect(calls.from).toEqual([]);
   });
@@ -267,7 +299,10 @@ describe('mergeLocalRatingsToServer', () => {
 
     const inserted = await mergeLocalRatingsToServer(client, 'user-1', local);
 
-    expect(inserted).toBe(2);
+    // Returns the barIds actually inserted (round-4): callers clear journal
+    // protection ONLY for these — a skipped bar's newer local row keeps its
+    // dirty entry and retries under LWW.
+    expect(inserted?.sort()).toEqual(['death-and-co', 'employees-only']);
     expect(calls.insert).toHaveLength(1);
     const rows = calls.insert[0] as Array<Record<string, string>>;
     expect(rows.map((r) => r.bar_id).sort()).toEqual(['death-and-co', 'employees-only']);
@@ -288,7 +323,7 @@ describe('mergeLocalRatingsToServer', () => {
 
     const inserted = await mergeLocalRatingsToServer(client, 'user-1', local);
 
-    expect(inserted).toBe(0);
+    expect(inserted).toEqual([]);
     expect(calls.insert).toHaveLength(0);
   });
 

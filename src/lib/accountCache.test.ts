@@ -4,7 +4,9 @@ import {
   clearAccountCache,
   clearRatingsDirty,
   clearResidualAccountCache,
+  destroyAccountDataOnDeletion,
   getCacheEpoch,
+  getDirtyRatingEntries,
   getDirtyRatingIds,
   guardAgainstForeignCache,
   markRatingDirty,
@@ -92,17 +94,28 @@ describe('clearResidualAccountCache', () => {
     expect(readCacheOwner()).toBe('user-a');
   });
 
-  it('never wipes over a non-empty dirty journal — those writes were never acked', () => {
+  it('never wipes ratings over a non-empty dirty journal — those writes were never acked', () => {
     // Round-3: latch === owner said "synced" while a failed fire-and-forget
     // upsert said otherwise. The journal is the tiebreaker.
     seedFullCache('user-a');
     writeCacheOwner('user-a');
-    markRatingDirty('attaboy');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     expect(clearResidualAccountCache()).toBe(false);
     expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
     // Acked → disposable again.
-    ackRatingDirty('attaboy');
+    ackRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     expect(clearResidualAccountCache()).toBe(true);
+  });
+
+  it('clears per surface: a pending ratings row does not keep the synced pairwise cache (round-4)', () => {
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    expect(clearResidualAccountCache()).toBe(false);
+    // Ratings (pending) survive; pairwise + follows (synced) are cleared.
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+    expect(window.localStorage.getItem(PAIRWISE_KEY)).toBeNull();
+    expect(window.localStorage.getItem(FOLLOWS_KEY)).toBeNull();
   });
 
   it('never wipes ratings whose import never completed — those rows exist nowhere else', () => {
@@ -249,9 +262,26 @@ describe('cache ownership is separate from the import latch', () => {
   it('sign-out seal: keeps rows with an unacked write even when latched', () => {
     seedFullCache('user-a');
     writeCacheOwner('user-a');
-    markRatingDirty('attaboy');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     sealAccountCacheOnSignOut();
     expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+  });
+
+  it('account deletion destroys everything: account cache, owner, AND personal keys (round-4)', () => {
+    // clearAccountCache alone removed the ownership signal but left the
+    // personal keys — the next account passed the foreign guard and
+    // inherited the deleted user's lists/night history/profile.
+    seedFullCache('user-a');
+    writeCacheOwner('user-a');
+    window.localStorage.setItem('next-bar:lists:v1', '[{"id":"faves"}]');
+    window.localStorage.setItem('next-bar:night-log:v1', '{"night":"2026-08-12"}');
+    window.localStorage.setItem('next-bar:profile:v1', '{"archetype":"x"}');
+    destroyAccountDataOnDeletion();
+    expect(readCacheOwner()).toBeNull();
+    expect(window.localStorage.getItem(RATINGS_KEY)).toBeNull();
+    expect(window.localStorage.getItem('next-bar:lists:v1')).toBeNull();
+    expect(window.localStorage.getItem('next-bar:night-log:v1')).toBeNull();
+    expect(window.localStorage.getItem('next-bar:profile:v1')).toBeNull();
   });
 
   it('sign-out seal: no-op on an anonymous device, but always bumps the epoch', () => {
@@ -264,24 +294,32 @@ describe('cache ownership is separate from the import latch', () => {
 
   it('a foreign sign-in wipes the dirty journal with the rest of the cache', () => {
     writeCacheOwner('user-a');
-    markRatingDirty('attaboy');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     expect(guardAgainstForeignCache('user-b')).toBe(true);
     expect(getDirtyRatingIds()).toEqual([]);
   });
 
-  it('mark/ack round-trips and racing writes stay dirty until the last ack', () => {
-    markRatingDirty('attaboy');
-    markRatingDirty('attaboy'); // second tap while first upsert in flight
-    ackRatingDirty('attaboy'); // first ack must NOT mark the second write clean
+  it('an older ack cannot clear a newer write — stamps, not counts (round-4)', () => {
+    // Two writes race one ack across tabs: the count journal collapsed them
+    // and the older ack erased the newer write's protection.
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    markRatingDirty('attaboy', '2026-05-10T00:00:05.000Z'); // newer tap
+    ackRatingDirty('attaboy', '2026-05-10T00:00:00.000Z'); // older ack — no-op
     expect(getDirtyRatingIds()).toEqual(['attaboy']);
-    ackRatingDirty('attaboy');
+    ackRatingDirty('attaboy', '2026-05-10T00:00:05.000Z');
     expect(getDirtyRatingIds()).toEqual([]);
   });
 
-  it('clearRatingsDirty removes entries outright whatever their count', () => {
-    markRatingDirty('attaboy');
-    markRatingDirty('attaboy');
-    markRatingDirty('dante');
+  it('entries carry their op — a delete intent reads back as one', () => {
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z', 'd');
+    expect(getDirtyRatingEntries()).toEqual([
+      { barId: 'attaboy', stamp: '2026-05-10T00:00:00.000Z', op: 'd' },
+    ]);
+  });
+
+  it('clearRatingsDirty removes entries outright', () => {
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    markRatingDirty('dante', '2026-05-11T00:00:00.000Z');
     clearRatingsDirty(['attaboy']);
     expect(getDirtyRatingIds()).toEqual(['dante']);
   });

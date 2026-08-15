@@ -218,7 +218,7 @@ vi.mock('@/lib/ratings.server', () => ({
   fetchServerRatings: vi.fn(() => Promise.resolve([])),
   upsertServerRating: vi.fn(() => Promise.resolve(true)),
   deleteServerRating: vi.fn(() => Promise.resolve(true)),
-  mergeLocalRatingsToServer: vi.fn(() => Promise.resolve(0)),
+  mergeLocalRatingsToServer: vi.fn(() => Promise.resolve([] as string[])),
 }));
 
 // The V7 pairwise transcript import moved onto this sign-in path (the
@@ -273,7 +273,7 @@ describe('useRatings — server mode', () => {
     vi.clearAllMocks();
     getBrowserSupabaseMock.mockReturnValue(fakeSupabase);
     fetchServerRatingsMock.mockResolvedValue([]);
-    mergeLocalRatingsToServerMock.mockResolvedValue(0);
+    mergeLocalRatingsToServerMock.mockResolvedValue([]);
     upsertServerRatingMock.mockResolvedValue(true);
     deleteServerRatingMock.mockResolvedValue(true);
   });
@@ -338,7 +338,8 @@ describe('useRatings — server mode', () => {
       ]),
     );
     window.localStorage.setItem(MERGED_KEY, 'user-1');
-    markRatingDirty('attaboy'); // dante is clean — it must NOT re-upload
+    // dante is clean — it must NOT re-upload
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
     renderHook(() => useRatings());
@@ -361,12 +362,14 @@ describe('useRatings — server mode', () => {
     });
   });
 
-  it('a journaled id with no local row retries as a server DELETE', async () => {
-    // The unacked-delete case: clearRating journaled the id, removed the
-    // local row, and the fire-and-forget delete never acked.
+  it('a journaled signed-in DELETE retries as a stamped server delete', async () => {
+    // The unacked-delete case: clearRating journaled the delete intent,
+    // removed the local row, and the fire-and-forget delete never acked.
+    // The retry carries the delete's own stamp so the server-side LWW guard
+    // spares a rating re-created later on another device (round-4, Codex).
     window.localStorage.setItem(KEY, JSON.stringify([]));
     window.localStorage.setItem(MERGED_KEY, 'user-1');
-    markRatingDirty('attaboy');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z', 'd');
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
     renderHook(() => useRatings());
@@ -376,9 +379,71 @@ describe('useRatings — server mode', () => {
         fakeSupabase,
         'user-1',
         'attaboy',
+        '2026-05-10T00:00:00.000Z',
       );
     });
     expect(upsertServerRatingMock).not.toHaveBeenCalled();
+  });
+
+  it('an upsert-intent entry with no local row is dropped, never replayed as a delete (round-4, Claude)', async () => {
+    // The anonymous-device case: rate X then clear X while signed out. The
+    // clear withdraws the intent, but even a stale surviving 'u' entry must
+    // NOT become a server delete — that erased the account's real rating
+    // made on another device.
+    window.localStorage.setItem(KEY, JSON.stringify([]));
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z', 'u');
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(getDirtyRatingIds()).toEqual([]);
+    });
+    expect(deleteServerRatingMock).not.toHaveBeenCalled();
+    expect(upsertServerRatingMock).not.toHaveBeenCalled();
+  });
+
+  it('the first import clears journal protection ONLY for inserted rows — a server-skipped newer row retries under LWW (round-4, Claude+Codex corroborated)', async () => {
+    // Seal wiped the latch; the user re-rated bar X while signed out (newer
+    // than the server copy); on sign-back-in the insert-only merge SKIPS X.
+    // The old bulk clear erased X's journal entry anyway and the hydrate
+    // reverted the newer rating everywhere. Now: X's entry survives the
+    // import, the retry upserts it with its own ratedAt, and when the
+    // retry cannot ack, the hydrate still keeps the newer local row.
+    const newerX = {
+      barId: 'attaboy',
+      rating: 'liked' as const,
+      ratedAt: '2026-06-01T00:00:00.000Z',
+    };
+    window.localStorage.setItem(KEY, JSON.stringify([newerX]));
+    markRatingDirty('attaboy', newerX.ratedAt); // journaled signed-out write
+    mergeLocalRatingsToServerMock.mockResolvedValue([]); // server-wins: X skipped
+    upsertServerRatingMock.mockResolvedValue(false); // retry cannot ack
+    fetchServerRatingsMock.mockResolvedValue([
+      { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+    ]);
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+
+    // The retry ran with the row's own ratedAt (not a fresh stamp).
+    await waitFor(() => {
+      expect(upsertServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        'liked',
+        undefined,
+        '2026-06-01T00:00:00.000Z',
+      );
+    });
+    // Journal protection survived the import (no bulk clear)...
+    expect(getDirtyRatingIds()).toEqual(['attaboy']);
+    // ...so the hydrate keeps the NEWER local rating over the old server row.
+    await waitFor(() => {
+      expect(result.current.getRating('attaboy')).toBe('liked');
+    });
   });
 
   it('a failed retry keeps the row journaled for the next sign-in', async () => {
@@ -389,7 +454,7 @@ describe('useRatings — server mode', () => {
       ]),
     );
     window.localStorage.setItem(MERGED_KEY, 'user-1');
-    markRatingDirty('attaboy');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
     upsertServerRatingMock.mockResolvedValue(false); // server never acks
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
@@ -457,12 +522,17 @@ describe('useRatings — server mode', () => {
     });
 
     // New rating: score arg is undefined (nothing to preserve or reset).
-    expect(upsertServerRatingMock).toHaveBeenCalledWith(
-      fakeSupabase,
-      'user-1',
-      'attaboy',
-      'loved',
-      undefined,
+    // 6th arg (round-4): the write's own stamp travels with the upsert so
+    // the journal ack matches the exact write it acknowledges.
+    await waitFor(() =>
+      expect(upsertServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        'loved',
+        undefined,
+        expect.any(String),
+      ),
     );
     // Write-through cache: localStorage mirrors the server-mode write so
     // usePairwise and the sign-out fallback read current data.
@@ -562,12 +632,15 @@ describe('useRatings — server mode', () => {
       result.current.setRating('attaboy', 'liked');
     });
 
-    expect(upsertServerRatingMock).toHaveBeenCalledWith(
-      fakeSupabase,
-      'user-1',
-      'attaboy',
-      'liked',
-      null,
+    await waitFor(() =>
+      expect(upsertServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        'liked',
+        null,
+        expect.any(String),
+      ),
     );
   });
 
@@ -581,12 +654,15 @@ describe('useRatings — server mode', () => {
       result.current.setRating('attaboy', 'loved', 9.3);
     });
 
-    expect(upsertServerRatingMock).toHaveBeenCalledWith(
-      fakeSupabase,
-      'user-1',
-      'attaboy',
-      'loved',
-      9.3,
+    await waitFor(() =>
+      expect(upsertServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        'loved',
+        9.3,
+        expect.any(String),
+      ),
     );
     expect(result.current.ratings).toEqual([
       expect.objectContaining({ barId: 'attaboy', rating: 'loved', score: 9.3 }),
@@ -605,10 +681,15 @@ describe('useRatings — server mode', () => {
       result.current.clearRating('attaboy');
     });
 
-    expect(deleteServerRatingMock).toHaveBeenCalledWith(
-      fakeSupabase,
-      'user-1',
-      'attaboy',
+    // 4th arg (round-4): the delete carries its own stamp so the retry path
+    // is LWW-guarded server-side.
+    await waitFor(() =>
+      expect(deleteServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        expect.any(String),
+      ),
     );
     expect(result.current.getRating('attaboy')).toBeNull();
   });

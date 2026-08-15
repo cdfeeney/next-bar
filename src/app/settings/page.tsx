@@ -11,7 +11,7 @@ import ClaimHandle from '@/components/ClaimHandle';
 import DisplayNameEditor from '@/components/DisplayNameEditor';
 import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
 import { fetchOutgoingRequests } from '@/lib/follows.server';
-import { clearAccountCache, getCacheEpoch } from '@/lib/accountCache';
+import { destroyAccountDataOnDeletion, getCacheEpoch } from '@/lib/accountCache';
 import { requestAccountDeletion } from '@/lib/accountDeletion';
 import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
@@ -148,16 +148,16 @@ export default function SettingsPage(): JSX.Element {
     }
     // The auth user is gone server-side. signOut() now SEALS the cache
     // (V8-2 round-3) — right for an ordinary sign-out, wrong here: this
-    // owner can never return, so sealed rows would sit forever and the
-    // surviving owner marker would describe an account that no longer
-    // exists. Account deletion is the one sign-out that hard-destroys the
-    // cache, owner included. try/finally (Opus review): the redirect must
-    // happen even if signOut throws — the account no longer exists, staying
-    // on a signed-in-looking page lies.
+    // owner can never return. Deletion hard-destroys EVERYTHING, personal
+    // keys included (round-4 panel: clearAccountCache alone removed the
+    // ownership signal while leaving lists/night-log/profile — the next
+    // account then passed the foreign guard and inherited them). try/finally
+    // (Opus review): the redirect must happen even if signOut throws — the
+    // account no longer exists, staying on a signed-in-looking page lies.
     try {
       await auth.signOut();
     } finally {
-      clearAccountCache();
+      destroyAccountDataOnDeletion();
       window.location.assign('/');
     }
   };
@@ -173,25 +173,35 @@ export default function SettingsPage(): JSX.Element {
         // supabase-js resolves with { error } instead of throwing, so the
         // helpers return success booleans — a try/catch alone here was dead
         // code (Codex review). try/catch kept for genuine transport throws.
-        let ok = false;
+        //
+        // Two deletes cannot be atomic from the client (round-4 panel,
+        // Codex). Order + honest partial reporting instead: comparisons go
+        // FIRST — they are derived judgments, so losing them while ratings
+        // survive is harmless, whereas the reverse leaves orphaned
+        // comparisons re-deriving stale scores. On a partial failure, say
+        // exactly what happened rather than claiming nothing was cleared.
+        let comparisonsOk = false;
+        let ratingsOk = false;
         try {
-          const ratingsOk = await deleteAllServerRatings(supabase, auth.user.id);
-          // The server comparison transcript must die with the ratings it
-          // ranked — orphaned judgments would re-derive stale scores onto
-          // re-rated bars on the next mount (santa-loop round-1 finding).
-          const comparisonsOk = await deleteAllServerComparisons(
+          comparisonsOk = await deleteAllServerComparisons(
             supabase,
             auth.user.id,
           );
-          ok = ratingsOk && comparisonsOk;
+          if (comparisonsOk) {
+            ratingsOk = await deleteAllServerRatings(supabase, auth.user.id);
+          }
         } catch {
-          ok = false;
+          // fall through with the flags as they stand
         }
-        if (!ok) {
-          // Surface the failure instead of a silent no-op: clearing only
-          // locally would just re-fetch everything after the reload.
+        if (!comparisonsOk) {
           window.alert(
             "Couldn't reach the server, so your ratings were NOT cleared. Try again in a moment.",
+          );
+          return;
+        }
+        if (!ratingsOk) {
+          window.alert(
+            'Your comparison history was cleared, but your ratings could NOT be — try "Clear ALL bar ratings" again in a moment.',
           );
           return;
         }

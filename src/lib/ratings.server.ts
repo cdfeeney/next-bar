@@ -122,17 +122,28 @@ export async function updateServerScores(
   );
 }
 
-/** Returns true only on server ack — see upsertServerRating. */
+/**
+ * Returns true only on server ack — see upsertServerRating.
+ *
+ * `at`: the delete's own timestamp. When supplied, the delete only removes a
+ * row whose `updated_at` is not newer — the LWW guard for journaled-delete
+ * RETRIES (round-4 panel, Codex): an unconditional retry erased a rating the
+ * user had since re-created on another device. An in-session delete passes
+ * its own stamp too, for the same reason.
+ */
 export async function deleteServerRating(
   supabase: SupabaseClient,
   userId: string,
   barId: string,
+  at?: string,
 ): Promise<boolean> {
-  const { error } = await supabase
+  let query = supabase
     .from('ratings')
     .delete()
     .eq('user_id', userId)
     .eq('bar_id', barId);
+  if (at !== undefined) query = query.lte('updated_at', at);
+  const { error } = await query;
   return error === null;
 }
 
@@ -163,17 +174,21 @@ export async function deleteAllServerRatings(
  * Server-wins on conflict — we only insert bars that don't already have a
  * server rating for this user. Idempotent: running twice does nothing.
  *
- * Returns the count of rows actually inserted, or null when the merge did
- * NOT complete (pre-merge fetch failed, or the insert errored) — callers
- * must not latch their merged-for flag on null, so a failed merge retries
- * on the next sign-in instead of being silently marked done.
+ * Returns the barIds actually INSERTED (round-4 panel, Claude + Codex — the
+ * corroborated finding of the round: callers were bulk-clearing the dirty
+ * journal for every local row, including rows this merge deliberately
+ * SKIPPED because the server already had them; those skipped-but-newer rows
+ * then lost their journal protection and were silently reverted). Returns
+ * null when the merge did NOT complete (pre-merge fetch failed, or the
+ * insert errored) — callers must not latch their merged-for flag on null,
+ * so a failed merge retries on the next sign-in.
  */
 export async function mergeLocalRatingsToServer(
   supabase: SupabaseClient,
   userId: string,
   localRatings: BarRating[],
-): Promise<number | null> {
-  if (localRatings.length === 0) return 0;
+): Promise<string[] | null> {
+  if (localRatings.length === 0) return [];
 
   const existing = await fetchServerRatings(supabase);
   if (existing === null) return null;
@@ -190,9 +205,9 @@ export async function mergeLocalRatingsToServer(
       score: typeof r.score === 'number' ? r.score : null,
     }));
 
-  if (toInsert.length === 0) return 0;
+  if (toInsert.length === 0) return [];
 
   const { error } = await supabase.from('ratings').insert(toInsert);
   if (error) return null;
-  return toInsert.length;
+  return toInsert.map((row) => row.bar_id);
 }

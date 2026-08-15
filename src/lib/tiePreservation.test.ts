@@ -62,7 +62,8 @@ const LOCAL: BarRating[] = [
 async function roundTrip(local: BarRating[]): Promise<BarRating[]> {
   const { client } = fakeServer();
   const inserted = await mergeLocalRatingsToServer(client, 'user-1', local);
-  expect(inserted).toBe(local.length);
+  // Round-4: the merge returns the inserted barIds, not a count.
+  expect(inserted).toHaveLength(local.length);
   const back = await fetchServerRatings(client);
   expect(back).not.toBeNull();
   return back!;

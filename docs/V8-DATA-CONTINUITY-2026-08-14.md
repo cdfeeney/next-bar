@@ -52,7 +52,7 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | `next-bar:night-vibe:v1` | local | Expiring per-night vibe selection | Preserve through the current night; server sync is not required. |
 | `next-bar:list:want-to-go:v1` | local | Want-to-Go entries | Preserve; fold into the named-list server owner without renaming this V7 source key. |
 | `next-bar:account:owner:v1` | local | V8 addition: which account this device cache belongs to | **Local-only, never synced** — a device-side marker holding a server user ID. Written on every successful signed-in hydrate and on every server-mode write-through, before the data it describes. **Survives sign-out and the residual clear** (the seal, V8-2 round-3): it is what lets a later foreign sign-in wipe the personal keys. Removed only by a foreign-account wipe, which installs the new owner's session in its place. Not a V7 key. |
-| `next-bar:dirty:v1` | local | V8 addition: unacked-write journal (`Record<barId, count>`) | **Local-only, never synced** — device-side sync bookkeeping, not account data. Incremented before every local rating write, decremented on the matching server ack. Non-empty blocks the sign-out/residual wipe exactly like a pending import, and the next sign-in retries exactly these rows. Wiped with the account cache on a foreign sign-in. Not a V7 key. |
+| `next-bar:dirty:v1` | local | V8 addition: unacked-write journal (`Record<barId, {s: stamp, op: 'u'\|'d'}>`) | **Local-only, never synced** — device-side sync bookkeeping, not account data. Written (last-writer-wins per bar) before every local rating write with that write's own stamp; an ack clears the entry only on an exact stamp match, so an older in-flight ack can never strip a newer write's protection (round-4). `op:'d'` entries are created only by signed-in deletes — anonymous clears withdraw intent instead, so they can never replay against an account's server data. Non-empty blocks the ratings surface of the sign-out/residual wipe, and sign-in retries exactly these rows (`'u'` as an LWW upsert with the row's own ratedAt; `'d'` as a stamp-guarded delete). Wiped with the account cache on a foreign sign-in. Not a V7 key. |
 | `next-bar:saved:v1` | local | Legacy saved-bar store; `src/lib/saved.ts` still reads it, no UI calls it | **Local-only, never synced.** Preserve unread data; if it is ever retired, migrate it into the named-list owner deliberately — never silently delete it. |
 
 ## Server ownership and conflict rules
@@ -100,6 +100,17 @@ deliberate:**
 | `guardAgainstForeignCache(currentUserId)` — a user signs IN | owner key **and** both legacy `:merged-for:` latches | A current account id makes ownership unambiguous, so a device upgrading from V7/early-V8 keeps full cross-account protection. Wipes account data AND the personal `FOREIGN_ONLY_KEYS`, owner included — the new session installs its own. |
 | `clearResidualAccountCache()` — resolved signed-out | owner key **only**, then the pending check (latch mismatch OR non-empty dirty journal) | A legacy latch is an import sentinel, not proof the cache is disposable. Treating it as ownership erased V7 data during an install-over before the user signed back in. Clears `DATA_KEYS` only — the owner marker survives so a later foreign sign-in still fires. |
 | `sealAccountCacheOnSignOut()` — explicit sign-out | same as the residual clear, plus an unconditional epoch bump | The sign-out button and a session expiry must have identical data semantics; only the epoch bump (abandoning in-flight hydrates) is unconditional. |
+| `destroyAccountDataOnDeletion()` — account deletion | nothing; unconditional | Hard-destroys the account cache, owner marker, AND the personal `FOREIGN_ONLY_KEYS` (round-4): the deleted owner can never return, and leaving the personal keys with no ownership signal handed them to the next account. |
+
+Both clears are **per surface** (round-4): ratings clear only when latched with an empty journal;
+pairwise clears only when latched; follows always clear (server-authoritative demo state). One
+pending ratings row no longer keeps the whole otherwise-synced cache visible signed-out. A write
+whose ack lands AFTER the seal triggers the residual clear from its own ack callback, so just-synced
+data does not linger until the next launch. Same-bar server writes are serialized client-side (a
+per-bar promise chain in `useRatings`), so a rate followed by a fast clear can no longer arrive at
+the server out of order and resurrect the cleared row; migration `0020_pairwise_tuple_unique.sql`
+(additive, idempotent, awaiting attended apply) makes the concurrent pairwise import
+database-idempotent.
 
 Two consequences, both accepted and named rather than hidden:
 
