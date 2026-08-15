@@ -331,6 +331,12 @@ export function useRatings(): UseRatingsReturn {
               ackRatingDirty(entry.barId, entry.stamp);
             }
           }
+          // A sign-out can land MID-LOOP (cycle-4 panel, Codex): the seal
+          // keeps the still-pending rows and sets the deferred flag, but
+          // the acks above then empty the journal without anyone re-running
+          // the cleanup — synced data lingered until the next launch.
+          // Interactive write acks already do this; the retry loop must too.
+          if (isSealDeferred()) clearResidualAccountCache();
         }
       }
 
@@ -386,8 +392,15 @@ export function useRatings(): UseRatingsReturn {
         //     deletions made on another device.
         // Seeded demo entries are excluded either way — hydrating them into
         // signed-in state re-created the pollution migration 0003 cleaned up.
+        // BOTH flags, exactly like the upload gate above (cycle-4 panel,
+        // Claude): trusting the bare pre-journal latch here meant a failed
+        // era-reconcile plus a successful fetch dropped the stranded row
+        // from keepLocal and writeRatings erased it from the cache — the
+        // very copy the next sign-in's retry needed. The flags are written
+        // together, so post-reconcile behavior is unchanged.
         const importedNow =
-          window.localStorage.getItem(MERGED_KEY) === userId;
+          window.localStorage.getItem(MERGED_KEY) === userId &&
+          window.localStorage.getItem(JOURNAL_ERA_KEY) === userId;
         const dirtyUnion = new Map(
           [...dirtyAtFetchStart, ...getDirtyRatingEntries()].map((e) => [
             e.barId,

@@ -327,6 +327,36 @@ describe('useRatings — server mode', () => {
     });
   });
 
+  it('a FAILED era reconcile keeps the stranded row in the cache for the next retry (cycle-4, Claude)', async () => {
+    // The hydrate's importedNow must trust the latch only WITH the era
+    // marker: a failed reconcile plus a successful fetch previously dropped
+    // the stranded row from keepLocal and erased from the cache the very
+    // copy the next sign-in's retry needed — permanent silent loss.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1'); // v0.5 latch, no era key
+    mergeLocalRatingsToServerMock.mockResolvedValue(null); // reconcile fails
+    fetchServerRatingsMock.mockResolvedValue([]); // fetch succeeds, row absent
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(result.current.getRating('attaboy')).toBe('loved');
+    });
+    const cached = JSON.parse(window.localStorage.getItem(KEY) ?? '[]');
+    expect(
+      cached.some((r: { barId: string }) => r.barId === 'attaboy'),
+    ).toBe(true);
+    // And no era latch was written — the reconcile retries next sign-in.
+    expect(window.localStorage.getItem('next-bar:journal-era:v1')).toBeNull();
+  });
+
   it('does NOT re-merge when the latch is set and the journal is clean (V8-2 round-3)', async () => {
     // Round-2 re-merged everything on every sign-in to fix stranded rows;
     // round-3 correctly flagged that as resurrection — a row deleted on
