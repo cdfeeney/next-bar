@@ -2,7 +2,7 @@ import type { VibeTag } from '@/types';
 
 /**
  * tagDisplay — THE single place a VibeTag becomes user-visible text
- * (E0.1, locked decision 2). The 33-tag data vocabulary is untouched;
+ * (E0.1, locked decision 2). The 35-tag data vocabulary is untouched;
  * this is display only. Price tags render as the glyph ladder — the
  * word "pricey" must never reach the UI. Components render tags ONLY
  * through displayTag(); tagDisplay.test.ts enforces that with a source
@@ -54,4 +54,107 @@ export const TAG_DISPLAY: Record<VibeTag, string> = {
 /** The one lookup components are allowed to render a tag through. */
 export function displayTag(tag: VibeTag): string {
   return TAG_DISPLAY[tag];
+}
+
+// ---------------------------------------------------------------------------
+// Venue tag priority (V8-5; PRD §"P1: venue presentation", checklist §2).
+//
+// A venue carries more tags than the lightbox shows, so WHICH five survive
+// must be a function of the tag SET alone — never of the order the catalog
+// happened to return them in. This total ranking over the whole vocabulary is
+// the single source of truth for that; there is no second ordering anywhere.
+//
+// Order: the PRD-named useful types lead, then the remaining venue types,
+// then what you'll hear, character, energy, and crowd — broadest first, so a
+// venue that carries seven tags still leads with what kind of place it is.
+// The PRD also names `sports`, `gay bar` and `reservation-led`, which have no
+// tag in the data vocabulary; adding one is out of scope for this goal.
+//
+// Price tags rank last AND topVenueTags() drops them: the lightbox already
+// renders price from `bar.priceTier`, so a "$$" chip would only repeat the
+// eyebrow. They stay ranked so the ordering is total over VibeTag.
+//
+// Record<VibeTag, number> makes tsc enforce that every tag has exactly one
+// rank and no unknown tag sneaks in (same guard TAG_BIT_INDEX uses).
+// ---------------------------------------------------------------------------
+export const TAG_PRIORITY: Record<VibeTag, number> = {
+  // PRD-named useful types
+  cocktail: 0,
+  pub: 1,
+  rooftop: 2,
+  club: 3,
+  wine: 4,
+  'restaurant-bar': 5,
+  lounge: 6,
+  // remaining venue types
+  dive: 7,
+  speakeasy: 8,
+  beer: 9,
+  dance: 10,
+  garden: 11,
+  // what you'll hear
+  jazz: 12,
+  live: 13,
+  house: 14,
+  hiphop: 15,
+  indie: 16,
+  // character
+  'old-nyc': 17,
+  romantic: 18,
+  polished: 19,
+  rough: 20,
+  trendy: 21,
+  instagrammable: 22,
+  // energy
+  chill: 23,
+  buzzy: 24,
+  loud: 25,
+  // crowd
+  locals: 26,
+  date: 27,
+  'post-work': 28,
+  industry: 29,
+  tourist: 30,
+  // price — ranked for totality, never rendered as a chip (see above)
+  cheap: 31,
+  mid: 32,
+  pricey: 33,
+  splurge: 34,
+};
+
+// Module-load invariant (mirrors catalog.ts): a copy-pasted duplicate rank
+// would compile fine and make the sort below order-dependent again.
+if (new Set(Object.values(TAG_PRIORITY)).size !== Object.keys(TAG_PRIORITY).length) {
+  throw new Error('tagDisplay: TAG_PRIORITY ranks must be distinct');
+}
+
+/** At most this many tags render per venue (PRD §P1, checklist §2). */
+export const MAX_VENUE_TAGS = 5;
+
+/**
+ * The tags a venue shows, highest priority first, never more than
+ * MAX_VENUE_TAGS.
+ *
+ * Deterministic by construction: duplicates collapse, price tags and any tag
+ * the server catalog invents outside the vocabulary drop out, and the
+ * survivors are ordered by TAG_PRIORITY — which is total, so the result
+ * depends only on the tag set, not on its input order.
+ *
+ * There is deliberately no `limit` parameter: the five-tag cap is the rule
+ * itself, not a decision each call site gets to make, so it cannot be
+ * widened by a caller passing a bigger number.
+ */
+export function topVenueTags(tags: readonly VibeTag[]): VibeTag[] {
+  // hasOwn, not `in`: `in` walks the prototype chain, so 'toString' reads as a
+  // ranked tag. Today it survives only because it is equally "in"
+  // PRICE_TAG_GLYPHS and gets dropped — determinism resting on two lookups
+  // sharing a prototype is a trap for whoever edits one of them. An unranked
+  // tag reaching the comparator would make it return NaN, and a NaN comparator
+  // leaves order engine-defined, which is exactly what criterion 3 forbids.
+  return [...new Set(tags)]
+    .filter(
+      (tag) => Object.hasOwn(TAG_PRIORITY, tag) && !Object.hasOwn(PRICE_TAG_GLYPHS, tag),
+    )
+    .sort((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b])
+    .slice(0, MAX_VENUE_TAGS);
 }

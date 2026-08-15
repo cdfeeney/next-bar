@@ -8,6 +8,7 @@ import { fetchBarDetails, type BarDetails } from '@/lib/barReviews';
 import { resolveMedia } from '@/lib/mediaPolicy';
 import { weekHoursRows } from '@/lib/openNow';
 import { displayHood } from '@/lib/hoodDisplay';
+import { displayTag, topVenueTags } from '@/lib/tagDisplay';
 import { lockBodyScroll } from '@/lib/bodyScrollLock';
 import { cycleFocusWithin } from '@/lib/focusTrap';
 import OpenNowBadge from '@/components/OpenNowBadge';
@@ -142,6 +143,10 @@ export default function BarLightbox({
       opener?.focus({ preventScroll: true });
     };
   }, [bar]);
+
+  // V8-5: at most five tags, chosen by the one priority rule in tagDisplay.
+  // BarDetails cannot carry tags, so `bar` is the whole truth here.
+  const venueTags = topVenueTags(bar.tags);
 
   const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
     displayBar.address
@@ -321,6 +326,29 @@ export default function BarLightbox({
               Hours are best-effort — confirm before a special trip.
             </p>
           </div>
+        ) : null}
+
+        {venueTags.length > 0 ? (
+          // Bottom of the lightbox, directly above the action pair (PRD §P1 /
+          // checklist §2: "at the bottom … without crowding the result card";
+          // the approved refinement keeps the actions last with safe-area
+          // padding, so this is the one slot below the hours card).
+          // flex-wrap, never a scroll strip — V8 contract 5 fails any
+          // horizontal scroller that isn't the tagged photo carousel.
+          <ul
+            data-venue-tags
+            aria-label={`${bar.name} tags`}
+            className="flex flex-wrap gap-2"
+          >
+            {venueTags.map((tag) => (
+              <li
+                key={tag}
+                className="rounded-full border border-border bg-surface text-muted font-display text-xs px-3 py-1.5"
+              >
+                {displayTag(tag)}
+              </li>
+            ))}
+          </ul>
         ) : null}
 
         <div className="flex items-center gap-3 pb-4">
