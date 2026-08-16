@@ -38,6 +38,21 @@
 --
 -- Idempotent: create table/index if not exists + create or replace +
 -- drop policy if exists + revoke-first grants. Safe to re-run.
+--
+-- APPLY GATE (attended — the behavioral half of criteria 3/6/9/10 that a
+-- committed-unapplied migration cannot prove; run after `npm run db:migrate`):
+--   1. As anon: select from each of the five tables → expect permission
+--      denied; call every RPC except preview_night_out → expect failure;
+--      preview_night_out with a random uuid → zero rows, with a real token →
+--      exactly the six preview columns.
+--   2. As authenticated NON-member: get_night_out / _members / _board on
+--      someone else's plan → zero rows; suggest/vote/invite/respond → false.
+--   3. Two owners, same date: create both, cross-call every read with each
+--      owner → each sees only their own plan's rows (criterion 9).
+--   4. Declined member re-opens the share link → still declined (visit ≠
+--      consent); explicit respond(true) → accepted.
+--   5. Function-works probe per 0016's 42702 lesson: one full create →
+--      invite → join-by-token → suggest → vote → decide → cancel cycle.
 
 ------------------------------------------------------------------------------
 -- 1. night_outs — the canonical plan identity
@@ -361,8 +376,13 @@ begin
   values (p_night_out, p_user, v_uid)
   on conflict on constraint night_out_members_pkey do nothing;
 
-  insert into public.night_out_events (night_out_id, actor_id, kind)
-  values (p_night_out, v_uid, 'invited');
+  -- Event only when a row was actually created (review round 1, Codex):
+  -- two concurrent invites both pass the pre-lock exists check; the loser's
+  -- conflict-skipped insert must not emit a second 'invited' event.
+  if found then
+    insert into public.night_out_events (night_out_id, actor_id, kind)
+    values (p_night_out, v_uid, 'invited');
+  end if;
   return true;
 end;
 $$;
@@ -388,10 +408,19 @@ begin
   if v_uid is null or p_night_out is null or p_accept is null then
     return false;
   end if;
+  -- A cancelled plan takes no further responses (review round 1, Codex:
+  -- cancelled plans stayed writable through authenticated RPCs).
+  if not exists (
+    select 1 from public.night_outs n
+     where n.id = p_night_out and n.status <> 'cancelled'
+  ) then
+    return false;
+  end if;
   -- Same-state repeat is an idempotent no-op (criterion 8); a real
-  -- transition (incl. declined→accepted "changed my mind" via the link,
-  -- and accepted→declined "Not tonight" after accepting) always applies —
-  -- the no-op never swallows a later legitimate change.
+  -- transition (incl. declined→accepted "changed my mind" — an EXPLICIT
+  -- respond call, never a mere link visit — and accepted→declined "Not
+  -- tonight" after accepting) always applies — the no-op never swallows a
+  -- later legitimate change.
   update public.night_out_members m
      set invite_status = v_new, responded_at = now()
    where m.night_out_id = p_night_out
@@ -441,12 +470,24 @@ begin
     return null;
   end if;
 
-  -- Existing member (any status): accept via the normal transition.
+  -- Existing member: a PENDING invite accepts (that is what tapping the
+  -- link means), but a DECLINED member merely VISITING the link must NOT be
+  -- silently re-accepted (review round 1, Codex high: visiting is not
+  -- consenting — the plan page offers an explicit "count me back in" which
+  -- goes through respond_night_out). Accepted members just land on the plan.
   if exists (
     select 1 from public.night_out_members m
      where m.night_out_id = v_id and m.user_id = v_uid
   ) then
-    perform public.respond_night_out(v_id, true);
+    update public.night_out_members m
+       set invite_status = 'accepted', responded_at = now()
+     where m.night_out_id = v_id
+       and m.user_id = v_uid
+       and m.invite_status = 'pending';
+    if found then
+      insert into public.night_out_events (night_out_id, actor_id, kind)
+      values (v_id, v_uid, 'accepted');
+    end if;
     return v_id;
   end if;
 
@@ -464,8 +505,12 @@ begin
   values (v_id, v_uid, 'accepted', now())
   on conflict on constraint night_out_members_pkey do nothing;
 
-  insert into public.night_out_events (night_out_id, actor_id, kind)
-  values (v_id, v_uid, 'accepted');
+  -- Event only on a real row (concurrent double-join races the pre-lock
+  -- exists check; the conflict-skipped loser must not emit a second event).
+  if found then
+    insert into public.night_out_events (night_out_id, actor_id, kind)
+    values (v_id, v_uid, 'accepted');
+  end if;
   return v_id;
 end;
 $$;
@@ -548,6 +593,13 @@ begin
   end if;
   if public.night_out_role(p_night_out) is null then
     return false;  -- criterion 10
+  end if;
+  -- No voting on a cancelled or already-decided plan (review round 1).
+  if not exists (
+    select 1 from public.night_outs n
+     where n.id = p_night_out and n.status in ('draft', 'open')
+  ) then
+    return false;
   end if;
   -- Votes attach only to bars actually on the board.
   if not exists (

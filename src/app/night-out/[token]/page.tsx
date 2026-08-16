@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
-import { storePendingInvite } from '@/lib/pendingInvite';
+import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
 import {
   cancelNightOut,
   decideNightOut,
@@ -95,6 +95,13 @@ export default function NightOutPage({
     },
     [],
   );
+
+  // The destination performs the single consume of the handoff context
+  // (PendingInviteRedirect only peeks — an interrupted navigation must not
+  // lose the token). Only our own token is consumed.
+  useEffect(() => {
+    if (peekPendingInvite() === token) consumePendingInvite();
+  }, [token]);
 
   useEffect(() => {
     if (auth.status === 'loading') return;

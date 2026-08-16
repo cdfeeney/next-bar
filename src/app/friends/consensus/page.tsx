@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Avatar from '@/components/Avatar';
 import ShareButton from '@/components/ShareButton';
 import TonightSuggestions from '@/components/TonightSuggestions';
+import StartNightOutButton from '@/components/StartNightOutButton';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
@@ -199,6 +200,9 @@ export default function ConsensusPage(): JSX.Element {
         <h1 className="font-display text-3xl md:text-4xl mb-2 text-center">
           Plan Night Out
         </h1>
+        {/* The canonical night_outs entry point (V8-3): creates the plan and
+            lands on its invite-link surface. */}
+        <StartNightOutButton />
       </header>
 
       <section className="max-w-md mx-auto px-6">
