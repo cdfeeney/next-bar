@@ -14,7 +14,7 @@ import { storePendingInvite as storePendingInviteDefault } from '@/lib/pendingIn
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Exactly the four PRD event types (0051's notification_preferences columns)
+// Exactly the four PRD event types (the notification_preferences columns)
 // — no fifth type.
 const EVENT_TYPES = new Set([
   'invited',

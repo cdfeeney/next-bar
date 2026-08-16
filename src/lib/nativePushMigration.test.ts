@@ -3,7 +3,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * V8-4 migration guard — static assertions over 0051 and 0052.
+ * V8-4 migration guard — static assertions over the device-token and outbox
+ * migrations. Their NUMBERS moved once already (both collided with migrations the
+ * trunk added while this branch was in flight), so the filenames live in exactly
+ * two constants below and nowhere else.
  *
  * This proves the security SHAPE from the SQL text, exactly as
  * nightOutsMigration.test.ts does for 0044. It is deliberately NOT presented
@@ -25,12 +28,12 @@ function migration(name: string): string {
   ).replace(/\r\n/g, '\n');
 }
 
-const TOKENS_SQL = migration('0051_native_device_tokens.sql');
-const OUTBOX_SQL = migration('0052_notification_outbox.sql');
+const TOKENS_SQL = migration('0055_native_device_tokens.sql');
+const OUTBOX_SQL = migration('0056_notification_outbox.sql');
 
 const EVENT_TYPES = ['invited', 'accepted', 'bar_suggested', 'plan_changed'];
 
-describe('0051_native_device_tokens.sql security shape (criterion 2)', () => {
+describe('native_device_tokens security shape (criterion 2)', () => {
   const tables = ['native_device_tokens', 'notification_preferences'];
 
   it('enables RLS and revokes every direct grant on both tables', () => {
@@ -124,7 +127,7 @@ describe('0051_native_device_tokens.sql security shape (criterion 2)', () => {
   });
 });
 
-describe('0052_notification_outbox.sql (criteria 3, 4)', () => {
+describe('notification_outbox (criteria 3, 4)', () => {
   const tables = ['notification_outbox', 'notification_deliveries'];
 
   it('keeps both tables entirely server-side — RLS on, revoked, and NO grant', () => {
@@ -233,8 +236,8 @@ describe('structural sanity', () => {
    * unbalanced dollar-quote or paren silently swallowing the rest of the file.
    */
   it.each([
-    ['0051', TOKENS_SQL],
-    ['0052', OUTBOX_SQL],
+    ['native_device_tokens', TOKENS_SQL],
+    ['notification_outbox', OUTBOX_SQL],
   ])('%s has balanced dollar-quotes and parentheses', (_name, sql) => {
     const statements = sql
       .split('\n')
@@ -250,8 +253,8 @@ describe('structural sanity', () => {
   });
 
   it.each([
-    ['0051', TOKENS_SQL],
-    ['0052', OUTBOX_SQL],
+    ['native_device_tokens', TOKENS_SQL],
+    ['notification_outbox', OUTBOX_SQL],
   ])('%s terminates every function body with $$;', (_name, sql) => {
     const bodies = (sql.match(/^as \$\$$/gm) ?? []).length;
     const ends = (sql.match(/^\$\$;$/gm) ?? []).length;
@@ -292,7 +295,7 @@ describe('web push stays dark (criterion 11)', () => {
 
   it('leaves the 0009 web-push migration itself untouched', () => {
     // The native path is a SEPARATE store. If this ever fails, someone
-    // repurposed the dark web-push table instead of adding to 0051.
+    // repurposed the dark web-push table instead of adding to the device-token migration.
     const webPush = migration('0009_push_subscriptions.sql');
     expect(webPush).not.toMatch(/native_device_tokens|notification_outbox/);
   });

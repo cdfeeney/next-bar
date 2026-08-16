@@ -24,6 +24,10 @@ import {
 
 const pushMocks = vi.hoisted(() => ({
   requestPermissions: vi.fn(),
+  // registerNativePush now CHECKS the existing permission before deciding
+  // whether to prompt, so that the once-per-install prompt latch no longer
+  // suppresses re-registration (cold panel, Codex, HIGH).
+  checkPermissions: vi.fn(),
   register: vi.fn(),
   addListener: vi.fn(),
   removeAllListeners: vi.fn(),
@@ -71,6 +75,10 @@ function stubNative(platform: 'ios' | 'web'): void {
 beforeEach(() => {
   __resetNativePushStateForTests();
   pushMocks.requestPermissions.mockReset();
+  pushMocks.checkPermissions.mockReset();
+  // Default: not yet granted, so the existing cases exercise the prompt path
+  // exactly as they did before.
+  pushMocks.checkPermissions.mockResolvedValue({ receive: 'prompt' });
   pushMocks.register.mockReset();
   pushMocks.addListener.mockReset();
   pushMocks.removeAllListeners.mockReset();
@@ -277,5 +285,34 @@ describe('revokeAllNativePush', () => {
       revoke_all_native_device_tokens: { error: { message: 'function does not exist' } },
     });
     expect(await revokeAllNativePush(client)).toBe(false);
+  });
+});
+
+describe('registerNativePush — prompting is once, registering is not', () => {
+  it('registers WITHOUT prompting when permission is already granted', async () => {
+    // The defect: the once-per-install latch gated registration itself, so a
+    // rotated token, a reinstall, or permission granted later in iOS Settings
+    // left the server with a stale or absent token and nothing was ever sent.
+    const listeners = captureListeners();
+    pushMocks.checkPermissions.mockResolvedValue({ receive: 'granted' });
+    pushMocks.register.mockImplementation(async () => {
+      listeners.registration({ value: 'ABCDEF0123456789ABCDEF0123456789' });
+    });
+    const { client } = fakeSupabase({ save_native_device_token: { data: true } });
+
+    expect(await registerNativePush(client, { promptIfNeeded: false })).toBe('registered');
+    expect(
+      pushMocks.requestPermissions,
+      'a silent re-registration showed the OS permission dialog',
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does NOT prompt when told not to and permission is missing', async () => {
+    pushMocks.checkPermissions.mockResolvedValue({ receive: 'prompt' });
+    const { client } = fakeSupabase({});
+    expect(await registerNativePush(client, { promptIfNeeded: false })).toBe(
+      'permission-denied',
+    );
+    expect(pushMocks.requestPermissions).not.toHaveBeenCalled();
   });
 });

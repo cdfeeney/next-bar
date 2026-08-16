@@ -43,6 +43,7 @@ describe('POST /api/notifications/drain', () => {
     vi.stubEnv('NOTIFICATIONS_DRAIN_SECRET', SECRET);
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://example.supabase.co');
     vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'service-role-test-key');
+    vi.stubEnv('NEXT_BAR_DATABASE_ENVIRONMENT', 'staging');
     vi.stubEnv('APNS_ENVIRONMENT', '');
     vi.stubEnv('APNS_KEY_ID', '');
     vi.stubEnv('APNS_TEAM_ID', '');
@@ -110,6 +111,7 @@ describe('POST /api/notifications/drain', () => {
   });
 
   it('REFUSES to run against the production APNs environment (criterion 12)', async () => {
+    vi.stubEnv('NEXT_BAR_DATABASE_ENVIRONMENT', 'staging');
     vi.stubEnv('APNS_ENVIRONMENT', 'production');
     vi.stubEnv('APNS_KEY_ID', 'ABCD123456');
     vi.stubEnv('APNS_TEAM_ID', 'TEAM123456');

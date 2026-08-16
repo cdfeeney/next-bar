@@ -16,7 +16,7 @@ import {
 /**
  * POST /api/notifications/drain — send whatever the outbox has queued.
  *
- * The outbox is written by database triggers (0052); something has to drain
+ * The outbox is written by database triggers (0056); something has to drain
  * it. This is that something: a small, secret-guarded endpoint a scheduler can
  * poke. All the delivery RULES live in src/lib/notificationOutbox.ts and are
  * unit-tested there — this file is only the wiring.
@@ -45,6 +45,13 @@ export const dynamic = 'force-dynamic';
 
 const BATCH_SIZE = 100;
 
+/**
+ * How long a claim holds a row. Long enough that a slow APNs batch finishes
+ * inside it; short enough that a drain killed mid-batch does not delay those
+ * notifications for long.
+ */
+const CLAIM_LEASE_SECONDS = 300;
+
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -60,24 +67,30 @@ function buildDeps(
 ): DrainDeps {
   return {
     async fetchPending(limit) {
-      const { data } = await admin
-        .from('notification_outbox')
-        .select(
-          'id, event_type, night_out_id, recipient_user_id, actor_id, bar_id, attempts',
-        )
-        .eq('status', 'pending')
-        .order('created_at', { ascending: true })
-        .order('id', { ascending: true })
-        .limit(limit);
+      // CLAIM, do not select. A plain read let two overlapping drains take the
+      // same pending rows and send the same notification twice (cold panel,
+      // both lanes, HIGH). claim_notification_outbox marks the rows under
+      // `for update skip locked` in one statement, so concurrent drains get
+      // disjoint sets and a crashed drain's rows return after the lease.
+      const { data, error } = await admin.rpc('claim_notification_outbox', {
+        p_limit: limit,
+        p_lease_seconds: CLAIM_LEASE_SECONDS,
+      });
+      if (error) throw new Error(`outbox unclaimable: ${error.code ?? 'unknown'}`);
       return (data ?? []) as OutboxRow[];
     },
 
     async fetchPreferences(userId) {
-      const { data } = await admin
+      const { data, error } = await admin
         .from('notification_preferences')
         .select('invited, accepted, bar_suggested, plan_changed')
         .eq('user_id', userId)
         .maybeSingle();
+      // THROW rather than fall back. `?? DEFAULT_PREFERENCES` made a failed
+      // read indistinguishable from "no row", and every default is true — so a
+      // database error granted consent nobody gave. A missing ROW is a genuine
+      // default; a missing ANSWER is not.
+      if (error) throw new Error(`preferences unavailable: ${error.code ?? 'unknown'}`);
       return (data as NotificationPreferences | null) ?? DEFAULT_PREFERENCES;
     },
 
@@ -107,21 +120,31 @@ function buildDeps(
     },
 
     async fetchLiveTokens(userId) {
-      const { data } = await admin
+      const { data, error } = await admin
         .from('native_device_tokens')
         .select('id, token')
         .eq('user_id', userId)
         .is('revoked_at', null);
+      // An unreadable token list is not "no devices" — suppressing on it would
+      // permanently mark a deliverable notification as undeliverable.
+      if (error) throw new Error(`device tokens unavailable: ${error.code ?? 'unknown'}`);
       return data ?? [];
     },
 
     async countRecentSends(userId, sinceIso) {
-      const { count } = await admin
+      const { count, error } = await admin
         .from('notification_outbox')
         .select('id', { count: 'exact', head: true })
         .eq('recipient_user_id', userId)
+        // Measured on when it was PROCESSED, not when it was enqueued.
+        // created_at is enqueue time, so a backlog that drains all at once
+        // counted as "old" and sailed straight past the limit (cold panel,
+        // both lanes). processed_at is set by markOutbox at send time.
         .eq('status', 'sent')
-        .gte('created_at', sinceIso);
+        .gte('processed_at', sinceIso);
+      if (error) throw new Error(`recent-send count unavailable: ${error.code ?? 'unknown'}`);
+      // A null count with no error means the head request returned nothing to
+      // count, which is genuinely zero.
       return count ?? 0;
     },
 
@@ -187,6 +210,28 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!secret || !timingSafeEqual(secret, presented)) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
+
+  // Checked AFTER authentication on purpose: a 503 here tells the caller how
+  // this deployment is configured, and an unauthenticated caller is owed
+  // nothing but 401.
+  // "Staging only" was enforced entirely by readApnsConfig refusing a
+  // non-sandbox APNS_ENVIRONMENT — which constrains WHICH APNs it talks to and
+  // says nothing about WHICH DATABASE it drains (cold panel, Codex, HIGH). This
+  // route reads the outbox with the service-role key and sends real pushes to
+  // real phones; it must also refuse to run against production data.
+  //
+  // Fail closed: an unset label is a missing answer, not permission — the same
+  // rule the live RLS suite and the migration-set applier already use.
+  const dbEnvironment = process.env.NEXT_BAR_DATABASE_ENVIRONMENT;
+  if (dbEnvironment !== 'staging') {
+    console.error(
+      `[notifications/drain] refused: NEXT_BAR_DATABASE_ENVIRONMENT is ${
+        dbEnvironment ? JSON.stringify(dbEnvironment) : 'unset'
+      }, and this is a staging-only feature.`,
+    );
+    return NextResponse.json({ ok: false, error: 'unavailable' }, { status: 503 });
+  }
+
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

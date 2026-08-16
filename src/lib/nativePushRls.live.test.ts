@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 
 /**
- * V8-4 BEHAVIORAL RLS/RPC negatives for 0051 and 0052 — criterion 2.
+ * V8-4 BEHAVIORAL RLS/RPC negatives for the device-token and outbox migrations — criterion 2.
  *
  * nativePushMigration.test.ts proves the security SHAPE from the SQL text.
  * A reviewer of the previous goal correctly refused a text scan as
@@ -17,7 +17,7 @@ import { Client } from 'pg';
  * TWO reasons it may not run, and they are NOT the same:
  *   - No DATABASE_URL: skip on CI (which has no credentials by design), throw
  *     anywhere else, because unverified denials must be loud.
- *   - DATABASE_URL present but 0051/0052 NOT APPLIED: throw. Applying these
+ *   - DATABASE_URL present but the native-push migrations NOT APPLIED: throw. Applying these
  *     migrations to staging is an attended step, so this is the honest signal
  *     that the behavioural half of criterion 2 is still outstanding — never a
  *     silent green.
@@ -90,7 +90,7 @@ const SKIP_ALLOWED = process.env.CI === 'true' || process.env.CI === '1';
 if (!URL && !SKIP_ALLOWED) {
   throw new Error(
     'nativePushRls.live.test.ts: no DATABASE_URL in .env.local, so the behavioral '
-    + 'RLS/RPC denials for 0051/0052 were NOT verified. Set it, or set CI=1 to '
+    + 'RLS/RPC denials for the native-push migrations were NOT verified. Set it, or set CI=1 to '
     + 'acknowledge that this environment cannot run them.',
   );
 }
@@ -104,7 +104,7 @@ const TABLES = [
   'notification_deliveries',
 ];
 
-describeLive('0051/0052 native push — live RLS/RPC denials', () => {
+describeLive('native push — live RLS/RPC denials', () => {
   let db: Client;
 
   beforeAll(async () => {
@@ -128,7 +128,7 @@ describeLive('0051/0052 native push — live RLS/RPC denials', () => {
     if (missing.length > 0) {
       throw new Error(
         `nativePushRls.live.test.ts: ${missing.join(', ')} not present in the target database. `
-        + 'Apply supabase/migrations/0051 and 0052 to staging (an ATTENDED step) before this '
+        + 'Apply the native-push migrations to staging (an ATTENDED step) before this '
         + 'suite can verify anything. A skip here would be a vacuous pass.',
       );
     }

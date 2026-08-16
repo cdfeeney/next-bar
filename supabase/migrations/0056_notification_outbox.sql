@@ -41,6 +41,12 @@ create table if not exists public.notification_outbox (
   attempts          integer     not null default 0,
   last_error        text        null,
   processed_at      timestamptz null,
+  -- LEASE. A drain must CLAIM rows before sending, or two overlapping drains
+  -- both read the same pending rows and both send — the user gets the same
+  -- notification twice (cold panel, both lanes, HIGH). A timestamp rather than
+  -- a boolean so a drain that dies mid-batch does not strand its rows: the
+  -- claim expires and they become claimable again.
+  claimed_at        timestamptz null,
   created_at        timestamptz not null default now(),
   constraint notification_outbox_dedupe_key unique (dedupe_key),
   constraint notification_outbox_event_check
@@ -302,3 +308,43 @@ create trigger night_outs_notify
 --   drop table if exists public.notification_deliveries;
 --   drop table if exists public.notification_outbox;
 ------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+-- Atomic claim — the only supported way to take work off this outbox
+------------------------------------------------------------------------------
+-- `for update skip locked` inside the CTE is what makes concurrent drains take
+-- DISJOINT sets rather than the same one: a row another drain has locked is
+-- skipped rather than waited for. Selecting and then updating in two statements
+-- cannot achieve this — that is the race the drain shipped with.
+--
+-- Rows whose claim has expired are re-claimable, so a drain that crashes
+-- between claiming and sending delays those notifications by the lease rather
+-- than losing them.
+create or replace function public.claim_notification_outbox(
+  p_limit integer default 100,
+  p_lease_seconds integer default 300
+)
+returns setof public.notification_outbox
+language sql
+security definer
+set search_path = public
+as $$
+  with claimable as (
+    select o.id
+      from public.notification_outbox o
+     where o.status = 'pending'
+       and (o.claimed_at is null
+            or o.claimed_at < now() - make_interval(secs => p_lease_seconds))
+     order by o.created_at, o.id
+     limit greatest(p_limit, 0)
+     for update skip locked
+  )
+  update public.notification_outbox o
+     set claimed_at = now()
+    from claimable c
+   where o.id = c.id
+  returning o.*
+$$;
+
+-- Service-role only. This hands out sendable work; no client role may call it.
+revoke all on function public.claim_notification_outbox(integer, integer) from public, anon, authenticated;

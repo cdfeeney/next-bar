@@ -5,6 +5,7 @@ import './globals.css';
 import 'leaflet/dist/leaflet.css';
 import AgeGate from '@/components/AgeGate';
 import BottomNav from '@/components/BottomNav';
+import PushTapRouter from '@/components/PushTapRouter';
 import OnboardingGate from '@/components/OnboardingGate';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import CatalogRefresh from '@/components/CatalogRefresh';
@@ -75,6 +76,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <BottomNav />
         <AgeGate />
         <OnboardingGate />
+        <PushTapRouter />
         <ServiceWorkerRegister />
         <CatalogRefresh />
         <PendingInviteRedirect />

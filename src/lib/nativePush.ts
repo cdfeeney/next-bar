@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { Capacitor } from '@capacitor/core';
 
 /**
- * Native APNs device-token registration (V8-4, migration 0051).
+ * Native APNs device-token registration (V8-4, migration 0055).
  *
  * DELIBERATELY separate from the DARK web-push module in push.ts — this
  * targets the Capacitor iOS shell only, stores into native_device_tokens,
@@ -21,7 +21,7 @@ import { Capacitor } from '@capacitor/core';
 const INSTALLATION_ID_KEY = 'next-bar:native-push-installation:v1';
 const PROMPTED_KEY = 'next-bar:native-push-prompted:v1';
 
-// Mirrors the CHECK constraints on native_device_tokens (0051) — validating
+// Mirrors the CHECK constraints on native_device_tokens (0055) — validating
 // client-side before an RPC round trip is a courtesy, not the boundary; the
 // database still enforces its own copy of both regexes.
 const INSTALLATION_RE = /^[0-9a-zA-Z-]{8,64}$/;
@@ -112,7 +112,7 @@ async function saveToken(rawToken: string): Promise<NativePushResult> {
       p_platform: 'ios',
       p_installation: getInstallationId(),
     });
-    // false covers both a missing RPC (pre-0051) and a device-cap refusal —
+    // false covers both a missing RPC (pre-0055) and a device-cap refusal —
     // neither is a crash, both are simply "not registered".
     return !error && data === true ? 'registered' : 'failed';
   } catch {
@@ -142,11 +142,27 @@ async function ensureListeners(plugin: PushNotificationsPlugin): Promise<void> {
 
 /**
  * Full opt-in flow: permission -> register() -> the 'registration' listener
- * yields a token -> save via the 0051 RPC. Any failure is a plain result
+ * yields a token -> save via the 0055 RPC. Any failure is a plain result
  * string; this never throws.
+ */
+/**
+ * `promptIfNeeded: false` REGISTERS without ever showing the OS permission
+ * dialog: it checks the existing permission and gives up if it is not already
+ * granted.
+ *
+ * The distinction is the whole point (cold panel, Codex, HIGH). The
+ * once-per-install latch is a rule about PROMPTING, and it was gating
+ * registration itself — so after the single prompt, the token was never
+ * re-registered. APNs rotates tokens whenever it likes, a reinstall issues a
+ * new one, and a user who grants permission later in iOS Settings never had one
+ * saved at all. In each case the server kept a stale or absent token and the
+ * notifications this feature exists to send went nowhere, silently.
+ *
+ * Prompting stays once. Registering happens whenever we are already allowed.
  */
 export async function registerNativePush(
   supabase: SupabaseClient,
+  { promptIfNeeded = true }: { promptIfNeeded?: boolean } = {},
 ): Promise<NativePushResult> {
   if (!isNativePushAvailable()) return 'unsupported';
 
@@ -160,8 +176,12 @@ export async function registerNativePush(
   activeSupabase = supabase;
 
   try {
-    const permission = await plugin.requestPermissions();
-    if (permission.receive !== 'granted') return 'permission-denied';
+    const existing = await plugin.checkPermissions();
+    if (existing.receive !== 'granted') {
+      if (!promptIfNeeded) return 'permission-denied';
+      const permission = await plugin.requestPermissions();
+      if (permission.receive !== 'granted') return 'permission-denied';
+    }
 
     await ensureListeners(plugin);
 

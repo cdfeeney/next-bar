@@ -163,6 +163,13 @@ export type DrainSummary = {
   sent: number;
   suppressed: number;
   failed: number;
+  /**
+   * Left pending because something we needed could not be READ — a preference
+   * or a recent-send count. Distinct from `suppressed` (a decision was made)
+   * and from `failed` (terminal). A deferred row is retried next drain, which
+   * is the only safe answer when consent is unknown.
+   */
+  deferred: number;
   invalidTokensRevoked: number;
 };
 
@@ -177,6 +184,7 @@ export async function drainNotificationOutbox(
     sent: 0,
     suppressed: 0,
     failed: 0,
+    deferred: 0,
     invalidTokensRevoked: 0,
   };
 
@@ -185,22 +193,51 @@ export async function drainNotificationOutbox(
   for (const row of pending) {
     summary.processed += 1;
 
-    const preferences = await deps.fetchPreferences(row.recipient_user_id);
+    // CONSENT IS FAIL-CLOSED. The adapter previously swallowed query errors and
+    // returned null here, which isEventAllowed treats as DEFAULT_PREFERENCES —
+    // and every default is `true`. A database blip therefore NOTIFIED people
+    // who had opted out (cold panel, both lanes). An unknown preference is not
+    // permission: leave the row pending and try again next drain.
+    let preferences: NotificationPreferences | null;
+    try {
+      preferences = await deps.fetchPreferences(row.recipient_user_id);
+    } catch {
+      summary.deferred += 1;
+      continue;
+    }
     if (!isEventAllowed(preferences, row.event_type)) {
       await deps.markOutbox(row.id, 'suppressed', 'opted_out');
       summary.suppressed += 1;
       continue;
     }
 
+    // Same reasoning for the rate limit: a failed count used to read as zero,
+    // which is "no recent sends" — the most permissive answer available.
     const sinceIso = new Date(deps.now() - RATE_LIMIT_WINDOW_MS).toISOString();
-    const recent = await deps.countRecentSends(row.recipient_user_id, sinceIso);
+    let recent: number;
+    try {
+      recent = await deps.countRecentSends(row.recipient_user_id, sinceIso);
+    } catch {
+      summary.deferred += 1;
+      continue;
+    }
     if (!isWithinRateLimit(recent)) {
       await deps.markOutbox(row.id, 'suppressed', 'rate_limited');
       summary.suppressed += 1;
       continue;
     }
 
-    const context = await deps.fetchContext(row);
+    // fetchContext and fetchLiveTokens now surface read errors rather than
+    // swallowing them, so an unreadable answer must defer rather than be
+    // mistaken for "no plan" (terminal) or "no devices" (suppressed) — both of
+    // which would retire a notification that was perfectly deliverable.
+    let context: NotificationContext | null;
+    try {
+      context = await deps.fetchContext(row);
+    } catch {
+      summary.deferred += 1;
+      continue;
+    }
     if (!context) {
       // The plan was deleted between enqueue and drain. There is nothing to
       // deep-link to, so this is terminal rather than retryable.
@@ -209,7 +246,13 @@ export async function drainNotificationOutbox(
       continue;
     }
 
-    const devices = await deps.fetchLiveTokens(row.recipient_user_id);
+    let devices: Awaited<ReturnType<DrainDeps['fetchLiveTokens']>>;
+    try {
+      devices = await deps.fetchLiveTokens(row.recipient_user_id);
+    } catch {
+      summary.deferred += 1;
+      continue;
+    }
     if (devices.length === 0) {
       // Not a failure of ours: the user has no registered device, or revoked
       // the only one. Recorded as suppressed so it is never retried forever.

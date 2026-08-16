@@ -218,10 +218,19 @@ export default function NightOutPage({
    * affect this page's render path.
    */
   const maybePromptForNativePush = (): void => {
-    if (!isNativePushAvailable() || hasPromptedForNativePush()) return;
-    markPromptedForNativePush();
+    if (!isNativePushAvailable()) return;
     const supabase = getBrowserSupabase();
     if (!supabase) return;
+    // The latch is about PROMPTING, not registering. Gating both on it meant
+    // the token was saved once and never again — so a rotated token, a
+    // reinstall, or permission granted later in iOS Settings all left the
+    // server unable to reach this device (cold panel, Codex, HIGH). If we have
+    // already prompted, re-register SILENTLY; only the dialog is once-per-install.
+    if (hasPromptedForNativePush()) {
+      void registerNativePush(supabase, { promptIfNeeded: false });
+      return;
+    }
+    markPromptedForNativePush();
     void registerNativePush(supabase);
   };
 

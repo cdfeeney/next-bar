@@ -2,7 +2,7 @@
 
 /**
  * NotificationPreferences — Settings section for the four V8-4 Night Out
- * push event types (migration 0051). A missing `notification_preferences`
+ * push event types (migration 0055). A missing `notification_preferences`
  * row means "never touched this screen" — the RPC's own documented default
  * is all four ON, so a read failure or a missing row both fall back to that
  * same default rather than silently going dark.
@@ -36,7 +36,7 @@ const DEFAULT_PREFS: Prefs = {
 };
 
 // Fixed order the four toggles render in — matches the RPC's own parameter
-// order (0051 set_notification_preferences), so there is one vocabulary
+// order (0055 set_notification_preferences), so there is one vocabulary
 // rather than a UI order that can drift from the write path.
 /**
  * The section is a labelled landmark, not a bare div. Two reasons, and the
