@@ -116,6 +116,22 @@ export async function respondNightOut(
   return !error && data === true;
 }
 
+/**
+ * Member-scoped token resolution — viewing NEVER mutates membership (review
+ * round 1, both lanes). Null = not a member (or error): fall to the preview
+ * plus an explicit Join action.
+ */
+export async function resolveNightOutByToken(
+  supabase: SupabaseClient,
+  token: string,
+): Promise<string | null> {
+  if (!UUID_RE.test(token)) return null;
+  const { data, error } = await supabase.rpc('resolve_night_out_by_token', {
+    p_token: token,
+  });
+  return !error && typeof data === 'string' ? data : null;
+}
+
 /** Authenticated link recipient joins (becomes accepted); returns plan id. */
 export async function joinNightOutByToken(
   supabase: SupabaseClient,

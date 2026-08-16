@@ -21,8 +21,11 @@ export default function PendingInviteRedirect(): null {
     if (auth.status !== 'signed-in') return;
     const pending = peekPendingInvite();
     if (pending === null) return;
-    // Already on the plan — the page consumes the token itself.
-    if (pathname?.startsWith('/night-out/')) return;
+    // Already on THE PENDING plan — that page consumes the token itself.
+    // Match the exact token's path, not any /night-out/* (review round 1,
+    // Claude): while browsing a DIFFERENT plan, a stale pending token was
+    // neither consumed nor acted on, then fired a surprise redirect later.
+    if (pathname?.startsWith(`/night-out/${pending}`)) return;
     // PEEK, never consume, before navigating (review round 1, Codex): a
     // fresh account's onboarding gate can hijack the navigation after a
     // consume, losing the context for good. Leaving the key in place makes

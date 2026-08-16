@@ -228,8 +228,10 @@ security definer
 set search_path = public
 as $$
 declare
+  plan_cap constant integer := 10;  -- live (non-cancelled, current) plans per owner
   v_uid uuid := auth.uid();
   v_id uuid;
+  v_live integer;
 begin
   if v_uid is null then
     raise exception 'not signed in' using errcode = '28000';
@@ -240,6 +242,20 @@ begin
   end if;
   if p_title is not null and char_length(trim(p_title)) not between 1 and 80 then
     raise exception 'invalid title' using errcode = '22023';
+  end if;
+
+  -- Per-owner cap with the house advisory-lock pattern (review round 1,
+  -- Claude: create was the one user-driven insert without a cap — 0006–0011
+  -- cap every other one). Check-then-act, so serialize per owner.
+  perform pg_advisory_xact_lock(
+    hashtextextended('night_outs:' || v_uid::text, 0));
+  select count(*) into v_live
+    from public.night_outs n
+   where n.owner_id = v_uid
+     and n.status <> 'cancelled'
+     and n.night >= (current_date - 2);
+  if v_live >= plan_cap then
+    raise exception 'too many open night outs' using errcode = '54000';
   end if;
 
   insert into public.night_outs (owner_id, night, title)
@@ -704,6 +720,30 @@ as $$
    order by s.created_at asc;
 $$;
 
+-- Member-scoped token resolution (review round 1, Claude high + Codex high
+-- converged: the page called join-by-token just to VIEW, and viewing must
+-- never mutate membership). Returns the plan id ONLY when the caller is
+-- already a member (ANY invite status — a declined member still gets their
+-- plan view with its explicit "count me back in"); null otherwise, so a
+-- non-member falls to the preview + an explicit Join action.
+create or replace function public.resolve_night_out_by_token(p_token uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with gated as materialized (
+    select n.id
+      from public.night_outs n
+      join public.night_out_members m
+        on m.night_out_id = n.id and m.user_id = auth.uid()
+     where n.share_token = p_token
+     limit 1
+  )
+  select id from gated;
+$$;
+
 -- The anon bearer preview (criterion 5): ONLY explicitly shared plan data —
 -- night, title, status, the host's display identity, and an accepted-member
 -- COUNT. No member identities, no account ids, no bar suggestions, no
@@ -767,6 +807,9 @@ grant execute on function public.vote_night_out_bar(uuid, text) to authenticated
 
 revoke all on function public.get_night_out(uuid) from public, anon, authenticated;
 grant execute on function public.get_night_out(uuid) to authenticated;
+
+revoke all on function public.resolve_night_out_by_token(uuid) from public, anon, authenticated;
+grant execute on function public.resolve_night_out_by_token(uuid) to authenticated;
 
 revoke all on function public.get_night_out_members(uuid) from public, anon, authenticated;
 grant execute on function public.get_night_out_members(uuid) to authenticated;

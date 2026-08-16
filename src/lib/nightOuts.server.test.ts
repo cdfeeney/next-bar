@@ -10,6 +10,7 @@ import {
   inviteToNightOut,
   joinNightOutByToken,
   previewNightOut,
+  resolveNightOutByToken,
   respondNightOut,
   suggestNightOutBar,
   voteNightOutBar,
@@ -24,6 +25,7 @@ import {
 
 const UUID = '123e4567-e89b-42d3-a456-426614174000';
 const UUID2 = '223e4567-e89b-42d3-a456-426614174000';
+const PLAN_UUID = '523e4567-e89b-42d3-a456-426614174000';
 
 function fakeRpc(result: { data?: unknown; error?: unknown }) {
   const rpc = vi.fn(() =>
@@ -73,6 +75,16 @@ describe('nightOuts.server write RPCs', () => {
       p_night_out: UUID,
       p_user: UUID2,
     });
+  });
+
+  it('resolveNightOutByToken is the read path — null for non-members falls to preview+Join', async () => {
+    const member = fakeRpc({ data: PLAN_UUID });
+    await expect(resolveNightOutByToken(member.client, UUID)).resolves.toBe(PLAN_UUID);
+    expect(member.rpc).toHaveBeenCalledWith('resolve_night_out_by_token', {
+      p_token: UUID,
+    });
+    const nonMember = fakeRpc({ data: null });
+    await expect(resolveNightOutByToken(nonMember.client, UUID)).resolves.toBeNull();
   });
 
   it('joinNightOutByToken returns the plan id, null on dead link', async () => {

@@ -107,6 +107,7 @@ describe('0021_night_outs.sql security shape', () => {
   });
 
   it('cap counting uses the advisory-lock pattern and inserts use ON CONSTRAINT (criterion 8)', () => {
+    expect(SQL).toMatch(/pg_advisory_xact_lock\(\s*hashtextextended\('night_outs:/);
     expect(SQL).toMatch(/pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/);
     expect(SQL).toMatch(/pg_advisory_xact_lock\(\s*hashtextextended\('night_out_suggestions:/);
     for (const constraint of [
@@ -129,6 +130,21 @@ describe('0021_night_outs.sql security shape', () => {
       expect(ddl, table).toMatch(/night_out_id\s+uuid\s+not null references public\.night_outs/);
       expect(ddl, table).not.toMatch(/\bnight\s+date\b/);
     }
+  });
+
+  it('viewing never mutates: resolve-by-token is a definer READ gated on existing membership', () => {
+    const resolve = SQL.match(
+      /create or replace function public\.resolve_night_out_by_token[\s\S]*?\$\$;/,
+    )?.[0];
+    expect(resolve).toBeDefined();
+    expect(resolve).toMatch(/stable/);
+    expect(resolve).toMatch(/security definer/);
+    expect(resolve).toMatch(/materialized/);
+    expect(resolve).not.toMatch(/insert|update|delete/i);
+    // Authenticated-only — a bearer token alone must not resolve membership.
+    expect(SQL).toMatch(
+      /grant execute on function public\.resolve_night_out_by_token\(uuid\) to authenticated/,
+    );
   });
 
   it('locks the PRD state machines exactly (required states)', () => {

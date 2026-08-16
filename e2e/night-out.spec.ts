@@ -113,6 +113,11 @@ async function stubMemberRpcs(page: Page): Promise<void> {
     '**/rest/v1/rpc/join_night_out_by_token*',
     fulfillJson(200, PLAN_ID),
   );
+  // Viewing never mutates: existing members RESOLVE (read) to their plan.
+  await page.route(
+    '**/rest/v1/rpc/resolve_night_out_by_token*',
+    fulfillJson(200, PLAN_ID),
+  );
   await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
     const url = route.request().url();
     if (url.includes('get_night_out_members')) {

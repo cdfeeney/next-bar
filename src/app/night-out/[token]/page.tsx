@@ -15,6 +15,7 @@ import {
   getNightOutMembers,
   joinNightOutByToken,
   previewNightOut,
+  resolveNightOutByToken,
   respondNightOut,
   suggestNightOutBar,
   voteNightOutBar,
@@ -113,12 +114,16 @@ export default function NightOutPage({
     let cancelled = false;
     void (async () => {
       if (auth.status === 'signed-in') {
-        const planId = await joinNightOutByToken(supabase, token);
+        // Viewing never mutates (review round 1, both lanes): an existing
+        // member — pending, accepted, or declined — RESOLVES straight to
+        // their plan view. Joining is always the explicit button below.
+        const planId = await resolveNightOutByToken(supabase, token);
         if (cancelled) return;
         if (planId !== null && (await loadMemberView(planId))) return;
         if (cancelled) return;
       }
-      // Signed-out, or the link is dead/cancelled: bearer preview only.
+      // Signed-out, non-member, or the link is dead/cancelled: bearer
+      // preview only.
       const preview = await previewNightOut(supabase, token);
       if (cancelled) return;
       setState(preview !== null ? { kind: 'preview', preview } : { kind: 'gone' });
@@ -187,7 +192,25 @@ export default function NightOutPage({
             : ''}
         </p>
         {auth.status === 'signed-in' ? (
-          <p className="mt-6 opacity-70">Opening your invite…</p>
+          // Joining is EXPLICIT (review round 1): a signed-in non-member
+          // sees the preview and chooses to join — the RPC is the accept.
+          <button
+            type="button"
+            onClick={() => {
+              void (async () => {
+                const supabase = getBrowserSupabase();
+                if (!supabase) return;
+                setActionError(null);
+                const planId = await joinNightOutByToken(supabase, token);
+                if (planId === null || !(await loadMemberView(planId))) {
+                  setActionError("Couldn't join — the link may have expired.");
+                }
+              })();
+            }}
+            className="mt-6 rounded-full bg-white px-6 py-3 font-semibold text-black"
+          >
+            Join this night out
+          </button>
         ) : (
           <button
             type="button"
@@ -197,6 +220,9 @@ export default function NightOutPage({
             Sign in to join
           </button>
         )}
+        {actionError !== null ? (
+          <p className="mt-3 text-sm text-red-400">{actionError}</p>
+        ) : null}
       </main>
     );
   }
@@ -234,6 +260,21 @@ export default function NightOutPage({
 
       {!isCancelled ? (
         <section className="mt-6 flex justify-center gap-3">
+          {plan.callerStatus === 'pending' ? (
+            // An invited member accepts EXPLICITLY (viewing never mutates).
+            <button
+              type="button"
+              onClick={withRefresh(() => {
+                const supabase = getBrowserSupabase();
+                return supabase
+                  ? respondNightOut(supabase, plan.id, true)
+                  : Promise.resolve(false);
+              })}
+              className="rounded-full bg-white px-5 py-2 font-semibold text-black"
+            >
+              I&apos;m in
+            </button>
+          ) : null}
           {isDeclined ? (
             <button
               type="button"
