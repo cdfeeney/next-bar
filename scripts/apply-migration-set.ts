@@ -30,12 +30,16 @@
  *
  * Usage:
  *   npx tsx scripts/apply-migration-set.ts --env staging 0044_x.sql 0045_y.sql
- *   npx tsx scripts/apply-migration-set.ts --env production --execute 0044_x.sql ...
+ *   npx tsx scripts/apply-migration-set.ts --secrets-file .env.production.local \
+ *     --env production --execute 0044_x.sql ...
+ *
+ * --secrets-file loads a target's credentials WITHOUT touching .env.local, so the
+ * repo stays pointed at staging for every other tool.
  */
 
 import { config as loadEnv } from 'dotenv';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 
@@ -46,9 +50,12 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function parseArgs(argv: string[]): { env: string; execute: boolean; files: string[] } {
+function parseArgs(argv: string[]): {
+  env: string; execute: boolean; files: string[]; secretsFile: string | null;
+} {
   let env = '';
   let execute = false;
+  let secretsFile: string | null = null;
   const files: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -57,12 +64,15 @@ function parseArgs(argv: string[]): { env: string; execute: boolean; files: stri
     else if (arg === '--env') {
       i += 1;
       env = argv[i] ?? '';
+    } else if (arg === '--secrets-file') {
+      i += 1;
+      secretsFile = argv[i] ?? '';
     } else if (arg.startsWith('--')) fail(`unknown option ${arg}`);
     else files.push(arg);
   }
   if (!env) fail('--env <label> is required; the target must be named, never inferred');
   if (files.length === 0) fail('name at least one migration file');
-  return { env, execute, files };
+  return { env, execute, files, secretsFile };
 }
 
 function redactUrl(url: string): string {
@@ -75,8 +85,25 @@ function redactUrl(url: string): string {
 }
 
 async function main(): Promise<void> {
-  const { env, execute, files } = parseArgs(process.argv.slice(2));
+  const { env, execute, files, secretsFile } = parseArgs(process.argv.slice(2));
 
+  // A separate --secrets-file is how you reach a NON-default target without editing
+  // .env.local. Repointing .env.local at production is the obvious workaround
+  // and it is a trap: it silently redirects every other tool in the repo,
+  // including the live RLS suite, and it stays repointed until someone
+  // remembers to undo it. One command, one file, no lingering state.
+  if (secretsFile !== null) {
+    if (secretsFile === '') fail('--secrets-file needs a path');
+    // NOTE: this option is deliberately NOT called --env-file. That name is a
+    // reserved Node flag; node consumes it before the script is reached, and
+    // the failure looks like a missing file rather than an option collision.
+    // Check existence ourselves: dotenv does not reliably surface a missing
+    // file as an error, so a typo'd path would silently fall through to
+    // .env.local and point this at whatever THAT names. A guard that does not
+    // guard is worse than no guard, because it is trusted.
+    if (!existsSync(secretsFile)) fail(`--secrets-file ${secretsFile} does not exist`);
+    loadEnv({ path: secretsFile, override: true });
+  }
   loadEnv({ path: '.env.local' });
   loadEnv({ path: '.env' });
 
