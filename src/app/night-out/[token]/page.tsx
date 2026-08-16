@@ -10,6 +10,7 @@ import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/l
 import {
   cancelNightOut,
   decideNightOut,
+  declineNightOutByToken,
   getNightOut,
   getNightOutBoard,
   getNightOutMembers,
@@ -74,6 +75,7 @@ export default function NightOutPage({
   const [state, setState] = useState<PageState>({ kind: 'loading' });
   const [suggestInput, setSuggestInput] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
   const token = decodeURIComponent(params.token);
 
   const loadMemberView = useCallback(
@@ -100,9 +102,19 @@ export default function NightOutPage({
   // The destination performs the single consume of the handoff context
   // (PendingInviteRedirect only peeks — an interrupted navigation must not
   // lose the token). Only our own token is consumed.
+  //
+  // Consume on ARRIVAL, not on mount. Mounting is not arriving: a fresh
+  // account lands here, this effect cleared sessionStorage, and OnboardingGate
+  // then redirected to /onboarding — with the token already gone, the
+  // self-healing redirect in PendingInviteRedirect had nothing left to replay
+  // and the plan was lost for good. That is the exact hole round 1 tried to
+  // close by making the redirect peek; the consume simply moved one component
+  // over. Waiting for the member view means an interrupted arrival keeps the
+  // token and the redirect fires again after onboarding completes.
   useEffect(() => {
+    if (state.kind !== 'member') return;
     if (peekPendingInvite() === token) consumePendingInvite();
-  }, [token]);
+  }, [state.kind, token]);
 
   useEffect(() => {
     if (auth.status === 'loading') return;
@@ -211,6 +223,29 @@ export default function NightOutPage({
           >
             Join this night out
           </button>
+        ) : null}
+        {auth.status === 'signed-in' ? (
+          // Declining must not route through joining (round-2 review, Codex
+          // high): tapping "Not tonight" here used to require joining first,
+          // which recorded an acceptance and emitted an 'accepted' event the
+          // host could see before the decline landed.
+          <button
+            type="button"
+            onClick={() => {
+              void (async () => {
+                const supabase = getBrowserSupabase();
+                if (!supabase) return;
+                setActionError(null);
+                const planId = await declineNightOutByToken(supabase, token);
+                if (planId === null || !(await loadMemberView(planId))) {
+                  setActionError("Couldn't send that — the link may have expired.");
+                }
+              })();
+            }}
+            className="mt-3 block w-full rounded-full border px-6 py-3"
+          >
+            Not tonight
+          </button>
         ) : (
           <button
             type="button"
@@ -232,6 +267,16 @@ export default function NightOutPage({
   const accepted = members.filter((m) => m.inviteStatus === 'accepted');
   const isCancelled = plan.status === 'cancelled';
   const isDeclined = plan.callerStatus === 'declined';
+  // Mirror of the write RPCs' own preconditions. suggest_night_out_bar and
+  // vote_night_out_bar both require status in ('draft','open') and reject a
+  // caller who is not an accepted member, so rendering those controls to
+  // anyone else offers an action that cannot succeed — the user tapped Vote on
+  // a decided plan and got "That didn't go through", which reads as a bug in
+  // the app rather than a closed plan. Kept as ONE predicate so the UI and the
+  // SQL cannot drift apart silently.
+  const isPlanOpen = plan.status === 'draft' || plan.status === 'open';
+  const canParticipate =
+    isPlanOpen && (isOwner || plan.callerStatus === 'accepted');
 
   return (
     <main className="min-h-screen px-6 py-8">
@@ -250,6 +295,38 @@ export default function NightOutPage({
         ) : plan.status === 'decided' && plan.decidedBarId !== null ? (
           <p className="mt-3 font-semibold">
             It&apos;s decided: {barLabel(plan.decidedBarId)}
+          </p>
+        ) : null}
+
+        {/* Round-2 review (Codex, high): creating a plan produced a link the
+            app gave you no way to send. The consensus page's "Invite friends"
+            still shares /join, and this page had no share control at all, so
+            the canonical invitation lifecycle had no reachable invite step. */}
+        {!isCancelled ? (
+          <button
+            type="button"
+            onClick={() => {
+              void (async () => {
+                const url = `${window.location.origin}/night-out/${token}`;
+                try {
+                  await navigator.clipboard.writeText(url);
+                  setShareNotice('Invite link copied.');
+                } catch {
+                  // Clipboard is permission-gated and absent in some in-app
+                  // browsers; show the link so it can still be copied by hand
+                  // rather than failing silently.
+                  setShareNotice(url);
+                }
+              })();
+            }}
+            className="mt-4 rounded-full border px-5 py-2 text-sm"
+          >
+            Copy invite link
+          </button>
+        ) : null}
+        {shareNotice !== null ? (
+          <p className="mt-2 break-all text-xs opacity-70" role="status">
+            {shareNotice}
           </p>
         ) : null}
       </header>
@@ -357,7 +434,9 @@ export default function NightOutPage({
                   <span className="text-sm opacity-70">
                     {entry.votes} {entry.votes === 1 ? 'vote' : 'votes'}
                   </span>
-                  {!entry.callerVoted ? (
+                  {entry.callerVoted ? (
+                    <span className="text-sm opacity-50">voted</span>
+                  ) : canParticipate ? (
                     <button
                       type="button"
                       onClick={withRefresh(() => {
@@ -370,9 +449,7 @@ export default function NightOutPage({
                     >
                       Vote
                     </button>
-                  ) : (
-                    <span className="text-sm opacity-50">voted</span>
-                  )}
+                  ) : null}
                   {isOwner && plan.status !== 'decided' ? (
                     <button
                       type="button"
@@ -394,6 +471,15 @@ export default function NightOutPage({
               <li className="text-sm opacity-60">No suggestions yet.</li>
             ) : null}
           </ul>
+          {!canParticipate ? (
+            <p className="mt-3 text-sm opacity-60">
+              {!isPlanOpen
+                ? 'The plan is settled — suggestions are closed.'
+                : isDeclined
+                  ? "You're out for this one. Count yourself back in to suggest a bar."
+                  : "Say you're in to suggest a bar."}
+            </p>
+          ) : (
           <form
             className="mt-3 flex gap-2"
             onSubmit={(event) => {
@@ -423,6 +509,7 @@ export default function NightOutPage({
               Suggest
             </button>
           </form>
+          )}
         </section>
       ) : null}
     </main>

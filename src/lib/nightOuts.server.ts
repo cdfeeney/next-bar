@@ -144,6 +144,24 @@ export async function joinNightOutByToken(
   return !error && typeof data === 'string' ? data : null;
 }
 
+/**
+ * Authenticated link recipient declines WITHOUT joining first; returns plan id.
+ *
+ * Round-2 review (Codex, high): the preview offered only Join, so saying "not
+ * tonight" to a shared link meant accepting first — which recorded the user as
+ * accepted and emitted an 'accepted' event the host could see.
+ */
+export async function declineNightOutByToken(
+  supabase: SupabaseClient,
+  token: string,
+): Promise<string | null> {
+  if (!UUID_RE.test(token)) return null;
+  const { data, error } = await supabase.rpc('decline_night_out_by_token', {
+    p_token: token,
+  });
+  return !error && typeof data === 'string' ? data : null;
+}
+
 export async function suggestNightOutBar(
   supabase: SupabaseClient,
   nightOutId: string,

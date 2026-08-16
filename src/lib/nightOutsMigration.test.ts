@@ -50,6 +50,39 @@ describe('0021_night_outs.sql security shape', () => {
     }
   });
 
+  it('the ONLY table grants are the two documented SELECT-behind-RLS reads (criterion 3)', () => {
+    // The revoke assertions above are necessary but not sufficient, and on
+    // their own they overstate the artifact: the migration deliberately
+    // re-grants SELECT on two tables AFTER revoking, so "revokes all direct
+    // grants" is not true of the SQL it passes against. Worse, a later commit
+    // could add `grant insert on table ... to authenticated` and every
+    // assertion above would still pass. Pin the exact grant set instead, so
+    // writes stay RPC-only by construction.
+    const tableGrants = [
+      ...SQL.matchAll(/grant\s+([a-z, ]+?)\s+on table public\.(\w+) to ([a-z, ]+);/g),
+    ].map(([, privileges, table, roles]) => ({
+      privileges: privileges.trim(),
+      table,
+      roles: roles.trim(),
+    }));
+
+    expect(tableGrants).toEqual([
+      { privileges: 'select', table: 'night_out_members', roles: 'authenticated' },
+      { privileges: 'select', table: 'night_outs', roles: 'authenticated' },
+    ]);
+
+    // Stated separately so the failure message names the actual risk if the
+    // shape above ever drifts: no direct write path to any table, ever.
+    for (const grant of tableGrants) {
+      expect(grant.privileges, `${grant.table} carries a non-select table grant`).toBe(
+        'select',
+      );
+      expect(grant.roles, `${grant.table} grants a table read to anon`).not.toMatch(
+        /\banon\b|\bpublic\b/,
+      );
+    }
+  });
+
   it('member policies never reference night_outs — the non-recursion invariant (criterion 4)', () => {
     // Extract each policy created ON night_out_members and assert its body
     // contains no reference to the parent table: the cycle
@@ -92,6 +125,10 @@ describe('0021_night_outs.sql security shape', () => {
       'invite_to_night_out',
       'respond_night_out',
       'join_night_out_by_token',
+      // Round 2 added these two; they mutate membership and the bearer
+      // capability respectively, so they owe the same definer/grant shape.
+      'decline_night_out_by_token',
+      'revoke_night_out_link',
       'suggest_night_out_bar',
       'vote_night_out_bar',
     ];

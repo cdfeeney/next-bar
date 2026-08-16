@@ -225,6 +225,108 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
       .toBe(true);
   });
 
+  test('signed-in non-member declines from the preview WITHOUT joining first', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    // Non-member: resolve finds nothing, so the page shows the bearer preview.
+    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    await page.route(
+      '**/rest/v1/rpc/resolve_night_out_by_token*',
+      fulfillJson(200, null),
+    );
+    await page.route(
+      '**/rest/v1/rpc/preview_night_out*',
+      fulfillJson(200, [PREVIEW_ROW]),
+    );
+    let joinCalled = false;
+    let declineCalled = false;
+    await page.route('**/rest/v1/rpc/join_night_out_by_token*', async (route) => {
+      joinCalled = true;
+      await fulfillJson(200, PLAN_ID)(route);
+    });
+    await page.route('**/rest/v1/rpc/decline_night_out_by_token*', async (route) => {
+      declineCalled = true;
+      await fulfillJson(200, PLAN_ID)(route);
+    });
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByRole('button', { name: /join this night out/i })).toBeVisible();
+    await page.getByRole('button', { name: /not tonight/i }).click();
+    await expect.poll(() => declineCalled, { timeout: 5000 }).toBe(true);
+
+    // The negative half, and the whole point of the round-2 finding: saying no
+    // must NOT route through joining. Before the fix the only way to decline a
+    // bearer link was to join first, which recorded an acceptance and emitted
+    // an 'accepted' event the host could see.
+    expect(joinCalled, 'declining a bearer link still joined first').toBe(false);
+  });
+
+  test('a decided plan closes voting and suggesting instead of failing on tap', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page);
+    // Re-stub the plan as decided — the RPCs reject writes in this state.
+    await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
+      const url = route.request().url();
+      if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
+      if (url.includes('get_night_out_board')) {
+        return fulfillJson(200, [
+          { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 2, caller_voted: false },
+        ])(route);
+      }
+      return fulfillJson(200, [
+        { ...PLAN_ROW, status: 'decided', decided_bar_id: 'attaboy' },
+      ])(route);
+    });
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByText(/it's decided/i)).toBeVisible();
+    // suggest_night_out_bar and vote_night_out_bar both require status in
+    // ('draft','open'), so offering these controls only produced a generic
+    // "that didn't go through" that reads as an app bug rather than a settled plan.
+    await expect(page.getByRole('button', { name: /^vote$/i })).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: /suggest a bar/i })).toHaveCount(0);
+    await expect(page.getByText(/suggestions are closed/i)).toBeVisible();
+  });
+
+  test('the plan page offers a way to share its own invite link', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page);
+    // Deliberately NOT granting clipboard permissions: WebKit rejects the
+    // 'clipboard-write' permission name outright, and both engines are in
+    // scope. Skipping the grant also makes this exercise the real branch that
+    // matters — where the clipboard is unavailable, the control must still
+    // surface the link rather than fail silently. The assertion below accepts
+    // either outcome, so it is honest on Chromium and WebKit alike.
+    await page.goto(`/night-out/${TOKEN}`);
+    // Creating a plan used to produce a link the app gave you no way to send:
+    // the consensus page's "Invite friends" shares /join, not this plan.
+    const share = page.getByRole('button', { name: /copy invite link/i });
+    await expect(share).toBeVisible();
+    await share.click();
+    await expect(page.getByText(/invite link copied|\/night-out\//i).first()).toBeVisible();
+  });
+
   test('criterion 7: signed-in with stored invite context lands back on THAT plan from anywhere', async ({
     page,
     context,

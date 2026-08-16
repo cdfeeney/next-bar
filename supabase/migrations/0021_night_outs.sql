@@ -275,6 +275,38 @@ $$;
 -- 7. cancel_night_out — owner only
 ------------------------------------------------------------------------------
 
+-- Round-2 review (Codex, high): share_token mints a SECOND anonymous bearer
+-- surface alongside shared_nights, and unshare_night governs only the latter —
+-- so the owner had no way to revoke a Night Out link once sent. A bearer
+-- capability the issuer cannot withdraw is the defect; rotating the token kills
+-- every previously-shared URL while leaving the plan and its membership intact.
+-- (Cancelling the plan also closes the link, but that destroys the plan, which
+-- is not what "stop sharing" means.)
+create or replace function public.revoke_night_out_link(p_night_out uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null or p_night_out is null then
+    return false;
+  end if;
+  update public.night_outs
+     set share_token = gen_random_uuid()
+   where id = p_night_out
+     and owner_id = v_uid
+     and status <> 'cancelled';
+  if found then
+    insert into public.night_out_events (night_out_id, actor_id, kind)
+    values (p_night_out, v_uid, 'plan_changed');
+  end if;
+  return found;
+end;
+$$;
+
 create or replace function public.cancel_night_out(p_night_out uuid)
 returns boolean
 language plpgsql
@@ -532,6 +564,74 @@ end;
 $$;
 
 ------------------------------------------------------------------------------
+-- 11b. decline_night_out_by_token — say no without first saying yes
+------------------------------------------------------------------------------
+-- Round-2 review (Codex, high): a signed-in bearer-link recipient who is not
+-- yet a member had exactly one control — Join. To tell the host "not tonight"
+-- they had to join first, which writes invite_status='accepted' and emits an
+-- 'accepted' event, so the host saw them accept and then leave. Declining is
+-- not a sub-case of joining and must not route through it.
+--
+-- Mirrors join_night_out_by_token's shape (same token lookup, same cap, same
+-- IF FOUND event gate) with the terminal state inverted. An accepted member is
+-- deliberately NOT downgraded here: leaving after joining is respond_night_out
+-- on the plan page, which is the path that already exists.
+create or replace function public.decline_night_out_by_token(p_token uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  member_cap constant integer := 20;
+  v_uid uuid := auth.uid();
+  v_id uuid;
+  v_count integer;
+begin
+  if v_uid is null then
+    raise exception 'not signed in' using errcode = '28000';  -- criterion 6
+  end if;
+  select n.id into v_id
+    from public.night_outs n
+   where n.share_token = p_token
+     and n.status in ('draft', 'open', 'decided');
+  if v_id is null then
+    return null;
+  end if;
+
+  -- Existing member: only a PENDING invite is turned down here. An accepted
+  -- member uses respond_night_out (the "Not tonight" control on the plan), and
+  -- an already-declined member is a no-op rather than a second event.
+  if exists (
+    select 1 from public.night_out_members m
+     where m.night_out_id = v_id and m.user_id = v_uid
+  ) then
+    update public.night_out_members m
+       set invite_status = 'declined', responded_at = now()
+     where m.night_out_id = v_id
+       and m.user_id = v_uid
+       and m.invite_status = 'pending';
+    return v_id;
+  end if;
+
+  perform pg_advisory_xact_lock(
+    hashtextextended('night_out_members:' || v_id::text, 0));
+  select count(*) into v_count
+    from public.night_out_members m
+   where m.night_out_id = v_id;
+  if v_count >= member_cap then
+    return null;
+  end if;
+
+  insert into public.night_out_members
+    (night_out_id, user_id, invite_status, responded_at)
+  values (v_id, v_uid, 'declined', now())
+  on conflict on constraint night_out_members_pkey do nothing;
+  return v_id;
+end;
+$$;
+
+------------------------------------------------------------------------------
 -- 12. suggest_night_out_bar / vote_night_out_bar — accepted members only
 ------------------------------------------------------------------------------
 
@@ -585,8 +685,17 @@ begin
   values (p_night_out, p_bar, v_uid)
   on conflict on constraint night_out_suggestions_pkey do nothing;
 
-  insert into public.night_out_events (night_out_id, actor_id, kind, bar_id)
-  values (p_night_out, v_uid, 'bar_suggested', p_bar);
+  -- Event only when a row was actually created — the same gate
+  -- invite_to_night_out and join_night_out_by_token already carry, and it was
+  -- missed here in round 1. The advisory lock above is keyed per (plan, USER),
+  -- so two DIFFERENT members racing on the same bar never serialize against
+  -- each other: both pass the pre-insert exists check, one insert loses the
+  -- conflict, and without this gate the loser still appended a second
+  -- 'bar_suggested' event attributed to the wrong actor.
+  if found then
+    insert into public.night_out_events (night_out_id, actor_id, kind, bar_id)
+    values (p_night_out, v_uid, 'bar_suggested', p_bar);
+  end if;
   return true;
 end;
 $$;
@@ -784,6 +893,8 @@ $$;
 revoke all on function public.create_night_out(date, text) from public, anon, authenticated;
 grant execute on function public.create_night_out(date, text) to authenticated;
 
+revoke all on function public.revoke_night_out_link(uuid) from public, anon, authenticated;
+grant execute on function public.revoke_night_out_link(uuid) to authenticated;
 revoke all on function public.cancel_night_out(uuid) from public, anon, authenticated;
 grant execute on function public.cancel_night_out(uuid) to authenticated;
 
@@ -798,6 +909,8 @@ grant execute on function public.respond_night_out(uuid, boolean) to authenticat
 
 revoke all on function public.join_night_out_by_token(uuid) from public, anon, authenticated;
 grant execute on function public.join_night_out_by_token(uuid) to authenticated;
+revoke all on function public.decline_night_out_by_token(uuid) from public, anon, authenticated;
+grant execute on function public.decline_night_out_by_token(uuid) to authenticated;
 
 revoke all on function public.suggest_night_out_bar(uuid, text) from public, anon, authenticated;
 grant execute on function public.suggest_night_out_bar(uuid, text) to authenticated;
