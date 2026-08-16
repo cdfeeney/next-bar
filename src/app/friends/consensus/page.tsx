@@ -202,7 +202,15 @@ export default function ConsensusPage(): JSX.Element {
         </h1>
         {/* The canonical night_outs entry point (V8-3): creates the plan and
             lands on its invite-link surface. */}
-        <StartNightOutButton />
+        <StartNightOutButton
+          inviteeIds={
+            isServer
+              ? followedFriends
+                  .map((f) => f.id)
+                  .filter((id) => id !== YOU_ID && effectiveSelected.has(id))
+              : []
+          }
+        />
       </header>
 
       <section className="max-w-md mx-auto px-6">

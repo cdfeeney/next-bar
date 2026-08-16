@@ -18,6 +18,8 @@ const pushed: string[] = [];
 let createResult: string | null = 'plan-1';
 let readFails = false;
 let createCalls = 0;
+const invited: Array<[string, string]> = [];
+let inviteFails = false;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => pushed.push(href) }),
@@ -38,6 +40,10 @@ vi.mock('@/lib/nightOuts.server', () => ({
   },
   getNightOut: async () =>
     readFails ? null : { id: 'plan-1', shareToken: 'tok-1', status: 'open' },
+  inviteToNightOut: async (_s: unknown, planId: string, userId: string) => {
+    invited.push([planId, userId]);
+    return !inviteFails;
+  },
 }));
 
 import StartNightOutButton from './StartNightOutButton';
@@ -47,6 +53,8 @@ beforeEach(() => {
   createResult = 'plan-1';
   readFails = false;
   createCalls = 0;
+  invited.length = 0;
+  inviteFails = false;
 });
 
 describe('StartNightOutButton — a created plan is never lost', () => {
@@ -87,5 +95,65 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     render(<StartNightOutButton />);
     await user.click(screen.getByRole('button'));
     await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+  });
+});
+
+describe('StartNightOutButton — account invitations (criterion 2, invited-account half)', () => {
+  const FRIEND_A = '11111111-1111-4111-8111-111111111111';
+  const FRIEND_B = '22222222-2222-4222-8222-222222222222';
+
+  test('invites exactly the selected accounts, after the plan exists', async () => {
+    const user = userEvent.setup();
+    render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+    expect(invited).toEqual([
+      ['plan-1', FRIEND_A],
+      ['plan-1', FRIEND_B],
+    ]);
+  });
+
+  test('never sends demo handles or YOU to the invite RPC', async () => {
+    // The consensus list mixes real friends (uuids) with demo entries keyed by
+    // HANDLE and the literal 'you'. night_out_members is FK-bound to profiles,
+    // so a non-uuid would fail at the database — and invite returns false, so
+    // it would fail silently. This is the filter that stops it being tried.
+    const user = userEvent.setup();
+    render(
+      <StartNightOutButton inviteeIds={['you', 'devbar', FRIEND_A, 'priya']} />,
+    );
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+    expect(invited, 'a non-account id was sent to the invite RPC').toEqual([
+      ['plan-1', FRIEND_A],
+    ]);
+  });
+
+  test('a failed invite is reported and does NOT block reaching the plan', async () => {
+    inviteFails = true;
+    const user = userEvent.setup();
+    render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
+    await user.click(screen.getByRole('button'));
+    // The plan is real either way, so navigation still happens...
+    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+    // ...but the owner is told, rather than believing two people were invited.
+    expect(await screen.findByText(/2 invites didn't send/)).toBeTruthy();
+  });
+
+  test('creating with nobody selected invites nobody and still works', async () => {
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+    expect(invited).toEqual([]);
+  });
+
+  test('a failed CREATE invites nobody — there is no plan to invite them to', async () => {
+    createResult = null;
+    const user = userEvent.setup();
+    render(<StartNightOutButton inviteeIds={[FRIEND_A]} />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    expect(invited).toEqual([]);
   });
 });
