@@ -45,6 +45,11 @@ export const ALLOWED = Object.freeze({
   ]),
   DRAFT: Object.freeze([
     'write_draft', 'write_report', 'write_decision_doc', 'update_state',
+    // Writing an outreach email to a file. Deliberately DRAFT and not CONTACT_EXTERNAL: it makes
+    // no contact, and filing it under the never-granted capability would have forced that
+    // capability open — the rot that starts every "we only widened it slightly" story. Sending
+    // stays impossible the honest way: this repository has no transport. See ceo-outreach.mjs.
+    'write_outreach_draft',
   ]),
   MUTATE_BRANCH: Object.freeze([
     'create_branch', 'commit_to_branch', 'open_pull_request', 'write_repo_file',
@@ -153,7 +158,10 @@ export function assertActionAllowed({ capability, action, branch } = {}) {
  * come through the agent path at all — see assertMeasurementUpdate.
  */
 export const AGENT_PROTECTED_FIELDS = Object.freeze([
-  'objective', 'kill_criterion', 'modules', 'metrics',
+  // `repo` joins them because it is what scopes a pr_sha. An agent that could rewrite it could
+  // point the evidence rule at a repository whose shas it controls, and every "shipped" claim
+  // would verify against work nobody asked for.
+  'repo', 'objective', 'kill_criterion', 'modules', 'metrics',
 ]);
 
 /** Only these may differ on a measurement write. */
@@ -167,12 +175,46 @@ function assertBothValid(previousState, nextState) {
   assertValidCeoState(nextState);
 }
 
-/** The AGENT write path: everything operator-owned must be byte-identical. */
+/**
+ * The AGENT write path: everything operator-owned must be byte-identical.
+ *
+ * `history` cannot be on AGENT_PROTECTED_FIELDS — log() appends to it, and that is the agent path.
+ * So it gets the next-strongest thing: APPEND-ONLY. The old record must survive verbatim as a prefix
+ * of the new one, and at most one entry may arrive per write.
+ *
+ * Review finding (Codex, HIGH): without this, `history` was neither protected nor item-validated, so
+ * the two rails that read it could both be defeated by editing it — delete an overdue unjudged bet's
+ * cycle, or insert a fabricated improving `primary_value`, and the flat and theater detectors go
+ * quiet. An append-only log is exactly as rewritable as a git history: not.
+ */
 export function assertStateMutationAllowed(previousState, nextState) {
   assertBothValid(previousState, nextState);
   for (const field of AGENT_PROTECTED_FIELDS) {
     if (!isDeepStrictEqual(previousState[field], nextState[field])) {
       abort(`${field} mutation is not permitted on the agent write path.`);
+    }
+  }
+
+  const before = previousState.history;
+  const after = nextState.history;
+
+  if (after.length < before.length) {
+    abort(
+      `history shrank from ${before.length} to ${after.length} entries. It is append-only — ` +
+        'the record of what happened is not a draft.',
+    );
+  }
+  if (after.length > before.length + 1) {
+    abort(
+      `history grew by ${after.length - before.length} entries in one write; a cycle logs exactly one.`,
+    );
+  }
+  for (let index = 0; index < before.length; index += 1) {
+    if (!isDeepStrictEqual(before[index], after[index])) {
+      abort(
+        `history entry ${index} (cycle ${before[index]?.cycle ?? '?'}) was rewritten. Past cycles ` +
+          'are immutable; a wrong entry is corrected by a later one, not by editing it away.',
+      );
     }
   }
 }

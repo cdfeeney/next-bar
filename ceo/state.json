@@ -1,5 +1,6 @@
 {
   "cycle": 0,
+  "repo": "cdfeeney/next-bar",
   "objective": "wau_one_neighborhood + self_maintaining_venues",
   "bottleneck": "users",
   "metrics": {
@@ -7,6 +8,8 @@
     "max_neighborhood_wau": null,
     "claimed_venues": 0,
     "self_maintaining_venues": 0,
+    "venue_active_maintainers": 0,
+    "user_interviews_this_week": 0,
     "revenue": 0,
     "operator_hours_available": 8
   },

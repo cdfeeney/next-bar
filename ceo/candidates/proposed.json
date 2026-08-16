@@ -1,0 +1,33 @@
+{
+  "_comment": "AGENT-AUTHORED by scripts/ceo-growth.mjs. Regenerate; do not hand-edit. The agent proposes the work and does NOT report the numbers it will be judged against — measurements arrive separately in ceo/measurements/, and the cycle refuses any candidate that jumps the sequence in decisions/2026-07-26-next-bar-gtm-sequence.md.",
+  "step": "first_claims",
+  "boundary": "5 claimed venues",
+  "candidates": [
+    {
+      "id": "walk-in-claims-one-neighborhood",
+      "statement": "Walk the chosen neighbourhood on a weekday evening and hand-claim 5 venues at the bar.",
+      "expected_lift": {
+        "metric": "claimed_venues",
+        "delta": 5,
+        "unit": "venues"
+      },
+      "operator_hours": 4,
+      "restores_measurement": false,
+      "rationale": "The documented first move for a local marketplace is founder-led, in-person supply recruitment. It is also the cheapest possible test of whether this wedge needs a salesperson the company does not have.",
+      "step": "first_claims"
+    },
+    {
+      "id": "claim-surface-minimum",
+      "statement": "Ship the smallest claim surface a bartender can use on a phone behind the bar: claim, fix hours, done.",
+      "expected_lift": {
+        "metric": "claimed_venues",
+        "delta": 3,
+        "unit": "venues"
+      },
+      "operator_hours": 6,
+      "restores_measurement": false,
+      "rationale": "The walk-in has nothing to hand over without it. Anything beyond claim-and-fix-hours is a feature for venues that do not exist yet.",
+      "step": "first_claims"
+    }
+  ]
+}

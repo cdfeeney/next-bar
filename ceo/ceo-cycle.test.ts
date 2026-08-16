@@ -49,6 +49,10 @@ const MEASURED_METRICS = {
   max_neighborhood_wau: 7,
   claimed_venues: 0,
   self_maintaining_venues: 0,
+  venue_active_maintainers: 0,
+  // One conversation happened this week, so the discovery floor lets the cycle run. Its own tests
+  // set this to zero on purpose.
+  user_interviews_this_week: 1,
   revenue: 0,
   operator_hours_available: 8,
 };
@@ -234,16 +238,159 @@ describe('assess', () => {
     expect(assessment.kill.tripped).toBe(true);
   });
 
-  it('does not trip at the deadline once the thresholds are met', () => {
+  it('does not trip at the deadline once BOTH thresholds are met', () => {
     const measured = measure(
       freshState(),
       measurement({
-        metrics: { ...MEASURED_METRICS, wau: 80, self_maintaining_venues: 20 },
+        metrics: {
+          ...MEASURED_METRICS,
+          wau: 80,
+          max_neighborhood_wau: 80,
+          self_maintaining_venues: 20,
+        },
       }),
     );
     const assessment = assess(measured, measurement({ at: '2027-01-01' }));
 
     expect(assessment.kill.tripped).toBe(false);
+    expect(assessment.kill.verdict).toBe('CONTINUE');
+  });
+
+  // The operator wrote "if exactly one passes, do not kill — re-scope to the side that worked".
+  // The previous inline version ORed the sides and reported TRIPPED here, condemning a working
+  // half on the strength of a failing one.
+  it('re-scopes rather than kills when exactly one side of the criterion passes', () => {
+    const measured = measure(
+      freshState(),
+      measurement({
+        metrics: { ...MEASURED_METRICS, max_neighborhood_wau: 5, self_maintaining_venues: 20 },
+      }),
+    );
+    const assessment = assess(measured, measurement({ at: '2027-01-01' }));
+
+    expect(assessment.kill.verdict).toBe('RESCOPE');
+    expect(assessment.kill.tripped).toBe(false);
+    expect(assessment.kill.rescope).toBe(true);
+  });
+
+  // The criterion is about ONE neighbourhood. A global total is the wrong number and is always
+  // the more flattering one, because it sums every neighbourhood the app is spread too thin across.
+  it('judges the neighbourhood number, not the global total', () => {
+    const measured = measure(
+      freshState(),
+      measurement({
+        metrics: {
+          ...MEASURED_METRICS,
+          wau: 400,
+          max_neighborhood_wau: 5,
+          self_maintaining_venues: 1,
+        },
+      }),
+    );
+    const assessment = assess(measured, measurement({ at: '2027-01-01' }));
+
+    expect(assessment.kill.verdict).toBe('KILL');
+  });
+});
+
+describe('the board has teeth in the runner', () => {
+  // Found by running it (independent review). The board returned KILL, the report printed
+  // "Board verdict: KILL", and the cycle recommended rewriting the share CTA underneath it. A
+  // verdict a plan is allowed to sit below is not a verdict.
+  const pastDeadline = (metrics: Record<string, unknown>) =>
+    measurement({ at: '2027-01-01', metrics: { ...MEASURED_METRICS, ...metrics } });
+
+  it('issues no recommendation under a KILL verdict', () => {
+    const m = pastDeadline({ max_neighborhood_wau: 3, self_maintaining_venues: 1 });
+    const measured = measure(freshState(), m);
+    const decision = decide(measured, assess(measured, m), [GROWTH_CANDIDATE, ANALYTICS_CANDIDATE]);
+
+    expect(decision.halt).toBe(true);
+    expect(decision.directive).toBe('BOARD_KILL');
+    expect(decision.recommendation).toBeNull();
+  });
+
+  it('issues no recommendation under a RESCOPE verdict either', () => {
+    const m = pastDeadline({ max_neighborhood_wau: 3, self_maintaining_venues: 20 });
+    const measured = measure(freshState(), m);
+    const decision = decide(measured, assess(measured, m), [GROWTH_CANDIDATE]);
+
+    expect(decision.directive).toBe('BOARD_RESCOPE');
+    expect(decision.recommendation).toBeNull();
+  });
+
+  it('writes a halt report with no Recommendation section and the board reasoning in it', () => {
+    const m = pastDeadline({ max_neighborhood_wau: 3, self_maintaining_venues: 1 });
+    const measured = measure(freshState(), m);
+    const assessment = assess(measured, m);
+    const report = draft(measured, assessment, decide(measured, assessment, [GROWTH_CANDIDATE]), m);
+
+    expect(report).toContain('BOARD_KILL');
+    expect(report).not.toContain('## Recommendation');
+    expect(report).toMatch(/BOTH sides failed/);
+    expect(report).toMatch(/pre-registered/);
+  });
+
+  it('cannot be shipped', () => {
+    expectHardAbort(
+      () =>
+        enterShip(
+          {
+            cycle: 5,
+            recommendation_id: null,
+            directive: 'BOARD_KILL',
+            drafted: true,
+            shipped: false,
+            evidence: null,
+            review: { verdict: 'pass', reviewer: 'deepseek', at: '2027-01-01' },
+          },
+          { branch: 'feat/whatever' },
+        ),
+      'BOARD_KILL',
+    );
+  });
+
+  it('still plans normally while the board says CONTINUE', () => {
+    const m = pastDeadline({ max_neighborhood_wau: 80, self_maintaining_venues: 20 });
+    const measured = measure(freshState(), m);
+    const decision = decide(measured, assess(measured, m), [GROWTH_CANDIDATE]);
+
+    expect(decision.halt).toBe(false);
+    expect(decision.recommendation?.id).toBe('share-cta-copy');
+  });
+});
+
+describe('the discovery floor', () => {
+  it('refuses to run a cycle in a week with no customer conversations', () => {
+    // The rail against the comfortable substitution: an articulate strategy partner instead of a
+    // conversation with an actual bar-goer or bar owner.
+    expectHardAbort(
+      () =>
+        runCycle({
+          state: freshState(),
+          measurement: measurement({
+            metrics: { ...MEASURED_METRICS, user_interviews_this_week: 0 },
+          }),
+          candidates: [ANALYTICS_CANDIDATE],
+          reportsDir: path.join(mkdtempSync(path.join(tmpdir(), 'ceo-floor-')), 'reports'),
+        }),
+      'DISCOVERY FLOOR',
+    );
+  });
+
+  it('runs once at least one conversation happened', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ceo-floor-'));
+    expect(() =>
+      runCycle({
+        state: freshState(),
+        measurement: measurement({
+          metrics: { ...MEASURED_METRICS, user_interviews_this_week: 1 },
+        }),
+        candidates: [ANALYTICS_CANDIDATE],
+        reportsDir: path.join(dir, 'reports'),
+      }),
+    ).not.toThrow();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -657,6 +804,28 @@ describe('detectors are wired into decide', () => {
     );
   });
 
+  // The same rail, for the halt that was added later. An identity check against the FIRST
+  // directive would have let the second one ship — the standard way a widened system stops
+  // covering the case it was widened for.
+  it('refuses to ship a GO_MEASURE cycle too', () => {
+    expectHardAbort(
+      () =>
+        enterShip(
+          {
+            cycle: 5,
+            recommendation_id: null,
+            directive: 'GO_MEASURE',
+            drafted: true,
+            shipped: false,
+            evidence: null,
+            review: { verdict: 'pass', reviewer: 'deepseek', at: '2026-07-26' },
+          },
+          { branch: 'feat/share-loop-week1' },
+        ),
+      'GO_MEASURE',
+    );
+  });
+
   // The reviewer assumed the halt report drops the flagged section. It does not — assert it, so
   // that stays true.
   it('keeps other findings visible in a halt report', () => {
@@ -697,11 +866,15 @@ describe('detectors are wired into decide', () => {
   });
 
   it('reads the theater tax into the report without halting', () => {
+    // The cycle numbers have to line up with the state's own cycle now that the flat detector sees
+    // the FRESH reading too: history 8, 8 then a fresh 12 is real movement, so the only thing
+    // wrong here is that nothing shipped — which is a flag, not a halt.
     const measured = measure(freshState(), measurement());
     const state = {
       ...measured,
-      history: [3, 4].map((cycle) => ({
-        ...flatEntry(cycle, 12),
+      cycle: 3,
+      history: [1, 2].map((cycle) => ({
+        ...flatEntry(cycle, 8),
         shipped: false,
         evidence: null,
       })),

@@ -1,0 +1,4 @@
+{
+  "_comment": "HUMAN-COMMITTED. The orchestrator READS this file and nothing in this repository writes it. Every entry is a venue a person decided to contact, with the person who decided recorded in approved_by. The agent may SELECT from this list; it may not add to it, because an invented address does not bounce loudly enough for anyone to notice the outreach never happened. Empty on purpose: decisions/2026-07-26-next-bar-gtm-sequence.md puts in-person venue recruitment first, and email only after 5 venues have claimed.",
+  "approved": []
+}
