@@ -219,12 +219,13 @@ describe('0044_night_outs.sql security shape', () => {
  *
  *   0044 — night_out_role, create_night_out, cancel_night_out, decide_night_out,
  *          suggest/vote, the member-scoped reads, preview, resolve-by-token
- *   0045 — invite_to_night_out, get_night_out
+ *   0045 — get_night_out (invite_to_night_out superseded by 0049)
  *   0046 — (superseded by 0048)
  *   0047 — night_outs column grants
  *   0048 — night_out_member_cap, night_out_seat_count, and the four callers:
  *          join_night_out_by_token, decline_night_out_by_token,
  *          respond_night_out, night_out_is_full_by_token
+ *   0049 — invite_to_night_out (0045's body, using 0048's helpers)
  *
  * The assertions in the block above still describe 0044's TEXT, which is correct
  * as a record of an applied, immutable file, but is NOT the effective definition
@@ -250,9 +251,18 @@ function functionBody(sql: string, name: string): string {
   return sql.slice(start, end);
 }
 
-describe('0046_night_outs_cap_and_race.sql — the round-2 ordering invariants', () => {
+/**
+ * These assert the ORDERING invariants that stand in for the untestable
+ * 20-member boundary, so they must read whichever file currently DEFINES the
+ * functions. They were written against 0046 and stayed pointed there after 0048
+ * superseded it (fresh-cycle round-2 review, Claude) — a guard aimed at dead
+ * text, which is the same claim-drifted-from-artifact failure it exists to
+ * catch. They now read SQL_0048; if a later migration re-states these
+ * functions again, this constant is what has to move with it.
+ */
+describe('effective night_out RPC ordering invariants (currently 0048)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
-    const body = functionBody(SQL_0046, 'join_night_out_by_token');
+    const body = functionBody(SQL_0048, 'join_night_out_by_token');
     const lock = body.indexOf('pg_advisory_xact_lock');
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
     const capCheck = body.indexOf('member_cap', conversion);
@@ -265,14 +275,14 @@ describe('0046_night_outs_cap_and_race.sql — the round-2 ordering invariants',
   });
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
-    const body = functionBody(SQL_0046, 'decline_night_out_by_token');
+    const body = functionBody(SQL_0048, 'decline_night_out_by_token');
     expect(body).not.toMatch(/member_cap/);
     // Still serialised, so a concurrent invite cannot swallow the decline.
     expect(body).toMatch(/pg_advisory_xact_lock/);
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = functionBody(SQL_0046, 'respond_night_out');
+    const body = functionBody(SQL_0048, 'respond_night_out');
     expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
       /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
     );
@@ -281,14 +291,12 @@ describe('0046_night_outs_cap_and_race.sql — the round-2 ordering invariants',
       .toMatch(/v_current = 'declined'/);
   });
 
-  it('every cap count excludes declined rows, in every function that counts', () => {
-    const counts = [...SQL_0046.matchAll(/select count\(\*\) into v_count[\s\S]{0,300}?;/g)]
-      .map(([match]) => match);
-    expect(counts.length, 'expected at least one cap count in 0046').toBeGreaterThan(0);
-    for (const count of counts) {
-      expect(count, `a cap count still counts declined rows: ${count}`)
-        .toMatch(/invite_status <> 'declined'/);
-    }
+  it('the one counted set excludes declined rows', () => {
+    // There is exactly one count now — night_out_seat_count — so this is the
+    // only place the rule can be wrong. 0048's exactly-once assertion is what
+    // keeps it that way.
+    const body = functionBody(SQL_0048, 'night_out_seat_count');
+    expect(body, 'the seat count includes declined rows').toMatch(/invite_status <> 'declined'/);
   });
 
   it('is create-or-replace only — additive over an applied migration (criterion 11)', () => {
@@ -316,6 +324,11 @@ const SQL_0048_RAW = readFileSync(
  */
 const SQL_0048 = SQL_0048_RAW.replace(/--.*/g, '');
 
+const SQL_0049 = readFileSync(
+  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0049_night_outs_invite_uses_cap_helpers.sql'),
+  'utf8',
+).toLowerCase().replace(/--.*/g, '');
+
 describe('0048_night_outs_cap_single_source.sql — one definition of a seat', () => {
   it('defines the cap and the counted set exactly once', () => {
     expect((SQL_0048.match(/select 20/g) ?? []).length, 'the cap literal appears more than once').toBe(1);
@@ -335,6 +348,19 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
     // Declining is never rationed by capacity, so it must ask neither.
     const decline = functionBody(SQL_0048, 'decline_night_out_by_token');
     expect(decline).not.toMatch(/night_out_member_cap/);
+  });
+
+  it('0049 finishes the job — invite_to_night_out asks the helpers too', () => {
+    // 0048 re-stated three callers and the fullness read and left invite in
+    // 0045 with its own cap and predicate (fresh-cycle round-2 review, Codex).
+    // A half-done single source is worse than four honest copies: it looks
+    // solved, and owner invitations would enforce a capacity the rest of the
+    // feature no longer uses.
+    const invite = functionBody(SQL_0049, 'invite_to_night_out');
+    expect(invite, 'invite does not use night_out_seat_count').toMatch(/night_out_seat_count/);
+    expect(invite, 'invite does not use night_out_member_cap').toMatch(/night_out_member_cap/);
+    expect(invite, 'invite still declares its own cap constant').not.toMatch(/member_cap constant/);
+    expect(SQL_0049, 'invite still restates the counted set').not.toMatch(/invite_status <> 'declined'/);
   });
 
   it('keeps the helpers away from client roles', () => {
