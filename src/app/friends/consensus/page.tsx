@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Avatar from '@/components/Avatar';
 import ShareButton from '@/components/ShareButton';
 import TonightSuggestions from '@/components/TonightSuggestions';
+import { deriveInviteeIds } from '@/lib/inviteeSelection';
 import StartNightOutButton from '@/components/StartNightOutButton';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
@@ -127,16 +128,39 @@ export default function ConsensusPage(): JSX.Element {
 
   const followedFriends = people;
 
+  /**
+   * Circle members with no ranked bars. They are invitable and selectable — they
+   * just contribute no picks — so the picker shows them alongside the rest
+   * rather than hiding them until they rate something.
+   */
+  const unratedCircle = useMemo(() => {
+    if (!isServer) return [] as Person[];
+    const rated = new Set(people.map((f) => f.id));
+    return circle
+      .filter((p) => !rated.has(p.id))
+      .map((p) => ({
+        id: p.id,
+        label: (p.displayName ?? `@${p.handle}`).split(' ')[0],
+        initials: initialsFor(p.displayName ?? p.handle),
+        seed: p.handle,
+        ratings: [],
+      })) as Person[];
+  }, [isServer, circle, people]);
+
   const youHasRatings = ratings.length > 0;
 
   // Selection: start with You (if you have ratings) + everyone followed.
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const effectiveSelected = useMemo(() => {
     if (selected) return selected;
-    const init = new Set<string>(followedFriends.map((f) => f.id));
+    // Everyone you follow starts selected — including members with no ratings,
+    // who are invitable even though they contribute no picks.
+    const init = new Set<string>(
+      isServer ? circle.map((p) => p.id) : followedFriends.map((f) => f.id),
+    );
     if (youHasRatings) init.add(YOU_ID);
     return init;
-  }, [selected, followedFriends, youHasRatings]);
+  }, [selected, isServer, circle, followedFriends, youHasRatings]);
 
   const toggle = (id: string) => {
     const next = new Set(effectiveSelected);
@@ -144,6 +168,38 @@ export default function ConsensusPage(): JSX.Element {
     else next.add(id);
     setSelected(next);
   };
+
+  /**
+   * Who gets INVITED when a Night Out is started.
+   *
+   * Cold panel (Codex, HIGH): this used to derive from `followedFriends`, which
+   * is the RATING-QUALIFIED subset — friends with zero rated bars are excluded
+   * from it on purpose, because an inert consensus chip reads as broken. That
+   * filter is right for the picker and wrong for invitations: being invited out
+   * and having rated bars are different things, and deriving from it meant a
+   * friend who had rated nothing was silently never invited. The same list is
+   * also EMPTY while `friendRatings` loads, so starting a plan a moment too
+   * early invited nobody at all and said nothing about it.
+   *
+   * Invitations now come from the full followed circle, and EVERY circle member
+   * is selectable in the picker below — including friends who have ranked
+   * nothing. Operator decision: "you should be able to add a friend that has no
+   * bars ranked, someone might not be into that and just use it as a social
+   * lens." Being invited out and having rated bars are unrelated.
+   *
+   * Unrated members contribute no picks to the consensus (they have none), so
+   * `participants` is unchanged; their chip is marked so an empty contribution
+   * reads as expected rather than broken.
+   */
+  const inviteeIds: string[] = useMemo(
+    () =>
+      deriveInviteeIds({
+        isServer,
+        circleIds: circle.map((p) => p.id),
+        selected: effectiveSelected,
+      }),
+    [isServer, circle, effectiveSelected],
+  );
 
   const participants: ConsensusParticipant[] = useMemo(() => {
     const list: ConsensusParticipant[] = [];
@@ -202,15 +258,7 @@ export default function ConsensusPage(): JSX.Element {
         </h1>
         {/* The canonical night_outs entry point (V8-3): creates the plan and
             lands on its invite-link surface. */}
-        <StartNightOutButton
-          inviteeIds={
-            isServer
-              ? followedFriends
-                  .map((f) => f.id)
-                  .filter((id) => id !== YOU_ID && effectiveSelected.has(id))
-              : []
-          }
-        />
+        <StartNightOutButton inviteeIds={inviteeIds} />
       </header>
 
       <section className="max-w-md mx-auto px-6">
@@ -235,6 +283,17 @@ export default function ConsensusPage(): JSX.Element {
               onClick={() => toggle(f.id)}
             />
           ))}
+          {unratedCircle.map((f) => (
+            <PersonChip
+              key={f.id}
+              label={f.label}
+              initials={f.initials}
+              seed={f.seed}
+              selected={effectiveSelected.has(f.id)}
+              onClick={() => toggle(f.id)}
+              noPicks
+            />
+          ))}
         </div>
 
         {/* UX-F v1 nudge, moved UNDER the chips (QA3: the operator
@@ -254,7 +313,9 @@ export default function ConsensusPage(): JSX.Element {
           <p className="text-muted text-xs text-center mb-8">
             {unratedFriendCount} of your circle{' '}
             {unratedFriendCount === 1 ? "hasn't" : "haven't"} ranked any bars
-            yet — they&apos;ll appear here once they do.
+            yet — you can still bring{' '}
+            {unratedFriendCount === 1 ? 'them' : 'them'} along; they just
+            don&apos;t sway the picks.
           </p>
         ) : null}
 
@@ -319,17 +380,26 @@ function PersonChip({
   seed,
   selected,
   onClick,
+  noPicks = false,
 }: {
   label: string;
   initials: string;
   seed: string;
   selected: boolean;
   onClick: () => void;
+  /**
+   * This person has ranked nothing, so they sway no picks — but they are still
+   * invitable, and hiding them was the defect. The marker exists so an empty
+   * contribution reads as expected rather than broken, which is what the
+   * original "inert chip reads as broken" comment was really about.
+   */
+  noPicks?: boolean;
 }): JSX.Element {
   return (
     <button
       type="button"
       aria-pressed={selected}
+      aria-label={noPicks ? `${label} — no ranked bars yet` : label}
       onClick={onClick}
       className={[
         'flex items-center gap-2 pl-1 pr-4 py-1 rounded-full border transition-colors min-h-[44px] touch-manipulation',
@@ -340,6 +410,11 @@ function PersonChip({
     >
       <Avatar initials={initials} seed={seed} size="sm" />
       <span className="font-display text-sm">{label}</span>
+      {noPicks ? (
+        <span className="text-[10px] uppercase tracking-wider text-muted">
+          no picks
+        </span>
+      ) : null}
       <span
         aria-hidden="true"
         className={selected ? 'text-accent' : 'text-muted'}

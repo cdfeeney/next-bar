@@ -117,9 +117,38 @@ async function main(): Promise<void> {
   if (actualEnv !== env) {
     fail(
       `you named --env ${JSON.stringify(env)} but the loaded environment is `
-      + `${JSON.stringify(actualEnv)}. The connection string cannot tell these apart; `
-      + 'the label is the only thing that can.',
+      + `${JSON.stringify(actualEnv)}.`,
     );
+  }
+
+  // A matching LABEL proves only that the same word was typed in two places
+  // (cold panel, Codex, HIGH). Verify the actual Supabase project behind
+  // DATABASE_URL, using pg's own resolution rather than the URL authority —
+  // query parameters override the authority, which is how the live RLS suite's
+  // first guard was bypassable. Same check, same reason; it should have been
+  // reused here the first time.
+  const probe = new Client({ connectionString: databaseUrl }) as unknown as {
+    connectionParameters?: { user?: string; host?: string };
+  };
+  const effectiveUser = probe.connectionParameters?.user ?? '';
+  const ref = effectiveUser.split('.').pop() ?? '';
+  const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
+  const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
+    .split(',').map((value) => value.trim()).filter(Boolean);
+
+  if (!ref) fail('could not determine the Supabase project ref from DATABASE_URL');
+  if (env === 'production') {
+    if (!productionRef) fail('NEXT_BAR_PRODUCTION_PROJECT_REF is not set, so --env production cannot be verified');
+    if (ref !== productionRef) {
+      fail('--env production, but DATABASE_URL does not point at the production project ref');
+    }
+  } else {
+    if (ref === productionRef) {
+      fail(`--env ${env}, but DATABASE_URL points at the PRODUCTION project ref`);
+    }
+    if (stagingRefs.length > 0 && !stagingRefs.includes(ref)) {
+      fail(`--env ${env}, but DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS`);
+    }
   }
 
   // Read and hash first: a missing or unreadable file must stop us before we
@@ -155,6 +184,26 @@ async function main(): Promise<void> {
     for (const entry of planned) {
       if (entry.name <= ledgerHead) {
         fail(`${entry.name} does not sort above the ledger head ${ledgerHead}`);
+      }
+    }
+
+    // The set must be given in LEXICAL ORDER, and this is not a nicety.
+    // Later files `create or replace` functions defined in earlier ones, so
+    // applying them out of order records every checksum while leaving an
+    // OBSOLETE definition live — the precise failure this tool exists to
+    // prevent, arrived at by a different route (cold panel, Codex, HIGH).
+    // Sorting the list silently would be worse: the caller's stated order is
+    // the thing being checked, and quietly correcting it hides a mistake in
+    // whatever produced the list.
+    const sorted = [...planned].map((e) => e.name).sort();
+    const given = planned.map((e) => e.name);
+    for (let i = 0; i < given.length; i += 1) {
+      if (given[i] !== sorted[i]) {
+        fail(
+          'the set is not in lexical order, so a later file could be applied '
+          + `before one it supersedes. Given: ${given.join(', ')}. `
+          + `Expected: ${sorted.join(', ')}.`,
+        );
       }
     }
 

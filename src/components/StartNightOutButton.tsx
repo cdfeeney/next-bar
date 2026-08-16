@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
@@ -36,6 +36,12 @@ export default function StartNightOutButton({
   const [readFailed, setReadFailed] = useState(false);
   const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
   const [inviteFailures, setInviteFailures] = useState(0);
+  /**
+   * Minted once per attempt and REUSED across retries. That is the whole point:
+   * a create whose response never arrived may already have made the plan, and
+   * without a stable key the retry makes a second one (cold panel, Codex).
+   */
+  const attemptKey = useRef<string | null>(null);
 
   /**
    * Retry the READ, not the create. The first version of this told the user to
@@ -59,7 +65,13 @@ export default function StartNightOutButton({
     if (!supabase || busy) return;
     setBusy(true);
     setError(false);
-    const planId = await createNightOut(supabase, nycNightKey());
+    if (attemptKey.current === null) attemptKey.current = crypto.randomUUID();
+    const planId = await createNightOut(
+      supabase,
+      nycNightKey(),
+      undefined,
+      attemptKey.current,
+    );
     if (planId === null) {
       setBusy(false);
       setError(true);

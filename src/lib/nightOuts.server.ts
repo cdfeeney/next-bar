@@ -54,15 +54,24 @@ export type NightOutPreview = {
 };
 
 /** Create a plan; returns its id, or null on failure. */
+/**
+ * `idempotencyKey` makes a retry identifiable as the SAME attempt. Mint it once
+ * before the first call and reuse it: a dropped connection after COMMIT is
+ * indistinguishable from a failure, and retrying without a key creates a second
+ * plan for the same night (cold panel, Codex).
+ */
 export async function createNightOut(
   supabase: SupabaseClient,
   night: string,
   title?: string,
+  idempotencyKey?: string,
 ): Promise<string | null> {
   if (!NIGHT_RE.test(night)) return null;
+  if (idempotencyKey !== undefined && !UUID_RE.test(idempotencyKey)) return null;
   const { data, error } = await supabase.rpc('create_night_out', {
     p_night: night,
     p_title: title ?? null,
+    p_idempotency_key: idempotencyKey ?? null,
   });
   return !error && typeof data === 'string' ? data : null;
 }

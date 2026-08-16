@@ -281,7 +281,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       const [owner, stranger] = people.map((r) => r.id as string);
 
       await asRole('authenticated', owner);
-      const { rows } = await db.query('select public.create_night_out(current_date, $1) as id', [
+      const { rows } = await db.query('select public.create_night_out(current_date, $1, null) as id', [
         'rls-negative probe',
       ]);
       const planId = rows[0].id as string;
@@ -316,7 +316,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       const [owner, stranger] = people.map((r) => r.id as string);
 
       await asRole('authenticated', owner);
-      const { rows } = await db.query('select public.create_night_out(current_date, $1) as id', [
+      const { rows } = await db.query('select public.create_night_out(current_date, $1, null) as id', [
         'authenticated non-member probe',
       ]);
       const planId = rows[0].id as string;
@@ -399,7 +399,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       const [owner, guest] = people.map((r) => r.id as string);
 
       await asRole('authenticated', owner);
-      const { rows: made } = await db.query('select public.create_night_out(current_date, $1) as id', ['accept path probe']);
+      const { rows: made } = await db.query('select public.create_night_out(current_date, $1, null) as id', ['accept path probe']);
       const planId = made[0].id as string;
       const { rows: invited } = await db.query('select public.invite_to_night_out($1, $2) as ok', [planId, guest]);
       expect(invited[0].ok, 'owner could not invite').toBe(true);
@@ -475,8 +475,8 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       const [owner, guest] = people.map((r) => r.id as string);
 
       await asRole('authenticated', owner);
-      const { rows: a } = await db.query('select public.create_night_out(current_date, $1) as id', ['fresh join probe']);
-      const { rows: b } = await db.query('select public.create_night_out(current_date + 1, $1) as id', ['fresh decline probe']);
+      const { rows: a } = await db.query('select public.create_night_out(current_date, $1, null) as id', ['fresh join probe']);
+      const { rows: b } = await db.query('select public.create_night_out(current_date + 1, $1, null) as id', ['fresh decline probe']);
       const planJoin = a[0].id as string;
       const planDecline = b[0].id as string;
 
@@ -527,7 +527,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       const [owner, guest] = people.map((r) => r.id as string);
 
       await asRole('authenticated', owner);
-      const { rows: made } = await db.query('select public.create_night_out(current_date, $1) as id', ['token grant probe']);
+      const { rows: made } = await db.query('select public.create_night_out(current_date, $1, null) as id', ['token grant probe']);
       const planId = made[0].id as string;
       await db.query('select public.invite_to_night_out($1, $2) as ok', [planId, guest]);
 
@@ -582,7 +582,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       await asRole('authenticated', owner);
       const { rows: made } = await db.query(
-        'select public.create_night_out(current_date, $1) as id',
+        'select public.create_night_out(current_date, $1, null) as id',
         ['cap boundary probe'],
       );
       const planId = made[0].id as string;
@@ -631,7 +631,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       await asRole('authenticated', owner);
       const { rows: made } = await db.query(
-        'select public.create_night_out(current_date, $1) as id',
+        'select public.create_night_out(current_date, $1, null) as id',
         ['rejoin boundary probe'],
       );
       const planId = made[0].id as string;
@@ -676,7 +676,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       await asRole('authenticated', owner);
       const { rows: made } = await db.query(
-        'select public.create_night_out(current_date + 3, $1) as id',
+        'select public.create_night_out(current_date + 3, $1, null) as id',
         ['my-invites probe'],
       );
       const planId = made[0].id as string;
@@ -708,7 +708,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       await asRole('authenticated', owner);
       const { rows: made } = await db.query(
-        'select public.create_night_out(current_date + 3, $1) as id',
+        'select public.create_night_out(current_date + 3, $1, null) as id',
         ['token gating probe'],
       );
       const planId = made[0].id as string;
@@ -743,10 +743,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       const [owner, guest] = await makeIdentities(2);
       await asRole('authenticated', owner);
       const { rows: a } = await db.query(
-        'select public.create_night_out(current_date + 3, $1) as id', ['updated probe'],
+        'select public.create_night_out(current_date + 3, $1, null) as id', ['updated probe'],
       );
       const { rows: b } = await db.query(
-        'select public.create_night_out(current_date + 4, $1) as id', ['cancelled probe'],
+        'select public.create_night_out(current_date + 4, $1, null) as id', ['cancelled probe'],
       );
       const updatedPlan = a[0].id as string;
       const cancelledPlan = b[0].id as string;
@@ -785,6 +785,121 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     });
   });
 
+  it('the night rollover is NYC with a 6am boundary, not UTC (cold panel HIGH)', async () => {
+    // Pinned instants, because the defect lives in a three-to-four hour window
+    // each evening and a test that reads the wall clock passes by accident.
+    const cases: Array<[string, string, string]> = [
+      ['2026-08-17T02:00:00Z', '2026-08-16', '22:00 EDT — the hours the bug lived in'],
+      ['2026-08-17T09:00:00Z', '2026-08-16', '05:00 EDT — before the 6am rollover'],
+      ['2026-08-17T11:00:00Z', '2026-08-17', '07:00 EDT — after it'],
+      ['2026-01-15T02:00:00Z', '2026-01-14', '21:00 EST — winter, UTC-5'],
+    ];
+    for (const [instant, expected, why] of cases) {
+      const { rows } = await db.query('select public.nyc_night_key($1::timestamptz) as night', [instant]);
+      expect(rows[0].night.toISOString().slice(0, 10), why).toBe(expected);
+    }
+    // And the thing that actually broke: UTC disagrees at those instants.
+    const { rows: utc } = await db.query(
+      "select ($1::timestamptz at time zone 'UTC')::date as d",
+      ['2026-08-17T02:00:00Z'],
+    );
+    expect(
+      utc[0].d.toISOString().slice(0, 10),
+      'if UTC agreed here there would have been no bug to fix',
+    ).toBe('2026-08-17');
+  });
+
+  it('an invitation to TONIGHT is not expired during tonight (cold panel HIGH)', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, null) as id',
+        ['tonight'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+      const { rows } = await db.query('select * from public.get_my_night_outs()');
+      const row = rows.find((r) => r.night_out_id === planId);
+      expect(row, 'the invitee cannot see tonight-s invitation at all').toBeTruthy();
+      expect(row.is_past, 'an invitation to tonight was marked expired').toBe(false);
+      expect(row.my_status).toBe('pending');
+    });
+  });
+
+  it('get_my_night_outs lists invitations, not the plans you own', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: mine } = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, null) as id',
+        ['my own plan'],
+      );
+      const ownPlan = mine[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [ownPlan, guest]);
+
+      // The owner holds an accepted membership row for their own plan; it must
+      // not surface on a surface that means "what am I invited to?".
+      const { rows: ownerSees } = await db.query('select * from public.get_my_night_outs()');
+      expect(
+        ownerSees.some((r) => r.night_out_id === ownPlan),
+        'your own plan appeared as an invitation to yourself',
+      ).toBe(false);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+      const { rows: guestSees } = await db.query('select * from public.get_my_night_outs()');
+      expect(
+        guestSees.some((r) => r.night_out_id === ownPlan),
+        'the invitee could not see the invitation',
+      ).toBe(true);
+    });
+  });
+
+  it('a retried create with the same key returns the SAME plan, not a second one', async () => {
+    await inRollback(async () => {
+      const [owner] = await makeIdentities(1);
+      await asRole('authenticated', owner);
+      const key = randomUUID();
+
+      const first = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, $2::uuid) as id',
+        ['idempotency probe', key],
+      );
+      const second = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, $2::uuid) as id',
+        ['idempotency probe', key],
+      );
+      expect(second.rows[0].id, 'the retry created a SECOND plan').toBe(first.rows[0].id);
+
+      await db.query('RESET ROLE');
+      const { rows: count } = await db.query(
+        'select count(*)::int as n from public.night_outs where owner_id = $1 and idempotency_key = $2',
+        [owner, key],
+      );
+      expect(count[0].n).toBe(1);
+    });
+  });
+
+  it('a DIFFERENT key from the same owner still creates a distinct plan', async () => {
+    await inRollback(async () => {
+      const [owner] = await makeIdentities(1);
+      await asRole('authenticated', owner);
+      const a = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, $2::uuid) as id',
+        ['first', randomUUID()],
+      );
+      const b = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, $2::uuid) as id',
+        ['second', randomUUID()],
+      );
+      expect(b.rows[0].id).not.toBe(a.rows[0].id);
+    });
+  });
+
   it('two plans on the SAME night stay isolated from each other (criterion 9)', async () => {
     await inRollback(async () => {
       const { rows: people } = await db.query('select id from public.profiles limit 2');
@@ -792,12 +907,12 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       const [a, b] = people.map((r) => r.id as string);
 
       await asRole('authenticated', a);
-      const { rows: ra } = await db.query('select public.create_night_out(current_date, $1) as id', ['plan A']);
+      const { rows: ra } = await db.query('select public.create_night_out(current_date, $1, null) as id', ['plan A']);
       const planA = ra[0].id as string;
 
       await db.query('RESET ROLE');
       await asRole('authenticated', b);
-      const { rows: rb } = await db.query('select public.create_night_out(current_date, $1) as id', ['plan B']);
+      const { rows: rb } = await db.query('select public.create_night_out(current_date, $1, null) as id', ['plan B']);
       const planB = rb[0].id as string;
       expect(planA).not.toEqual(planB);
 

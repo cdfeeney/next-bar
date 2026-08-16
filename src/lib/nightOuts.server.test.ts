@@ -41,7 +41,32 @@ describe('nightOuts.server write RPCs', () => {
     expect(rpc).toHaveBeenCalledWith('create_night_out', {
       p_night: '2026-08-20',
       p_title: 'Birthday crawl',
+      p_idempotency_key: null,
     });
+  });
+
+  it('createNightOut passes an idempotency key through when given one', async () => {
+    // A retry carrying the same key returns the existing plan instead of making
+    // a second one. If the key stops reaching the RPC, that protection is gone
+    // and nothing else would notice (cold panel, Codex).
+    const { client, rpc } = fakeRpc({ data: UUID });
+    const key = '9f1c2b7e-1111-4111-8111-222222222222';
+    await expect(
+      createNightOut(client, '2026-08-20', 'Birthday crawl', key),
+    ).resolves.toBe(UUID);
+    expect(rpc).toHaveBeenCalledWith('create_night_out', {
+      p_night: '2026-08-20',
+      p_title: 'Birthday crawl',
+      p_idempotency_key: key,
+    });
+  });
+
+  it('createNightOut refuses a malformed idempotency key without a network call', async () => {
+    const { client, rpc } = fakeRpc({ data: UUID });
+    await expect(
+      createNightOut(client, '2026-08-20', 'Birthday crawl', 'not-a-uuid'),
+    ).resolves.toBeNull();
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it('createNightOut rejects a malformed night without a network call', async () => {
