@@ -449,7 +449,7 @@ export default function NightOutPage({
               onClick={withRefresh(() => {
                 const supabase = getBrowserSupabase();
                 return supabase
-                  ? respondNightOut(supabase, plan.id, true)
+                  ? respondNightOut(supabase, plan.id, true, plan.callerStatus ?? 'pending')
                   : Promise.resolve(false);
               })}
               className="rounded-full bg-white px-5 py-2 font-semibold text-black"
@@ -463,7 +463,7 @@ export default function NightOutPage({
               onClick={withRefresh(() => {
                 const supabase = getBrowserSupabase();
                 return supabase
-                  ? respondNightOut(supabase, plan.id, true)
+                  ? respondNightOut(supabase, plan.id, true, plan.callerStatus ?? 'pending')
                   : Promise.resolve(false);
               }, true)}
               className="rounded-full border px-5 py-2"
@@ -476,7 +476,7 @@ export default function NightOutPage({
               onClick={withRefresh(() => {
                 const supabase = getBrowserSupabase();
                 return supabase
-                  ? respondNightOut(supabase, plan.id, false)
+                  ? respondNightOut(supabase, plan.id, false, plan.callerStatus ?? 'pending')
                   : Promise.resolve(false);
               })}
               className="rounded-full border px-5 py-2"

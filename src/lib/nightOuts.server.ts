@@ -114,15 +114,26 @@ export async function inviteToNightOut(
 }
 
 /** accept=true, or "Not tonight" (declined) with accept=false. */
+/**
+ * `expectedStatus` is the state the UI was showing when the user acted.
+ *
+ * Without it, a replayed accept — a retried fetch, a double tap, a request that
+ * sat in a queue — reversed a LATER decline and recorded the person as coming
+ * when they had said no (cold panel, Codex, HIGH). The RPC refuses when the
+ * stored state no longer matches what the caller saw, which covers both the
+ * replay and a simply stale screen.
+ */
 export async function respondNightOut(
   supabase: SupabaseClient,
   nightOutId: string,
   accept: boolean,
+  expectedStatus: 'pending' | 'accepted' | 'declined',
 ): Promise<boolean> {
   if (!UUID_RE.test(nightOutId)) return false;
   const { data, error } = await supabase.rpc('respond_night_out', {
     p_night_out: nightOutId,
     p_accept: accept,
+    p_expected_status: expectedStatus,
   });
   return !error && data === true;
 }

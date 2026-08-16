@@ -79,15 +79,29 @@ describe('nightOuts.server write RPCs', () => {
     const { client } = fakeRpc({ error: { message: 'denied' } });
     await expect(cancelNightOut(client, UUID)).resolves.toBe(false);
     await expect(decideNightOut(client, UUID, 'attaboy')).resolves.toBe(false);
-    await expect(respondNightOut(client, UUID, true)).resolves.toBe(false);
+    await expect(respondNightOut(client, UUID, true, 'pending')).resolves.toBe(false);
   });
 
   it('respondNightOut carries the accept flag — "Not tonight" is accept=false', async () => {
     const { client, rpc } = fakeRpc({ data: true });
-    await expect(respondNightOut(client, UUID, false)).resolves.toBe(true);
+    await expect(respondNightOut(client, UUID, false, 'pending')).resolves.toBe(true);
     expect(rpc).toHaveBeenCalledWith('respond_night_out', {
       p_night_out: UUID,
       p_accept: false,
+      p_expected_status: 'pending',
+    });
+  });
+
+  it('respondNightOut sends the state the caller observed', async () => {
+    // Without it, a replayed accept reversed a LATER decline and recorded the
+    // person as coming when they had said no (cold panel, Codex, HIGH). If the
+    // expected state stops reaching the RPC, that protection is gone silently.
+    const { client, rpc } = fakeRpc({ data: true });
+    await expect(respondNightOut(client, UUID, true, 'declined')).resolves.toBe(true);
+    expect(rpc).toHaveBeenCalledWith('respond_night_out', {
+      p_night_out: UUID,
+      p_accept: true,
+      p_expected_status: 'declined',
     });
   });
 

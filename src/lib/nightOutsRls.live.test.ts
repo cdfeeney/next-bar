@@ -212,7 +212,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       ['cancel_night_out', `select public.cancel_night_out('${randomUUID()}'::uuid)`],
       ['decide_night_out', `select public.decide_night_out('${randomUUID()}'::uuid, 'attaboy')`],
       ['invite_to_night_out', `select public.invite_to_night_out('${randomUUID()}'::uuid, '${randomUUID()}'::uuid)`],
-      ['respond_night_out', `select public.respond_night_out('${randomUUID()}'::uuid, true)`],
+      ['respond_night_out', `select public.respond_night_out('${randomUUID()}'::uuid, true, 'pending')`],
       ['join_night_out_by_token', `select public.join_night_out_by_token('${randomUUID()}'::uuid)`],
       ['decline_night_out_by_token', `select public.decline_night_out_by_token('${randomUUID()}'::uuid)`],
       ['revoke_night_out_link', `select public.revoke_night_out_link('${randomUUID()}'::uuid)`],
@@ -362,7 +362,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
         ['select public.suggest_night_out_bar($1, $2) as ok', [planId, 'stranger-bar']],
         ['select public.vote_night_out_bar($1, $2) as ok', [planId, 'probe-bar']],
         ['select public.invite_to_night_out($1, $2) as ok', [planId, stranger]],
-        ['select public.respond_night_out($1, true) as ok', [planId]],
+        ['select public.respond_night_out($1, true, $2) as ok', [planId, 'declined']],
         ['select public.cancel_night_out($1) as ok', [planId]],
         ['select public.decide_night_out($1, $2) as ok', [planId, 'probe-bar']],
       ];
@@ -428,7 +428,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       // Explicit "Not tonight" after accepting, then an explicit rejoin.
       await asRole('authenticated', guest);
-      const { rows: no } = await db.query('select public.respond_night_out($1, false) as ok', [planId]);
+      const { rows: no } = await db.query(
+        'select public.respond_night_out($1, false, $2) as ok',
+        [planId, 'accepted'],
+      );
       expect(no[0].ok, 'an accepted member could not decline').toBe(true);
       await db.query('RESET ROLE');
       const declined = await db.query(
@@ -451,7 +454,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       // ...but an EXPLICIT rejoin does, when there is room.
       await asRole('authenticated', guest);
-      const { rows: back } = await db.query('select public.respond_night_out($1, true) as ok', [planId]);
+      const { rows: back } = await db.query(
+        'select public.respond_night_out($1, true, $2) as ok',
+        [planId, 'declined'],
+      );
       expect(back[0].ok, 'an explicit rejoin was refused while under the cap').toBe(true);
       await db.query('RESET ROLE');
       const rejoined = await db.query(
@@ -643,7 +649,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       // quitter declines, freeing a seat; replacement takes it; plan full again.
       await db.query('RESET ROLE');
       await asRole('authenticated', quitter);
-      expect((await db.query('select public.respond_night_out($1,false) as ok', [planId])).rows[0].ok).toBe(true);
+      expect(
+        (await db.query('select public.respond_night_out($1,false,$2) as ok', [planId, 'pending']))
+          .rows[0].ok,
+      ).toBe(true);
       await db.query('RESET ROLE');
       await asRole('authenticated', owner);
       expect((await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, replacement])).rows[0].ok).toBe(true);
@@ -652,7 +661,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       // The rejoin hole: a declined member must not get back into a full plan.
       await asRole('authenticated', quitter);
-      const { rows: back } = await db.query('select public.respond_night_out($1,true) as ok', [planId]);
+      const { rows: back } = await db.query(
+        'select public.respond_night_out($1,true,$2) as ok',
+        [planId, 'declined'],
+      );
       expect(back[0].ok, 'a declined member rejoined past the cap').toBe(false);
       await db.query('RESET ROLE');
       expect(
@@ -662,10 +674,13 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       // Free one seat; now the rejoin is legitimate and must succeed.
       await asRole('authenticated', replacement);
-      await db.query('select public.respond_night_out($1,false) as ok', [planId]);
+      await db.query('select public.respond_night_out($1,false,$2) as ok', [planId, 'pending']);
       await db.query('RESET ROLE');
       await asRole('authenticated', quitter);
-      const { rows: back2 } = await db.query('select public.respond_night_out($1,true) as ok', [planId]);
+      const { rows: back2 } = await db.query(
+        'select public.respond_night_out($1,true,$2) as ok',
+        [planId, 'declined'],
+      );
       expect(back2[0].ok, 'a declined member could not rejoin a plan with room').toBe(true);
     });
   });
@@ -724,14 +739,15 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       // Pending: no token. "View plan" is not reachable before accepting.
       expect((await readAs(guest)).share_token, 'a pending invitee was handed the share token').toBeNull();
 
-      // Accepted: token, because that is how the plan page is reached.
-      await db.query('select public.respond_night_out($1, true) as ok', [planId]);
+      // Accepted: token, because that is how the plan page is reached. The
+      // invitee is PENDING here — that is the state this accept acts on.
+      await db.query('select public.respond_night_out($1, true, $2) as ok', [planId, 'pending']);
       const accepted = await readAs(guest);
       expect(accepted.my_status).toBe('accepted');
       expect(accepted.share_token, 'an accepted member could not reach the plan').not.toBeNull();
 
       // Declined: token withdrawn again.
-      await db.query('select public.respond_night_out($1, false) as ok', [planId]);
+      await db.query('select public.respond_night_out($1, false, $2) as ok', [planId, 'accepted']);
       const declined = await readAs(guest);
       expect(declined.my_status).toBe('declined');
       expect(declined.share_token, 'a declined member kept the share token').toBeNull();
@@ -755,7 +771,11 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       await db.query('RESET ROLE');
       await asRole('authenticated', guest);
-      await db.query('select public.respond_night_out($1, true) as ok', [updatedPlan]);
+      // This invitee is pending — they are accepting for the first time.
+      await db.query(
+        'select public.respond_night_out($1, true, $2) as ok',
+        [updatedPlan, 'pending'],
+      );
 
       // A plan_changed event AFTER the response is what "Updated" means.
       await db.query('RESET ROLE');
@@ -897,6 +917,119 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
         ['second', randomUUID()],
       );
       expect(b.rows[0].id).not.toBe(a.rows[0].id);
+    });
+  });
+
+  it('a REPLAYED accept cannot reverse a later decline (cold panel HIGH, criterion 8)', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, null) as id',
+        ['replay probe'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+
+      // 1. The invitee accepts, from a pending card.
+      expect(
+        (await db.query('select public.respond_night_out($1, true, $2) as ok', [planId, 'pending']))
+          .rows[0].ok,
+      ).toBe(true);
+
+      // 2. They change their mind and decline. This is their real, later decision.
+      expect(
+        (await db.query('select public.respond_night_out($1, false, $2) as ok', [planId, 'accepted']))
+          .rows[0].ok,
+      ).toBe(true);
+
+      // 3. The step-1 request is REPLAYED — a retried fetch, a double tap, a
+      //    queued request finally landing. It still carries 'pending', the
+      //    state the user was looking at when they first tapped Accept.
+      const replay = await db.query(
+        'select public.respond_night_out($1, true, $2) as ok',
+        [planId, 'pending'],
+      );
+      expect(replay.rows[0].ok, 'a replayed accept was applied').toBe(false);
+
+      await db.query('RESET ROLE');
+      const { rows: after } = await db.query(
+        'select invite_status from public.night_out_members where night_out_id=$1 and user_id=$2',
+        [planId, guest],
+      );
+      expect(
+        after[0].invite_status,
+        'the replay reversed a consent decision the user had already made',
+      ).toBe('declined');
+
+      // And it recorded no second acceptance.
+      const { rows: events } = await db.query(
+        "select count(*)::int as n from public.night_out_events where night_out_id=$1 and actor_id=$2 and kind='accepted'",
+        [planId, guest],
+      );
+      expect(events[0].n, 'the replay logged another accepted event').toBe(1);
+    });
+  });
+
+  it('an honest change of mind still works — declined to accepted with the right expectation', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, null) as id',
+        ['rejoin probe'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+      await db.query('select public.respond_night_out($1, false, $2) as ok', [planId, 'pending']);
+      // "Count me back in", acting on the declined card actually on screen.
+      expect(
+        (await db.query('select public.respond_night_out($1, true, $2) as ok', [planId, 'declined']))
+          .rows[0].ok,
+        'a legitimate change of mind was refused',
+      ).toBe(true);
+
+      await db.query('RESET ROLE');
+      const { rows: after } = await db.query(
+        'select invite_status from public.night_out_members where night_out_id=$1 and user_id=$2',
+        [planId, guest],
+      );
+      expect(after[0].invite_status).toBe('accepted');
+    });
+  });
+
+  it('rejects a malformed or absent expected state rather than guessing', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, null) as id',
+        ['expectation probe'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+      for (const bogus of [null, 'made-up', '']) {
+        const { rows } = await db.query(
+          'select public.respond_night_out($1, true, $2) as ok',
+          [planId, bogus],
+        );
+        expect(rows[0].ok, `expected state ${JSON.stringify(bogus)} was accepted`).toBe(false);
+      }
+      await db.query('RESET ROLE');
+      const { rows: after } = await db.query(
+        'select invite_status from public.night_out_members where night_out_id=$1 and user_id=$2',
+        [planId, guest],
+      );
+      expect(after[0].invite_status, 'a bogus expectation still changed the row').toBe('pending');
     });
   });
 
