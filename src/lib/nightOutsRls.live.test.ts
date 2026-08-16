@@ -542,6 +542,133 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     });
   });
 
+  /**
+   * THE CAP BOUNDARY, BEHAVIORALLY. Finally.
+   *
+   * This gap was recorded three times as "not testable — it needs 21 distinct
+   * fixture identities and public.profiles is FK-bound to auth.users, which
+   * this suite does not manufacture", and the 20-member invariant shipped
+   * guarded only by SQL text-order assertions. A cold reviewer made the sharper
+   * point: those assertions would still pass if someone changed the advisory
+   * lock to a per-USER key, which would let concurrent callers sail past the
+   * cap.
+   *
+   * The claim was never checked. auth.users requires exactly one NOT NULL
+   * column without a default (id), and an AFTER INSERT trigger
+   * (on_auth_user_created) creates the profile row. Inside a rolled-back
+   * transaction that is a fixture factory, and it always was.
+   */
+  async function makeIdentities(count: number): Promise<string[]> {
+    const ids: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const id = randomUUID();
+      await db.query('insert into auth.users (id) values ($1)', [id]);
+      ids.push(id);
+    }
+    // The trigger owes us a profile for each, or the FK below would fail anyway.
+    const { rows } = await db.query(
+      'select count(*)::int as n from public.profiles where id = any($1::uuid[])',
+      [ids],
+    );
+    expect(rows[0].n, 'the auth.users trigger did not create profiles').toBe(count);
+    return ids;
+  }
+
+  it('enforces the 20-member cap, and lets a pending invitee convert AT the boundary (criterion 8)', async () => {
+    await inRollback(async () => {
+      const ids = await makeIdentities(22);
+      const [owner, boundary, extra, ...fillers] = ids;
+
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(current_date, $1) as id',
+        ['cap boundary probe'],
+      );
+      const planId = made[0].id as string;
+
+      // Owner is member 1 (accepted). 18 fillers + the boundary invitee = 20.
+      for (const uid of fillers.slice(0, 18)) {
+        const { rows } = await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, uid]);
+        expect(rows[0].ok, 'filling below the cap was refused').toBe(true);
+      }
+      const { rows: inv20 } = await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, boundary]);
+      expect(inv20[0].ok).toBe(true);
+
+      await db.query('RESET ROLE');
+      const seats = await db.query('select public.night_out_seat_count($1) as n', [planId]);
+      expect(seats.rows[0].n, 'the fixture did not actually reach the cap').toBe(20);
+
+      // The cap is real: a 21st NEW member is refused.
+      await asRole('authenticated', owner);
+      const { rows: over } = await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, extra]);
+      expect(over[0].ok, 'the member cap did not hold at 20').toBe(false);
+
+      // ...and the pending invitee can still accept. This is the invariant the
+      // ordering fix exists for: converting your own invite is not a new seat,
+      // so a full plan must not refuse it.
+      await db.query('RESET ROLE');
+      const { rows: tok } = await db.query('select share_token from public.night_outs where id=$1', [planId]);
+      await asRole('authenticated', boundary);
+      const { rows: joined } = await db.query('select public.join_night_out_by_token($1) as id', [tok[0].share_token]);
+      expect(joined[0].id, 'a pending invitee could not accept at the cap boundary').toBe(planId);
+
+      await db.query('RESET ROLE');
+      const after = await db.query(
+        'select invite_status from public.night_out_members where night_out_id=$1 and user_id=$2',
+        [planId, boundary],
+      );
+      expect(after.rows[0].invite_status, 'the accept was lost at the boundary').toBe('accepted');
+      const still = await db.query('select public.night_out_seat_count($1) as n', [planId]);
+      expect(still.rows[0].n, 'converting an invite consumed a new seat').toBe(20);
+    });
+  });
+
+  it('refuses a declined member rejoining a full plan, and lets them in once a seat frees', async () => {
+    await inRollback(async () => {
+      const ids = await makeIdentities(22);
+      const [owner, quitter, replacement, ...fillers] = ids;
+
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(current_date, $1) as id',
+        ['rejoin boundary probe'],
+      );
+      const planId = made[0].id as string;
+      for (const uid of fillers.slice(0, 18)) {
+        await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, uid]);
+      }
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, quitter]);
+
+      // quitter declines, freeing a seat; replacement takes it; plan full again.
+      await db.query('RESET ROLE');
+      await asRole('authenticated', quitter);
+      expect((await db.query('select public.respond_night_out($1,false) as ok', [planId])).rows[0].ok).toBe(true);
+      await db.query('RESET ROLE');
+      await asRole('authenticated', owner);
+      expect((await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, replacement])).rows[0].ok).toBe(true);
+      await db.query('RESET ROLE');
+      expect((await db.query('select public.night_out_seat_count($1) as n', [planId])).rows[0].n).toBe(20);
+
+      // The rejoin hole: a declined member must not get back into a full plan.
+      await asRole('authenticated', quitter);
+      const { rows: back } = await db.query('select public.respond_night_out($1,true) as ok', [planId]);
+      expect(back[0].ok, 'a declined member rejoined past the cap').toBe(false);
+      await db.query('RESET ROLE');
+      expect(
+        (await db.query('select public.night_out_seat_count($1) as n', [planId])).rows[0].n,
+        'accepted membership exceeded the cap via rejoin',
+      ).toBe(20);
+
+      // Free one seat; now the rejoin is legitimate and must succeed.
+      await asRole('authenticated', replacement);
+      await db.query('select public.respond_night_out($1,false) as ok', [planId]);
+      await db.query('RESET ROLE');
+      await asRole('authenticated', quitter);
+      const { rows: back2 } = await db.query('select public.respond_night_out($1,true) as ok', [planId]);
+      expect(back2[0].ok, 'a declined member could not rejoin a plan with room').toBe(true);
+    });
+  });
+
   it('two plans on the SAME night stay isolated from each other (criterion 9)', async () => {
     await inRollback(async () => {
       const { rows: people } = await db.query('select id from public.profiles limit 2');

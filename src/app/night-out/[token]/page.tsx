@@ -131,6 +131,14 @@ export default function NightOutPage({
   const authEpoch = useRef(0);
   useEffect(() => {
     authEpoch.current += 1;
+    // Blocking a stale load from painting is only half of it (cold panel 2,
+    // Codex): on a sign-out the member view ALREADY on screen stayed rendered
+    // until the anonymous preview settled, so accepted-member data sat in front
+    // of a signed-out viewer for as long as that request took. Drop it now and
+    // let the reload decide what a signed-out viewer may see.
+    if (auth.status !== 'signed-in') {
+      setState((current) => (current.kind === 'member' ? { kind: 'loading' } : current));
+    }
   }, [auth.status]);
 
   const loadMemberView = useCallback(

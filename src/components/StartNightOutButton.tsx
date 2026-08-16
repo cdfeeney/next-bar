@@ -19,6 +19,22 @@ export default function StartNightOutButton(): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [readFailed, setReadFailed] = useState(false);
+  const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
+
+  /**
+   * Retry the READ, not the create. The first version of this told the user to
+   * refresh — advice that loses the plan id from component state and re-arms
+   * the Start button, walking them straight back into the duplicate-plan bug it
+   * was written to prevent (cold panel 2, Codex). Advice the UI cannot honour
+   * is worse than no advice.
+   */
+  const retryOpen = async (): Promise<void> => {
+    const supabase = getBrowserSupabase();
+    if (!supabase || createdPlanId === null) return;
+    const plan = await getNightOut(supabase, createdPlanId);
+    if (plan === null) return;
+    router.push(`/night-out/${plan.shareToken}`);
+  };
 
   if (auth.status !== 'signed-in') return null;
 
@@ -38,6 +54,7 @@ export default function StartNightOutButton(): JSX.Element | null {
     // the next tap create a SECOND plan for the same night, splitting the group
     // between two plans nobody could tell apart (cold panel, Codex + Claude).
     // Stay busy and route by plan id; the plan page resolves its own token.
+    setCreatedPlanId(planId);
     const plan = await getNightOut(supabase, planId);
     if (plan === null) {
       setReadFailed(true);
@@ -62,10 +79,19 @@ export default function StartNightOutButton(): JSX.Element | null {
         </p>
       ) : null}
       {readFailed ? (
-        <p className="mt-2 text-sm text-red-400">
-          Your night out was created, but this page couldn&apos;t open it.
-          Refresh — don&apos;t start another one.
-        </p>
+        <div className="mt-2">
+          <p className="text-sm text-red-400">
+            Your night out was created, but this page couldn&apos;t open it.
+            Don&apos;t start another one.
+          </p>
+          <button
+            type="button"
+            onClick={() => void retryOpen()}
+            className="mt-2 rounded-full border px-5 py-2 text-sm"
+          >
+            Open it
+          </button>
+        </div>
       ) : null}
     </div>
   );
