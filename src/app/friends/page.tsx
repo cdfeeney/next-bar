@@ -275,7 +275,14 @@ function DemoFind({
               key={f.handle}
               className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3"
             >
-              <Link href={`/u/${f.handle}`} className="min-w-0 flex-1">
+              {/* Criterion 9: this row IS a tap target — it navigates to the
+                  profile — so it owes the same 44px minimum the follow button
+                  beside it already carries. It was 36px (two stacked lines with
+                  no floor), which the Home-only target audit never saw. */}
+              <Link
+                href={`/u/${f.handle}`}
+                className="min-w-0 flex-1 min-h-[44px] flex flex-col justify-center touch-manipulation"
+              >
                 <p className="font-display text-sm truncate">{f.displayName}</p>
                 <p className="text-muted text-xs truncate">
                   @{f.handle} · {f.archetype}

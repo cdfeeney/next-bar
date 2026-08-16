@@ -132,7 +132,14 @@ export default function MapPage(): JSX.Element {
     // shell's one-scroll-owner contract still holds for every other route.
     <main
       data-testid="map-surface"
-      className="fixed inset-0 overflow-hidden"
+      // `position: fixed` makes this its own stacking context, so the sheet's
+      // z-index only ranks INSIDE here — the bottom nav's root-level z-[1000]
+      // painted over the whole surface and swallowed taps on the sheet's
+      // primary action ("Show N bars" resolved to the nav's "Next Bar?" tab,
+      // navigating away instead of applying the filter). At rest the map must
+      // stay BEHIND the nav, per the locked design; while the aria-modal sheet
+      // is open it has to be above it. So raise the context only then.
+      className={`fixed inset-0 overflow-hidden${filtersOpen ? ' z-[1100]' : ''}`}
     >
       <div className="absolute inset-0">
         <BarMap
@@ -283,16 +290,23 @@ export default function MapPage(): JSX.Element {
               below commits the draft to the map. One Clear, one apply. */}
           <FindBarFilterChips filters={draft} onChange={setDraft} />
 
-          <button
-            type="button"
-            onClick={() => {
-              setFilters(draft);
-              setFiltersOpen(false);
-            }}
-            className="mt-3 w-full min-h-[44px] px-4 rounded-full bg-accent text-bg font-display text-sm touch-manipulation"
-          >
-            Show {draftCount} {draftCount === 1 ? 'bar' : 'bars'}
-          </button>
+          {/* Sticky: the commit control must stay reachable no matter how far
+              the vibe accordion expands inside the sheet's own scroll area.
+              Expanded, it pushed this button below the fold and the primary
+              action became unreachable without scrolling a container most
+              users would not realise had scrolled. */}
+          <div className="sticky bottom-0 -mx-4 mt-3 bg-bg px-4 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setFilters(draft);
+                setFiltersOpen(false);
+              }}
+              className="w-full min-h-[44px] px-4 rounded-full bg-accent text-bg font-display text-sm touch-manipulation"
+            >
+              Show {draftCount} {draftCount === 1 ? 'bar' : 'bars'}
+            </button>
+          </div>
         </div>
       ) : null}
     </main>

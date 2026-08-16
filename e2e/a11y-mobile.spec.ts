@@ -56,6 +56,13 @@ async function undersizedTargets(page: Page): Promise<string[]> {
       // Inline links inside a paragraph are text, not tap targets; the
       // criterion is about controls.
       if (el.tagName === 'A' && el.closest('p')) continue;
+      // Map markers are DATA, not controls. Leaflet renders each one as a
+      // focusable div, and the LOCKED design specifies the quiet tier at 8px
+      // ("everything else is a smaller muted dot" — next-bar-map-v1.png note
+      // 3), so auditing them at 44px would fail the approved design rather
+      // than find a defect. The map's real controls — search, Filters, Locate
+      // — sit outside this container and are still audited.
+      if (el.closest('.leaflet-container')) continue;
       if (rect.height < 44) {
         bad.push(
           `<${el.tagName.toLowerCase()}> "${(el.textContent ?? '').trim().slice(0, 40)}" height ${rect.height.toFixed(1)}px`,
