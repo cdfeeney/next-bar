@@ -17,10 +17,16 @@ import { describe, expect, it } from 'vitest';
  * states, and idempotent DDL (criterion 11).
  */
 
+// Normalise line endings at the read. Git checks this file out with CRLF on
+// Windows, and the assertions below are text patterns over the SQL — the
+// policy-extraction regex terminates on ";\n", which never matches ";\r\n", so
+// it silently found ZERO policies and the non-recursion invariant passed
+// vacuously rather than failing loudly. Normalising once here keeps every
+// pattern in this file line-ending agnostic instead of sprinkling \r? around.
 const SQL = readFileSync(
   path.join(__dirname, '..', '..', 'supabase', 'migrations', '0021_night_outs.sql'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 const TABLES = [
   'night_outs',
