@@ -14,6 +14,7 @@ import {
   getNightOut,
   getNightOutBoard,
   getNightOutMembers,
+  isNightOutFullByToken,
   joinNightOutByToken,
   previewNightOut,
   resolveNightOutByToken,
@@ -194,7 +195,15 @@ export default function NightOutPage({
       setActionError(null);
       const ok = await action();
       if (!ok) {
-        setActionError("That didn't go through — try again.");
+        // "Try again" is the wrong advice when the plan is simply full — the
+        // retry can never succeed (round-3 review).
+        const supabase = getBrowserSupabase();
+        const full = supabase ? await isNightOutFullByToken(supabase, token) : false;
+        setActionError(
+          full
+            ? 'This night out is full.'
+            : "That didn't go through — try again.",
+        );
         return;
       }
       if (state.kind === 'member') void loadMemberView(state.plan.id);
@@ -265,7 +274,13 @@ export default function NightOutPage({
                 setActionError(null);
                 const planId = await joinNightOutByToken(supabase, token);
                 if (planId === null || !(await loadMemberView(planId))) {
-                  setActionError("Couldn't join — the link may have expired.");
+                  // The link is fine when the plan is merely full; saying it
+                  // expired sends the user to ask for a new one (round-3 review).
+                  setActionError(
+                    (await isNightOutFullByToken(supabase, token))
+                      ? 'This night out is full.'
+                      : "Couldn't join — the link may have expired.",
+                  );
                 }
               })();
             }}

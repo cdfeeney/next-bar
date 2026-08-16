@@ -212,11 +212,20 @@ describe('0044_night_outs.sql security shape', () => {
 });
 
 /**
- * 0046 supersedes four of 0044's functions. The assertions in the block above
- * still describe 0044's TEXT, which is correct as a record of an applied,
- * immutable file — but for join_night_out_by_token, decline_night_out_by_token,
- * invite_to_night_out and get_night_out it is no longer the effective
- * definition. Read this block for those four.
+ * WHICH FILE HOLDS THE EFFECTIVE DEFINITION (round-3 review, Claude: the first
+ * version of this comment listed the wrong four functions and omitted
+ * respond_night_out — the one function round 3 existed to fix — which would
+ * send an auditor of the 20-member cap to 0044's uncapped, unlocked text):
+ *
+ *   0044 — night_out_role, create_night_out, cancel_night_out, decide_night_out,
+ *          suggest/vote, the member-scoped reads, preview, resolve-by-token
+ *   0045 — invite_to_night_out, get_night_out
+ *   0046 — join_night_out_by_token, decline_night_out_by_token, respond_night_out
+ *   0047 — night_outs column grants, night_out_is_full_by_token
+ *
+ * The assertions in the block above still describe 0044's TEXT, which is correct
+ * as a record of an applied, immutable file, but is NOT the effective definition
+ * for anything in the 0045/0046/0047 rows.
  *
  * These are ORDERING invariants, and they exist because the thing they guard
  * cannot be exercised behaviorally on staging: the 20-member boundary needs 21

@@ -153,6 +153,23 @@ export async function joinNightOutByToken(
  * tonight" to a shared link meant accepting first — which recorded the user as
  * accepted and emitted an 'accepted' event the host could see.
  */
+/**
+ * Is this plan at the member cap? Asked only on a FAILURE path, so the UI can
+ * say "full" instead of "the link may have expired" — join_night_out_by_token
+ * returns null for both, and respond_night_out returns false for both
+ * (round-3 review, Claude: retrying is advice that can never succeed).
+ */
+export async function isNightOutFullByToken(
+  supabase: SupabaseClient,
+  token: string,
+): Promise<boolean> {
+  if (!UUID_RE.test(token)) return false;
+  const { data, error } = await supabase.rpc('night_out_is_full_by_token', {
+    p_token: token,
+  });
+  return !error && data === true;
+}
+
 export async function declineNightOutByToken(
   supabase: SupabaseClient,
   token: string,

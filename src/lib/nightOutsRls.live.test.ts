@@ -200,10 +200,13 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   });
 
   it('anon cannot execute any night_out WRITE rpc (criterion 6)', async () => {
-    // ALL TEN write RPCs. Round-3 review caught this list claiming "all" while
-    // omitting decide/invite/respond — the same overstated-claim species as the
-    // criterion-3 grant test. The completeness assertion at the end of this
-    // test is what stops the list silently falling behind the migration again.
+    // The ten write RPCs, plus 0047's authenticated-only definer READ
+    // (night_out_is_full_by_token) which anon must also not execute. An
+    // earlier round caught this list claiming "all" while omitting
+    // decide/invite/respond — the same overstated-claim species as the
+    // criterion-3 grant test. The completeness assertion at the end is what
+    // stops the list silently falling behind the migration again, and it is
+    // what caught 0047's new function on the round it was added.
     const writes: Array<[string, string]> = [
       ['create_night_out', "select public.create_night_out(current_date, 'x')"],
       ['cancel_night_out', `select public.cancel_night_out('${randomUUID()}'::uuid)`],
@@ -215,6 +218,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       ['revoke_night_out_link', `select public.revoke_night_out_link('${randomUUID()}'::uuid)`],
       ['suggest_night_out_bar', `select public.suggest_night_out_bar('${randomUUID()}'::uuid, 'attaboy')`],
       ['vote_night_out_bar', `select public.vote_night_out_bar('${randomUUID()}'::uuid, 'attaboy')`],
+      ['night_out_is_full_by_token', `select public.night_out_is_full_by_token('${randomUUID()}'::uuid)`],
     ];
     for (const [name, sql] of writes) {
       const denied = await inRollback(async () => {
@@ -450,6 +454,87 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
         [planId, guest],
       );
       expect(rejoined.rows[0].invite_status).toBe('accepted');
+    });
+  });
+
+
+  it('a FRESH bearer-link recipient can join, and a different one can decline (criterion 2, round-3 gap)', async () => {
+    // Round-3 review (Codex): the lifecycle test above invites the guest first,
+    // so it only ever exercised the CONVERSION branches. Removing either
+    // fresh-row INSERT in 0046 would have left every behavioral gate green
+    // while criterion 2 — "an invited account OR link recipient can accept and
+    // decline" — was broken for the link-recipient half.
+    await inRollback(async () => {
+      const { rows: people } = await db.query('select id from public.profiles limit 2');
+      expect(people.length, 'need 2 profiles').toBe(2);
+      const [owner, guest] = people.map((r) => r.id as string);
+
+      await asRole('authenticated', owner);
+      const { rows: a } = await db.query('select public.create_night_out(current_date, $1) as id', ['fresh join probe']);
+      const { rows: b } = await db.query('select public.create_night_out(current_date + 1, $1) as id', ['fresh decline probe']);
+      const planJoin = a[0].id as string;
+      const planDecline = b[0].id as string;
+
+      await db.query('RESET ROLE');
+      const { rows: tokens } = await db.query(
+        'select id, share_token from public.night_outs where id = any($1::uuid[])',
+        [[planJoin, planDecline]],
+      );
+      const tokenFor = (id: string) => tokens.find((r) => r.id === id)!.share_token as string;
+
+      // No invite anywhere: the guest holds only the link.
+      const priorMembership = await db.query(
+        'select 1 from public.night_out_members where user_id = $1 and night_out_id = any($2::uuid[])',
+        [guest, [planJoin, planDecline]],
+      );
+      expect(priorMembership.rowCount, 'the guest was already a member; this test proves nothing').toBe(0);
+
+      await asRole('authenticated', guest);
+      const { rows: joined } = await db.query('select public.join_night_out_by_token($1) as id', [tokenFor(planJoin)]);
+      expect(joined[0].id, 'a fresh link recipient could not join').toBe(planJoin);
+      const { rows: declined } = await db.query('select public.decline_night_out_by_token($1) as id', [tokenFor(planDecline)]);
+      expect(declined[0].id, 'a fresh link recipient could not decline').toBe(planDecline);
+
+      await db.query('RESET ROLE');
+      const rows = await db.query(
+        'select night_out_id, invite_status from public.night_out_members where user_id = $1 and night_out_id = any($2::uuid[])',
+        [guest, [planJoin, planDecline]],
+      );
+      const byPlan = new Map(rows.rows.map((r) => [r.night_out_id as string, r.invite_status as string]));
+      expect(byPlan.get(planJoin), 'a fresh join did not create an accepted row').toBe('accepted');
+      expect(byPlan.get(planDecline), 'a fresh decline did not create a declined row').toBe('declined');
+
+      // Declining without joining must not have announced an acceptance.
+      const events = await db.query(
+        "select count(*)::int as n from public.night_out_events where night_out_id = $1 and actor_id = $2",
+        [planDecline, guest],
+      );
+      expect(events.rows[0].n, 'declining emitted an event').toBe(0);
+    });
+  });
+
+  it('share_token is not readable through a direct table read, at any membership status (round-3 HIGH)', async () => {
+    // 0045 gated share_token inside get_night_out; 0047 had to take it out of
+    // the authenticated column grant, because the RPC gate was decorative while
+    // the table grant admitted every member status.
+    await inRollback(async () => {
+      const { rows: people } = await db.query('select id from public.profiles limit 2');
+      const [owner, guest] = people.map((r) => r.id as string);
+
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query('select public.create_night_out(current_date, $1) as id', ['token grant probe']);
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1, $2) as ok', [planId, guest]);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+      let denied: string | null = null;
+      try {
+        await db.query('select share_token from public.night_outs where id = $1', [planId]);
+      } catch (error) {
+        denied = (error as { message: string }).message;
+      }
+      expect(denied, 'a member read share_token straight off the table').toMatch(/permission denied/i);
     });
   });
 
