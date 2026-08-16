@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import PlanInvites from '@/components/PlanInvites';
 import FindFriends from '@/components/FindFriends';
 import { RequestRow } from '@/components/FollowRows';
 import { useAuth } from '@/hooks/useAuth';
@@ -169,6 +170,11 @@ export default function FriendsPage(): JSX.Element {
             </div>
           </div>
         ) : null}
+
+        {/* Plans — Night Out invitations addressed to this account (Social →
+            Plans per the locked MECE). Hidden when empty, exactly like the
+            follow-request inbox above it. */}
+        <PlanInvites />
 
         {/* Find friends. */}
         <div>

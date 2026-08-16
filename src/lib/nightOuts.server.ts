@@ -253,6 +253,67 @@ type MemberRow = {
   invite_status: NightOutMember['inviteStatus'];
 };
 
+
+/**
+ * One row of Social → Plans. Everything the approved invitation card needs and
+ * nothing else: no other members' identities, no ratings, no scores.
+ */
+export type MyNightOut = {
+  nightOutId: string;
+  night: string;
+  title: string | null;
+  status: NightOut['status'];
+  ownerHandle: string | null;
+  ownerDisplayName: string | null;
+  myStatus: 'pending' | 'accepted' | 'declined';
+  respondedAt: string | null;
+  acceptedCount: number;
+  /** Null unless the caller is ACCEPTED — the rule 0047 set at the grant. */
+  shareToken: string | null;
+  planUpdated: boolean;
+  isPast: boolean;
+};
+
+type MyNightOutRow = {
+  night_out_id: string;
+  night: string;
+  title: string | null;
+  status: NightOut['status'];
+  owner_handle: string | null;
+  owner_display_name: string | null;
+  my_status: MyNightOut['myStatus'];
+  responded_at: string | null;
+  accepted_count: number;
+  share_token: string | null;
+  plan_updated: boolean;
+  is_past: boolean;
+};
+
+/**
+ * "What am I invited to?" — the query that did not exist until 0052, which is
+ * why account-targeted invitations were invisible to their recipients.
+ */
+export async function getMyNightOuts(
+  supabase: SupabaseClient,
+): Promise<MyNightOut[] | null> {
+  const { data, error } = await supabase.rpc('get_my_night_outs');
+  if (error || !Array.isArray(data)) return null;
+  return (data as MyNightOutRow[]).map((r) => ({
+    nightOutId: r.night_out_id,
+    night: r.night,
+    title: r.title,
+    status: r.status,
+    ownerHandle: r.owner_handle,
+    ownerDisplayName: r.owner_display_name,
+    myStatus: r.my_status,
+    respondedAt: r.responded_at,
+    acceptedCount: r.accepted_count,
+    shareToken: r.share_token,
+    planUpdated: r.plan_updated,
+    isPast: r.is_past,
+  }));
+}
+
 export async function getNightOutMembers(
   supabase: SupabaseClient,
   nightOutId: string,

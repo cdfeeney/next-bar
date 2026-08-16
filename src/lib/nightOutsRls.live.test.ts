@@ -223,6 +223,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       // SECURITY DEFINER RPCs (running as the owner) call them.
       ['night_out_member_cap', 'select public.night_out_member_cap()'],
       ['night_out_seat_count', `select public.night_out_seat_count('${randomUUID()}'::uuid)`],
+      ['get_my_night_outs', 'select public.get_my_night_outs()'],
     ];
     for (const [name, sql] of writes) {
       const denied = await inRollback(async () => {
@@ -666,6 +667,121 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       await asRole('authenticated', quitter);
       const { rows: back2 } = await db.query('select public.respond_night_out($1,true) as ok', [planId]);
       expect(back2[0].ok, 'a declined member could not rejoin a plan with room').toBe(true);
+    });
+  });
+
+  it('get_my_night_outs shows each caller only their own memberships (criterion 3)', async () => {
+    await inRollback(async () => {
+      const [owner, guest, stranger] = await makeIdentities(3);
+
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(current_date + 3, $1) as id',
+        ['my-invites probe'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+
+      // The invitee sees it.
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+      const mine = await db.query('select * from public.get_my_night_outs()');
+      const row = mine.rows.find((r) => r.night_out_id === planId);
+      expect(row, 'an invited account could not see its own invitation').toBeTruthy();
+      expect(row.my_status).toBe('pending');
+      expect(row.owner_handle ?? row.owner_display_name, 'the card cannot name who invited you').toBeDefined();
+
+      // A stranger does not.
+      await db.query('RESET ROLE');
+      await asRole('authenticated', stranger);
+      const theirs = await db.query('select * from public.get_my_night_outs()');
+      expect(
+        theirs.rows.some((r) => r.night_out_id === planId),
+        'a stranger saw a plan they were never invited to',
+      ).toBe(false);
+    });
+  });
+
+  it('get_my_night_outs releases share_token ONLY to an accepted member (0047 rule)', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(current_date + 3, $1) as id',
+        ['token gating probe'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+
+      const readAs = async (uid: string) => {
+        await db.query('RESET ROLE');
+        await asRole('authenticated', uid);
+        const { rows } = await db.query('select * from public.get_my_night_outs()');
+        return rows.find((r) => r.night_out_id === planId);
+      };
+
+      // Pending: no token. "View plan" is not reachable before accepting.
+      expect((await readAs(guest)).share_token, 'a pending invitee was handed the share token').toBeNull();
+
+      // Accepted: token, because that is how the plan page is reached.
+      await db.query('select public.respond_night_out($1, true) as ok', [planId]);
+      const accepted = await readAs(guest);
+      expect(accepted.my_status).toBe('accepted');
+      expect(accepted.share_token, 'an accepted member could not reach the plan').not.toBeNull();
+
+      // Declined: token withdrawn again.
+      await db.query('select public.respond_night_out($1, false) as ok', [planId]);
+      const declined = await readAs(guest);
+      expect(declined.my_status).toBe('declined');
+      expect(declined.share_token, 'a declined member kept the share token').toBeNull();
+    });
+  });
+
+  it('get_my_night_outs hides cancelled plans and flags a plan changed after you responded', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: a } = await db.query(
+        'select public.create_night_out(current_date + 3, $1) as id', ['updated probe'],
+      );
+      const { rows: b } = await db.query(
+        'select public.create_night_out(current_date + 4, $1) as id', ['cancelled probe'],
+      );
+      const updatedPlan = a[0].id as string;
+      const cancelledPlan = b[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [updatedPlan, guest]);
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [cancelledPlan, guest]);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+      await db.query('select public.respond_night_out($1, true) as ok', [updatedPlan]);
+
+      // A plan_changed event AFTER the response is what "Updated" means.
+      await db.query('RESET ROLE');
+      // created_at is given an EXPLICIT later stamp on purpose: inside a single
+      // transaction now() is frozen, so a defaulted event would carry exactly
+      // the same timestamp as the response and `created_at > responded_at`
+      // would be false. Production writes these in separate transactions. The
+      // strict `>` is correct and deliberate — `>=` would flag the moment of
+      // your own acceptance as an update to it.
+      await db.query(
+        "insert into public.night_out_events (night_out_id, actor_id, kind, created_at)"
+        + " values ($1,$2,'plan_changed', now() + interval '1 minute')",
+        [updatedPlan, owner],
+      );
+      await asRole('authenticated', owner);
+      await db.query('select public.cancel_night_out($1) as ok', [cancelledPlan]);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', guest);
+      const { rows } = await db.query('select * from public.get_my_night_outs()');
+      const updated = rows.find((r) => r.night_out_id === updatedPlan);
+      expect(updated.plan_updated, 'a change after responding was not flagged').toBe(true);
+      expect(
+        rows.some((r) => r.night_out_id === cancelledPlan),
+        'a cancelled plan still appeared in the invite list',
+      ).toBe(false);
     });
   });
 
