@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * V8-3 migration guard — static assertions over 0021_night_outs.sql.
+ * V8-3 migration guard — static assertions over 0044_night_outs.sql.
  *
  * The migration is committed UNAPPLIED (attended apply is a recorded
  * residual), so live RLS behavior cannot be exercised here. What CAN be
@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest';
 // vacuously rather than failing loudly. Normalising once here keeps every
 // pattern in this file line-ending agnostic instead of sprinkling \r? around.
 const SQL = readFileSync(
-  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0021_night_outs.sql'),
+  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0044_night_outs.sql'),
   'utf8',
 ).replace(/\r\n/g, '\n');
 
@@ -36,7 +36,7 @@ const TABLES = [
   'night_out_events',
 ];
 
-describe('0021_night_outs.sql security shape', () => {
+describe('0044_night_outs.sql security shape', () => {
   it('every table enables RLS and revokes all direct grants (criterion 3)', () => {
     for (const table of TABLES) {
       expect(SQL).toMatch(
