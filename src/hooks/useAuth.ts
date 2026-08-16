@@ -9,6 +9,7 @@ import {
   sealAccountCacheOnSignOut,
   writeCacheOwner,
 } from '@/lib/accountCache';
+import { revokeNativePushForThisInstallation } from '@/lib/nativePush';
 
 export type AuthState =
   | { status: 'loading'; user: null; session: null }
@@ -124,6 +125,12 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
   const signOut = async () => {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
+    // Revoke THIS installation's token before signing out — the RPC needs
+    // the still-live session, and a revoke attempted after signOut() would
+    // silently no-op (no auth.uid() left to scope it to), leaving the
+    // device registered to an account that just signed out. Best-effort:
+    // a revoke failure must never block the sign-out itself.
+    await revokeNativePushForThisInstallation(supabase);
     await supabase.auth.signOut();
     // SEAL, don't destroy (V8-2 round-3): synced data is cleared, unsynced
     // rows are kept under the still-latched owner, and the owner marker

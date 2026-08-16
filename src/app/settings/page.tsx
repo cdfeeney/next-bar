@@ -9,6 +9,7 @@ import InstallPrompt from '@/components/InstallPrompt';
 import SetPassword from '@/components/SetPassword';
 import ClaimHandle from '@/components/ClaimHandle';
 import DisplayNameEditor from '@/components/DisplayNameEditor';
+import NotificationPreferences from '@/components/NotificationPreferences';
 import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
 import { fetchOutgoingRequests } from '@/lib/follows.server';
 import {
@@ -21,6 +22,7 @@ import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
 import { deleteAllServerComparisons } from '@/lib/pairwise.server';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { revokeAllNativePush } from '@/lib/nativePush';
 import { deriveTasteProfile } from '@/lib/tasteProfile';
 import { deriveBadges } from '@/lib/badges';
 import { useBars } from '@/lib/useBars';
@@ -143,6 +145,12 @@ export default function SettingsPage(): JSX.Element {
     if (auth.status !== 'signed-in' || deleteState === 'deleting') return;
     if (deleteConfirmText.trim().toLowerCase() !== 'delete') return;
     setDeleteState('deleting');
+    // Revoke every device's native push registration WHILE the session is
+    // still valid — the RPC scopes to auth.uid(), so this has to happen
+    // before the account (and the session backing it) is gone. Best-effort:
+    // a revoke failure must not block the deletion itself.
+    const supabase = getBrowserSupabase();
+    if (supabase) await revokeAllNativePush(supabase);
     const ok = await requestAccountDeletion(auth.session.access_token);
     if (!ok) {
       // Nothing was deleted (the route is all-or-nothing) — say so and let
@@ -382,6 +390,8 @@ export default function SettingsPage(): JSX.Element {
             </div>
           </div>
         ) : null}
+
+        <NotificationPreferences />
 
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">

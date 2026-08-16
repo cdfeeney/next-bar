@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  aps-environment is pinned to "development" (i.e. the sandbox APNs
+	  gateway) on purpose for V8. Switching this to "production" is an
+	  attended change out of scope here: it requires a production APNs
+	  credential/cert, a distribution provisioning profile, and an App
+	  Store / TestFlight build — none of which this goal is authorized to
+	  create. Do not flip this value without that separate, explicit step.
+	-->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

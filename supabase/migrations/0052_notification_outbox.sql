@@ -1,0 +1,304 @@
+-- Next Bar — 0052 server-owned notification outbox (V8-4)
+--
+-- ⚠ COMMITTED UNAPPLIED. Applying to staging is an ATTENDED action and is not
+-- performed by this goal. Numbered above the live maximum per CLAUDE.md.
+--
+-- Generates EXACTLY the four PRD event types — invited, accepted,
+-- bar_suggested, plan_changed — into a server-owned outbox. The vocabulary is
+-- the one 0044 already uses for public.night_out_events.kind; this migration
+-- introduces no fifth type and no new name for an existing one.
+--
+-- WHY TRIGGERS AND NOT EDITED RPCs: the invite/accept RPCs were hardened
+-- across 0045–0050 (accept race, cap boundary, invite re-check ordering).
+-- `create or replace` on them here would mean restating those bodies and
+-- risking a silent regression of that work. Triggers on the underlying tables
+-- are purely additive, and they capture the event whichever RPC path caused
+-- it — including paths added later.
+--
+-- OWNERSHIP: both tables are server-only. RLS is on and there are NO grants
+-- and NO policies for anon/authenticated, so the only reader/writer is the
+-- service-role sender. Clients never see the outbox.
+--
+-- Idempotent: safe to re-run.
+
+------------------------------------------------------------------------------
+-- 1. notification_outbox
+------------------------------------------------------------------------------
+
+create table if not exists public.notification_outbox (
+  id                bigint      generated always as identity primary key,
+  event_type        text        not null,
+  night_out_id      uuid        not null references public.night_outs(id) on delete cascade,
+  recipient_user_id uuid        not null references public.profiles(id) on delete cascade,
+  actor_id          uuid        null references public.profiles(id) on delete set null,
+  bar_id            text        null,
+  -- IDEMPOTENCY (criterion 3). Every key ends in a per-OCCURRENCE
+  -- discriminator — the member row's timestamp, the suggested bar, the plan
+  -- revision — so re-running the same occurrence is a no-op while a genuine
+  -- LATER event of the same type to the same person still enqueues.
+  dedupe_key        text        not null,
+  status            text        not null default 'pending',
+  attempts          integer     not null default 0,
+  last_error        text        null,
+  processed_at      timestamptz null,
+  created_at        timestamptz not null default now(),
+  constraint notification_outbox_dedupe_key unique (dedupe_key),
+  constraint notification_outbox_event_check
+    check (event_type in ('invited', 'accepted', 'bar_suggested', 'plan_changed')),
+  constraint notification_outbox_status_check
+    check (status in ('pending', 'sent', 'failed', 'suppressed')),
+  constraint notification_outbox_bar_check
+    check (bar_id is null or bar_id ~ '^[a-z0-9-]{1,60}$')
+);
+
+-- The drain query: oldest pending first.
+create index if not exists notification_outbox_pending_idx
+  on public.notification_outbox (created_at, id)
+  where status = 'pending';
+
+alter table public.notification_outbox enable row level security;
+revoke all on table public.notification_outbox from public, anon, authenticated;
+
+------------------------------------------------------------------------------
+-- 2. notification_deliveries — one row per (outbox row, device)
+------------------------------------------------------------------------------
+
+create table if not exists public.notification_deliveries (
+  id              bigint      generated always as identity primary key,
+  outbox_id       bigint      not null references public.notification_outbox(id) on delete cascade,
+  device_token_id uuid        not null references public.native_device_tokens(id) on delete cascade,
+  status          text        not null,
+  apns_status     integer     null,
+  apns_reason     text        null,
+  created_at      timestamptz not null default now(),
+  -- This is the (event, recipient, device) half of criterion 3: the same
+  -- event can never be delivered to the same device twice, even if the outbox
+  -- row is drained more than once (crash between send and status write).
+  constraint notification_deliveries_once unique (outbox_id, device_token_id),
+  constraint notification_deliveries_status_check
+    check (status in ('sent', 'failed', 'invalid_token'))
+);
+
+-- The sender's rate-limit window read.
+create index if not exists notification_deliveries_recent_idx
+  on public.notification_deliveries (device_token_id, created_at);
+
+alter table public.notification_deliveries enable row level security;
+revoke all on table public.notification_deliveries from public, anon, authenticated;
+
+------------------------------------------------------------------------------
+-- 3. night_outs.plan_revision — the plan_changed occurrence discriminator
+------------------------------------------------------------------------------
+-- Additive column with a default, bumped only when a field a guest would
+-- care about actually changes. Without it, a plan edited A → B → A would
+-- dedupe the second A against the first and silently drop a real change.
+
+alter table public.night_outs
+  add column if not exists plan_revision integer not null default 0;
+
+create or replace function public.night_outs_bump_plan_revision()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.night is distinct from old.night
+     or new.title is distinct from old.title
+     or new.status is distinct from old.status
+     or new.decided_bar_id is distinct from old.decided_bar_id
+  then
+    new.plan_revision := old.plan_revision + 1;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists night_outs_bump_plan_revision on public.night_outs;
+create trigger night_outs_bump_plan_revision
+  before update on public.night_outs
+  for each row execute function public.night_outs_bump_plan_revision();
+
+------------------------------------------------------------------------------
+-- 4. enqueue helper
+------------------------------------------------------------------------------
+-- `on conflict do nothing` is the whole idempotency contract: a duplicate
+-- occurrence is a silent no-op and never raises, so it can never fail the
+-- user-facing RPC that triggered it.
+
+create or replace function public.enqueue_notification(
+  p_event_type text,
+  p_night_out uuid,
+  p_recipient uuid,
+  p_actor uuid,
+  p_bar_id text,
+  p_dedupe_key text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Never notify someone about their own action.
+  if p_recipient is null or p_recipient = p_actor then
+    return;
+  end if;
+
+  insert into public.notification_outbox
+    (event_type, night_out_id, recipient_user_id, actor_id, bar_id, dedupe_key)
+  values
+    (p_event_type, p_night_out, p_recipient, p_actor, p_bar_id, p_dedupe_key)
+  on conflict on constraint notification_outbox_dedupe_key do nothing;
+end;
+$$;
+
+revoke all on function public.enqueue_notification(text, uuid, uuid, uuid, text, text)
+  from public, anon, authenticated;
+
+------------------------------------------------------------------------------
+-- 5. membership triggers — 'invited' and 'accepted'
+------------------------------------------------------------------------------
+
+create or replace function public.night_out_members_notify()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_owner uuid;
+begin
+  -- The plan creator's own 'owner'/'accepted' seed row is not an invitation
+  -- and not an acceptance.
+  if new.role = 'owner' then
+    return null;
+  end if;
+
+  select o.owner_id into v_owner
+    from public.night_outs o
+   where o.id = new.night_out_id;
+
+  if tg_op = 'INSERT' and new.invite_status = 'pending' then
+    -- Someone was invited. Recipient is the invitee.
+    perform public.enqueue_notification(
+      'invited', new.night_out_id, new.user_id, new.invited_by, null,
+      'invited:' || new.night_out_id::text || ':' || new.user_id::text || ':' ||
+        extract(epoch from new.created_at)::text);
+    return null;
+  end if;
+
+  -- An acceptance: either a direct token join (INSERT already 'accepted') or
+  -- a pending invitation converting (UPDATE). The host is the one who wants
+  -- to know. A decline produces no notification — the PRD has four types.
+  if new.invite_status = 'accepted'
+     and (tg_op = 'INSERT' or old.invite_status is distinct from 'accepted')
+  then
+    perform public.enqueue_notification(
+      'accepted', new.night_out_id, v_owner, new.user_id, null,
+      'accepted:' || new.night_out_id::text || ':' || new.user_id::text || ':' ||
+        extract(epoch from coalesce(new.responded_at, new.created_at))::text);
+  end if;
+
+  return null;
+end;
+$$;
+
+drop trigger if exists night_out_members_notify on public.night_out_members;
+create trigger night_out_members_notify
+  after insert or update on public.night_out_members
+  for each row execute function public.night_out_members_notify();
+
+------------------------------------------------------------------------------
+-- 6. suggestion trigger — 'bar_suggested'
+------------------------------------------------------------------------------
+
+create or replace function public.night_out_suggestions_notify()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_member record;
+begin
+  -- Everyone actually going, minus whoever suggested it.
+  for v_member in
+    select m.user_id
+      from public.night_out_members m
+     where m.night_out_id = new.night_out_id
+       and m.invite_status = 'accepted'
+       and m.user_id <> new.suggested_by
+  loop
+    perform public.enqueue_notification(
+      'bar_suggested', new.night_out_id, v_member.user_id, new.suggested_by,
+      new.bar_id,
+      'bar_suggested:' || new.night_out_id::text || ':' || new.bar_id || ':' ||
+        v_member.user_id::text);
+  end loop;
+
+  return null;
+end;
+$$;
+
+drop trigger if exists night_out_suggestions_notify on public.night_out_suggestions;
+create trigger night_out_suggestions_notify
+  after insert on public.night_out_suggestions
+  for each row execute function public.night_out_suggestions_notify();
+
+------------------------------------------------------------------------------
+-- 7. plan trigger — 'plan_changed'
+------------------------------------------------------------------------------
+
+create or replace function public.night_outs_notify()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_member record;
+begin
+  -- No bump means nothing a guest would notice changed (the BEFORE trigger in
+  -- section 3 is the single decision point for that).
+  if new.plan_revision = old.plan_revision then
+    return null;
+  end if;
+
+  for v_member in
+    select m.user_id
+      from public.night_out_members m
+     where m.night_out_id = new.id
+       and m.invite_status = 'accepted'
+  loop
+    perform public.enqueue_notification(
+      'plan_changed', new.id, v_member.user_id, v_actor, new.decided_bar_id,
+      'plan_changed:' || new.id::text || ':' || new.plan_revision::text || ':' ||
+        v_member.user_id::text);
+  end loop;
+
+  return null;
+end;
+$$;
+
+drop trigger if exists night_outs_notify on public.night_outs;
+create trigger night_outs_notify
+  after update on public.night_outs
+  for each row execute function public.night_outs_notify();
+
+------------------------------------------------------------------------------
+-- Rollback (in comments, per convention):
+--   drop trigger if exists night_outs_notify on public.night_outs;
+--   drop function if exists public.night_outs_notify();
+--   drop trigger if exists night_out_suggestions_notify on public.night_out_suggestions;
+--   drop function if exists public.night_out_suggestions_notify();
+--   drop trigger if exists night_out_members_notify on public.night_out_members;
+--   drop function if exists public.night_out_members_notify();
+--   drop function if exists public.enqueue_notification(text, uuid, uuid, uuid, text, text);
+--   drop trigger if exists night_outs_bump_plan_revision on public.night_outs;
+--   drop function if exists public.night_outs_bump_plan_revision();
+--   alter table public.night_outs drop column if exists plan_revision;
+--   drop table if exists public.notification_deliveries;
+--   drop table if exists public.notification_outbox;
+------------------------------------------------------------------------------

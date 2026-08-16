@@ -8,6 +8,12 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
 import {
+  hasPromptedForNativePush,
+  isNativePushAvailable,
+  markPromptedForNativePush,
+  registerNativePush,
+} from '@/lib/nativePush';
+import {
   cancelNightOut,
   decideNightOut,
   declineNightOutByToken,
@@ -202,6 +208,23 @@ export default function NightOutPage({
     };
   }, [auth.status, token, loadMemberView]);
 
+  /**
+   * The ONLY place this page requests iOS push permission — right after a
+   * real invite-send or accept action, never on mount and never
+   * speculatively (V8-4 PRD requirement). At most once per install unless
+   * the user re-enables from Settings, which is what
+   * hasPromptedForNativePush()/markPromptedForNativePush() enforce.
+   * Fire-and-forget: registerNativePush never throws, so nothing here can
+   * affect this page's render path.
+   */
+  const maybePromptForNativePush = (): void => {
+    if (!isNativePushAvailable() || hasPromptedForNativePush()) return;
+    markPromptedForNativePush();
+    const supabase = getBrowserSupabase();
+    if (!supabase) return;
+    void registerNativePush(supabase);
+  };
+
   const handleSignInToJoin = (): void => {
     // The handoff (criterion 7): the token rides sessionStorage through
     // /auth; PendingInviteRedirect completes the round trip.
@@ -307,12 +330,17 @@ export default function NightOutPage({
                       ? 'This night out is full.'
                       : "Couldn't join — the link may have expired.",
                   );
-                } else if (!(await loadMemberView(planId))) {
-                  // The join SUCCEEDED and the membership is stored; only the
-                  // follow-up read failed. Reporting "full" here contradicted
-                  // the database when the join took the last seat (fresh-cycle
-                  // review, Codex).
-                  setActionError("You're in — but this page couldn't load. Refresh to see it.");
+                } else {
+                  // The join succeeded (membership is stored) regardless of
+                  // whether the follow-up read below does — the accept event
+                  // already happened, so this is the right moment to ask.
+                  maybePromptForNativePush();
+                  if (!(await loadMemberView(planId))) {
+                    // Only the follow-up read failed. Reporting "full" here
+                    // contradicted the database when the join took the last
+                    // seat (fresh-cycle review, Codex).
+                    setActionError("You're in — but this page couldn't load. Refresh to see it.");
+                  }
                 }
               })();
             }}
@@ -408,6 +436,9 @@ export default function NightOutPage({
                 try {
                   await navigator.clipboard.writeText(url);
                   setShareNotice('Invite link copied.');
+                  // The invite-send action (V8-4): this is the moment to ask
+                  // for push permission, not first launch.
+                  maybePromptForNativePush();
                 } catch {
                   // Clipboard is permission-gated and absent in some in-app
                   // browsers; show the link so it can still be copied by hand
@@ -438,11 +469,14 @@ export default function NightOutPage({
             // An invited member accepts EXPLICITLY (viewing never mutates).
             <button
               type="button"
-              onClick={withRefresh(() => {
+              onClick={withRefresh(async () => {
                 const supabase = getBrowserSupabase();
-                return supabase
-                  ? respondNightOut(supabase, plan.id, true)
-                  : Promise.resolve(false);
+                if (!supabase) return false;
+                const ok = await respondNightOut(supabase, plan.id, true);
+                // Accepted (V8-4): ask for push permission right after,
+                // never on mount.
+                if (ok) maybePromptForNativePush();
+                return ok;
               })}
               className="rounded-full bg-white px-5 py-2 font-semibold text-black"
             >
@@ -452,11 +486,12 @@ export default function NightOutPage({
           {isDeclined ? (
             <button
               type="button"
-              onClick={withRefresh(() => {
+              onClick={withRefresh(async () => {
                 const supabase = getBrowserSupabase();
-                return supabase
-                  ? respondNightOut(supabase, plan.id, true)
-                  : Promise.resolve(false);
+                if (!supabase) return false;
+                const ok = await respondNightOut(supabase, plan.id, true);
+                if (ok) maybePromptForNativePush();
+                return ok;
               }, true)}
               className="rounded-full border px-5 py-2"
             >

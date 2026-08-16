@@ -74,6 +74,11 @@ const config: CapacitorConfig = {
     backgroundColor: '#0a0a0a',
     contentInset: 'automatic',
   },
+  plugins: {
+    PushNotifications: {
+      presentationOptions: ['badge', 'sound', 'alert'],
+    },
+  },
 };
 
 export default config;
