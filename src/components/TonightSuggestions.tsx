@@ -56,6 +56,13 @@ export default function TonightSuggestions(): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const night = nycNightKey();
+  // Focus restoration that survives a disabled opener. handlePick batches
+  // setPickerOpen(false) with setBusy(true), so by the time the pickerOpen
+  // cleanup runs, `+ Find a bar` is already disabled={busy} — and focus() on a
+  // disabled button is a silent no-op that drops focus to <body>, breaking the
+  // close-restores-focus contract exactly on the path a user is most likely to
+  // take. Park the element here and finish the restore when busy clears.
+  const pendingFocusRef = useRef<HTMLElement | null>(null);
 
   // The suggest picker is a full-screen role="dialog": it owes the same
   // contract as the other overlays — lock the page behind it, and hand focus
@@ -87,9 +94,25 @@ export default function TonightSuggestions(): JSX.Element | null {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       unlockScroll();
-      opener?.focus?.({ preventScroll: true });
+      if (!opener) return;
+      if (opener.hasAttribute('disabled')) {
+        pendingFocusRef.current = opener;
+        return;
+      }
+      opener.focus?.({ preventScroll: true });
     };
   }, [pickerOpen]);
+
+  // The deferred half of the restore above: once the write settles and the
+  // opener is interactive again, focus finally lands where it was taken from.
+  useEffect(() => {
+    if (busy) return;
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    pendingFocusRef.current = null;
+    if (!pending.isConnected || pending.hasAttribute('disabled')) return;
+    pending.focus?.({ preventScroll: true });
+  }, [busy]);
 
   const refresh = useCallback(async () => {
     if (auth.status !== 'signed-in') return;

@@ -247,16 +247,61 @@ test.describe('V8 native interaction contract', () => {
           return (el ?? heading).getBoundingClientRect().top;
         });
 
+      // The nav is "attached to the safe area" only if it is genuinely taken
+      // out of flow. Assert that structurally first: a static nav that happens
+      // to sit still because the page cannot scroll would satisfy every
+      // geometric check below while being exactly the bug criterion 5 names.
+      const navPosition = await nav.evaluate((el) => getComputedStyle(el).position);
+      expect(navPosition, `${route}: nav is position:${navPosition}, not fixed`).toBe(
+        'fixed',
+      );
+
+      // Overscroll from a REAL offset. Starting at scrollY 0, scrollTo(0,-1200)
+      // clamps straight back to 0, so nothing moves and the assertions below
+      // pass no matter how broken the shell is — the original form of this test
+      // could not fail. Scroll down first so there is a position to be dragged
+      // away from.
+      const maxScroll = await page.evaluate(
+        () => document.documentElement.scrollHeight - window.innerHeight,
+      );
+      expect(
+        maxScroll,
+        `${route} does not scroll, so overscroll cannot be exercised here`,
+      ).toBeGreaterThan(0);
+      const anchor = Math.min(300, maxScroll);
+      await page.evaluate((y) => window.scrollTo(0, y), anchor);
+      await settle(page);
+      expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(anchor, 0);
+
       const navBefore = await nav.boundingBox();
       const headerBefore = await headerY();
       expect(navBefore).not.toBeNull();
 
+      // Past the top, then past the bottom. The offset returns to the clamped
+      // range either way; what must not happen is the fixed chrome drifting.
       await page.evaluate(() => window.scrollTo(0, -1200));
       await settle(page);
-      expect(await headerY(), `${route}: header moved on top overscroll`).toBeCloseTo(
-        headerBefore!,
-        0,
-      );
+      expect(
+        (await nav.boundingBox())?.y,
+        `${route}: nav drifted on top overscroll`,
+      ).toBeCloseTo(navBefore!.y, 0);
+
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight + 1200));
+      await settle(page);
+      expect(
+        (await nav.boundingBox())?.y,
+        `${route}: nav drifted on bottom overscroll`,
+      ).toBeCloseTo(navBefore!.y, 0);
+
+      // Back to the anchor: the header travels WITH the page (it is in flow),
+      // so its viewport position at a given offset must be reproducible — a
+      // header that lands somewhere else after overscroll is detached.
+      await page.evaluate((y) => window.scrollTo(0, y), anchor);
+      await settle(page);
+      expect(
+        await headerY(),
+        `${route}: header did not return to its position after overscroll`,
+      ).toBeCloseTo(headerBefore!, 0);
 
       // A route change must not leave the nav detached either. Navigate by
       // TAPPING the tab rather than goto(): that is the real transition
@@ -269,6 +314,20 @@ test.describe('V8 native interaction contract', () => {
         navBefore!.y,
         0,
       );
+      // Criterion 5 names the header too, and the old test stopped at the nav:
+      // the destination must still present its own header at the top of the
+      // page, not inherit a scrolled-away one.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await settle(page);
+      const headerAfterRoute = await headerY();
+      expect(
+        headerAfterRoute,
+        `${route}: destination route has no header after the tab change`,
+      ).not.toBeNull();
+      expect(
+        headerAfterRoute!,
+        `${route}: destination header starts off-screen at ${headerAfterRoute}px`,
+      ).toBeLessThan(page.viewportSize()!.height);
     });
   }
 

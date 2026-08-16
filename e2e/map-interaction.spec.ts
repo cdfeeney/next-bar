@@ -1,20 +1,20 @@
 /**
  * map-interaction.spec.ts
  *
- * Behavioral coverage for the /map fixes:
- *  1. Bars render as markers on the map.
- *  2. Single-finger drag pans the map (gesture-handling is OFF on this full
- *     view, so default Leaflet one-pointer dragging is active).
- *  3. "Use my location" grabs geolocation and plots the user marker.
- *  4. B6 marker tiers: suggested (loud) vs rated vs everything-else (quiet
- *     grey), plus the legend chip row and the no-profile quiz hint.
+ * Behavioral coverage for /map under the LOCKED V8 design
+ * (`docs/design-reference/approved/next-bar-map-v1.png`):
+ *  1. Map-first hierarchy — the map is the page: no heading, no quiz prompt,
+ *     no page scroll before it.
+ *  2. Search, Filters and Locate float over the map.
+ *  3. Two marker meanings only: Ranked ring + muted "other" dot. There is no
+ *     suggested tier — Next Bar? owns the guided decision, the map does not
+ *     recommend.
+ *  4. Filter choices stay a draft until "Show N bars".
+ *  5. Single-finger drag pans; geolocation states still explain themselves.
  */
 
 import type { Page } from '@playwright/test';
 import { test, expect } from './helpers/catalogTest';
-
-/** How many bars the map's suggested tier may surface (useSuggestions). */
-const MAP_SUGGESTION_COUNT = 10;
 
 async function gotoLoadedMap(page: Page): Promise<void> {
   await page.goto('/map');
@@ -22,9 +22,9 @@ async function gotoLoadedMap(page: Page): Promise<void> {
 }
 
 /**
- * Seeds a saved vibe-quiz profile before the app boots, so /map computes a
- * suggested tier. Shape must satisfy storedProfile.loadProfile's validation
- * (tags + preferredNeighborhoods arrays, archetype + savedAt strings).
+ * Seeds a saved vibe-quiz profile before the app boots. Under the locked design
+ * this must change NOTHING on the map — kept precisely so "a profile silently
+ * reintroduces a recommendation tier" fails here.
  */
 const SEED_PROFILE_SCRIPT = () => {
   window.localStorage.setItem(
@@ -47,15 +47,72 @@ const COARSE_FAR = { latitude: 51.5074, longitude: -0.1278, accuracy: 3000 };
 test.describe('/map interaction', () => {
   test('renders bar markers', async ({ page }) => {
     await gotoLoadedMap(page);
-    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
     // Leaflet attribution confirms the map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,
     });
-    // Bars are plotted as Leaflet marker icons.
     const markers = page.locator('.leaflet-marker-icon');
     await expect(markers.first()).toBeVisible({ timeout: 15_000 });
     expect(await markers.count()).toBeGreaterThan(0);
+  });
+
+  test('map-first hierarchy: the map IS the page, with no heading or quiz prompt', async ({
+    page,
+  }) => {
+    await gotoLoadedMap(page);
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Reference note 1. These are the four things the pre-lock surface put
+    // ABOVE the map; each one reintroduces the recommendation hierarchy.
+    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toHaveCount(0);
+    await expect(page.getByTestId('map-quiz-hint')).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /^Discover/ })).toHaveCount(0);
+
+    // The map fills the viewport rather than sitting in a boxed card below a
+    // header — assert geometry, since "no heading" alone would still pass for a
+    // small map floating in whitespace.
+    const surface = page.getByTestId('map-surface');
+    await expect(surface).toBeVisible();
+    const viewport = page.viewportSize()!;
+    const box = await surface.boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(viewport.width - 1);
+    expect(box!.height).toBeGreaterThanOrEqual(viewport.height - 1);
+
+    // Note 1 again: nothing scrolls before the map.
+    const scrollable = await page.evaluate(
+      () => document.documentElement.scrollHeight > window.innerHeight + 1,
+    );
+    expect(scrollable, '/map scrolls, but the locked design has no page scroll').toBe(
+      false,
+    );
+  });
+
+  test('search, Filters and Locate float over the map', async ({ page }) => {
+    await gotoLoadedMap(page);
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Reference note 2 — all three are overlays, so each must sit within the
+    // map's own bounds rather than in a stacked block above it.
+    const surface = await page.getByTestId('map-surface').boundingBox();
+    for (const control of [
+      page.getByRole('searchbox', { name: /Search bars/i }),
+      page.getByRole('button', { name: /^Filters/ }),
+      page.getByRole('button', { name: /^Locate$/ }),
+    ]) {
+      await expect(control).toBeVisible();
+      const box = await control.boundingBox();
+      expect(box!.y).toBeGreaterThanOrEqual(surface!.y - 1);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(
+        surface!.y + surface!.height + 1,
+      );
+      // Criterion 9: real 44px targets.
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
   });
 
   test('single-finger pan is enabled (no gesture-handling lock) and pans', async ({
@@ -69,35 +126,26 @@ test.describe('/map interaction', () => {
     // Gesture-handling (two-finger lock) must be OFF on the full map view.
     await expect(container).not.toHaveClass(/leaflet-gesture-handling/);
 
-    // A single-pointer drag should move the tile pane (i.e. the map pans).
     const pane = page.locator('.leaflet-map-pane');
-    const before = await pane.evaluate(
-      (el) => getComputedStyle(el).transform,
-    );
+    const before = await pane.evaluate((el) => getComputedStyle(el).transform);
     // Night-loop N1: the pan-MOTION assertion is Chromium-only. On the
     // iPhone-13 project (WebKit + hasTouch) Leaflet ignores Playwright's
-    // synthetic mouse drags, and synthetic Pointer/TouchEvents aren't
-    // trusted enough to drive its drag handler either — an emulator
-    // limitation, not an app bug (the two-finger-lock class assertion
-    // above still guards the actual regression on every device).
+    // synthetic mouse drags — an emulator limitation, not an app bug (the
+    // two-finger-lock class assertion above still guards the regression).
     if (browserName === 'webkit') return;
 
-    // QA2 made the page taller (filter rows) — the container's CENTER can
-    // land under the fixed bottom nav, which swallows the drag. Scroll the
-    // map into view and drag from its visible upper portion instead.
-    await container.scrollIntoViewIfNeeded();
     const box = await container.boundingBox();
     if (!box) throw new Error('no map bounding box');
+    // Drag from the upper-middle: the floating search sits at the top and the
+    // fixed nav at the bottom, so aim between them.
     const cx = box.x + box.width / 2;
-    const cy = Math.max(box.y + 40, Math.min(box.y + 200, box.y + box.height / 3));
+    const cy = box.y + box.height / 2;
     await page.mouse.move(cx, cy);
     await page.mouse.down();
     await page.mouse.move(cx - 120, cy - 90, { steps: 8 });
     await page.mouse.up();
     await page.waitForTimeout(300);
-    const after = await pane.evaluate(
-      (el) => getComputedStyle(el).transform,
-    );
+    const after = await pane.evaluate((el) => getComputedStyle(el).transform);
     expect(after).not.toBe(before);
   });
 
@@ -109,14 +157,12 @@ test.describe('/map interaction', () => {
     await context.setGeolocation(NYC);
     await gotoLoadedMap(page);
 
-    // U2-4 auto-resume: granted permission → the map locates on mount.
     await expect(page.getByText(/Showing your location on the map/i)).toBeVisible(
       { timeout: 15_000 },
     );
-    // The button reads as the update affordance without ever being tapped.
-    await expect(
-      page.getByRole('button', { name: /Update my location/i }),
-    ).toBeVisible();
+    // The locked control reads "Locate" in every state (reference note 2); the
+    // status line, not the button label, reports the fix.
+    await expect(page.getByRole('button', { name: /^Locate$/ })).toBeVisible();
   });
 
   test('a too-rough location explains itself instead of silently no-op-ing', async ({
@@ -127,8 +173,6 @@ test.describe('/map interaction', () => {
     await context.setGeolocation(COARSE_FAR);
     await gotoLoadedMap(page);
 
-    // U2-4: the auto-resume attempt runs on mount; a coarse fix must still
-    // surface its explanation, not leave a silent gap.
     await expect(page.getByText(/too rough to pin exactly/i)).toBeVisible({
       timeout: 15_000,
     });
@@ -139,76 +183,41 @@ test.describe('/map interaction', () => {
   });
 });
 
-test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)', () => {
-  test('legend chip row renders all three tiers', async ({ page }) => {
+test.describe('/map marker meanings (locked: Ranked + other only)', () => {
+  test('the legend names exactly the two marker meanings', async ({ page }) => {
     await gotoLoadedMap(page);
     const legend = page.getByTestId('map-legend');
     await expect(legend).toBeVisible();
-    await expect(legend).toContainText('Suggested');
-    await expect(legend).toContainText('Rated');
-    // UX-C: the grey dot is just "Bar" — minimum words.
-    await expect(legend).toContainText('Bar');
-    await expect(legend).not.toContainText('Everything else');
+    await expect(legend).toContainText('Ranked');
+    await expect(legend).toContainText('Other bars');
+    // Reference note 3: no suggested tier, and no Loved/Liked/Pass on the map.
+    await expect(legend).not.toContainText('Suggested');
+    for (const word of ['Loved', 'Liked', 'Pass']) {
+      await expect(legend).not.toContainText(word);
+    }
   });
 
-  test('seeded profile: suggested markers ≤ 10 and grey markers exist', async ({
+  test('no suggested markers render — even with a seeded quiz profile', async ({
     page,
   }) => {
     await page.addInitScript(SEED_PROFILE_SCRIPT);
     await gotoLoadedMap(page);
 
-    // Map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,
     });
 
-    const suggested = page.locator(
-      '.leaflet-marker-icon [data-tier="suggested"]',
-    );
     const grey = page.locator('.leaflet-marker-icon [data-tier="other"]');
-
-    // At least one suggestion computes for the seeded profile, capped at
-    // the suggestion count — the rest of the catalog stays quiet grey.
-    await expect(suggested.first()).toBeVisible({ timeout: 15_000 });
-    const suggestedCount = await suggested.count();
-    expect(suggestedCount).toBeGreaterThan(0);
-    expect(suggestedCount).toBeLessThanOrEqual(MAP_SUGGESTION_COUNT);
-
     await expect(grey.first()).toBeVisible({ timeout: 15_000 });
     expect(await grey.count()).toBeGreaterThan(0);
 
-    // With a profile present, the quiz hint must NOT show.
+    // Note 5 — the map does not recommend. A profile is exactly the input that
+    // used to switch the loud suggested tier on, so this is where a regression
+    // would land.
+    await expect(
+      page.locator('.leaflet-marker-icon [data-tier="suggested"]'),
+    ).toHaveCount(0);
     await expect(page.getByTestId('map-quiz-hint')).toHaveCount(0);
-  });
-
-  test('no profile: suggested dots STILL show (empty-profile fallback), quiz hint links to /quiz (UX-C)', async ({
-    page,
-  }) => {
-    await gotoLoadedMap(page);
-
-    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
-      timeout: 15_000,
-    });
-
-    const grey = page.locator('.leaflet-marker-icon [data-tier="other"]');
-    await expect(grey.first()).toBeVisible({ timeout: 15_000 });
-
-    // UX-C (operator: "no suggested bars for me now"): a missing quiz
-    // profile falls back to the empty profile — the suggested tier is
-    // NEVER blank.
-    const suggested = page.locator(
-      '.leaflet-marker-icon [data-tier="suggested"]',
-    );
-    await expect(suggested.first()).toBeVisible({ timeout: 15_000 });
-    expect(await suggested.count()).toBeLessThanOrEqual(MAP_SUGGESTION_COUNT);
-
-    // The one-line personalize hint still links to the quiz.
-    const hint = page.getByTestId('map-quiz-hint');
-    await expect(hint).toBeVisible();
-    await expect(hint.getByRole('link', { name: /quiz/i })).toHaveAttribute(
-      'href',
-      '/quiz',
-    );
   });
 
   test('map search flies to the picked bar and opens its popup (UX-C)', async ({
@@ -225,7 +234,6 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
       .getByRole('button', { name: /Attaboy/ })
       .click();
 
-    // The popup names the bar (fly animation settles under the retry).
     await expect(page.locator('.leaflet-popup')).toContainText('Attaboy', {
       timeout: 10_000,
     });
@@ -234,8 +242,8 @@ test.describe('/map marker tiers (B6: suggestions loud, everything else quiet)',
   });
 });
 
-test.describe('/map Find Bar filters (QA2)', () => {
-  test('a neighborhood chip narrows the markers; Clear restores them', async ({
+test.describe('/map filter sheet (locked: draft until "Show N bars")', () => {
+  test('the sheet keeps the map visible and holds choices as a draft', async ({
     page,
   }) => {
     await gotoLoadedMap(page);
@@ -248,33 +256,67 @@ test.describe('/map Find Bar filters (QA2)', () => {
     const allCount = await markers.count();
     expect(allCount).toBeGreaterThan(0);
 
-    // Neighborhood is a row inside the same accordion as every vibe axis.
-    const filters = page.getByTestId('findbar-filters');
-    await expect(filters.getByRole('group', { name: 'Filter by distance' })).toHaveCount(0);
+    await page.getByRole('button', { name: /^Filters/ }).click();
+    const sheet = page.getByTestId('map-filter-sheet');
+    await expect(sheet).toBeVisible();
+
+    // Reference note 2: the sheet is COMPACT — the map stays visible behind it.
+    const viewport = page.viewportSize()!;
+    const sheetBox = await sheet.boundingBox();
+    expect(
+      sheetBox!.height,
+      'the filter sheet covers the map instead of keeping it visible',
+    ).toBeLessThan(viewport.height * 0.75);
+    await expect(page.locator('.leaflet-container')).toBeVisible();
+
+    // Pick a neighborhood inside the sheet.
+    const filters = sheet.getByTestId('findbar-filters');
     await filters.getByTestId('vibe-filter-toggle').click();
-    await expect(filters.getByRole('heading', { name: 'Tweak the vibe' })).toBeVisible();
-    await expect(filters.getByRole('button', { name: 'Sound' })).toBeVisible();
     await filters.getByRole('button', { name: 'Neighborhood' }).click();
-    await filters.getByRole('group', { name: 'Neighborhood' })
+    await filters
+      .getByRole('group', { name: 'Neighborhood' })
       .getByRole('button', { name: /^Lower East Side$/ })
       .click();
     await filters.getByRole('button', { name: 'Apply' }).click();
 
+    // DRAFT: the map behind the sheet has not changed yet. This is the whole
+    // point of note 2 — committing on every tap makes the map twitch while the
+    // user is still deciding.
+    await expect(markers).toHaveCount(allCount);
+
+    // Committing applies it.
+    await page.getByRole('button', { name: /^Show \d+ bars?$/ }).click();
+    await expect(sheet).toHaveCount(0);
     await expect
       .poll(async () => markers.count(), { timeout: 15_000 })
       .toBeLessThan(allCount);
-    // The badge counts the one active filter.
-    await expect(page.getByTestId('filter-count')).toHaveText('1');
+    await expect(page.getByRole('button', { name: /^Filters \(1\)$/ })).toBeVisible();
+  });
 
-    // One-tap Clear restores the full catalog.
-    await page.getByTestId('filter-clear').click();
-    await expect
-      .poll(async () => markers.count(), { timeout: 15_000 })
-      .toBe(allCount);
-    await expect(page.getByTestId('filter-count')).toHaveCount(0);
+  test('cancelling the sheet discards the draft', async ({ page }) => {
+    await gotoLoadedMap(page);
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
+      timeout: 15_000,
+    });
+    const markers = page.locator('.leaflet-marker-icon');
+    await expect(markers.first()).toBeVisible({ timeout: 15_000 });
+    const allCount = await markers.count();
 
-    // Reopening preserves the neighborhood as a formatted accordion summary.
+    await page.getByRole('button', { name: /^Filters/ }).click();
+    const sheet = page.getByTestId('map-filter-sheet');
+    const filters = sheet.getByTestId('findbar-filters');
     await filters.getByTestId('vibe-filter-toggle').click();
-    await expect(filters.getByRole('button', { name: 'Neighborhood' })).toContainText('Anywhere');
+    await filters.getByRole('button', { name: 'Neighborhood' }).click();
+    await filters
+      .getByRole('group', { name: 'Neighborhood' })
+      .getByRole('button', { name: /^Lower East Side$/ })
+      .click();
+    await filters.getByRole('button', { name: 'Apply' }).click();
+    await sheet.getByRole('button', { name: 'Cancel' }).click();
+
+    await expect(sheet).toHaveCount(0);
+    // Discarded, not applied — and no stale filter badge left behind.
+    await expect(markers).toHaveCount(allCount);
+    await expect(page.getByRole('button', { name: /^Filters$/ })).toBeVisible();
   });
 });

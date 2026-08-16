@@ -311,13 +311,31 @@ export default function BarLightbox({
             </h3>
             <table className="w-full text-sm">
               <tbody>
+                {/* Locked reference POLISH 4: the current row is labelled
+                    "Today" with a restrained accent rule and tint — NOT colour
+                    alone. `text-accent` on its own is invisible to anyone who
+                    cannot separate coral from grey, which is the one thing the
+                    recovered token list rules out ("state never conveyed by
+                    color alone"). */}
                 {rows.map((r) => (
                   <tr
                     key={r.day}
-                    className={r.isToday ? 'text-accent' : 'text-muted'}
+                    data-today={r.isToday ? 'true' : undefined}
+                    className={
+                      r.isToday
+                        ? 'text-text bg-accent/10 border-l-2 border-accent'
+                        : 'text-muted border-l-2 border-transparent'
+                    }
                   >
-                    <td className="py-0.5 pr-4 font-display w-14">{r.day}</td>
+                    <td className="py-0.5 pl-2 pr-4 font-display w-14">{r.day}</td>
                     <td className="py-0.5">{r.hours}</td>
+                    <td className="py-0.5 pr-2 text-right">
+                      {r.isToday ? (
+                        <span className="inline-block rounded-full border border-accent px-2 py-0.5 text-[10px] font-display uppercase tracking-wider text-accent">
+                          Today
+                        </span>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -351,21 +369,26 @@ export default function BarLightbox({
           </ul>
         ) : null}
 
-        <div className="flex items-center gap-3 pb-4">
-          <Link
-            href={`/rankings?add=${bar.id}`}
-            className="flex-1 text-center bg-accent hover:bg-accentDim transition-colors text-bg font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation"
-          >
-            Rank it →
-          </Link>
+        {/* Locked reference POLISH 5: ONE clear primary — filled coral "View on
+            Maps" — with the quieter outline beside it, and safe-area padding so
+            the row clears the home indicator. The filled/outline pair was the
+            other way round, which made the app's own funnel the loudest thing
+            on a panel whose job is getting the user to the bar. */}
+        <div className="flex items-center gap-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <a
             href={mapsHref}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex-1 text-center border border-border text-text font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation hover:border-accent transition-colors"
+            className="flex-1 text-center bg-accent hover:bg-accentDim transition-colors text-bg font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation"
           >
             View on Maps
           </a>
+          <Link
+            href={`/rankings?add=${bar.id}`}
+            className="flex-1 text-center border border-border text-text font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation hover:border-accent transition-colors"
+          >
+            Rank it
+          </Link>
         </div>
       </div>
     </div>

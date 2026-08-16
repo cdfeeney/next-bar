@@ -43,6 +43,13 @@ type BarMapProps = {
    * gesture-handling (two-finger) keeps single-finger swipes scrolling the page.
    */
   oneFingerPan?: boolean;
+  /**
+   * Edge-to-edge mode for the /map surface, where the locked design makes the
+   * map the page itself: no card border, no aspect ratio, height inherited from
+   * the parent. Embedded maps (WhereNextFlow results) leave this off and keep
+   * their framed card.
+   */
+  fill?: boolean;
 };
 
 const NYC_FALLBACK_CENTER: Coords = { lat: 40.7250, lng: -73.9850 };
@@ -186,7 +193,7 @@ function FocusBar({ bar, nonce }: { bar: Bar | null; nonce?: number }) {
   return null;
 }
 
-export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, fitToBars, oneFingerPan }: BarMapProps) {
+export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, fitToBars, oneFingerPan, fill }: BarMapProps) {
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -206,12 +213,18 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
   );
 
   return (
-    <section className="px-4 py-8 md:px-6 md:py-12">
-      <div className="max-w-5xl mx-auto">
+    <section className={fill ? 'h-full w-full' : 'px-4 py-8 md:px-6 md:py-12'}>
+      <div className={fill ? 'h-full w-full' : 'max-w-5xl mx-auto'}>
         <div
-          className="rounded-2xl border border-border overflow-hidden"
+          className={
+            fill
+              ? 'h-full w-full overflow-hidden'
+              : 'rounded-2xl border border-border overflow-hidden'
+          }
           style={{
-            aspectRatio: '4 / 5',
+            // `fill` maps ARE the page (the /map surface): edge to edge, no card
+            // chrome, height from the parent instead of an aspect ratio.
+            ...(fill ? { height: '100%' } : { aspectRatio: '4 / 5' }),
             // One-finger-pan maps own the touch surface entirely ('none'); embedded
             // maps keep 'pan-y' so a vertical swipe still scrolls the page.
             touchAction: oneFingerPan ? 'none' : 'pan-y',

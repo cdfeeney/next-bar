@@ -43,7 +43,9 @@ test.describe('App-shell smoke', () => {
 
   test('/map renders the Leaflet map', async ({ page }) => {
     await page.goto('/map');
-    await expect(page.getByRole('heading', { name: /^Find Bar$/ })).toBeVisible();
+    // The locked design has no heading on this surface — the map IS the page,
+    // so the map surface itself is the recognizable landmark.
+    await expect(page.getByTestId('map-surface')).toBeVisible();
     // Leaflet attribution link is a reliable marker that the map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
       timeout: 15_000,

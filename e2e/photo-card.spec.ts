@@ -15,17 +15,17 @@ import { denyGeolocation } from './helpers/geo';
 const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
 
 /**
- * The legacy re-hosted Google photo files are behind a kill switch
- * (src/lib/mediaPolicy.ts). It is OFF by default — CI has no .env.local — and
- * ON for anyone whose .env.local still sets it, which is what the operator's
- * machine ships. The lightbox therefore renders zero images in one state and
- * the cached carousel in the other, so assert the policy that has to hold in
- * BOTH rather than the one that happens to hold in CI: the app never hotlinks
- * Google, and attribution is always on screen. playwright.config.ts loads
- * .env.local so this reads the same value the server was built with.
+ * The legacy re-hosted Google photo files (src/lib/mediaPolicy.ts,
+ * `legacy-google-cached`) are the non-compliant state Phase 1 exists to stop.
+ * playwright.config.ts pins NEXT_PUBLIC_LEGACY_PHOTOS=0 for the server under
+ * test, so this guard asserts the shipped policy unconditionally.
+ *
+ * It used to branch on the ambient flag and accept a visible /bar-photos/
+ * carousel as a pass. That inverted the guard: on the operator's machine, whose
+ * .env.local sets the flag, the one test protecting the no-photo-cache policy
+ * asserted that the cache WAS being served. A guard that passes in the state it
+ * exists to forbid is not a guard.
  */
-const legacyPhotosEnabled = process.env.NEXT_PUBLIC_LEGACY_PHOTOS === '1';
-
 async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
   await page.clock.setFixedTime(FRIDAY_NIGHT);
   await page.goto('/');
@@ -63,18 +63,10 @@ test.describe('Hero result card', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     // Places UI Kit owns its media; V7 must not render cached app-owned images.
-    const images = dialog.locator('img');
-    if (legacyPhotosEnabled) {
-      await expect(images.first()).toBeVisible();
-      const sources = await images.evaluateAll((nodes) =>
-        nodes.map((node) => (node as HTMLImageElement).getAttribute('src') ?? ''),
-      );
-      // Re-encoded files served from our own domain — never a Google CDN URL.
-      for (const src of sources) expect(src).toMatch(/^\/bar-photos\//);
-      await expect(dialog.getByText(/· Google$/)).toBeVisible();
-    } else {
-      await expect(images).toHaveCount(0);
-    }
+    await expect(dialog.locator('img')).toHaveCount(0);
+    // State the forbidden thing directly, so a regression that re-introduces the
+    // re-hosted cache fails on the policy rather than on an incidental count.
+    await expect(dialog.locator('img[src^="/bar-photos/"]')).toHaveCount(0);
     await expect(dialog.getByRole('heading', { name: 'Hours' })).toBeVisible();
   });
 

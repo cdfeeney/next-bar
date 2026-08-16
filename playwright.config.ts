@@ -32,7 +32,10 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: true,
-  retries: process.env.CI ? 2 : 0,
+  // Release mode is the zero-retry gate, so it wins over CI. Written the other
+  // way round (`CI ? 2 : 0`), `CI=1 PLAYWRIGHT_RELEASE=1` silently granted two
+  // retries and a flake could pass the very gate that exists to catch it.
+  retries: releaseMode ? 0 : process.env.CI ? 2 : 0,
   // Release mode is the ZERO-RETRY gate, so it must be deterministic. Every
   // page load hydrates the full bars catalog from Supabase, so parallel
   // workers starve the single server: at six workers vibe-vote timed out at
@@ -77,6 +80,14 @@ export default defineConfig({
       ? `npm run build && npm run start -- --port ${port}`
       : `npm run dev -- --port ${port}`,
     url: baseURL,
+    // The suite tests the SHIPPED media policy, so the server under test is
+    // always built with the legacy re-hosted-Google-photo cache off. Without
+    // this the assertion depended on whoever's .env.local was on disk: the
+    // operator's machine sets the flag, so the no-photo-cache guard quietly
+    // asserted the non-compliant state instead of the policy (V8 AC 8).
+    // Exercising the legacy path is a deliberate act — set it in a spec that
+    // says so, not by inheriting ambient environment.
+    env: { ...process.env, NEXT_PUBLIC_LEGACY_PHOTOS: '0' } as Record<string, string>,
     // A pinned port means "give me my own server" — reusing whatever already
     // listens there would defeat the isolation it was pinned for.
     reuseExistingServer: !releaseMode && !isPinnedPort,
