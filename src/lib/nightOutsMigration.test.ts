@@ -210,3 +210,78 @@ describe('0044_night_outs.sql security shape', () => {
     expect(SQL).toMatch(/create or replace function/);
   });
 });
+
+/**
+ * 0046 supersedes four of 0044's functions. The assertions in the block above
+ * still describe 0044's TEXT, which is correct as a record of an applied,
+ * immutable file — but for join_night_out_by_token, decline_night_out_by_token,
+ * invite_to_night_out and get_night_out it is no longer the effective
+ * definition. Read this block for those four.
+ *
+ * These are ORDERING invariants, and they exist because the thing they guard
+ * cannot be exercised behaviorally on staging: the 20-member boundary needs 21
+ * distinct fixture identities and public.profiles is FK'd to auth.users, which
+ * this suite does not manufacture. A static guard is the honest fallback, not a
+ * substitute — see the residual-risk note in the goal.
+ */
+const SQL_0046 = readFileSync(
+  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0046_night_outs_cap_and_race.sql'),
+  'utf8',
+).toLowerCase();
+
+/** The body of one create-or-replace function, up to its closing $$. */
+function functionBody(sql: string, name: string): string {
+  const start = sql.indexOf(`create or replace function public.${name}`);
+  expect(start, `${name} not found in 0046`).toBeGreaterThan(-1);
+  const end = sql.indexOf('$$;', start);
+  expect(end, `${name} has no terminator`).toBeGreaterThan(start);
+  return sql.slice(start, end);
+}
+
+describe('0046_night_outs_cap_and_race.sql — the round-2 ordering invariants', () => {
+  it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
+    const body = functionBody(SQL_0046, 'join_night_out_by_token');
+    const lock = body.indexOf('pg_advisory_xact_lock');
+    const conversion = body.indexOf("set invite_status = 'accepted'", lock);
+    const capCheck = body.indexOf('member_cap', conversion);
+    expect(lock, 'join takes no advisory lock').toBeGreaterThan(-1);
+    expect(conversion, 'no own-row conversion after the lock').toBeGreaterThan(lock);
+    // The whole defect was asking about capacity before knowing whether this
+    // call even takes capacity. Converting an existing invite is not a new seat.
+    expect(capCheck, 'the cap check must come AFTER the post-lock conversion')
+      .toBeGreaterThan(conversion);
+  });
+
+  it('declining is never rationed by capacity (round-2 medium)', () => {
+    const body = functionBody(SQL_0046, 'decline_night_out_by_token');
+    expect(body).not.toMatch(/member_cap/);
+    // Still serialised, so a concurrent invite cannot swallow the decline.
+    expect(body).toMatch(/pg_advisory_xact_lock/);
+  });
+
+  it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
+    const body = functionBody(SQL_0046, 'respond_night_out');
+    expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
+      /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
+    );
+    expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
+    expect(body, 'the cap only applies when a declined row re-enters the counted set')
+      .toMatch(/v_current = 'declined'/);
+  });
+
+  it('every cap count excludes declined rows, in every function that counts', () => {
+    const counts = [...SQL_0046.matchAll(/select count\(\*\) into v_count[\s\S]{0,300}?;/g)]
+      .map(([match]) => match);
+    expect(counts.length, 'expected at least one cap count in 0046').toBeGreaterThan(0);
+    for (const count of counts) {
+      expect(count, `a cap count still counts declined rows: ${count}`)
+        .toMatch(/invite_status <> 'declined'/);
+    }
+  });
+
+  it('is create-or-replace only — additive over an applied migration (criterion 11)', () => {
+    expect(SQL_0046).not.toMatch(/^create (table|index|unique index|policy)/im);
+    expect(SQL_0046).not.toMatch(/^(drop|alter) table/im);
+    expect(SQL_0046).toMatch(/create or replace function/);
+  });
+});

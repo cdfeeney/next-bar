@@ -60,11 +60,45 @@ const URL = databaseUrl();
  *   NEXT_BAR_STAGING_PROJECT_REFS=<ref>[,<ref>...]
  *   NEXT_BAR_PRODUCTION_PROJECT_REF=<ref>
  */
+/**
+ * Ask `pg` itself what it will connect AS, rather than reading the URL.
+ *
+ * Round-2 review (Codex): the first version of this gate parsed
+ * `new URL(connectionString).username`, but pg's connection-string parser gives
+ * QUERY PARAMETERS precedence over the authority. A string whose authority says
+ * `postgres.<staging-ref>` while its query says `user=postgres.<production-ref>`
+ * passed the gate and connected to production — the gate read one value and pg
+ * used another. Building the client and inspecting its own resolved parameters
+ * makes those the same question by construction.
+ *
+ * `connectionParameters` is not in @types/pg, hence the narrow cast.
+ */
+function effectiveConnection(connectionString: string): { user: string; host: string } {
+  const probe = new Client({ connectionString }) as unknown as {
+    connectionParameters?: { user?: string; host?: string };
+  };
+  return {
+    user: probe.connectionParameters?.user ?? '',
+    host: probe.connectionParameters?.host ?? '',
+  };
+}
+
 function assertStagingOnly(connectionString: string): void {
-  const ref = decodeURIComponent(new globalThis.URL(connectionString).username).split('.').pop() ?? '';
+  const effective = effectiveConnection(connectionString);
+  const ref = effective.user.split('.').pop() ?? '';
   const allowlist = (envValue('NEXT_BAR_STAGING_PROJECT_REFS') ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
   const productionRef = envValue('NEXT_BAR_PRODUCTION_PROJECT_REF');
+
+  // No host override either: the connection must go where the URL's authority
+  // says it goes, so a redirected host cannot ride along with an allowlisted user.
+  const authorityHost = new globalThis.URL(connectionString).hostname;
+  if (authorityHost && effective.host && effective.host !== authorityHost) {
+    throw new Error(
+      'nightOutsRls.live.test.ts refuses to run: the effective connection host does not match the '
+      + 'connection string authority, so the target was overridden by a query parameter.',
+    );
+  }
 
   if (allowlist.length === 0) {
     throw new Error(
@@ -335,6 +369,87 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
         [planId, stranger],
       );
       expect(leaked.rowCount, 'a refused write still created a membership row').toBe(0);
+    });
+  });
+
+
+  it('an explicit accept and an explicit decline both survive and are exactly-once (criterion 8, round-2 fixes)', async () => {
+    // What this DOES cover: the conversion paths 0046 restructured — a pending
+    // invite converting on a link tap, a fresh recipient declining, and a
+    // declined member rejoining explicitly — each landing in the right terminal
+    // state with exactly one event.
+    //
+    // What it does NOT cover, stated plainly: the 20-member CAP BOUNDARY, which
+    // is where the round-2 HIGH actually lived. Reaching it needs 21 distinct
+    // fixture identities and public.profiles is FK'd to auth.users, which this
+    // suite does not manufacture. The ordering invariant that fixes the
+    // boundary is guarded statically in nightOutsMigration.test.ts instead.
+    await inRollback(async () => {
+      const { rows: people } = await db.query('select id from public.profiles limit 2');
+      expect(people.length, 'need 2 profiles').toBe(2);
+      const [owner, guest] = people.map((r) => r.id as string);
+
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query('select public.create_night_out(current_date, $1) as id', ['accept path probe']);
+      const planId = made[0].id as string;
+      const { rows: invited } = await db.query('select public.invite_to_night_out($1, $2) as ok', [planId, guest]);
+      expect(invited[0].ok, 'owner could not invite').toBe(true);
+
+      await db.query('RESET ROLE');
+      const { rows: tok } = await db.query('select share_token from public.night_outs where id = $1', [planId]);
+      const token = tok[0].share_token as string;
+
+      // Pending invitee taps the link: converts, and says so.
+      await asRole('authenticated', guest);
+      const { rows: joined } = await db.query('select public.join_night_out_by_token($1) as id', [token]);
+      expect(joined[0].id, 'the invitee could not join by token').toBe(planId);
+
+      await db.query('RESET ROLE');
+      const after = await db.query(
+        'select invite_status, responded_at from public.night_out_members where night_out_id = $1 and user_id = $2',
+        [planId, guest],
+      );
+      expect(after.rows[0].invite_status, 'an explicit accept did not stick').toBe('accepted');
+      expect(after.rows[0].responded_at, 'accepted without a responded_at').not.toBeNull();
+      const accepted = await db.query(
+        "select count(*)::int as n from public.night_out_events where night_out_id = $1 and actor_id = $2 and kind = 'accepted'",
+        [planId, guest],
+      );
+      expect(accepted.rows[0].n, 'accepted event is not exactly-once').toBe(1);
+
+      // Explicit "Not tonight" after accepting, then an explicit rejoin.
+      await asRole('authenticated', guest);
+      const { rows: no } = await db.query('select public.respond_night_out($1, false) as ok', [planId]);
+      expect(no[0].ok, 'an accepted member could not decline').toBe(true);
+      await db.query('RESET ROLE');
+      const declined = await db.query(
+        'select invite_status from public.night_out_members where night_out_id = $1 and user_id = $2',
+        [planId, guest],
+      );
+      expect(declined.rows[0].invite_status).toBe('declined');
+
+      // A mere link visit must NOT resurrect a declined member (round-1 rule,
+      // preserved through two rewrites of this function).
+      await asRole('authenticated', guest);
+      await db.query('select public.join_night_out_by_token($1) as id', [token]);
+      await db.query('RESET ROLE');
+      const stillDeclined = await db.query(
+        'select invite_status from public.night_out_members where night_out_id = $1 and user_id = $2',
+        [planId, guest],
+      );
+      expect(stillDeclined.rows[0].invite_status, 'visiting a link silently re-accepted a declined member')
+        .toBe('declined');
+
+      // ...but an EXPLICIT rejoin does, when there is room.
+      await asRole('authenticated', guest);
+      const { rows: back } = await db.query('select public.respond_night_out($1, true) as ok', [planId]);
+      expect(back[0].ok, 'an explicit rejoin was refused while under the cap').toBe(true);
+      await db.query('RESET ROLE');
+      const rejoined = await db.query(
+        'select invite_status from public.night_out_members where night_out_id = $1 and user_id = $2',
+        [planId, guest],
+      );
+      expect(rejoined.rows[0].invite_status).toBe('accepted');
     });
   });
 

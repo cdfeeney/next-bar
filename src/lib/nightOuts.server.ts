@@ -22,7 +22,9 @@ export type NightOut = {
   decidedBarId: string | null;
   ownerHandle: string | null;
   ownerDisplayName: string | null;
-  shareToken: string;
+  // Null unless the caller is an ACCEPTED member: 0046's get_night_out gates
+  // share_token on invite_status, so pending/declined callers receive SQL NULL.
+  shareToken: string | null;
   callerRole: 'owner' | 'member' | null;
   callerStatus: 'pending' | 'accepted' | 'declined' | null;
 };
@@ -196,7 +198,7 @@ type NightOutRow = {
   decided_bar_id: string | null;
   owner_handle: string | null;
   owner_display_name: string | null;
-  share_token: string;
+  share_token: string | null;
   caller_role: NightOut['callerRole'];
   caller_status: NightOut['callerStatus'];
 };
