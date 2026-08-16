@@ -219,6 +219,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       ['suggest_night_out_bar', `select public.suggest_night_out_bar('${randomUUID()}'::uuid, 'attaboy')`],
       ['vote_night_out_bar', `select public.vote_night_out_bar('${randomUUID()}'::uuid, 'attaboy')`],
       ['night_out_is_full_by_token', `select public.night_out_is_full_by_token('${randomUUID()}'::uuid)`],
+      // 0048's internal helpers: revoked from every client role, since only the
+      // SECURITY DEFINER RPCs (running as the owner) call them.
+      ['night_out_member_cap', 'select public.night_out_member_cap()'],
+      ['night_out_seat_count', `select public.night_out_seat_count('${randomUUID()}'::uuid)`],
     ];
     for (const [name, sql] of writes) {
       const denied = await inRollback(async () => {

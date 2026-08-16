@@ -190,14 +190,21 @@ export default function NightOutPage({
     router.push('/auth');
   };
 
+  /**
+   * `capacityRefusable` marks the ONE action the member cap can actually
+   * refuse: a declined member rejoining. Asking "is it full?" after every
+   * failure mislabels unrelated ones — on a full plan, a suggestion-cap or
+   * vote failure was reported as "This night out is full" (fresh-cycle review,
+   * both lanes). The probe is a diagnosis for a specific refusal, not a
+   * general explanation for failure.
+   */
   const withRefresh =
-    (action: () => Promise<boolean>) => async (): Promise<void> => {
+    (action: () => Promise<boolean>, capacityRefusable = false) =>
+    async (): Promise<void> => {
       setActionError(null);
       const ok = await action();
       if (!ok) {
-        // "Try again" is the wrong advice when the plan is simply full — the
-        // retry can never succeed (round-3 review).
-        const supabase = getBrowserSupabase();
+        const supabase = capacityRefusable ? getBrowserSupabase() : null;
         const full = supabase ? await isNightOutFullByToken(supabase, token) : false;
         setActionError(
           full
@@ -273,14 +280,20 @@ export default function NightOutPage({
                 if (!supabase) return;
                 setActionError(null);
                 const planId = await joinNightOutByToken(supabase, token);
-                if (planId === null || !(await loadMemberView(planId))) {
+                if (planId === null) {
                   // The link is fine when the plan is merely full; saying it
-                  // expired sends the user to ask for a new one (round-3 review).
+                  // expired sends the user to ask for a new one.
                   setActionError(
                     (await isNightOutFullByToken(supabase, token))
                       ? 'This night out is full.'
                       : "Couldn't join — the link may have expired.",
                   );
+                } else if (!(await loadMemberView(planId))) {
+                  // The join SUCCEEDED and the membership is stored; only the
+                  // follow-up read failed. Reporting "full" here contradicted
+                  // the database when the join took the last seat (fresh-cycle
+                  // review, Codex).
+                  setActionError("You're in — but this page couldn't load. Refresh to see it.");
                 }
               })();
             }}
@@ -425,7 +438,7 @@ export default function NightOutPage({
                 return supabase
                   ? respondNightOut(supabase, plan.id, true)
                   : Promise.resolve(false);
-              })}
+              }, true)}
               className="rounded-full border px-5 py-2"
             >
               Count me back in

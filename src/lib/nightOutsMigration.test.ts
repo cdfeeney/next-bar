@@ -220,8 +220,11 @@ describe('0044_night_outs.sql security shape', () => {
  *   0044 — night_out_role, create_night_out, cancel_night_out, decide_night_out,
  *          suggest/vote, the member-scoped reads, preview, resolve-by-token
  *   0045 — invite_to_night_out, get_night_out
- *   0046 — join_night_out_by_token, decline_night_out_by_token, respond_night_out
- *   0047 — night_outs column grants, night_out_is_full_by_token
+ *   0046 — (superseded by 0048)
+ *   0047 — night_outs column grants
+ *   0048 — night_out_member_cap, night_out_seat_count, and the four callers:
+ *          join_night_out_by_token, decline_night_out_by_token,
+ *          respond_night_out, night_out_is_full_by_token
  *
  * The assertions in the block above still describe 0044's TEXT, which is correct
  * as a record of an applied, immutable file, but is NOT the effective definition
@@ -292,5 +295,57 @@ describe('0046_night_outs_cap_and_race.sql — the round-2 ordering invariants',
     expect(SQL_0046).not.toMatch(/^create (table|index|unique index|policy)/im);
     expect(SQL_0046).not.toMatch(/^(drop|alter) table/im);
     expect(SQL_0046).toMatch(/create or replace function/);
+  });
+});
+
+/**
+ * 0048 exists so the cap and the seat-count predicate have ONE definition. The
+ * assertion that matters is the negative one: no caller may carry its own copy
+ * again, because 0046/0047 are immutable and a fifth copy could not be edited
+ * back into agreement either.
+ */
+const SQL_0048_RAW = readFileSync(
+  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0048_night_outs_cap_single_source.sql'),
+  'utf8',
+).toLowerCase();
+/**
+ * Counting "how many times is this rule written down" must count CODE, not
+ * prose — the header comment explains the rule and quoting it there is not a
+ * second definition. Stripping line comments is what makes the assertion
+ * measure the thing it claims to measure.
+ */
+const SQL_0048 = SQL_0048_RAW.replace(/--.*/g, '');
+
+describe('0048_night_outs_cap_single_source.sql — one definition of a seat', () => {
+  it('defines the cap and the counted set exactly once', () => {
+    expect((SQL_0048.match(/select 20/g) ?? []).length, 'the cap literal appears more than once').toBe(1);
+    expect(
+      (SQL_0048.match(/invite_status <> 'declined'/g) ?? []).length,
+      'the declined-exclusion predicate appears more than once',
+    ).toBe(1);
+  });
+
+  it('every caller asks the helpers rather than restating the rule', () => {
+    for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token']) {
+      const body = functionBody(SQL_0048, fn);
+      expect(body, `${fn} does not use night_out_seat_count`).toMatch(/night_out_seat_count/);
+      expect(body, `${fn} does not use night_out_member_cap`).toMatch(/night_out_member_cap/);
+      expect(body, `${fn} still carries a hard-coded cap`).not.toMatch(/member_cap constant/);
+    }
+    // Declining is never rationed by capacity, so it must ask neither.
+    const decline = functionBody(SQL_0048, 'decline_night_out_by_token');
+    expect(decline).not.toMatch(/night_out_member_cap/);
+  });
+
+  it('keeps the helpers away from client roles', () => {
+    expect(SQL_0048).toMatch(/revoke all on function public\.night_out_member_cap\(\) from public, anon, authenticated/);
+    expect(SQL_0048).toMatch(/revoke all on function public\.night_out_seat_count\(uuid\) from public, anon, authenticated/);
+    expect(SQL_0048).not.toMatch(/grant execute on function public\.night_out_(member_cap|seat_count)/);
+  });
+
+  it('is create-or-replace only — additive over applied migrations (criterion 11)', () => {
+    expect(SQL_0048).not.toMatch(/^create (table|index|unique index|policy)/im);
+    expect(SQL_0048).not.toMatch(/^(drop|alter) table/im);
+    expect(SQL_0048).toMatch(/create or replace function/);
   });
 });
