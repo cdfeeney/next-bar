@@ -5,10 +5,11 @@ import { describe, expect, it } from 'vitest';
 /**
  * V8-3 migration guard — static assertions over 0044_night_outs.sql.
  *
- * The migration is committed UNAPPLIED (attended apply is a recorded
- * residual), so live RLS behavior cannot be exercised here. What CAN be
- * mechanically proven from the SQL text is the security shape the criteria
- * demand: RLS on + revoked table grants for every table (criterion 3's
+ * This file proves the security SHAPE from the SQL text. Live RLS behaviour is
+ * exercised separately in nightOutsRls.live.test.ts, against the APPLIED schema
+ * (0044 was applied to staging on 2026-08-16; it was renumbered from the
+ * reserved 0021 because the live ledger already held a different 0021).
+ * What is mechanically proven here from the text alone: RLS on + revoked table grants for every table (criterion 3's
  * denied-by-RLS/RPC half), the non-recursive policy invariant (criterion 4),
  * definer-RPC-only writes with revoke-first grants, exactly one anon-granted
  * function (the bearer preview, criterion 5), advisory-lock cap counting and

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
- * Server-mode Night Out operations (V8-3, migration 0021). House pattern:
+ * Server-mode Night Out operations (V8-3, migration 0044). House pattern:
  * null/false on error, never throw. Every write is a SECURITY DEFINER RPC —
  * the tables have no client grants, so this module IS the client surface.
  *

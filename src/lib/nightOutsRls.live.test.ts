@@ -36,6 +36,22 @@ function databaseUrl(): string | null {
 }
 
 const URL = databaseUrl();
+
+/**
+ * A security gate that silently skips is not a gate (round-3 review, Codex:
+ * "fail-open and incomplete"). Absent credentials are only a legitimate reason
+ * to skip on a CI runner, which has none by design. Anywhere else — an operator
+ * machine, a deploy box — a missing DATABASE_URL means these denials went
+ * UNVERIFIED, and that must be loud rather than green.
+ */
+const SKIP_ALLOWED = process.env.CI === 'true' || process.env.CI === '1';
+if (!URL && !SKIP_ALLOWED) {
+  throw new Error(
+    'nightOutsRls.live.test.ts: no DATABASE_URL in .env.local, so the behavioral '
+    + 'RLS/RPC denials were NOT verified. Set it, or set CI=1 to acknowledge that '
+    + 'this environment cannot run them.',
+  );
+}
 const describeLive = URL ? describe : describe.skip;
 
 describeLive('0044 night_outs — live RLS/RPC denials', () => {
@@ -98,9 +114,16 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   });
 
   it('anon cannot execute any night_out WRITE rpc (criterion 6)', async () => {
+    // ALL TEN write RPCs. Round-3 review caught this list claiming "all" while
+    // omitting decide/invite/respond — the same overstated-claim species as the
+    // criterion-3 grant test. The completeness assertion at the end of this
+    // test is what stops the list silently falling behind the migration again.
     const writes: Array<[string, string]> = [
       ['create_night_out', "select public.create_night_out(current_date, 'x')"],
       ['cancel_night_out', `select public.cancel_night_out('${randomUUID()}'::uuid)`],
+      ['decide_night_out', `select public.decide_night_out('${randomUUID()}'::uuid, 'attaboy')`],
+      ['invite_to_night_out', `select public.invite_to_night_out('${randomUUID()}'::uuid, '${randomUUID()}'::uuid)`],
+      ['respond_night_out', `select public.respond_night_out('${randomUUID()}'::uuid, true)`],
       ['join_night_out_by_token', `select public.join_night_out_by_token('${randomUUID()}'::uuid)`],
       ['decline_night_out_by_token', `select public.decline_night_out_by_token('${randomUUID()}'::uuid)`],
       ['revoke_night_out_link', `select public.revoke_night_out_link('${randomUUID()}'::uuid)`],
@@ -119,6 +142,22 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       });
       expect(denied, `anon could execute ${name}`).toMatch(/permission denied/i);
     }
+
+    // The list above claims to be exhaustive, so PROVE it against the database
+    // rather than trusting it. Every night_out function that is not the one
+    // anon-granted read (preview) or a member-scoped definer READ must appear.
+    // Without this, adding an 11th write RPC would leave it silently unchecked
+    // and the test would still say "any write rpc".
+    const READS = new Set(['preview_night_out', 'resolve_night_out_by_token',
+      'get_night_out', 'get_night_out_members', 'get_night_out_board', 'night_out_role']);
+    const { rows } = await db.query(`
+      select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname like '%night_out%'`);
+    const covered = new Set(writes.map(([name]) => name));
+    const uncovered = rows
+      .map((r) => r.proname as string)
+      .filter((name) => !READS.has(name) && !covered.has(name));
+    expect(uncovered, 'night_out write RPCs not covered by this denial test').toEqual([]);
   });
 
   it('anon CAN execute exactly the bearer preview, and it leaks no identifiers (criterion 5)', async () => {

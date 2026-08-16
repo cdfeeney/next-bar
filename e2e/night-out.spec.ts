@@ -6,8 +6,8 @@ import path from 'node:path';
  * night-out.spec.ts — the V8-3 canonical Night Out surface.
  *
  * Supabase RPCs are STUBBED at the browser boundary (page.route on
- * /rest/v1/rpc/*) — no request reaches a live database (the 0021 migration
- * is committed unapplied). Auth uses the fake-session-cookie pattern from
+ * /rest/v1/rpc/*) — no request reaches a live database (the 0044 migration
+ * is applied to staging). Auth uses the fake-session-cookie pattern from
  * account-delete.spec.ts. What this proves end-to-end:
  *
  *   1. anon + dead link  → terminal "isn't here" state (smoke for the route)
@@ -325,6 +325,95 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await expect(share).toBeVisible();
     await share.click();
     await expect(page.getByText(/invite link copied|\/night-out\//i).first()).toBeVisible();
+  });
+
+  /**
+   * The pending-invite token must be spent once the page SETTLES — in ANY
+   * terminal state, not just 'member'. Three rounds of review each fixed a
+   * different approximation of that one invariant:
+   *   r1 consumed in the redirect, r2 on mount, r3 on member-only.
+   * The r3 form stranded a signed-in user who settled in 'preview' or 'gone':
+   * PendingInviteRedirect replayed the navigation on every route change for the
+   * rest of the session, and 'gone' had no in-app escape at all.
+   *
+   * Covering all three terminal states here is what stops a fourth variant.
+   */
+  for (const settled of ['member', 'preview', 'gone'] as const) {
+    test(`the invite token is consumed when the page settles in '${settled}'`, async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+      await context.addCookies([
+        { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+      ]);
+      await page.route('**/rest/v1/**', fulfillJson(200, []));
+      await page.route('**/auth/v1/**', fulfillJson(200, {}));
+
+      if (settled === 'member') {
+        await stubMemberRpcs(page);
+      } else {
+        // Not a member: resolve finds nothing. 'preview' still has a live
+        // bearer row; 'gone' is a dead/cancelled link.
+        await page.route('**/rest/v1/rpc/resolve_night_out_by_token*', fulfillJson(200, null));
+        await page.route(
+          '**/rest/v1/rpc/preview_night_out*',
+          fulfillJson(200, settled === 'preview' ? [PREVIEW_ROW] : []),
+        );
+      }
+
+      // Arrive WITH a pending token, exactly as the post-sign-in handoff does.
+      await page.addInitScript(
+        ([key, token]) => window.sessionStorage.setItem(key, token),
+        [PENDING_KEY, TOKEN] as const,
+      );
+      await page.goto(`/night-out/${TOKEN}`);
+
+      // Wait for the terminal state to actually render before asserting.
+      if (settled === 'member') {
+        await expect(page.getByRole('heading', { name: /birthday crawl/i })).toBeVisible();
+      } else if (settled === 'preview') {
+        await expect(page.getByRole('button', { name: /join this night out/i })).toBeVisible();
+      } else {
+        await expect(page.getByRole('heading', { name: /isn't here/i })).toBeVisible();
+      }
+
+      await expect
+        .poll(
+          async () => page.evaluate((key) => window.sessionStorage.getItem(key), PENDING_KEY),
+          { timeout: 5000 },
+        )
+        .toBeNull();
+    });
+  }
+
+  test("a dead link offers a real way out of the app's own invite page", async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    await page.route('**/rest/v1/rpc/resolve_night_out_by_token*', fulfillJson(200, null));
+    await page.route('**/rest/v1/rpc/preview_night_out*', fulfillJson(200, []));
+    await page.addInitScript(
+      ([key, token]) => window.sessionStorage.setItem(key, token),
+      [PENDING_KEY, TOKEN] as const,
+    );
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByRole('heading', { name: /isn't here/i })).toBeVisible();
+
+    // The escape must actually escape: with the token spent, following it must
+    // NOT be replayed straight back to the invite page.
+    await page.getByRole('link', { name: /back to your circle/i }).click();
+    await expect(page).toHaveURL(/\/friends$/);
+    await expect(page).not.toHaveURL(new RegExp(`/night-out/${TOKEN}`));
   });
 
   test('criterion 7: signed-in with stored invite context lands back on THAT plan from anywhere', async ({

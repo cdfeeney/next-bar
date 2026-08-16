@@ -50,6 +50,45 @@ type PageState =
       board: NightOutBoardEntry[];
     };
 
+/**
+ * Has the page reached a TERMINAL state — i.e. has the invite handoff finished
+ * its job, whatever the outcome?
+ *
+ * This predicate is the root of a bug that has now been "fixed" three times,
+ * each time by approximating the same invariant slightly differently:
+ *
+ *   round 1: consume in PendingInviteRedirect  -> it navigated away before
+ *            arriving, so an interrupted trip lost the plan
+ *   round 2: consume on MOUNT                  -> mount is not arrival;
+ *            OnboardingGate redirected first and the token was already gone
+ *   round 3: consume on state.kind==='member'  -> membership is not the only
+ *            arrival; a signed-in non-member settling in 'preview' or 'gone'
+ *            never spent the token, so PendingInviteRedirect replayed the
+ *            navigation on EVERY route change for the rest of the session
+ *
+ * The invariant was always: the handoff is spent once the destination SETTLES,
+ * regardless of which terminal state it settles into. Stating it once, here,
+ * is what stops a fourth variant appearing.
+ *
+ * The exhaustive switch is deliberate. Adding a fifth PageState will fail to
+ * compile until someone classifies it as settled or not — the next person
+ * cannot silently inherit the wrong answer.
+ */
+function isSettled(kind: PageState['kind']): boolean {
+  switch (kind) {
+    case 'member':
+    case 'preview':
+    case 'gone':
+      return true;
+    case 'loading':
+      return false;
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
 function nightDateLabel(nightKey: string): string {
   const [y, m, d] = nightKey.split('-').map(Number);
   if (!y || !m || !d) return nightKey;
@@ -103,16 +142,14 @@ export default function NightOutPage({
   // (PendingInviteRedirect only peeks — an interrupted navigation must not
   // lose the token). Only our own token is consumed.
   //
-  // Consume on ARRIVAL, not on mount. Mounting is not arriving: a fresh
-  // account lands here, this effect cleared sessionStorage, and OnboardingGate
-  // then redirected to /onboarding — with the token already gone, the
-  // self-healing redirect in PendingInviteRedirect had nothing left to replay
-  // and the plan was lost for good. That is the exact hole round 1 tried to
-  // close by making the redirect peek; the consume simply moved one component
-  // over. Waiting for the member view means an interrupted arrival keeps the
-  // token and the redirect fires again after onboarding completes.
+  // SETTLED, not mounted and not "member": see isSettled() above for why this
+  // exact predicate is the root. While the page is still 'loading' the trip is
+  // not over — OnboardingGate can still redirect — so the token must survive.
+  // Once ANY terminal state renders, the handoff has done its job and the token
+  // must be spent, or PendingInviteRedirect replays it on every later
+  // navigation for the rest of the session.
   useEffect(() => {
-    if (state.kind !== 'member') return;
+    if (!isSettled(state.kind)) return;
     if (peekPendingInvite() === token) consumePendingInvite();
   }, [state.kind, token]);
 
@@ -178,9 +215,22 @@ export default function NightOutPage({
         <p className="mt-3 opacity-70">
           The plan was cancelled, or the link is no longer active.
         </p>
-        <Link href="/" className="mt-6 inline-block underline">
-          Find your next bar
-        </Link>
+        {/* A dead link is a terminal state, so isSettled() has already spent the
+            pending token by the time this renders — without that, these links
+            bounced straight back here and the user had no way out of the app's
+            own invite page. Two real destinations rather than one, because "/"
+            is location-first and can redirect again on its own. */}
+        <div className="mt-6 flex flex-col items-center gap-3">
+          <Link
+            href="/"
+            className="inline-flex min-h-[44px] items-center rounded-full bg-white px-6 font-semibold text-black"
+          >
+            Find your next bar
+          </Link>
+          <Link href="/friends" className="inline-flex min-h-[44px] items-center underline">
+            Back to your circle
+          </Link>
+        </div>
       </main>
     );
   }
