@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
@@ -118,16 +118,35 @@ export default function NightOutPage({
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   const token = decodeURIComponent(params.token);
 
+  /**
+   * Monotonic epoch, bumped whenever the auth status changes. Every member load
+   * captures it and refuses to paint if it has moved on.
+   *
+   * Cold panel (Codex): loadMemberView called setState unconditionally and never
+   * saw the effect's `cancelled` flag, so an authenticated load started before a
+   * sign-out could settle afterwards and put PRIVATE member data back on screen
+   * for a signed-out viewer. The effect's own cancel flag could not cover it —
+   * the direct callers (join, rejoin, refresh) are outside that closure.
+   */
+  const authEpoch = useRef(0);
+  useEffect(() => {
+    authEpoch.current += 1;
+  }, [auth.status]);
+
   const loadMemberView = useCallback(
     async (planId: string): Promise<boolean> => {
       const supabase = getBrowserSupabase();
       if (!supabase) return false;
+      const epoch = authEpoch.current;
       const [plan, members, board] = await Promise.all([
         getNightOut(supabase, planId),
         getNightOutMembers(supabase, planId),
         getNightOutBoard(supabase, planId),
       ]);
       if (plan === null) return false;
+      // Auth moved while we were away: this answer belongs to a session that is
+      // no longer the one looking at the screen.
+      if (epoch !== authEpoch.current) return false;
       setState({
         kind: 'member',
         plan,

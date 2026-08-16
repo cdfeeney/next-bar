@@ -24,7 +24,18 @@ const PLAN_ID = '223e4567-e89b-42d3-a456-426614174000';
 const USER_ID = '323e4567-e89b-42d3-a456-426614174000';
 const PENDING_KEY = 'next-bar:pending-invite:v1';
 
+/**
+ * Read the Supabase URL from the process environment FIRST, then .env.local.
+ *
+ * Cold panel (Codex): this only ever read .env.local, so a CI or shell that
+ * supplies NEXT_PUBLIC_SUPABASE_URL through the environment — the normal way to
+ * configure a runner — got null, and every authenticated test below called
+ * test.skip. The suite reported green while asserting nothing about the signed-in
+ * lifecycle. Same fail-open species as the CI=1 skip in the live RLS suite.
+ */
 function readSupabaseUrl(): string | null {
+  const fromEnv = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  if (fromEnv) return fromEnv;
   try {
     const env = readFileSync(path.join(__dirname, '..', '.env.local'), 'utf8');
     const match = env.match(/^NEXT_PUBLIC_SUPABASE_URL=(.+)$/m);

@@ -225,7 +225,8 @@ describe('0044_night_outs.sql security shape', () => {
  *   0048 — night_out_member_cap, night_out_seat_count, and the four callers:
  *          join_night_out_by_token, decline_night_out_by_token,
  *          respond_night_out, night_out_is_full_by_token
- *   0049 — invite_to_night_out (0045's body, using 0048's helpers)
+ *   0049 — (superseded by 0050)
+ *   0050 — invite_to_night_out
  *
  * The assertions in the block above still describe 0044's TEXT, which is correct
  * as a record of an applied, immutable file, but is NOT the effective definition
@@ -373,5 +374,32 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
     expect(SQL_0048).not.toMatch(/^create (table|index|unique index|policy)/im);
     expect(SQL_0048).not.toMatch(/^(drop|alter) table/im);
     expect(SQL_0048).toMatch(/create or replace function/);
+  });
+});
+
+const SQL_0050 = readFileSync(
+  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0050_night_outs_invite_recheck_before_cap.sql'),
+  'utf8',
+).toLowerCase().replace(/--.*/g, '');
+
+describe('0050 — invite answers the membership question before the capacity one', () => {
+  it('re-reads its own subject under the lock, BEFORE the cap check', () => {
+    const body = functionBody(SQL_0050, 'invite_to_night_out');
+    const lock = body.indexOf('pg_advisory_xact_lock');
+    const recheck = body.indexOf('m.user_id = p_user', lock);
+    const cap = body.indexOf('night_out_member_cap', recheck);
+    expect(lock, 'invite takes no advisory lock').toBeGreaterThan(-1);
+    expect(recheck, 'invite does not re-read its own subject after the lock').toBeGreaterThan(lock);
+    // The whole defect: an already-present member consumes no NEW seat, so the
+    // duplicate answer must be reached without consulting capacity at all.
+    expect(cap, 'the cap check must come AFTER the post-lock membership re-read')
+      .toBeGreaterThan(recheck);
+  });
+
+  it('still uses the single-source helpers rather than its own copy', () => {
+    const body = functionBody(SQL_0050, 'invite_to_night_out');
+    expect(body).toMatch(/night_out_seat_count/);
+    expect(body).toMatch(/night_out_member_cap/);
+    expect(SQL_0050, 'invite restates the counted set again').not.toMatch(/invite_status <> 'declined'/);
   });
 });

@@ -18,6 +18,7 @@ export default function StartNightOutButton(): JSX.Element | null {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [readFailed, setReadFailed] = useState(false);
 
   if (auth.status !== 'signed-in') return null;
 
@@ -27,10 +28,19 @@ export default function StartNightOutButton(): JSX.Element | null {
     setBusy(true);
     setError(false);
     const planId = await createNightOut(supabase, nycNightKey());
-    const plan = planId !== null ? await getNightOut(supabase, planId) : null;
-    if (plan === null) {
+    if (planId === null) {
       setBusy(false);
       setError(true);
+      return;
+    }
+    // The plan EXISTS from here on. A failed follow-up read is a read failure,
+    // not a create failure: reporting it as one and re-enabling the button made
+    // the next tap create a SECOND plan for the same night, splitting the group
+    // between two plans nobody could tell apart (cold panel, Codex + Claude).
+    // Stay busy and route by plan id; the plan page resolves its own token.
+    const plan = await getNightOut(supabase, planId);
+    if (plan === null) {
+      setReadFailed(true);
       return;
     }
     router.push(`/night-out/${plan.shareToken}`);
@@ -49,6 +59,12 @@ export default function StartNightOutButton(): JSX.Element | null {
       {error ? (
         <p className="mt-2 text-sm text-red-400">
           Couldn&apos;t start it — try again.
+        </p>
+      ) : null}
+      {readFailed ? (
+        <p className="mt-2 text-sm text-red-400">
+          Your night out was created, but this page couldn&apos;t open it.
+          Refresh — don&apos;t start another one.
         </p>
       ) : null}
     </div>

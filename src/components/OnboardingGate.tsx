@@ -29,8 +29,18 @@ import { getCacheEpoch } from '@/lib/accountCache';
  */
 export const ONBOARDING_PROMPTED_KEY = 'next-bar:onboarding-prompted:v1';
 
-/** Never yank the user out of these flows into onboarding. */
-const EXCLUDED_PREFIXES = ['/onboarding', '/auth', '/privacy', '/terms'];
+/**
+ * Never yank the user out of these flows into onboarding.
+ *
+ * `/night-out` is here because of the cold-panel HIGH: the invite landing page
+ * spends the pending-invite token as soon as it reaches a terminal state, and
+ * this gate could then replace the route with /onboarding — with the token
+ * already spent, so nothing brought the user back. A brand-new account is the
+ * COMMON case for an invite link, so that is the primary flow breaking, not an
+ * edge. The nudge is once-per-session and keys off a missing handle, not
+ * timing, so skipping it here only defers it to the next navigation.
+ */
+const EXCLUDED_PREFIXES = ['/onboarding', '/auth', '/privacy', '/terms', '/night-out'];
 
 /**
  * Best-effort flag write: sessionStorage.setItem can throw (Safari private
