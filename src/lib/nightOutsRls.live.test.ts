@@ -26,16 +26,68 @@ import { Client } from 'pg';
  * stays green while the operator's machine gets the real coverage.
  */
 
-function databaseUrl(): string | null {
+function envValue(key: string): string | null {
   try {
     const env = readFileSync(path.join(__dirname, '..', '..', '.env.local'), 'utf8');
-    return env.match(/^DATABASE_URL=(.+)$/m)?.[1]?.trim() ?? null;
+    return env.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() ?? null;
   } catch {
     return null;
   }
 }
 
+function databaseUrl(): string | null {
+  return envValue('DATABASE_URL');
+}
+
 const URL = databaseUrl();
+
+/**
+ * STAGING-ONLY GATE (round-1 review, Codex medium: "a loaded gun pointed at
+ * prod").
+ *
+ * This file does not merely read. It calls create_night_out, invite, join and
+ * decline inside transactions, so it issues real DML, WAL and per-user advisory
+ * locks against whatever DATABASE_URL names. ROLLBACK stops rows from being
+ * committed; it does not stop any of that, and it is not an authorization.
+ *
+ * The URL itself cannot tell you which database it is: Supabase's pooler
+ * hostname is shared and the project ref hides in the username, so a human
+ * reading the connection string sees the same text for staging and production.
+ * Therefore the target must be named explicitly, and the gate FAILS CLOSED —
+ * an unset allowlist is not permission, it is a missing answer.
+ *
+ * Set in .env.local (see .env.example):
+ *   NEXT_BAR_STAGING_PROJECT_REFS=<ref>[,<ref>...]
+ *   NEXT_BAR_PRODUCTION_PROJECT_REF=<ref>
+ */
+function assertStagingOnly(connectionString: string): void {
+  const ref = decodeURIComponent(new globalThis.URL(connectionString).username).split('.').pop() ?? '';
+  const allowlist = (envValue('NEXT_BAR_STAGING_PROJECT_REFS') ?? '')
+    .split(',').map((value) => value.trim()).filter(Boolean);
+  const productionRef = envValue('NEXT_BAR_PRODUCTION_PROJECT_REF');
+
+  if (allowlist.length === 0) {
+    throw new Error(
+      'nightOutsRls.live.test.ts refuses to run: NEXT_BAR_STAGING_PROJECT_REFS is not set in '
+      + '.env.local. This suite writes to the database it connects to, so the staging target must '
+      + 'be named explicitly. An unset allowlist is never treated as permission.',
+    );
+  }
+  if (productionRef && ref === productionRef) {
+    throw new Error(
+      'nightOutsRls.live.test.ts refuses to run: DATABASE_URL points at NEXT_BAR_PRODUCTION_PROJECT_REF. '
+      + 'Production writes are an attended gate and never happen from a test run.',
+    );
+  }
+  if (!allowlist.includes(ref)) {
+    throw new Error(
+      "nightOutsRls.live.test.ts refuses to run: DATABASE_URL's project ref is not in "
+      + 'NEXT_BAR_STAGING_PROJECT_REFS. Point .env.local at staging, or add the ref deliberately.',
+    );
+  }
+}
+
+if (URL) assertStagingOnly(URL);
 
 /**
  * A security gate that silently skips is not a gate (round-3 review, Codex:
@@ -203,6 +255,86 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
         [planId],
       );
       expect(members.rowCount, 'a non-member could read the member list').toBe(0);
+    });
+  });
+
+  it('an authenticated non-member is denied on EVERY table and EVERY member-gated write (criteria 3, 10)', async () => {
+    // Round-1 review, both lanes independently: the criterion-10 test above
+    // probes a stranger's direct reads on night_outs and night_out_members
+    // only, and never calls a member-gated write RPC as that stranger. So the
+    // denial that criterion 3 requires "per table" rested on a text scan of
+    // 0044 for three of five tables — a static shape, not a behavior. A later
+    // migration granting authenticated select on a child table, or a
+    // regression in night_out_role's accepted-member gate, would leave this
+    // suite green. These assertions are what make that impossible.
+    await inRollback(async () => {
+      const { rows: people } = await db.query('select id from public.profiles limit 2');
+      expect(people.length, 'need 2 profiles to prove non-member denial').toBe(2);
+      const [owner, stranger] = people.map((r) => r.id as string);
+
+      await asRole('authenticated', owner);
+      const { rows } = await db.query('select public.create_night_out(current_date, $1) as id', [
+        'authenticated non-member probe',
+      ]);
+      const planId = rows[0].id as string;
+      expect(planId).toBeTruthy();
+      // Give the plan a child row of every kind, so "denied" cannot be
+      // confused with "there was nothing there anyway".
+      await db.query('select public.suggest_night_out_bar($1, $2)', [planId, 'probe-bar']);
+      await db.query('select public.vote_night_out_bar($1, $2)', [planId, 'probe-bar']);
+
+      await db.query('RESET ROLE');
+      await asRole('authenticated', stranger);
+
+      await db.query('SAVEPOINT probe');
+      // Denial arrives by one of two mechanisms and both are acceptable: the
+      // child tables are not granted to `authenticated` at all (a hard
+      // permission-denied), while night_outs/night_out_members are granted and
+      // filtered by RLS (zero rows). Asserting only the RLS shape would have
+      // made this test fail against the STRONGER protection.
+      for (const table of TABLES) {
+        const where = table === 'night_outs' ? 'where id = $1' : 'where night_out_id = $1';
+        let visibleRows: number | null;
+        try {
+          const seen = await db.query(`select 1 from public.${table} ${where} limit 1`, [planId]);
+          visibleRows = seen.rowCount;
+        } catch (error) {
+          expect(
+            (error as { message: string }).message,
+            `public.${table} failed for a reason other than denial`,
+          ).toMatch(/permission denied/i);
+          visibleRows = 0;
+          // A failed statement aborts the transaction; recover so the loop and
+          // the write-RPC assertions below still run inside it.
+          await db.query('ROLLBACK TO SAVEPOINT probe');
+        }
+        expect(visibleRows, `an authenticated non-member could read public.${table}`).toBe(0);
+        await db.query('RELEASE SAVEPOINT probe');
+        await db.query('SAVEPOINT probe');
+      }
+
+      // Every member-gated write must refuse this caller. These return false
+      // rather than raising — a silent `true` is the regression to catch.
+      const gatedWrites: Array<[string, unknown[]]> = [
+        ['select public.suggest_night_out_bar($1, $2) as ok', [planId, 'stranger-bar']],
+        ['select public.vote_night_out_bar($1, $2) as ok', [planId, 'probe-bar']],
+        ['select public.invite_to_night_out($1, $2) as ok', [planId, stranger]],
+        ['select public.respond_night_out($1, true) as ok', [planId]],
+        ['select public.cancel_night_out($1) as ok', [planId]],
+        ['select public.decide_night_out($1, $2) as ok', [planId, 'probe-bar']],
+      ];
+      for (const [sql, params] of gatedWrites) {
+        const { rows: out } = await db.query(sql, params);
+        expect(out[0].ok, `a non-member's ${sql.match(/public\.(\w+)/)![1]} was not refused`).toBe(false);
+      }
+
+      // And nothing it tried actually landed.
+      await db.query('RESET ROLE');
+      const leaked = await db.query(
+        'select 1 from public.night_out_members where night_out_id = $1 and user_id = $2',
+        [planId, stranger],
+      );
+      expect(leaked.rowCount, 'a refused write still created a membership row').toBe(0);
     });
   });
 

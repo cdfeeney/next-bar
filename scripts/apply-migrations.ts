@@ -75,9 +75,44 @@ if (files.length === 0) {
   process.exit(0);
 }
 
+/**
+ * Hard gate: a database that keeps a ledger is a SHARED database, and this
+ * runner is ledger-blind.
+ *
+ * The warning at the top of this file, and the identical one in CLAUDE.md, are
+ * prose — and 0044_night_outs.sql, which is already applied and therefore
+ * immutable, still carries an APPLY GATE checklist pointing an operator right
+ * back here. A comment cannot stop that; a refusal can. LOOP_UNATTENDED=1 only
+ * ever covered the overnight loop, which is the one case nobody was worried
+ * about: the dangerous run is an attended operator following a stale checklist
+ * at the exact moment they believe they are being careful.
+ */
+async function assertNotLedgerBearing(client: Client): Promise<void> {
+  const { rows } = await client.query(
+    "select to_regclass('public.schema_migrations') is not null as tracked",
+  );
+  if (!rows[0]?.tracked) return;
+  const { rows: head } = await client.query(
+    'select name from public.schema_migrations order by name desc limit 1',
+  );
+  console.error(
+    '\n[ledger-guard] REFUSING to run.\n'
+    + `  ${redactUrl(databaseUrl!)} has a public.schema_migrations ledger (head: ${head[0]?.name ?? 'unknown'}).\n`
+    + '  This runner replays EVERY file in lexical order and consults no ledger, so it would\n'
+    + "  re-execute older, divergent copies of the base schema over a database that has moved past\n"
+    + '  them — including re-granting privileges 0034_revoke_first_grants.sql tightened.\n\n'
+    + "  Use nb-overnight's ledger-aware runner, or apply the specific file by hand after reading\n"
+    + '  the ledger and numbering above its maximum. Ignore any apply checklist embedded inside an\n'
+    + '  already-applied migration file; those cannot be corrected in place.\n',
+  );
+  await client.end();
+  process.exit(1);
+}
+
 async function main() {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
+  await assertNotLedgerBearing(client);
 
   console.log(`Applying ${files.length} migration${files.length === 1 ? '' : 's'} to ${redactUrl(databaseUrl!)}`);
 
