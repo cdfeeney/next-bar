@@ -243,6 +243,12 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       ['night_out_member_cap', 'select public.night_out_member_cap()'],
       ['night_out_seat_count', `select public.night_out_seat_count('${randomUUID()}'::uuid)`],
       ['get_my_night_outs', 'select public.get_my_night_outs()'],
+      // 0059's revision trigger function. It `returns trigger`, so PostgreSQL
+      // would refuse a direct call anyway — but it is SECURITY DEFINER, and the
+      // EXECUTE privilege is checked BEFORE the trigger-context error, so the
+      // revoke is what actually answers here and is worth asserting. Verified:
+      // both anon and authenticated get "permission denied for function".
+      ['night_out_members_bump_revision', 'select public.night_out_members_bump_revision()'],
     ];
     for (const [name, sql] of writes) {
       const denied = await inRollback(async () => {
