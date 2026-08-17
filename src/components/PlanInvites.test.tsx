@@ -13,6 +13,25 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 type Row = Record<string, unknown>;
 
+/**
+ * Fixture nights are derived from the CLOCK, never hardcoded.
+ *
+ * Round 2 (Claude): the default was the literal '2026-08-20'. The component's
+ * new grace window hides anything more than EXPIRED_INVITE_GRACE_DAYS past, so
+ * from 2026-08-23 the section would render nothing and seven of these tests
+ * would fail unconditionally — a suite with a fuse on it, green right up to the
+ * day it isn't. A fixed date in a fixture that a date-sensitive filter reads is
+ * the bug; relative dates are the fix.
+ */
+function nightsFromNow(offsetDays: number): string {
+  return new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+}
+/** Tonight — always inside the grace window, whenever the suite runs. */
+const TONIGHT = nightsFromNow(0);
+/** Comfortably outside it, whenever the suite runs. */
+const LONG_PAST = nightsFromNow(-400);
+const YESTERDAY = nightsFromNow(-1);
+
 let rows: Row[] = [];
 let respondOk = true;
 const responded: Array<[string, boolean]> = [];
@@ -28,7 +47,7 @@ vi.mock('@/lib/nightOuts.server', () => ({
   getMyNightOuts: async () =>
     rows.map((r) => ({
       nightOutId: r.id,
-      night: r.night ?? '2026-08-20',
+      night: r.night ?? TONIGHT,
       title: r.title ?? 'Friday night in the LES',
       status: 'open',
       ownerHandle: 'dev',
@@ -124,7 +143,7 @@ describe('Social → Plans invitation cards', () => {
     // Round 1 (Claude): this interpolated the raw night key, so the user read
     // "see you 2026-08-20" at the moment of accepting. The design draws a
     // friendly weekday.
-    rows = [{ id: 'p1', myStatus: 'pending', night: '2026-08-20' }];
+    rows = [{ id: 'p1', myStatus: 'pending', night: TONIGHT }];
     const user = userEvent.setup();
     render(<PlanInvites />);
     await user.click(await screen.findByRole('button', { name: 'Accept' }));
@@ -149,7 +168,7 @@ describe('Social → Plans invitation cards', () => {
     // Round 1 (Claude): Dismiss is session-local and the query has no past
     // cutoff, so every historical plan re-rendered as an expired invite in
     // every new session, without bound and with no way to clear it.
-    rows = [{ id: 'p1', myStatus: 'accepted', night: '2020-01-01', isPast: true }];
+    rows = [{ id: 'p1', myStatus: 'accepted', night: LONG_PAST, isPast: true }];
     const { container } = render(<PlanInvites />);
     await waitFor(() =>
       expect(
@@ -160,8 +179,7 @@ describe('Social → Plans invitation cards', () => {
   });
 
   test('last night’s plan is still shown — the cutoff is a grace period, not a wall', async () => {
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    rows = [{ id: 'p1', myStatus: 'pending', night: yesterday, isPast: true }];
+    rows = [{ id: 'p1', myStatus: 'pending', night: YESTERDAY, isPast: true }];
     render(<PlanInvites />);
     expect(await screen.findByTestId('invite-expired')).toBeTruthy();
   });

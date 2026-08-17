@@ -102,7 +102,29 @@ async function main(): Promise<void> {
     // .env.local and point this at whatever THAT names. A guard that does not
     // guard is worse than no guard, because it is trusted.
     if (!existsSync(secretsFile)) fail(`--secrets-file ${secretsFile} does not exist`);
-    loadEnv({ path: secretsFile, override: true });
+    const loaded = loadEnv({ path: secretsFile, override: true });
+    // The URL and the LABEL must come from the SAME file (round 2, Claude).
+    //
+    // `.env.local` is loaded below WITHOUT override, so it fills in anything the
+    // secrets file left unset. That is the desired behaviour for most variables
+    // and catastrophic for this one: a secrets file carrying only DATABASE_URL
+    // lets the label fall through from .env.local, so a production connection
+    // string gets paired with the word "staging", `--env staging --execute`
+    // passes the check below, and every line this script prints says staging
+    // while it writes to production.
+    //
+    // The label is the ONLY thing that can tell these targets apart — the
+    // comment above already says a guard that does not guard is worse than no
+    // guard, because it is trusted. So require the file to name it explicitly
+    // rather than inferring it from whatever else happens to be loaded.
+    if (!loaded.parsed?.NEXT_BAR_DATABASE_ENVIRONMENT) {
+      fail(
+        `--secrets-file ${secretsFile} sets no NEXT_BAR_DATABASE_ENVIRONMENT. `
+        + 'A secrets file that names a target must also name WHICH target it is; '
+        + 'otherwise the label is inherited from .env.local and can disagree with '
+        + 'the connection string this file supplies.',
+      );
+    }
   }
   loadEnv({ path: '.env.local' });
   loadEnv({ path: '.env' });

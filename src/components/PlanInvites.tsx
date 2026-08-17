@@ -35,6 +35,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { nycNightKey } from '@/lib/nightKey';
 import { getMyNightOuts, respondNightOut, type MyNightOut } from '@/lib/nightOuts.server';
 
 function nightLabel(plan: MyNightOut): string {
@@ -81,13 +82,32 @@ function weekdayLabel(night: string): string {
  */
 const EXPIRED_INVITE_GRACE_DAYS = 2;
 
-function isWithinExpiryGrace(night: string, today: Date): boolean {
-  const [y, m, d] = night.split('-').map(Number);
-  if (!y || !m || !d) return true; // unparseable: show it rather than hide it
-  const nightMs = Date.UTC(y, m - 1, d);
-  const todayMs = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  const daysPast = Math.floor((todayMs - nightMs) / 86_400_000);
-  return daysPast <= EXPIRED_INVITE_GRACE_DAYS;
+/** A 'YYYY-MM-DD' night key as calendar-day milliseconds, or null if malformed. */
+function nightKeyToMs(key: string): number | null {
+  const [y, m, d] = key.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return Date.UTC(y, m - 1, d);
+}
+
+/**
+ * Both sides in the NIGHT-KEY frame, never in UTC.
+ *
+ * Round 2 (Codex): the first version derived "today" from `Date.getUTC*`, so
+ * the grace period advanced at UTC midnight — 8pm in New York — instead of at
+ * the 6am NYC rollover that `nycNightKey` defines a night by. That is a small
+ * error in effect and a serious one in kind: this stack is actively removing
+ * competing UTC night definitions (0011, 0012, 0013, 0017 and a device-local
+ * 5am one are all filed against it), and the fix round had quietly added
+ * another. Comparing a night key against the CURRENT night key keeps exactly
+ * one definition of when a night turns over.
+ */
+function isWithinExpiryGrace(night: string, todayKey: string): boolean {
+  const nightMs = nightKeyToMs(night);
+  const todayMs = nightKeyToMs(todayKey);
+  // Unparseable: show it rather than hide it. Hiding on bad input would make a
+  // data problem look like an empty inbox.
+  if (nightMs === null || todayMs === null) return true;
+  return Math.floor((todayMs - nightMs) / 86_400_000) <= EXPIRED_INVITE_GRACE_DAYS;
 }
 
 function inviterLabel(plan: MyNightOut): string {
@@ -139,14 +159,14 @@ export default function PlanInvites(): JSX.Element | null {
   // session. Hidden when empty, matching the Requests consent inbox on this
   // same page rather than inventing an empty state (that belongs to the
   // deferred operational-states work).
-  const now = new Date();
+  const tonight = nycNightKey();
   const visible = plans.filter(
     (p) =>
       p.myStatus !== 'declined'
       && !dismissed.has(p.nightOutId)
       // Without this, every plan the user was ever invited to comes back as an
       // expired invite in every new session (round 1, Claude).
-      && isWithinExpiryGrace(p.night, now),
+      && isWithinExpiryGrace(p.night, tonight),
   );
   if (visible.length === 0) return null;
 
