@@ -441,8 +441,24 @@ describe('StartNightOutButton — a created plan is never lost', () => {
       'a second plan was created for the same night while the first RPC was in flight',
     ).toBe(1);
 
+    // ...and when the create finally settles inside the DEAD instance's
+    // closure, the LIVE one must hear about it. Cycle 3 round 2 (both lanes):
+    // it never did — the screen sat on a disabled "Starting…" forever while
+    // module state said the plan was parked and ready. The previous version of
+    // this test released the promise and asserted nothing afterwards, pinning
+    // the safety half and silently tolerating the liveness half.
+    readFails = true;
     releaseCreate(PLAN_ID);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      'the remounted screen never learned the create had settled',
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: /Start the official Night Out/i }) as HTMLButtonElement)
+        .disabled,
+      'Start should stay disabled while an unopened plan is recoverable',
+    ).toBe(true);
   });
 
   test('a failed create for A is not shown as B’s failure after an in-place switch', async () => {

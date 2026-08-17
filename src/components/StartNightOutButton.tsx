@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
@@ -107,6 +107,40 @@ let storageUsable = true;
  * span that must be covered is the JS context, not the component instance.
  */
 const creatingOwners = new Set<string>();
+
+/**
+ * Live instances have to be TOLD when a create settles.
+ *
+ * Cycle 3 round 2, both lanes: a component remounted mid-create derived
+ * `busy` from `creatingOwners` and then never heard anything again — the create
+ * resolved inside the DEAD instance's closure, parked the plan and cleared the
+ * marker, but every setState there was a no-op and the live instance's effect
+ * deps ([userId]) never changed. The screen sat on a disabled "Starting…" with
+ * no recovery affordance while module state said the plan was parked and ready.
+ *
+ * Safe direction — no duplicate is possible — but a stuck, self-contradicting
+ * screen until the user happens to navigate away and back. A module-level
+ * version read through useSyncExternalStore is the ordinary React 18 answer for
+ * state that lives outside the tree.
+ */
+let creatingVersion = 0;
+const creatingListeners = new Set<() => void>();
+
+function subscribeCreating(listener: () => void): () => void {
+  creatingListeners.add(listener);
+  return () => {
+    creatingListeners.delete(listener);
+  };
+}
+
+function getCreatingVersion(): number {
+  return creatingVersion;
+}
+
+function markCreatingChanged(): void {
+  creatingVersion += 1;
+  for (const listener of creatingListeners) listener();
+}
 
 /** Every parked record in the store, validated. Unreadable input yields {}. */
 function readAll(): ParkedByUser {
@@ -240,12 +274,34 @@ export default function StartNightOutButton(): JSX.Element | null {
    * ACCOUNT, so that is what gets captured and compared.
    */
   const liveUserId = useRef<string | null>(userId);
-  useEffect(() => {
-    // Assigned on COMMIT, never during render (cycle 3, Codex). A render that
-    // React throws away must not change the identity that already-committed
-    // handlers compare against. Every caller reads this from a click or an
-    // await, both of which happen after commit.
+  /**
+   * LAYOUT effect, not a passive one, and not a render-phase write.
+   *
+   * Render-phase assignment was filed by Codex: a render React throws away must
+   * not change the identity that committed handlers compare against. Moving it
+   * to a passive effect then opened the opposite hole (Claude, next round):
+   * passive effects flush in a task AFTER paint, so a settling RPC could
+   * interleave between the commit of a cross-tab auth change and the flush, pass
+   * the owner guard against the OLD account, destroy that account's parked
+   * record and navigate the NEW viewer to the old account's plan.
+   *
+   * useLayoutEffect runs synchronously inside the commit, so no external task
+   * can observe this stale against a committed UI — and it is not a render-phase
+   * write, so the first objection does not apply either.
+   */
+  useLayoutEffect(() => {
     liveUserId.current = userId;
+  }, [userId]);
+
+  // Re-runs the reset effect when a create settles in another (possibly dead)
+  // instance's closure.
+  const creatingTick = useSyncExternalStore(
+    subscribeCreating,
+    getCreatingVersion,
+    getCreatingVersion,
+  );
+
+  useEffect(() => {
     // EVERY path through this effect ends in a definite state for the CURRENT
     // account. Round 2 (Claude, HIGH): the previous version early-returned when
     // the new user had no parked record, leaving the PREVIOUS account's
@@ -291,6 +347,26 @@ export default function StartNightOutButton(): JSX.Element | null {
   }, [userId]);
 
   /**
+   * A create settled somewhere else — refresh, but do NOT reset.
+   *
+   * Deliberately separate from the account-change effect above. Folding this
+   * into that one looked tidier and immediately broke a real case: the tick
+   * fires from `handleStart`'s `finally`, so the full reset ran microseconds
+   * after a failed create and wiped the "Couldn't start it" message the user
+   * needed to see. Account change means "throw everything away"; a settling
+   * create means "re-derive what is in flight and whether a recovery is
+   * waiting" — different questions, different effects.
+   */
+  useEffect(() => {
+    if (userId === null) return;
+    setBusy(creatingOwners.has(userId));
+    const parked = recallStarted(userId);
+    if (parked === null || parked.nightKey !== nycNightKey()) return;
+    setCreatedPlanId(parked.planId);
+    setReadFailed(true);
+  }, [creatingTick, userId]);
+
+  /**
    * Retry the READ, not the create. The first version of this told the user to
    * refresh — advice that loses the plan id from component state and re-arms
    * the Start button, walking them straight back into the duplicate-plan bug it
@@ -334,50 +410,53 @@ export default function StartNightOutButton(): JSX.Element | null {
     // even from a freshly mounted component that has no local memory of it.
     if (creatingOwners.has(owner)) return;
     creatingOwners.add(owner);
+    markCreatingChanged();
     setBusy(true);
     setError(false);
-    // ONE reading of the clock for this whole attempt (round 3, Codex). The
-    // night key was read again when parking, so a 6am NYC rollover landing
-    // between the two calls tagged the parked record with a night the plan does
-    // not belong to — and the scoping check would then discard a live recovery
-    // as stale. Narrow window, but it is the recovery path for a plan the user
-    // cannot otherwise reach.
-    const nightKey = nycNightKey();
-    const planId = await createNightOut(supabase, nightKey);
-    if (owner !== liveUserId.current) {
-      // A different account is on screen. The plan (if any) still belongs to
-      // `owner`, so park it below rather than dropping it — but paint nothing.
+    try {
+      // ONE reading of the clock for this whole attempt (cycle 1, Codex). The
+      // night key was read again when parking, so a 6am NYC rollover landing
+      // between the two calls tagged the parked record with a night the plan
+      // does not belong to, and the scoping check then discarded a live
+      // recovery as stale.
+      const nightKey = nycNightKey();
+      const planId = await createNightOut(supabase, nightKey);
+      if (owner !== liveUserId.current) {
+        // A different account is on screen. The plan (if any) still belongs to
+        // `owner`, so park it rather than dropping it — but paint nothing.
+        if (planId !== null) rememberStarted(owner, { planId, nightKey });
+        return;
+      }
+      if (planId === null) {
+        setBusy(false);
+        setError(true);
+        return;
+      }
+      // The plan EXISTS from here on. A failed follow-up read is a read
+      // failure, not a create failure: reporting it as one and re-enabling the
+      // button made the next tap create a SECOND plan for the same night,
+      // splitting the group between two plans nobody could tell apart.
+      // Parked BEFORE the follow-up read, because the window this closes is the
+      // one where the read is still in flight and the user navigates away.
+      rememberStarted(owner, { planId, nightKey });
+      setCreatedPlanId(planId);
+      const plan = await getNightOut(supabase, planId);
+      if (owner !== liveUserId.current) return;
+      if (plan === null) {
+        setReadFailed(true);
+        return;
+      }
+      if (!mounted.current) return;
+      forgetStarted(owner);
+      router.push(`/night-out/${plan.shareToken}`);
+    } finally {
+      // ALWAYS. `finally` is what makes an orphaned marker impossible — an
+      // orphan would be a permanent lockout for that account, strictly worse
+      // than the duplicate the marker prevents. The notification is here too,
+      // so it fires after every storage mutation above has already happened.
       creatingOwners.delete(owner);
-      if (planId !== null) rememberStarted(owner, { planId, nightKey });
-      return;
+      markCreatingChanged();
     }
-    if (planId === null) {
-      creatingOwners.delete(owner);
-      setBusy(false);
-      setError(true);
-      return;
-    }
-    // The plan EXISTS from here on. A failed follow-up read is a read failure,
-    // not a create failure: reporting it as one and re-enabling the button made
-    // the next tap create a SECOND plan for the same night, splitting the group
-    // between two plans nobody could tell apart (cold panel, Codex + Claude).
-    // Stay busy and route by plan id; the plan page resolves its own token.
-    // Parked BEFORE the follow-up read, not after it: the window this closes is
-    // the one where the read is still in flight and the user navigates away.
-    // Parked under the account that STARTED it, from the value captured before
-    // the await — never from a re-read of `auth`, which may have moved on.
-    rememberStarted(owner, { planId, nightKey });
-    setCreatedPlanId(planId);
-    const plan = await getNightOut(supabase, planId);
-    creatingOwners.delete(owner);
-    if (owner !== liveUserId.current) return;
-    if (plan === null) {
-      setReadFailed(true);
-      return;
-    }
-    if (!mounted.current) return;
-    forgetStarted(owner);
-    router.push(`/night-out/${plan.shareToken}`);
   };
 
   return (
