@@ -109,6 +109,61 @@ describe('Social → Plans invitation cards', () => {
     render(<PlanInvites />);
     expect(await screen.findByTestId('invite-updated')).toBeTruthy();
     expect(screen.getByText('Updated')).toBeTruthy();
+    // The approved Part B copy, verbatim. Round 1 (both lanes): the card said
+    // "Plan changed" / "… was updated", and the test checked only the badge, so
+    // the copy could drift from the design with the suite green.
+    expect(
+      screen.getByText('Time changed'),
+      'the plan-updated card must use the approved copy, not a paraphrase',
+    ).toBeTruthy();
+    expect(screen.queryByText('Plan changed')).toBeNull();
+    expect(screen.queryByText(/was updated/)).toBeNull();
+  });
+
+  test('the accepted confirmation names a WEEKDAY, not a date stamp', async () => {
+    // Round 1 (Claude): this interpolated the raw night key, so the user read
+    // "see you 2026-08-20" at the moment of accepting. The design draws a
+    // friendly weekday.
+    rows = [{ id: 'p1', myStatus: 'pending', night: '2026-08-20' }];
+    const user = userEvent.setup();
+    render(<PlanInvites />);
+    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+
+    // The CONFIRM BAR specifically — the element the finding named. The plan
+    // card rendered beneath it still uses nightLabel(), which carries the night
+    // key; reformatting that is a surface-wide copy change across all five card
+    // states, which the operator's morning decision routes to a separate copy
+    // goal rather than to a fix round on a frozen candidate.
+    await screen.findByTestId('invite-accepted-confirm');
+    const bar = screen.getByText(/You accepted — see you/);
+    expect(bar.textContent).toMatch(
+      /^You accepted — see you (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$/,
+    );
+    expect(
+      bar.textContent,
+      'the confirmation bar still shows a raw ISO night key',
+    ).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+
+  test('a long-past plan does not come back as an invitation forever', async () => {
+    // Round 1 (Claude): Dismiss is session-local and the query has no past
+    // cutoff, so every historical plan re-rendered as an expired invite in
+    // every new session, without bound and with no way to clear it.
+    rows = [{ id: 'p1', myStatus: 'accepted', night: '2020-01-01', isPast: true }];
+    const { container } = render(<PlanInvites />);
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-testid="plan-invites"]'),
+        'a plan from years ago is still being offered as an invite',
+      ).toBeNull(),
+    );
+  });
+
+  test('last night’s plan is still shown — the cutoff is a grace period, not a wall', async () => {
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    rows = [{ id: 'p1', myStatus: 'pending', night: yesterday, isPast: true }];
+    render(<PlanInvites />);
+    expect(await screen.findByTestId('invite-expired')).toBeTruthy();
   });
 
   test('a past night reads as expired and can be dismissed', async () => {
