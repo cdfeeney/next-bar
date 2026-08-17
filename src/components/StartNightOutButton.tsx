@@ -46,7 +46,26 @@ const UUID_RE =
  * Both are the same missing idea — a parked plan is only meaningful for the
  * identity and the night that created it.
  */
-type ParkedPlan = { planId: string; userId: string; nightKey: string };
+type ParkedPlan = { planId: string; nightKey: string };
+
+/**
+ * One record PER USER, under one literal key.
+ *
+ * Round 1 of this cycle, filed by BOTH lanes: a single slot meant the last
+ * writer won. "Ignore another account's record" protected owner A only while B
+ * *looked* — the moment B successfully created their own plan, rememberStarted
+ * overwrote A's record and the subsequent open cleared it. A returned the same
+ * night to an armed Start with no recovery, and the next tap made exactly the
+ * duplicate plan criterion 4 exists to prevent, with A's first plan unreachable
+ * because no surface lists plans you own.
+ *
+ * A per-user KEY (`...:v1:${userId}`) is the obvious shape and is forbidden
+ * here: storageInventory.test.ts fails any interpolated storage key, because a
+ * computed key cannot be seen by the data-continuity registry that governs
+ * account wipes. That constraint is right, so the scoping goes INSIDE the value
+ * instead — one literal key, a map keyed by user id.
+ */
+type ParkedByUser = Record<string, ParkedPlan>;
 
 /**
  * Last-resort store for when sessionStorage throws (Safari private mode at
@@ -59,7 +78,7 @@ type ParkedPlan = { planId: string; userId: string; nightKey: string };
  * unmounts a component across, so it closes the same window without pretending
  * to be durable.
  */
-let inMemoryParked: ParkedPlan | null = null;
+let inMemoryParked: ParkedByUser = {};
 /**
  * Did the last write actually land? A WRITABLE store is authoritative: if it
  * says nothing is parked, nothing is parked. The in-memory copy is consulted
@@ -69,10 +88,36 @@ let inMemoryParked: ParkedPlan | null = null;
  */
 let storageUsable = true;
 
-function rememberStarted(parked: ParkedPlan): void {
-  inMemoryParked = parked;
+/** Every parked record in the store, validated. Unreadable input yields {}. */
+function readAll(): ParkedByUser {
+  let raw: string | null = null;
   try {
-    window.sessionStorage.setItem(STARTED_KEY, JSON.stringify(parked));
+    raw = window.sessionStorage.getItem(STARTED_KEY);
+  } catch {
+    return inMemoryParked;
+  }
+  if (raw === null) return storageUsable ? {} : inMemoryParked;
+  const out: ParkedByUser = {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    for (const [userId, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!UUID_RE.test(userId) || typeof value !== 'object' || value === null) continue;
+      const { planId, nightKey } = value as Record<string, unknown>;
+      if (typeof planId !== 'string' || !UUID_RE.test(planId)) continue;
+      if (typeof nightKey !== 'string' || nightKey === '') continue;
+      out[userId] = { planId, nightKey };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeAll(next: ParkedByUser): void {
+  inMemoryParked = next;
+  try {
+    window.sessionStorage.setItem(STARTED_KEY, JSON.stringify(next));
     storageUsable = true;
   } catch {
     // Covered by inMemoryParked — never let this throw block navigation.
@@ -80,35 +125,20 @@ function rememberStarted(parked: ParkedPlan): void {
   }
 }
 
-function recallStarted(): ParkedPlan | null {
-  let raw: string | null = null;
-  try {
-    raw = window.sessionStorage.getItem(STARTED_KEY);
-  } catch {
-    return inMemoryParked;
-  }
-  if (raw === null) return storageUsable ? null : inMemoryParked;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null) return null;
-    const { planId, userId, nightKey } = parsed as Record<string, unknown>;
-    if (typeof planId !== 'string' || !UUID_RE.test(planId)) return null;
-    if (typeof userId !== 'string' || !UUID_RE.test(userId)) return null;
-    if (typeof nightKey !== 'string' || nightKey === '') return null;
-    return { planId, userId, nightKey };
-  } catch {
-    return null;
-  }
+function rememberStarted(userId: string, parked: ParkedPlan): void {
+  writeAll({ ...readAll(), [userId]: parked });
 }
 
-function forgetStarted(): void {
-  inMemoryParked = null;
-  storageUsable = true;
-  try {
-    window.sessionStorage.removeItem(STARTED_KEY);
-  } catch {
-    // Nothing to do; a stale entry dies with the session.
-  }
+function recallStarted(userId: string): ParkedPlan | null {
+  return readAll()[userId] ?? null;
+}
+
+/** Drops only THIS user's record. Another account's parked plan is not ours. */
+function forgetStarted(userId: string): void {
+  const all = readAll();
+  if (!(userId in all)) return;
+  const { [userId]: _dropped, ...rest } = all;
+  writeAll(rest);
 }
 
 /**
@@ -148,19 +178,15 @@ export default function StartNightOutButton(): JSX.Element | null {
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
   useEffect(() => {
     if (userId === null) return;
-    const parked = recallStarted();
+    // Only ever OUR record. Another account's parked plan is now a different
+    // entry in the same map rather than something to inherit, ignore or
+    // destroy — the earlier single-slot design could do all three.
+    const parked = recallStarted(userId);
     if (parked === null) return;
-    // ANOTHER ACCOUNT'S plan: ignore it, do not delete it (round 3, Codex).
-    // Round 2 cleared the record here, which fixed the lockout by destroying
-    // the original owner's only route back to a plan they created and never
-    // opened — and no surface lists plans you own, so that route is genuinely
-    // the only one. Ignoring is strictly better: B is not locked out either
-    // way, and A still has their recovery if they sign back in on this tab.
-    if (parked.userId !== userId) return;
-    // A STALE NIGHT is different — that record is spent, and clearing it is
-    // what stops yesterday's plan disabling Start today.
+    // A STALE NIGHT is spent, and clearing it is what stops yesterday's plan
+    // disabling Start today. This drops only our own entry.
     if (parked.nightKey !== nycNightKey()) {
-      forgetStarted();
+      forgetStarted(userId);
       return;
     }
     setCreatedPlanId(parked.planId);
@@ -176,7 +202,10 @@ export default function StartNightOutButton(): JSX.Element | null {
    */
   const retryOpen = async (): Promise<void> => {
     const supabase = getBrowserSupabase();
-    if (!supabase || createdPlanId === null) return;
+    // `userId`, not `auth.user.id`: this closure is defined above the
+    // signed-in guard, so the narrowed type is not available here — and a
+    // signed-out retry has no record of its own to clear anyway.
+    if (!supabase || createdPlanId === null || userId === null) return;
     setRetryFailed(false);
     const plan = await getNightOut(supabase, createdPlanId);
     if (!mounted.current) return;
@@ -189,7 +218,7 @@ export default function StartNightOutButton(): JSX.Element | null {
       setRetryFailed(true);
       return;
     }
-    forgetStarted();
+    forgetStarted(userId);
     router.push(`/night-out/${plan.shareToken}`);
   };
 
@@ -220,7 +249,7 @@ export default function StartNightOutButton(): JSX.Element | null {
     // Stay busy and route by plan id; the plan page resolves its own token.
     // Parked BEFORE the follow-up read, not after it: the window this closes is
     // the one where the read is still in flight and the user navigates away.
-    rememberStarted({ planId, userId: auth.user.id, nightKey });
+    rememberStarted(auth.user.id, { planId, nightKey });
     setCreatedPlanId(planId);
     const plan = await getNightOut(supabase, planId);
     if (plan === null) {
@@ -228,7 +257,7 @@ export default function StartNightOutButton(): JSX.Element | null {
       return;
     }
     if (!mounted.current) return;
-    forgetStarted();
+    forgetStarted(auth.user.id);
     router.push(`/night-out/${plan.shareToken}`);
   };
 

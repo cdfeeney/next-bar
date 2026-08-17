@@ -217,6 +217,68 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     ).toBeTruthy();
   });
 
+  test("another account CREATING a plan does not destroy the owner's parked one", async () => {
+    // Both lanes, new cycle round 1. The previous fix ignored a foreign record
+    // rather than deleting it, which protected A only while B LOOKED. The
+    // moment B created successfully, the single slot was overwritten and then
+    // cleared on open — A came back to an armed Start and the next tap made the
+    // duplicate plan criterion 4 exists to prevent.
+    readFails = true;
+    const user = userEvent.setup();
+    const a = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    a.unmount();
+
+    // B signs in and successfully creates and opens their own plan.
+    currentUser = USER_B;
+    readFails = false;
+    const b = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+    b.unmount();
+
+    // A returns the same night.
+    currentUser = USER_A;
+    render(<StartNightOutButton />);
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      "B creating a plan destroyed A's only route back to their unopened plan",
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: /Start the official Night Out/i }) as HTMLButtonElement)
+        .disabled,
+      'Start was re-armed for A, which is how the duplicate plan gets created',
+    ).toBe(true);
+  });
+
+  test('opening a plan clears only that account’s record', async () => {
+    readFails = true;
+    const user = userEvent.setup();
+    const a = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    a.unmount();
+
+    currentUser = USER_B;
+    readFails = false;
+    const b = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(pushed.length).toBe(1));
+    b.unmount();
+
+    // B's own record is gone (they opened it) — B is not stuck.
+    currentUser = USER_B;
+    const b2 = render(<StartNightOutButton />);
+    expect(screen.queryByRole('button', { name: /open it/i })).toBeNull();
+    b2.unmount();
+
+    // ...and A's survived that whole sequence.
+    currentUser = USER_A;
+    render(<StartNightOutButton />);
+    expect(await screen.findByRole('button', { name: /open it/i })).toBeTruthy();
+  });
+
   test('a plan parked on an earlier night does not disable Start today', async () => {
     // Codex, round 2: mobile browsers restore sessionStorage, so an unopened
     // plan from last night would otherwise keep Start disabled the next day.
