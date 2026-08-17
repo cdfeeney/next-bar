@@ -99,16 +99,30 @@ invisible to clients and to the CAS. Re-adding `response_revision` with
 pre-revert client has seen — and the counter then re-walks `0, 1, 2 …` into
 exactly the collisions described above.
 
-A genuinely safe reintroduction needs one of:
+**There is exactly one thing known to be sufficient**, and it has to be set up
+*before* you revert:
 
-- the counter **seeded above every value previously issued** — which the revert
-  itself destroys the data to compute, so it would have to be captured *before*
-  reverting; or
-- a **forced client re-sync**, so no session still holds a pre-revert pair.
+> Seed the counter **above every value previously issued**, so no historical pair
+> is reachable again.
 
-Neither is free, and neither is the migration number. If you are reverting under
-pressure, the honest position is that the replay guard is weakened until one of
-those two things is true, and this file cannot tell you when that is.
+That covers both populations of stale pair — sessions holding a rendered value,
+and requests already emitted and still in flight — because neither can name a
+revision the counter will ever reach again. The catch is that the revert destroys
+the data needed to compute that maximum, so it must be **captured before
+reverting**. If you did not capture it, this option is gone.
+
+**A forced client re-sync is NOT sufficient**, and an earlier version of this file
+said it was. Reloading every client means no *session* still holds a pre-revert
+pair — but it cannot recall a request already **emitted**. A response sent moments
+before the revert, delayed in the network or sitting in a retry queue, still
+carries its old pair; after re-apply, a pending member's row is back at
+`(pending, 0)`, which such a request matches immediately, with no counter climb
+needed. A re-sync is worth doing and it is not a guarantee.
+
+That is the honest state: **if you did not capture the high-water mark before
+reverting, this document cannot tell you when the guard is sound again.** Treat
+reintroduction as a design question for whoever does it, with the facts above as
+the inputs — not as a procedure to follow from here.
 
 Reverting also reinstates the ABA hole itself: `repro-aba-cases-20260817.mjs`
 cases 1 and 2 go RED again. Expected, not a surprise.
