@@ -24,12 +24,20 @@
 -- ORDER: nothing applied after 0059 may depend on the column or on the 4-arg
 -- overload. Check the ledger head before running this.
 --
--- The CODE half of the revert point is recorded in
--- REVERT-POINT-0059-20260817.md.
+-- The CODE half of the revert point is recorded in REVERT-POINT-0059-20260817.md,
+-- committed BESIDE this file in supabase/migrations/revert/. It was previously
+-- reachable only from the harness docs directory, which a round-3 reviewer
+-- correctly called the same dangling-pointer defect this directory exists to fix.
 --
 -- To revert: run this file, then
 --   delete from public.schema_migrations where name = '0059_night_outs_respond_revision.sql';
--- (apply-single-migration.mjs <file> revert does both in one transaction.)
+-- See README.md in this directory for a self-contained transactional psql recipe.
+-- The apply-single-migration.mjs helper also does both in one transaction, but it
+-- is harness-local and NOT committed here, and in revert mode it now REQUIRES the
+-- migration name to unrecord:
+--   apply-single-migration.mjs <revert-file> revert 0059_night_outs_respond_revision.sql
+-- It previously hard-coded 0058 and would have deleted the wrong ledger row
+-- (round-3 reviewer, fixed 2026-08-17). Prefer the psql recipe.
 ------------------------------------------------------------------------------
 
 -- 1. respond_night_out — back to 0058's 3-argument form ----------------------

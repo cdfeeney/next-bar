@@ -4,6 +4,7 @@ import {
   cancelNightOut,
   createNightOut,
   decideNightOut,
+  getMyNightOuts,
   getNightOut,
   getNightOutBoard,
   getNightOutMembers,
@@ -122,6 +123,65 @@ describe('nightOuts.server write RPCs', () => {
       await expect(respondNightOut(client, UUID, true, 'pending', bad)).resolves.toBe(false);
     }
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('getMyNightOuts maps my_revision onto myRevision', async () => {
+    // Both review lanes found this gap independently. The two component tests
+    // mock the whole nightOuts.server module, and the live tests query SQL
+    // directly, so NOTHING exercised this mapping. Break it — drop the key,
+    // typo it, or rename the SQL column — and tsc stays 0 (the row is a blind
+    // `as MyNightOutRow[]` cast) while every Accept and Decline on Social →
+    // Plans silently stops working, because respondNightOut's local
+    // Number.isInteger guard refuses an undefined revision.
+    //
+    // The revision is the only field asserted here that has no other coverage;
+    // the rest of the row is included so a reordering or a dropped key shows up
+    // as a diff rather than a silent pass.
+    const { client, rpc } = fakeRpc({
+      data: [
+        {
+          night_out_id: PLAN_UUID,
+          night: '2026-08-20',
+          title: 'Birthday crawl',
+          status: 'open',
+          owner_handle: 'conor',
+          owner_display_name: 'Conor',
+          my_status: 'pending',
+          responded_at: null,
+          accepted_count: 4,
+          share_token: null,
+          plan_updated: false,
+          is_past: false,
+          my_revision: 5,
+        },
+      ],
+    });
+    await expect(getMyNightOuts(client)).resolves.toEqual([
+      {
+        nightOutId: PLAN_UUID,
+        night: '2026-08-20',
+        title: 'Birthday crawl',
+        status: 'open',
+        ownerHandle: 'conor',
+        ownerDisplayName: 'Conor',
+        myStatus: 'pending',
+        respondedAt: null,
+        acceptedCount: 4,
+        shareToken: null,
+        planUpdated: false,
+        isPast: false,
+        myRevision: 5,
+      },
+    ]);
+    expect(rpc).toHaveBeenCalledWith('get_my_night_outs');
+  });
+
+  it('getMyNightOuts returns null on error rather than an empty list', async () => {
+    // An empty list and a failed read render identically on the card surface
+    // (the section hides when empty), so conflating them would make an outage
+    // look like "no invitations".
+    const { client } = fakeRpc({ error: { message: 'denied' } });
+    await expect(getMyNightOuts(client)).resolves.toBeNull();
   });
 
   it('inviteToNightOut validates both uuids before calling', async () => {

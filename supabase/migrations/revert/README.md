@@ -68,13 +68,25 @@ row to `0`; an honest decline then moves it to `(declined, 1)` — past `0` — 
 the delayed accept now matches and applies. The reset counter re-walks values it
 has already issued, so **any** historical pair can collide again as it climbs.
 
-The real boundary is time, not revision: the guard is fully sound again only once
-no request holding a pre-revert pair can still arrive. Bound that by the client
-and network timeouts of the surfaces that call `respond_night_out`, not by
-watching the counter.
+The real boundary is time, not revision — but **it is not request timeouts
+either**, which is where a second draft of this file was also wrong.
 
-**So: do not revert and re-apply while responses are in flight.** If you must,
-do it in a genuinely quiet window.
+A stale pair is not only held by requests in flight. It is held by every
+**rendered screen**: both surfaces deliberately pass the value they drew and
+never re-fetch at click time, because re-fetching is what would move the replay
+window into the client. That is the right design, and its consequence here is
+that a tab or installed PWA left open across the revert holds a pre-revert
+`(status, revision)` pair with **no expiry at all**, and can send it hours or
+days later, after the reset counter has climbed back to a colliding value.
+
+So there is no window you can wait out. **Expect stale open clients to survive
+any quiet period.** If you revert and re-apply, assume some clients still hold
+pre-revert pairs and treat the guard as weakened until those sessions have
+plausibly been reloaded — which you cannot observe from the database.
+
+**Prefer not to revert and re-apply at all.** If the migration has to come out,
+consider leaving it out rather than cycling it back in, and reintroduce it under
+a new migration number so the counter starts from a state no client has seen.
 
 Reverting also reinstates the ABA hole itself: `repro-aba-cases-20260817.mjs`
 cases 1 and 2 go RED again. That is the expected consequence, not a surprise.
