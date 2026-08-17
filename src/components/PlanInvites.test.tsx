@@ -18,7 +18,7 @@ let respondOk = true;
 // Lets a test say "the row had already moved on" — the reason a real refusal
 // happens, and the thing the card has to notice.
 let onRefusal: (() => void) | null = null;
-const responded: Array<[string, boolean]> = [];
+const responded: Array<[string, boolean, number]> = [];
 const pushed: string[] = [];
 let authStatus = 'signed-in';
 
@@ -42,9 +42,19 @@ vi.mock('@/lib/nightOuts.server', () => ({
       shareToken: r.shareToken ?? null,
       planUpdated: r.planUpdated ?? false,
       isPast: r.isPast ?? false,
+      myRevision: r.myRevision ?? 0,
     })),
-  respondNightOut: async (_s: unknown, id: string, accept: boolean) => {
-    responded.push([id, accept]);
+  respondNightOut: async (
+    _s: unknown,
+    id: string,
+    accept: boolean,
+    _expectedStatus: string,
+    expectedRevision: number,
+  ) => {
+    // The revision is captured so a test can assert the card sends the value it
+    // RENDERED. Sending a re-fetched one would re-open the replay window in the
+    // client, and nothing else in the suite would notice.
+    responded.push([id, accept, expectedRevision]);
     if (respondOk && accept) {
       rows = rows.map((r) =>
         r.id === id ? { ...r, myStatus: 'accepted', shareToken: 'tok-1' } : r,
@@ -84,7 +94,7 @@ describe('Social → Plans invitation cards', () => {
     const user = userEvent.setup();
     render(<PlanInvites />);
     await user.click(await screen.findByRole('button', { name: 'Accept' }));
-    await waitFor(() => expect(responded).toEqual([['p1', true]]));
+    await waitFor(() => expect(responded).toEqual([['p1', true, 0]]));
     expect(await screen.findByTestId('invite-accepted-confirm')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'View plan' }));
     // share_token only exists once accepted — that is the 0047 rule, and it is
@@ -97,8 +107,21 @@ describe('Social → Plans invitation cards', () => {
     const user = userEvent.setup();
     const { container } = render(<PlanInvites />);
     await user.click(await screen.findByRole('button', { name: 'Decline' }));
-    await waitFor(() => expect(responded).toEqual([['p1', false]]));
+    await waitFor(() => expect(responded).toEqual([['p1', false, 0]]));
     await waitFor(() => expect(container.querySelector('[data-testid="plan-invites"]')).toBeNull());
+  });
+
+  test('the card sends the revision it RENDERED, not a default', async () => {
+    // 0059: the revision is what makes the replay guard reliable, and it only
+    // works if the value travelling with the tap is the one the card was drawn
+    // from. A card rendered at revision 4 that sends 0 — or re-fetches at click
+    // time — hands the RPC a version the user never saw, which is the ABA
+    // window moved into the client. Nothing else in this suite would catch it.
+    rows = [{ id: 'p1', myStatus: 'pending', myRevision: 4 }];
+    const user = userEvent.setup();
+    render(<PlanInvites />);
+    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(responded).toEqual([['p1', true, 4]]));
   });
 
   test('an already-accepted invite reads as already responded, not as new', async () => {

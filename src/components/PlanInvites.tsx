@@ -73,15 +73,25 @@ export default function PlanInvites(): JSX.Element | null {
   const respond = async (
     planId: string,
     accept: boolean,
-    // The state THIS CARD was rendered from. A replay carries the state from
-    // before a later decision and is refused server-side.
+    // The state THIS CARD was rendered from — status AND revision. A replay
+    // carries the state from before a later decision and is refused
+    // server-side. The revision is what makes that refusal reliable: a status
+    // can come back, so a status-only check matched a stale request again once
+    // the row returned to it (0059).
     expectedStatus: MyNightOut['myStatus'],
+    expectedRevision: MyNightOut['myRevision'],
   ): Promise<void> => {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     setBusy(planId);
     setError(null);
-    const ok = await respondNightOut(supabase, planId, accept, expectedStatus);
+    const ok = await respondNightOut(
+      supabase,
+      planId,
+      accept,
+      expectedStatus,
+      expectedRevision,
+    );
     setBusy(null);
     if (!ok) {
       // The expected-status guard makes this refusal DETERMINISTIC, not transient:
@@ -169,7 +179,7 @@ export default function PlanInvites(): JSX.Element | null {
                   <button
                     type="button"
                     disabled={busy === plan.nightOutId}
-                    onClick={() => void respond(plan.nightOutId, true, plan.myStatus)}
+                    onClick={() => void respond(plan.nightOutId, true, plan.myStatus, plan.myRevision)}
                     className="flex-1 rounded-full bg-accent py-2 text-sm font-semibold text-black touch-manipulation disabled:opacity-50"
                   >
                     Accept
@@ -177,7 +187,7 @@ export default function PlanInvites(): JSX.Element | null {
                   <button
                     type="button"
                     disabled={busy === plan.nightOutId}
-                    onClick={() => void respond(plan.nightOutId, false, plan.myStatus)}
+                    onClick={() => void respond(plan.nightOutId, false, plan.myStatus, plan.myRevision)}
                     className="flex-1 rounded-full border border-border py-2 text-sm touch-manipulation disabled:opacity-50"
                   >
                     Decline

@@ -79,16 +79,17 @@ describe('nightOuts.server write RPCs', () => {
     const { client } = fakeRpc({ error: { message: 'denied' } });
     await expect(cancelNightOut(client, UUID)).resolves.toBe(false);
     await expect(decideNightOut(client, UUID, 'attaboy')).resolves.toBe(false);
-    await expect(respondNightOut(client, UUID, true, 'pending')).resolves.toBe(false);
+    await expect(respondNightOut(client, UUID, true, 'pending', 0)).resolves.toBe(false);
   });
 
   it('respondNightOut carries the accept flag — "Not tonight" is accept=false', async () => {
     const { client, rpc } = fakeRpc({ data: true });
-    await expect(respondNightOut(client, UUID, false, 'pending')).resolves.toBe(true);
+    await expect(respondNightOut(client, UUID, false, 'pending', 0)).resolves.toBe(true);
     expect(rpc).toHaveBeenCalledWith('respond_night_out', {
       p_night_out: UUID,
       p_accept: false,
       p_expected_status: 'pending',
+      p_expected_revision: 0,
     });
   });
 
@@ -96,13 +97,31 @@ describe('nightOuts.server write RPCs', () => {
     // Without it, a replayed accept reversed a LATER decline and recorded the
     // person as coming when they had said no (cold panel, Codex, HIGH). If the
     // expected state stops reaching the RPC, that protection is gone silently.
+    //
+    // 0059: the REVISION travels with the status, and it is the half that makes
+    // the guard reliable — a status can come back, so a status-only check
+    // matched a stale request again once the row returned to it.
     const { client, rpc } = fakeRpc({ data: true });
-    await expect(respondNightOut(client, UUID, true, 'declined')).resolves.toBe(true);
+    await expect(respondNightOut(client, UUID, true, 'declined', 3)).resolves.toBe(true);
     expect(rpc).toHaveBeenCalledWith('respond_night_out', {
       p_night_out: UUID,
       p_accept: true,
       p_expected_status: 'declined',
+      p_expected_revision: 3,
     });
+  });
+
+  it('respondNightOut refuses a revision that was never rendered', async () => {
+    // A caller reaching here with no revision has not rendered one, and the
+    // tempting fix — substituting 0 — sends a value the user never saw, which
+    // is the fabricated-default pattern the RPC exists to reject. Refuse
+    // locally so the failure is attributable to the caller rather than
+    // arriving as an opaque `false` from the database.
+    const { client, rpc } = fakeRpc({ data: true });
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      await expect(respondNightOut(client, UUID, true, 'pending', bad)).resolves.toBe(false);
+    }
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it('inviteToNightOut validates both uuids before calling', async () => {
@@ -161,6 +180,7 @@ describe('nightOuts.server reads', () => {
           share_token: UUID2,
           caller_role: 'member',
           caller_status: 'accepted',
+          caller_revision: 2,
         },
       ],
     });
@@ -170,6 +190,7 @@ describe('nightOuts.server reads', () => {
       status: 'open',
       callerRole: 'member',
       callerStatus: 'accepted',
+      callerRevision: 2,
       shareToken: UUID2,
     });
   });
