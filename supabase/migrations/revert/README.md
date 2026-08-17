@@ -88,9 +88,27 @@ nobody re-derives them:
   installed PWA left open across the revert holds a pre-revert pair with **no
   expiry** and can send it days later.
 
-So: **expect stale open clients to survive any quiet period.** If `0059` has to
-come out, prefer leaving it out and reintroducing the change under a **new
-migration number**, so the counter starts from a state no client has seen.
+So: **expect stale open clients to survive any quiet period.**
+
+**There is no cheap safe way to reintroduce this after a revert, and an earlier
+version of this file claimed there was.** It said to bring the change back under
+a new migration number "so the counter starts from a state no client has seen".
+That is false, and the two bullets above disprove it: the migration number is
+invisible to clients and to the CAS. Re-adding `response_revision` with
+`default 0` under *any* number restarts every row at `0` — a state every
+pre-revert client has seen — and the counter then re-walks `0, 1, 2 …` into
+exactly the collisions described above.
+
+A genuinely safe reintroduction needs one of:
+
+- the counter **seeded above every value previously issued** — which the revert
+  itself destroys the data to compute, so it would have to be captured *before*
+  reverting; or
+- a **forced client re-sync**, so no session still holds a pre-revert pair.
+
+Neither is free, and neither is the migration number. If you are reverting under
+pressure, the honest position is that the replay guard is weakened until one of
+those two things is true, and this file cannot tell you when that is.
 
 Reverting also reinstates the ABA hole itself: `repro-aba-cases-20260817.mjs`
 cases 1 and 2 go RED again. Expected, not a surprise.
