@@ -47,6 +47,26 @@ function readSupabaseUrl(): string | null {
 
 const SUPABASE_URL = readSupabaseUrl();
 
+/**
+ * Reading the environment fixed HOW the URL is found; it did not stop the suite
+ * skipping when it is absent (fix round 1, Codex). Eight `test.skip` calls below
+ * still turn a missing URL into a green run that asserts nothing about the
+ * signed-in lifecycle — criterion 5 is "run or fail loudly", and a config-shaped
+ * silence is the failure mode it names.
+ *
+ * Same shape and same acknowledgement flag as the live RLS suite: a CI runner
+ * legitimately has no credentials, anywhere else a missing URL means the
+ * authenticated coverage did NOT run and must say so.
+ */
+const SKIP_ALLOWED = process.env.CI === 'true' || process.env.CI === '1';
+if (SUPABASE_URL === null && !SKIP_ALLOWED) {
+  throw new Error(
+    'night-out.spec.ts: no NEXT_PUBLIC_SUPABASE_URL in the environment or '
+    + '.env.local, so the authenticated Night Out lifecycle was NOT exercised. '
+    + 'Set it, or set CI=1 to acknowledge that this environment cannot run it.',
+  );
+}
+
 function base64Url(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url');
 }

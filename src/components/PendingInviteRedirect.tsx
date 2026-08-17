@@ -26,6 +26,14 @@ export default function PendingInviteRedirect(): null {
     // Claude): while browsing a DIFFERENT plan, a stale pending token was
     // neither consumed nor acted on, then fired a surprise redirect later.
     if (pathname?.startsWith(`/night-out/${pending}`)) return;
+    // Onboarding is the ONE interruption this must not undo (fix round 1). The
+    // token deliberately survives until the plan page settles, so from
+    // /onboarding this component would otherwise see a live pending invite and
+    // replace the route — pulling a brand-new account out of the identity form
+    // it was just sent to, and setting the prompted flag means nothing sends it
+    // back. OnboardingGate already carries the plan as its `?next=`, so the trip
+    // is not lost by waiting: it completes on the other side.
+    if (pathname?.startsWith('/onboarding')) return;
     // PEEK, never consume, before navigating (review round 1, Codex): a
     // fresh account's onboarding gate can hijack the navigation after a
     // consume, losing the context for good. Leaving the key in place makes

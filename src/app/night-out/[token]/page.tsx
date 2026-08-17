@@ -119,42 +119,57 @@ export default function NightOutPage({
   const token = decodeURIComponent(params.token);
 
   /**
-   * Monotonic epoch, bumped whenever the auth status changes. Every member load
-   * captures it and refuses to paint if it has moved on.
+   * Monotonic epoch identifying WHICH VIEW is on screen — the pair (auth
+   * identity, plan token). Every member load captures it and refuses to paint
+   * if it has moved on.
    *
    * Cold panel (Codex): loadMemberView called setState unconditionally and never
    * saw the effect's `cancelled` flag, so an authenticated load started before a
    * sign-out could settle afterwards and put PRIVATE member data back on screen
    * for a signed-out viewer. The effect's own cancel flag could not cover it —
    * the direct callers (join, rejoin, refresh) are outside that closure.
+   *
+   * Fix round 1 (both lanes): the guard covered auth ONLY, which left the same
+   * defect shape alive one axis over. Next's client router REUSES this component
+   * across `/night-out/A` → `/night-out/B`, so a load for plan A could settle and
+   * paint A's private member state under B's URL — no remount, no sign-out, and
+   * the auth epoch never moves. The epoch is the whole view identity now, which
+   * is why it is no longer called authEpoch: naming it for one of its two axes is
+   * what made adding the second one feel out of scope.
    */
-  const authEpoch = useRef(0);
+  const viewEpoch = useRef(0);
   useEffect(() => {
-    authEpoch.current += 1;
+    viewEpoch.current += 1;
     // Blocking a stale load from painting is only half of it (cold panel 2,
     // Codex): on a sign-out the member view ALREADY on screen stayed rendered
     // until the anonymous preview settled, so accepted-member data sat in front
     // of a signed-out viewer for as long as that request took. Drop it now and
-    // let the reload decide what a signed-out viewer may see.
-    if (auth.status !== 'signed-in') {
-      setState((current) => (current.kind === 'member' ? { kind: 'loading' } : current));
-    }
-  }, [auth.status]);
+    // let the reload decide what the new viewer may see.
+    //
+    // The same argument applies unchanged to a token change, which is why this
+    // clears on ANY epoch bump rather than on sign-out only: while plan B loads,
+    // plan A's member list — names, statuses, the whole board — would otherwise
+    // sit on screen under plan B's URL. That is the identical leak as the async
+    // one the epoch guard blocks, arriving synchronously instead.
+    setState((current) => (current.kind === 'member' ? { kind: 'loading' } : current));
+    // This effect is declared BEFORE the loading effect, so on either change the
+    // epoch has already moved by the time the new load captures it.
+  }, [auth.status, token]);
 
   const loadMemberView = useCallback(
     async (planId: string): Promise<boolean> => {
       const supabase = getBrowserSupabase();
       if (!supabase) return false;
-      const epoch = authEpoch.current;
+      const epoch = viewEpoch.current;
       const [plan, members, board] = await Promise.all([
         getNightOut(supabase, planId),
         getNightOutMembers(supabase, planId),
         getNightOutBoard(supabase, planId),
       ]);
       if (plan === null) return false;
-      // Auth moved while we were away: this answer belongs to a session that is
-      // no longer the one looking at the screen.
-      if (epoch !== authEpoch.current) return false;
+      // The view moved while we were away: this answer belongs to a session, or
+      // a plan, that is no longer the one on screen.
+      if (epoch !== viewEpoch.current) return false;
       setState({
         kind: 'member',
         plan,
