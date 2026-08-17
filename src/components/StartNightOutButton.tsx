@@ -20,32 +20,90 @@ import { createNightOut, getNightOut } from '@/lib/nightOuts.server';
  *
  * sessionStorage, not localStorage: an unopened plan is one tab's in-flight
  * intent. It should not outlive the session or leak across tabs — the plan is
- * durable in the database and reachable from the plan list either way.
+ * durable in the database either way. (It is NOT yet reachable from a plan
+ * list: no surface lists plans you own. That gap is recorded as a residual
+ * product gap in V8-3-HANDOFF-2026-08-16b.md, which is why this recovery path
+ * carries more weight than it looks like it should.)
  */
 const STARTED_KEY = 'next-bar:started-night-out:v1';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function rememberStarted(planId: string): void {
+/**
+ * WHOSE plan, and for WHICH night. Round 2 filed the unscoped version twice.
+ *
+ * Claude (HIGH): sessionStorage is per TAB, not per account, and this key is in
+ * no wipe set — `accountCache` clears localStorage only. So user A parks an
+ * unopened plan, signs out, and user B signing in to the same tab inherits A's
+ * plan id: Start is disabled, "Open it" silently no-ops because getNightOut
+ * returns null under B's RLS, and nothing ever clears the key. B cannot create a
+ * night out for the rest of the session.
+ *
+ * Codex, independently: also unscoped by night, so a mobile browser restoring
+ * the tab tomorrow keeps Start disabled for yesterday's plan.
+ *
+ * Both are the same missing idea — a parked plan is only meaningful for the
+ * identity and the night that created it.
+ */
+type ParkedPlan = { planId: string; userId: string; nightKey: string };
+
+/**
+ * Last-resort store for when sessionStorage throws (Safari private mode at
+ * quota, some webviews).
+ *
+ * Codex (round 2): a purely best-effort write left criterion 4 unfixed exactly
+ * where storage is unavailable — the duplicate-plan bug came back for those
+ * users while the code looked like it had been handled. A module-level value
+ * lives as long as the JS context, which is precisely the span a route change
+ * unmounts a component across, so it closes the same window without pretending
+ * to be durable.
+ */
+let inMemoryParked: ParkedPlan | null = null;
+/**
+ * Did the last write actually land? A WRITABLE store is authoritative: if it
+ * says nothing is parked, nothing is parked. The in-memory copy is consulted
+ * only when the store could not be written or could not be read — otherwise a
+ * stale module-level value would outrank the real answer and re-offer a
+ * recovery the user has already finished with.
+ */
+let storageUsable = true;
+
+function rememberStarted(parked: ParkedPlan): void {
+  inMemoryParked = parked;
   try {
-    window.sessionStorage.setItem(STARTED_KEY, planId);
+    window.sessionStorage.setItem(STARTED_KEY, JSON.stringify(parked));
+    storageUsable = true;
   } catch {
-    // Private mode / quota. Recovery degrades to component state, which is
-    // exactly where it was before — never let this throw block navigation.
+    // Covered by inMemoryParked — never let this throw block navigation.
+    storageUsable = false;
   }
 }
 
-function recallStarted(): string | null {
+function recallStarted(): ParkedPlan | null {
+  let raw: string | null = null;
   try {
-    const raw = window.sessionStorage.getItem(STARTED_KEY);
-    return raw !== null && UUID_RE.test(raw) ? raw : null;
+    raw = window.sessionStorage.getItem(STARTED_KEY);
+  } catch {
+    return inMemoryParked;
+  }
+  if (raw === null) return storageUsable ? null : inMemoryParked;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { planId, userId, nightKey } = parsed as Record<string, unknown>;
+    if (typeof planId !== 'string' || !UUID_RE.test(planId)) return null;
+    if (typeof userId !== 'string' || !UUID_RE.test(userId)) return null;
+    if (typeof nightKey !== 'string' || nightKey === '') return null;
+    return { planId, userId, nightKey };
   } catch {
     return null;
   }
 }
 
 function forgetStarted(): void {
+  inMemoryParked = null;
+  storageUsable = true;
   try {
     window.sessionStorage.removeItem(STARTED_KEY);
   } catch {
@@ -65,6 +123,7 @@ export default function StartNightOutButton(): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const [readFailed, setReadFailed] = useState(false);
+  const [retryFailed, setRetryFailed] = useState(false);
   const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
   /**
    * Navigation must not fire from an unmounted component (fix round 1, Codex):
@@ -82,13 +141,22 @@ export default function StartNightOutButton(): JSX.Element | null {
   // Re-arm the recovery affordance instead of the Start button. A plan created
   // in this session but never opened is the one state where offering "Start" is
   // actively harmful.
+  //
+  // Keyed on the signed-in user: a parked plan belonging to someone else, or to
+  // an earlier night, is discarded rather than shown. Without that, the recovery
+  // UI locks the NEXT account out of creating a plan (round 2, both lanes).
+  const userId = auth.status === 'signed-in' ? auth.user.id : null;
   useEffect(() => {
+    if (userId === null) return;
     const parked = recallStarted();
-    if (parked !== null) {
-      setCreatedPlanId(parked);
-      setReadFailed(true);
+    if (parked === null) return;
+    if (parked.userId !== userId || parked.nightKey !== nycNightKey()) {
+      forgetStarted();
+      return;
     }
-  }, []);
+    setCreatedPlanId(parked.planId);
+    setReadFailed(true);
+  }, [userId]);
 
   /**
    * Retry the READ, not the create. The first version of this told the user to
@@ -100,8 +168,18 @@ export default function StartNightOutButton(): JSX.Element | null {
   const retryOpen = async (): Promise<void> => {
     const supabase = getBrowserSupabase();
     if (!supabase || createdPlanId === null) return;
+    setRetryFailed(false);
     const plan = await getNightOut(supabase, createdPlanId);
-    if (plan === null || !mounted.current) return;
+    if (!mounted.current) return;
+    if (plan === null) {
+      // Round 2 (Claude): this returned silently, so a plan that had genuinely
+      // gone — deleted, or a read that keeps failing — turned "Open it" into a
+      // dead control with no message and Start still disabled. A button that
+      // does nothing and says nothing is worse than a reported failure, because
+      // the user cannot tell it from a slow tap.
+      setRetryFailed(true);
+      return;
+    }
     forgetStarted();
     router.push(`/night-out/${plan.shareToken}`);
   };
@@ -126,7 +204,7 @@ export default function StartNightOutButton(): JSX.Element | null {
     // Stay busy and route by plan id; the plan page resolves its own token.
     // Parked BEFORE the follow-up read, not after it: the window this closes is
     // the one where the read is still in flight and the user navigates away.
-    rememberStarted(planId);
+    rememberStarted({ planId, userId: auth.user.id, nightKey: nycNightKey() });
     setCreatedPlanId(planId);
     const plan = await getNightOut(supabase, planId);
     if (plan === null) {
@@ -169,6 +247,12 @@ export default function StartNightOutButton(): JSX.Element | null {
           >
             Open it
           </button>
+          {retryFailed ? (
+            <p className="mt-2 text-sm text-red-400" role="status">
+              Still couldn&apos;t open it. Your night out exists — try again in a
+              moment.
+            </p>
+          ) : null}
         </div>
       ) : null}
     </div>

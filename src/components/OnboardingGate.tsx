@@ -49,15 +49,35 @@ export const ONBOARDING_PROMPTED_KEY = 'next-bar:onboarding-prompted:v1';
 const EXCLUDED_PREFIXES = ['/onboarding', '/auth', '/privacy', '/terms'];
 
 /**
+ * Sentinel origin used only to RESOLVE a candidate return path. It is never
+ * navigated to; it exists so the check works identically on the server, in
+ * jsdom and in a browser.
+ */
+const RETURN_ORIGIN = 'https://return-path-check.invalid';
+
+/**
  * Only a same-origin ABSOLUTE PATH may be returned to. This value reaches the
- * router from the URL bar, so it is untrusted input and "starts with /" alone is
- * not enough: `//evil.example` is a protocol-relative URL that browsers resolve
- * OFF-ORIGIN, and several normalise a backslash to a slash, so `/\evil.example`
- * is the same attack with one character changed.
+ * router from the URL bar, so it is untrusted input.
+ *
+ * Round 2 (Claude, HIGH) broke the first version of this, which rejected
+ * `//evil` and `/\evil` by inspecting `value[1]`. Character checks lose to the
+ * URL parser: `?next=/%09/evil.example` decodes to `/\t/evil.example`, whose
+ * second character is a tab, so it passed — and the WHATWG parser STRIPS ASCII
+ * tab, LF and CR before parsing, turning it back into `//evil.example` and
+ * navigating off-origin. `%0A` and `%0D` did the same.
+ *
+ * So do not guess which characters the parser ignores. Resolve the value with
+ * the same parser the browser will use and require the origin to survive. A
+ * hostile value has to reach a different origin to be worth anything, and this
+ * asks exactly that question.
  */
 export function isSafeReturnPath(value: string | null | undefined): boolean {
   if (typeof value !== 'string' || !value.startsWith('/')) return false;
-  return value[1] !== '/' && value[1] !== '\\';
+  try {
+    return new URL(value, RETURN_ORIGIN).origin === RETURN_ORIGIN;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -113,6 +113,22 @@ describe('isSafeReturnPath', () => {
     expect(isSafeReturnPath('/\\evil.example')).toBe(false);
   });
 
+  test('rejects the ASCII tab/newline bypass (round 2, HIGH)', () => {
+    // ?next=/%09/evil.example decodes to this. The first version of the check
+    // inspected value[1], saw a tab, and allowed it — then the WHATWG URL
+    // parser STRIPPED the tab and navigated to //evil.example. Character
+    // blacklists lose to the parser, so the check now asks the parser.
+    expect(isSafeReturnPath('/\t/evil.example')).toBe(false);
+    expect(isSafeReturnPath('/\n/evil.example')).toBe(false);
+    expect(isSafeReturnPath('/\r/evil.example')).toBe(false);
+    expect(isSafeReturnPath('/\t\\evil.example')).toBe(false);
+  });
+
+  test('still accepts ordinary paths with queries and fragments', () => {
+    expect(isSafeReturnPath('/friends/consensus?tab=all')).toBe(true);
+    expect(isSafeReturnPath('/settings#account')).toBe(true);
+  });
+
   test('rejects absolute URLs and anything that is not a path', () => {
     expect(isSafeReturnPath('https://evil.example')).toBe(false);
     expect(isSafeReturnPath('javascript:alert(1)')).toBe(false);

@@ -28,13 +28,22 @@ let readFails = false;
 let createCalls = 0;
 /** When set, getNightOut hands back this promise instead of resolving. */
 let heldRead: Promise<unknown> | null = null;
+let nightKey = '2026-08-17';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => pushed.push(href) }),
 }));
 
+const USER_A = '11111111-1111-4111-8111-111111111111';
+const USER_B = '22222222-2222-4222-8222-222222222222';
+let currentUser = USER_A;
+
 vi.mock('@/hooks/useAuth', () => ({
-  useAuth: () => ({ status: 'signed-in' }),
+  useAuth: () => ({ status: 'signed-in', user: { id: currentUser } }),
+}));
+
+vi.mock('@/lib/nightKey', () => ({
+  nycNightKey: () => nightKey,
 }));
 
 vi.mock('@/lib/supabase/client', () => ({
@@ -60,6 +69,8 @@ beforeEach(() => {
   readFails = false;
   createCalls = 0;
   heldRead = null;
+  currentUser = USER_A;
+  nightKey = '2026-08-17';
   window.sessionStorage.clear();
 });
 
@@ -144,6 +155,79 @@ describe('StartNightOutButton — a created plan is never lost', () => {
       (screen.getByRole('button') as HTMLButtonElement).disabled,
       'Start stayed disabled after the plan was successfully opened',
     ).toBe(false);
+  });
+
+  test('another account NEVER inherits the parked plan, and is not locked out', async () => {
+    // Round 2, filed by BOTH lanes. sessionStorage is per tab, not per account,
+    // and accountCache wipes localStorage only — so without user scoping the
+    // next person to sign in on this tab got A's recovery UI, a disabled Start,
+    // and an "Open it" that silently no-ops under their own RLS. They could not
+    // create a night out for the rest of the session.
+    readFails = true;
+    const user = userEvent.setup();
+    const first = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    expect(await screen.findByText(/created/i)).toBeTruthy();
+    first.unmount();
+
+    currentUser = USER_B;
+    render(<StartNightOutButton />);
+
+    expect(
+      screen.queryByRole('button', { name: /open it/i }),
+      "user B inherited user A's parked plan",
+    ).toBeNull();
+    const start = screen.getByRole('button', { name: /Start the official Night Out/i });
+    expect(
+      (start as HTMLButtonElement).disabled,
+      'user B was locked out of creating their own night out',
+    ).toBe(false);
+
+    readFails = false;
+    await user.click(start);
+    await waitFor(() =>
+      expect(createCalls, 'user B could not create a plan at all').toBe(2),
+    );
+  });
+
+  test('a plan parked on an earlier night does not disable Start today', async () => {
+    // Codex, round 2: mobile browsers restore sessionStorage, so an unopened
+    // plan from last night would otherwise keep Start disabled the next day.
+    readFails = true;
+    const user = userEvent.setup();
+    const first = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    first.unmount();
+
+    nightKey = '2026-08-18'; // the tab is restored the next day
+    render(<StartNightOutButton />);
+
+    expect(
+      screen.queryByRole('button', { name: /open it/i }),
+      "yesterday's unopened plan was re-offered as today's",
+    ).toBeNull();
+    expect(
+      (screen.getByRole('button') as HTMLButtonElement).disabled,
+      'Start stayed disabled for a plan from a previous night',
+    ).toBe(false);
+  });
+
+  test('a failed retry SAYS so instead of being a dead button', async () => {
+    readFails = true;
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    // The plan is genuinely gone, so the retry cannot succeed.
+    await user.click(await screen.findByRole('button', { name: /open it/i }));
+    expect(
+      await screen.findByText(/Still couldn't open it/i),
+      'a failing retry gave the user no feedback at all',
+    ).toBeTruthy();
+    expect(pushed).toEqual([]);
   });
 
   test('navigation does not fire from a component that is already gone', async () => {

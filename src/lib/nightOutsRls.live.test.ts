@@ -719,7 +719,15 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     let planId: string | null = null;
     let identities: string[] = [];
     try {
-      identities = await makeIdentities(21);
+      // Collected INCREMENTALLY, not by assigning makeIdentities' return value
+      // (round 2, Codex): each identity is its own autocommitted insert, so a
+      // throw partway through — the profile-trigger assertion, a transient
+      // error — left `identities` still [] and stranded every row already
+      // committed. The cleanup can only delete what it knows about, so it has
+      // to learn each id at the moment that id becomes real.
+      for (let i = 0; i < 21; i += 1) {
+        identities.push(...(await makeIdentities(1)));
+      }
       const [owner, target, extra, ...fillers] = identities;
 
       // Committed fixture: 19 seats (owner + 18 fillers), one seat left, and

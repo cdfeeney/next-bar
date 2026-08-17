@@ -1,6 +1,13 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+// Shared with src/lib/authenticatedE2eConfig.test.ts, which is what puts this
+// guard inside the DEFAULT gate — vitest never loads this spec (round 2, Codex).
+import {
+  assertAuthenticatedE2eConfigured,
+  authenticatedE2eSkipAllowed,
+  resolveSupabaseUrl,
+} from '../src/lib/authenticatedE2eConfig';
 
 /**
  * night-out.spec.ts — the V8-3 canonical Night Out surface.
@@ -33,19 +40,18 @@ const PENDING_KEY = 'next-bar:pending-invite:v1';
  * test.skip. The suite reported green while asserting nothing about the signed-in
  * lifecycle. Same fail-open species as the CI=1 skip in the live RLS suite.
  */
-function readSupabaseUrl(): string | null {
-  const fromEnv = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  if (fromEnv) return fromEnv;
+function readEnvFile(): string | null {
   try {
-    const env = readFileSync(path.join(__dirname, '..', '.env.local'), 'utf8');
-    const match = env.match(/^NEXT_PUBLIC_SUPABASE_URL=(.+)$/m);
-    return match ? match[1].trim() : null;
+    return readFileSync(path.join(__dirname, '..', '.env.local'), 'utf8');
   } catch {
     return null;
   }
 }
 
-const SUPABASE_URL = readSupabaseUrl();
+const SUPABASE_URL = resolveSupabaseUrl(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  readEnvFile(),
+);
 
 /**
  * Reading the environment fixed HOW the URL is found; it did not stop the suite
@@ -58,14 +64,11 @@ const SUPABASE_URL = readSupabaseUrl();
  * legitimately has no credentials, anywhere else a missing URL means the
  * authenticated coverage did NOT run and must say so.
  */
-const SKIP_ALLOWED = process.env.CI === 'true' || process.env.CI === '1';
-if (SUPABASE_URL === null && !SKIP_ALLOWED) {
-  throw new Error(
-    'night-out.spec.ts: no NEXT_PUBLIC_SUPABASE_URL in the environment or '
-    + '.env.local, so the authenticated Night Out lifecycle was NOT exercised. '
-    + 'Set it, or set CI=1 to acknowledge that this environment cannot run it.',
-  );
-}
+assertAuthenticatedE2eConfigured(
+  SUPABASE_URL,
+  authenticatedE2eSkipAllowed(process.env),
+  'night-out.spec.ts',
+);
 
 function base64Url(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url');
