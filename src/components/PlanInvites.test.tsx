@@ -15,6 +15,9 @@ type Row = Record<string, unknown>;
 
 let rows: Row[] = [];
 let respondOk = true;
+// Lets a test say "the row had already moved on" — the reason a real refusal
+// happens, and the thing the card has to notice.
+let onRefusal: (() => void) | null = null;
 const responded: Array<[string, boolean]> = [];
 const pushed: string[] = [];
 let authStatus = 'signed-in';
@@ -50,6 +53,7 @@ vi.mock('@/lib/nightOuts.server', () => ({
     if (respondOk && !accept) {
       rows = rows.map((r) => (r.id === id ? { ...r, myStatus: 'declined' } : r));
     }
+    if (!respondOk) onRefusal?.();
     return respondOk;
   },
 }));
@@ -59,6 +63,7 @@ import PlanInvites from './PlanInvites';
 beforeEach(() => {
   rows = [];
   respondOk = true;
+  onRefusal = null;
   responded.length = 0;
   pushed.length = 0;
   authStatus = 'signed-in';
@@ -143,5 +148,29 @@ describe('Social → Plans invitation cards', () => {
     await user.click(await screen.findByRole('button', { name: 'Accept' }));
     expect(await screen.findByText(/didn't go through/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Accept' })).toBeTruthy();
+  });
+
+  test('a refusal re-reads state, so the retry is not doomed to repeat it', async () => {
+    // The expected-status guard refuses DETERMINISTICALLY: this card claims
+    // 'pending' while the row has already been answered somewhere else. Retrying
+    // from an unrefreshed card re-sends the same stale expectation and fails
+    // identically every time, so "try again" is advice that can never succeed
+    // unless the card first stops lying about what it is looking at.
+    rows = [{ id: 'p1', myStatus: 'pending' }];
+    respondOk = false;
+    onRefusal = () => {
+      rows = rows.map((r) =>
+        r.id === 'p1' ? { ...r, myStatus: 'accepted', respondedAt: '2026-08-16T00:00:00Z' } : r,
+      );
+    };
+    const user = userEvent.setup();
+    render(<PlanInvites />);
+    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+
+    expect(await screen.findByText(/didn't go through/)).toBeTruthy();
+    // Re-synced to what the database actually holds, so the next tap cannot
+    // re-send 'pending'.
+    expect(await screen.findByTestId('invite-responded')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
   });
 });

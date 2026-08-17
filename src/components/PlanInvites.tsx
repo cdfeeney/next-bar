@@ -84,6 +84,13 @@ export default function PlanInvites(): JSX.Element | null {
     const ok = await respondNightOut(supabase, planId, accept, expectedStatus);
     setBusy(null);
     if (!ok) {
+      // The expected-status guard makes this refusal DETERMINISTIC, not transient:
+      // the card was rendered from a state the row no longer holds, so retrying
+      // from the same card re-sends the same stale expectedStatus and fails
+      // identically, forever. Re-read before advising a retry, so the next tap
+      // carries the truth. Retry advice that can never succeed is the exact
+      // anti-pattern this codebase has flagged before.
+      await load();
       setError("That didn't go through — try again.");
       return;
     }

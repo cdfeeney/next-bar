@@ -129,6 +129,8 @@ export default function NightOutPage({
    * the direct callers (join, rejoin, refresh) are outside that closure.
    */
   const authEpoch = useRef(0);
+  // Guards every withRefresh action against re-entrant taps. See withRefresh.
+  const actionInFlight = useRef(false);
   useEffect(() => {
     authEpoch.current += 1;
     // Blocking a stale load from painting is only half of it (cold panel 2,
@@ -228,19 +230,34 @@ export default function NightOutPage({
   const withRefresh =
     (action: () => Promise<boolean>, capacityRefusable = false) =>
     async (): Promise<void> => {
+      // A ref, not state: two taps landing in the same render both read a stale
+      // `false` from state and both fire. Without this, a fast double-tap of
+      // "Count me back in" sends the second request carrying the status the
+      // FIRST one just invalidated, and the user sees a failure for an action
+      // that actually succeeded.
+      if (actionInFlight.current) return;
+      actionInFlight.current = true;
       setActionError(null);
-      const ok = await action();
-      if (!ok) {
-        const supabase = capacityRefusable ? getBrowserSupabase() : null;
-        const full = supabase ? await isNightOutFullByToken(supabase, token) : false;
-        setActionError(
-          full
-            ? 'This night out is full.'
-            : "That didn't go through — try again.",
-        );
-        return;
+      try {
+        const ok = await action();
+        if (!ok) {
+          const supabase = capacityRefusable ? getBrowserSupabase() : null;
+          const full = supabase ? await isNightOutFullByToken(supabase, token) : false;
+          // Re-sync before advising a retry. The expected-status guard refuses
+          // deterministically, so a retry from an unrefreshed screen re-sends the
+          // same stale expectation and fails the same way every time.
+          if (state.kind === 'member') await loadMemberView(state.plan.id);
+          setActionError(
+            full
+              ? 'This night out is full.'
+              : "That didn't go through — try again.",
+          );
+          return;
+        }
+        if (state.kind === 'member') await loadMemberView(state.plan.id);
+      } finally {
+        actionInFlight.current = false;
       }
-      if (state.kind === 'member') void loadMemberView(state.plan.id);
     };
 
   if (state.kind === 'loading') {
