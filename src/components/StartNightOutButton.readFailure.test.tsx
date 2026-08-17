@@ -28,6 +28,8 @@ let readFails = false;
 let createCalls = 0;
 /** When set, getNightOut hands back this promise instead of resolving. */
 let heldRead: Promise<unknown> | null = null;
+/** When set, createNightOut hands back this promise instead of resolving. */
+let heldCreate: Promise<unknown> | null = null;
 let nightKey = '2026-08-17';
 
 vi.mock('next/navigation', () => ({
@@ -38,8 +40,13 @@ const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
 let currentUser = USER_A;
 
+let authStatus: 'signed-in' | 'signed-out' = 'signed-in';
+
 vi.mock('@/hooks/useAuth', () => ({
-  useAuth: () => ({ status: 'signed-in', user: { id: currentUser } }),
+  useAuth: () =>
+    authStatus === 'signed-in'
+      ? { status: 'signed-in', user: { id: currentUser } }
+      : { status: 'signed-out', user: null },
 }));
 
 vi.mock('@/lib/nightKey', () => ({
@@ -53,6 +60,7 @@ vi.mock('@/lib/supabase/client', () => ({
 vi.mock('@/lib/nightOuts.server', () => ({
   createNightOut: async () => {
     createCalls += 1;
+    if (heldCreate !== null) return heldCreate;
     return createResult;
   },
   getNightOut: async () => {
@@ -69,7 +77,9 @@ beforeEach(() => {
   readFails = false;
   createCalls = 0;
   heldRead = null;
+  heldCreate = null;
   currentUser = USER_A;
+  authStatus = 'signed-in';
   nightKey = '2026-08-17';
   window.sessionStorage.clear();
 });
@@ -315,6 +325,87 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     expect(
       await screen.findByRole('button', { name: /open it/i }),
       "A's parked plan was destroyed by B's visit",
+    ).toBeTruthy();
+  });
+
+  test('a sign-out/sign-in round trip DURING a create does not re-arm Start', async () => {
+    // The root cause both lanes converged on, and the one the goal named on day
+    // one: "an async result applied to state that has since moved on — fix them
+    // as one shape." Every earlier test here switches accounts only between
+    // SETTLED states, which is why five versions of this component passed while
+    // this window stayed open.
+    let releaseCreate: (value: unknown) => void = () => {};
+    heldCreate = new Promise((resolve) => {
+      releaseCreate = resolve;
+    });
+
+    const user = userEvent.setup();
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    // A's session blips out and back — same account, create still in flight.
+    authStatus = 'signed-out';
+    view.rerender(<StartNightOutButton />);
+    authStatus = 'signed-in';
+    view.rerender(<StartNightOutButton />);
+
+    // While a create is in flight the control reads "Starting…", so select the
+    // control itself rather than the idle label.
+    const start = screen.getByRole('button') as HTMLButtonElement;
+    expect(
+      start.disabled,
+      'Start was re-armed while the account’s own create was still in flight',
+    ).toBe(true);
+    expect(start.textContent).toMatch(/Starting/);
+    await user.click(start).catch(() => undefined);
+    expect(
+      createCalls,
+      'a second plan was created for the same night while the first was in flight',
+    ).toBe(1);
+
+    // And A's own answer still applies, because A is who is looking.
+    readFails = true;
+    releaseCreate(PLAN_ID);
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /open it/i })).toBeTruthy(),
+    );
+  });
+
+  test('a create that lands after a switch to B is parked for A, and never painted for B', async () => {
+    let releaseCreate: (value: unknown) => void = () => {};
+    heldCreate = new Promise((resolve) => {
+      releaseCreate = resolve;
+    });
+
+    const user = userEvent.setup();
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    // A different account takes over the tab mid-create.
+    currentUser = USER_B;
+    view.rerender(<StartNightOutButton />);
+
+    releaseCreate(PLAN_ID);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(
+      screen.queryByRole('button', { name: /open it/i }),
+      "A's in-flight create painted its recovery panel into B's view",
+    ).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: /Start the official Night Out/i }) as HTMLButtonElement)
+        .disabled,
+      'B was left disabled by an operation belonging to another account',
+    ).toBe(false);
+
+    // A returns: the plan A actually created is still recoverable.
+    currentUser = USER_A;
+    view.rerender(<StartNightOutButton />);
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      "A's plan was lost because the create resolved while B was on screen",
     ).toBeTruthy();
   });
 

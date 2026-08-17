@@ -185,7 +185,44 @@ export default function StartNightOutButton(): JSX.Element | null {
   // Keyed on the signed-in user: a parked plan belonging to someone else, or to
   // an earlier night, is discarded rather than shown. Without that, the recovery
   // UI locks the NEXT account out of creating a plan (round 2, both lanes).
+  /**
+   * WHICH ACCOUNT is on screen, as a monotonic epoch. The same mechanism
+   * `/night-out/[token]` uses, and the one this goal asked for in its own
+   * constraints: "items 1, 2 and 4 are three instances of one defect shape — an
+   * async result applied to state that has since moved on. Fix them as one
+   * shape, not three ad-hoc patches."
+   *
+   * The page got the shape. This component got five ad-hoc patches instead, and
+   * each one created the next defect, because every version answered "whose
+   * record is this?" and none answered "is the answer I am holding still
+   * addressed to the screen?". `useAuth` updates IN PLACE via
+   * onAuthStateChange, so a cross-tab sign-out/sign-in lands mid-flight with no
+   * unmount, and:
+   *
+   *   - the reset effect cleared `busy` while a create was still in flight, so
+   *     Start re-armed and a second tap made a second plan for the same night
+   *     (criterion 4, through the door the reset itself opened);
+   *   - the stale closure then resolved and called setCreatedPlanId /
+   *     setReadFailed unguarded, painting A's recovery panel into B's view.
+   *
+   * Every async result below captures this epoch before its first await and
+   * refuses to act if it has moved. `mounted` is kept for the separate question
+   * of whether the component still exists at all.
+   */
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
+  /**
+   * The account on screen RIGHT NOW, readable from inside a stale closure.
+   *
+   * A counter was the first shape tried and it was wrong here: auth cycling
+   * A -> signed-out -> A bumps twice, so A's own in-flight create would have
+   * been discarded on A's own screen. The page keys its epoch on (auth, token)
+   * because that is its view identity; this component's view identity is the
+   * ACCOUNT, so that is what gets captured and compared.
+   */
+  const liveUserId = useRef<string | null>(userId);
+  liveUserId.current = userId;
+  /** The account whose create is in flight, if any. Survives an epoch change. */
+  const inFlightOwner = useRef<string | null>(null);
   useEffect(() => {
     // EVERY path through this effect ends in a definite state for the CURRENT
     // account. Round 2 (Claude, HIGH): the previous version early-returned when
@@ -204,7 +241,12 @@ export default function StartNightOutButton(): JSX.Element | null {
     setCreatedPlanId(null);
     setReadFailed(false);
     setRetryFailed(false);
-    setBusy(false);
+    // `busy` is NOT blindly cleared: an in-flight create belonging to the
+    // account still on screen must keep Start disabled, or a sign-out/sign-in
+    // round trip re-arms it mid-create and the next tap makes a second plan for
+    // the same night. It IS cleared when the account changed, because the new
+    // account has nothing in flight.
+    setBusy(inFlightOwner.current !== null && inFlightOwner.current === userId);
     if (userId === null) return;
     // Only ever OUR record. Another account's parked plan is a different entry
     // in the same map rather than something to inherit, ignore or destroy —
@@ -234,9 +276,11 @@ export default function StartNightOutButton(): JSX.Element | null {
     // signed-in guard, so the narrowed type is not available here — and a
     // signed-out retry has no record of its own to clear anyway.
     if (!supabase || createdPlanId === null || userId === null) return;
+    const owner = userId;
     setRetryFailed(false);
     const plan = await getNightOut(supabase, createdPlanId);
-    if (!mounted.current) return;
+    // Still the same account on screen, and still mounted.
+    if (!mounted.current || owner !== liveUserId.current) return;
     if (plan === null) {
       // Round 2 (Claude): this returned silently, so a plan that had genuinely
       // gone — deleted, or a read that keeps failing — turned "Open it" into a
@@ -255,6 +299,11 @@ export default function StartNightOutButton(): JSX.Element | null {
   const handleStart = async (): Promise<void> => {
     const supabase = getBrowserSupabase();
     if (!supabase || busy) return;
+    // Captured BEFORE the first await. Every setState and every write below is
+    // addressed to THIS account's screen; if a different account is on screen
+    // when the answer arrives, it is not ours to apply.
+    const owner = auth.user.id;
+    inFlightOwner.current = owner;
     setBusy(true);
     setError(false);
     // ONE reading of the clock for this whole attempt (round 3, Codex). The
@@ -265,7 +314,15 @@ export default function StartNightOutButton(): JSX.Element | null {
     // cannot otherwise reach.
     const nightKey = nycNightKey();
     const planId = await createNightOut(supabase, nightKey);
+    if (owner !== liveUserId.current) {
+      // A different account is on screen. The plan (if any) still belongs to
+      // `owner`, so park it below rather than dropping it — but paint nothing.
+      inFlightOwner.current = null;
+      if (planId !== null) rememberStarted(owner, { planId, nightKey });
+      return;
+    }
     if (planId === null) {
+      inFlightOwner.current = null;
       setBusy(false);
       setError(true);
       return;
@@ -277,15 +334,19 @@ export default function StartNightOutButton(): JSX.Element | null {
     // Stay busy and route by plan id; the plan page resolves its own token.
     // Parked BEFORE the follow-up read, not after it: the window this closes is
     // the one where the read is still in flight and the user navigates away.
-    rememberStarted(auth.user.id, { planId, nightKey });
+    // Parked under the account that STARTED it, from the value captured before
+    // the await — never from a re-read of `auth`, which may have moved on.
+    rememberStarted(owner, { planId, nightKey });
     setCreatedPlanId(planId);
     const plan = await getNightOut(supabase, planId);
+    inFlightOwner.current = null;
+    if (owner !== liveUserId.current) return;
     if (plan === null) {
       setReadFailed(true);
       return;
     }
     if (!mounted.current) return;
-    forgetStarted(auth.user.id);
+    forgetStarted(owner);
     router.push(`/night-out/${plan.shareToken}`);
   };
 
