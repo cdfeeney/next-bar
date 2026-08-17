@@ -43,6 +43,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 
+import { resolveTarget, TargetRefusal } from './lib/migration-target-guard';
+
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
 function fail(message: string): never {
@@ -87,11 +89,18 @@ function redactUrl(url: string): string {
 async function main(): Promise<void> {
   const { env, execute, files, secretsFile } = parseArgs(process.argv.slice(2));
 
+  // Snapshot BEFORE any dotenv load. dotenv defaults to override:false, so a
+  // DATABASE_URL exported in the shell survives every load below and is
+  // indistinguishable afterwards from one a file supplied — which is exactly
+  // how a production connection string pairs with .env.local's staging label.
+  const shellDatabaseUrl = process.env.DATABASE_URL;
+
   // A separate --secrets-file is how you reach a NON-default target without editing
   // .env.local. Repointing .env.local at production is the obvious workaround
   // and it is a trap: it silently redirects every other tool in the repo,
   // including the live RLS suite, and it stays repointed until someone
   // remembers to undo it. One command, one file, no lingering state.
+  let secretsParsed: Record<string, string> | undefined;
   if (secretsFile !== null) {
     if (secretsFile === '') fail('--secrets-file needs a path');
     // NOTE: this option is deliberately NOT called --env-file. That name is a
@@ -102,47 +111,30 @@ async function main(): Promise<void> {
     // .env.local and point this at whatever THAT names. A guard that does not
     // guard is worse than no guard, because it is trusted.
     if (!existsSync(secretsFile)) fail(`--secrets-file ${secretsFile} does not exist`);
-    const loaded = loadEnv({ path: secretsFile, override: true });
-    // The URL and the LABEL must come from the SAME file (round 2, Claude).
-    //
-    // `.env.local` is loaded below WITHOUT override, so it fills in anything the
-    // secrets file left unset. That is the desired behaviour for most variables
-    // and catastrophic for this one: a secrets file carrying only DATABASE_URL
-    // lets the label fall through from .env.local, so a production connection
-    // string gets paired with the word "staging", `--env staging --execute`
-    // passes the check below, and every line this script prints says staging
-    // while it writes to production.
-    //
-    // The label is the ONLY thing that can tell these targets apart — the
-    // comment above already says a guard that does not guard is worse than no
-    // guard, because it is trusted. So require the file to name it explicitly
-    // rather than inferring it from whatever else happens to be loaded.
-    if (!loaded.parsed?.NEXT_BAR_DATABASE_ENVIRONMENT) {
-      fail(
-        `--secrets-file ${secretsFile} sets no NEXT_BAR_DATABASE_ENVIRONMENT. `
-        + 'A secrets file that names a target must also name WHICH target it is; '
-        + 'otherwise the label is inherited from .env.local and can disagree with '
-        + 'the connection string this file supplies.',
-      );
-    }
+    secretsParsed = loadEnv({ path: secretsFile, override: true }).parsed;
   }
   loadEnv({ path: '.env.local' });
   loadEnv({ path: '.env' });
 
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) fail('DATABASE_URL is not set');
-
-  const actualEnv = process.env.NEXT_BAR_DATABASE_ENVIRONMENT;
-  if (!actualEnv) {
-    fail('NEXT_BAR_DATABASE_ENVIRONMENT is not set, so the target cannot be identified');
+  // Which database are we about to write to, and can the label be trusted to
+  // name it? Every refusal that answers that lives in one tested function —
+  // see scripts/lib/migration-target-guard.ts. Connect with what IT returned,
+  // never by re-reading process.env, so the approved pair is the applied pair.
+  let target: { databaseUrl: string; actualEnv: string };
+  try {
+    target = resolveTarget({
+      env,
+      secretsFile,
+      secretsParsed,
+      shellDatabaseUrl,
+      databaseUrl: process.env.DATABASE_URL,
+      actualEnv: process.env.NEXT_BAR_DATABASE_ENVIRONMENT,
+    });
+  } catch (error) {
+    if (error instanceof TargetRefusal) fail(error.message);
+    throw error;
   }
-  if (actualEnv !== env) {
-    fail(
-      `you named --env ${JSON.stringify(env)} but the loaded environment is `
-      + `${JSON.stringify(actualEnv)}. The connection string cannot tell these apart; `
-      + 'the label is the only thing that can.',
-    );
-  }
+  const { databaseUrl, actualEnv } = target;
 
   // Read and hash first: a missing or unreadable file must stop us before we
   // open a transaction on anything.

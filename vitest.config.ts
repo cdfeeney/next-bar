@@ -15,7 +15,11 @@ export default defineConfig({
     // the ONE gate rather than a second config, because a suite you have to
     // remember a --config flag to run is not a gate. (Replaces the separate
     // ceo/vitest.config.mjs, deleted.)
-    include: ['src/**/*.test.{ts,tsx}', 'ceo/**/*.test.{ts,tsx}'],
+    // scripts/** holds the migration apply-tool's target guard. It is the one
+    // piece of live-revenue code a wrong answer sends to the wrong database,
+    // and until it was extracted from the script's import-time main() nothing
+    // could reach it. Same gate, for the same reason ceo/** is here.
+    include: ['src/**/*.test.{ts,tsx}', 'ceo/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
   },
   resolve: {
     alias: {
