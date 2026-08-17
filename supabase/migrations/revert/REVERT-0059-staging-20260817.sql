@@ -1,6 +1,6 @@
 ------------------------------------------------------------------------------
 -- REVERT-0059-staging-20260817.sql
--- Rollback half of the T0 gate for migration 0059
+-- Body-restoring half of the rollback for migration 0059
 ------------------------------------------------------------------------------
 -- Restores respond_night_out to its 3-argument 0058 body, get_night_out to its
 -- 0045 shape, get_my_night_outs to its 0053 shape, drops the revision trigger
@@ -8,36 +8,16 @@
 --
 -- PROVENANCE: every definition below is the VERBATIM text of the migration that
 -- last defined that object before 0059 — 0058 for respond_night_out, 0045 for
--- get_night_out, 0053 for get_my_night_outs — which is the same text that
--- produced the definition 0059 replaced.
+-- get_night_out, 0053 for get_my_night_outs.
 --
--- APPLYING THIS REINSTATES THE ABA HOLE. A delayed duplicate accept can again
--- reverse a later decline (repro-aba-cases-20260817.mjs cases 1 and 2 go RED).
--- It exists so the deploy is reversible in one step, not because 0058 is
--- correct.
+-- DO NOT RUN THIS FILE DIRECTLY. On its own it restores the bodies without
+-- unrecording 0059, leaving the ledger claiming a migration that is no longer
+-- installed. Run revert-0059-transaction.sql in this directory, which wraps
+-- this file and the ledger delete in ONE transaction.
 --
--- DATA LOSS: dropping response_revision discards every stored revision. Re-
--- applying 0059 afterwards re-adds the column at 0 for every row, so any
--- in-flight request holding a pre-revert revision would match again. Do not
--- revert and re-apply while responses are in flight.
---
--- ORDER: nothing applied after 0059 may depend on the column or on the 4-arg
--- overload. Check the ledger head before running this.
---
--- The CODE half of the revert point is recorded in REVERT-POINT-0059-20260817.md,
--- committed BESIDE this file in supabase/migrations/revert/. It was previously
--- reachable only from the harness docs directory, which a round-3 reviewer
--- correctly called the same dangling-pointer defect this directory exists to fix.
---
--- To revert: run this file, then
---   delete from public.schema_migrations where name = '0059_night_outs_respond_revision.sql';
--- See README.md in this directory for a self-contained transactional psql recipe.
--- The apply-single-migration.mjs helper also does both in one transaction, but it
--- is harness-local and NOT committed here, and in revert mode it now REQUIRES the
--- migration name to unrecord:
---   apply-single-migration.mjs <revert-file> revert 0059_night_outs_respond_revision.sql
--- It previously hard-coded 0058 and would have deleted the wrong ledger row
--- (round-3 reviewer, fixed 2026-08-17). Prefer the psql recipe.
+-- README.md in this directory is the single source for what this costs and
+-- when it is safe. Deliberately not repeated here: three earlier rounds of
+-- review were spent on the same claim drifting between copies of it.
 ------------------------------------------------------------------------------
 
 -- 1. respond_night_out — back to 0058's 3-argument form ----------------------

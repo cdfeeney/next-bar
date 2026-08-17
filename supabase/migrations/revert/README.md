@@ -1,13 +1,14 @@
 # Migration revert files
 
-A round-1 reviewer found that `0059_night_outs_respond_revision.sql` line 42
-says `Revert: REVERT-0059-staging-20260817.sql` — and that file existed nowhere
-in this repository. An operator reaching for the revert under pressure would
-follow the committed migration's own pointer and find nothing.
+**This file is the single source of truth for reverting `0059`.** Nothing else —
+not the migration header, not the revert SQL, not the revert-point doc — restates
+what a revert costs or when it is safe.
 
-That is true of **every** revert file, not just `0059`. All of them were written
-into the harness docs directory (`~/.claude/docs`) and none were ever committed.
-This directory starts closing that.
+That rule exists because it was learned the hard way. Four review rounds on this
+change were spent almost entirely on the same claim drifting between copies of
+itself: the recovery boundary was stated three different ways in three files, and
+each correction left a stale twin somewhere else. One statement, one place,
+pointers everywhere else.
 
 ## Why the files are here and not next to the migrations
 
@@ -17,81 +18,76 @@ subdirectory cannot be swept into a migration set by accident. Verified: the
 top-level `.sql` count is unchanged by this directory's existence.
 
 A revert is **not** a migration. It is deliberately not numbered into the
-sequence, because applying it is a rollback, not a forward step, and the ledger
-row for the migration it reverses is deleted rather than added to.
+sequence, because applying it is a rollback and the ledger row for the migration
+it reverses is deleted rather than added.
 
-## How to run one
+## How to run it
 
-The revert must restore the bodies **and** delete the ledger row **in one
-transaction**. If those come apart, the ledger claims `0059` while the installed
-bodies are `0058`, and a ledger-aware runner will then act on a false picture.
-
-Nothing outside this repository is required:
+One command. It works in PowerShell, cmd and bash alike, which is the point — the
+operator is on Windows, and an earlier version of this file documented a bash
+heredoc that PowerShell cannot parse:
 
 ```
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
-BEGIN;
-\i supabase/migrations/revert/REVERT-0059-staging-20260817.sql
-DELETE FROM public.schema_migrations WHERE name = '0059_night_outs_respond_revision.sql';
-COMMIT;
-SQL
+psql "<connection-string>" -v ON_ERROR_STOP=1 -f supabase/migrations/revert/revert-0059-transaction.sql
 ```
 
-Check the target first — `DATABASE_URL` names the serving database, and the
-label identifies it rather than protecting it:
+`revert-0059-transaction.sql` wraps the body restore and the ledger delete in one
+transaction and refuses to commit a half-done rollback. `\ir` resolves relative
+to the script, so the command works from anywhere in the repository.
+
+Confirm the target first — the connection string names the serving database, and
+the environment label identifies it rather than protecting it:
 
 ```
-psql "$DATABASE_URL" -Atc "select current_setting('server_version'), current_user"
+psql "<connection-string>" -Atc "select current_user"
 ```
 
-There is also a harness-local helper, `apply-single-migration.mjs`, which does
-the same two steps atomically. It is **not committed here** and must not be the
-only path you know: a round-2 reviewer correctly pointed out that a T0 rollback
-runbook whose sole execution path lives outside the repository repeats — one
-level removed — the very problem this directory was created to fix. The psql
-recipe above is the repository-sufficient path; the helper is a convenience.
+**Do not** run `REVERT-0059-staging-20260817.sql` on its own: it restores the
+bodies without unrecording `0059`, leaving the ledger describing a migration that
+is no longer installed. **Do not** use `npm run db:migrate` — it is ledger-blind
+and would replay every file.
 
-Do not use `npm run db:migrate` — it is ledger-blind and would replay every file.
+There is also a harness-local helper, `apply-single-migration.mjs`, in
+`~/.claude/docs`. It is **not committed here**, so it is a convenience and never
+the path of record. In revert mode it now requires the migration name explicitly:
 
-## `0059` — read this before reverting it
+```
+node ~/.claude/docs/apply-single-migration.mjs <revert-file> revert 0059_night_outs_respond_revision.sql
+```
 
-**Reverting `0059` loses data, and `0058`'s revert did not.**
+It previously hard-coded `0058` and would have deleted the wrong ledger row —
+found by review on 2026-08-17 and fixed. Prefer the psql path above.
 
-Dropping `response_revision` discards every stored revision. Re-applying `0059`
-afterwards re-adds the column at `0` for every row.
+## What reverting `0059` costs
 
-**There is no "wait for it to recover" boundary.** An earlier draft of this file
-said the guard was weakened only until rows moved past `0`. That was wrong, and a
-reviewer supplied the counterexample: a delayed accept carrying `(declined, 1)`
-against a row that is `accepted` at revision `2`; revert and re-apply resets that
-row to `0`; an honest decline then moves it to `(declined, 1)` — past `0` — and
-the delayed accept now matches and applies. The reset counter re-walks values it
-has already issued, so **any** historical pair can collide again as it climbs.
+**It loses data, and `0058`'s revert did not.** Dropping `response_revision`
+discards every stored revision. Re-applying `0059` afterwards re-adds the column
+at `0` for every row.
 
-The real boundary is time, not revision — but **it is not request timeouts
-either**, which is where a second draft of this file was also wrong.
+**There is no waiting period that makes re-applying safe.** Two earlier drafts of
+this file got that wrong in two different ways, and both are worth stating so
+nobody re-derives them:
 
-A stale pair is not only held by requests in flight. It is held by every
-**rendered screen**: both surfaces deliberately pass the value they drew and
-never re-fetch at click time, because re-fetching is what would move the replay
-window into the client. That is the right design, and its consequence here is
-that a tab or installed PWA left open across the revert holds a pre-revert
-`(status, revision)` pair with **no expiry at all**, and can send it hours or
-days later, after the reset counter has climbed back to a colliding value.
+- *"The guard recovers once rows move past revision 0."* **False.** A delayed
+  accept carrying `(declined, 1)` against a row that is `accepted` at `2` will
+  match again after a reset, once an honest decline moves that row to
+  `(declined, 1)` — which is past `0`. The reset counter re-walks values it has
+  already issued, so **any** historical pair can collide as it climbs.
+- *"Bound the window by client and network timeouts."* **Also false.** A stale
+  pair is not only held by requests in flight. Both response surfaces
+  deliberately pass the value they RENDERED and never re-fetch at click time —
+  that is the design that keeps the replay window out of the client — so a tab or
+  installed PWA left open across the revert holds a pre-revert pair with **no
+  expiry** and can send it days later.
 
-So there is no window you can wait out. **Expect stale open clients to survive
-any quiet period.** If you revert and re-apply, assume some clients still hold
-pre-revert pairs and treat the guard as weakened until those sessions have
-plausibly been reloaded — which you cannot observe from the database.
-
-**Prefer not to revert and re-apply at all.** If the migration has to come out,
-consider leaving it out rather than cycling it back in, and reintroduce it under
-a new migration number so the counter starts from a state no client has seen.
+So: **expect stale open clients to survive any quiet period.** If `0059` has to
+come out, prefer leaving it out and reintroducing the change under a **new
+migration number**, so the counter starts from a state no client has seen.
 
 Reverting also reinstates the ABA hole itself: `repro-aba-cases-20260817.mjs`
-cases 1 and 2 go RED again. That is the expected consequence, not a surprise.
+cases 1 and 2 go RED again. Expected, not a surprise.
 
-Order matters inside the file: the trigger is dropped **before** the column,
+Order inside the body file matters: the trigger is dropped **before** the column,
 because the trigger function references it.
 
 ## Still outstanding
@@ -106,9 +102,8 @@ REVERT-0058
 ```
 
 Bringing those in is deliberately **not** done in this goal — its scope is the
-ABA fix, and a thirteen-file import is someone else's reviewed change. Recorded
-here so the gap is visible from the repository rather than only from a handoff
-document.
+ABA fix, and a thirteen-file import deserves its own review. Recorded here so the
+gap is visible from the repository rather than only from a handoff document.
 
 Two of them carry warnings worth repeating before anyone imports them:
 `REVERT-0044` is a drop of the entire Night Out feature and deletes every plan,

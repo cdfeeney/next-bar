@@ -1164,6 +1164,68 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     });
   });
 
+  /**
+   * The revision READ contract, at the SQL boundary.
+   *
+   * Found by review: everything else tests the revision somewhere it is mocked
+   * or read directly. The live ABA test queries `night_out_members` itself; the
+   * wrapper and component tests supply RPC rows by hand. So both read functions
+   * could return a constant 0 and the entire suite would stay green — while
+   * every legitimate UI response failed the moment a membership passed revision
+   * 0, because the caller would send 0 against a row that had moved on.
+   *
+   * This asserts the two reads that feed the two response surfaces actually
+   * carry the row's revision, and that it MOVES.
+   */
+  it('get_night_out and get_my_night_outs return the live response_revision (0059)', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, null) as id',
+        ['revision read probe'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+      await db.query('RESET ROLE');
+
+      const rowRevision = async (): Promise<number> => {
+        const { rows } = await db.query(
+          `select response_revision from public.night_out_members
+            where night_out_id = $1 and user_id = $2`, [planId, guest],
+        );
+        return Number(rows[0].response_revision);
+      };
+      const readBack = async (): Promise<{ plan: number; list: number }> => {
+        await asRole('authenticated', guest);
+        const { rows: one } = await db.query(
+          'select caller_revision from public.get_night_out($1)', [planId]);
+        const { rows: many } = await db.query(
+          'select night_out_id, my_revision from public.get_my_night_outs()');
+        await db.query('RESET ROLE');
+        const mine = many.find((r) => r.night_out_id === planId);
+        expect(mine, 'the invitee could not see the plan in get_my_night_outs').toBeTruthy();
+        return { plan: Number(one[0].caller_revision), list: Number(mine.my_revision) };
+      };
+
+      const atZero = await readBack();
+      expect(atZero.plan, 'get_night_out did not report the fresh revision 0').toBe(0);
+      expect(atZero.list, 'get_my_night_outs did not report the fresh revision 0').toBe(0);
+
+      // Move it, twice, so a hardcoded 0 cannot pass.
+      await asRole('authenticated', guest);
+      await db.query(RESPOND, [planId, false, 'pending']);
+      await db.query(RESPOND, [planId, true, 'declined']);
+      await db.query('RESET ROLE');
+
+      const moved = await rowRevision();
+      expect(moved, 'two responses did not advance the stored revision').toBe(2);
+      const after = await readBack();
+      expect(after.plan, 'get_night_out does not carry the live revision').toBe(moved);
+      expect(after.list, 'get_my_night_outs does not carry the live revision').toBe(moved);
+    });
+  });
+
   it('two plans on the SAME night stay isolated from each other (criterion 9)', async () => {
     await inRollback(async () => {
       const { rows: people } = await db.query('select id from public.profiles limit 2');
