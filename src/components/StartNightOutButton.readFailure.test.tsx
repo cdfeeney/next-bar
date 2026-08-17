@@ -191,6 +191,32 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     );
   });
 
+  test('the original owner still has their recovery after another account visits', async () => {
+    // Round 3 (Codex): round 2 fixed B's lockout by DELETING A's parked record,
+    // which destroys A's only route back to a plan they created and never
+    // opened — no surface lists plans you own. Ignoring is strictly better.
+    readFails = true;
+    const user = userEvent.setup();
+    const first = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    first.unmount();
+
+    // B signs in on the same tab, sees nothing of A's, and leaves.
+    currentUser = USER_B;
+    const second = render(<StartNightOutButton />);
+    expect(screen.queryByRole('button', { name: /open it/i })).toBeNull();
+    second.unmount();
+
+    // A comes back.
+    currentUser = USER_A;
+    render(<StartNightOutButton />);
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      "another account's visit destroyed the owner's only way back to their plan",
+    ).toBeTruthy();
+  });
+
   test('a plan parked on an earlier night does not disable Start today', async () => {
     // Codex, round 2: mobile browsers restore sessionStorage, so an unopened
     // plan from last night would otherwise keep Start disabled the next day.

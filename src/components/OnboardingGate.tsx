@@ -48,12 +48,7 @@ export const ONBOARDING_PROMPTED_KEY = 'next-bar:onboarding-prompted:v1';
  */
 const EXCLUDED_PREFIXES = ['/onboarding', '/auth', '/privacy', '/terms'];
 
-/**
- * Sentinel origin used only to RESOLVE a candidate return path. It is never
- * navigated to; it exists so the check works identically on the server, in
- * jsdom and in a browser.
- */
-const RETURN_ORIGIN = 'https://return-path-check.invalid';
+// (No sentinel origin. See isSafeReturnPath — introducing one was a defect.)
 
 /**
  * Only a same-origin ABSOLUTE PATH may be returned to. This value reaches the
@@ -70,11 +65,26 @@ const RETURN_ORIGIN = 'https://return-path-check.invalid';
  * the same parser the browser will use and require the origin to survive. A
  * hostile value has to reach a different origin to be worth anything, and this
  * asks exactly that question.
+ *
+ * Round 3 (Codex) then broke the FIRST version of that idea, which resolved
+ * against a fixed sentinel origin so the check would behave identically on the
+ * server and in jsdom. That made the sentinel itself a passable target:
+ * `?next=//return-path-check.invalid/evil` starts with `/`, resolves to the
+ * sentinel's own origin, compared equal, and navigated off-origin for real.
+ * Convenience in the check became a hole in it.
+ *
+ * The comparison is against `window.location.origin` — the origin that actually
+ * matters. A protocol-relative URL naming the REAL host is genuinely same-origin
+ * and harmless; naming anything else is caught. There is no third host left for
+ * an attacker to aim at.
  */
 export function isSafeReturnPath(value: string | null | undefined): boolean {
   if (typeof value !== 'string' || !value.startsWith('/')) return false;
+  // No window means no origin to be same as. Fail closed rather than guess.
+  if (typeof window === 'undefined') return false;
+  const origin = window.location.origin;
   try {
-    return new URL(value, RETURN_ORIGIN).origin === RETURN_ORIGIN;
+    return new URL(value, origin).origin === origin;
   } catch {
     return false;
   }

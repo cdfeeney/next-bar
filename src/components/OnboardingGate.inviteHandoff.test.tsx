@@ -129,6 +129,24 @@ describe('isSafeReturnPath', () => {
     expect(isSafeReturnPath('/settings#account')).toBe(true);
   });
 
+  test('rejects a protocol-relative URL naming the CHECK’s own helper host', () => {
+    // The round-3 HIGH. The check used to resolve against a fixed sentinel
+    // origin so it would behave the same on the server and in jsdom — which
+    // made the sentinel itself a reachable target: this value starts with '/',
+    // resolved to the sentinel's origin, compared equal, and navigated
+    // off-origin for real. The comparison is against window.location.origin
+    // now, so there is no third host to aim at.
+    expect(isSafeReturnPath('//return-path-check.invalid/evil')).toBe(false);
+    expect(isSafeReturnPath('/\t/return-path-check.invalid/evil')).toBe(false);
+  });
+
+  test('accepts a protocol-relative URL naming the REAL origin, which is same-origin', () => {
+    // Not a hole: this resolves to this very site. Rejecting it would be
+    // arbitrary; the property under test is "cannot reach another origin".
+    const host = window.location.host;
+    expect(isSafeReturnPath(`//${host}/rankings`)).toBe(true);
+  });
+
   test('rejects absolute URLs and anything that is not a path', () => {
     expect(isSafeReturnPath('https://evil.example')).toBe(false);
     expect(isSafeReturnPath('javascript:alert(1)')).toBe(false);

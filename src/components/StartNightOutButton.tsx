@@ -150,7 +150,16 @@ export default function StartNightOutButton(): JSX.Element | null {
     if (userId === null) return;
     const parked = recallStarted();
     if (parked === null) return;
-    if (parked.userId !== userId || parked.nightKey !== nycNightKey()) {
+    // ANOTHER ACCOUNT'S plan: ignore it, do not delete it (round 3, Codex).
+    // Round 2 cleared the record here, which fixed the lockout by destroying
+    // the original owner's only route back to a plan they created and never
+    // opened — and no surface lists plans you own, so that route is genuinely
+    // the only one. Ignoring is strictly better: B is not locked out either
+    // way, and A still has their recovery if they sign back in on this tab.
+    if (parked.userId !== userId) return;
+    // A STALE NIGHT is different — that record is spent, and clearing it is
+    // what stops yesterday's plan disabling Start today.
+    if (parked.nightKey !== nycNightKey()) {
       forgetStarted();
       return;
     }
@@ -191,7 +200,14 @@ export default function StartNightOutButton(): JSX.Element | null {
     if (!supabase || busy) return;
     setBusy(true);
     setError(false);
-    const planId = await createNightOut(supabase, nycNightKey());
+    // ONE reading of the clock for this whole attempt (round 3, Codex). The
+    // night key was read again when parking, so a 6am NYC rollover landing
+    // between the two calls tagged the parked record with a night the plan does
+    // not belong to — and the scoping check would then discard a live recovery
+    // as stale. Narrow window, but it is the recovery path for a plan the user
+    // cannot otherwise reach.
+    const nightKey = nycNightKey();
+    const planId = await createNightOut(supabase, nightKey);
     if (planId === null) {
       setBusy(false);
       setError(true);
@@ -204,7 +220,7 @@ export default function StartNightOutButton(): JSX.Element | null {
     // Stay busy and route by plan id; the plan page resolves its own token.
     // Parked BEFORE the follow-up read, not after it: the window this closes is
     // the one where the read is still in flight and the user navigates away.
-    rememberStarted({ planId, userId: auth.user.id, nightKey: nycNightKey() });
+    rememberStarted({ planId, userId: auth.user.id, nightKey });
     setCreatedPlanId(planId);
     const plan = await getNightOut(supabase, planId);
     if (plan === null) {
