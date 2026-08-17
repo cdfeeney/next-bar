@@ -88,6 +88,26 @@ let inMemoryParked: ParkedByUser = {};
  */
 let storageUsable = true;
 
+/**
+ * Accounts with a create RPC in flight, module-scoped on purpose.
+ *
+ * Cycle 3 round 1, both lanes. A per-component ref died with the instance, and
+ * nothing is parked until the create RESOLVES — so tapping Start, navigating
+ * away before the RPC answered, and coming back gave a remounted component no
+ * parked record and no in-flight marker. Start was armed, a second tap called
+ * create_night_out again, and 0044 has no per-(owner, night) uniqueness, so the
+ * server happily made a second plan. The first create's dead closure then parked
+ * plan #1 over the newer one's slot.
+ *
+ * That is the exact symmetric twin of the read-in-flight window this component
+ * already closes, and the one unmount case the test file never covered — every
+ * unmount test held the READ, never the CREATE.
+ *
+ * Module scope is the same reasoning as `inMemoryParked` directly above: the
+ * span that must be covered is the JS context, not the component instance.
+ */
+const creatingOwners = new Set<string>();
+
 /** Every parked record in the store, validated. Unreadable input yields {}. */
 function readAll(): ParkedByUser {
   // A store we could not WRITE is not a source of truth, whatever it returns.
@@ -220,10 +240,12 @@ export default function StartNightOutButton(): JSX.Element | null {
    * ACCOUNT, so that is what gets captured and compared.
    */
   const liveUserId = useRef<string | null>(userId);
-  liveUserId.current = userId;
-  /** The account whose create is in flight, if any. Survives an epoch change. */
-  const inFlightOwner = useRef<string | null>(null);
   useEffect(() => {
+    // Assigned on COMMIT, never during render (cycle 3, Codex). A render that
+    // React throws away must not change the identity that already-committed
+    // handlers compare against. Every caller reads this from a click or an
+    // await, both of which happen after commit.
+    liveUserId.current = userId;
     // EVERY path through this effect ends in a definite state for the CURRENT
     // account. Round 2 (Claude, HIGH): the previous version early-returned when
     // the new user had no parked record, leaving the PREVIOUS account's
@@ -241,12 +263,17 @@ export default function StartNightOutButton(): JSX.Element | null {
     setCreatedPlanId(null);
     setReadFailed(false);
     setRetryFailed(false);
+    // `error` too (cycle 3, Claude): without it, B rendered A's "Couldn't start
+    // it — try again." after an in-place account switch — a false failure
+    // attributed to the wrong account, and a direct contradiction of this
+    // effect's own stated invariant.
+    setError(false);
     // `busy` is NOT blindly cleared: an in-flight create belonging to the
     // account still on screen must keep Start disabled, or a sign-out/sign-in
     // round trip re-arms it mid-create and the next tap makes a second plan for
     // the same night. It IS cleared when the account changed, because the new
     // account has nothing in flight.
-    setBusy(inFlightOwner.current !== null && inFlightOwner.current === userId);
+    setBusy(userId !== null && creatingOwners.has(userId));
     if (userId === null) return;
     // Only ever OUR record. Another account's parked plan is a different entry
     // in the same map rather than something to inherit, ignore or destroy —
@@ -303,7 +330,10 @@ export default function StartNightOutButton(): JSX.Element | null {
     // addressed to THIS account's screen; if a different account is on screen
     // when the answer arrives, it is not ours to apply.
     const owner = auth.user.id;
-    inFlightOwner.current = owner;
+    // Refuses a second create for an account that already has one in flight,
+    // even from a freshly mounted component that has no local memory of it.
+    if (creatingOwners.has(owner)) return;
+    creatingOwners.add(owner);
     setBusy(true);
     setError(false);
     // ONE reading of the clock for this whole attempt (round 3, Codex). The
@@ -317,12 +347,12 @@ export default function StartNightOutButton(): JSX.Element | null {
     if (owner !== liveUserId.current) {
       // A different account is on screen. The plan (if any) still belongs to
       // `owner`, so park it below rather than dropping it — but paint nothing.
-      inFlightOwner.current = null;
+      creatingOwners.delete(owner);
       if (planId !== null) rememberStarted(owner, { planId, nightKey });
       return;
     }
     if (planId === null) {
-      inFlightOwner.current = null;
+      creatingOwners.delete(owner);
       setBusy(false);
       setError(true);
       return;
@@ -339,7 +369,7 @@ export default function StartNightOutButton(): JSX.Element | null {
     rememberStarted(owner, { planId, nightKey });
     setCreatedPlanId(planId);
     const plan = await getNightOut(supabase, planId);
-    inFlightOwner.current = null;
+    creatingOwners.delete(owner);
     if (owner !== liveUserId.current) return;
     if (plan === null) {
       setReadFailed(true);

@@ -409,6 +409,61 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     ).toBeTruthy();
   });
 
+  test('unmount DURING the create does not re-arm Start on remount', async () => {
+    // Cycle 3 (both lanes). Nothing is parked until the create RESOLVES, and the
+    // in-flight marker used to die with the component — so tap Start, navigate
+    // away before the RPC answers, come back, and Start was armed. 0044 has no
+    // per-(owner, night) uniqueness, so the second tap really did make a second
+    // plan. Every other unmount test in this file holds the READ, never the
+    // CREATE, which is why this window stayed open.
+    let releaseCreate: (value: unknown) => void = () => {};
+    heldCreate = new Promise((resolve) => {
+      releaseCreate = resolve;
+    });
+
+    const user = userEvent.setup();
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    // Navigate away while create_night_out is still in flight, then come back.
+    view.unmount();
+    render(<StartNightOutButton />);
+
+    const start = screen.getByRole('button') as HTMLButtonElement;
+    expect(
+      start.disabled,
+      'Start was armed while this account already had a create in flight',
+    ).toBe(true);
+    await user.click(start).catch(() => undefined);
+    expect(
+      createCalls,
+      'a second plan was created for the same night while the first RPC was in flight',
+    ).toBe(1);
+
+    releaseCreate(PLAN_ID);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+
+  test('a failed create for A is not shown as B’s failure after an in-place switch', async () => {
+    // Cycle 3 (Claude). The reset effect cleared everything except `error`.
+    createResult = null;
+    const user = userEvent.setup();
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    expect(await screen.findByText(/Couldn't start it/i)).toBeTruthy();
+
+    currentUser = USER_B;
+    view.rerender(<StartNightOutButton />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/Couldn't start it/i),
+        "B was shown A's create failure",
+      ).toBeNull(),
+    );
+  });
+
   test('a plan parked on an earlier night does not disable Start today', async () => {
     // Codex, round 2: mobile browsers restore sessionStorage, so an unopened
     // plan from last night would otherwise keep Start disabled the next day.
