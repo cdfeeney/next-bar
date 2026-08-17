@@ -22,27 +22,59 @@ row for the migration it reverses is deleted rather than added to.
 
 ## How to run one
 
+The revert must restore the bodies **and** delete the ledger row **in one
+transaction**. If those come apart, the ledger claims `0059` while the installed
+bodies are `0058`, and a ledger-aware runner will then act on a false picture.
+
+Nothing outside this repository is required:
+
 ```
-node ~/.claude/docs/apply-single-migration.mjs \
-  supabase/migrations/revert/REVERT-0059-staging-20260817.sql revert
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+\i supabase/migrations/revert/REVERT-0059-staging-20260817.sql
+DELETE FROM public.schema_migrations WHERE name = '0059_night_outs_respond_revision.sql';
+COMMIT;
+SQL
 ```
 
-`revert` mode restores the prior bodies **and** deletes the ledger row in one
-transaction, so the ledger keeps describing what is actually installed. Do not
-use `npm run db:migrate` — it is ledger-blind and would replay every file.
+Check the target first — `DATABASE_URL` names the serving database, and the
+label identifies it rather than protecting it:
+
+```
+psql "$DATABASE_URL" -Atc "select current_setting('server_version'), current_user"
+```
+
+There is also a harness-local helper, `apply-single-migration.mjs`, which does
+the same two steps atomically. It is **not committed here** and must not be the
+only path you know: a round-2 reviewer correctly pointed out that a T0 rollback
+runbook whose sole execution path lives outside the repository repeats — one
+level removed — the very problem this directory was created to fix. The psql
+recipe above is the repository-sufficient path; the helper is a convenience.
+
+Do not use `npm run db:migrate` — it is ledger-blind and would replay every file.
 
 ## `0059` — read this before reverting it
 
 **Reverting `0059` loses data, and `0058`'s revert did not.**
 
 Dropping `response_revision` discards every stored revision. Re-applying `0059`
-afterwards re-adds the column at `0` for every row — so a response request that
-was in flight across a revert-and-reapply would carry a revision that now
-matches again, which is precisely the replay the migration exists to refuse.
+afterwards re-adds the column at `0` for every row.
 
-**Do not revert and re-apply while responses are in flight.** If you must, do it
-in a quiet window and accept that the guard is weakened until every row has moved
-past `0` again.
+**There is no "wait for it to recover" boundary.** An earlier draft of this file
+said the guard was weakened only until rows moved past `0`. That was wrong, and a
+reviewer supplied the counterexample: a delayed accept carrying `(declined, 1)`
+against a row that is `accepted` at revision `2`; revert and re-apply resets that
+row to `0`; an honest decline then moves it to `(declined, 1)` — past `0` — and
+the delayed accept now matches and applies. The reset counter re-walks values it
+has already issued, so **any** historical pair can collide again as it climbs.
+
+The real boundary is time, not revision: the guard is fully sound again only once
+no request holding a pre-revert pair can still arrive. Bound that by the client
+and network timeouts of the surfaces that call `respond_night_out`, not by
+watching the counter.
+
+**So: do not revert and re-apply while responses are in flight.** If you must,
+do it in a genuinely quiet window.
 
 Reverting also reinstates the ABA hole itself: `repro-aba-cases-20260817.mjs`
 cases 1 and 2 go RED again. That is the expected consequence, not a surprise.
