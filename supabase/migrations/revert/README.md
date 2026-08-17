@@ -23,17 +23,25 @@ it reverses is deleted rather than added.
 
 ## How to run it
 
-One command. It works in PowerShell, cmd and bash alike, which is the point — the
-operator is on Windows, and an earlier version of this file documented a bash
-heredoc that PowerShell cannot parse:
+One command, **run from the repository root**. It works in PowerShell, cmd and
+bash alike, which is the point — the operator is on Windows, and an earlier
+version of this file documented a bash heredoc that PowerShell cannot parse:
 
 ```
 psql "<connection-string>" -v ON_ERROR_STOP=1 -f supabase/migrations/revert/revert-0059-transaction.sql
 ```
 
+From anywhere else, pass an absolute path. `psql` resolves the `-f` argument
+against **your current directory** — only the script's internal `\ir` include is
+script-relative. An earlier version of this file claimed the command worked from
+anywhere; a reviewer caught that it does not.
+
 `revert-0059-transaction.sql` wraps the body restore and the ledger delete in one
-transaction and refuses to commit a half-done rollback. `\ir` resolves relative
-to the script, so the command works from anywhere in the repository.
+transaction. It **refuses before touching anything** unless `0059` is actually in
+the ledger and is the newest migration there — so a wrong target, a second run,
+or a ledger that has moved past `0059` all stop up front rather than committing a
+body downgrade. Its postcondition then confirms the row is gone and `0058`, whose
+bodies are now installed, is still recorded.
 
 Confirm the target first — the connection string names the serving database, and
 the environment label identifies it rather than protecting it:
