@@ -90,13 +90,23 @@ let storageUsable = true;
 
 /** Every parked record in the store, validated. Unreadable input yields {}. */
 function readAll(): ParkedByUser {
+  // A store we could not WRITE is not a source of truth, whatever it returns.
+  //
+  // Round 2, filed by both lanes: this consulted `storageUsable` only when the
+  // read came back null, which fails in exactly the environment the fallback
+  // exists for. Safari at quota throws on setItem while getItem keeps serving
+  // the last persisted value — so after a park, a quota failure, and an open,
+  // the stale map outranked the fresh in-memory one and resurrected a recovery
+  // for a plan the user had already opened. The comment on `storageUsable`
+  // claimed this was handled; the code only handled the empty case.
+  if (!storageUsable) return inMemoryParked;
   let raw: string | null = null;
   try {
     raw = window.sessionStorage.getItem(STARTED_KEY);
   } catch {
     return inMemoryParked;
   }
-  if (raw === null) return storageUsable ? {} : inMemoryParked;
+  if (raw === null) return {};
   const out: ParkedByUser = {};
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -177,10 +187,28 @@ export default function StartNightOutButton(): JSX.Element | null {
   // UI locks the NEXT account out of creating a plan (round 2, both lanes).
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
   useEffect(() => {
+    // EVERY path through this effect ends in a definite state for the CURRENT
+    // account. Round 2 (Claude, HIGH): the previous version early-returned when
+    // the new user had no parked record, leaving the PREVIOUS account's
+    // createdPlanId and readFailed in React state.
+    //
+    // Scoping the storage per user was not enough, because `useAuth` subscribes
+    // to onAuthStateChange and updates IN PLACE — a sign-out and a different
+    // sign-in propagating from another tab reach this component with no
+    // unmount. B then inherited A's disabled Start and A's recovery panel, and
+    // "Open it" failed under B's RLS into a message telling B their night out
+    // exists. That is the round-2 lockout again, one layer up, and every
+    // multi-account test missed it because they all unmount between switches.
+    //
+    // So: clear first, then re-arm only from a record that is genuinely ours.
+    setCreatedPlanId(null);
+    setReadFailed(false);
+    setRetryFailed(false);
+    setBusy(false);
     if (userId === null) return;
-    // Only ever OUR record. Another account's parked plan is now a different
-    // entry in the same map rather than something to inherit, ignore or
-    // destroy — the earlier single-slot design could do all three.
+    // Only ever OUR record. Another account's parked plan is a different entry
+    // in the same map rather than something to inherit, ignore or destroy —
+    // the earlier single-slot design could do all three.
     const parked = recallStarted(userId);
     if (parked === null) return;
     // A STALE NIGHT is spent, and clearing it is what stops yesterday's plan

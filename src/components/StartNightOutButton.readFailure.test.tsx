@@ -279,6 +279,45 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     expect(await screen.findByRole('button', { name: /open it/i })).toBeTruthy();
   });
 
+  test('an in-place account switch (no unmount) does not hand B the previous account’s recovery', async () => {
+    // Round 2 (Claude, HIGH). useAuth subscribes to onAuthStateChange and
+    // updates IN PLACE, so a sign-out and a different sign-in propagating from
+    // ANOTHER TAB reach this component without unmounting it. Every other
+    // multi-account test here unmounts between switches, which is exactly why
+    // they all passed while this was broken: the storage map was per-user but
+    // the React state above it was not.
+    readFails = true;
+    const user = userEvent.setup();
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    expect(await screen.findByText(/created/i)).toBeTruthy();
+
+    // A signs out and B signs in, both without this component unmounting.
+    currentUser = USER_B;
+    view.rerender(<StartNightOutButton />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: /open it/i }),
+        "B inherited A's recovery panel across an in-place account switch",
+      ).toBeNull(),
+    );
+    const start = screen.getByRole('button', { name: /Start the official Night Out/i });
+    expect(
+      (start as HTMLButtonElement).disabled,
+      'B was locked out of creating a plan by state left behind by A',
+    ).toBe(false);
+
+    // ...and A's own record is still intact underneath.
+    currentUser = USER_A;
+    view.rerender(<StartNightOutButton />);
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      "A's parked plan was destroyed by B's visit",
+    ).toBeTruthy();
+  });
+
   test('a plan parked on an earlier night does not disable Start today', async () => {
     // Codex, round 2: mobile browsers restore sessionStorage, so an unopened
     // plan from last night would otherwise keep Start disabled the next day.

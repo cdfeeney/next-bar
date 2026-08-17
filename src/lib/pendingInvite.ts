@@ -17,9 +17,24 @@
  * which is who an invite link is usually for.
  *
  * So the token is written to BOTH: sessionStorage for the same-tab case, and
- * localStorage with a short TTL for the cross-tab handoff. The TTL is what
+ * localStorage with a short TTL for the cross-TAB handoff. The TTL is what
  * keeps the original concern honest — the context still must not survive as
  * durable state, it just has to outlive a tab. Consume clears both.
+ *
+ * WHAT THIS DOES NOT FIX, stated because the paragraph above used to imply
+ * otherwise (round 2, Codex, HIGH). Web Storage is scoped to an origin WITHIN
+ * one browser profile. localStorage therefore recovers the new-tab case and
+ * nothing else:
+ *
+ *   new tab, same browser      RECOVERED by the localStorage copy
+ *   a different browser        NOT recoverable — separate storage entirely
+ *   a mail app's webview       usually NOT recoverable — most partition
+ *                              storage away from the default browser
+ *
+ * So criterion 7 is satisfied for the same-browser paths and remains OPEN for
+ * the others. Closing them needs the token carried in the confirmation URL
+ * itself (server-side, via the auth redirect), which is a different goal. Do
+ * not read the two-store write as "the email-confirmation flow is handled".
  */
 
 const PENDING_INVITE_KEY = 'next-bar:pending-invite:v1';
