@@ -219,6 +219,16 @@ describe('notification_outbox (criteria 3, 4)', () => {
     );
   });
 
+  it('records which claim reserved a delivery, so the write can be fenced too', () => {
+    // The outbox claim fence covers the row's status; without this column a
+    // sender that stalled past its lease could still overwrite a delivery a
+    // later drain had already settled.
+    expect(OUTBOX_SQL).toMatch(/claim_token\s+uuid\s+null,/);
+    expect(OUTBOX_SQL).toMatch(
+      /alter table public\.notification_deliveries\s*\n\s*add column if not exists claim_token uuid null;/,
+    );
+  });
+
   it('lets a delivery be RESERVED before APNs is called (criterion 3)', () => {
     // The unique key alone only deduplicates the audit row, which is written
     // after Apple already has the push. A non-terminal 'pending' status is

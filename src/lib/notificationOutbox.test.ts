@@ -49,8 +49,14 @@ const CONTEXT: NotificationContext = {
 };
 
 type Recorded = {
-  deliveries: Array<{ outboxId: number; deviceTokenId: string; status: string }>;
+  deliveries: Array<{
+    outboxId: number;
+    deviceTokenId: string;
+    claimToken: string;
+    status: string;
+  }>;
   reserved: string[];
+  reserveTokens: string[];
   outbox: Array<{ id: number; claimToken: string; status: string; error: string | null }>;
   deferred: Array<{ id: number; claimToken: string; error: string | null }>;
   revoked: string[];
@@ -72,6 +78,7 @@ function harness(options: {
   const recorded: Recorded = {
     deliveries: [],
     reserved: [],
+    reserveTokens: [],
     outbox: [],
     deferred: [],
     revoked: [],
@@ -98,7 +105,8 @@ function harness(options: {
         }
       );
     },
-    reserveDelivery: async (outboxId, deviceTokenId) => {
+    reserveDelivery: async (outboxId, deviceTokenId, claimToken) => {
+      recorded.reserveTokens.push(claimToken);
       const key = `${outboxId}:${deviceTokenId}`;
       if (taken.has(key)) return false;
       taken.add(key);
@@ -110,6 +118,7 @@ function harness(options: {
       recorded.deliveries.push({
         outboxId: input.outboxId,
         deviceTokenId: input.deviceTokenId,
+        claimToken: input.claimToken,
         status: input.status,
       });
     },
@@ -253,8 +262,8 @@ describe('drainNotificationOutbox', () => {
     expect(recorded.revoked).toEqual(['device-dead']);
     expect(summary.invalidTokensRevoked).toBe(1);
     expect(recorded.deliveries).toEqual([
-      { outboxId: 1, deviceTokenId: 'device-dead', status: 'invalid_token' },
-      { outboxId: 1, deviceTokenId: 'device-alive', status: 'sent' },
+      { outboxId: 1, deviceTokenId: 'device-dead', claimToken: CLAIM, status: 'invalid_token' },
+      { outboxId: 1, deviceTokenId: 'device-alive', claimToken: CLAIM, status: 'sent' },
     ]);
     expect(recorded.outbox).toEqual([
       { id: 1, claimToken: CLAIM, status: 'sent', error: null },
@@ -362,6 +371,10 @@ describe('drainNotificationOutbox', () => {
     const keys = recorded.deliveries.map((d) => `${d.outboxId}:${d.deviceTokenId}`);
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toEqual(['1:device-1', '1:device-2']);
+    // Both halves of the write carry the claim they belong to, so a superseded
+    // drain can settle neither the row nor any of its deliveries.
+    expect(recorded.reserveTokens).toEqual([CLAIM, CLAIM]);
+    expect(recorded.deliveries.map((d) => d.claimToken)).toEqual([CLAIM, CLAIM]);
   });
 
   it('RESERVES each device before calling APNs (criterion 3)', async () => {
@@ -373,9 +386,9 @@ describe('drainNotificationOutbox', () => {
     const send = deps.send;
     const instrumented: DrainDeps = {
       ...deps,
-      reserveDelivery: async (outboxId, deviceTokenId) => {
+      reserveDelivery: async (outboxId, deviceTokenId, claimToken) => {
         order.push('reserve');
-        return reserve(outboxId, deviceTokenId);
+        return reserve(outboxId, deviceTokenId, claimToken);
       },
       send: async (token, payload) => {
         order.push('send');

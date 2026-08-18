@@ -141,7 +141,7 @@ export function buildDrainDeps(
 
     send,
 
-    async reserveDelivery(outboxId, deviceTokenId) {
+    async reserveDelivery(outboxId, deviceTokenId, claimToken) {
       // COMMITTED BEFORE APNs IS CALLED. The unique (outbox_id,
       // device_token_id) constraint used to be reached only on the way OUT,
       // after the push had already been handed to Apple - so a drain that died
@@ -152,6 +152,7 @@ export function buildDrainDeps(
         outbox_id: outboxId,
         device_token_id: deviceTokenId,
         status: 'pending',
+        claim_token: claimToken,
       });
       if (!error) return true;
       if (error.code !== UNIQUE_VIOLATION) unavailable('delivery reservation', error);
@@ -175,9 +176,16 @@ export function buildDrainDeps(
       // sender stayed wedged for the whole lease, and every push carries a
       // collapse id so Apple folds a repeat for the same Night Out together.
       // A lost invitation is worse than a collapsed duplicate.
+      // Taking it also takes OWNERSHIP: stamping our claim here is what makes
+      // the superseded drain's own delivery write match nothing below.
       const { data, error: retakeError } = await admin
         .from('notification_deliveries')
-        .update({ status: 'pending', apns_status: null, apns_reason: null })
+        .update({
+          status: 'pending',
+          apns_status: null,
+          apns_reason: null,
+          claim_token: claimToken,
+        })
         .eq('outbox_id', outboxId)
         .eq('device_token_id', deviceTokenId)
         .in('status', ['pending', 'failed'])
@@ -187,6 +195,12 @@ export function buildDrainDeps(
     },
 
     async recordDelivery(input) {
+      // FENCED on the reservation this drain made. The claim fence protected
+      // the outbox row's status but not the delivery row, so a sender that
+      // stalled past its lease could come back and overwrite a delivery a
+      // later drain had already settled — turning a `sent` row into a stale
+      // `failed` and buying a retry nobody owed. A superseded write now
+      // matches no row, which is the write being discarded, not an error.
       const { error } = await admin
         .from('notification_deliveries')
         .update({
@@ -195,7 +209,8 @@ export function buildDrainDeps(
           apns_reason: input.apnsReason,
         })
         .eq('outbox_id', input.outboxId)
-        .eq('device_token_id', input.deviceTokenId);
+        .eq('device_token_id', input.deviceTokenId)
+        .eq('claim_token', input.claimToken);
       if (error) unavailable('delivery record', error);
     },
 

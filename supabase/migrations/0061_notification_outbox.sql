@@ -101,6 +101,13 @@ create table if not exists public.notification_deliveries (
   status          text        not null,
   apns_status     integer     null,
   apns_reason     text        null,
+  -- WHICH outbox claim reserved this row. The claim fence on the outbox row
+  -- stops a superseded drain writing a STATUS, but nothing stopped it writing
+  -- a DELIVERY: a stalled sender that resumed after its lease expired could
+  -- overwrite a `sent` row this drain had already settled with its own stale
+  -- `failed`, which handed the outbox a retry that was not owed. Recording the
+  -- claim here lets the delivery write be fenced the same way.
+  claim_token     uuid        null,
   created_at      timestamptz not null default now(),
   -- This is the (event, recipient, device) half of criterion 3. The unique
   -- key alone only deduplicates the AUDIT ROW, which is written after APNs has
@@ -121,6 +128,10 @@ create table if not exists public.notification_deliveries (
   constraint notification_deliveries_status_check
     check (status in ('pending', 'sent', 'failed', 'invalid_token'))
 );
+
+-- Additive for an already-created table (this migration is re-runnable).
+alter table public.notification_deliveries
+  add column if not exists claim_token uuid null;
 
 -- Re-runnable widening for an already-created table.
 alter table public.notification_deliveries

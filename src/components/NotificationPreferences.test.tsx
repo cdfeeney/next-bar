@@ -17,6 +17,7 @@ let authState: AuthState = { status: 'signed-out' };
 let prefsRow: Record<string, boolean> | null = null;
 let prefsError: unknown = null;
 let rpcResult: { data?: unknown; error?: unknown } = { data: true };
+let onRpc: (() => void) | null = null;
 const rpcCalls: Array<{ fn: string; args: unknown }> = [];
 let nativeAvailable = false;
 let nativeResult: string = 'registered';
@@ -26,8 +27,12 @@ vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => authState,
 }));
 
+// Mutable so a test can bump it MID-SAVE, which is what a sign-out does. A
+// constant epoch made the guard that reads it unreachable, and the wedge it
+// caused invisible.
+let cacheEpoch = 1;
 vi.mock('@/lib/accountCache', () => ({
-  getCacheEpoch: () => 1,
+  getCacheEpoch: () => cacheEpoch,
 }));
 
 vi.mock('@/lib/supabase/client', () => ({
@@ -41,6 +46,8 @@ vi.mock('@/lib/supabase/client', () => ({
     }),
     rpc: (fn: string, args: unknown) => {
       rpcCalls.push({ fn, args });
+      // Fires while the call is in flight — the window a sign-out lands in.
+      onRpc?.();
       return Promise.resolve(rpcResult);
     },
   }),
@@ -70,6 +77,8 @@ beforeEach(() => {
   prefsError = null;
   rpcResult = { data: true };
   rpcCalls.length = 0;
+  cacheEpoch = 1;
+  onRpc = null;
   nativeAvailable = false;
   nativeResult = 'registered';
   registerCalls = 0;
@@ -234,6 +243,24 @@ describe('NotificationPreferences — signed in', () => {
     });
     // Nothing was written while the new account's row was in flight.
     expect(rpcCalls).toEqual([]);
+  });
+
+  test('a save interrupted by a sign-out does not wedge the toggles', async () => {
+    // The busy flag was set before the await and cleared after a guard that
+    // RETURNED first, so a sign-out landing mid-save left every toggle
+    // disabled — for the next account too, since /settings stays mounted.
+    onRpc = () => {
+      cacheEpoch = 2;
+    };
+    const user = userEvent.setup();
+    render(<NotificationPreferences />);
+    const toggle = (await screen.findAllByRole('switch'))[0];
+
+    await user.click(toggle);
+
+    await waitFor(() => {
+      expect((screen.getAllByRole('switch')[0] as HTMLButtonElement).disabled).toBe(false);
+    });
   });
 
   test('a native registration failure shows an explanatory error, not a crash', async () => {

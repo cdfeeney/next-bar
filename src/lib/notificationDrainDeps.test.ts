@@ -75,6 +75,7 @@ function fakeAdmin(options: {
 }
 
 const SEND = async () => ({ outcome: 'sent' as const, status: 200, reason: null });
+const CLAIM = 'claim-token-1';
 
 function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
   return {
@@ -135,6 +136,7 @@ describe('mutation adapters surface database errors', () => {
         deps.recordDelivery({
           outboxId: 7,
           deviceTokenId: 'device-1',
+          claimToken: CLAIM,
           status: 'sent',
           apnsStatus: 200,
           apnsReason: null,
@@ -175,12 +177,17 @@ describe('reserveDelivery', () => {
     const { admin, calls } = fakeAdmin({});
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1')).resolves.toBe(true);
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe(true);
     expect(calls).toEqual([
       {
         table: 'notification_deliveries',
         operation: 'insert',
-        payload: { outbox_id: 7, device_token_id: 'device-1', status: 'pending' },
+        payload: {
+        outbox_id: 7,
+        device_token_id: 'device-1',
+        status: 'pending',
+        claim_token: CLAIM,
+      },
       },
     ]);
   });
@@ -193,7 +200,7 @@ describe('reserveDelivery', () => {
     });
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1')).resolves.toBe(false);
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe(false);
   });
 
   it('RETAKES an unsettled reservation, and only an unsettled one', async () => {
@@ -210,7 +217,7 @@ describe('reserveDelivery', () => {
     });
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1')).resolves.toBe(true);
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe(true);
     expect(calls[1]).toMatchObject({
       table: 'notification_deliveries',
       operation: 'update',
@@ -220,6 +227,55 @@ describe('reserveDelivery', () => {
     });
     expect(calls[1].status).not.toContain('sent');
     expect(calls[1].status).not.toContain('invalid_token');
+  });
+
+  it('FENCES the delivery write on the reservation this drain made', async () => {
+    // The outbox claim protected the row's STATUS but not the delivery row, so
+    // a sender that stalled past its lease could return and overwrite a
+    // delivery a later drain had already settled - turning 'sent' into a stale
+    // 'failed' and buying a retry nobody owed.
+    const { admin, calls } = fakeAdmin({});
+    const deps = buildDrainDeps(admin, SEND);
+
+    await deps.recordDelivery({
+      outboxId: 7,
+      deviceTokenId: 'device-1',
+      claimToken: CLAIM,
+      status: 'sent',
+      apnsStatus: 200,
+      apnsReason: null,
+    });
+
+    expect(calls[0]).toMatchObject({
+      table: 'notification_deliveries',
+      operation: 'update',
+      outbox_id: 7,
+      device_token_id: 'device-1',
+      claim_token: CLAIM,
+    });
+  });
+
+  it('takes OWNERSHIP of a retaken reservation, so the superseded drain cannot settle it', async () => {
+    const { admin, calls } = fakeAdmin({
+      results: {
+        'notification_deliveries:insert': { data: null, error: { code: '23505' } },
+        'notification_deliveries:update': { data: [{ id: 1 }], error: null },
+      },
+    });
+    const deps = buildDrainDeps(admin, SEND);
+
+    await deps.reserveDelivery(7, 'device-1', 'claim-token-2');
+
+    expect(calls[1]).toMatchObject({
+      table: 'notification_deliveries',
+      operation: 'update',
+      payload: {
+        status: 'pending',
+        apns_status: null,
+        apns_reason: null,
+        claim_token: 'claim-token-2',
+      },
+    });
   });
 
   it('does NOT retake a settled reservation', async () => {
@@ -233,7 +289,7 @@ describe('reserveDelivery', () => {
     });
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1')).resolves.toBe(false);
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe(false);
   });
 
   it('passes the attempt ceiling to the claim so SQL can enforce it too', async () => {
@@ -260,7 +316,7 @@ describe('reserveDelivery', () => {
     const { admin } = fakeAdmin({ results: { notification_deliveries: ERROR } });
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1')).rejects.toThrow(
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).rejects.toThrow(
       /delivery reservation unavailable/,
     );
   });

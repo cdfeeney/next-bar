@@ -160,10 +160,19 @@ export type DrainDeps = {
    * and must be skipped, so a re-drained row can never repeat a delivery that
    * already happened.
    */
-  reserveDelivery(outboxId: number, deviceTokenId: string): Promise<boolean>;
+  reserveDelivery(
+    outboxId: number,
+    deviceTokenId: string,
+    claimToken: string,
+  ): Promise<boolean>;
+  /**
+   * Settle a reservation THIS drain made. Fenced on the same claim token, so a
+   * drain whose lease expired cannot overwrite a delivery a later one settled.
+   */
   recordDelivery(input: {
     outboxId: number;
     deviceTokenId: string;
+    claimToken: string;
     status: DeliveryStatus;
     apnsStatus: number | null;
     apnsReason: string | null;
@@ -326,7 +335,9 @@ async function processOutboxRow(
     // RESERVE, then send. The reservation is committed before Apple is
     // contacted, so a device an earlier pass already reached is skipped
     // rather than buzzed a second time.
-    if (!(await deps.reserveDelivery(row.id, device.id))) continue;
+    if (!(await deps.reserveDelivery(row.id, device.id, row.claim_token))) {
+      continue;
+    }
     attemptedAny = true;
     const result = await deps.send(device.token, payload);
     lastReason = result.reason;
@@ -336,6 +347,7 @@ async function processOutboxRow(
       await deps.recordDelivery({
         outboxId: row.id,
         deviceTokenId: device.id,
+        claimToken: row.claim_token,
         status: 'sent',
         apnsStatus: result.status,
         apnsReason: result.reason,
@@ -352,6 +364,7 @@ async function processOutboxRow(
       await deps.recordDelivery({
         outboxId: row.id,
         deviceTokenId: device.id,
+        claimToken: row.claim_token,
         status: 'invalid_token',
         apnsStatus: result.status,
         apnsReason: result.reason,
@@ -363,6 +376,7 @@ async function processOutboxRow(
     await deps.recordDelivery({
       outboxId: row.id,
       deviceTokenId: device.id,
+      claimToken: row.claim_token,
       status: 'failed',
       apnsStatus: result.status,
       apnsReason: result.reason,

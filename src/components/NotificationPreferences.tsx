@@ -79,8 +79,13 @@ type PrefRow = {
 
 export default function NotificationPreferences(): JSX.Element {
   const auth = useAuth();
-  const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState(false);
+  // WHOSE preferences these are, not merely THAT some were loaded. A boolean
+  // could only be corrected by an effect, and an effect runs AFTER the render
+  // that already showed the previous account's toggles as loaded — one tap in
+  // that window wrote their values into the new account's row. Comparing the
+  // owner makes an account switch take effect in the same render.
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const [loadErrorFor, setLoadErrorFor] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<PrefKey | null>(null);
@@ -88,18 +93,22 @@ export default function NotificationPreferences(): JSX.Element {
   const [nativeResult, setNativeResult] = useState<NativePushResult | null>(null);
 
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
+  const loaded = userId !== null && loadedFor === userId;
+  const loadError = userId !== null && loadErrorFor === userId;
 
   useEffect(() => {
-    // Keyed on the USER, not just the status, and it resets before refetching.
-    // Neither was true before: an account change left the previous account's
-    // toggles on screen still flagged `loaded`, and because a toggle writes all
-    // four columns, tapping one during the new account's fetch wrote the old
-    // account's preferences into the new account's row. A switch from one
-    // signed-in user straight to another did not refetch at all.
-    setLoaded(false);
-    setLoadError(false);
+    // Keyed on the USER, not just the status: a switch from one signed-in user
+    // straight to another used not to refetch at all. The state cleared below
+    // is for tidiness — correctness does NOT depend on this effect running
+    // first, because `loaded` and `loadError` are derived from the owner above.
     setPrefs(DEFAULT_PREFS);
     setSaveError(null);
+    // These two DO depend on it: a save or a device registration still in
+    // flight when the account changed left its busy flag set, and every later
+    // tap was silently dropped by the `busyKey !== null` guard until a remount.
+    setBusyKey(null);
+    setNativeBusy(false);
+    setNativeResult(null);
     if (userId === null) return;
     const supabase = getBrowserSupabase();
     if (!supabase) return;
@@ -118,7 +127,7 @@ export default function NotificationPreferences(): JSX.Element {
         if (error) {
           // Stay UNLOADED. Rendering toggles here would show fabricated
           // state, and the first tap would write it over the real row.
-          setLoadError(true);
+          setLoadErrorFor(userId);
           return;
         }
         const row = data as PrefRow | null;
@@ -132,7 +141,7 @@ export default function NotificationPreferences(): JSX.Element {
                 plan_changed: row.plan_changed ?? true,
               },
         );
-        setLoaded(true);
+        setLoadedFor(userId);
       });
     return () => {
       cancelled = true;
@@ -157,8 +166,10 @@ export default function NotificationPreferences(): JSX.Element {
       p_bar_suggested: next.bar_suggested,
       p_plan_changed: next.plan_changed,
     });
-    if (getCacheEpoch() !== epoch) return;
+    // Cleared FIRST. Returning before it left every toggle disabled for the
+    // next account on a page that stays mounted across a sign-out.
     setBusyKey(null);
+    if (getCacheEpoch() !== epoch) return;
     if (error || data !== true) {
       setPrefs(previous);
       setSaveError("That didn't save — try again.");
