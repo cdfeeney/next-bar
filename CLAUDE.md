@@ -3,6 +3,26 @@
 Project context lives in `docs/PRD.md`, `docs/PRD-v0.3.1.md`, `docs/PRD-v0.5.md`,
 and `docs/ARCHITECTURE-v0.2.md`. Read those before making non-trivial changes.
 
+## The standard gate — `test:e2e` is part of it
+
+Before claiming a change is verified, all three of these run and pass:
+
+```
+npm run typecheck
+npm test          # vitest
+npm run test:e2e  # Playwright, both viewports
+```
+
+`npm test` runs **vitest only**. Between 2026-08-13 and 2026-08-16 every
+"full suite green" reported during the V8 work meant vitest alone — the browser
+specs were never invoked, and the suite had been red and invisible for weeks.
+A gate that omits `test:e2e` is not a gate; say which of the three you ran.
+
+For the release gate add `PLAYWRIGHT_RELEASE=1` (production build, 3 workers,
+zero retries). Do NOT pass `--reporter=list` on the command line: it overrides
+the config's `[['list'], ['html']]`, so the run produces no HTML report and no
+traces — exactly when a failure most needs them.
+
 ## Testing principle: every interactive feature gets an e2e test
 
 Connor caught a "rating a bar pushes me back to home" bug manually that should

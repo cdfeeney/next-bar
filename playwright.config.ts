@@ -8,11 +8,10 @@ loadEnvFile({ path: '.env.local' });
 
 const releaseMode = process.env.PLAYWRIGHT_RELEASE === '1';
 
-// Port 3000 with reuseExistingServer is right for a single checkout, but when
-// two worktrees of this repo run suites at once the second one silently
-// ATTACHES TO THE FIRST ONE'S dev server and tests the other branch's code —
-// observed as a spec passing, then failing unchanged minutes later. Pin
-// PLAYWRIGHT_PORT to get a private server; unset, behavior is unchanged.
+// Every run starts its own server (see reuseExistingServer below), so the port
+// only decides WHICH port that server binds. Pin PLAYWRIGHT_PORT when another
+// checkout already holds 3000; unset, 3000 is used and the run fails loudly if
+// it is taken.
 // Validate rather than interpolate: `?? '3000'` only catches an UNSET var, so
 // PLAYWRIGHT_PORT="" (the natural way to clear it) produced "http://localhost:"
 // and a valueless --port flag. A bad value now fails loudly at config load
@@ -44,7 +43,13 @@ export default defineConfig({
   // a 60-minute bound; two was measurably WORSE than three. Dev keeps full
   // parallelism. The one test that still felt this (bias-smoke) carries its
   // own enlarged budget rather than serialising the whole suite for it.
-  workers: process.env.CI ? 1 : releaseMode ? 3 : undefined,
+  //
+  // Dev used to be `undefined` — 6 workers on this host, against its documented
+  // "serialize heavy gates" rule, while other worktrees build concurrently. That
+  // is the same starvation, so dev takes the same measured 3. There is no reason
+  // for the command in CLAUDE.md's standard gate to be less reliable than the
+  // release gate that wraps it.
+  workers: process.env.CI ? 1 : 3,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,
@@ -88,9 +93,15 @@ export default defineConfig({
     // Exercising the legacy path is a deliberate act — set it in a spec that
     // says so, not by inheriting ambient environment.
     env: { ...process.env, NEXT_PUBLIC_LEGACY_PHOTOS: '0' } as Record<string, string>,
-    // A pinned port means "give me my own server" — reusing whatever already
-    // listens there would defeat the isolation it was pinned for.
-    reuseExistingServer: !releaseMode && !isPinnedPort,
+    // NEVER reuse. This was `!releaseMode && !isPinnedPort`, and on 2026-08-16/17
+    // it silently attached a dev run to a `next start -p 3000` left over from
+    // ANOTHER worktree, so the suite measured a branch it had never checked out:
+    // "424 tests, 124 failed" and a 21-failure cluster report, both of which
+    // evaporated (138/138 green) once the run had its own server. A comment
+    // warning about this trap was already sitting in this file and did not stop
+    // it, so the default is now structural: if something else holds the port,
+    // Playwright fails loudly with "is already used" instead of testing it.
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

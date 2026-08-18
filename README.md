@@ -69,3 +69,8 @@ The validation phase is intentionally web-only. The iOS app launches in week 8+ 
 | `npm run build` | Production build |
 | `npm run start` | Run the production build |
 | `npm run typecheck` | Type-check without emitting |
+| `npm test` | Unit/component tests (vitest) |
+| `npm run test:e2e` | Browser tests (Playwright, iPhone 13 + Pixel 7) |
+
+`typecheck` + `test` + `test:e2e` together are the standard gate — `npm test`
+alone does **not** cover the browser specs.
