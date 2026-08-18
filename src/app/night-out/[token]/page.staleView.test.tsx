@@ -314,4 +314,56 @@ describe('the plan page never paints an answer the view has moved on from', () =
     });
     expect(await screen.findByText("B's night out")).toBeTruthy();
   });
+
+  test("a join whose follow-up read is refused does not announce itself on the next plan", async () => {
+    /**
+     * Round-4 panel (Codex). `loadMemberView` returning false is AMBIGUOUS: it
+     * means either "the read failed" or "the view moved on and I refused to
+     * paint". The handler treated both as a read failure and called
+     * setActionError unguarded, so a stale abort printed "You're in — but this
+     * page couldn't load" over whatever plan is now on screen.
+     */
+    const heldPlanA = new Deferred<ReturnType<typeof planFor>>();
+
+    resolveByToken.mockResolvedValue(null);
+    previewNightOut.mockResolvedValueOnce({
+      night: '2026-08-20',
+      title: "A's night out",
+      ownerHandle: 'host',
+      ownerDisplayName: 'Host',
+      acceptedCount: 2,
+    });
+    // The join resolves immediately; its follow-up member read is what we hold,
+    // so the epoch moves DURING loadMemberView rather than before it.
+    joinNightOutByToken.mockResolvedValue('plan-A');
+    getNightOut.mockReturnValueOnce(heldPlanA.promise);
+    getNightOutMembers.mockResolvedValue(PRIVATE_MEMBERS);
+    getNightOutBoard.mockResolvedValue([]);
+
+    const view = render(<NightOutPage params={{ token: TOKEN_A }} />);
+    (await screen.findByRole('button', { name: /join this night out/i })).click();
+    await waitFor(() => expect(joinNightOutByToken).toHaveBeenCalled());
+
+    // Navigate to plan B while plan A's follow-up read is still open.
+    resolveByToken.mockResolvedValue('plan-B');
+    getNightOut.mockResolvedValue(planFor("B's night out"));
+    getNightOutMembers.mockResolvedValue([]);
+    view.rerender(<NightOutPage params={{ token: TOKEN_B }} />);
+    await waitFor(() => expect(screen.getByText("B's night out")).toBeTruthy());
+
+    // Now plan A's read settles. loadMemberView refuses to paint — correctly —
+    // and the handler must not mistake that refusal for a failure.
+    heldPlanA.resolve(planFor("A's night out"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      screen.queryByText(/You're in/i),
+      "plan A's join announced itself over plan B",
+    ).toBeNull();
+    expect(
+      screen.queryByText(OWNER_PRIVATE_NAME),
+      "plan A's member list leaked into plan B's view",
+    ).toBeNull();
+    expect(screen.getByText("B's night out")).toBeTruthy();
+  });
 });

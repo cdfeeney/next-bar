@@ -612,6 +612,33 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     expect(createCalls, 'this tab created a plan of its own').toBe(0);
   });
 
+  test('Start re-reads the store before creating, so a just-parked plan wins the race', async () => {
+    // Round-4 panel (Codex). The cross-tab `storage` event keeps the UI honest,
+    // but it is delivered asynchronously and the React state it drives commits
+    // later still. Between another tab parking its plan and this tab's effect
+    // running, Start is enabled and `busy` is false — a click in that window
+    // issued a second create_night_out.
+    //
+    // This is that exact window: the record is written the way another realm
+    // would write it, and Start is clicked with NO storage event dispatched at
+    // all, which is strictly harder than the real race.
+    const OTHER_TAB_PLAN = '99999999-9999-4999-8999-999999999999';
+    render(<StartNightOutButton />);
+    window.localStorage.setItem(
+      STARTED_KEY,
+      JSON.stringify({ [USER_A]: { planId: OTHER_TAB_PLAN, nightKey } }),
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /start the official night out/i }));
+
+    expect(createCalls, 'a second plan was created for a night that already has one').toBe(0);
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      'the already-parked plan was not offered for recovery',
+    ).toBeTruthy();
+  });
+
   test('a plan parked on an earlier night does not disable Start today', async () => {
     // Codex, round 2: the record outlives the tab, so an unopened plan from
     // last night would otherwise keep Start disabled the next day.

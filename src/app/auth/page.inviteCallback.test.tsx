@@ -85,7 +85,12 @@ describe('the confirmation email carries the invite across browser profiles', ()
     expect(redirect, 'an ordinary signup was rerouted').toBe('/settings');
   });
 
-  test('the reset-password link carries it too', async () => {
+  test('the reset-password link does NOT carry it — recovery keeps its own destination', async () => {
+    // Round 4 (Codex). The signup fix was applied to the reset flow too, and it
+    // should not have been: a recovery link exists to get the user to the
+    // account card's "Set a password", and sending them to the plan instead
+    // skips the one step the flow is for. The invite handoff was authorized for
+    // signup, not for every email this page sends.
     pending = INVITE_TOKEN;
     const user = userEvent.setup();
     render(<AuthPage />);
@@ -97,6 +102,9 @@ describe('the confirmation email carries the invite across browser profiles', ()
     const redirect = new URL(
       resetPasswordForEmail.mock.calls[0][1].redirectTo,
     ).searchParams.get('redirect_to');
-    expect(redirect).toBe(`/night-out/${INVITE_TOKEN}`);
+    expect(
+      redirect,
+      'password recovery was rerouted away from the page that sets the password',
+    ).toBe('/settings');
   });
 });

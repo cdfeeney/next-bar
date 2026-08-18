@@ -98,22 +98,28 @@ export default function AuthPage() {
   /**
    * Where /auth/callback should land after it exchanges the code.
    *
-   * Cold-panel round 2 (Codex, HIGH): this carried `AFTER_AUTH_PATH`
-   * unconditionally, so an invite survived sign-up only when the confirmation
-   * link opened in the SAME browser profile that started it — Web Storage is
-   * scoped to an origin within one profile, and `pendingInvite` says so itself.
-   * Open the invite in an in-app browser and confirm from the system mail app
-   * (the common shape on a phone) and neither store is reachable: the user
-   * lands on /settings with no route back to the plan they were invited to.
+   * `carryInvite` is the SIGNUP handoff and nothing else.
    *
-   * The token therefore rides the callback URL, which is the one channel that
-   * crosses profiles. It is not a new trust surface: /auth/callback already
-   * refuses any `redirect_to` that is not a plain same-origin path, and the
-   * plan page authorizes the token itself — a bearer link is exactly what the
-   * user was sent.
+   * Round 2 (Codex, HIGH): this carried `AFTER_AUTH_PATH` unconditionally, so
+   * an invite survived sign-up only when the confirmation link opened in the
+   * SAME browser profile that started it — Web Storage is scoped to an origin
+   * within one profile, and `pendingInvite` says so itself. Open the invite in
+   * an in-app browser and confirm from the system mail app (the common shape on
+   * a phone) and neither store is reachable: the user lands on /settings with no
+   * route back to the plan they were invited to. The token therefore rides the
+   * callback URL, which is the one channel that crosses profiles. It is not a
+   * new trust surface: /auth/callback already refuses any `redirect_to` that is
+   * not a plain same-origin path, and the plan page authorizes the token itself
+   * — a bearer link is exactly what the user was sent.
+   *
+   * Round 4 (Codex): that fix was applied to the RESET flow too, and it should
+   * not have been. A recovery link exists to get the user to the account card's
+   * "Set a password"; sending them to the plan instead skips the one step the
+   * flow is for, and the invite handoff was authorized for signup only. Reset
+   * keeps its documented destination.
    */
-  const callbackUrl = (): string => {
-    const pending = peekPendingInvite();
+  const callbackUrl = (carryInvite: boolean): string => {
+    const pending = carryInvite ? peekPendingInvite() : null;
     const params = new URLSearchParams({
       redirect_to: pending === null ? AFTER_AUTH_PATH : `/night-out/${pending}`,
     });
@@ -128,7 +134,7 @@ export default function AuthPage() {
     }
     setStatus({ kind: 'sending' });
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: callbackUrl(),
+      redirectTo: callbackUrl(false),
     });
     if (error) {
       setStatus({ kind: 'error', message: error.message });
@@ -156,7 +162,7 @@ export default function AuthPage() {
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
-        options: { emailRedirectTo: callbackUrl() },
+        options: { emailRedirectTo: callbackUrl(true) },
       });
       if (error) {
         setStatus({ kind: 'error', message: error.message });

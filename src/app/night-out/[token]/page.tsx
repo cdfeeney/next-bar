@@ -356,8 +356,12 @@ export default function NightOutPage({
                 if (planId === null) {
                   // The link is fine when the plan is merely full; saying it
                   // expired sends the user to ask for a new one.
+                  const full = await isNightOutFullByToken(supabase, token);
+                  // Round 4 (Codex): the capacity probe is another await, and
+                  // the banner it produces belongs to the view that asked.
+                  if (startedAt !== viewEpoch.current) return;
                   setActionError(
-                    (await isNightOutFullByToken(supabase, token))
+                    full
                       ? 'This night out is full.'
                       : "Couldn't join — the link may have expired.",
                   );
@@ -366,6 +370,13 @@ export default function NightOutPage({
                   // follow-up read failed. Reporting "full" here contradicted
                   // the database when the join took the last seat (fresh-cycle
                   // review, Codex).
+                  //
+                  // Round 4 (Codex): `loadMemberView` returning false is
+                  // AMBIGUOUS — it means either "the read failed" or "the view
+                  // moved on and I refused to paint". Only the first is a
+                  // failure to report. Without this, a stale abort announced
+                  // "You're in" over whatever plan is now on screen.
+                  if (startedAt !== viewEpoch.current) return;
                   setActionError("You're in — but this page couldn't load. Refresh to see it.");
                 }
               })();
@@ -391,6 +402,9 @@ export default function NightOutPage({
                 const planId = await declineNightOutByToken(supabase, token);
                 if (startedAt !== viewEpoch.current) return;
                 if (planId === null || !(await loadMemberView(planId, startedAt))) {
+                  // Same ambiguity as the join branch above (round 4, Codex):
+                  // a refused paint is not a failed decline.
+                  if (startedAt !== viewEpoch.current) return;
                   setActionError("Couldn't send that — the link may have expired.");
                 }
               })();

@@ -479,6 +479,22 @@ export default function StartNightOutButton(): JSX.Element | null {
     // Refuses a second create for an account that already has one in flight,
     // even from a freshly mounted component that has no local memory of it.
     if (creatingOwners.has(owner)) return;
+    // And a SYNCHRONOUS re-read of the store, because `creatingOwners` is
+    // module-scoped and therefore per-realm (round 4, Codex).
+    //
+    // The `storage` event that tells this tab about another tab's park is
+    // delivered asynchronously, and the React state it drives commits later
+    // still. Between tab A parking its plan and this tab's effect running,
+    // Start is enabled and `busy` is false — a click in that window issued a
+    // second `create_night_out`. The event is what keeps the UI honest; this is
+    // what keeps the ACTION honest, and it costs one localStorage read on a
+    // path the user takes at most once a night.
+    const alreadyParked = recallStarted(owner);
+    if (alreadyParked !== null && alreadyParked.nightKey === nycNightKey()) {
+      setCreatedPlanId(alreadyParked.planId);
+      setReadFailed(true);
+      return;
+    }
     creatingOwners.add(owner);
     markCreatingChanged();
     /**

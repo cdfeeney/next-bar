@@ -2,10 +2,9 @@
  * Invite-context handoff across the sign-in flow (V8-3 criterion 7).
  *
  * Opening a Night Out share link signed-out must land the user back on THAT
- * exact plan after they sign in. The auth flow redirects to a fixed post-auth
- * path, so the context rides sessionStorage: the share page stores the token
- * before pushing to /auth, and PendingInviteRedirect (mounted in the root
- * layout) consumes it on the first signed-in render anywhere in the app.
+ * exact plan after they sign in. The share page stores the token before pushing
+ * to /auth, and PendingInviteRedirect (mounted in the root layout) consumes it
+ * on the first signed-in render anywhere in the app.
  *
  * sessionStorage ALONE was the original design — "one tab's in-flight intent,
  * must not leak to other tabs or survive the session". That reasoning is sound
@@ -19,22 +18,32 @@
  * So the token is written to BOTH: sessionStorage for the same-tab case, and
  * localStorage with a short TTL for the cross-TAB handoff. The TTL is what
  * keeps the original concern honest — the context still must not survive as
- * durable state, it just has to outlive a tab. Consume clears both.
+ * durable state, it just has to outlive a tab.
  *
- * WHAT THIS DOES NOT FIX, stated because the paragraph above used to imply
- * otherwise (round 2, Codex, HIGH). Web Storage is scoped to an origin WITHIN
- * one browser profile. localStorage therefore recovers the new-tab case and
- * nothing else:
+ * THIS FILE IS NOT THE WHOLE HANDOFF ANY MORE. Web Storage is scoped to an
+ * origin within ONE browser profile, so these two stores recover the new-tab
+ * case and nothing else:
  *
  *   new tab, same browser      RECOVERED by the localStorage copy
- *   a different browser        NOT recoverable — separate storage entirely
- *   a mail app's webview       usually NOT recoverable — most partition
- *                              storage away from the default browser
+ *   a different browser        not reachable from here — separate storage
+ *   a mail app's webview       usually not reachable — most partition storage
  *
- * So criterion 7 is satisfied for the same-browser paths and remains OPEN for
- * the others. Closing them needs the token carried in the confirmation URL
- * itself (server-side, via the auth redirect), which is a different goal. Do
- * not read the two-store write as "the email-confirmation flow is handled".
+ * Those last two are closed OUTSIDE this module, by `/auth`: when a signup
+ * begins with an invite pending, `callbackUrl()` puts the token in the
+ * confirmation link's own `redirect_to`, which is the one channel that crosses
+ * profiles. /auth/callback validates it as a plain same-origin path.
+ *
+ * (This header previously said the cross-profile case "remains OPEN" and needed
+ * "a different goal" — round 4, Claude. That was true when it was written and
+ * false by the time it was read, which is the exact failure mode this goal has
+ * filed against its own docs three times. If you change where the token can
+ * ride, change this paragraph.)
+ *
+ * What is genuinely still open: a signup that begins with NO readable pending
+ * invite. If both stores refuse a write — private mode at quota — nothing is
+ * stored, so nothing can ride the URL either, and the user lands on the default
+ * post-auth page. Password RECOVERY deliberately never carries an invite: that
+ * link exists to reach the account card's "Set a password" (round 4, Codex).
  */
 
 const PENDING_INVITE_KEY = 'next-bar:pending-invite:v1';
