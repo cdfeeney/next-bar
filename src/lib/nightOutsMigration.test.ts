@@ -271,31 +271,48 @@ function asciiLower(sql: string): string {
   return sql.replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
-/** Both comment forms, so a commented-out statement never counts. */
-function withoutComments(sql: string): string {
-  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--.*/g, '');
-}
-
 /**
- * One dollar-quoted or single-quoted region: where its CONTENT starts and ends,
- * and where the whole region ends. Dollar quoting may be tagged (`$fn$ ... $fn$`)
- * and a tag closes only with the identical tag, which is the point of tagging.
+ * A stretch of SQL that is not executable code: a comment, a quoted string, or a
+ * dollar-quoted function body.
  */
-type Literal = { contentStart: number; contentEnd: number; end: number };
+type Region = {
+  kind: 'comment' | 'string' | 'body';
+  contentStart: number;
+  contentEnd: number;
+  end: number;
+};
 
 /**
- * Every string and function body in `sql`, in order.
+ * Every comment, string and dollar-quoted body in `sql`, in order, found in ONE
+ * pass.
  *
- * These regions are where SQL keeps text that LOOKS like code, and reading them
- * as code is how a guard gets fooled: a migration may legally carry a
- * dollar-quoted string whose content spells out a create-function statement, and
- * an earlier version of this file would have read that inert text as the
- * effective definition (round-5 review, Codex, medium).
+ * The single pass is the point. Comments used to be stripped first and literals
+ * found afterwards, which is backwards: a legal `select '--';` loses its closing
+ * quote to the comment strip, and every literal boundary after it is off by one,
+ * so a later migration's definition can be masked out of existence and the guard
+ * keeps reading the old one (round-6 review, Codex, medium). Whichever construct
+ * opens FIRST wins, which is what Postgres does.
  */
-function literals(sql: string): Literal[] {
-  const found: Literal[] = [];
+function scanRegions(sql: string): Region[] {
+  const found: Region[] = [];
   const QUOTE = String.fromCharCode(39);
-  for (let i = 0; i < sql.length; i += 1) {
+  let i = 0;
+  while (i < sql.length) {
+    const pair = sql.slice(i, i + 2);
+    if (pair === '--') {
+      const nl = sql.indexOf('\n', i);
+      const stop = nl === -1 ? sql.length : nl;
+      found.push({ kind: 'comment', contentStart: i, contentEnd: stop, end: stop });
+      i = stop;
+      continue;
+    }
+    if (pair === '/*') {
+      const close = sql.indexOf('*/', i + 2);
+      const stop = close === -1 ? sql.length : close + 2;
+      found.push({ kind: 'comment', contentStart: i, contentEnd: stop, end: stop });
+      i = stop;
+      continue;
+    }
     if (sql[i] === QUOTE) {
       // A doubled quote inside a string is an escaped quote, not the end of one.
       let j = i + 1;
@@ -304,38 +321,51 @@ function literals(sql: string): Literal[] {
         if (sql[j + 1] === QUOTE) { j += 2; continue; }
         break;
       }
-      found.push({ contentStart: i + 1, contentEnd: j, end: j + 1 });
-      i = j;
+      const stop = Math.min(j + 1, sql.length);
+      found.push({ kind: 'string', contentStart: i + 1, contentEnd: j, end: stop });
+      i = stop;
       continue;
     }
-    const tag = /^\$[a-zA-Z_][a-zA-Z0-9_]*\$|^\$\$/.exec(sql.slice(i));
-    if (!tag) continue;
-    const close = sql.indexOf(tag[0], i + tag[0].length);
-    if (close === -1) break; // unterminated: nothing after it can be trusted
-    found.push({ contentStart: i + tag[0].length, contentEnd: close, end: close + tag[0].length });
-    i = close + tag[0].length - 1;
+    if (sql[i] === '$') {
+      // Bounded slice: a dollar tag is short, and slicing the whole remainder on
+      // every `$` would be quadratic over the concatenated stream.
+      const tag = /^\$[a-zA-Z_][a-zA-Z0-9_]*\$|^\$\$/.exec(sql.slice(i, i + 64));
+      if (tag) {
+        const close = sql.indexOf(tag[0], i + tag[0].length);
+        if (close === -1) break; // unterminated: nothing after it can be trusted
+        found.push({
+          kind: 'body',
+          contentStart: i + tag[0].length,
+          contentEnd: close,
+          end: close + tag[0].length,
+        });
+        i = close + tag[0].length;
+        continue;
+      }
+    }
+    i += 1;
   }
   return found;
 }
 
-/** The same text with every literal's CONTENT blanked, so offsets still line up. */
-function maskLiterals(sql: string): string {
-  let masked = sql;
-  for (const lit of literals(sql)) {
-    masked =
-      masked.slice(0, lit.contentStart) +
-      ' '.repeat(lit.contentEnd - lit.contentStart) +
-      masked.slice(lit.contentEnd);
+/** The same text with the given regions blanked, so every offset still lines up. */
+function blank(sql: string, regions: Region[]): string {
+  let out = sql;
+  for (const r of regions) {
+    out =
+      out.slice(0, r.contentStart) +
+      ' '.repeat(r.contentEnd - r.contentStart) +
+      out.slice(r.contentEnd);
   }
-  return masked;
+  return out;
 }
 
 /**
  * One statement that creates or drops a function, in any spelling Postgres
  * accepts: optional OR REPLACE, optional IF [NOT] EXISTS, optional public.
  * qualification, optional double quotes, and any whitespace — including a
- * newline, or a block comment, already removed above — between the name and its
- * argument list. A DROP may end at `;` instead.
+ * newline, or a block comment, blanked above — between the name and its argument
+ * list. A DROP may end at `;` instead.
  *
  * It is anchored on the verb on purpose. `grant execute on function
  * public.respond_night_out(...)`, `revoke all on function ...` and
@@ -358,14 +388,16 @@ const FUNCTION_STATEMENT =
  * the "which file?" step that kept going wrong.
  *
  * Files only: `revert/` is a subdirectory and its rollback text restates these
- * functions. Names are zero-padded, so lexical order is application order.
+ * functions — REVERT-0059 re-creates the three-argument respond_night_out, and
+ * would win if it were read. Names are zero-padded, so lexical order is
+ * application order.
  */
 function migrationStream(): string {
   const dir = path.join(__dirname, '..', '..', 'supabase', 'migrations');
   return readdirSync(dir)
     .filter((f) => f.endsWith('.sql'))
     .sort()
-    .map((f) => withoutComments(readFileSync(path.join(dir, f), 'utf8')))
+    .map((f) => readFileSync(path.join(dir, f), 'utf8'))
     .join('\n;\n');
 }
 
@@ -382,11 +414,11 @@ function migrationStream(): string {
  * and reading the first would assert against a body Postgres immediately
  * replaced (round-4 review, Codex, medium).
  *
- * Statements are matched against MASKED text, so a create-shaped string sitting
- * inside a body or a quoted literal is data and stays data. The body is then cut
- * at its own dollar-quote tag rather than at the next `$$;`, so a tagged body
- * cannot be spliced together with whatever follows it (round-5 review, Codex,
- * two mediums).
+ * Statements are matched against text with every comment, string and body
+ * blanked, so a create-shaped string is data and stays data. The returned slice
+ * runs to the end of the next DOLLAR-QUOTED region — the function's own body,
+ * not a string-valued argument default that happens to come first — and has its
+ * comments blanked, so no assertion can be satisfied by commentary.
  *
  * WHAT THIS DELIBERATELY DOES NOT DO: decide WHICH OVERLOAD is under test, or
  * notice that a later migration DROPPED the function. Both need argument-type
@@ -397,22 +429,23 @@ function migrationStream(): string {
  * so it is answered where it can be answered exactly: the overload-set test in
  * nightOutsRls.live.test.ts pins the catalog for ALL FOUR names this helper
  * resolves, so a removal, a rename, or an added overload fails there. The
- * residual, stated rather than hidden: that suite skips without DATABASE_URL, so
- * on a bare CI runner those changes would leave these assertions reading the
- * last definition.
+ * residual, stated rather than hidden: that suite skips on a bare CI runner with
+ * no DATABASE_URL, and there those changes would leave these assertions reading
+ * the last definition.
  */
 function effectiveBody(name: string): string {
   const raw = migrationStream();
-  const masked = asciiLower(maskLiterals(raw));
+  const regions = scanRegions(raw);
+  const masked = asciiLower(blank(raw, regions));
   const created = [...masked.matchAll(FUNCTION_STATEMENT)].filter(
     (m) => m[2] === name && m[1] === 'create',
   );
   expect(created.length, `no migration creates ${name}`).toBeGreaterThan(0);
 
   const start = created[created.length - 1].index;
-  const body = literals(raw).find((lit) => lit.contentStart > start);
+  const body = regions.find((r) => r.kind === 'body' && r.contentStart > start);
   expect(body, `${name} has no terminator`).toBeDefined();
-  return raw.slice(start, body!.end);
+  return blank(raw, regions.filter((r) => r.kind === 'comment')).slice(start, body!.end);
 }
 
 /** The body of one create-or-replace function, up to its closing $$. */
@@ -458,8 +491,14 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
     const body = effectiveBody('respond_night_out');
+    // The plan id is REQUIRED in the key, not just the prefix. Stopping at
+    // 'night_out_members:' let the lock be re-keyed to any expression — per USER,
+    // say — and still pass, which is exactly the weakening these text assertions
+    // claim to catch and the boundary test cannot see (round-6 review, Codex,
+    // medium). join/decline lock on a resolved local instead, so this shape is
+    // asserted only where the plan id is the parameter.
     expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
-      /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
+      /pg_advisory_xact_lock\(\s*hashtextextended\(\s*'night_out_members:'\s*\|\|\s*p_night_out::text/,
     );
     expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
     expect(body, 'the cap only applies when a declined row re-enters the counted set')
