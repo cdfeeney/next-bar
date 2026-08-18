@@ -256,7 +256,7 @@ type NightOutRow = {
   share_token: string | null;
   caller_role: NightOut['callerRole'];
   caller_status: NightOut['callerStatus'];
-  caller_revision: number | null;
+  caller_revision?: number | null;
 };
 
 /** Member-scoped plan read. Null = error OR the caller is not a member. */
@@ -281,7 +281,11 @@ export async function getNightOut(
     shareToken: row.share_token,
     callerRole: row.caller_role,
     callerStatus: row.caller_status,
-    callerRevision: row.caller_revision,
+    // Normalised to null, never left undefined: a row without the column at
+    // all must take the same "no revision was rendered" branch in callers as an
+    // explicit null, instead of slipping past a null check and reaching the RPC
+    // as undefined.
+    callerRevision: row.caller_revision ?? null,
   };
 }
 

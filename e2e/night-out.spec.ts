@@ -113,6 +113,10 @@ const PLAN_ROW = {
   share_token: TOKEN,
   caller_role: 'member',
   caller_status: 'accepted',
+  // 0059 added the caller's response revision to get_night_out, and
+  // respond_night_out will not take a response without it. A fixture missing it
+  // makes the decline below unsendable rather than merely untyped.
+  caller_revision: 0,
 };
 
 async function stubMemberRpcs(page: Page): Promise<void> {
@@ -217,8 +221,15 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     let declineCalled = false;
     await page.route('**/rest/v1/rpc/respond_night_out*', async (route) => {
       declineCalled = true;
-      const body = route.request().postDataJSON() as { p_accept: boolean };
-      expect(body.p_accept).toBe(false);
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      // All four params of the only overload the serving database has, carrying
+      // the state this page RENDERED (0057 dropped the 2-argument form).
+      expect(body).toEqual({
+        p_night_out: PLAN_ID,
+        p_accept: false,
+        p_expected_status: 'accepted',
+        p_expected_revision: 0,
+      });
       await fulfillJson(200, true)(route);
     });
 
