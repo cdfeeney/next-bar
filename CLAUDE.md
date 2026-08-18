@@ -9,9 +9,14 @@ Before claiming a change is verified, all three of these run and pass:
 
 ```
 npm run typecheck
-npm test                              # vitest
-PLAYWRIGHT_RELEASE=1 npm run test:e2e # Playwright, production build, both viewports
+npm test                  # vitest
+npm run test:e2e:release  # Playwright, production build, both viewports
 ```
+
+`test:e2e:release` is the portable spelling of `PLAYWRIGHT_RELEASE=1 npm run
+test:e2e`. Use it: `VAR=1 cmd` is a parse error in PowerShell, which is this
+machine's primary shell, so the env-prefixed form is not a command Connor can
+run.
 
 Run the e2e leg in **release mode**. Plain `npm run test:e2e` uses the dev
 server, which carries a navigation race that is not a product defect: a
@@ -26,10 +31,11 @@ spec; it is not the thing to gate on.
 specs were never invoked, and the suite had been red and invisible for weeks.
 A gate that omits `test:e2e` is not a gate; say which of the three you ran.
 
-`PLAYWRIGHT_RELEASE=1` is production build, 3 workers, zero retries. Do NOT
-pass `--reporter=list` on the command line: it overrides the config's
-`[['list'], ['html']]`, so the run produces no HTML report and no traces —
-exactly when a failure most needs them.
+Release mode is production build, 3 workers, zero retries. Do NOT pass
+`--reporter=list` on the command line: it overrides the config's
+`[['list'], ['html']]`, so the run produces no HTML report — exactly when a
+failure most needs it. Traces come from `trace: 'retain-on-failure'` and do not
+depend on a retry; `on-first-retry` wrote none at all under a zero-retry gate.
 
 ## Testing principle: every interactive feature gets an e2e test
 
@@ -60,7 +66,7 @@ interrupted by another navigation to "/"`. **Not confined to `/quiz`** — hit o
 `/map` (app-store-pack.spec.ts:16) on 2026-08-17, where it was not intermittent
 at all but 3/3 reproducible on a cold server, which reads exactly like a real
 regression. What settles it is the mode, not the repeat count: the same commit
-was 5/5 green under `PLAYWRIGHT_RELEASE=1`. Re-run it in release mode before
+was 5/5 green under `npm run test:e2e:release`. Re-run it in release mode before
 debugging, and gate in release mode so it cannot cost anyone this hour again.
 
 ## Database migrations

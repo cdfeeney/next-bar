@@ -1,14 +1,19 @@
 name: CI
 
 # Push-protocol gate (operator ask 2026-07-25): every PR and every push to
-# main runs the same three gates the local workflow uses — type-check,
-# unit tests, production build. With branch protection requiring this
-# check, a build that would fail on Vercel can never reach main (today's
-# edge-bundle-size failure would have been caught at the PR).
+# main runs type-check, unit tests, and the production build. With branch
+# protection requiring this check, a build that would fail on Vercel can never
+# reach main (today's edge-bundle-size failure would have been caught at the PR).
 #
-# E2e (Playwright) is deliberately NOT here yet: it needs browser installs
-# + a dev server and roughly 10x the minutes. Add as a separate
-# nightly/PR-labeled job when the team grows.
+# THIS IS NOT THE FULL GATE. The local standard gate is typecheck + vitest +
+# `npm run test:e2e:release` (CLAUDE.md); this job runs the first two and the
+# build, and does NOT run the browser specs. A green check here therefore does
+# not mean the e2e suite passed — that is the same invisibility that let the
+# Playwright suite sit red for weeks, so it is stated rather than assumed.
+#
+# E2e is deliberately still out: it needs browser installs + a server and
+# roughly 10x the minutes. Add as a separate nightly/PR-labeled job when the
+# team grows; until then the e2e leg is run locally before push.
 
 on:
   push:

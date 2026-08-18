@@ -53,7 +53,11 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,
-    trace: 'on-first-retry',
+    // NOT 'on-first-retry': retries are 0 in release mode (the gate) and 0
+    // locally, so a failing test only ever has attempt zero and no trace was
+    // ever written — precisely when CLAUDE.md promises one. Retain on failure
+    // instead, which does not depend on a retry existing.
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     // Pre-acknowledge the 21+ age gate (H1) for every spec — the overlay
     // would otherwise intercept the first click of all existing flows.
