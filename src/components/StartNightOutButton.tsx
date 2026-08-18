@@ -141,6 +141,32 @@ const creatingOwners = new Set<string>();
 let creatingVersion = 0;
 const creatingListeners = new Set<() => void>();
 
+/**
+ * ANOTHER TAB parked a plan. Round-2 panel (Codex, medium).
+ *
+ * Moving the record to localStorage made it visible to every tab, but visible
+ * is not the same as noticed: a tab that was already mounted re-derives its
+ * parked state only from `creatingTick`, which is module-scoped and therefore
+ * per-realm. So tab A could create a plan, fail its follow-up read and park it,
+ * while tab B sat on an armed Start with no idea — and B's tap made the second
+ * plan criterion 4 exists to prevent.
+ *
+ * The `storage` event is the platform's own answer: it fires in every OTHER tab
+ * of the origin on a write. Routing it into the SAME tick the local path uses
+ * means there is one way to say "re-derive what is parked", not two.
+ *
+ * What this does NOT close, stated rather than implied: two tabs tapping Start
+ * within the same instant, before either has parked anything. Nothing on the
+ * client can serialize that — it needs per-(owner, night) uniqueness in
+ * `create_night_out`, which no finding in this goal names. Recorded as a
+ * residual gap in V8-3-HANDOFF-2026-08-16b.md.
+ */
+function onCrossTabStorage(event: StorageEvent): void {
+  // A null key means the whole store was cleared, which also invalidates ours.
+  if (event.key !== null && event.key !== STARTED_KEY) return;
+  markCreatingChanged();
+}
+
 function subscribeCreating(listener: () => void): () => void {
   creatingListeners.add(listener);
   return () => {
@@ -252,6 +278,12 @@ export default function StartNightOutButton(): JSX.Element | null {
     mounted.current = true;
     return () => {
       mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    window.addEventListener('storage', onCrossTabStorage);
+    return () => {
+      window.removeEventListener('storage', onCrossTabStorage);
     };
   }, []);
   /**

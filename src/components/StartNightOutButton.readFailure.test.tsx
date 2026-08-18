@@ -36,6 +36,7 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => pushed.push(href) }),
 }));
 
+const STARTED_KEY = 'next-bar:started-night-out:v1';
 const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
 let currentUser = USER_A;
@@ -571,6 +572,44 @@ describe('StartNightOutButton — a created plan is never lost', () => {
       'Start re-armed after a tab close, so the next tap creates a second plan',
     ).toBe(true);
     expect(createCalls, 'a second create was issued for the same night').toBe(1);
+  });
+
+  test('a plan parked by ANOTHER TAB disarms an already-mounted Start', async () => {
+    // Round-2 panel (Codex, medium). Moving the record to localStorage made it
+    // visible to every tab, but a tab that was already mounted re-derived its
+    // parked state only from module-scoped state, which is per-realm. Tab A
+    // parks a plan; tab B sits on an armed Start and its next tap makes the
+    // second plan criterion 4 exists to prevent.
+    //
+    // A real second tab cannot be spawned in jsdom, so this writes the record
+    // the way another realm would — straight to the shared store — and then
+    // dispatches the `storage` event the browser fires in every OTHER tab.
+    render(<StartNightOutButton />);
+    expect(
+      (screen.getByRole('button') as HTMLButtonElement).disabled,
+      'Start began disabled with nothing parked',
+    ).toBe(false);
+
+    const OTHER_TAB_PLAN = '99999999-9999-4999-8999-999999999999';
+    const value = JSON.stringify({
+      [USER_A]: { planId: OTHER_TAB_PLAN, nightKey },
+    });
+    window.localStorage.setItem(STARTED_KEY, value);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: STARTED_KEY, newValue: value }),
+    );
+
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      "another tab's parked plan never reached this one",
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', {
+        name: /start the official night out/i,
+      }) as HTMLButtonElement).disabled,
+      'Start stayed armed after another tab parked a plan, so the next tap duplicates it',
+    ).toBe(true);
+    expect(createCalls, 'this tab created a plan of its own').toBe(0);
   });
 
   test('a plan parked on an earlier night does not disable Start today', async () => {
