@@ -15,7 +15,9 @@ export default defineConfig({
     // the ONE gate rather than a second config, because a suite you have to
     // remember a --config flag to run is not a gate. (Replaces the separate
     // ceo/vitest.config.mjs, deleted.)
-    include: ['src/**/*.test.{ts,tsx}', 'ceo/**/*.test.{ts,tsx}'],
+    // scripts/** covers the migration apply tooling guards. Same reason as
+    // ceo/**: a test that needs a remembered flag to run is not a gate.
+    include: ['src/**/*.test.{ts,tsx}', 'ceo/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
   },
   resolve: {
     alias: {

@@ -42,6 +42,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
+import { checkMigrationTarget } from './apply-migration-target-guard';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -136,20 +137,8 @@ async function main(): Promise<void> {
   const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
 
-  if (!ref) fail('could not determine the Supabase project ref from DATABASE_URL');
-  if (env === 'production') {
-    if (!productionRef) fail('NEXT_BAR_PRODUCTION_PROJECT_REF is not set, so --env production cannot be verified');
-    if (ref !== productionRef) {
-      fail('--env production, but DATABASE_URL does not point at the production project ref');
-    }
-  } else {
-    if (ref === productionRef) {
-      fail(`--env ${env}, but DATABASE_URL points at the PRODUCTION project ref`);
-    }
-    if (stagingRefs.length > 0 && !stagingRefs.includes(ref)) {
-      fail(`--env ${env}, but DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS`);
-    }
-  }
+  const refusal = checkMigrationTarget({ env, ref, productionRef, stagingRefs });
+  if (refusal) fail(refusal);
 
   // Read and hash first: a missing or unreadable file must stop us before we
   // open a transaction on anything.
