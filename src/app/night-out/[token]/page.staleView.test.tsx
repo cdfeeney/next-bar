@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -365,5 +367,74 @@ describe('the plan page never paints an answer the view has moved on from', () =
       "plan A's member list leaked into plan B's view",
     ).toBeNull();
     expect(screen.getByText("B's night out")).toBeTruthy();
+  });
+
+  test("plan A's share notice does not offer its invite link from plan B", async () => {
+    /**
+     * Round-5 panel (Codex). The epoch effect cleared the view state but not the
+     * auxiliary state around it. When the clipboard write is refused, the share
+     * notice holds plan A's URL as a selectable fallback — and it sat there under
+     * plan B, offering one plan's invite link from another plan's page.
+     */
+    resolveByToken.mockResolvedValue('plan-A');
+    getNightOut.mockResolvedValue(planFor("A's night out"));
+    getNightOutMembers.mockResolvedValue(PRIVATE_MEMBERS);
+    getNightOutBoard.mockResolvedValue([]);
+
+    const view = render(<NightOutPage params={{ token: TOKEN_A }} />);
+    await screen.findByText("A's night out");
+
+    // Clipboard refused: the notice becomes the URL itself.
+    Object.assign(navigator, {
+      clipboard: { writeText: () => Promise.reject(new Error('denied')) },
+    });
+    (await screen.findByRole('button', { name: /copy invite link/i })).click();
+    await waitFor(() => expect(screen.getByText(new RegExp(TOKEN_A))).toBeTruthy());
+
+    // Navigate to plan B.
+    resolveByToken.mockResolvedValue('plan-B');
+    getNightOut.mockResolvedValue(planFor("B's night out"));
+    getNightOutMembers.mockResolvedValue([]);
+    view.rerender(<NightOutPage params={{ token: TOKEN_B }} />);
+    await waitFor(() => expect(screen.getByText("B's night out")).toBeTruthy());
+
+    expect(
+      screen.queryByText(new RegExp(TOKEN_A)),
+      "plan A's invite link was still on offer from plan B's page",
+    ).toBeNull();
+  });
+});
+
+/**
+ * A STATIC guard, and the honest reason it is static.
+ *
+ * The epoch must advance inside the commit, not in a passive effect that flushes
+ * in a task after paint — otherwise a response settling in between compares the
+ * old epoch against itself, passes, and paints the previous view's private data
+ * into the committed new one (round-5 panel, Codex).
+ *
+ * That window cannot be expressed in this suite: Testing Library wraps render
+ * and rerender in `act()`, which flushes passive effects synchronously before
+ * returning, so `useEffect` and `useLayoutEffect` are indistinguishable here —
+ * every behavioral test above passes either way, which is exactly why this
+ * assertion exists. A static guard is the honest fallback, not a substitute; it
+ * fails if someone downgrades the effect, which is the regression that would
+ * otherwise ship green.
+ */
+describe('the view epoch advances inside the commit', () => {
+  test('the epoch effect is a layout effect', () => {
+    const source = readFileSync(path.join(__dirname, 'page.tsx'), 'utf8');
+    const epochAt = source.indexOf('viewEpoch.current += 1;');
+    expect(epochAt, 'the epoch bump moved or was renamed').toBeGreaterThan(-1);
+    const opener = source.lastIndexOf('useLayoutEffect(() => {', epochAt);
+    const passive = source.lastIndexOf('useEffect(() => {', epochAt);
+    expect(
+      opener,
+      'the epoch bump is not inside a useLayoutEffect',
+    ).toBeGreaterThan(-1);
+    expect(
+      opener,
+      'a passive effect now sits between useLayoutEffect and the epoch bump',
+    ).toBeGreaterThan(passive);
   });
 });

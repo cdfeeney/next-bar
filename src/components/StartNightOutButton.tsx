@@ -161,9 +161,44 @@ const creatingListeners = new Set<() => void>();
  * `create_night_out`, which no finding in this goal names. Recorded as a
  * residual gap in V8-3-HANDOFF-2026-08-16b.md.
  */
+/**
+ * Accounts whose parked record another realm REMOVED while our create was still
+ * in flight (round-5 panel, Codex).
+ *
+ * A record disappearing elsewhere mid-create means the answer we are about to
+ * write is already stale: the owner opened that plan in the other tab, or their
+ * account was erased. Writing it back re-offers a recovery the user has
+ * finished with, or resurrects identifiers a wipe just removed.
+ *
+ * The test is a PRESENT -> ABSENT transition for that specific owner, read from
+ * the event's own `oldValue`/`newValue`. "Absent now" alone is not the test and
+ * getting that wrong would be worse than the bug: our own create has not parked
+ * anything yet, so any other account's park would look like our abandonment and
+ * silently discard a real recovery record.
+ */
+const abandonedCreates = new Set<string>();
+
+function ownersIn(raw: string | null): Set<string> {
+  if (raw === null) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return new Set();
+    return new Set(Object.keys(parsed as Record<string, unknown>));
+  } catch {
+    return new Set();
+  }
+}
+
 function onCrossTabStorage(event: StorageEvent): void {
   // A null key means the whole store was cleared, which also invalidates ours.
   if (event.key !== null && event.key !== STARTED_KEY) return;
+  if (creatingOwners.size > 0) {
+    const before = ownersIn(event.oldValue);
+    const after = ownersIn(event.newValue);
+    for (const owner of creatingOwners) {
+      if (before.has(owner) && !after.has(owner)) abandonedCreates.add(owner);
+    }
+  }
   markCreatingChanged();
 }
 
@@ -230,16 +265,33 @@ function writeAll(next: ParkedByUser): void {
   }
 }
 
-function rememberStarted(userId: string, parked: ParkedPlan): void {
-  // Drop every record whose night has rolled over, not just our own. A store
-  // that now outlives the tab would otherwise accumulate one dead entry per
-  // account per night forever; a record for a past night is already ignored by
-  // every reader, so this only removes what nothing can use.
+/**
+ * Drop every record whose night has rolled over, whoever it belongs to.
+ *
+ * This ran only inside `rememberStarted`, so the pruning the registry doc
+ * promises happened only when SOMEBODY created a plan (round-5 panel, Codex):
+ * user A opening their plan the next morning called `forgetStarted(A)`, whose
+ * write preserved user B's expired entry indefinitely. A store that outlives
+ * the tab then keeps one dead account id per user per night forever. Pruning on
+ * every write is what makes the documented lifetime true rather than aspiration.
+ */
+function withoutExpired(all: ParkedByUser, nightKey: string): ParkedByUser {
   const kept: ParkedByUser = {};
-  for (const [id, record] of Object.entries(readAll())) {
-    if (record.nightKey === parked.nightKey) kept[id] = record;
+  for (const [id, record] of Object.entries(all)) {
+    if (record.nightKey === nightKey) kept[id] = record;
   }
-  writeAll({ ...kept, [userId]: parked });
+  return kept;
+}
+
+function rememberStarted(userId: string, parked: ParkedPlan): void {
+  // Our create was abandoned by another realm while it was in flight — see
+  // `abandonedCreates`. Re-parking would resurrect a record that tab
+  // deliberately removed, including after an account deletion wiped it.
+  if (abandonedCreates.has(userId)) {
+    abandonedCreates.delete(userId);
+    return;
+  }
+  writeAll({ ...withoutExpired(readAll(), parked.nightKey), [userId]: parked });
 }
 
 function recallStarted(userId: string): ParkedPlan | null {
@@ -249,9 +301,12 @@ function recallStarted(userId: string): ParkedPlan | null {
 /** Drops only THIS user's record. Another account's parked plan is not ours. */
 function forgetStarted(userId: string): void {
   const all = readAll();
-  if (!(userId in all)) return;
-  const { [userId]: _dropped, ...rest } = all;
-  writeAll(rest);
+  const { [userId]: dropped, ...rest } = all;
+  const pruned = withoutExpired(rest, nycNightKey());
+  // Nothing of ours to drop AND nothing expired to sweep: leave the store alone
+  // rather than rewriting it for no reason.
+  if (dropped === undefined && Object.keys(pruned).length === Object.keys(rest).length) return;
+  writeAll(pruned);
 }
 
 /**

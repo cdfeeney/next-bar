@@ -639,6 +639,93 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     ).toBeTruthy();
   });
 
+  test('a record removed by another tab mid-create is not written back', async () => {
+    // Round-5 panel (Codex). A record disappearing elsewhere while our create is
+    // in flight means our answer is stale — the owner opened that plan there, or
+    // their account was erased. Writing it back re-offers a finished recovery or
+    // resurrects identifiers a wipe just removed.
+    let release: (value: unknown) => void = () => {};
+    heldCreate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /start the official night out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    // Another realm had a record for us and has just removed it.
+    const before = JSON.stringify({ [USER_A]: { planId: PLAN_ID, nightKey } });
+    window.localStorage.removeItem(STARTED_KEY);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: STARTED_KEY, oldValue: before, newValue: null }),
+    );
+
+    // Only now does our create answer.
+    release(PLAN_ID);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(
+      window.localStorage.getItem(STARTED_KEY),
+      'a create that another tab had already settled wrote its record back',
+    ).toBeNull();
+  });
+
+  test("another account parking does NOT discard our own in-flight create", async () => {
+    // The false positive that a naive "absent now" rule would introduce, which
+    // would be worse than the bug it fixes: our create has parked nothing yet,
+    // so somebody else's park must not look like our abandonment.
+    let release: (value: unknown) => void = () => {};
+    heldCreate = new Promise((resolve) => {
+      release = resolve;
+    });
+    readFails = true;
+
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /start the official night out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    // A DIFFERENT account parks a plan in another tab.
+    const after = JSON.stringify({ [USER_B]: { planId: PLAN_ID, nightKey } });
+    window.localStorage.setItem(STARTED_KEY, after);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: STARTED_KEY, oldValue: null, newValue: after }),
+    );
+
+    release(PLAN_ID);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const stored = JSON.parse(window.localStorage.getItem(STARTED_KEY) as string);
+    expect(
+      stored[USER_A],
+      "our own recovery record was discarded because another account parked one",
+    ).toBeTruthy();
+  });
+
+  test('opening a plan sweeps every expired record, not only our own', async () => {
+    // Round-5 panel (Codex). Pruning ran only inside rememberStarted, so a user
+    // opening their plan preserved another account's expired entry forever — and
+    // the registry doc claims the record is night-bound.
+    window.localStorage.setItem(
+      STARTED_KEY,
+      JSON.stringify({
+        [USER_B]: { planId: PLAN_ID, nightKey: '2026-01-01' },
+        [USER_A]: { planId: PLAN_ID, nightKey: '2026-01-01' },
+      }),
+    );
+    render(<StartNightOutButton />);
+
+    await waitFor(() => {
+      const raw = window.localStorage.getItem(STARTED_KEY);
+      const left = raw === null ? {} : JSON.parse(raw);
+      expect(
+        left[USER_B],
+        "another account's expired entry outlived the night it was stamped with",
+      ).toBeUndefined();
+    });
+  });
+
   test('a plan parked on an earlier night does not disable Start today', async () => {
     // Codex, round 2: the record outlives the tab, so an unopened plan from
     // last night would otherwise keep Start disabled the next day.

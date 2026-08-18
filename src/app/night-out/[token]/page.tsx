@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
@@ -138,7 +138,23 @@ export default function NightOutPage({
    * what made adding the second one feel out of scope.
    */
   const viewEpoch = useRef(0);
-  useEffect(() => {
+  /**
+   * LAYOUT effect, not a passive one (round-5 panel, Codex).
+   *
+   * Passive effects flush in a task AFTER paint, so between React committing a
+   * new (auth, token) pair and this effect running there is a window where
+   * `viewEpoch.current` still holds the OLD value. A member read resolving in
+   * that window compares the old epoch against itself, passes, and paints the
+   * previous plan's private data into the committed new view — the exact defect
+   * the epoch exists to stop, arriving through the guard rather than around it.
+   *
+   * `StartNightOutButton` already learned this on its own identity ref and says
+   * so in its comments; the page did not get the lesson. A layout effect runs
+   * synchronously inside the commit, so no external task can observe the epoch
+   * stale against a committed UI. It still runs before the passive loading
+   * effect below, which is the ordering that effect depends on.
+   */
+  useLayoutEffect(() => {
     viewEpoch.current += 1;
     // Blocking a stale load from painting is only half of it (cold panel 2,
     // Codex): on a sign-out the member view ALREADY on screen stayed rendered
@@ -161,6 +177,15 @@ export default function NightOutPage({
     // host accepted membership in B. A settled view whose identity has moved on
     // is not a display problem, it is a live control wired to the wrong plan.
     setState((current) => (current.kind === 'loading' ? current : { kind: 'loading' }));
+    // Everything else on screen belongs to the view that is leaving, too
+    // (round-5 panel, Codex). `shareNotice` is the one that bites: when the
+    // clipboard write is refused the notice holds plan A's share URL as a
+    // selectable fallback, and it sat there under plan B — offering one plan's
+    // invite link from another plan's page. `actionError` and `suggestInput`
+    // are the same argument with a smaller blast radius.
+    setShareNotice(null);
+    setActionError(null);
+    setSuggestInput('');
     // This effect is declared BEFORE the loading effect, so on either change the
     // epoch has already moved by the time the new load captures it.
   }, [auth.status, token]);
