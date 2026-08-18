@@ -50,8 +50,9 @@ export function isEventAllowed(
  * The DECISION is not made here. Counting in the sender and then deciding is a
  * check-then-act, and three review rounds found three different ways for it to
  * be wrong; the window and the budget below are passed to
- * admit_notification_send, which counts and stamps in one statement under a
- * per-recipient lock. These constants are the policy, in one place.
+ * admit_notification_send, which counts and stamps while holding a
+ * per-recipient advisory lock for its transaction. These constants are the
+ * policy, in one place.
  *
  * ponytail: a fixed rolling window per recipient. Per-event-type budgets or a
  * token bucket are only worth it if this proves too blunt in real use.
@@ -158,9 +159,16 @@ export type DrainDeps = {
   fetchContext(row: OutboxRow): Promise<NotificationContext | null>;
   fetchLiveTokens(userId: string): Promise<readonly DeviceToken[]>;
   /**
-   * Spend one of this recipient's slots, or refuse. Atomic: the count and the
-   * stamp happen in the same statement, so two drains holding different rows
-   * for the same person cannot both be admitted on the same total.
+   * Decide whether this row may be sent, and record the decision. Three
+   * answers collapse into the boolean:
+   *   - it had already been admitted on an earlier pass, so it keeps that slot
+   *     and is re-admitted without being counted again;
+   *   - it fits inside the recipient's window, so a slot is spent now;
+   *   - it does not fit, or this drain no longer owns the row, so it is
+   *     refused.
+   * Counting and stamping happen under a per-recipient advisory lock held for
+   * the transaction, which is what stops two drains holding different rows for
+   * the same person from both being admitted on the same total.
    */
   admitSend(outboxId: number, claimToken: string): Promise<boolean>;
   send(

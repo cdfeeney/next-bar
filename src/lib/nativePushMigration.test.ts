@@ -210,10 +210,19 @@ describe('notification_outbox (criteria 3, 4)', () => {
     );
   });
 
-  it('decides and records the rate limit in ONE locked statement (criterion 7)', () => {
+  it('decides and records the rate limit under a per-recipient lock (criterion 7)', () => {
     // Counting in the sender and then deciding is a check-then-act, and three
     // review rounds found three different ways for it to be wrong. The lock is
     // per RECIPIENT, so drains working on different people never wait.
+    //
+    // These are TEXT assertions, and they are the ceiling available here: the
+    // migration is committed unapplied, so no test in this repository can
+    // execute this function. They are written to pin the SHAPE closely enough
+    // that the mutations that matter fail — removing the lock, dropping the
+    // already-paid fast path, dropping the lost-claim check, or replacing the
+    // body with an unconditional admission all break at least one line below.
+    // Behavioural proof needs the attended migration apply; see
+    // nativePushRls.live.test.ts.
     const admit = OUTBOX_SQL.slice(
       OUTBOX_SQL.indexOf('create or replace function public.admit_notification_send'),
     );
@@ -232,6 +241,33 @@ describe('notification_outbox (criteria 3, 4)', () => {
     expect(OUTBOX_SQL).toMatch(/add column if not exists admitted_at timestamptz null;/);
     expect(OUTBOX_SQL).toMatch(
       /revoke all on function public\.admit_notification_send\(bigint, uuid, integer, integer\)\s*\n\s*from public, anon, authenticated/,
+    );
+
+    // ORDER, not just presence. Every one of these steps is load-bearing and
+    // each was added by a separate review round, so pin the sequence: read the
+    // fence, honour an already-paid slot, take the lock, count, refuse at the
+    // limit, stamp, and refuse again if the stamp matched nothing.
+    const steps = [
+      /select o\.recipient_user_id, o\.admitted_at into v_recipient, v_admitted/,
+      /if v_recipient is null then/,
+      /if v_admitted is not null then/,
+      /pg_advisory_xact_lock/,
+      /select count\(\*\) into v_recent/,
+      /if v_recent >= p_limit then/,
+      /set admitted_at = now\(\)/,
+      /if not found then/,
+    ];
+    let cursor = 0;
+    for (const step of steps) {
+      const rest = admit.slice(cursor);
+      const at = rest.search(step);
+      expect(at, `out of order or missing: ${step}`).toBeGreaterThanOrEqual(0);
+      cursor += at + 1;
+    }
+    // And the body must not be able to answer without doing the work: exactly
+    // one unconditional `return true`, at the end, after the stamp.
+    expect(admit.slice(admit.indexOf('set admitted_at = now()'))).toMatch(
+      /if not found then\s*\n\s*return false;\s*\n\s*end if;\s*\n\s*return true;/,
     );
   });
 

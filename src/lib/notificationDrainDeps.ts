@@ -126,13 +126,15 @@ export function buildDrainDeps(
     },
 
     async admitSend(outboxId, claimToken) {
-      // ONE STATEMENT decides and records. Reading a count here and deciding
-      // in JavaScript is a check-then-act, and every version of it was wrong
-      // in a different way: it counted the wrong rows, it let a row count
-      // against its own retry, and it let two drains holding different rows
-      // for the same recipient both pass on the same total. The function takes
-      // a per-recipient advisory lock for its transaction, so the count it
-      // sees is the count it acts on.
+      // THE LOCK is what makes this safe, not the round trip. Reading a count
+      // here and deciding in JavaScript is a check-then-act, and every version
+      // of it was wrong in a different way: it counted the wrong rows, it let
+      // a row count against its own retry, and it let two drains holding
+      // different rows for the same recipient both pass on the same total.
+      // admit_notification_send is several statements, but it holds a
+      // per-recipient advisory lock for its whole transaction, so the count it
+      // sees is still the count it acts on. Do not remove that lock on the
+      // theory that a single function call is already atomic.
       const { data, error } = await admin.rpc('admit_notification_send', {
         p_id: outboxId,
         p_claim_token: claimToken,

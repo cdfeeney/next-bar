@@ -45,8 +45,8 @@ create table if not exists public.notification_outbox (
   last_error        text        null,
   processed_at      timestamptz null,
   -- WHEN THIS ROW WAS ADMITTED THROUGH THE RATE LIMIT, set once and never
-  -- moved. This is the budget's unit of account, and it is stamped by
-  -- admit_notification_send in the same statement that decides - see the
+  -- moved. This is the budget's unit of account, and it is counted and stamped
+  -- by admit_notification_send under a per-recipient advisory lock - see the
   -- function at the foot of this file for why counting after the fact could
   -- not be made correct.
   admitted_at       timestamptz null,
