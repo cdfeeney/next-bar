@@ -51,11 +51,37 @@ jobs:
   # missing is exactly the silent pass it exists to remove. Until
   # MIGRATION_LEDGER_DATABASE_URL is set to a read-only NON-production
   # connection, this job fails loudly and says why.
+  #
+  # OPERATOR ACTION, outside this file: a red job only BLOCKS a merge once
+  # `migration-ledger` is added to the branch-protection required status checks
+  # next to `gates`. Until then it is an advisory red X a reviewer has to
+  # notice — which is the manual step this whole guard exists to remove. Enrol
+  # it at the same time as the secret and the two vars, not before: a required
+  # check with no credential configured blocks every merge.
   migration-ledger:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # THE CREDENTIAL MUST NEVER REACH CODE THE PR CONTROLS. `on: pull_request`
+      # runs with repository secrets for any same-repo branch, and
+      # `npm run check:migrations` resolves through the checked-out tree's
+      # package.json and its scripts — so a PR editing either could print or
+      # exfiltrate DATABASE_URL, and neither the read-only session nor the
+      # production refusal would stop it.
+      #
+      # So: the BASE commit is the code that runs, and the PR head is checked
+      # out only as DATA. The guard reads filenames out of it and executes
+      # nothing from it. Consequence worth knowing: a PR that changes the guard
+      # itself is validated by the OLD guard, and the PR that first adds this
+      # job fails because the base commit has no `check:migrations` script.
+      # Both are the fail-closed direction.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: pr
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -64,6 +90,8 @@ jobs:
       - name: Migrations are appliable against the serving ledger
         run: npm run check:migrations
         env:
+          # The PR's migrations, read by the base commit's guard.
+          MIGRATION_LEDGER_DIR: pr/supabase/migrations
           DATABASE_URL: ${{ secrets.MIGRATION_LEDGER_DATABASE_URL }}
           # The label is mandatory and the guard refuses "production" outright.
           NEXT_BAR_DATABASE_ENVIRONMENT: ${{ vars.MIGRATION_LEDGER_ENVIRONMENT }}

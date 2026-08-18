@@ -27,16 +27,30 @@
 
 import { config as loadEnv } from 'dotenv';
 import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Client } from 'pg';
 import {
   describeUnappliable, findMisnamed, findUnappliable, ledgerHead,
 } from './migration-ledger-guard';
 
-const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
+// Normally the worktree's own migrations. CI overrides it so the code that RUNS
+// comes from the trusted base commit while the PR's tree is read only as data —
+// see the migration-ledger job in .github/workflows/ci.yml. Only filenames are
+// ever read from here; nothing in it is executed.
+const MIGRATIONS_DIR = process.env.MIGRATION_LEDGER_DIR
+  ? resolve(process.env.MIGRATION_LEDGER_DIR)
+  : join(process.cwd(), 'supabase', 'migrations');
 const OK = 0;
 const UNAPPLIABLE = 1;
 const COULD_NOT_VERIFY = 2;
+
+// pg defaults BOTH of these to unlimited. Without them a target that drops
+// packets or stalls the handshake hangs until the workflow's own 5-minute
+// timeout kills the job — a generic cancellation instead of the distinct
+// COULD NOT VERIFY this guard promises. Finite timeouts route the same failure
+// through the ordinary catch path.
+const CONNECT_TIMEOUT_MS = 15_000;
+const QUERY_TIMEOUT_MS = 30_000;
 
 function cannotVerify(message: string): never {
   console.error(`\n[migration-ledger] COULD NOT VERIFY: ${message}\n`);
@@ -45,7 +59,11 @@ function cannotVerify(message: string): never {
 
 /** Reads the ledger. Any failure is the caller's "could not verify", never an empty list. */
 async function readLedger(databaseUrl: string): Promise<string[]> {
-  const client = new Client({ connectionString: databaseUrl });
+  const client = new Client({
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    query_timeout: QUERY_TIMEOUT_MS,
+  });
   await client.connect();
   try {
     // Belt and braces: nothing below this line writes, and now nothing below
@@ -189,6 +207,23 @@ async function main(): Promise<void> {
   // a reformatted ledger) establishes no head either — and findUnappliable
   // returns [] on a null head, so counting rows instead of asking for the head
   // greens the guard in precisely the scenario it exists to catch.
+  // The same convention, enforced on the OTHER side. findMisnamed over the files
+  // keeps THIS repo from minting an off-width name, but a row can reach the
+  // ledger by a path this guard does not control (nb-overnight's runner, a
+  // manual apply, another branch). Once '60_foo.sql' is a ledger row, the
+  // numeric head is 60 while apply-migration-set.ts's lexical head is
+  // '60_foo.sql', and it refuses every later four-digit file while this guard
+  // sees 61 > 60 and stays green. A ledger we cannot order is one we cannot
+  // check against, so it is a could-not-verify, not a repo violation.
+  const misnamedRows = findMisnamed(ledger);
+  if (misnamedRows.length > 0) {
+    cannotVerify(
+      `public.schema_migrations contains ${misnamedRows.length} row(s) that do not use the `
+      + `NNNN_name.sql convention (${misnamedRows.slice(0, 3).join(', ')}), so its lexical `
+      + 'order and the numeric order used here disagree, so no head can be trusted.',
+    );
+  }
+
   const head = ledgerHead(ledger);
   if (head === null) {
     cannotVerify(
