@@ -48,6 +48,25 @@ body::before {
 
 .leaflet-container { background: #0a0a0a; }
 
+/* Leaflet renders the zoom buttons at 30x30 on touch (`.leaflet-touch
+   .leaflet-bar a` in leaflet.css) — the eighth member of the control family
+   8a46aee sized up to the 44px minimum. These are controls, not markers, so
+   a11y-mobile.spec.ts audits them; 94ab0e2 narrowed the marker exclusion that
+   had been hiding them and deliberately left the fix open. Grow the BOX, not a
+   ::after hit area — the spec measures getBoundingClientRect.
+
+   The `.leaflet-touch` prefix is load-bearing: globals.css is imported BEFORE
+   leaflet.css (layout.tsx), so an equal-specificity rule would lose the cascade
+   to `.leaflet-touch .leaflet-bar a`. */
+.leaflet-touch .leaflet-bar a.leaflet-control-zoom-in,
+.leaflet-touch .leaflet-bar a.leaflet-control-zoom-out,
+.leaflet-bar a.leaflet-control-zoom-in,
+.leaflet-bar a.leaflet-control-zoom-out {
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+}
+
 .touch-card {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
