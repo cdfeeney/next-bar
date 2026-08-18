@@ -40,6 +40,17 @@ describe('ledgerHead', () => {
   it('cannot be established from an empty ledger', () => {
     expect(ledgerHead([])).toBeNull();
   });
+
+  // A non-empty ledger whose rows do not parse establishes no head either. The
+  // CLI counted rows instead of asking for the head, so this greened the guard
+  // in exactly the scenario it exists to catch.
+  it('cannot be established from rows that are not migration names', () => {
+    expect(ledgerHead(['legacy', 'supabase/migrations/0041_a.sql', '0041_a.txt'])).toBeNull();
+  });
+
+  it('and findUnappliable therefore flags nothing, which is why callers must check the head', () => {
+    expect(findUnappliable(['0045_forked.sql'], ['legacy'])).toEqual([]);
+  });
 });
 
 describe('findUnappliable', () => {

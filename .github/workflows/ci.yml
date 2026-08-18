@@ -67,4 +67,7 @@ jobs:
           DATABASE_URL: ${{ secrets.MIGRATION_LEDGER_DATABASE_URL }}
           # The label is mandatory and the guard refuses "production" outright.
           NEXT_BAR_DATABASE_ENVIRONMENT: ${{ vars.MIGRATION_LEDGER_ENVIRONMENT }}
+          # Mandatory: the guard refuses to connect on a label alone.
           NEXT_BAR_PRODUCTION_PROJECT_REF: ${{ vars.NEXT_BAR_PRODUCTION_PROJECT_REF }}
+          # Optional positive allowlist, same semantics as apply-migration-set.ts.
+          NEXT_BAR_STAGING_PROJECT_REFS: ${{ vars.NEXT_BAR_STAGING_PROJECT_REFS }}

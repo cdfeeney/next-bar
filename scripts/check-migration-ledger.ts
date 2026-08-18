@@ -29,7 +29,7 @@ import { config as loadEnv } from 'dotenv';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
-import { describeUnappliable, findUnappliable } from './migration-ledger-guard';
+import { describeUnappliable, findUnappliable, ledgerHead } from './migration-ledger-guard';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 const OK = 0;
@@ -85,21 +85,45 @@ async function main(): Promise<void> {
     cannotVerify('NEXT_BAR_DATABASE_ENVIRONMENT is "production"; this guard does not run against production.');
   }
 
+  // MANDATORY, not best-effort. Guarding this block with `if (productionRef)`
+  // made the whole cross-check vanish on the one configuration that ships by
+  // default (.env.example leaves it blank) and on a CI repo whose variable has
+  // not been created yet — leaving criterion 6 as label-only, which is exactly
+  // the "a word someone typed" it exists to distrust.
   const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
-  if (productionRef) {
-    // pg's own resolution, not the URL authority — query parameters override the
-    // authority, which is how an earlier guard in this repo was bypassable.
-    const probe = new Client({ connectionString: databaseUrl }) as unknown as {
-      connectionParameters?: { user?: string };
-    };
-    const ref = (probe.connectionParameters?.user ?? '').split('.').pop() ?? '';
-    if (!ref) cannotVerify('could not determine the Supabase project ref from DATABASE_URL');
-    if (ref === productionRef) {
-      cannotVerify(
-        `NEXT_BAR_DATABASE_ENVIRONMENT says ${JSON.stringify(environment)} but DATABASE_URL `
-        + 'points at the PRODUCTION project ref.',
-      );
-    }
+  if (!productionRef) {
+    cannotVerify(
+      'NEXT_BAR_PRODUCTION_PROJECT_REF is not set, so the target cannot be proven not to be '
+      + 'production and this guard will not connect on the strength of a label alone.',
+    );
+  }
+
+  // pg's own resolution, not the URL authority — query parameters override the
+  // authority, which is how an earlier guard in this repo was bypassable.
+  const probe = new Client({ connectionString: databaseUrl }) as unknown as {
+    connectionParameters?: { user?: string };
+  };
+  const ref = (probe.connectionParameters?.user ?? '').split('.').pop() ?? '';
+  if (!ref) cannotVerify('could not determine the Supabase project ref from DATABASE_URL');
+  if (ref === productionRef) {
+    cannotVerify(
+      `NEXT_BAR_DATABASE_ENVIRONMENT says ${JSON.stringify(environment)} but DATABASE_URL `
+      + 'points at the PRODUCTION project ref.',
+    );
+  }
+
+  // The same allowlist apply-migration-set.ts enforces. `ref !== productionRef`
+  // only rules out the one ref we can name; a positive allowlist also catches a
+  // direct connection whose user is plain `postgres` (so the derived ref is
+  // `postgres`, matching nothing) and any third project nobody meant to touch.
+  // Optional, exactly as it is there: unset means no allowlist to check against.
+  const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
+    .split(',').map((value) => value.trim()).filter(Boolean);
+  if (stagingRefs.length > 0 && !stagingRefs.includes(ref)) {
+    cannotVerify(
+      `DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS (env `
+      + `${JSON.stringify(environment)}).`,
+    );
   }
 
   let files: string[];
@@ -116,11 +140,16 @@ async function main(): Promise<void> {
     cannotVerify(`cannot read public.schema_migrations: ${(error as Error).message}`);
   }
 
-  // An empty ledger establishes no head. Treating that as "nothing to check"
-  // would green the guard against a database it has, in effect, not read.
-  if (ledger.length === 0) {
+  // No head, no check. An EMPTY ledger is the obvious case, but a non-empty one
+  // whose rows do not parse as migration names (a path prefix, a missing .sql,
+  // a reformatted ledger) establishes no head either — and findUnappliable
+  // returns [] on a null head, so counting rows instead of asking for the head
+  // greens the guard in precisely the scenario it exists to catch.
+  const head = ledgerHead(ledger);
+  if (head === null) {
     cannotVerify(
-      'public.schema_migrations returned no rows, so no ledger head can be established.',
+      `public.schema_migrations yielded no ledger head from ${ledger.length} row(s), so no `
+      + 'migration can be checked against it.',
     );
   }
 
