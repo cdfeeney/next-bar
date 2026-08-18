@@ -11,6 +11,7 @@
 // no shell, so no quoting or `.cmd`-spawn platform difference, and extra argv
 // (a spec path, `--grep`) passes straight through.
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { config as loadEnvFile } from 'dotenv';
 
@@ -27,27 +28,51 @@ import { config as loadEnvFile } from 'dotenv';
 // That is this goal's whole subject: a gate is only a gate if it runs the suite
 // it claims to.
 //
-// The check reads `.env.local` and NOT `process.env`, which looks stricter than
-// necessary and is not. Seven specs (account-delete, claim-handle,
+// Each variable is checked the way ITS OWN consumer reads it, because a check
+// that is merely equivalent-ish is what lets a false green through.
+//
+// NEXT_PUBLIC_SUPABASE_URL is read by seven specs (account-delete, claim-handle,
 // follow-requests, friends-real, onboarding-identity, suggestions, vibe-vote)
-// each `readFileSync('.env.local')` and regex the value out themselves, then
-// `test.skip` when it is absent. Credentials exported into the shell but never
-// written to the file satisfy `process.env`, so a preflight honouring it would
-// wave the run through while those same specs skip — the exact
-// reads-like-a-full-pass outcome this block exists to stop, now with the gate
-// asserting it had checked. The consumers' source of truth is the file, so the
-// gate's has to be the file too.
-const REQUIRED_ENV = ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY'];
+// that each `readFileSync('.env.local')` and apply the regex below themselves,
+// then `test.skip` when it does not match. So the gate applies that same regex
+// to those same bytes. dotenv is NOT equivalent for this purpose: it accepts an
+// `export ` prefix and strips quotes, so `export NEXT_PUBLIC_SUPABASE_URL=...`
+// parses fine for dotenv while the specs' regex returns null — preflight passes,
+// the seven skip, and the summary line reads like a full pass. The value in the
+// shell only is the same hole with a different cause: those specs never look
+// there.
+//
+// NEXT_PUBLIC_SUPABASE_ANON_KEY has no such direct reader. Its consumer is the
+// Next build this wrapper spawns, which inherits `process.env` and loads
+// `.env.local` itself, so either source genuinely works and demanding the file
+// would reject a working configuration.
+const SPEC_SUPABASE_URL_RE = /^NEXT_PUBLIC_SUPABASE_URL=(.+)$/m;
 const fileEnv = loadEnvFile({ path: '.env.local', quiet: true }).parsed ?? {};
-const missing = REQUIRED_ENV.filter((key) => !fileEnv[key]);
+let rawEnvFile = '';
+try {
+  rawEnvFile = readFileSync('.env.local', 'utf8');
+} catch {
+  rawEnvFile = '';
+}
+
+const missing = [];
+if (!SPEC_SUPABASE_URL_RE.test(rawEnvFile)) {
+  missing.push('NEXT_PUBLIC_SUPABASE_URL (as a plain KEY=value line in .env.local)');
+}
+if (!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY && !fileEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+  missing.push('NEXT_PUBLIC_SUPABASE_ANON_KEY (in .env.local or the environment)');
+}
 if (missing.length > 0) {
   console.error(
     [
       '',
-      `npm run test:e2e cannot run: ${missing.join(', ')} missing from .env.local.`,
+      'npm run test:e2e cannot run. Missing:',
+      ...missing.map((entry) => `  - ${entry}`),
       '',
-      'Exporting them into the shell is not enough: seven specs read .env.local',
-      'directly and skip themselves when the value is not in that file.',
+      'NEXT_PUBLIC_SUPABASE_URL must be a plain `KEY=value` line in .env.local:',
+      'seven specs read that file directly with /^NEXT_PUBLIC_SUPABASE_URL=(.+)$/m,',
+      'so an `export ` prefix, or the value in the shell only, makes them skip',
+      'themselves however well dotenv or Next.js copes.',
       '',
       'Without them ~90 specs skip themselves and ~19 more fail on assertions that do',
       'not name the cause, so the run is not the gate.',
