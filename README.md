@@ -73,6 +73,11 @@ The validation phase is intentionally web-only. The iOS app launches in week 8+ 
 | `npm run test:e2e` | Browser tests against a production build — the gate leg |
 | `npm run test:e2e:dev` | Same specs against the dev server, for iterating on one spec |
 
+On a fresh checkout, run `npx playwright install` once before the browser
+specs: `npm ci` installs `@playwright/test` but not the browser binaries, and
+the version bump to 1.62 means a machine cached at 1.60 needs it too. Without
+it `npm run test:e2e` fails before a single test runs.
+
 `typecheck` + `test` + `test:e2e` together are the standard gate — `npm test`
 alone does **not** cover the browser specs. `test:e2e` is the production-build
 run; the `:dev` variant is an explicit opt-in and carries a cold-compile

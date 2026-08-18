@@ -49,6 +49,23 @@ const VIEWPORTS = [
 const OVERFLOW_TOLERANCE_PX = 1;
 
 /** Settle async layout (map tiles, font swap) before measuring geometry. */
+// Criterion 5 names the HEADER as well as the nav. Measure the page's first
+// heading's nearest sticky/fixed ancestor if there is one, else the heading
+// itself: either way its viewport y is what must not drift.
+function headerY(page: Page): Promise<number | null> {
+  return page.evaluate(() => {
+    const heading = document.querySelector('h1');
+    if (!heading) return null;
+    let el: HTMLElement | null = heading as HTMLElement;
+    while (el) {
+      const pos = getComputedStyle(el).position;
+      if (pos === 'fixed' || pos === 'sticky') break;
+      el = el.parentElement;
+    }
+    return (el ?? heading).getBoundingClientRect().top;
+  });
+}
+
 async function settle(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle').catch(() => {
     /* networkidle is best-effort; the explicit waits below carry the test. */
@@ -250,22 +267,81 @@ test.describe('V8 native interaction contract', () => {
 
   // Both scrollable tab routes, not just one: pinning is per-layout, and a
   // regression on Rankings says nothing about the Social layout.
+  //
+  // Split in two on purpose (2026-08-18, g-11ccebea). Only the OVERSCROLL half
+  // is unrunnable on /friends; the shell and route-change assertions are
+  // perfectly exercisable there and quarantining them with the rest left the
+  // Social layout with no coverage of a non-fixed nav or a broken tab
+  // transition — regressions unrelated to the stated limitation.
   for (const route of ['/rankings', '/friends'] as const) {
-    test(`${route} keeps header and bottom nav anchored through overscroll and route change`, async ({
+    test(`${route} keeps header and bottom nav anchored through a route change`, async ({
       page,
     }) => {
-      // QUARANTINED for /friends (2026-08-17, g-11ccebea). Not a shell defect and
-      // not a flake: /friends settled is 844px tall in this test's 844px viewport,
-      // so `maxScroll` is 0 and there is no scroll position to overscroll AWAY
-      // from. The guard below says so in as many words. Measured on both
-      // viewports; Pixel 7 fails on that guard directly, iPhone 13 used to fail
-      // 76px later at the header assertion for the same reason (see settle()).
+      await denyGeolocation(page.context());
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(route);
+      await settle(page);
+
+      const nav = page.getByRole('navigation', { name: 'Primary' });
+      await expect(nav).toBeVisible();
+
+      // The nav is "attached to the safe area" only if it is genuinely taken
+      // out of flow. Assert that structurally: a static nav that happens to sit
+      // still because the page cannot scroll would satisfy every geometric
+      // check while being exactly the bug criterion 5 names.
+      const navPosition = await nav.evaluate((el) => getComputedStyle(el).position);
+      expect(navPosition, `${route}: nav is position:${navPosition}, not fixed`).toBe(
+        'fixed',
+      );
+
+      const navBefore = await nav.boundingBox();
+      expect(navBefore).not.toBeNull();
+
+      // Navigate by TAPPING the tab rather than goto(): that is the real
+      // transition criterion 5 describes, and a goto races the client-side
+      // router.
+      await nav.getByRole('link', { name: route === '/rankings' ? 'Social' : 'Rankings' }).click();
+      await expect(page).toHaveURL(route === '/rankings' ? /\/friends$/ : /\/rankings$/);
+      await settle(page);
+      expect(
+        (await nav.boundingBox())?.y,
+        `${route}: nav moved after a route change`,
+      ).toBeCloseTo(navBefore!.y, 0);
+
+      // Criterion 5 names the header too, and the old test stopped at the nav:
+      // the destination must still present its own header at the top of the
+      // page, not inherit a scrolled-away one.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await settle(page);
+      const headerAfterRoute = await headerY(page);
+      expect(
+        headerAfterRoute,
+        `${route}: destination route has no header after the tab change`,
+      ).not.toBeNull();
+      expect(
+        headerAfterRoute!,
+        `${route}: destination header starts off-screen at ${headerAfterRoute}px`,
+      ).toBeLessThan(page.viewportSize()!.height);
+    });
+
+    test(`${route} keeps header and bottom nav anchored through overscroll`, async ({
+      page,
+    }) => {
+      // QUARANTINED for /friends (2026-08-17, g-11ccebea). Not a shell defect
+      // and not a flake: /friends settled is 844px tall in this test's 844px
+      // viewport, so `maxScroll` is 0 and there is no scroll position to
+      // overscroll AWAY from. The guard below says so in as many words.
+      // Measured on both viewports; Pixel 7 fails on that guard directly,
+      // iPhone 13 used to fail 76px later at the header assertion for the same
+      // reason (see settle()).
       //
       // Kept as fixme rather than deleted: the assertions are correct and the
-      // Social layout does need this coverage. Un-quarantine by giving /friends
-      // more than a viewport of content in the fixture (a seeded follow list is
-      // the obvious lever) — NOT by relaxing the maxScroll guard, which exists
-      // because an earlier form of this test could not fail at all.
+      // Social layout does need this coverage. Un-quarantine by giving
+      // /friends more than a viewport of content in the fixture (a seeded
+      // follow list is the obvious lever) — NOT by relaxing the maxScroll
+      // guard, which exists because an earlier form of this test could not
+      // fail at all. The route-change half above is NOT quarantined and still
+      // covers /friends.
       test.fixme(
         route === '/friends',
         '/friends has no scrollable overflow in the test fixture; overscroll cannot be exercised',
@@ -277,31 +353,6 @@ test.describe('V8 native interaction contract', () => {
 
       const nav = page.getByRole('navigation', { name: 'Primary' });
       await expect(nav).toBeVisible();
-
-      // Criterion 5 names the HEADER too. Measure the page's first heading's
-      // nearest sticky/fixed ancestor if there is one, else the heading itself:
-      // either way its viewport y must not drift when the page overscrolls.
-      const headerY = () =>
-        page.evaluate(() => {
-          const heading = document.querySelector('h1');
-          if (!heading) return null;
-          let el: HTMLElement | null = heading as HTMLElement;
-          while (el) {
-            const pos = getComputedStyle(el).position;
-            if (pos === 'fixed' || pos === 'sticky') break;
-            el = el.parentElement;
-          }
-          return (el ?? heading).getBoundingClientRect().top;
-        });
-
-      // The nav is "attached to the safe area" only if it is genuinely taken
-      // out of flow. Assert that structurally first: a static nav that happens
-      // to sit still because the page cannot scroll would satisfy every
-      // geometric check below while being exactly the bug criterion 5 names.
-      const navPosition = await nav.evaluate((el) => getComputedStyle(el).position);
-      expect(navPosition, `${route}: nav is position:${navPosition}, not fixed`).toBe(
-        'fixed',
-      );
 
       // Overscroll from a REAL offset. Starting at scrollY 0, scrollTo(0,-1200)
       // clamps straight back to 0, so nothing moves and the assertions below
@@ -321,7 +372,7 @@ test.describe('V8 native interaction contract', () => {
       expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(anchor, 0);
 
       const navBefore = await nav.boundingBox();
-      const headerBefore = await headerY();
+      const headerBefore = await headerY(page);
       expect(navBefore).not.toBeNull();
 
       // Past the top, then past the bottom. The offset returns to the clamped
@@ -346,35 +397,9 @@ test.describe('V8 native interaction contract', () => {
       await page.evaluate((y) => window.scrollTo(0, y), anchor);
       await settle(page);
       expect(
-        await headerY(),
+        await headerY(page),
         `${route}: header did not return to its position after overscroll`,
       ).toBeCloseTo(headerBefore!, 0);
-
-      // A route change must not leave the nav detached either. Navigate by
-      // TAPPING the tab rather than goto(): that is the real transition
-      // criterion 5 describes, and a goto races the client-side router.
-      await nav.getByRole('link', { name: route === '/rankings' ? 'Social' : 'Rankings' }).click();
-      await expect(page).toHaveURL(route === '/rankings' ? /\/friends$/ : /\/rankings$/);
-      await settle(page);
-      const navAfterRoute = await nav.boundingBox();
-      expect(navAfterRoute?.y, `${route}: nav moved after a route change`).toBeCloseTo(
-        navBefore!.y,
-        0,
-      );
-      // Criterion 5 names the header too, and the old test stopped at the nav:
-      // the destination must still present its own header at the top of the
-      // page, not inherit a scrolled-away one.
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await settle(page);
-      const headerAfterRoute = await headerY();
-      expect(
-        headerAfterRoute,
-        `${route}: destination route has no header after the tab change`,
-      ).not.toBeNull();
-      expect(
-        headerAfterRoute!,
-        `${route}: destination header starts off-screen at ${headerAfterRoute}px`,
-      ).toBeLessThan(page.viewportSize()!.height);
     });
   }
 

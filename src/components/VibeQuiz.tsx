@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { quiz, deriveArchetype } from '@/lib/quiz';
 import type { QuizOption } from '@/lib/quiz';
@@ -10,6 +10,19 @@ import type { ManhattanNeighborhood, VibeProfile, VibeTag } from '@/types';
 type VibeQuizProps = { onComplete: (profile: VibeProfile) => void };
 
 export default function VibeQuiz({ onComplete }: VibeQuizProps) {
+  // The quiz is server-rendered, so every option button exists — enabled,
+  // sized and hit-testable — before React attaches a handler to it. A tap in
+  // that window is silently discarded: no state change, no feedback. framer-
+  // motion also renders the block at opacity:0 until it animates in, so the
+  // control is invisible to a person and still clickable by anything that
+  // ignores opacity (Playwright, and a keyboard user tabbing through).
+  // Disabling until mounted closes both: the button reports the state it is
+  // actually in, and callers that wait for "enabled" now wait for the truth.
+  // The window sits entirely inside the opacity:0 animation, so nothing a
+  // user can see changes.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+
   const [step, setStep] = useState(0);
   const [tags, setTags] = useState<VibeTag[]>([]);
   const [preferredNeighborhoods, setPreferredNeighborhoods] = useState<
@@ -88,6 +101,7 @@ export default function VibeQuiz({ onComplete }: VibeQuizProps) {
                 <button
                   key={idx}
                   type="button"
+                  disabled={!hydrated}
                   onClick={() => handlePick(option)}
                   className="min-h-[44px] touch-manipulation border border-border hover:border-accent hover:bg-surface transition-colors rounded-2xl p-6 font-display text-xl text-left"
                 >
