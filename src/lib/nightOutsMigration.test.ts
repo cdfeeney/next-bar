@@ -257,46 +257,103 @@ const SQL_0046 = readFileSync(
 ).toLowerCase();
 
 /**
- * Where `name` is stated in `sql`, or -1. Both statement forms are checked:
- * 0059 states get_night_out as `drop function` + plain `create function`, not
- * `create or replace`, so looking only for the latter would miss it. The open
- * paren is part of the match so get_night_out cannot hit get_night_out_board.
+ * ASCII-only lowercase. Indexes into the result map 1:1 onto the original text,
+ * which is what lets these helpers search case-insensitively and still slice the
+ * original bytes.
+ */
+function asciiLower(sql: string): string {
+  return sql.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
+/** Strip `--` line comments so a commented-out statement never counts. */
+function withoutComments(sql: string): string {
+  return sql.replace(/--.*/g, '');
+}
+
+/**
+ * Whether `sql` contains a statement position for `name` — the LOOSE scan. It
+ * deliberately accepts far more than definitionIndex can parse, because its job
+ * is to notice that a migration touched this function at all, including a bare
+ * `drop function`.
+ */
+function touchesDefinition(sql: string, name: string): boolean {
+  const lower = asciiLower(withoutComments(sql));
+  for (const lead of [`function public.${name}`, `function if exists public.${name}`]) {
+    let at = lower.indexOf(lead);
+    while (at > -1) {
+      // An argument list or a bare `;`. Requiring one of the two is what keeps
+      // get_night_out from matching get_night_out_board.
+      if (/^\s*[(;]/.test(lower.slice(at + lead.length, at + lead.length + 40))) return true;
+      at = lower.indexOf(lead, at + 1);
+    }
+  }
+  return false;
+}
+
+/**
+ * Where `name`'s definition starts in `sql`, or -1 — the STRICT read. Both
+ * statement forms are accepted (0059 states get_night_out as `drop function`
+ * plus a plain `create function`, not `create or replace`), and whitespace may
+ * sit between the name and its argument list, as Postgres allows.
  */
 function definitionIndex(sql: string, name: string): number {
+  const lower = asciiLower(sql);
   for (const form of [
-    `create or replace function public.${name}(`,
-    `create function public.${name}(`,
+    `create or replace function public.${name}`,
+    `create function public.${name}`,
   ]) {
-    const at = sql.indexOf(form);
-    if (at > -1) return at;
+    let at = lower.indexOf(form);
+    while (at > -1) {
+      if (/^\s*\(/.test(lower.slice(at + form.length, at + form.length + 40))) return at;
+      at = lower.indexOf(form, at + 1);
+    }
   }
   return -1;
 }
 
 /**
- * The migration that currently DEFINES `name`: the highest-numbered file that
- * states it, which is the text the database actually runs.
+ * The migration that currently DEFINES `name`: the last file that states it,
+ * which is the text the database actually runs.
  *
- * This is derived rather than hard-coded on purpose. Every previous version of
- * this block named its file literally, and the pointer went stale twice as
+ * Derived rather than hard-coded on purpose. Every previous version of this
+ * block named its file literally, and the pointer went stale twice as
  * respond_night_out moved 0046 -> 0048 -> 0059 — each time leaving these
  * invariants asserting against dead text with the suite green, which is the one
- * failure this block exists to prevent (round-2 review, Claude, medium). A 0060
- * re-stating any of these functions now moves the guard by itself.
+ * failure this block exists to prevent (round-2 review, Claude, medium).
+ *
+ * The two-scan shape is the point, and it is what round 3 got wrong. Picking the
+ * last file that the STRICT matcher can read would silently fall back to the
+ * previous definer whenever a newer migration states the function in a form the
+ * matcher does not know — or merely drops it — which is the same dead-text
+ * failure wearing a derivation (round-3 review, both lanes, medium). So the
+ * LOOSE scan chooses the file, and the strict read must then succeed on that
+ * file. A form this guard cannot parse fails loudly here instead of quietly
+ * asserting against a superseded body.
+ *
+ * The text is returned in its original case. Lowercasing it would let a future
+ * definition comparing against 'DECLINED' — which never matches the lowercase
+ * status Postgres stores, so the cap gate would never engage — satisfy an
+ * assertion looking for 'declined' (round-3 review, Codex, medium).
  */
 function effectiveSql(name: string): string {
   const dir = path.join(__dirname, '..', '..', 'supabase', 'migrations');
-  // Files only: `revert/` is a subdirectory and its rollback text must never be
-  // mistaken for the effective definition. Names are zero-padded, so lexical
-  // order is numeric order.
-  const defining = readdirSync(dir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()
-    .filter((f) => definitionIndex(readFileSync(path.join(dir, f), 'utf8').toLowerCase(), name) > -1);
-  expect(defining.length, `no migration defines ${name}`).toBeGreaterThan(0);
-  return readFileSync(path.join(dir, defining[defining.length - 1]), 'utf8')
-    .toLowerCase()
-    .replace(/--.*/g, '');
+  const read = (f: string) => readFileSync(path.join(dir, f), 'utf8');
+  // Files only: `revert/` is a subdirectory, and its rollback text restates
+  // these functions. Names are zero-padded, so lexical order is numeric order.
+  const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+  const touching = files.filter((f) => touchesDefinition(read(f), name));
+  expect(touching.length, `no migration states ${name}`).toBeGreaterThan(0);
+
+  const last = touching[touching.length - 1];
+  const sql = withoutComments(read(last));
+  expect(
+    definitionIndex(sql, name),
+    `${last} is the last migration to state ${name}, but this guard cannot read a ` +
+      `definition out of it — it may only drop the function, or state it in a form ` +
+      `definitionIndex does not accept. Fix the matcher rather than letting the guard ` +
+      `fall back to a superseded file.`,
+  ).toBeGreaterThan(-1);
+  return sql;
 }
 
 /** The body of one stated function, up to its closing $$. */
