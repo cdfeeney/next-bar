@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -256,9 +256,52 @@ const SQL_0046 = readFileSync(
   'utf8',
 ).toLowerCase();
 
-/** The body of one create-or-replace function, up to its closing $$. */
+/**
+ * Where `name` is stated in `sql`, or -1. Both statement forms are checked:
+ * 0059 states get_night_out as `drop function` + plain `create function`, not
+ * `create or replace`, so looking only for the latter would miss it. The open
+ * paren is part of the match so get_night_out cannot hit get_night_out_board.
+ */
+function definitionIndex(sql: string, name: string): number {
+  for (const form of [
+    `create or replace function public.${name}(`,
+    `create function public.${name}(`,
+  ]) {
+    const at = sql.indexOf(form);
+    if (at > -1) return at;
+  }
+  return -1;
+}
+
+/**
+ * The migration that currently DEFINES `name`: the highest-numbered file that
+ * states it, which is the text the database actually runs.
+ *
+ * This is derived rather than hard-coded on purpose. Every previous version of
+ * this block named its file literally, and the pointer went stale twice as
+ * respond_night_out moved 0046 -> 0048 -> 0059 — each time leaving these
+ * invariants asserting against dead text with the suite green, which is the one
+ * failure this block exists to prevent (round-2 review, Claude, medium). A 0060
+ * re-stating any of these functions now moves the guard by itself.
+ */
+function effectiveSql(name: string): string {
+  const dir = path.join(__dirname, '..', '..', 'supabase', 'migrations');
+  // Files only: `revert/` is a subdirectory and its rollback text must never be
+  // mistaken for the effective definition. Names are zero-padded, so lexical
+  // order is numeric order.
+  const defining = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .filter((f) => definitionIndex(readFileSync(path.join(dir, f), 'utf8').toLowerCase(), name) > -1);
+  expect(defining.length, `no migration defines ${name}`).toBeGreaterThan(0);
+  return readFileSync(path.join(dir, defining[defining.length - 1]), 'utf8')
+    .toLowerCase()
+    .replace(/--.*/g, '');
+}
+
+/** The body of one stated function, up to its closing $$. */
 function functionBody(sql: string, name: string): string {
-  const start = sql.indexOf(`create or replace function public.${name}`);
+  const start = definitionIndex(sql, name);
   expect(start, `${name} not found in the migration under test`).toBeGreaterThan(-1);
   const end = sql.indexOf('$$;', start);
   expect(end, `${name} has no terminator`).toBeGreaterThan(start);
@@ -271,14 +314,14 @@ function functionBody(sql: string, name: string): string {
  * functions. They were written against 0046 and stayed pointed there after 0048
  * superseded it (fresh-cycle round-2 review, Claude) — a guard aimed at dead
  * text, which is the same claim-drifted-from-artifact failure it exists to
- * catch. Each `it` below reads whichever constant currently DEFINES the
- * function it names — 0048 for join/decline/seat-count, 0059 for
- * respond_night_out — so a later migration re-stating any of them has to move
- * that constant with it.
+ * catch. Each `it` below now derives its text through effectiveSql(), so it
+ * reads whichever migration currently DEFINES the function it names. Nothing
+ * here has to be moved when the next migration re-states one of them — the
+ * remembering is what kept failing.
  */
-describe('effective night_out RPC ordering invariants (0048, and 0059 for respond)', () => {
+describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
-    const body = functionBody(SQL_0048, 'join_night_out_by_token');
+    const body = functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token');
     const lock = body.indexOf('pg_advisory_xact_lock');
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
     const capCheck = body.indexOf('member_cap', conversion);
@@ -291,19 +334,14 @@ describe('effective night_out RPC ordering invariants (0048, and 0059 for respon
   });
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
-    const body = functionBody(SQL_0048, 'decline_night_out_by_token');
+    const body = functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token');
     expect(body).not.toMatch(/member_cap/);
     // Still serialised, so a concurrent invite cannot swallow the decline.
     expect(body).toMatch(/pg_advisory_xact_lock/);
   });
 
-  // Reads SQL_0059, not SQL_0048: 0059 is where respond_night_out is defined
-  // now. Pointed at 0048 these three assertions passed against text the database
-  // no longer runs, so a 0059+ replacement could drop the lock or the cap gate
-  // untouched — the exact dead-text drift this block was created to catch
-  // (round-3 review, Claude, medium).
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = functionBody(SQL_0059, 'respond_night_out');
+    const body = functionBody(effectiveSql('respond_night_out'), 'respond_night_out');
     expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
       /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
     );
@@ -316,7 +354,7 @@ describe('effective night_out RPC ordering invariants (0048, and 0059 for respon
     // There is exactly one count now — night_out_seat_count — so this is the
     // only place the rule can be wrong. 0048's exactly-once assertion is what
     // keeps it that way.
-    const body = functionBody(SQL_0048, 'night_out_seat_count');
+    const body = functionBody(effectiveSql('night_out_seat_count'), 'night_out_seat_count');
     expect(body, 'the seat count includes declined rows').toMatch(/invite_status <> 'declined'/);
   });
 
@@ -396,17 +434,6 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
     expect(SQL_0048).toMatch(/create or replace function/);
   });
 });
-
-/**
- * The effective respond_night_out. 0057 added the expected-status argument,
- * 0058 moved it into the write predicate, 0059 added the revision CAS and is
- * the last word — so this is the constant that has to move with the next
- * migration that re-states the function.
- */
-const SQL_0059 = readFileSync(
-  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0059_night_outs_respond_revision.sql'),
-  'utf8',
-).toLowerCase().replace(/--.*/g, '');
 
 const SQL_0050 = readFileSync(
   path.join(__dirname, '..', '..', 'supabase', 'migrations', '0050_night_outs_invite_recheck_before_cap.sql'),
