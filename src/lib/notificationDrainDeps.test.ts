@@ -31,7 +31,10 @@ const OK: Result = { data: null, error: null };
  */
 function fakeAdmin(options: {
   results?: Record<string, Result>;
-  rpc?: Result;
+  /** Keyed by function name. A name-agnostic fake answered admit_notification_send
+   *  with the claim's row array, which is not `true`, so every end-to-end drain
+   *  silently took the rate-limited path and tested nothing past it. */
+  rpc?: Record<string, Result>;
 }): { admin: SupabaseClient; calls: Array<Record<string, unknown>> } {
   const calls: Array<Record<string, unknown>> = [];
 
@@ -73,13 +76,17 @@ function fakeAdmin(options: {
       update: (payload: unknown) => builder(table, 'update', payload),
       upsert: (payload: unknown) => builder(table, 'upsert', payload),
     }),
-    rpc: async () => options.rpc ?? { data: [], error: null },
+    rpc: async (fn: string) => options.rpc?.[fn] ?? { data: [], error: null },
   } as unknown as SupabaseClient;
 
   return { admin, calls };
 }
 
-const SEND = async () => ({ outcome: 'sent' as const, status: 200, reason: null });
+const SEND = async (_deviceToken?: string, _payload?: unknown) => ({
+  outcome: 'sent' as const,
+  status: 200,
+  reason: null,
+});
 const CLAIM = 'claim-token-1';
 
 function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
@@ -446,23 +453,33 @@ describe('drain end to end against the fake client', () => {
   it('defers a row whose status write is rejected rather than reporting it sent', async () => {
     // The whole point of the adapters throwing: an unconfirmed write must not
     // be counted as a delivery, and must leave the row for the next drain.
+    const sent: string[] = [];
     const { admin } = fakeAdmin({
-      rpc: { data: [row()], error: null },
+      rpc: {
+        claim_notification_outbox: { data: [row()], error: null },
+        admit_notification_send: { data: true, error: null },
+      },
       results: {
         notification_preferences: { data: null, error: null },
         night_outs: { data: { share_token: 'tok', title: 'Friday' }, error: null },
         profiles: { data: { display_name: 'Sam', handle: 'sam' }, error: null },
         native_device_tokens: { data: [{ id: 'device-1', token: 'a'.repeat(64) }], error: null },
-        // The rate-limit count reads this table and must succeed; only the
-        // status WRITE is rejected.
-        'notification_outbox:select': { data: null, error: null, count: 0 },
+        // Only the outbox STATUS write is rejected. Everything the row needs
+        // on the way to Apple succeeds.
         'notification_outbox:update': ERROR,
       },
     });
-    const deps = buildDrainDeps(admin, SEND);
+    const deps = buildDrainDeps(admin, async (deviceToken, payload) => {
+      sent.push(deviceToken);
+      return SEND(deviceToken, payload);
+    });
 
     const summary = await drainNotificationOutbox(deps);
 
+    // The send MUST have happened, or this asserts nothing about the write
+    // that follows it — which is exactly how this test went quiet once
+    // admission started going through the same rpc entry point.
+    expect(sent).toEqual(['a'.repeat(64)]);
     expect(summary).toMatchObject({ processed: 1, sent: 0, deferred: 1 });
   });
 });

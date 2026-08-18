@@ -486,9 +486,13 @@ revoke all on function public.claim_notification_outbox(integer, integer, intege
 -- Admission is charged BEFORE the send, not after it: a row admitted whose
 -- sends then fail still spent its slot for the window. That errs toward
 -- suppressing, which is the right direction for a phone that buzzes.
--- `coalesce` means a retry of an already-admitted row keeps its original
--- stamp, so a deferred row neither drifts its own window forward nor counts
--- against itself (it is excluded by id anyway).
+--
+-- A ROW THAT HAS ALREADY PAID KEEPS ITS SLOT. Re-testing the budget on a retry
+-- meant a row admitted, deferred for a flaky phone, and then overtaken by
+-- eight unrelated events came back REFUSED - and the drain retires a refusal
+-- as terminally suppressed, so a notification that had already bought its
+-- place in the window was thrown away instead of retried. An already-stamped
+-- row is re-admitted without re-counting.
 create or replace function public.admit_notification_send(
   p_id bigint,
   p_claim_token uuid,
@@ -502,15 +506,19 @@ set search_path = public
 as $$
 declare
   v_recipient uuid;
+  v_admitted  timestamptz;
   v_recent    integer;
 begin
   -- Fenced on the claim: a drain whose lease expired may not spend budget.
-  select o.recipient_user_id into v_recipient
+  select o.recipient_user_id, o.admitted_at into v_recipient, v_admitted
     from public.notification_outbox o
    where o.id = p_id
      and o.claim_token = p_claim_token;
   if v_recipient is null then
     return false;
+  end if;
+  if v_admitted is not null then
+    return true;
   end if;
 
   perform pg_advisory_xact_lock(hashtext('nb:notify:admit'), hashtext(v_recipient::text));
@@ -525,9 +533,15 @@ begin
   end if;
 
   update public.notification_outbox o
-     set admitted_at = coalesce(o.admitted_at, now())
+     set admitted_at = now()
    where o.id = p_id
      and o.claim_token = p_claim_token;
+  -- The claim can expire between the fence read above and this write. Without
+  -- this the function reported an admission it never recorded, and the stale
+  -- worker sent without spending anything.
+  if not found then
+    return false;
+  end if;
   return true;
 end;
 $$;

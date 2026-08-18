@@ -222,8 +222,12 @@ describe('notification_outbox (criteria 3, 4)', () => {
     expect(admit).toMatch(/and o\.claim_token = p_claim_token/);
     // Excludes the row being admitted, or a retry counts against itself.
     expect(admit).toMatch(/r\.id <> p_id/);
-    // Set once: a retry keeps its original stamp instead of drifting forward.
-    expect(admit).toMatch(/set admitted_at = coalesce\(o\.admitted_at, now\(\)\)/);
+    // A row that already paid keeps its slot rather than being re-tested and
+    // terminally suppressed by unrelated traffic.
+    expect(admit).toMatch(/if v_admitted is not null then\s*\n\s*return true;/);
+    // The claim can expire between the fence read and the write; reporting an
+    // admission that was never recorded let a stale worker send for free.
+    expect(admit).toMatch(/if not found then\s*\n\s*return false;/);
     expect(OUTBOX_SQL).toMatch(/admitted_at\s+timestamptz null,/);
     expect(OUTBOX_SQL).toMatch(/add column if not exists admitted_at timestamptz null;/);
     expect(OUTBOX_SQL).toMatch(
