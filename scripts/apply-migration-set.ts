@@ -42,7 +42,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
-import { checkConnectionHost, checkMigrationTarget } from './apply-migration-target-guard';
+import {
+  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
+} from './apply-migration-target-guard';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -129,23 +131,27 @@ async function main(): Promise<void> {
   // first guard was bypassable. Same check, same reason; it should have been
   // reused here the first time.
   const probe = new Client({ connectionString: databaseUrl }) as unknown as {
-    connectionParameters?: { user?: string; host?: string };
+    connectionParameters?: { user?: string; host?: string; port?: number | string };
   };
   const effectiveUser = probe.connectionParameters?.user ?? '';
   const effectiveHost = probe.connectionParameters?.host ?? '';
-  const ref = effectiveUser.split('.').pop() ?? '';
+  const effectivePort = String(probe.connectionParameters?.port ?? '');
+  const ref = resolveProjectRef(effectiveUser);
 
-  // The ref says WHICH PROJECT; the host says WHICH ENDPOINT. Checking only the
-  // ref verifies a target the tool never inspected, because pg lets `?host=`
-  // override the authority the operator reads in the banner below.
-  let authorityHost = '';
+  // The ref says WHICH PROJECT; the endpoint says WHICH SERVER. Checking only
+  // the ref verifies a target the tool never inspected, because pg lets
+  // `?host=` / `?port=` override the authority the operator reads below.
+  let authority = { host: '', port: '' };
   try {
-    authorityHost = new URL(databaseUrl).hostname;
+    const parsed = new URL(databaseUrl);
+    authority = { host: parsed.hostname, port: parsed.port };
   } catch {
     fail('DATABASE_URL is not a parsable URL, so the connection target cannot be verified');
   }
-  const hostRefusal = checkConnectionHost(effectiveHost, authorityHost);
-  if (hostRefusal) fail(hostRefusal);
+  const endpointRefusal = checkConnectionEndpoint(
+    { host: effectiveHost, port: effectivePort }, authority,
+  );
+  if (endpointRefusal) fail(endpointRefusal);
   const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
   const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
@@ -210,7 +216,7 @@ async function main(): Promise<void> {
     }
 
     console.log(`\n[apply-set] target   : ${redactUrl(databaseUrl)}`);
-    console.log(`[apply-set] host     : ${effectiveHost} (pg's effective host)`);
+    console.log(`[apply-set] effective: ${effectiveUser}@${effectiveHost}:${effectivePort} (pg's own resolution)`);
     console.log(`[apply-set] env      : ${actualEnv}`);
     console.log(`[apply-set] head     : ${ledgerHead}`);
     console.log(`[apply-set] mode     : ${execute ? 'EXECUTE (one transaction)' : 'DRY RUN — nothing will be written'}`);

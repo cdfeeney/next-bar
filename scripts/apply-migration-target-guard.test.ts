@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { checkConnectionHost, checkMigrationTarget } from './apply-migration-target-guard';
+import {
+  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
+} from './apply-migration-target-guard';
 
 const PROD = 'prodrefaaaaaaaaaaaa';
 const STAGING = 'stagingrefbbbbbbbb';
@@ -99,26 +101,99 @@ describe('checkMigrationTarget', () => {
   });
 });
 
-// Round-2 panel finding: the ref check answers "which project" and was reused
-// from the live RLS suite, but its host half was dropped, so `?host=` could
-// redirect a connection whose username still looked allowlisted.
-describe('checkConnectionHost', () => {
+// Round-2 panel: the ref check answers "which project", this one answers
+// "which server". pg gives query parameters precedence over the URL authority,
+// so ?host= / ?port= redirected a connection whose username still looked
+// allowlisted, and the operator's banner showed the authority.
+describe('checkConnectionEndpoint', () => {
   const HOST = 'aws-0-us-east-1.pooler.supabase.com';
+  const at = (host: string, port: string) => ({ host, port });
 
   it('refuses when pg resolves a different host than the URL authority', () => {
-    const refusal = checkConnectionHost('somewhere-else.internal', HOST);
-    expect(refusal).toContain('does not match');
+    expect(checkConnectionEndpoint(at('somewhere-else.internal', '5432'), at(HOST, '5432')))
+      .toContain('host does not match');
   });
 
-  it('refuses when the authority has no host', () => {
-    expect(checkConnectionHost(HOST, '')).toContain('DATABASE_URL has no host');
+  it('refuses when pg resolves a different port than the URL authority', () => {
+    expect(checkConnectionEndpoint(at(HOST, '6543'), at(HOST, '5432')))
+      .toContain('port does not match');
+  });
+
+  // A host-less authority parses cleanly, so a check that skips empty sides
+  // skips itself: `postgres:///postgres?host=elsewhere`.
+  it('refuses when the authority names no host', () => {
+    expect(checkConnectionEndpoint(at('db.other.example.com', '5432'), at('', '')))
+      .toContain('DATABASE_URL has no host');
   });
 
   it('refuses when the effective host could not be resolved', () => {
-    expect(checkConnectionHost('   ', HOST)).toContain('effective connection host could not be resolved');
+    expect(checkConnectionEndpoint(at('   ', '5432'), at(HOST, '5432')))
+      .toContain('effective connection host could not be resolved');
   });
 
-  it('accepts the connection when pg resolves the authority host', () => {
-    expect(checkConnectionHost(HOST, HOST)).toBeNull();
+  it('refuses when the effective port could not be resolved', () => {
+    expect(checkConnectionEndpoint(at(HOST, ''), at(HOST, '5432')))
+      .toContain('effective connection port could not be resolved');
+  });
+
+  it('accepts an omitted authority port when pg resolves the libpq default', () => {
+    expect(checkConnectionEndpoint(at(HOST, '5432'), at(HOST, ''))).toBeNull();
+  });
+
+  it('refuses an omitted authority port when pg resolves something else', () => {
+    expect(checkConnectionEndpoint(at(HOST, '6543'), at(HOST, ''))).toContain('port does not match');
+  });
+
+  it('accepts the connection when pg resolves the authority endpoint', () => {
+    expect(checkConnectionEndpoint(at(HOST, '6543'), at(HOST, '6543'))).toBeNull();
+  });
+});
+
+// Round-2 panel: taking the last dot-separated piece of ANY username invented a
+// ref for connection strings that carry none, and an allowlist could then match
+// the invention.
+describe('resolveProjectRef', () => {
+  it('resolves the ref from a Supabase pooler username', () => {
+    expect(resolveProjectRef('postgres.' + STAGING)).toBe(STAGING);
+  });
+
+  it('resolves nothing from a direct connection username', () => {
+    expect(resolveProjectRef('postgres')).toBe('');
+  });
+
+  // The whole username became the "ref", so an arbitrary server reached with
+  // the staging ref as its username resolved to the allowlisted value.
+  it('resolves nothing from a username that is just the ref', () => {
+    expect(resolveProjectRef(STAGING)).toBe('');
+  });
+
+  it('resolves nothing from a username with more than one dot', () => {
+    expect(resolveProjectRef('postgres.' + STAGING + '.extra')).toBe('');
+  });
+
+  it('resolves nothing when the ref piece is not a project ref', () => {
+    expect(resolveProjectRef('postgres.not-a-ref')).toBe('');
+  });
+
+  it('feeds the guard an unresolved ref that the guard then refuses', () => {
+    expect(checkMigrationTarget({
+      env: 'staging', ref: resolveProjectRef('postgres'), productionRef: PROD, stagingRefs: ['postgres'],
+    })).toContain('could not determine the Supabase project ref');
+  });
+});
+
+// Round-2 panel: a malformed configured value is truthy, so it passed the
+// missing-variable check and then never equalled a real ref.
+describe('checkMigrationTarget with malformed configuration', () => {
+  it('refuses a production ref carrying a stray separator', () => {
+    expect(checkMigrationTarget({
+      env: 'staging', ref: PROD, productionRef: PROD + ',', stagingRefs: [PROD],
+    })).toContain('NEXT_BAR_PRODUCTION_PROJECT_REF is not a valid project ref');
+  });
+
+  it('refuses a staging list entry that is not a project ref', () => {
+    expect(checkMigrationTarget({
+      env: 'staging', ref: STAGING, productionRef: PROD, stagingRefs: [STAGING, 'not a ref'],
+    })).toContain('not a project ref');
   });
 });

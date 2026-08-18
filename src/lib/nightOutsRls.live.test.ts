@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
+import {
+  checkConnectionEndpoint, resolveProjectRef,
+} from '../../scripts/apply-migration-target-guard';
 
 /**
  * V8-3 BEHAVIORAL RLS/RPC negatives — criteria 3, 9 and 10.
@@ -73,31 +76,36 @@ const URL = databaseUrl();
  *
  * `connectionParameters` is not in @types/pg, hence the narrow cast.
  */
-function effectiveConnection(connectionString: string): { user: string; host: string } {
+function effectiveConnection(connectionString: string): { user: string; host: string; port: string } {
   const probe = new Client({ connectionString }) as unknown as {
-    connectionParameters?: { user?: string; host?: string };
+    connectionParameters?: { user?: string; host?: string; port?: number | string };
   };
   return {
     user: probe.connectionParameters?.user ?? '',
     host: probe.connectionParameters?.host ?? '',
+    port: String(probe.connectionParameters?.port ?? ''),
   };
 }
 
 function assertStagingOnly(connectionString: string): void {
   const effective = effectiveConnection(connectionString);
-  const ref = effective.user.split('.').pop() ?? '';
+  const ref = resolveProjectRef(effective.user);
   const allowlist = (envValue('NEXT_BAR_STAGING_PROJECT_REFS') ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
   const productionRef = envValue('NEXT_BAR_PRODUCTION_PROJECT_REF');
 
-  // No host override either: the connection must go where the URL's authority
-  // says it goes, so a redirected host cannot ride along with an allowlisted user.
-  const authorityHost = new globalThis.URL(connectionString).hostname;
-  if (authorityHost && effective.host && effective.host !== authorityHost) {
-    throw new Error(
-      'nightOutsRls.live.test.ts refuses to run: the effective connection host does not match the '
-      + 'connection string authority, so the target was overridden by a query parameter.',
-    );
+  // No endpoint override either: the connection must go where the URL's
+  // authority says it goes, so a redirected host or port cannot ride along with
+  // an allowlisted user. This is the migration guard's own check, imported
+  // rather than copied — the copy short-circuited when either side was empty,
+  // which a host-less authority (`postgres:///db?host=elsewhere`) produces.
+  const authority = new globalThis.URL(connectionString);
+  const endpointRefusal = checkConnectionEndpoint(
+    { host: effective.host, port: effective.port },
+    { host: authority.hostname, port: authority.port },
+  );
+  if (endpointRefusal) {
+    throw new Error(`nightOutsRls.live.test.ts refuses to run: ${endpointRefusal}.`);
   }
 
   if (allowlist.length === 0) {
