@@ -65,7 +65,7 @@ const forgetStartedNightOut = vi.fn();
 
 vi.mock('@/components/StartNightOutButton', () => ({
   default: () => null,
-  forgetStartedNightOut: (id: string) => forgetStartedNightOut(id),
+  forgetStartedNightOut: (id: string, planId: string) => forgetStartedNightOut(id, planId),
 }));
 
 vi.mock('@/lib/pendingInvite', () => ({
@@ -508,7 +508,7 @@ describe('the plan page never paints an answer the view has moved on from', () =
       expect(
         forgetStartedNightOut,
         'the plan rendered and the parked record was never spent',
-      ).toHaveBeenCalledWith('u1'),
+      ).toHaveBeenCalledWith('u1', "plan-A's night out"),
     );
   });
 

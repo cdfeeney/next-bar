@@ -250,8 +250,11 @@ export default function NightOutPage({
     // route committed dropped the record anyway, and a later remount armed
     // Start into a duplicate plan. The record is spent where the plan actually
     // renders, for the member who owns it, and nowhere else.
+    // ...and only for THIS plan (round-10 panel, Codex): clearing whatever the
+    // user had parked meant opening any plan they belong to spent plan A's
+    // record, re-arming Start into a duplicate.
     if (state.kind === 'member' && auth.status === 'signed-in') {
-      forgetStartedNightOut(auth.user.id);
+      forgetStartedNightOut(auth.user.id, state.plan.id);
     }
   }, [state, token, auth]);
 

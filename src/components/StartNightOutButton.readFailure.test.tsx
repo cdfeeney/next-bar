@@ -162,7 +162,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     // fire-and-forget navigation that never commits must not drop it. This line
     // is what that page does on settling as a member, and the requirement below
     // is unchanged — an opened plan is not re-offered as unfinished.
-    forgetStartedNightOut(USER_A);
+    forgetStartedNightOut(USER_A, PLAN_ID);
     first.unmount();
 
     render(<StartNightOutButton />);
@@ -174,6 +174,39 @@ describe('StartNightOutButton — a created plan is never lost', () => {
       (screen.getByRole('button') as HTMLButtonElement).disabled,
       'Start stayed disabled after the plan was successfully opened',
     ).toBe(false);
+  });
+
+  test('opening a DIFFERENT plan does not spend the parked one', async () => {
+    // Round-10 panel (Codex). The plan page called this for whatever the user
+    // had parked, not for the plan it was rendering: park plan A behind a
+    // failed follow-up read, open plan B (any plan the same user belongs to),
+    // and A's record was gone, Start re-armed, and the next tap made a second
+    // plan for the same night. Both directions are asserted here — a clear
+    // that never fires is as broken as one that fires for the wrong plan.
+    const OTHER_PLAN = '11111111-1111-4111-8111-111111111111';
+    window.localStorage.setItem(
+      STARTED_KEY,
+      JSON.stringify({ [USER_A]: { planId: PLAN_ID, nightKey } }),
+    );
+
+    forgetStartedNightOut(USER_A, OTHER_PLAN);
+    expect(
+      JSON.parse(window.localStorage.getItem(STARTED_KEY) as string)[USER_A]?.planId,
+      'opening a different plan spent the parked record, re-arming Start into a duplicate',
+    ).toBe(PLAN_ID);
+
+    render(<StartNightOutButton />);
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      'the parked plan stopped being offered for recovery',
+    ).toBeTruthy();
+
+    // ...and the plan it IS about still spends it.
+    forgetStartedNightOut(USER_A, PLAN_ID);
+    expect(
+      JSON.parse(window.localStorage.getItem(STARTED_KEY) ?? '{}')[USER_A],
+      'opening the parked plan itself did not spend its record',
+    ).toBeUndefined();
   });
 
   test('another account NEVER inherits the parked plan, and is not locked out', async () => {
@@ -285,7 +318,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
     await waitFor(() => expect(pushed.length).toBe(1));
     // B reaches the plan page, which is what spends a record now.
-    forgetStartedNightOut(USER_B);
+    forgetStartedNightOut(USER_B, PLAN_ID);
     b.unmount();
 
     // B's own record is gone (they opened it) — B is not stuck.

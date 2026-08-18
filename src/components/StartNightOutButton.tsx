@@ -345,14 +345,23 @@ function recallStarted(userId: string): ParkedPlan | null {
  * Keeping the record one moment too LONG is safe — the worst case is a
  * recovery affordance for a plan the user has already seen, which the night
  * stamp sweeps anyway. Dropping it one moment too early is the duplicate.
+ *
+ * `planId` is REQUIRED, and it is the round-10 finding (Codex): the plan page
+ * cleared whatever this user had parked, not the plan it was rendering. Park
+ * plan A behind a failed follow-up read, then open plan B — any plan of the
+ * same user's — and A's record was gone, Start re-armed, and the next tap made
+ * a second plan for the same night. The record is spent by the plan it is
+ * about, and by nothing else.
  */
-export function forgetStartedNightOut(userId: string): void {
-  forgetStarted(userId);
+export function forgetStartedNightOut(userId: string, planId: string): void {
+  forgetStarted(userId, planId);
 }
 
-function forgetStarted(userId: string): void {
+function forgetStarted(userId: string, planId: string): void {
   const all = readAll();
-  const { [userId]: dropped, ...rest } = all;
+  const mine = all[userId];
+  const dropped = mine !== undefined && mine.planId === planId ? mine : undefined;
+  const rest = dropped === undefined ? all : (({ [userId]: _drop, ...keep }) => keep)(all);
   const pruned = withoutExpired(rest, nycNightKey());
   // Nothing of ours to drop AND nothing expired to sweep: leave the store alone
   // rather than rewriting it for no reason.
@@ -521,7 +530,7 @@ export default function StartNightOutButton(): JSX.Element | null {
     // A STALE NIGHT is spent, and clearing it is what stops yesterday's plan
     // disabling Start today. This drops only our own entry.
     if (parked.nightKey !== nycNightKey()) {
-      forgetStarted(userId);
+      forgetStarted(userId, parked.planId);
       return;
     }
     setCreatedPlanId(parked.planId);
