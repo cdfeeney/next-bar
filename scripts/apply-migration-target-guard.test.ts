@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { checkMigrationTarget } from './apply-migration-target-guard';
+import { checkConnectionHost, checkMigrationTarget } from './apply-migration-target-guard';
 
 const PROD = 'prodrefaaaaaaaaaaaa';
 const STAGING = 'stagingrefbbbbbbbb';
@@ -96,5 +96,29 @@ describe('checkMigrationTarget', () => {
     expect(checkMigrationTarget({
       env: 'production', ref: PROD, productionRef: PROD, stagingRefs: [STAGING],
     })).toBeNull();
+  });
+});
+
+// Round-2 panel finding: the ref check answers "which project" and was reused
+// from the live RLS suite, but its host half was dropped, so `?host=` could
+// redirect a connection whose username still looked allowlisted.
+describe('checkConnectionHost', () => {
+  const HOST = 'aws-0-us-east-1.pooler.supabase.com';
+
+  it('refuses when pg resolves a different host than the URL authority', () => {
+    const refusal = checkConnectionHost('somewhere-else.internal', HOST);
+    expect(refusal).toContain('does not match');
+  });
+
+  it('refuses when the authority has no host', () => {
+    expect(checkConnectionHost(HOST, '')).toContain('DATABASE_URL has no host');
+  });
+
+  it('refuses when the effective host could not be resolved', () => {
+    expect(checkConnectionHost('   ', HOST)).toContain('effective connection host could not be resolved');
+  });
+
+  it('accepts the connection when pg resolves the authority host', () => {
+    expect(checkConnectionHost(HOST, HOST)).toBeNull();
   });
 });

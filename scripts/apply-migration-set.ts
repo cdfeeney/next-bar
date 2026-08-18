@@ -42,7 +42,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
-import { checkMigrationTarget } from './apply-migration-target-guard';
+import { checkConnectionHost, checkMigrationTarget } from './apply-migration-target-guard';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -132,7 +132,20 @@ async function main(): Promise<void> {
     connectionParameters?: { user?: string; host?: string };
   };
   const effectiveUser = probe.connectionParameters?.user ?? '';
+  const effectiveHost = probe.connectionParameters?.host ?? '';
   const ref = effectiveUser.split('.').pop() ?? '';
+
+  // The ref says WHICH PROJECT; the host says WHICH ENDPOINT. Checking only the
+  // ref verifies a target the tool never inspected, because pg lets `?host=`
+  // override the authority the operator reads in the banner below.
+  let authorityHost = '';
+  try {
+    authorityHost = new URL(databaseUrl).hostname;
+  } catch {
+    fail('DATABASE_URL is not a parsable URL, so the connection target cannot be verified');
+  }
+  const hostRefusal = checkConnectionHost(effectiveHost, authorityHost);
+  if (hostRefusal) fail(hostRefusal);
   const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
   const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
@@ -197,6 +210,7 @@ async function main(): Promise<void> {
     }
 
     console.log(`\n[apply-set] target   : ${redactUrl(databaseUrl)}`);
+    console.log(`[apply-set] host     : ${effectiveHost} (pg's effective host)`);
     console.log(`[apply-set] env      : ${actualEnv}`);
     console.log(`[apply-set] head     : ${ledgerHead}`);
     console.log(`[apply-set] mode     : ${execute ? 'EXECUTE (one transaction)' : 'DRY RUN — nothing will be written'}`);

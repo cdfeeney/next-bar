@@ -107,7 +107,18 @@ function assertStagingOnly(connectionString: string): void {
       + 'be named explicitly. An unset allowlist is never treated as permission.',
     );
   }
-  if (productionRef && ref === productionRef) {
+  // Unset is UNVERIFIABLE, not "no objection". Without the production ref this
+  // suite cannot prove the allowlisted ref it is about to write to is not the
+  // production one — the same fail-open scripts/apply-migration-target-guard.ts
+  // exists to close, and the allowlist alone is a weaker claim because its own
+  // refusal below invites adding a ref deliberately.
+  if (!productionRef) {
+    throw new Error(
+      'nightOutsRls.live.test.ts refuses to run: NEXT_BAR_PRODUCTION_PROJECT_REF is not set in '
+      + '.env.local, so this target cannot be shown to be anything other than production.',
+    );
+  }
+  if (ref === productionRef) {
     throw new Error(
       'nightOutsRls.live.test.ts refuses to run: DATABASE_URL points at NEXT_BAR_PRODUCTION_PROJECT_REF. '
       + 'Production writes are an attended gate and never happen from a test run.',

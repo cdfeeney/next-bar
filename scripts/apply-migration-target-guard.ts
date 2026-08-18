@@ -66,3 +66,27 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
   }
   return null;
 }
+
+/**
+ * Refuses when pg's effective host is not the one the connection string's
+ * authority names. pg gives query parameters precedence over the authority, so
+ * `?host=` (or PGHOST) silently redirects a connection whose username — and
+ * therefore whose project ref — still looks allowlisted. The ref check above
+ * answers "which project", this answers "which endpoint"; verifying the ref for
+ * a host nobody inspected is the same fail-open by another route.
+ *
+ * `src/lib/nightOutsRls.live.test.ts` has carried this check since its own
+ * review; the apply tool should have reused it the first time.
+ */
+export function checkConnectionHost(effectiveHost: string, authorityHost: string): string | null {
+  const effective = effectiveHost.trim();
+  const authority = authorityHost.trim();
+  // Empty on either side is unverifiable, not "no objection".
+  if (!authority) return 'DATABASE_URL has no host, so the connection target cannot be verified';
+  if (!effective) return 'the effective connection host could not be resolved from DATABASE_URL';
+  if (effective !== authority) {
+    return 'the effective connection host does not match DATABASE_URL\'s authority, '
+      + 'so the target was overridden by a query parameter';
+  }
+  return null;
+}
