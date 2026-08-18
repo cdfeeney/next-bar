@@ -245,11 +245,15 @@ describe('0044_night_outs.sql security shape', () => {
  * as a record of an applied, immutable file, but is NOT the effective definition
  * for anything in the 0045/0046/0047 rows.
  *
- * These are ORDERING invariants, and they exist because the thing they guard
- * cannot be exercised behaviorally on staging: the 20-member boundary needs 21
- * distinct fixture identities and public.profiles is FK'd to auth.users, which
- * this suite does not manufacture. A static guard is the honest fallback, not a
- * substitute — see the residual-risk note in the goal.
+ * These are ORDERING invariants, and they are REDUNDANT COVER, not a fallback.
+ * This paragraph used to say the 20-member boundary 'cannot be exercised
+ * behaviorally ... this suite does not manufacture' 21 identities. That was
+ * recorded three times and never checked; nightOutsRls.live.test.ts now
+ * manufactures identities in makeIdentities() and drives the boundary itself
+ * (round-5 review, Claude, medium). These assertions still earn their place,
+ * because text order catches a weakening the boundary test cannot see — an
+ * advisory lock re-keyed per USER would still let concurrent callers past — and
+ * because they run when DATABASE_URL is absent and that suite skips.
  */
 const SQL_0046 = readFileSync(
   path.join(__dirname, '..', '..', 'supabase', 'migrations', '0046_night_outs_cap_and_race.sql'),
@@ -273,6 +277,60 @@ function withoutComments(sql: string): string {
 }
 
 /**
+ * One dollar-quoted or single-quoted region: where its CONTENT starts and ends,
+ * and where the whole region ends. Dollar quoting may be tagged (`$fn$ ... $fn$`)
+ * and a tag closes only with the identical tag, which is the point of tagging.
+ */
+type Literal = { contentStart: number; contentEnd: number; end: number };
+
+/**
+ * Every string and function body in `sql`, in order.
+ *
+ * These regions are where SQL keeps text that LOOKS like code, and reading them
+ * as code is how a guard gets fooled: a migration may legally carry a
+ * dollar-quoted string whose content spells out a create-function statement, and
+ * an earlier version of this file would have read that inert text as the
+ * effective definition (round-5 review, Codex, medium).
+ */
+function literals(sql: string): Literal[] {
+  const found: Literal[] = [];
+  const QUOTE = String.fromCharCode(39);
+  for (let i = 0; i < sql.length; i += 1) {
+    if (sql[i] === QUOTE) {
+      // A doubled quote inside a string is an escaped quote, not the end of one.
+      let j = i + 1;
+      while (j < sql.length) {
+        if (sql[j] !== QUOTE) { j += 1; continue; }
+        if (sql[j + 1] === QUOTE) { j += 2; continue; }
+        break;
+      }
+      found.push({ contentStart: i + 1, contentEnd: j, end: j + 1 });
+      i = j;
+      continue;
+    }
+    const tag = /^\$[a-zA-Z_][a-zA-Z0-9_]*\$|^\$\$/.exec(sql.slice(i));
+    if (!tag) continue;
+    const close = sql.indexOf(tag[0], i + tag[0].length);
+    if (close === -1) break; // unterminated: nothing after it can be trusted
+    found.push({ contentStart: i + tag[0].length, contentEnd: close, end: close + tag[0].length });
+    i = close + tag[0].length - 1;
+  }
+  return found;
+}
+
+/** The same text with every literal's CONTENT blanked, so offsets still line up. */
+function maskLiterals(sql: string): string {
+  let masked = sql;
+  for (const lit of literals(sql)) {
+    masked =
+      masked.slice(0, lit.contentStart) +
+      ' '.repeat(lit.contentEnd - lit.contentStart) +
+      masked.slice(lit.contentEnd);
+  }
+  return masked;
+}
+
+/**
  * One statement that creates or drops a function, in any spelling Postgres
  * accepts: optional OR REPLACE, optional IF [NOT] EXISTS, optional public.
  * qualification, optional double quotes, and any whitespace — including a
@@ -280,11 +338,12 @@ function withoutComments(sql: string): string {
  * argument list. A DROP may end at `;` instead.
  *
  * It is anchored on the verb on purpose. `grant execute on function
- * public.respond_night_out(...)` and `revoke all on function ...` also contain
- * the name followed by an argument list, and an earlier version keyed on that
- * substring alone, so a grants-only migration (0047 is the precedent in this
- * tree) looked like a definer and failed this guard on a correct migration
- * (round-4 review, Claude, medium).
+ * public.respond_night_out(...)`, `revoke all on function ...` and
+ * `create trigger ... execute function ...` also contain a name followed by an
+ * argument list, and an earlier version keyed on that substring alone, so a
+ * grants-only migration (0047 is the precedent in this tree) looked like a
+ * definer and failed this guard on a correct migration (round-4 review, Claude,
+ * medium).
  *
  * The name is CAPTURED rather than interpolated, so callers compare it exactly.
  * That is also what keeps get_night_out from matching get_night_out_board.
@@ -311,8 +370,7 @@ function migrationStream(): string {
 }
 
 /**
- * The EFFECTIVE body of `name` — its last CREATE across every migration, up to
- * that definition's `$$;`.
+ * The EFFECTIVE body of `name` — its last CREATE across every migration.
  *
  * Derived rather than pinned to a filename. Every earlier version of this block
  * named its file literally and the pointer went stale twice as respond_night_out
@@ -324,31 +382,37 @@ function migrationStream(): string {
  * and reading the first would assert against a body Postgres immediately
  * replaced (round-4 review, Codex, medium).
  *
- * WHAT THIS DELIBERATELY DOES NOT DO: notice that a later migration DROPPED the
- * function. A drop cannot be judged by name alone — Postgres identifies a
- * function by name AND argument types, and dropping a superseded overload right
- * after installing its replacement is routine (0059 does exactly that at :192,
- * having created the four-argument form at :92). Telling that apart from a real
- * removal means parsing and comparing argument type lists, which is more parser
- * than this guard should own. The database-side question is answered where it
- * can be answered honestly: the criterion-4 test in nightOutsRls.live.test.ts
- * asks the catalog which overloads exist and pins the surviving set exactly, so
- * a function that was genuinely removed fails there. The residual is that the
- * live suite skips without DATABASE_URL, so on a bare CI runner a removed
- * function would leave these ordering assertions reading its last definition.
+ * Statements are matched against MASKED text, so a create-shaped string sitting
+ * inside a body or a quoted literal is data and stays data. The body is then cut
+ * at its own dollar-quote tag rather than at the next `$$;`, so a tagged body
+ * cannot be spliced together with whatever follows it (round-5 review, Codex,
+ * two mediums).
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO: decide WHICH OVERLOAD is under test, or
+ * notice that a later migration DROPPED the function. Both need argument-type
+ * comparison — Postgres identifies a function by name AND argument types, and
+ * dropping a superseded overload right after installing its replacement is
+ * routine (0059 creates the four-argument respond_night_out at :92 and drops the
+ * three-argument form at :192). That is more parser than this guard should own,
+ * so it is answered where it can be answered exactly: the overload-set test in
+ * nightOutsRls.live.test.ts pins the catalog for ALL FOUR names this helper
+ * resolves, so a removal, a rename, or an added overload fails there. The
+ * residual, stated rather than hidden: that suite skips without DATABASE_URL, so
+ * on a bare CI runner those changes would leave these assertions reading the
+ * last definition.
  */
 function effectiveBody(name: string): string {
   const raw = migrationStream();
-  const lower = asciiLower(raw);
-  const created = [...lower.matchAll(FUNCTION_STATEMENT)].filter(
+  const masked = asciiLower(maskLiterals(raw));
+  const created = [...masked.matchAll(FUNCTION_STATEMENT)].filter(
     (m) => m[2] === name && m[1] === 'create',
   );
   expect(created.length, `no migration creates ${name}`).toBeGreaterThan(0);
 
   const start = created[created.length - 1].index;
-  const end = lower.indexOf('$$;', start);
-  expect(end, `${name} has no terminator`).toBeGreaterThan(start);
-  return raw.slice(start, end);
+  const body = literals(raw).find((lit) => lit.contentStart > start);
+  expect(body, `${name} has no terminator`).toBeDefined();
+  return raw.slice(start, body!.end);
 }
 
 /** The body of one create-or-replace function, up to its closing $$. */

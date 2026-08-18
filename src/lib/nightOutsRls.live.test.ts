@@ -413,11 +413,14 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     // declined member rejoining explicitly — each landing in the right terminal
     // state with exactly one event.
     //
-    // What it does NOT cover, stated plainly: the 20-member CAP BOUNDARY, which
-    // is where the round-2 HIGH actually lived. Reaching it needs 21 distinct
-    // fixture identities and public.profiles is FK'd to auth.users, which this
-    // suite does not manufacture. The ordering invariant that fixes the
-    // boundary is guarded statically in nightOutsMigration.test.ts instead.
+    // What it does NOT cover: the 20-member CAP BOUNDARY, which is where the
+    // round-2 HIGH actually lived. This comment used to say reaching it needs 21
+    // identities "which this suite does not manufacture" — that was wrong when
+    // written and is wronger now: makeIdentities() below manufactures them, and
+    // the boundary is exercised behaviorally in this same file (round-5 review,
+    // Claude, medium). It is guarded THERE, plus redundantly by the text-order
+    // assertions in nightOutsMigration.test.ts, which catch a re-keyed advisory
+    // lock that a boundary test cannot see.
     await inRollback(async () => {
       const { rows: people } = await db.query('select id from public.profiles limit 2');
       expect(people.length, 'need 2 profiles').toBe(2);
@@ -1117,6 +1120,51 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       .toEqual([
         'p_night_out uuid, p_accept boolean, p_expected_status text, p_expected_revision integer',
       ]);
+  });
+
+  /**
+   * THE SAME QUESTION, FOR THE OTHER THREE FUNCTIONS THE STATIC GUARD READS.
+   *
+   * src/lib/nightOutsMigration.test.ts derives the effective body of four
+   * functions by taking the last CREATE of that NAME in the migration stream. It
+   * cannot tell one overload from another and cannot tell a real removal from
+   * the routine drop of a superseded overload, because both need argument-type
+   * comparison; it names this test as the control that does.
+   *
+   * That claim only held for respond_night_out, which is a control covering one
+   * of four uses (round-5 review, Claude, medium). Rename night_out_seat_count
+   * and the static guard would keep asserting against its 0048 definition, green,
+   * while the predicate that actually rations seats went unguarded. Add a
+   * join_night_out_by_token(text) overload and the static guard could read THAT
+   * body instead of the uuid one the app calls (round-5 review, Codex, medium).
+   *
+   * So the pin covers every name the helper resolves. Exactly these signatures,
+   * no more and no fewer.
+   */
+  it('the guarded night_out functions have exactly the overloads we expect', async () => {
+    const expected: Record<string, string[]> = {
+      respond_night_out: [
+        'p_night_out uuid, p_accept boolean, p_expected_status text, p_expected_revision integer',
+      ],
+      join_night_out_by_token: ['p_token uuid'],
+      decline_night_out_by_token: ['p_token uuid'],
+      night_out_seat_count: ['p_night_out uuid'],
+    };
+    const { rows } = await db.query(
+      `select p.proname as name, pg_get_function_identity_arguments(p.oid) as args
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = any($1)
+        order by p.proname, args`,
+      [Object.keys(expected)],
+    );
+    const actual: Record<string, string[]> = {};
+    for (const row of rows as Array<{ name: string; args: string }>) {
+      (actual[row.name] ??= []).push(row.args);
+    }
+    // Compared as a whole map, so a function that VANISHED shows up as a missing
+    // key rather than as an empty list nobody looked at.
+    expect(actual, 'the guarded overload set drifted from what the static guard assumes')
+      .toEqual(expected);
   });
 
   /**
