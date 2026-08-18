@@ -403,6 +403,83 @@ describe('the plan page never paints an answer the view has moved on from', () =
       "plan A's invite link was still on offer from plan B's page",
     ).toBeNull();
   });
+  test('a clipboard rejection settling after the token changed says nothing', async () => {
+    /**
+     * Round-6 panel (Codex). The clipboard write is an await like any other, so
+     * its continuation belongs to the view that started it. A late rejection
+     * printed plan A's bearer URL as a fallback under plan B.
+     */
+    let reject: (reason: unknown) => void = () => {};
+    const held = new Promise((_resolve, r) => {
+      reject = r;
+    });
+    Object.assign(navigator, { clipboard: { writeText: () => held } });
+
+    resolveByToken.mockResolvedValue('plan-A');
+    getNightOut.mockResolvedValue(planFor("A's night out"));
+    getNightOutMembers.mockResolvedValue(PRIVATE_MEMBERS);
+    getNightOutBoard.mockResolvedValue([]);
+
+    const view = render(<NightOutPage params={{ token: TOKEN_A }} />);
+    await screen.findByText("A's night out");
+    (await screen.findByRole('button', { name: /copy invite link/i })).click();
+
+    resolveByToken.mockResolvedValue('plan-B');
+    getNightOut.mockResolvedValue(planFor("B's night out"));
+    getNightOutMembers.mockResolvedValue([]);
+    view.rerender(<NightOutPage params={{ token: TOKEN_B }} />);
+    await waitFor(() => expect(screen.getByText("B's night out")).toBeTruthy());
+
+    reject(new Error('denied'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      screen.queryByText(new RegExp(TOKEN_A)),
+      "a late clipboard rejection printed plan A's invite link under plan B",
+    ).toBeNull();
+  });
+
+  test('the initial load for plan A cannot paint after the token changes', async () => {
+    /**
+     * Round-6 panel (Claude). The loading effect awaited resolveNightOutByToken
+     * and then called loadMemberView with NO captured epoch, so it captured
+     * whatever epoch was current when it finally ran. `cancelled` did not cover
+     * it: the epoch bump is a LAYOUT effect that runs inside the commit, while
+     * this effect's cleanup runs in the later passive flush, so between them the
+     * epoch has moved and `cancelled` is still false.
+     *
+     * Holding the resolve is what expresses that window here.
+     */
+    const heldResolve = new Deferred<string>();
+    resolveByToken.mockReturnValueOnce(heldResolve.promise);
+
+    const view = render(<NightOutPage params={{ token: TOKEN_A }} />);
+    await waitFor(() => expect(resolveByToken).toHaveBeenCalled());
+
+    // Plan B takes over the mounted route while A's resolve is still open.
+    resolveByToken.mockResolvedValue('plan-B');
+    getNightOut.mockResolvedValue(planFor("B's night out"));
+    getNightOutMembers.mockResolvedValue([]);
+    getNightOutBoard.mockResolvedValue([]);
+    view.rerender(<NightOutPage params={{ token: TOKEN_B }} />);
+    await waitFor(() => expect(screen.getByText("B's night out")).toBeTruthy());
+
+    // A's resolve finally answers, pointing at A's private member board.
+    getNightOut.mockResolvedValue(planFor("A's night out"));
+    getNightOutMembers.mockResolvedValue(PRIVATE_MEMBERS);
+    heldResolve.resolve('plan-A');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      screen.queryByText("A's night out"),
+      "plan A's initial load painted under plan B's URL",
+    ).toBeNull();
+    expect(
+      screen.queryByText(OWNER_PRIVATE_NAME),
+      "plan A's member list leaked into plan B's view through the loading effect",
+    ).toBeNull();
+    expect(screen.getByText("B's night out")).toBeTruthy();
+  });
 });
 
 /**
@@ -422,6 +499,38 @@ describe('the plan page never paints an answer the view has moved on from', () =
  * otherwise ship green.
  */
 describe('the view epoch advances inside the commit', () => {
+  test('the initial loading effect captures its epoch before its first await', () => {
+    // Same environment limit as the layout-effect assertion below, and it was
+    // caught the same way: reverting this fix leaves every behavioral test in
+    // this file green, because `act()` runs the effect cleanup synchronously on
+    // rerender, so `cancelled` covers the window that a real browser leaves
+    // open between the commit and the passive flush. The behavioral test above
+    // proves the view does not leak; only this proves it is the EPOCH doing it.
+    //
+    // The region is SLICED, not searched from an offset. The first version of
+    // this guard used indexOf(needle, effectStart) and passed against a
+    // deliberately broken page, because the join handler further down the file
+    // contains the identical call and satisfied the search.
+    const source = readFileSync(path.join(__dirname, 'page.tsx'), 'utf8');
+    const from = source.indexOf('let cancelled = false;');
+    const to = source.indexOf('}, [auth.status, token, loadMemberView]);', from);
+    expect(from, 'the loading effect moved or was renamed').toBeGreaterThan(-1);
+    expect(to, 'the loading effect no longer ends where expected').toBeGreaterThan(from);
+    const effect = source.slice(from, to);
+
+    const capture = effect.indexOf('const startedAt = viewEpoch.current;');
+    const firstAwait = effect.indexOf('await resolveNightOutByToken');
+    expect(capture, 'the loading effect captures no epoch of its own').toBeGreaterThan(-1);
+    expect(
+      capture,
+      'the epoch is captured AFTER the first await, which is the defect itself',
+    ).toBeLessThan(firstAwait);
+    expect(
+      effect.includes('loadMemberView(planId, startedAt)'),
+      'the loading effect does not pass its captured epoch down',
+    ).toBe(true);
+  });
+
   test('the epoch effect is a layout effect', () => {
     const source = readFileSync(path.join(__dirname, 'page.tsx'), 'utf8');
     const epochAt = source.indexOf('viewEpoch.current += 1;');

@@ -25,13 +25,17 @@
  * case and nothing else:
  *
  *   new tab, same browser      RECOVERED by the localStorage copy
- *   a different browser        not reachable from here — separate storage
- *   a mail app's webview       usually not reachable — most partition storage
+ *   a different browser        NOT recoverable — separate storage, and PKCE
+ *                              refuses the code exchange there anyway
+ *   a mail app's webview       usually NOT recoverable — same two reasons
  *
- * Those last two are closed OUTSIDE this module, by `/auth`: when a signup
- * begins with an invite pending, `callbackUrl()` puts the token in the
- * confirmation link's own `redirect_to`, which is the one channel that crosses
- * profiles. /auth/callback validates it as a plain same-origin path.
+ * `/auth` also puts the token in the confirmation link's own `redirect_to` when
+ * a signup begins with an invite pending. That is NOT a cross-profile fix, and
+ * saying so was the round-6 correction: `@supabase/ssr` pins PKCE, so the code
+ * exchange needs the verifier held by the profile that started the signup, and
+ * a link opened elsewhere fails before any redirect runs. What the URL copy
+ * actually buys is surviving the 30-minute TTL below within the same profile.
+ * The last two rows stay OPEN — see docs/V8-3-HANDOFF-2026-08-16b.md.
  *
  * (This header previously said the cross-profile case "remains OPEN" and needed
  * "a different goal" — round 4, Claude. That was true when it was written and

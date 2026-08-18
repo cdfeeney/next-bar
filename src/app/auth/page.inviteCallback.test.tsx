@@ -105,6 +105,6 @@ describe('the confirmation email carries the invite across browser profiles', ()
     expect(
       redirect,
       'password recovery was rerouted away from the page that sets the password',
-    ).toBe('/settings');
+    ).toBe('/settings?from=recovery');
   });
 });

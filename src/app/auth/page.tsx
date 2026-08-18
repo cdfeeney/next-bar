@@ -44,6 +44,18 @@ const MIN_PASSWORD_LENGTH = 6;
  *  signed-in state visible immediately (vs. the anonymous-looking home). */
 const AFTER_AUTH_PATH = '/settings';
 
+/**
+ * Where an EMAIL callback lands when it is not carrying an invite.
+ *
+ * Same page, plus a one-navigation marker that tells PendingInviteRedirect to
+ * stand down (round-6 panel, Codex). A recovery link exists to reach the account
+ * card's "Set a password"; with an invite pending, the global handoff fired the
+ * instant recovery signed the user in and replaced /settings with the plan, so
+ * the password could never be set. The marker is not consumed, so the invite
+ * still completes once the user leaves this page themselves.
+ */
+const RECOVERY_PATH = '/settings?from=recovery';
+
 const UNCONFIGURED_MESSAGE =
   'Sign-in is unavailable — Supabase env vars are missing on this build.';
 
@@ -103,25 +115,36 @@ export default function AuthPage() {
    * Round 2 (Codex, HIGH): this carried `AFTER_AUTH_PATH` unconditionally, so
    * an invite survived sign-up only when the confirmation link opened in the
    * SAME browser profile that started it — Web Storage is scoped to an origin
-   * within one profile, and `pendingInvite` says so itself. Open the invite in
-   * an in-app browser and confirm from the system mail app (the common shape on
-   * a phone) and neither store is reachable: the user lands on /settings with no
-   * route back to the plan they were invited to. The token therefore rides the
-   * callback URL, which is the one channel that crosses profiles. It is not a
-   * new trust surface: /auth/callback already refuses any `redirect_to` that is
-   * not a plain same-origin path, and the plan page authorizes the token itself
-   * — a bearer link is exactly what the user was sent.
+   * within one profile. The token therefore rides the callback URL.
    *
-   * Round 4 (Codex): that fix was applied to the RESET flow too, and it should
-   * not have been. A recovery link exists to get the user to the account card's
-   * "Set a password"; sending them to the plan instead skips the one step the
-   * flow is for, and the invite handoff was authorized for signup only. Reset
-   * keeps its documented destination.
+   * WHAT THAT DOES AND DOES NOT BUY, corrected in round 6 (Codex, HIGH),
+   * because rounds 2-5 of this file claimed more than it delivers.
+   * `@supabase/ssr` pins `flowType: "pkce"` for both the browser and server
+   * clients and we pass no override, so the confirmation link's `code` can only
+   * be exchanged by the profile that HOLDS THE VERIFIER — the one that started
+   * the signup. Open that link in a different browser or a partitioned mail
+   * webview and `exchangeCodeForSession` fails before any redirect happens; the
+   * user reaches /auth?error=..., not the plan and not /settings. Carrying the
+   * token cannot fix that and never could.
+   *
+   * What it DOES buy is real but narrower: within the same profile, the URL
+   * outlives `pendingInvite`'s 30-minute localStorage TTL, so an invite still
+   * completes for someone who reads their email an hour later. The
+   * cross-profile case remains OPEN and is recorded as an acceptance gap in
+   * docs/V8-3-HANDOFF-2026-08-16b.md — closing it needs a confirmation path
+   * that does not require the verifier, which is a server-side decision.
+   *
+   * Round 4 (Codex): the round-2 change was applied to the RESET flow too, and
+   * it should not have been. A recovery link exists to get the user to the
+   * account card's "Set a password"; sending them to the plan skips the one
+   * step the flow is for. Reset keeps its own destination — and carries the
+   * marker that stops the global handoff from overriding it.
    */
-  const callbackUrl = (carryInvite: boolean): string => {
-    const pending = carryInvite ? peekPendingInvite() : null;
+  const callbackUrl = (intent: 'signup' | 'recovery'): string => {
+    const pending = intent === 'signup' ? peekPendingInvite() : null;
+    const fallback = intent === 'recovery' ? RECOVERY_PATH : AFTER_AUTH_PATH;
     const params = new URLSearchParams({
-      redirect_to: pending === null ? AFTER_AUTH_PATH : `/night-out/${pending}`,
+      redirect_to: pending === null ? fallback : `/night-out/${pending}`,
     });
     return `${window.location.origin}/auth/callback?${params.toString()}`;
   };
@@ -134,7 +157,7 @@ export default function AuthPage() {
     }
     setStatus({ kind: 'sending' });
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: callbackUrl(false),
+      redirectTo: callbackUrl('recovery'),
     });
     if (error) {
       setStatus({ kind: 'error', message: error.message });
@@ -162,7 +185,7 @@ export default function AuthPage() {
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
-        options: { emailRedirectTo: callbackUrl(true) },
+        options: { emailRedirectTo: callbackUrl('signup') },
       });
       if (error) {
         setStatus({ kind: 'error', message: error.message });

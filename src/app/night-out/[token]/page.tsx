@@ -253,20 +253,32 @@ export default function NightOutPage({
       return;
     }
     let cancelled = false;
+    // The epoch this effect belongs to, captured before its first await, exactly
+    // as `loadMemberView` documents its contract (round-6 panel, Claude).
+    //
+    // `cancelled` alone does NOT cover this, and the layout effect above made
+    // that worse rather than better: the epoch bump now happens synchronously
+    // inside the commit, while THIS effect's cleanup runs in the later passive
+    // flush. In the window between them the epoch has already moved and
+    // `cancelled` is still false, so a resolve settling there passed both
+    // guards and painted the previous view's private board under the new token.
+    // Every other caller got this fix; the one that runs on every navigation
+    // did not.
+    const startedAt = viewEpoch.current;
     void (async () => {
       if (auth.status === 'signed-in') {
         // Viewing never mutates (review round 1, both lanes): an existing
         // member — pending, accepted, or declined — RESOLVES straight to
         // their plan view. Joining is always the explicit button below.
         const planId = await resolveNightOutByToken(supabase, token);
-        if (cancelled) return;
-        if (planId !== null && (await loadMemberView(planId))) return;
-        if (cancelled) return;
+        if (cancelled || startedAt !== viewEpoch.current) return;
+        if (planId !== null && (await loadMemberView(planId, startedAt))) return;
+        if (cancelled || startedAt !== viewEpoch.current) return;
       }
       // Signed-out, non-member, or the link is dead/cancelled: bearer
       // preview only.
       const preview = await previewNightOut(supabase, token);
-      if (cancelled) return;
+      if (cancelled || startedAt !== viewEpoch.current) return;
       setState(preview !== null ? { kind: 'preview', preview } : { kind: 'gone' });
     })();
     return () => {
@@ -499,14 +511,21 @@ export default function NightOutPage({
             type="button"
             onClick={() => {
               void (async () => {
+                // The clipboard write is an await like any other, so its
+                // continuation belongs to the view that started it (round-6
+                // panel, Codex). A late rejection otherwise printed plan A's
+                // bearer URL under plan B.
+                const startedAt = viewEpoch.current;
                 const url = `${window.location.origin}/night-out/${token}`;
                 try {
                   await navigator.clipboard.writeText(url);
+                  if (startedAt !== viewEpoch.current) return;
                   setShareNotice('Invite link copied.');
                 } catch {
                   // Clipboard is permission-gated and absent in some in-app
                   // browsers; show the link so it can still be copied by hand
                   // rather than failing silently.
+                  if (startedAt !== viewEpoch.current) return;
                   setShareNotice(url);
                 }
               })();
