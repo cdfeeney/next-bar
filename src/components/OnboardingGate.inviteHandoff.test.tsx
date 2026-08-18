@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -38,8 +40,10 @@ vi.mock('@/lib/supabase/client', () => ({
   getBrowserSupabase: () => ({}),
 }));
 
+let heldProfile: Promise<unknown> | null = null;
+
 vi.mock('@/lib/profile.server', () => ({
-  fetchOwnProfile: async () => ({ handle }),
+  fetchOwnProfile: () => (heldProfile !== null ? heldProfile : Promise.resolve({ handle })),
 }));
 
 vi.mock('@/lib/accountCache', () => ({
@@ -53,7 +57,9 @@ const PLAN_PATH = '/night-out/2f1c9e2a-0000-4000-8000-000000000000';
 beforeEach(() => {
   replaced.length = 0;
   handle = null; // a brand-new account: signed in, no handle yet
+  heldProfile = null;
   window.sessionStorage.clear();
+  window.history.replaceState({}, '', '/');
 });
 
 describe('OnboardingGate — the invite survives onboarding', () => {
@@ -183,4 +189,65 @@ describe('isSafeReturnPath', () => {
     await waitFor(() => expect(replaced.length).toBeGreaterThan(0));
     expect(replaced[0]).toBe(`/onboarding?next=${encodeURIComponent('/rankings')}`);
   });
+
+  test('a profile answer for the PREVIOUS route does not redirect the new one', async () => {
+    // Round-8 panel (Codex). The effect's `cancelled` flag is cleared by a
+    // passive cleanup, which runs after the new route commits — so a fetch
+    // started on route A and settling in that window saw cancelled === false and
+    // an unchanged cache epoch (the identity did not change, only the route) and
+    // redirected the freshly committed route B carrying `next=A`.
+    let release: (value: unknown) => void = () => {};
+    heldProfile = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    pathname = '/rankings';
+    const view = render(<OnboardingGate />);
+
+    // Route B commits while A's profile fetch is still open.
+    pathname = '/map';
+    heldProfile = null;
+    view.rerender(<OnboardingGate />);
+    await waitFor(() => expect(replaced.length).toBeGreaterThan(0));
+    expect(replaced[0], "route B's own redirect did not fire").toBe(
+      `/onboarding?next=${encodeURIComponent('/map')}`,
+    );
+
+    // Now A's answer lands, addressed to a route the user already left.
+    release({ handle: null });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      replaced.filter((h) => h.includes(encodeURIComponent('/rankings'))),
+      "a stale profile answer redirected the new route back to the old one",
+    ).toEqual([]);
+  });
 });
+
+/**
+ * STATIC guard, same reason as its siblings: `act()` runs the previous effect's
+ * cleanup synchronously on rerender, so `cancelled` covers the stale-route
+ * window here and the behavioural test above passes with the fix reverted. It
+ * proves the redirect does not fire; only this proves the ROUTE identity is what
+ * stops it.
+ */
+describe('the gate answers only for the route it was started on', () => {
+  test('the live pathname is committed in a layout effect and compared in the fetch', () => {
+    const source = readFileSync(path.join(__dirname, 'OnboardingGate.tsx'), 'utf8');
+    const assign = source.indexOf('livePathname.current = pathname;');
+    expect(assign, 'the live pathname ref moved or was renamed').toBeGreaterThan(-1);
+    const opener = source.lastIndexOf('useLayoutEffect(() => {', assign);
+    const passive = source.lastIndexOf('useEffect(() => {', assign);
+    expect(opener, 'the live pathname is not committed in a layout effect').toBeGreaterThan(-1);
+    expect(opener, 'a passive effect sits between the opener and the assignment').toBeGreaterThan(passive);
+
+    const from = source.indexOf('fetchOwnProfile(supabase).then(');
+    const to = source.indexOf('setPromptedFlag();', from);
+    expect(from, 'the profile fetch moved').toBeGreaterThan(-1);
+    expect(
+      source.slice(from, to).includes('livePathname.current !== pathname'),
+      'the fetch continuation does not check the route it was started on',
+    ).toBe(true);
+  });
+});
+

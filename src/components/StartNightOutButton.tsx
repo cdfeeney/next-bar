@@ -287,10 +287,14 @@ function rememberStarted(userId: string, parked: ParkedPlan): void {
   // Our create was abandoned by another realm while it was in flight — see
   // `abandonedCreates`. Re-parking would resurrect a record that tab
   // deliberately removed, including after an account deletion wiped it.
-  if (abandonedCreates.has(userId)) {
-    abandonedCreates.delete(userId);
-    return;
-  }
+  //
+  // READ ONLY. Clearing it here was a defect (round-8 panel, Claude): this runs
+  // only when a create SUCCEEDS, so a create that failed left the flag set and
+  // the owner's next successful create silently refused to park — reopening the
+  // very duplicate-plan hole the flag protects. `settleCreate` clears it,
+  // because "the create is over" is the moment the flag stops meaning anything,
+  // and every path reaches it.
+  if (abandonedCreates.has(userId)) return;
   writeAll({ ...withoutExpired(readAll(), parked.nightKey), [userId]: parked });
 }
 
@@ -329,7 +333,17 @@ export default function StartNightOutButton(): JSX.Element | null {
    * yanks the user off whatever they deliberately opened.
    */
   const mounted = useRef(true);
-  useEffect(() => {
+  /**
+   * LAYOUT effect (round-8 panel, Codex), for the same reason `liveUserId`
+   * below is one and the plan page's epoch is one.
+   *
+   * A passive cleanup runs in a task AFTER the unmount commits, so a read
+   * settling in between saw `mounted.current === true` on a component that is
+   * already gone — and this guard gates `forgetStarted` and `router.push`, so a
+   * discarded screen could delete the parked plan and yank the user off
+   * whatever they had deliberately opened.
+   */
+  useLayoutEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
@@ -557,6 +571,10 @@ export default function StartNightOutButton(): JSX.Element | null {
      * and again from `finally` without double-notifying.
      */
     const settleCreate = (): void => {
+      // The abandonment flag is scoped to ONE create attempt, so it dies with
+      // that attempt however it ends — success, refusal, or throw. `finally`
+      // calls this on every path.
+      abandonedCreates.delete(owner);
       if (creatingOwners.delete(owner)) markCreatingChanged();
     };
     setBusy(true);

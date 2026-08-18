@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
@@ -726,6 +728,47 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     });
   });
 
+  test('a FAILED create clears the abandonment flag, so the next one still parks', async () => {
+    // Round-8 panel (Claude). The flag was cleared only inside rememberStarted,
+    // which runs only when a create SUCCEEDS. A create that failed left it set,
+    // and the owner's next successful create silently refused to park — which
+    // reopens the criterion-4 duplicate-plan hole the flag exists to protect.
+    let release: (value: unknown) => void = () => {};
+    heldCreate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /start the official night out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    // Another realm removes our record while the create is in flight.
+    const before = JSON.stringify({ [USER_A]: { planId: PLAN_ID, nightKey } });
+    window.localStorage.removeItem(STARTED_KEY);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: STARTED_KEY, oldValue: before, newValue: null }),
+    );
+
+    // ...and THIS create then fails outright.
+    release(null);
+    await waitFor(() => expect(screen.getByText(/Couldn't start it/i)).toBeTruthy());
+
+    // A second attempt succeeds, and its follow-up read fails. It must park.
+    heldCreate = null;
+    createResult = PLAN_ID;
+    readFails = true;
+    await user.click(screen.getByRole('button', { name: /start the official night out/i }));
+    await waitFor(() => expect(createCalls).toBe(2));
+
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      'a stale abandonment flag from a FAILED create discarded the next real plan',
+    ).toBeTruthy();
+    const stored = JSON.parse(window.localStorage.getItem(STARTED_KEY) as string);
+    expect(stored[USER_A]?.planId, 'the new plan was never parked').toBe(PLAN_ID);
+  });
+
   test('a plan parked on an earlier night does not disable Start today', async () => {
     // Codex, round 2: the record outlives the tab, so an unopened plan from
     // last night would otherwise keep Start disabled the next day.
@@ -787,3 +830,43 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * STATIC guards, and the honest reason they are static.
+ *
+ * `act()` flushes passive effects and runs effect cleanup synchronously, so the
+ * window a real browser leaves open between a commit and the passive flush does
+ * not exist in this suite. Both assertions below were added only after reverting
+ * the fix left every behavioral test in this file green — a guard that cannot
+ * fail is worse than no guard, because it is advertised.
+ *
+ * The region is SLICED rather than searched from an offset: an earlier guard in
+ * this repo passed against a deliberately broken file because `indexOf(needle,
+ * start)` matched an identical call further down.
+ */
+describe('identity refs are committed, not flushed after paint', () => {
+  test('the mounted ref is set in a layout effect', () => {
+    const source = readFileSync(path.join(__dirname, 'StartNightOutButton.tsx'), 'utf8');
+    const at = source.indexOf('mounted.current = true;');
+    expect(at, 'the mounted ref moved or was renamed').toBeGreaterThan(-1);
+    const opener = source.lastIndexOf('useLayoutEffect(() => {', at);
+    const passive = source.lastIndexOf('useEffect(() => {', at);
+    expect(opener, 'the mounted ref is not inside a useLayoutEffect').toBeGreaterThan(-1);
+    expect(
+      opener,
+      'a passive effect now sits between useLayoutEffect and the mounted ref',
+    ).toBeGreaterThan(passive);
+  });
+
+  test('the abandonment flag is cleared where the create ends, not where it parks', () => {
+    const source = readFileSync(path.join(__dirname, 'StartNightOutButton.tsx'), 'utf8');
+    const from = source.indexOf('const settleCreate = (): void => {');
+    const to = source.indexOf('};', from);
+    expect(from, 'settleCreate moved or was renamed').toBeGreaterThan(-1);
+    expect(
+      source.slice(from, to).includes('abandonedCreates.delete(owner);'),
+      'settleCreate does not clear the flag, so a FAILED create strands it',
+    ).toBe(true);
+  });
+});
+

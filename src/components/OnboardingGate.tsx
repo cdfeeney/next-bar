@@ -15,7 +15,7 @@
  * Renders nothing.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
@@ -116,6 +116,24 @@ export default function OnboardingGate(): null {
   const auth = useAuth();
   const pathname = usePathname();
   const router = useRouter();
+  /**
+   * The route on screen RIGHT NOW, readable from inside a settled fetch.
+   *
+   * Round-8 panel (Codex): the effect's `cancelled` flag is cleared by a passive
+   * cleanup, which runs in a task after the new route commits. A profile fetch
+   * started on route A and settling in that window saw `cancelled === false` and
+   * an unchanged cache epoch — the identity did not change, only the route — so
+   * it redirected the freshly committed route B to onboarding carrying
+   * `next=A`, sending the user somewhere they had already left.
+   *
+   * A layout effect commits this synchronously, so no settling task can observe
+   * it stale. Same mechanism as the plan page's view epoch and this file's
+   * sibling components.
+   */
+  const livePathname = useRef(pathname);
+  useLayoutEffect(() => {
+    livePathname.current = pathname;
+  });
 
   useEffect(() => {
     if (auth.status !== 'signed-in') return;
@@ -130,6 +148,8 @@ export default function OnboardingGate(): null {
     const epoch = getCacheEpoch();
     fetchOwnProfile(supabase).then((profile) => {
       if (cancelled || getCacheEpoch() !== epoch) return;
+      // ...and the ROUTE is the other half of this effect's identity.
+      if (livePathname.current !== pathname) return;
       // null = unknown (fetch failed / no row yet) — fail open, no prompt,
       // and no flag either so a later navigation retries.
       if (profile === null) return;

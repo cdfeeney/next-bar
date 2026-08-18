@@ -575,11 +575,27 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * (on_auth_user_created) creates the profile row. Inside a rolled-back
    * transaction that is a fixture factory, and it always was.
    */
-  async function makeIdentities(count: number): Promise<string[]> {
+  /**
+   * `onCreated` fires the instant a row is real, BEFORE anything that can throw.
+   *
+   * Round-8 panel (Codex). The committing test collects ids incrementally so a
+   * failure part-way through still cleans up — but the leak had moved INSIDE
+   * this helper: the insert autocommits, and the profile-trigger assertion below
+   * runs before the return, so a failed assertion stranded a row the caller
+   * never learned about. Collecting incrementally at the call site cannot fix
+   * that, because the call site is exactly what never runs.
+   *
+   * Only the committing test passes a sink; the rollback tests do not need one.
+   */
+  async function makeIdentities(
+    count: number,
+    onCreated?: (id: string) => void,
+  ): Promise<string[]> {
     const ids: string[] = [];
     for (let i = 0; i < count; i += 1) {
       const id = randomUUID();
       await db.query('insert into auth.users (id) values ($1)', [id]);
+      onCreated?.(id);
       ids.push(id);
     }
     // The trigger owes us a profile for each, or the FK below would fail anyway.
@@ -719,15 +735,13 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     let planId: string | null = null;
     let identities: string[] = [];
     try {
-      // Collected INCREMENTALLY, not by assigning makeIdentities' return value
-      // (round 2, Codex): each identity is its own autocommitted insert, so a
-      // throw partway through — the profile-trigger assertion, a transient
-      // error — left `identities` still [] and stranded every row already
-      // committed. The cleanup can only delete what it knows about, so it has
-      // to learn each id at the moment that id becomes real.
-      for (let i = 0; i < 21; i += 1) {
-        identities.push(...(await makeIdentities(1)));
-      }
+      // The cleanup can only delete what it knows about, so it has to learn
+      // each id at the moment that id becomes real — which is inside the helper,
+      // right after the autocommitted insert and BEFORE the profile-trigger
+      // assertion that can throw (round 8, Codex). Collecting the helper's
+      // RETURN value incrementally, which is what this loop used to do, still
+      // lost every row whenever that assertion failed.
+      await makeIdentities(21, (id) => identities.push(id));
       const [owner, target, extra, ...fillers] = identities;
 
       // Committed fixture: 19 seats (owner + 18 fillers), one seat left, and
