@@ -54,16 +54,46 @@ describe('nightOuts.server write RPCs', () => {
     const { client } = fakeRpc({ error: { message: 'denied' } });
     await expect(cancelNightOut(client, UUID)).resolves.toBe(false);
     await expect(decideNightOut(client, UUID, 'attaboy')).resolves.toBe(false);
-    await expect(respondNightOut(client, UUID, true)).resolves.toBe(false);
+    await expect(respondNightOut(client, UUID, true, 'pending', 0)).resolves.toBe(false);
   });
 
   it('respondNightOut carries the accept flag — "Not tonight" is accept=false', async () => {
     const { client, rpc } = fakeRpc({ data: true });
-    await expect(respondNightOut(client, UUID, false)).resolves.toBe(true);
+    await expect(respondNightOut(client, UUID, false, 'pending', 3)).resolves.toBe(true);
     expect(rpc).toHaveBeenCalledWith('respond_night_out', {
       p_night_out: UUID,
       p_accept: false,
+      p_expected_status: 'pending',
+      p_expected_revision: 3,
     });
+  });
+
+  /**
+   * Both review lanes filed this as a HIGH: the module called the 2-argument
+   * respond_night_out, which 0057 dropped, so Accept and Decline resolved no
+   * function on the serving database. The live overload is
+   * (uuid, boolean, text, integer) and nothing else, so the four params are the
+   * contract, not a preference — assert all four by name.
+   */
+  it('respondNightOut sends the 4-param signature the serving database actually has', async () => {
+    const { client, rpc } = fakeRpc({ data: true });
+    await expect(respondNightOut(client, UUID, true, 'accepted', 7)).resolves.toBe(true);
+    expect(rpc).toHaveBeenCalledWith('respond_night_out', {
+      p_night_out: UUID,
+      p_accept: true,
+      p_expected_status: 'accepted',
+      p_expected_revision: 7,
+    });
+  });
+
+  it('respondNightOut refuses a revision no render produced, without a network call', async () => {
+    const { client, rpc } = fakeRpc({ data: true });
+    await expect(respondNightOut(client, UUID, true, 'pending', -1)).resolves.toBe(false);
+    await expect(respondNightOut(client, UUID, true, 'pending', 1.5)).resolves.toBe(false);
+    await expect(
+      respondNightOut(client, UUID, true, 'pending', Number.NaN),
+    ).resolves.toBe(false);
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it('inviteToNightOut validates both uuids before calling', async () => {
@@ -122,6 +152,7 @@ describe('nightOuts.server reads', () => {
           share_token: UUID2,
           caller_role: 'member',
           caller_status: 'accepted',
+          caller_revision: 4,
         },
       ],
     });
@@ -131,6 +162,9 @@ describe('nightOuts.server reads', () => {
       status: 'open',
       callerRole: 'member',
       callerStatus: 'accepted',
+      // The revision the response guard is built on: it must survive the row
+      // mapping, or every caller sends a made-up version.
+      callerRevision: 4,
       shareToken: UUID2,
     });
   });

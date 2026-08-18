@@ -27,6 +27,13 @@ export type NightOut = {
   shareToken: string | null;
   callerRole: 'owner' | 'member' | null;
   callerStatus: 'pending' | 'accepted' | 'declined' | null;
+  /**
+   * Monotonic version of the caller's own response (0059). Pass THIS value back
+   * to `respondNightOut` — the one that was rendered, never one fetched at click
+   * time, because fetching at click time re-creates the replay window inside the
+   * client. Null only when the caller has no membership row.
+   */
+  callerRevision: number | null;
 };
 
 export type NightOutMember = {
@@ -105,15 +112,46 @@ export async function inviteToNightOut(
 }
 
 /** accept=true, or "Not tonight" (declined) with accept=false. */
+/**
+ * `expectedStatus` and `expectedRevision` are the state the UI was showing when
+ * the user acted. Pass BOTH, and pass what was RENDERED.
+ *
+ * This signature is not a preference — it is the only `respond_night_out` the
+ * serving database has. 0057 dropped the 2-argument overload this module used to
+ * call and 0059 dropped the 3-argument one, leaving
+ * `(uuid, boolean, text, integer)` alone. Both review lanes filed the 2-argument
+ * call as a HIGH: Accept and Decline resolved no function and failed live.
+ *
+ * Without the status, a replayed accept — a retried fetch, a double tap, a
+ * request that sat in a queue — reversed a LATER decline and recorded the person
+ * as coming when they had said no.
+ *
+ * The status alone was not enough, because a status is not a version: a row can
+ * return to a status it already held, and the stale request then matches again.
+ * The revision cannot come back — it only ever increases — so comparing it is
+ * what actually makes a replay identifiable.
+ *
+ * `expectedRevision` is deliberately REQUIRED with no "skip the check" value. A
+ * nullable revision would reopen the hole for every caller that forgot, which is
+ * exactly how 0057's 2-argument overload became a problem.
+ */
 export async function respondNightOut(
   supabase: SupabaseClient,
   nightOutId: string,
   accept: boolean,
+  expectedStatus: 'pending' | 'accepted' | 'declined',
+  expectedRevision: number,
 ): Promise<boolean> {
   if (!UUID_RE.test(nightOutId)) return false;
+  // A non-integer or negative revision can only come from a caller that never
+  // rendered one. Refuse locally rather than sending a value the RPC will
+  // reject, so the failure is attributable here.
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) return false;
   const { data, error } = await supabase.rpc('respond_night_out', {
     p_night_out: nightOutId,
     p_accept: accept,
+    p_expected_status: expectedStatus,
+    p_expected_revision: expectedRevision,
   });
   return !error && data === true;
 }
@@ -218,6 +256,7 @@ type NightOutRow = {
   share_token: string | null;
   caller_role: NightOut['callerRole'];
   caller_status: NightOut['callerStatus'];
+  caller_revision: number | null;
 };
 
 /** Member-scoped plan read. Null = error OR the caller is not a member. */
@@ -242,6 +281,7 @@ export async function getNightOut(
     shareToken: row.share_token,
     callerRole: row.caller_role,
     callerStatus: row.caller_status,
+    callerRevision: row.caller_revision,
   };
 }
 
@@ -272,6 +312,8 @@ export type MyNightOut = {
   shareToken: string | null;
   planUpdated: boolean;
   isPast: boolean;
+  /** Monotonic version of this response (0059) — pass it back as rendered. */
+  myRevision: number;
 };
 
 type MyNightOutRow = {
@@ -287,11 +329,18 @@ type MyNightOutRow = {
   share_token: string | null;
   plan_updated: boolean;
   is_past: boolean;
+  my_revision: number;
 };
 
 /**
  * "What am I invited to?" — the query that did not exist until 0052, which is
  * why account-targeted invitations were invisible to their recipients.
+ *
+ * The columns read here are the SERVING function's, which is 0059's revision of
+ * it, not the 0052 body in this tree. 0052 is applied and checksum-recorded, so
+ * it is immutable; 0053 and 0059 corrected it additively (NYC rollover for
+ * `is_past`, owner rows excluded, soonest-night ordering, and `my_revision`).
+ * Reading this file alone will understate the live shape by one column.
  */
 export async function getMyNightOuts(
   supabase: SupabaseClient,
@@ -311,6 +360,7 @@ export async function getMyNightOuts(
     shareToken: r.share_token,
     planUpdated: r.plan_updated,
     isPast: r.is_past,
+    myRevision: r.my_revision,
   }));
 }
 

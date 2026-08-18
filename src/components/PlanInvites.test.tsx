@@ -34,7 +34,8 @@ const YESTERDAY = nightsFromNow(-1);
 
 let rows: Row[] = [];
 let respondOk = true;
-const responded: Array<[string, boolean]> = [];
+/** [planId, accept, expectedStatus, expectedRevision] — the full RPC contract. */
+const responded: Array<[string, boolean, string, number]> = [];
 const pushed: string[] = [];
 let authStatus = 'signed-in';
 
@@ -58,16 +59,34 @@ vi.mock('@/lib/nightOuts.server', () => ({
       shareToken: r.shareToken ?? null,
       planUpdated: r.planUpdated ?? false,
       isPast: r.isPast ?? false,
+      myRevision: r.myRevision ?? 0,
     })),
-  respondNightOut: async (_s: unknown, id: string, accept: boolean) => {
-    responded.push([id, accept]);
+  respondNightOut: async (
+    _s: unknown,
+    id: string,
+    accept: boolean,
+    expectedStatus: string,
+    expectedRevision: number,
+  ) => {
+    responded.push([id, accept, expectedStatus, expectedRevision]);
     if (respondOk && accept) {
       rows = rows.map((r) =>
-        r.id === id ? { ...r, myStatus: 'accepted', shareToken: 'tok-1' } : r,
+        r.id === id
+          ? {
+            ...r,
+            myStatus: 'accepted',
+            shareToken: 'tok-1',
+            myRevision: ((r.myRevision as number) ?? 0) + 1,
+          }
+          : r,
       );
     }
     if (respondOk && !accept) {
-      rows = rows.map((r) => (r.id === id ? { ...r, myStatus: 'declined' } : r));
+      rows = rows.map((r) =>
+        r.id === id
+          ? { ...r, myStatus: 'declined', myRevision: ((r.myRevision as number) ?? 0) + 1 }
+          : r,
+      );
     }
     return respondOk;
   },
@@ -98,7 +117,7 @@ describe('Social → Plans invitation cards', () => {
     const user = userEvent.setup();
     render(<PlanInvites />);
     await user.click(await screen.findByRole('button', { name: 'Accept' }));
-    await waitFor(() => expect(responded).toEqual([['p1', true]]));
+    await waitFor(() => expect(responded).toEqual([['p1', true, 'pending', 0]]));
     expect(await screen.findByTestId('invite-accepted-confirm')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'View plan' }));
     // share_token only exists once accepted — that is the 0047 rule, and it is
@@ -111,7 +130,7 @@ describe('Social → Plans invitation cards', () => {
     const user = userEvent.setup();
     const { container } = render(<PlanInvites />);
     await user.click(await screen.findByRole('button', { name: 'Decline' }));
-    await waitFor(() => expect(responded).toEqual([['p1', false]]));
+    await waitFor(() => expect(responded).toEqual([['p1', false, 'pending', 0]]));
     await waitFor(() => expect(container.querySelector('[data-testid="plan-invites"]')).toBeNull());
   });
 
@@ -206,6 +225,21 @@ describe('Social → Plans invitation cards', () => {
     rows = [{ id: 'p1', myStatus: 'pending' }];
     const { container } = render(<PlanInvites />);
     await waitFor(() => expect(container.querySelector('[data-testid="plan-invites"]')).toBeNull());
+  });
+
+  /**
+   * Both lanes, HIGH: Accept and Decline called the 2-argument
+   * respond_night_out, which 0057 dropped. The serving database has only
+   * (uuid, boolean, text, integer), so the card MUST send the status and the
+   * revision it was rendered from — not a default, and not a value re-read at
+   * click time, which would re-open the replay window inside the client.
+   */
+  test('Accept sends the status AND revision THIS CARD was rendered from', async () => {
+    rows = [{ id: 'p1', myStatus: 'pending', myRevision: 5 }];
+    const user = userEvent.setup();
+    render(<PlanInvites />);
+    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(responded).toEqual([['p1', true, 'pending', 5]]));
   });
 
   test('a failed response says so and leaves the card actionable', async () => {

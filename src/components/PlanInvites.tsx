@@ -138,14 +138,37 @@ export default function PlanInvites(): JSX.Element | null {
     void load();
   }, [auth.status, load]);
 
-  const respond = async (planId: string, accept: boolean): Promise<void> => {
+  const respond = async (
+    planId: string,
+    accept: boolean,
+    // The state THIS CARD was rendered from — status AND revision. The serving
+    // database's only respond_night_out takes both (0057 dropped the 2-argument
+    // overload, 0059 the 3-argument one), and a replay carries the state from
+    // before a later decision, so it is refused server-side. The revision is
+    // what makes that refusal reliable: a status can come back, a revision
+    // cannot.
+    expectedStatus: MyNightOut['myStatus'],
+    expectedRevision: MyNightOut['myRevision'],
+  ): Promise<void> => {
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     setBusy(planId);
     setError(null);
-    const ok = await respondNightOut(supabase, planId, accept);
+    const ok = await respondNightOut(
+      supabase,
+      planId,
+      accept,
+      expectedStatus,
+      expectedRevision,
+    );
     setBusy(null);
     if (!ok) {
+      // The expected-state guard makes this refusal DETERMINISTIC, not
+      // transient: the card was rendered from a state the row no longer holds,
+      // so retrying from the same card re-sends the same stale pair and fails
+      // identically, forever. Re-read before advising a retry, so the next tap
+      // carries the truth.
+      await load();
       setError("That didn't go through — try again.");
       return;
     }
@@ -230,7 +253,7 @@ export default function PlanInvites(): JSX.Element | null {
                   <button
                     type="button"
                     disabled={busy === plan.nightOutId}
-                    onClick={() => void respond(plan.nightOutId, true)}
+                    onClick={() => void respond(plan.nightOutId, true, plan.myStatus, plan.myRevision)}
                     className="flex-1 rounded-full bg-accent py-2 text-sm font-semibold text-black touch-manipulation disabled:opacity-50"
                   >
                     Accept
@@ -238,7 +261,7 @@ export default function PlanInvites(): JSX.Element | null {
                   <button
                     type="button"
                     disabled={busy === plan.nightOutId}
-                    onClick={() => void respond(plan.nightOutId, false)}
+                    onClick={() => void respond(plan.nightOutId, false, plan.myStatus, plan.myRevision)}
                     className="flex-1 rounded-full border border-border py-2 text-sm touch-manipulation disabled:opacity-50"
                   >
                     Decline

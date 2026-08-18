@@ -372,6 +372,32 @@ export default function NightOutPage({
   const accepted = members.filter((m) => m.inviteStatus === 'accepted');
   const isCancelled = plan.status === 'cancelled';
   const isDeclined = plan.callerStatus === 'declined';
+
+  /**
+   * One response call site for all three buttons, carrying the status AND the
+   * revision THIS RENDER was built from (0059). Passing the rendered pair is the
+   * whole mechanism: re-reading at click time would re-open the replay window
+   * inside the client.
+   *
+   * It refuses rather than substituting a default when either value is absent.
+   * Fabricating a status or a revision that was never rendered would hand the
+   * RPC a made-up version and defeat the check. `plan` is only non-null when the
+   * caller has a membership row, so this branch is unreachable in practice —
+   * which is the reason to make it refuse, not the reason to guess.
+   */
+  const respondAs = (accept: boolean) => (): Promise<boolean> => {
+    const supabase = getBrowserSupabase();
+    if (supabase === null || plan.callerStatus === null || plan.callerRevision === null) {
+      return Promise.resolve(false);
+    }
+    return respondNightOut(
+      supabase,
+      plan.id,
+      accept,
+      plan.callerStatus,
+      plan.callerRevision,
+    );
+  };
   // Mirror of the write RPCs' own preconditions. suggest_night_out_bar and
   // vote_night_out_bar both require status in ('draft','open') and reject a
   // caller who is not an accepted member, so rendering those controls to
@@ -446,12 +472,7 @@ export default function NightOutPage({
             // An invited member accepts EXPLICITLY (viewing never mutates).
             <button
               type="button"
-              onClick={withRefresh(() => {
-                const supabase = getBrowserSupabase();
-                return supabase
-                  ? respondNightOut(supabase, plan.id, true)
-                  : Promise.resolve(false);
-              })}
+              onClick={withRefresh(respondAs(true))}
               className="rounded-full bg-white px-5 py-2 font-semibold text-black"
             >
               I&apos;m in
@@ -460,12 +481,7 @@ export default function NightOutPage({
           {isDeclined ? (
             <button
               type="button"
-              onClick={withRefresh(() => {
-                const supabase = getBrowserSupabase();
-                return supabase
-                  ? respondNightOut(supabase, plan.id, true)
-                  : Promise.resolve(false);
-              }, true)}
+              onClick={withRefresh(respondAs(true), true)}
               className="rounded-full border px-5 py-2"
             >
               Count me back in
@@ -473,12 +489,7 @@ export default function NightOutPage({
           ) : !isOwner ? (
             <button
               type="button"
-              onClick={withRefresh(() => {
-                const supabase = getBrowserSupabase();
-                return supabase
-                  ? respondNightOut(supabase, plan.id, false)
-                  : Promise.resolve(false);
-              })}
+              onClick={withRefresh(respondAs(false))}
               className="rounded-full border px-5 py-2"
             >
               Not tonight
