@@ -37,3 +37,34 @@ jobs:
           # anon publishables and are only needed if a page prerenders
           # against them; the build tolerates their absence (dual-mode).
           NEXT_TELEMETRY_DISABLED: '1'
+
+  # A migration numbered at or below the serving ledger head, and absent from
+  # the ledger, is refused by apply-migration-set.ts — so it can be committed,
+  # reviewed, merged and shipped while being permanently unappliable. Nothing
+  # said so until someone tried to apply it. This says so at the PR.
+  #
+  # Its own job, not a step in `gates`: it is the only thing here that needs a
+  # database, and a type error should not hide a ledger violation or vice versa.
+  #
+  # DELIBERATELY NOT `if: secrets.* != ''`. The guard is fail-closed by design
+  # (exit 2, "COULD NOT VERIFY"), and skipping it when the connection is
+  # missing is exactly the silent pass it exists to remove. Until
+  # MIGRATION_LEDGER_DATABASE_URL is set to a read-only NON-production
+  # connection, this job fails loudly and says why.
+  migration-ledger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Migrations are appliable against the serving ledger
+        run: npm run check:migrations
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_LEDGER_DATABASE_URL }}
+          # The label is mandatory and the guard refuses "production" outright.
+          NEXT_BAR_DATABASE_ENVIRONMENT: ${{ vars.MIGRATION_LEDGER_ENVIRONMENT }}
+          NEXT_BAR_PRODUCTION_PROJECT_REF: ${{ vars.NEXT_BAR_PRODUCTION_PROJECT_REF }}
