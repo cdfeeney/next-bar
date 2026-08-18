@@ -282,9 +282,23 @@ type Region = {
   end: number;
 };
 
+/** Where a dollar tag opens at `i`, or null. */
+function dollarTagAt(sql: string, i: number): string | null {
+  if (sql[i] !== '$') return null;
+  // A `$` that continues an identifier is part of that identifier, not a quote:
+  // `select 1 as guard$mask$` is a legal alias, and pairing those two `$mask$`
+  // substrings would blank whatever sat between them (round-7 review, Codex,
+  // medium).
+  if (i > 0 && /[A-Za-z0-9_$]/.test(sql[i - 1])) return null;
+  // Bounded slice: a tag is short, and slicing the whole remainder on every `$`
+  // would be quadratic over the concatenated stream.
+  const tag = /^\$[a-zA-Z_][a-zA-Z0-9_]*\$|^\$\$/.exec(sql.slice(i, i + 64));
+  return tag ? tag[0] : null;
+}
+
 /**
- * Every comment, string and dollar-quoted body in `sql`, in order, found in ONE
- * pass.
+ * Every comment, string and dollar-quoted body in `sql[from..to)`, in order,
+ * found in ONE pass.
  *
  * The single pass is the point. Comments used to be stripped first and literals
  * found afterwards, which is backwards: a legal `select '--';` loses its closing
@@ -292,23 +306,41 @@ type Region = {
  * so a later migration's definition can be masked out of existence and the guard
  * keeps reading the old one (round-6 review, Codex, medium). Whichever construct
  * opens FIRST wins, which is what Postgres does.
+ *
+ * A body's INTERIOR is scanned too, and its regions are appended after the body
+ * itself. Skipping it left in-body comments intact in the one region every
+ * assertion actually reads, so a comment mentioning member_cap could satisfy the
+ * cap assertion while the cap check was gone — and, in the other direction, turn
+ * a correct body red (round-7 review, both lanes, medium). Outer-first ordering
+ * matters: effectiveBody takes the FIRST body region after a definition, and
+ * that must be the function's own body, not one nested inside it.
  */
-function scanRegions(sql: string): Region[] {
+function scanRegions(sql: string, from = 0, to = sql.length): Region[] {
   const found: Region[] = [];
   const QUOTE = String.fromCharCode(39);
-  let i = 0;
-  while (i < sql.length) {
+  let i = from;
+  while (i < to) {
     const pair = sql.slice(i, i + 2);
     if (pair === '--') {
       const nl = sql.indexOf('\n', i);
-      const stop = nl === -1 ? sql.length : nl;
+      const stop = nl === -1 || nl > to ? to : nl;
       found.push({ kind: 'comment', contentStart: i, contentEnd: stop, end: stop });
       i = stop;
       continue;
     }
     if (pair === '/*') {
-      const close = sql.indexOf('*/', i + 2);
-      const stop = close === -1 ? sql.length : close + 2;
+      // Postgres NESTS block comments: /* /* */ */ ends at the outer */, not the
+      // inner one. Closing at the first */ would treat the tail of the comment as
+      // executable (round-7 review, Codex, medium).
+      let depth = 1;
+      let j = i + 2;
+      while (j < to && depth > 0) {
+        const here = sql.slice(j, j + 2);
+        if (here === '/*') { depth += 1; j += 2; continue; }
+        if (here === '*/') { depth -= 1; j += 2; continue; }
+        j += 1;
+      }
+      const stop = Math.min(j, to);
       found.push({ kind: 'comment', contentStart: i, contentEnd: stop, end: stop });
       i = stop;
       continue;
@@ -316,48 +348,45 @@ function scanRegions(sql: string): Region[] {
     if (sql[i] === QUOTE) {
       // A doubled quote inside a string is an escaped quote, not the end of one.
       let j = i + 1;
-      while (j < sql.length) {
+      while (j < to) {
         if (sql[j] !== QUOTE) { j += 1; continue; }
         if (sql[j + 1] === QUOTE) { j += 2; continue; }
         break;
       }
-      const stop = Math.min(j + 1, sql.length);
-      found.push({ kind: 'string', contentStart: i + 1, contentEnd: j, end: stop });
+      const stop = Math.min(j + 1, to);
+      found.push({ kind: 'string', contentStart: i + 1, contentEnd: Math.min(j, to), end: stop });
       i = stop;
       continue;
     }
-    if (sql[i] === '$') {
-      // Bounded slice: a dollar tag is short, and slicing the whole remainder on
-      // every `$` would be quadratic over the concatenated stream.
-      const tag = /^\$[a-zA-Z_][a-zA-Z0-9_]*\$|^\$\$/.exec(sql.slice(i, i + 64));
-      if (tag) {
-        const close = sql.indexOf(tag[0], i + tag[0].length);
-        if (close === -1) break; // unterminated: nothing after it can be trusted
-        found.push({
-          kind: 'body',
-          contentStart: i + tag[0].length,
-          contentEnd: close,
-          end: close + tag[0].length,
-        });
-        i = close + tag[0].length;
-        continue;
-      }
+    const tag = dollarTagAt(sql, i);
+    if (tag) {
+      const close = sql.indexOf(tag, i + tag.length);
+      if (close === -1 || close >= to) break; // unterminated: trust nothing after it
+      const contentStart = i + tag.length;
+      found.push({ kind: 'body', contentStart, contentEnd: close, end: close + tag.length });
+      // Outer body pushed FIRST, then whatever lives inside it.
+      found.push(...scanRegions(sql, contentStart, close));
+      i = close + tag.length;
+      continue;
     }
     i += 1;
   }
   return found;
 }
 
-/** The same text with the given regions blanked, so every offset still lines up. */
+/**
+ * The same text with the given regions blanked, so every offset still lines up.
+ *
+ * One pass over a character array rather than a slice-and-rejoin per region:
+ * scanning inside bodies multiplied the region count, and rebuilding the whole
+ * concatenated stream once per region is quadratic.
+ */
 function blank(sql: string, regions: Region[]): string {
-  let out = sql;
+  const out = [...sql];
   for (const r of regions) {
-    out =
-      out.slice(0, r.contentStart) +
-      ' '.repeat(r.contentEnd - r.contentStart) +
-      out.slice(r.contentEnd);
+    for (let i = r.contentStart; i < r.contentEnd; i += 1) out[i] = ' ';
   }
-  return out;
+  return out.join('');
 }
 
 /**
@@ -418,7 +447,13 @@ function migrationStream(): string {
  * blanked, so a create-shaped string is data and stays data. The returned slice
  * runs to the end of the next DOLLAR-QUOTED region — the function's own body,
  * not a string-valued argument default that happens to come first — and has its
- * comments blanked, so no assertion can be satisfied by commentary.
+ * comments blanked, INCLUDING the ones inside that body, so no assertion can be
+ * satisfied by commentary and no comment can turn a correct body red.
+ *
+ * String CONTENT is deliberately left intact: the invariants below are partly
+ * about string literals ('night_out_members:', 'declined'), so blanking strings
+ * would delete the very text they assert. These remain text assertions over SQL
+ * text, which is what they have always been.
  *
  * WHAT THIS DELIBERATELY DOES NOT DO: decide WHICH OVERLOAD is under test, or
  * notice that a later migration DROPPED the function. Both need argument-type
@@ -495,10 +530,15 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
     // 'night_out_members:' let the lock be re-keyed to any expression — per USER,
     // say — and still pass, which is exactly the weakening these text assertions
     // claim to catch and the boundary test cannot see (round-6 review, Codex,
+    // medium).
+    // The WHOLE key is pinned, through the closing `, 0)`. Requiring only the
+    // prefix through p_night_out::text still admitted an appended discriminator
+    // — `|| ':' || v_uid::text` — which re-keys the lock per user and lets two
+    // declined members rejoin a full plan concurrently (round-7 review, Codex,
     // medium). join/decline lock on a resolved local instead, so this shape is
     // asserted only where the plan id is the parameter.
     expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
-      /pg_advisory_xact_lock\(\s*hashtextextended\(\s*'night_out_members:'\s*\|\|\s*p_night_out::text/,
+      /pg_advisory_xact_lock\(\s*hashtextextended\(\s*'night_out_members:'\s*\|\|\s*p_night_out::text\s*,\s*0\s*\)\s*\)/,
     );
     expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
     expect(body, 'the cap only applies when a declined row re-enters the counted set')
