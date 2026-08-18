@@ -1,7 +1,8 @@
 {
-  "_comment": "Next Bar risk-tier map. This project has no payments/pricing surface, so T0 is the irreversible user-data surface: schema migrations, which can corrupt or destroy account state and are not trivially revertible once applied. Application code stays at the T1 floor (still reviewed). Docs and e2e specs are T2. Every glob is verified against `git ls-files` — dead rules block the overnight preflight.",
+  "_comment": "Next Bar risk-tier map. This project has no payments/pricing surface, so T0 is the irreversible user-data surface: schema migrations, which can corrupt or destroy account state and are not trivially revertible once applied. T0 covers both the migration FILES and the TOOLING THAT APPLIES THEM — a defect in one migration affects that migration, but a defect in the apply tool selects the target database and can apply the whole set to the wrong one, so the tooling's blast radius is strictly larger than the files'. Application code stays at the T1 floor (still reviewed). Docs and e2e specs are T2. Every glob is verified against `git ls-files` — dead rules block the overnight preflight.",
   "rules": [
     { "glob": "supabase/migrations/**", "tier": "T0" },
+    { "glob": "scripts/apply-*migration*", "tier": "T0" },
     { "glob": "docs/**", "tier": "T2" },
     { "glob": "e2e/**", "tier": "T2" }
   ]
