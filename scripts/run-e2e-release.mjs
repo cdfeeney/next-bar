@@ -12,6 +12,40 @@
 // (a spec path, `--grep`) passes straight through.
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { config as loadEnvFile } from 'dotenv';
+
+// The gate refuses to run without the Supabase env rather than quietly running
+// a smaller suite that reports like the same one.
+//
+// Measured on 2026-08-18 against a .env.local carrying only PLAYWRIGHT_PORT:
+// 446 tests -> 337 passed, 90 skipped, 19 failed. The 90 are specs that gate
+// themselves on NEXT_PUBLIC_SUPABASE_URL and skip when it is absent; the 19 are
+// data-dependent specs that were never gated, so they failed on assertions
+// ("Vibe match card carries no Open · badge") naming nothing like the real
+// cause. Neither half says "your environment is not configured", and a
+// 0-failed-90-skipped run reads exactly like a full pass in a summary line.
+// That is this goal's whole subject: a gate is only a gate if it runs the suite
+// it claims to.
+const REQUIRED_ENV = ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY'];
+const fileEnv = loadEnvFile({ path: '.env.local', quiet: true }).parsed ?? {};
+const missing = REQUIRED_ENV.filter((key) => !process.env[key] && !fileEnv[key]);
+if (missing.length > 0) {
+  console.error(
+    [
+      '',
+      `npm run test:e2e cannot run: ${missing.join(', ')} missing from the environment`,
+      'and from .env.local.',
+      '',
+      'Without them ~90 specs skip themselves and ~19 more fail on assertions that do',
+      'not name the cause, so the run is not the gate.',
+      '',
+      'Copy the values into .env.local (see .env.example, and keep any PLAYWRIGHT_PORT',
+      'line already there), then re-run.',
+      '',
+    ].join('\n'),
+  );
+  process.exit(1);
+}
 
 const cli = createRequire(import.meta.url).resolve('@playwright/test/cli');
 const result = spawnSync(process.execPath, [cli, 'test', ...process.argv.slice(2)], {
