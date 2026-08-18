@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ledgerHead, migrationNumber, findUnappliable, describeUnappliable, findMisnamed,
+  findUnconventionalRows,
 } from './migration-ledger-guard';
 
 // The live ledger as read on 2026-08-17 (read-only query recorded in the goal):
@@ -126,6 +127,33 @@ describe('findMisnamed', () => {
     expect(findUnappliable(['0061_bar.sql'], ['60_foo.sql'])).toEqual([]);   // guard: 61 > 60, green
     expect('0061_bar.sql' <= '60_foo.sql').toBe(true);                        // apply: refuses it
     expect(findMisnamed(['60_foo.sql'])).toHaveLength(1);                     // so the name is refused first
+  });
+});
+
+describe('findUnconventionalRows', () => {
+  // The ledger side has NO .sql precondition, and that is the point. A row like
+  // 'manual-fix-2026' is invisible to migrationNumber (so ledgerHead ignores it)
+  // but IS apply-migration-set.ts's head, since its head is `order by name desc`
+  // over every row and 'manual-fix-2026' sorts above '0059_whatever.sql'. Apply
+  // would then refuse every future four-digit file with the guard still green.
+  it('flags a ledger row with no .sql suffix, which findMisnamed skips', () => {
+    expect(findMisnamed(['manual-fix-2026'])).toEqual([]);
+    expect(findUnconventionalRows(['manual-fix-2026'])).toEqual(['manual-fix-2026']);
+  });
+
+  it('flags an off-width row', () => {
+    expect(findUnconventionalRows(['60_foo.sql', '0059_ok.sql'])).toEqual(['60_foo.sql']);
+  });
+
+  it('passes a conventional ledger', () => {
+    expect(findUnconventionalRows(LIVE_LEDGER)).toEqual([]);
+  });
+
+  // The divergence the check exists to stop, both orderings on the same rows.
+  it('catches the row that would become apply-migration-set head', () => {
+    expect(ledgerHead(['0059_whatever.sql', 'manual-fix-2026'])).toBe(59);
+    expect('0060_next.sql' <= 'manual-fix-2026').toBe(true);
+    expect(findUnconventionalRows(['0059_whatever.sql', 'manual-fix-2026'])).toHaveLength(1);
   });
 });
 

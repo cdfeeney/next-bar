@@ -30,7 +30,7 @@ import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Client } from 'pg';
 import {
-  describeUnappliable, findMisnamed, findUnappliable, ledgerHead,
+  describeUnappliable, findMisnamed, findUnappliable, findUnconventionalRows, ledgerHead,
 } from './migration-ledger-guard';
 
 // Normally the worktree's own migrations. CI overrides it so the code that RUNS
@@ -215,7 +215,7 @@ async function main(): Promise<void> {
   // '60_foo.sql', and it refuses every later four-digit file while this guard
   // sees 61 > 60 and stays green. A ledger we cannot order is one we cannot
   // check against, so it is a could-not-verify, not a repo violation.
-  const misnamedRows = findMisnamed(ledger);
+  const misnamedRows = findUnconventionalRows(ledger);
   if (misnamedRows.length > 0) {
     cannotVerify(
       `public.schema_migrations contains ${misnamedRows.length} row(s) that do not use the `

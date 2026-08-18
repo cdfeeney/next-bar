@@ -1,0 +1,81 @@
+name: Migration ledger
+
+# A migration numbered at or below the serving ledger head, and absent from the
+# ledger, is refused by apply-migration-set.ts — so it can be committed,
+# reviewed, merged and shipped while being permanently unappliable. Nothing said
+# so until someone tried to apply it. This says so at the PR.
+#
+# WHY ITS OWN FILE, AND WHY pull_request_target.
+# This is the only check here that needs a database credential. On
+# `pull_request`, a same-repository PR runs ITS OWN copy of the workflow file
+# with repository secrets available — so a PR that edits the workflow can
+# exfiltrate the connection string, and checking out trusted code cannot help,
+# because the thing being attacked is the workflow definition itself.
+# `pull_request_target` runs the definition from the DEFAULT BRANCH instead, and
+# is safe here only because of the rule below.
+#
+# THE RULE: nothing from the PR is ever executed. The default checkout is the
+# base commit; the PR head is checked out to `pr/` and read strictly as DATA —
+# `npm ci` and `npm run check:migrations` both resolve through the base tree,
+# and the guard only calls readdirSync on the PR directory. Never add a step
+# that runs `pr/`'s scripts, installs its dependencies, or builds it.
+#
+# Two consequences, both fail-closed and both intentional: a PR that changes the
+# guard itself is validated by the guard on the default branch, and this file
+# has no effect until it is ON the default branch (pull_request_target always
+# uses the base copy).
+#
+# DELIBERATELY NOT `if: secrets.* != ''`. The guard is fail-closed by design
+# (exit 2, "COULD NOT VERIFY") and skipping it when the connection is missing is
+# exactly the silent pass it exists to remove. Until
+# MIGRATION_LEDGER_DATABASE_URL is set to a read-only NON-production connection,
+# this job fails loudly and says why.
+#
+# OPERATOR ACTION, outside this file: a red job only BLOCKS a merge once
+# `migration-ledger` is added to the branch-protection required status checks
+# next to `gates`. Until then it is an advisory red X someone has to notice —
+# the manual step this guard exists to remove. Enrol it at the same time as the
+# secret and the two vars, never before: a required check with no credential
+# configured blocks every merge.
+
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+
+# Read-only. pull_request_target otherwise hands out a write-scoped token.
+permissions:
+  contents: read
+
+jobs:
+  migration-ledger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Trusted: the base commit is the code that runs.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+      # Untrusted: the PR head, read only as a directory of filenames.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: pr
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Migrations are appliable against the serving ledger
+        run: npm run check:migrations
+        env:
+          # The PR's migrations, read by the base commit's guard.
+          MIGRATION_LEDGER_DIR: pr/supabase/migrations
+          DATABASE_URL: ${{ secrets.MIGRATION_LEDGER_DATABASE_URL }}
+          # The label is mandatory and the guard refuses "production" outright.
+          NEXT_BAR_DATABASE_ENVIRONMENT: ${{ vars.MIGRATION_LEDGER_ENVIRONMENT }}
+          # Mandatory: the guard refuses to connect on a label alone.
+          NEXT_BAR_PRODUCTION_PROJECT_REF: ${{ vars.NEXT_BAR_PRODUCTION_PROJECT_REF }}
+          # Optional positive allowlist, same semantics as apply-migration-set.ts.
+          NEXT_BAR_STAGING_PROJECT_REFS: ${{ vars.NEXT_BAR_STAGING_PROJECT_REFS }}

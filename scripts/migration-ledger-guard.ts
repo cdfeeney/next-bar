@@ -105,3 +105,19 @@ export function describeUnappliable({ name, number, head }: Unappliable): string
 export function findMisnamed(files: readonly string[]): string[] {
   return files.filter((name) => name.endsWith('.sql') && !CONVENTIONAL_FILE.test(name));
 }
+
+/**
+ * Every LEDGER row that does not follow `NNNN_name.sql` — with no `.sql`
+ * precondition, which is the whole reason this is not `findMisnamed`.
+ *
+ * That precondition exists on the file side to skip directory entries like
+ * `README.md`. On the ledger side it would be a hole: `apply-migration-set.ts`
+ * takes its head as `order by name desc limit 1` over ALL rows, so a suffix-less
+ * row such as `manual-fix-2026` becomes its head while this module's
+ * `migrationNumber` returns null for it and `ledgerHead` ignores it entirely.
+ * Apply would then refuse every future four-digit migration while the guard
+ * stayed green. A ledger row we cannot order is a ledger we cannot trust.
+ */
+export function findUnconventionalRows(ledgerNames: readonly string[]): string[] {
+  return ledgerNames.filter((name) => !CONVENTIONAL_FILE.test(name));
+}
