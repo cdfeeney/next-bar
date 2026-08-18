@@ -189,14 +189,44 @@ function ownersIn(raw: string | null): Set<string> {
   }
 }
 
+/**
+ * The account-cache owner marker. `clearAccountCache` removes it, and account
+ * DELETION is one of the two callers; an ordinary sign-out deliberately seals
+ * rather than clears, so this is not a sign-out signal.
+ *
+ * Round 9 (Codex, re-filing a gap this goal had recorded as unclosable). The
+ * earlier reasoning — "no diff of the parked key can distinguish a create that
+ * never parked from an ordinary concurrent write, and a tombstone naming the
+ * deleted user would be the residue deletion exists to remove" — was too
+ * narrow. It only ever looked at diffs of the parked key. Deletion also removes
+ * THIS key, which crosses realms through the same `storage` event and names
+ * nobody, so the signal existed the whole time.
+ *
+ * The literal is repeated from accountCache on purpose: storage keys must appear
+ * as literals to stay visible to `storageInventory.test.ts`.
+ */
+const ACCOUNT_OWNER_KEY = 'next-bar:account:owner:v1';
+
 function onCrossTabStorage(event: StorageEvent): void {
-  // A null key means the whole store was cleared, which also invalidates ours.
-  if (event.key !== null && event.key !== STARTED_KEY) return;
+  // A null key means the whole store was cleared, which invalidates everything.
+  const wholeStoreCleared = event.key === null;
+  const ownerWiped =
+    wholeStoreCleared
+    || (event.key === ACCOUNT_OWNER_KEY && event.newValue === null);
+  if (!wholeStoreCleared && event.key !== STARTED_KEY && !ownerWiped) return;
   if (creatingOwners.size > 0) {
-    const before = ownersIn(event.oldValue);
-    const after = ownersIn(event.newValue);
-    for (const owner of creatingOwners) {
-      if (before.has(owner) && !after.has(owner)) abandonedCreates.add(owner);
+    if (ownerWiped) {
+      // An account cache was destroyed elsewhere. Nothing in flight has a
+      // record yet, so there is no transition to read — the wipe itself is the
+      // answer, and re-parking after it would restore identifiers the strongest
+      // erase in the app has just removed.
+      for (const owner of creatingOwners) abandonedCreates.add(owner);
+    } else {
+      const before = ownersIn(event.oldValue);
+      const after = ownersIn(event.newValue);
+      for (const owner of creatingOwners) {
+        if (before.has(owner) && !after.has(owner)) abandonedCreates.add(owner);
+      }
     }
   }
   markCreatingChanged();
@@ -302,7 +332,24 @@ function recallStarted(userId: string): ParkedPlan | null {
   return readAll()[userId] ?? null;
 }
 
-/** Drops only THIS user's record. Another account's parked plan is not ours. */
+/**
+ * Drops only THIS user's record. Another account's parked plan is not ours.
+ *
+ * EXPORTED (round-9 panel, Codex) because this component is the wrong place to
+ * decide the plan was opened. It used to clear the record and then call
+ * `router.push`, which is fire-and-forget: a navigation that fails or is
+ * superseded before the route commits left the record already gone, so a later
+ * remount armed Start and the next tap made a second plan. "Opened" means the
+ * plan page rendered, and only the plan page knows that.
+ *
+ * Keeping the record one moment too LONG is safe — the worst case is a
+ * recovery affordance for a plan the user has already seen, which the night
+ * stamp sweeps anyway. Dropping it one moment too early is the duplicate.
+ */
+export function forgetStartedNightOut(userId: string): void {
+  forgetStarted(userId);
+}
+
 function forgetStarted(userId: string): void {
   const all = readAll();
   const { [userId]: dropped, ...rest } = all;
@@ -532,7 +579,7 @@ export default function StartNightOutButton(): JSX.Element | null {
       setRetryFailed(true);
       return;
     }
-    forgetStarted(userId);
+    // NOT cleared here — the plan page clears it when it actually renders.
     router.push(`/night-out/${plan.shareToken}`);
   };
 
@@ -626,7 +673,7 @@ export default function StartNightOutButton(): JSX.Element | null {
         return;
       }
       if (!mounted.current) return;
-      forgetStarted(owner);
+      // NOT cleared here — see `forgetStartedNightOut`.
       router.push(`/night-out/${plan.shareToken}`);
     } finally {
       // ALWAYS. `finally` is what makes an orphaned marker impossible — an

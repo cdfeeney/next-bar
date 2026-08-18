@@ -72,7 +72,7 @@ vi.mock('@/lib/nightOuts.server', () => ({
   },
 }));
 
-import StartNightOutButton from './StartNightOutButton';
+import StartNightOutButton, { forgetStartedNightOut } from './StartNightOutButton';
 
 beforeEach(() => {
   pushed.length = 0;
@@ -158,6 +158,11 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     const first = render(<StartNightOutButton />);
     await user.click(screen.getByRole('button'));
     await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+    // The PLAN PAGE spends the record now, not the push (round 9, Codex): a
+    // fire-and-forget navigation that never commits must not drop it. This line
+    // is what that page does on settling as a member, and the requirement below
+    // is unchanged — an opened plan is not re-offered as unfinished.
+    forgetStartedNightOut(USER_A);
     first.unmount();
 
     render(<StartNightOutButton />);
@@ -279,6 +284,8 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     const b = render(<StartNightOutButton />);
     await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
     await waitFor(() => expect(pushed.length).toBe(1));
+    // B reaches the plan page, which is what spends a record now.
+    forgetStartedNightOut(USER_B);
     b.unmount();
 
     // B's own record is gone (they opened it) — B is not stuck.
@@ -767,6 +774,56 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     ).toBeTruthy();
     const stored = JSON.parse(window.localStorage.getItem(STARTED_KEY) as string);
     expect(stored[USER_A]?.planId, 'the new plan was never parked').toBe(PLAN_ID);
+  });
+
+  test('navigating to the plan does NOT spend the record — the plan page does', async () => {
+    // Round-9 panel (Codex). `router.push` is fire-and-forget: clearing the
+    // record beside it meant a navigation that failed or was superseded before
+    // the route committed dropped the record anyway, and a later remount armed
+    // Start into a duplicate plan. Keeping it one moment too long is safe; the
+    // night stamp sweeps it. Dropping it early is the duplicate.
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /start the official night out/i }));
+    await waitFor(() => expect(pushed.length).toBe(1));
+
+    const raw = window.localStorage.getItem(STARTED_KEY);
+    expect(raw, 'the record was spent at push time, before any route committed').not.toBeNull();
+    expect(JSON.parse(raw as string)[USER_A]?.planId).toBe(PLAN_ID);
+  });
+
+  test('an account wiped in another tab abandons an in-flight create', async () => {
+    // Round-9 panel (Codex), re-filing a gap this goal had recorded as
+    // unclosable. Nothing is parked yet when a create is in flight, so there is
+    // no PRESENT->ABSENT transition on the parked key to read — but account
+    // deletion also removes the account-owner marker, which crosses realms
+    // through the same storage event and names nobody.
+    let release: (value: unknown) => void = () => {};
+    heldCreate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /start the official night out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    // Another tab deletes the account: clearAccountCache removes the owner key.
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'next-bar:account:owner:v1',
+        oldValue: USER_A,
+        newValue: null,
+      }),
+    );
+
+    release(PLAN_ID);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(
+      window.localStorage.getItem(STARTED_KEY),
+      "an in-flight create restored a deleted account's identifiers after the wipe",
+    ).toBeNull();
   });
 
   test('a plan parked on an earlier night does not disable Start today', async () => {

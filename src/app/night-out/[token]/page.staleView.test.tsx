@@ -61,6 +61,13 @@ vi.mock('@/lib/catalog', () => ({
   getBarById: () => null,
 }));
 
+const forgetStartedNightOut = vi.fn();
+
+vi.mock('@/components/StartNightOutButton', () => ({
+  default: () => null,
+  forgetStartedNightOut: (id: string) => forgetStartedNightOut(id),
+}));
+
 vi.mock('@/lib/pendingInvite', () => ({
   consumePendingInvite: vi.fn(),
   peekPendingInvite: () => null,
@@ -479,6 +486,51 @@ describe('the plan page never paints an answer the view has moved on from', () =
       "plan A's member list leaked into plan B's view through the loading effect",
     ).toBeNull();
     expect(screen.getByText("B's night out")).toBeTruthy();
+  });
+  test('reaching the plan as a member is what spends the parked record', async () => {
+    /**
+     * Round-9 panel (Codex). StartNightOutButton used to clear its
+     * created-but-never-opened record and then call `router.push`, which is
+     * fire-and-forget: a navigation that failed or was superseded before the
+     * route committed dropped the record anyway, and a later remount armed
+     * Start into a duplicate plan. "Opened" means this page rendered, so this
+     * page is what spends it.
+     */
+    resolveByToken.mockResolvedValue('plan-A');
+    getNightOut.mockResolvedValue(planFor("A's night out"));
+    getNightOutMembers.mockResolvedValue(PRIVATE_MEMBERS);
+    getNightOutBoard.mockResolvedValue([]);
+
+    render(<NightOutPage params={{ token: TOKEN_A }} />);
+    await screen.findByText("A's night out");
+
+    await waitFor(() =>
+      expect(
+        forgetStartedNightOut,
+        'the plan rendered and the parked record was never spent',
+      ).toHaveBeenCalledWith('u1'),
+    );
+  });
+
+  test('a bearer PREVIEW does not spend anyone’s parked record', async () => {
+    // Only a member reaching their own plan counts as opening it. A signed-in
+    // non-member looking at a preview has opened nothing.
+    resolveByToken.mockResolvedValue(null);
+    previewNightOut.mockResolvedValue({
+      night: '2026-08-20',
+      title: "A's night out",
+      ownerHandle: 'host',
+      ownerDisplayName: 'Host',
+      acceptedCount: 2,
+    });
+
+    render(<NightOutPage params={{ token: TOKEN_A }} />);
+    await screen.findByRole('button', { name: /join this night out/i });
+
+    expect(
+      forgetStartedNightOut,
+      'a preview spent a parked record that belongs to a different plan',
+    ).not.toHaveBeenCalled();
   });
 });
 

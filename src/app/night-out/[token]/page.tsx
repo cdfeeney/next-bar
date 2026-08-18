@@ -7,6 +7,7 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
+import { forgetStartedNightOut } from '@/components/StartNightOutButton';
 import {
   cancelNightOut,
   decideNightOut,
@@ -243,7 +244,16 @@ export default function NightOutPage({
   useEffect(() => {
     if (!isSettled(state.kind)) return;
     if (peekPendingInvite() === token) consumePendingInvite();
-  }, [state.kind, token]);
+    // THIS is what "opened" means (round-9 panel, Codex). StartNightOutButton
+    // used to clear its parked record and then call `router.push`, which is
+    // fire-and-forget — a navigation that failed or was superseded before the
+    // route committed dropped the record anyway, and a later remount armed
+    // Start into a duplicate plan. The record is spent where the plan actually
+    // renders, for the member who owns it, and nowhere else.
+    if (state.kind === 'member' && auth.status === 'signed-in') {
+      forgetStartedNightOut(auth.user.id);
+    }
+  }, [state, token, auth]);
 
   useEffect(() => {
     if (auth.status === 'loading') return;
