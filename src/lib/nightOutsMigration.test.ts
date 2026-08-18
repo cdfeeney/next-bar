@@ -222,11 +222,18 @@ describe('0044_night_outs.sql security shape', () => {
  *   0045 — get_night_out (invite_to_night_out superseded by 0049)
  *   0046 — (superseded by 0048)
  *   0047 — night_outs column grants
- *   0048 — night_out_member_cap, night_out_seat_count, and the four callers:
+ *   0048 — night_out_member_cap, night_out_seat_count, and three callers:
  *          join_night_out_by_token, decline_night_out_by_token,
- *          respond_night_out, night_out_is_full_by_token
+ *          night_out_is_full_by_token
  *   0049 — (superseded by 0050)
  *   0050 — invite_to_night_out
+ *   0057/0058 — (respond_night_out, superseded by 0059)
+ *   0059 — respond_night_out, get_night_out, get_my_night_outs
+ *
+ * respond_night_out moved OUT of 0048 in the 0057 -> 0058 -> 0059 chain. It is
+ * called out here because the map was written after an auditor of the 20-member
+ * cap was sent to the wrong file once already, and leaving 0048 as its listed
+ * home would do it a second time.
  *
  * The assertions in the block above still describe 0044's TEXT, which is correct
  * as a record of an applied, immutable file, but is NOT the effective definition
@@ -246,7 +253,7 @@ const SQL_0046 = readFileSync(
 /** The body of one create-or-replace function, up to its closing $$. */
 function functionBody(sql: string, name: string): string {
   const start = sql.indexOf(`create or replace function public.${name}`);
-  expect(start, `${name} not found in 0046`).toBeGreaterThan(-1);
+  expect(start, `${name} not found in the migration under test`).toBeGreaterThan(-1);
   const end = sql.indexOf('$$;', start);
   expect(end, `${name} has no terminator`).toBeGreaterThan(start);
   return sql.slice(start, end);
@@ -258,10 +265,12 @@ function functionBody(sql: string, name: string): string {
  * functions. They were written against 0046 and stayed pointed there after 0048
  * superseded it (fresh-cycle round-2 review, Claude) — a guard aimed at dead
  * text, which is the same claim-drifted-from-artifact failure it exists to
- * catch. They now read SQL_0048; if a later migration re-states these
- * functions again, this constant is what has to move with it.
+ * catch. Each `it` below reads whichever constant currently DEFINES the
+ * function it names — 0048 for join/decline/seat-count, 0059 for
+ * respond_night_out — so a later migration re-stating any of them has to move
+ * that constant with it.
  */
-describe('effective night_out RPC ordering invariants (currently 0048)', () => {
+describe('effective night_out RPC ordering invariants (0048, and 0059 for respond)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
     const body = functionBody(SQL_0048, 'join_night_out_by_token');
     const lock = body.indexOf('pg_advisory_xact_lock');
@@ -282,8 +291,13 @@ describe('effective night_out RPC ordering invariants (currently 0048)', () => {
     expect(body).toMatch(/pg_advisory_xact_lock/);
   });
 
+  // Reads SQL_0059, not SQL_0048: 0059 is where respond_night_out is defined
+  // now. Pointed at 0048 these three assertions passed against text the database
+  // no longer runs, so a 0059+ replacement could drop the lock or the cap gate
+  // untouched — the exact dead-text drift this block was created to catch
+  // (round-3 review, Claude, medium).
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = functionBody(SQL_0048, 'respond_night_out');
+    const body = functionBody(SQL_0059, 'respond_night_out');
     expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
       /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
     );
@@ -376,6 +390,17 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
     expect(SQL_0048).toMatch(/create or replace function/);
   });
 });
+
+/**
+ * The effective respond_night_out. 0057 added the expected-status argument,
+ * 0058 moved it into the write predicate, 0059 added the revision CAS and is
+ * the last word — so this is the constant that has to move with the next
+ * migration that re-states the function.
+ */
+const SQL_0059 = readFileSync(
+  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0059_night_outs_respond_revision.sql'),
+  'utf8',
+).toLowerCase().replace(/--.*/g, '');
 
 const SQL_0050 = readFileSync(
   path.join(__dirname, '..', '..', 'supabase', 'migrations', '0050_night_outs_invite_recheck_before_cap.sql'),

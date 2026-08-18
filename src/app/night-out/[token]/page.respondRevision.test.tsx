@@ -53,6 +53,8 @@ const calls: Call[] = [];
 let plan: Record<string, unknown>;
 /** How many times the page has read the plan. A click-time re-fetch shows up here. */
 let getNightOutCalls = 0;
+/** What respondNightOut answers. A pending promise keeps the call in flight. */
+let respondResult: boolean | Promise<boolean> = true;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -84,7 +86,8 @@ vi.mock('@/lib/nightOuts.server', () => ({
   ) => {
     readsAtSend = getNightOutCalls;
     calls.push({ accept, status: expectedStatus, revision: expectedRevision });
-    return true;
+    // A promise here is what lets the double-tap test hold the first call open.
+    return respondResult;
   },
   joinNightOutByToken: async () => PLAN_ID,
   declineNightOutByToken: async () => PLAN_ID,
@@ -118,6 +121,7 @@ beforeEach(() => {
   calls.length = 0;
   getNightOutCalls = 0;
   readsAtSend = -1;
+  respondResult = true;
   plan = makePlan();
 });
 
@@ -185,6 +189,62 @@ describe('plan page — the response carries the rendered revision (0059)', () =
 
     expect(calls[0]).toEqual({ accept: true, status: 'declined', revision: 3 });
     expect(readsAtSend, 'the page re-read the plan BEFORE sending').toBe(afterRender);
+  });
+
+  /**
+   * The OTHER half of withRefresh, and the half no test reached: what the page
+   * does when the guard says no.
+   *
+   * A round-3 reviewer showed both branches were free — drop the loadMemberView
+   * call on the `!ok` path, or drop the actionInFlight ref, and the whole suite
+   * stayed green. Both are the doomed-retry bug this change exists to fix: the
+   * refusal is DETERMINISTIC, so a retry from an unrefreshed screen re-sends the
+   * same stale pair and fails identically, forever.
+   */
+  test('a refusal re-reads the plan, so the retry is not doomed to repeat it', async () => {
+    respondResult = false;
+    const user = userEvent.setup();
+    render(<NightOutPage params={{ token: TOKEN }} />);
+    const button = await screen.findByRole('button', { name: /I'm in/i });
+
+    // Someone else moved the row while this screen sat. The send below carries
+    // the rendered pair, the guard refuses it, and the screen must re-sync.
+    await bumpBackendTo(11);
+    await user.click(button);
+    await waitFor(() => expect(screen.getByText(/didn't go through/i)).toBeTruthy());
+
+    expect(calls[0], 'the refused send did not carry the rendered pair')
+      .toEqual({ accept: true, status: 'pending', revision: 7 });
+    expect(getNightOutCalls, 'the page did not re-read after the refusal')
+      .toBeGreaterThan(readsAtSend);
+    // Re-synced to accepted/11, so the button that would re-send the stale
+    // 'pending'/7 pair is gone. That is what makes the next tap survivable.
+    expect(
+      screen.queryByRole('button', { name: /I'm in/i }),
+      'the stale accept button survived the re-sync',
+    ).toBeNull();
+  });
+
+  test('a second tap while the first is still in flight is swallowed', async () => {
+    let release!: (ok: boolean) => void;
+    respondResult = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    const user = userEvent.setup();
+    render(<NightOutPage params={{ token: TOKEN }} />);
+    const button = await screen.findByRole('button', { name: /I'm in/i });
+
+    await user.click(button);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    // Nothing disables the button, so this is a real second tap, not a
+    // hypothetical one. Without the ref both taps fire and the second carries
+    // the pair the first just invalidated.
+    await user.click(button);
+    expect(calls, 'the in-flight guard let a second request through').toHaveLength(1);
+
+    release(true);
+    await waitFor(() => expect(getNightOutCalls).toBeGreaterThan(readsAtSend));
+    expect(calls, 'a tap leaked through after the first settled').toHaveLength(1);
   });
 
   test('a null revision refuses rather than substituting one', async () => {

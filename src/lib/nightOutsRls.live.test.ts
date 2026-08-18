@@ -1071,6 +1071,55 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   });
 
   /**
+   * CRITERION 4, the database-side half — the one this file was missing.
+   *
+   * "No caller can invoke the unguarded form" was only ever proved from the
+   * migration TEXT: 0057 drops the 2-argument overload, 0059 drops the
+   * 3-argument one. But `drop function if exists` is silently a no-op if the
+   * overload is later re-created, and four applied files (0044/0045/0046/0048)
+   * still contain a `create or replace` of the 2-argument form — a partial
+   * hand-apply or a replayed hotfix puts it back. Every other call in this file
+   * now uses the 4-argument form, so nothing here would notice; the replay hole
+   * would simply be reachable again through the old signature (round-3 review,
+   * Claude, medium).
+   *
+   * 42883 is undefined_function: the name resolves to no such argument list.
+   */
+  it('the superseded respond_night_out overloads are GONE from this database (criterion 4)', async () => {
+    const superseded: Array<[string, string]> = [
+      ['2-argument (dropped by 0057)', `select public.respond_night_out('${randomUUID()}'::uuid, true)`],
+      ['3-argument (dropped by 0059)', `select public.respond_night_out('${randomUUID()}'::uuid, true, 'pending')`],
+    ];
+    for (const [label, sql] of superseded) {
+      const code = await inRollback(async () => {
+        try {
+          await db.query(sql);
+          return null;
+        } catch (error) {
+          return (error as { code?: string }).code ?? null;
+        }
+      });
+      expect(code, `the ${label} overload still resolves on this database`).toBe('42883');
+    }
+
+    // The two probes above only cover the signatures we thought to name. This
+    // is the same prove-the-list assertion the anon-denial test carries: ask the
+    // catalog what actually exists, so a THIRD overload nobody listed cannot
+    // sit there unnoticed.
+    const { rows } = await db.query(`
+      select pg_get_function_identity_arguments(p.oid) as args
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'respond_night_out'`);
+    // Argument NAMES are asserted too, not just types: PostgREST resolves an
+    // RPC by the named keys in the JSON body, so a rename is a caller-breaking
+    // change on the same footing as a signature change.
+    expect(rows.map((r) => r.args as string), 'respond_night_out has an unexpected overload set')
+      .toEqual([
+        'p_night_out uuid, p_accept boolean, p_expected_status text, p_expected_revision integer',
+      ]);
+  });
+
+  /**
    * 0059 — a status is not a version.
    *
    * 0057 refused a caller whose expected STATUS no longer matched, and 0058 put
