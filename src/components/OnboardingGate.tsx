@@ -141,12 +141,26 @@ export default function OnboardingGate(): null {
       }
       setPromptedFlag();
       // Carry the interrupted destination through onboarding (criterion 1).
-      // `pathname` only — a query string is not part of any flow this gate
+      //
+      // `pathname` plus ONE named marker. Dropping the query entirely was the
+      // original rule — "a query string is not part of any flow this gate
       // interrupts, and forwarding one would widen the redirect surface for
-      // nothing.
+      // nothing" — and that stopped being true when password recovery started
+      // carrying `?from=recovery` (round-7 panel, Codex). A handle-less account
+      // recovering its password was sent to /onboarding?next=/settings, came
+      // back to an UNMARKED /settings, and PendingInviteRedirect then pulled it
+      // to the plan before the password could be set.
+      //
+      // Only that one literal marker is forwarded, reconstructed rather than
+      // passed through, so the original concern still holds: nothing
+      // attacker-shaped rides back on the return path.
+      const isRecovery =
+        typeof window !== 'undefined'
+        && new URLSearchParams(window.location.search).get('from') === 'recovery';
+      const returnTo = isRecovery ? `${pathname}?from=recovery` : pathname;
       router.replace(
         isSafeReturnPath(pathname)
-          ? `/onboarding?next=${encodeURIComponent(pathname)}`
+          ? `/onboarding?next=${encodeURIComponent(returnTo)}`
           : '/onboarding',
       );
     });

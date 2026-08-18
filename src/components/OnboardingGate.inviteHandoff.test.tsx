@@ -154,4 +154,33 @@ describe('isSafeReturnPath', () => {
     expect(isSafeReturnPath(null)).toBe(false);
     expect(isSafeReturnPath(undefined)).toBe(false);
   });
+
+  test('the recovery marker survives the onboarding round trip', async () => {
+    // Round-7 panel (Codex). The gate forwarded `pathname` only, so a
+    // handle-less account recovering its password was sent to
+    // /onboarding?next=/settings, came back to an UNMARKED /settings, and
+    // PendingInviteRedirect pulled it to the plan before the password was set.
+    pathname = '/settings';
+    window.history.replaceState({}, '', '/settings?from=recovery');
+
+    render(<OnboardingGate />);
+
+    await waitFor(() => expect(replaced.length).toBeGreaterThan(0));
+    expect(
+      replaced[0],
+      'the recovery marker was dropped, so the return trip lands unmarked',
+    ).toBe(`/onboarding?next=${encodeURIComponent('/settings?from=recovery')}`);
+  });
+
+  test('an ordinary query string is still NOT forwarded', async () => {
+    // The original rule holds for everything except the one named marker:
+    // nothing attacker-shaped rides back on the return path.
+    pathname = '/rankings';
+    window.history.replaceState({}, '', '/rankings?utm=x&from=elsewhere');
+
+    render(<OnboardingGate />);
+
+    await waitFor(() => expect(replaced.length).toBeGreaterThan(0));
+    expect(replaced[0]).toBe(`/onboarding?next=${encodeURIComponent('/rankings')}`);
+  });
 });

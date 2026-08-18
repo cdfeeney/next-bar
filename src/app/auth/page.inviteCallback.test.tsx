@@ -3,21 +3,32 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 /**
- * Criterion 1, the half that browser storage cannot reach (cold-panel round 2,
- * Codex, HIGH).
+ * What the confirmation URL's `redirect_to` actually carries — and, since the
+ * round-6 panel, what it does NOT.
  *
- * The invite handoff rode sessionStorage plus a short-TTL localStorage copy,
- * and `pendingInvite`'s own header says what that does NOT cover: Web Storage
- * is scoped to an origin within ONE browser profile. Open an invite in an
- * in-app browser, sign up, and confirm from the system mail app — the common
- * shape on a phone — and neither store exists when the callback runs. The
- * callback carried a fixed `/settings`, so the user was signed in and stranded.
+ * The invite handoff rides sessionStorage plus a short-TTL localStorage copy,
+ * both scoped to one browser profile. `/auth` additionally puts the token in
+ * the confirmation link's own `redirect_to` when a signup begins with an invite
+ * pending.
  *
- * The confirmation URL is the only channel that crosses profiles, so the token
- * rides it. These tests pin that it is actually put there, and that a signup
- * with no invite pending is unaffected.
+ * THAT IS NOT A CROSS-PROFILE FIX, and this file used to say it was — filed by
+ * both lanes at round 7. `@supabase/ssr` hard-sets `flowType: "pkce"`
+ * (`createBrowserClient.js`, `createServerClient.js`) and this project passes no
+ * override, so `exchangeCodeForSession` needs the verifier held by the profile
+ * that started the signup. Open the link in a system browser or a partitioned
+ * mail webview and the exchange fails first: the user reaches `/auth?error=...`,
+ * never the plan. No assertion below can see that, because they inspect the
+ * URL Supabase was handed, not what happens when it is opened elsewhere.
+ *
+ * What these tests DO pin, and all they pin: signup with a pending invite puts
+ * the plan in `redirect_to` (which is what lets an invite survive the 30-minute
+ * localStorage TTL within one profile); signup without one keeps the default
+ * post-auth page; and recovery keeps its own destination plus the marker that
+ * stops the global handoff from overriding it.
+ *
+ * Acceptance criterion 1 is therefore MET for same-profile signup and OPEN for
+ * cross-profile. See docs/V8-3-HANDOFF-2026-08-16b.md.
  */
-
 const INVITE_TOKEN = '11111111-1111-4111-8111-111111111111';
 
 let pending: string | null = null;
@@ -60,7 +71,7 @@ beforeEach(() => {
   resetPasswordForEmail.mockResolvedValue({ error: null });
 });
 
-describe('the confirmation email carries the invite across browser profiles', () => {
+describe('what the confirmation email carries (same profile only — see the header)', () => {
   test('a pending invite becomes the callback destination', async () => {
     pending = INVITE_TOKEN;
     await submitSignup();
@@ -71,7 +82,7 @@ describe('the confirmation email carries the invite across browser profiles', ()
     ).searchParams.get('redirect_to');
     expect(
       redirect,
-      'the confirmation link dropped the invite, so a cross-profile confirm lands nowhere near the plan',
+      'the confirmation link dropped the invite, so it cannot outlive the storage TTL',
     ).toBe(`/night-out/${INVITE_TOKEN}`);
   });
 
