@@ -15,6 +15,18 @@
 /** `0052_night_outs_my_invites.sql` — a leading number, an underscore, `.sql`. */
 const MIGRATION_FILE = /^(\d+)_.*\.sql$/;
 
+/**
+ * The convention this guard's arithmetic silently depends on: FOUR digits.
+ *
+ * `apply-migration-set.ts` decides appliability LEXICALLY (`entry.name <= head`,
+ * over a head read as `order by name desc limit 1`); this module decides it
+ * numerically. Those two orders coincide only while every prefix is the same
+ * width, so one `60_foo.sql` applied against head `0059` breaks the
+ * correspondence for good: afterwards apply refuses `0061_bar.sql` ('0061' sorts
+ * below '60_') while `findUnappliable` sees 61 > 60 and says nothing.
+ */
+const CONVENTIONAL_FILE = /^\d{4}_.*\.sql$/;
+
 export type Unappliable = {
   /** The offending file, as it is named in `supabase/migrations/`. */
   name: string;
@@ -82,4 +94,14 @@ export function describeUnappliable({ name, number, head }: Unappliable): string
     + 'renaming it breaks the ledger-to-filename correspondence the reverts depend on; '
     + 'reconcile the ledger instead.'
   );
+}
+
+/**
+ * Every `.sql` file whose name does not follow `NNNN_name.sql`. Callers must
+ * treat these as violations rather than skip them: `findUnappliable` cannot
+ * reason about a file whose prefix width breaks the numeric/lexical
+ * correspondence, and silently ignoring one is how the guard goes blind.
+ */
+export function findMisnamed(files: readonly string[]): string[] {
+  return files.filter((name) => name.endsWith('.sql') && !CONVENTIONAL_FILE.test(name));
 }

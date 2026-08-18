@@ -29,7 +29,9 @@ import { config as loadEnv } from 'dotenv';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
-import { describeUnappliable, findUnappliable, ledgerHead } from './migration-ledger-guard';
+import {
+  describeUnappliable, findMisnamed, findUnappliable, ledgerHead,
+} from './migration-ledger-guard';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 const OK = 0;
@@ -100,26 +102,42 @@ async function main(): Promise<void> {
 
   // pg's own resolution, not the URL authority — query parameters override the
   // authority, which is how an earlier guard in this repo was bypassable.
+  //
+  // BOTH the user and the host carry the ref, in different connection shapes:
+  // a pooler URL is `postgres.<ref>@aws-0-....pooler.supabase.com`, a DIRECT
+  // one is `postgres@db.<ref>.supabase.co`. Reading only the user derived the
+  // literal string "postgres" for every direct URL, which matches no production
+  // ref, so a direct production URL walked straight through this gate and was
+  // stopped only by DNS. Collect every ref the connection can be read as and
+  // refuse if ANY of them is production.
   const probe = new Client({ connectionString: databaseUrl }) as unknown as {
-    connectionParameters?: { user?: string };
+    connectionParameters?: { user?: string; host?: string };
   };
-  const ref = (probe.connectionParameters?.user ?? '').split('.').pop() ?? '';
-  if (!ref) cannotVerify('could not determine the Supabase project ref from DATABASE_URL');
-  if (ref === productionRef) {
+  const { user = '', host = '' } = probe.connectionParameters ?? {};
+  const refs = [
+    // `postgres.<ref>` — a plain `postgres` yields nothing, not a bogus ref.
+    user.includes('.') ? user.split('.').pop() ?? '' : '',
+    // `db.<ref>.supabase.co`
+    /^db\.([^.]+)\./.exec(host)?.[1] ?? '',
+  ].filter(Boolean);
+
+  if (refs.length === 0) {
+    cannotVerify('could not determine the Supabase project ref from DATABASE_URL');
+  }
+  if (refs.includes(productionRef)) {
     cannotVerify(
       `NEXT_BAR_DATABASE_ENVIRONMENT says ${JSON.stringify(environment)} but DATABASE_URL `
       + 'points at the PRODUCTION project ref.',
     );
   }
 
-  // The same allowlist apply-migration-set.ts enforces. `ref !== productionRef`
-  // only rules out the one ref we can name; a positive allowlist also catches a
-  // direct connection whose user is plain `postgres` (so the derived ref is
-  // `postgres`, matching nothing) and any third project nobody meant to touch.
-  // Optional, exactly as it is there: unset means no allowlist to check against.
+  // The same allowlist apply-migration-set.ts enforces, and the positive half of
+  // the check: "not production" only rules out the one ref we can name, while an
+  // allowlist also excludes any third project nobody meant to touch. Optional,
+  // exactly as it is there: unset means there is no allowlist to check against.
   const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
-  if (stagingRefs.length > 0 && !stagingRefs.includes(ref)) {
+  if (stagingRefs.length > 0 && !refs.some((value) => stagingRefs.includes(value))) {
     cannotVerify(
       `DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS (env `
       + `${JSON.stringify(environment)}).`,
@@ -131,6 +149,32 @@ async function main(): Promise<void> {
     files = readdirSync(MIGRATIONS_DIR);
   } catch (error) {
     cannotVerify(`cannot read ${MIGRATIONS_DIR}: ${(error as Error).message}`);
+  }
+
+  // apply-migration-set.ts compares filenames LEXICALLY (`entry.name <= head`,
+  // and its head is `order by name desc limit 1`); this guard compares the
+  // numeric prefix. The two orders agree only while every prefix is the same
+  // width. One `60_foo.sql` applied against head `0059` is enough to break the
+  // correspondence permanently: after it, apply refuses `0061_bar.sql`
+  // ('0061...' < '60_...') while this guard sees 61 > 60 and stays green — the
+  // guard would then be blind to exactly what it exists to catch. Cheaper to
+  // refuse the filename than to model two orderings.
+  const misnamed = findMisnamed(files);
+  if (misnamed.length > 0) {
+    console.error(
+      `\n[migration-ledger] ${misnamed.length} migration file(s) do not use the `
+      + 'NNNN_name.sql convention:\n',
+    );
+    for (const name of misnamed) {
+      console.error(
+        `  - ${name}\n`
+        + '    Remedy: rename it to a four-digit prefix. apply-migration-set.ts orders\n'
+        + '    migrations lexically and this guard orders them numerically; those agree\n'
+        + '    only at a fixed width, and one file of another width makes this guard\n'
+        + '    blind to the unappliable migrations it exists to catch.\n',
+      );
+    }
+    process.exit(UNAPPLIABLE);
   }
 
   let ledger: string[];

@@ -1,7 +1,9 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ledgerHead, migrationNumber, findUnappliable, describeUnappliable } from './migration-ledger-guard';
+import {
+  ledgerHead, migrationNumber, findUnappliable, describeUnappliable, findMisnamed,
+} from './migration-ledger-guard';
 
 // The live ledger as read on 2026-08-17 (read-only query recorded in the goal):
 // head 0059, real gaps at 0038-0040, and 0055/0056 reserved by another branch
@@ -102,6 +104,31 @@ describe('describeUnappliable', () => {
   });
 });
 
+describe('findMisnamed', () => {
+  // apply-migration-set.ts orders lexically, this guard orders numerically, and
+  // the two agree only at a fixed prefix width. One `60_foo.sql` applied against
+  // head 0059 makes apply refuse every later 4-digit file while findUnappliable
+  // stays green — so an off-width name is a violation, not something to skip.
+  it('flags a .sql file whose prefix is not four digits', () => {
+    expect(findMisnamed(['60_foo.sql', '0061_bar.sql'])).toEqual(['60_foo.sql']);
+  });
+
+  it('flags a .sql file with no numeric prefix at all', () => {
+    expect(findMisnamed(['night_outs.sql'])).toEqual(['night_outs.sql']);
+  });
+
+  it('ignores non-.sql files', () => {
+    expect(findMisnamed(['README.md', '.gitkeep'])).toEqual([]);
+  });
+
+  // The divergence itself, spelled out: both orderings on the same pair.
+  it('is what keeps numeric and lexical order coincident', () => {
+    expect(findUnappliable(['0061_bar.sql'], ['60_foo.sql'])).toEqual([]);   // guard: 61 > 60, green
+    expect('0061_bar.sql' <= '60_foo.sql').toBe(true);                        // apply: refuses it
+    expect(findMisnamed(['60_foo.sql'])).toHaveLength(1);                     // so the name is refused first
+  });
+});
+
 describe('the real supabase/migrations directory', () => {
   const files = readdirSync(join(process.cwd(), 'supabase', 'migrations'));
 
@@ -116,6 +143,10 @@ describe('the real supabase/migrations directory', () => {
 
   // Criterion 1 end-to-end over the real file list: drop one applied row out of
   // the ledger and that file — and only that file — becomes unappliable.
+  it('has no misnamed files, so enforcing the convention costs nothing today', () => {
+    expect(findMisnamed(files)).toEqual([]);
+  });
+
   it('flags a real migration once the ledger stops knowing about it', () => {
     const ledger = [...files, '0059_head_from_another_branch.sql']
       .filter((name) => name !== '0052_night_outs_my_invites.sql');
