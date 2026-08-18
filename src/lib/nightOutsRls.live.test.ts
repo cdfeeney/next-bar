@@ -176,6 +176,25 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     }
   };
 
+  /**
+   * respond_night_out, carrying the caller's CURRENT view.
+   *
+   * 0059 made the response revision part of the contract and dropped the
+   * 3-argument overload, so every call needs the pair. In these sequential
+   * single-connection tests the caller always acts on the row as it stands, so
+   * the revision is read inline — the same thing a UI does when it renders a
+   * card immediately before the tap. Tests that need a STALE revision (the
+   * replay cases) pass it explicitly instead and do not use this.
+   *
+   * For a non-member the subquery yields NULL, which the RPC refuses — which is
+   * exactly what the gated-write probes assert.
+   *
+   * Params: [planId, accept, expectedStatus].
+   */
+  const RESPOND = `select public.respond_night_out($1, $2, $3,
+    (select m.response_revision from public.night_out_members m
+      where m.night_out_id = $1 and m.user_id = auth.uid())) as ok`;
+
   const TABLES = [
     'night_outs',
     'night_out_members',
@@ -212,7 +231,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       ['cancel_night_out', `select public.cancel_night_out('${randomUUID()}'::uuid)`],
       ['decide_night_out', `select public.decide_night_out('${randomUUID()}'::uuid, 'attaboy')`],
       ['invite_to_night_out', `select public.invite_to_night_out('${randomUUID()}'::uuid, '${randomUUID()}'::uuid)`],
-      ['respond_night_out', `select public.respond_night_out('${randomUUID()}'::uuid, true, 'pending')`],
+      ['respond_night_out', `select public.respond_night_out('${randomUUID()}'::uuid, true, 'pending', 0)`],
       ['join_night_out_by_token', `select public.join_night_out_by_token('${randomUUID()}'::uuid)`],
       ['decline_night_out_by_token', `select public.decline_night_out_by_token('${randomUUID()}'::uuid)`],
       ['revoke_night_out_link', `select public.revoke_night_out_link('${randomUUID()}'::uuid)`],
@@ -224,6 +243,12 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       ['night_out_member_cap', 'select public.night_out_member_cap()'],
       ['night_out_seat_count', `select public.night_out_seat_count('${randomUUID()}'::uuid)`],
       ['get_my_night_outs', 'select public.get_my_night_outs()'],
+      // 0059's revision trigger function. It `returns trigger`, so PostgreSQL
+      // would refuse a direct call anyway — but it is SECURITY DEFINER, and the
+      // EXECUTE privilege is checked BEFORE the trigger-context error, so the
+      // revoke is what actually answers here and is worth asserting. Verified:
+      // both anon and authenticated get "permission denied for function".
+      ['night_out_members_bump_revision', 'select public.night_out_members_bump_revision()'],
     ];
     for (const [name, sql] of writes) {
       const denied = await inRollback(async () => {
@@ -362,7 +387,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
         ['select public.suggest_night_out_bar($1, $2) as ok', [planId, 'stranger-bar']],
         ['select public.vote_night_out_bar($1, $2) as ok', [planId, 'probe-bar']],
         ['select public.invite_to_night_out($1, $2) as ok', [planId, stranger]],
-        ['select public.respond_night_out($1, true, $2) as ok', [planId, 'declined']],
+        [RESPOND, [planId, true, 'declined']],
         ['select public.cancel_night_out($1) as ok', [planId]],
         ['select public.decide_night_out($1, $2) as ok', [planId, 'probe-bar']],
       ];
@@ -429,8 +454,8 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       // Explicit "Not tonight" after accepting, then an explicit rejoin.
       await asRole('authenticated', guest);
       const { rows: no } = await db.query(
-        'select public.respond_night_out($1, false, $2) as ok',
-        [planId, 'accepted'],
+        RESPOND,
+        [planId, false, 'accepted'],
       );
       expect(no[0].ok, 'an accepted member could not decline').toBe(true);
       await db.query('RESET ROLE');
@@ -455,8 +480,8 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       // ...but an EXPLICIT rejoin does, when there is room.
       await asRole('authenticated', guest);
       const { rows: back } = await db.query(
-        'select public.respond_night_out($1, true, $2) as ok',
-        [planId, 'declined'],
+        RESPOND,
+        [planId, true, 'declined'],
       );
       expect(back[0].ok, 'an explicit rejoin was refused while under the cap').toBe(true);
       await db.query('RESET ROLE');
@@ -650,7 +675,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       await db.query('RESET ROLE');
       await asRole('authenticated', quitter);
       expect(
-        (await db.query('select public.respond_night_out($1,false,$2) as ok', [planId, 'pending']))
+        (await db.query(RESPOND, [planId, false, 'pending']))
           .rows[0].ok,
       ).toBe(true);
       await db.query('RESET ROLE');
@@ -662,8 +687,8 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       // The rejoin hole: a declined member must not get back into a full plan.
       await asRole('authenticated', quitter);
       const { rows: back } = await db.query(
-        'select public.respond_night_out($1,true,$2) as ok',
-        [planId, 'declined'],
+        RESPOND,
+        [planId, true, 'declined'],
       );
       expect(back[0].ok, 'a declined member rejoined past the cap').toBe(false);
       await db.query('RESET ROLE');
@@ -674,12 +699,12 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       // Free one seat; now the rejoin is legitimate and must succeed.
       await asRole('authenticated', replacement);
-      await db.query('select public.respond_night_out($1,false,$2) as ok', [planId, 'pending']);
+      await db.query(RESPOND, [planId, false, 'pending']);
       await db.query('RESET ROLE');
       await asRole('authenticated', quitter);
       const { rows: back2 } = await db.query(
-        'select public.respond_night_out($1,true,$2) as ok',
-        [planId, 'declined'],
+        RESPOND,
+        [planId, true, 'declined'],
       );
       expect(back2[0].ok, 'a declined member could not rejoin a plan with room').toBe(true);
     });
@@ -741,13 +766,13 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       // Accepted: token, because that is how the plan page is reached. The
       // invitee is PENDING here — that is the state this accept acts on.
-      await db.query('select public.respond_night_out($1, true, $2) as ok', [planId, 'pending']);
+      await db.query(RESPOND, [planId, true, 'pending']);
       const accepted = await readAs(guest);
       expect(accepted.my_status).toBe('accepted');
       expect(accepted.share_token, 'an accepted member could not reach the plan').not.toBeNull();
 
       // Declined: token withdrawn again.
-      await db.query('select public.respond_night_out($1, false, $2) as ok', [planId, 'accepted']);
+      await db.query(RESPOND, [planId, false, 'accepted']);
       const declined = await readAs(guest);
       expect(declined.my_status).toBe('declined');
       expect(declined.share_token, 'a declined member kept the share token').toBeNull();
@@ -773,8 +798,8 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       await asRole('authenticated', guest);
       // This invitee is pending — they are accepting for the first time.
       await db.query(
-        'select public.respond_night_out($1, true, $2) as ok',
-        [updatedPlan, 'pending'],
+        RESPOND,
+        [updatedPlan, true, 'pending'],
       );
 
       // A plan_changed event AFTER the response is what "Updated" means.
@@ -936,13 +961,13 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       // 1. The invitee accepts, from a pending card.
       expect(
-        (await db.query('select public.respond_night_out($1, true, $2) as ok', [planId, 'pending']))
+        (await db.query(RESPOND, [planId, true, 'pending']))
           .rows[0].ok,
       ).toBe(true);
 
       // 2. They change their mind and decline. This is their real, later decision.
       expect(
-        (await db.query('select public.respond_night_out($1, false, $2) as ok', [planId, 'accepted']))
+        (await db.query(RESPOND, [planId, false, 'accepted']))
           .rows[0].ok,
       ).toBe(true);
 
@@ -950,8 +975,8 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       //    queued request finally landing. It still carries 'pending', the
       //    state the user was looking at when they first tapped Accept.
       const replay = await db.query(
-        'select public.respond_night_out($1, true, $2) as ok',
-        [planId, 'pending'],
+        RESPOND,
+        [planId, true, 'pending'],
       );
       expect(replay.rows[0].ok, 'a replayed accept was applied').toBe(false);
 
@@ -987,10 +1012,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
       await db.query('RESET ROLE');
       await asRole('authenticated', guest);
-      await db.query('select public.respond_night_out($1, false, $2) as ok', [planId, 'pending']);
+      await db.query(RESPOND, [planId, false, 'pending']);
       // "Count me back in", acting on the declined card actually on screen.
       expect(
-        (await db.query('select public.respond_night_out($1, true, $2) as ok', [planId, 'declined']))
+        (await db.query(RESPOND, [planId, true, 'declined']))
           .rows[0].ok,
         'a legitimate change of mind was refused',
       ).toBe(true);
@@ -1018,11 +1043,23 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       await db.query('RESET ROLE');
       await asRole('authenticated', guest);
       for (const bogus of [null, 'made-up', '']) {
-        const { rows } = await db.query(
-          'select public.respond_night_out($1, true, $2) as ok',
-          [planId, bogus],
-        );
+        const { rows } = await db.query(RESPOND, [planId, true, bogus]);
         expect(rows[0].ok, `expected state ${JSON.stringify(bogus)} was accepted`).toBe(false);
+      }
+
+      // 0059: the revision is the other half of the expectation and gets the
+      // same treatment. A missing revision must not read as "skip the check",
+      // and a revision from the FUTURE must be refused too — a comparison
+      // written as >= or <> instead of = would let it through.
+      for (const bogusRevision of [null, -1, 999]) {
+        const { rows } = await db.query(
+          `select public.respond_night_out($1, true, $2, $3) as ok`,
+          [planId, 'pending', bogusRevision],
+        );
+        expect(
+          rows[0].ok,
+          `expected revision ${JSON.stringify(bogusRevision)} was accepted`,
+        ).toBe(false);
       }
       await db.query('RESET ROLE');
       const { rows: after } = await db.query(
@@ -1030,6 +1067,211 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
         [planId, guest],
       );
       expect(after[0].invite_status, 'a bogus expectation still changed the row').toBe('pending');
+    });
+  });
+
+  /**
+   * CRITERION 4, the database-side half — the one this file was missing.
+   *
+   * "No caller can invoke the unguarded form" was only ever proved from the
+   * migration TEXT: 0057 drops the 2-argument overload, 0059 drops the
+   * 3-argument one. But `drop function if exists` is silently a no-op if the
+   * overload is later re-created, and three applied files (0044/0046/0048)
+   * still contain a `create or replace` of the 2-argument form — a partial
+   * hand-apply or a replayed hotfix puts it back. Every other call in this file
+   * now uses the 4-argument form, so nothing here would notice; the replay hole
+   * would simply be reachable again through the old signature (round-3 review,
+   * Claude, medium).
+   *
+   * 42883 is undefined_function: the name resolves to no such argument list.
+   */
+  it('the superseded respond_night_out overloads are GONE from this database (criterion 4)', async () => {
+    const superseded: Array<[string, string]> = [
+      ['2-argument (dropped by 0057)', `select public.respond_night_out('${randomUUID()}'::uuid, true)`],
+      ['3-argument (dropped by 0059)', `select public.respond_night_out('${randomUUID()}'::uuid, true, 'pending')`],
+    ];
+    for (const [label, sql] of superseded) {
+      const code = await inRollback(async () => {
+        try {
+          await db.query(sql);
+          return null;
+        } catch (error) {
+          return (error as { code?: string }).code ?? null;
+        }
+      });
+      expect(code, `the ${label} overload still resolves on this database`).toBe('42883');
+    }
+
+    // The two probes above only cover the signatures we thought to name. This
+    // is the same prove-the-list assertion the anon-denial test carries: ask the
+    // catalog what actually exists, so a THIRD overload nobody listed cannot
+    // sit there unnoticed.
+    const { rows } = await db.query(`
+      select pg_get_function_identity_arguments(p.oid) as args
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'respond_night_out'`);
+    // Argument NAMES are asserted too, not just types: PostgREST resolves an
+    // RPC by the named keys in the JSON body, so a rename is a caller-breaking
+    // change on the same footing as a signature change.
+    expect(rows.map((r) => r.args as string), 'respond_night_out has an unexpected overload set')
+      .toEqual([
+        'p_night_out uuid, p_accept boolean, p_expected_status text, p_expected_revision integer',
+      ]);
+  });
+
+  /**
+   * 0059 — a status is not a version.
+   *
+   * 0057 refused a caller whose expected STATUS no longer matched, and 0058 put
+   * that guard in the UPDATE's own predicate so it held under concurrency.
+   * Neither stopped a REPLAY, because a row can return to a status it already
+   * held and the stale request then matches again. Reproduced against this
+   * database on 2026-08-17 before the fix.
+   *
+   * Both directions are asserted. A fix that only guards one of them passes the
+   * first half and is still wrong.
+   */
+  it('a replayed response cannot reverse a later decision (0059, both directions)', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, null) as id',
+        ['replay probe'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+      await db.query('RESET ROLE');
+
+      /** The pair a caller would have rendered, read as the owner would not. */
+      const held = async (): Promise<{ status: string; revision: number }> => {
+        const { rows } = await db.query(
+          `select invite_status, response_revision from public.night_out_members
+            where night_out_id = $1 and user_id = $2`,
+          [planId, guest],
+        );
+        return { status: rows[0].invite_status as string, revision: Number(rows[0].response_revision) };
+      };
+      /** Respond carrying a REMEMBERED pair — replaying means reusing one. */
+      const respondHolding = async (
+        accept: boolean,
+        view: { status: string; revision: number },
+      ): Promise<boolean> => {
+        await asRole('authenticated', guest);
+        const { rows } = await db.query(
+          'select public.respond_night_out($1, $2, $3, $4) as ok',
+          [planId, accept, view.status, view.revision],
+        );
+        await db.query('RESET ROLE');
+        return rows[0].ok as boolean;
+      };
+
+      // Forward: decline, accept, decline — then replay the ACCEPT.
+      const v0 = await held();
+      expect(v0.revision, 'a fresh membership must start at revision 0').toBe(0);
+      await respondHolding(false, v0);
+      const vAccept = await held(); // the view the replayed request carried
+      await respondHolding(true, vAccept);
+      const vDecline = await held();
+      await respondHolding(false, vDecline);
+      expect((await held()).status, 'setup: the last real decision was decline').toBe('declined');
+
+      expect(
+        await respondHolding(true, vAccept),
+        'a replayed accept was applied',
+      ).toBe(false);
+      expect(
+        (await held()).status,
+        'a replayed accept reversed the last decline — the ABA hole is open',
+      ).toBe('declined');
+
+      // Reverse: the same hole in the other direction, on the same row.
+      const vBack = await held();
+      await respondHolding(true, vBack);
+      const vReverseDecline = await held(); // this one gets replayed
+      await respondHolding(false, vReverseDecline);
+      const vReverseAccept = await held();
+      await respondHolding(true, vReverseAccept);
+      expect((await held()).status, 'setup: the last real decision was accept').toBe('accepted');
+
+      expect(
+        await respondHolding(false, vReverseDecline),
+        'a replayed decline was applied',
+      ).toBe(false);
+      expect(
+        (await held()).status,
+        'a replayed decline reversed the last accept — the fix guards only one direction',
+      ).toBe('accepted');
+
+      // The honest path must still work, and every accepted transition must
+      // have moved the revision — a counter that stands still is not a version.
+      const now = await held();
+      expect(now.revision, 'the revision did not advance across six state changes')
+        .toBeGreaterThanOrEqual(6);
+      expect(await respondHolding(false, now), 'an honest decline was refused').toBe(true);
+      expect((await held()).status).toBe('declined');
+    });
+  });
+
+  /**
+   * The revision READ contract, at the SQL boundary.
+   *
+   * Found by review: everything else tests the revision somewhere it is mocked
+   * or read directly. The live ABA test queries `night_out_members` itself; the
+   * wrapper and component tests supply RPC rows by hand. So both read functions
+   * could return a constant 0 and the entire suite would stay green — while
+   * every legitimate UI response failed the moment a membership passed revision
+   * 0, because the caller would send 0 against a row that had moved on.
+   *
+   * This asserts the two reads that feed the two response surfaces actually
+   * carry the row's revision, and that it MOVES.
+   */
+  it('get_night_out and get_my_night_outs return the live response_revision (0059)', async () => {
+    await inRollback(async () => {
+      const [owner, guest] = await makeIdentities(2);
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(public.nyc_night_key(), $1, null) as id',
+        ['revision read probe'],
+      );
+      const planId = made[0].id as string;
+      await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, guest]);
+      await db.query('RESET ROLE');
+
+      const rowRevision = async (): Promise<number> => {
+        const { rows } = await db.query(
+          `select response_revision from public.night_out_members
+            where night_out_id = $1 and user_id = $2`, [planId, guest],
+        );
+        return Number(rows[0].response_revision);
+      };
+      const readBack = async (): Promise<{ plan: number; list: number }> => {
+        await asRole('authenticated', guest);
+        const { rows: one } = await db.query(
+          'select caller_revision from public.get_night_out($1)', [planId]);
+        const { rows: many } = await db.query(
+          'select night_out_id, my_revision from public.get_my_night_outs()');
+        await db.query('RESET ROLE');
+        const mine = many.find((r) => r.night_out_id === planId);
+        expect(mine, 'the invitee could not see the plan in get_my_night_outs').toBeTruthy();
+        return { plan: Number(one[0].caller_revision), list: Number(mine.my_revision) };
+      };
+
+      const atZero = await readBack();
+      expect(atZero.plan, 'get_night_out did not report the fresh revision 0').toBe(0);
+      expect(atZero.list, 'get_my_night_outs did not report the fresh revision 0').toBe(0);
+
+      // Move it, twice, so a hardcoded 0 cannot pass.
+      await asRole('authenticated', guest);
+      await db.query(RESPOND, [planId, false, 'pending']);
+      await db.query(RESPOND, [planId, true, 'declined']);
+      await db.query('RESET ROLE');
+
+      const moved = await rowRevision();
+      expect(moved, 'two responses did not advance the stored revision').toBe(2);
+      const after = await readBack();
+      expect(after.plan, 'get_night_out does not carry the live revision').toBe(moved);
+      expect(after.list, 'get_my_night_outs does not carry the live revision').toBe(moved);
     });
   });
 

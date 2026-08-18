@@ -4,6 +4,7 @@ import {
   cancelNightOut,
   createNightOut,
   decideNightOut,
+  getMyNightOuts,
   getNightOut,
   getNightOutBoard,
   getNightOutMembers,
@@ -79,16 +80,17 @@ describe('nightOuts.server write RPCs', () => {
     const { client } = fakeRpc({ error: { message: 'denied' } });
     await expect(cancelNightOut(client, UUID)).resolves.toBe(false);
     await expect(decideNightOut(client, UUID, 'attaboy')).resolves.toBe(false);
-    await expect(respondNightOut(client, UUID, true, 'pending')).resolves.toBe(false);
+    await expect(respondNightOut(client, UUID, true, 'pending', 0)).resolves.toBe(false);
   });
 
   it('respondNightOut carries the accept flag — "Not tonight" is accept=false', async () => {
     const { client, rpc } = fakeRpc({ data: true });
-    await expect(respondNightOut(client, UUID, false, 'pending')).resolves.toBe(true);
+    await expect(respondNightOut(client, UUID, false, 'pending', 0)).resolves.toBe(true);
     expect(rpc).toHaveBeenCalledWith('respond_night_out', {
       p_night_out: UUID,
       p_accept: false,
       p_expected_status: 'pending',
+      p_expected_revision: 0,
     });
   });
 
@@ -96,13 +98,90 @@ describe('nightOuts.server write RPCs', () => {
     // Without it, a replayed accept reversed a LATER decline and recorded the
     // person as coming when they had said no (cold panel, Codex, HIGH). If the
     // expected state stops reaching the RPC, that protection is gone silently.
+    //
+    // 0059: the REVISION travels with the status, and it is the half that makes
+    // the guard reliable — a status can come back, so a status-only check
+    // matched a stale request again once the row returned to it.
     const { client, rpc } = fakeRpc({ data: true });
-    await expect(respondNightOut(client, UUID, true, 'declined')).resolves.toBe(true);
+    await expect(respondNightOut(client, UUID, true, 'declined', 3)).resolves.toBe(true);
     expect(rpc).toHaveBeenCalledWith('respond_night_out', {
       p_night_out: UUID,
       p_accept: true,
       p_expected_status: 'declined',
+      p_expected_revision: 3,
     });
+  });
+
+  it('respondNightOut refuses a revision that was never rendered', async () => {
+    // A caller reaching here with no revision has not rendered one, and the
+    // tempting fix — substituting 0 — sends a value the user never saw, which
+    // is the fabricated-default pattern the RPC exists to reject. Refuse
+    // locally so the failure is attributable to the caller rather than
+    // arriving as an opaque `false` from the database.
+    const { client, rpc } = fakeRpc({ data: true });
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      await expect(respondNightOut(client, UUID, true, 'pending', bad)).resolves.toBe(false);
+    }
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('getMyNightOuts maps my_revision onto myRevision', async () => {
+    // Both review lanes found this gap independently. The two component tests
+    // mock the whole nightOuts.server module, and the live tests query SQL
+    // directly, so NOTHING exercised this mapping. Break it — drop the key,
+    // typo it, or rename the SQL column — and tsc stays 0 (the row is a blind
+    // `as MyNightOutRow[]` cast) while every Accept and Decline on Social →
+    // Plans silently stops working, because respondNightOut's local
+    // Number.isInteger guard refuses an undefined revision.
+    //
+    // The revision is the only field asserted here that has no other coverage;
+    // the rest of the row is included so a reordering or a dropped key shows up
+    // as a diff rather than a silent pass.
+    const { client, rpc } = fakeRpc({
+      data: [
+        {
+          night_out_id: PLAN_UUID,
+          night: '2026-08-20',
+          title: 'Birthday crawl',
+          status: 'open',
+          owner_handle: 'conor',
+          owner_display_name: 'Conor',
+          my_status: 'pending',
+          responded_at: null,
+          accepted_count: 4,
+          share_token: null,
+          plan_updated: false,
+          is_past: false,
+          my_revision: 5,
+        },
+      ],
+    });
+    await expect(getMyNightOuts(client)).resolves.toEqual([
+      {
+        nightOutId: PLAN_UUID,
+        night: '2026-08-20',
+        title: 'Birthday crawl',
+        status: 'open',
+        ownerHandle: 'conor',
+        ownerDisplayName: 'Conor',
+        myStatus: 'pending',
+        respondedAt: null,
+        acceptedCount: 4,
+        shareToken: null,
+        planUpdated: false,
+        isPast: false,
+        myRevision: 5,
+      },
+    ]);
+    expect(rpc).toHaveBeenCalledWith('get_my_night_outs');
+  });
+
+  it('getMyNightOuts returns null on error rather than an empty list', async () => {
+    // An empty list and a failed read render identically on the card surface
+    // (the section hides when empty), so conflating them would make an outage
+    // look like "no invitations".
+    const { client } = fakeRpc({ error: { message: 'denied' } });
+    await expect(getMyNightOuts(client)).resolves.toBeNull();
   });
 
   it('inviteToNightOut validates both uuids before calling', async () => {
@@ -161,6 +240,7 @@ describe('nightOuts.server reads', () => {
           share_token: UUID2,
           caller_role: 'member',
           caller_status: 'accepted',
+          caller_revision: 2,
         },
       ],
     });
@@ -170,6 +250,7 @@ describe('nightOuts.server reads', () => {
       status: 'open',
       callerRole: 'member',
       callerStatus: 'accepted',
+      callerRevision: 2,
       shareToken: UUID2,
     });
   });

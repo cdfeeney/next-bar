@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -217,16 +217,29 @@ describe('0044_night_outs.sql security shape', () => {
  * respond_night_out — the one function round 3 existed to fix — which would
  * send an auditor of the 20-member cap to 0044's uncapped, unlocked text):
  *
- *   0044 — night_out_role, create_night_out, cancel_night_out, decide_night_out,
- *          suggest/vote, the member-scoped reads, preview, resolve-by-token
- *   0045 — get_night_out (invite_to_night_out superseded by 0049)
+ *   0044 — night_out_role, cancel_night_out, decide_night_out, vote_night_out_bar,
+ *          get_night_out_board, get_night_out_members, preview_night_out,
+ *          resolve_night_out_by_token, revoke_night_out_link
+ *          (create_night_out superseded by 0054, suggest_night_out_bar by 0051)
+ *   0045 — (get_night_out superseded by 0059; invite_to_night_out by 0049)
  *   0046 — (superseded by 0048)
  *   0047 — night_outs column grants
- *   0048 — night_out_member_cap, night_out_seat_count, and the four callers:
+ *   0048 — night_out_member_cap, night_out_seat_count, and three callers:
  *          join_night_out_by_token, decline_night_out_by_token,
- *          respond_night_out, night_out_is_full_by_token
+ *          night_out_is_full_by_token
  *   0049 — (superseded by 0050)
  *   0050 — invite_to_night_out
+ *   0051 — suggest_night_out_bar
+ *   0053 — nyc_night_key
+ *   0054 — create_night_out
+ *   0057/0058 — (respond_night_out, superseded by 0059)
+ *   0059 — respond_night_out, get_night_out, get_my_night_outs,
+ *          night_out_members_bump_revision
+ *
+ * respond_night_out moved OUT of 0048 in the 0057 -> 0058 -> 0059 chain. It is
+ * called out here because the map was written after an auditor of the 20-member
+ * cap was sent to the wrong file once already, and leaving 0048 as its listed
+ * home would do it a second time.
  *
  * The assertions in the block above still describe 0044's TEXT, which is correct
  * as a record of an applied, immutable file, but is NOT the effective definition
@@ -243,10 +256,110 @@ const SQL_0046 = readFileSync(
   'utf8',
 ).toLowerCase();
 
-/** The body of one create-or-replace function, up to its closing $$. */
+/**
+ * ASCII-only lowercase. Indexes into the result map 1:1 onto the original text,
+ * which is what lets these helpers search case-insensitively and still slice the
+ * original bytes.
+ */
+function asciiLower(sql: string): string {
+  return sql.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
+/** Strip `--` line comments so a commented-out statement never counts. */
+function withoutComments(sql: string): string {
+  return sql.replace(/--.*/g, '');
+}
+
+/**
+ * Whether `sql` contains a statement position for `name` — the LOOSE scan. It
+ * deliberately accepts far more than definitionIndex can parse, because its job
+ * is to notice that a migration touched this function at all, including a bare
+ * `drop function`.
+ */
+function touchesDefinition(sql: string, name: string): boolean {
+  const lower = asciiLower(withoutComments(sql));
+  for (const lead of [`function public.${name}`, `function if exists public.${name}`]) {
+    let at = lower.indexOf(lead);
+    while (at > -1) {
+      // An argument list or a bare `;`. Requiring one of the two is what keeps
+      // get_night_out from matching get_night_out_board.
+      if (/^\s*[(;]/.test(lower.slice(at + lead.length, at + lead.length + 40))) return true;
+      at = lower.indexOf(lead, at + 1);
+    }
+  }
+  return false;
+}
+
+/**
+ * Where `name`'s definition starts in `sql`, or -1 — the STRICT read. Both
+ * statement forms are accepted (0059 states get_night_out as `drop function`
+ * plus a plain `create function`, not `create or replace`), and whitespace may
+ * sit between the name and its argument list, as Postgres allows.
+ */
+function definitionIndex(sql: string, name: string): number {
+  const lower = asciiLower(sql);
+  for (const form of [
+    `create or replace function public.${name}`,
+    `create function public.${name}`,
+  ]) {
+    let at = lower.indexOf(form);
+    while (at > -1) {
+      if (/^\s*\(/.test(lower.slice(at + form.length, at + form.length + 40))) return at;
+      at = lower.indexOf(form, at + 1);
+    }
+  }
+  return -1;
+}
+
+/**
+ * The migration that currently DEFINES `name`: the last file that states it,
+ * which is the text the database actually runs.
+ *
+ * Derived rather than hard-coded on purpose. Every previous version of this
+ * block named its file literally, and the pointer went stale twice as
+ * respond_night_out moved 0046 -> 0048 -> 0059 — each time leaving these
+ * invariants asserting against dead text with the suite green, which is the one
+ * failure this block exists to prevent (round-2 review, Claude, medium).
+ *
+ * The two-scan shape is the point, and it is what round 3 got wrong. Picking the
+ * last file that the STRICT matcher can read would silently fall back to the
+ * previous definer whenever a newer migration states the function in a form the
+ * matcher does not know — or merely drops it — which is the same dead-text
+ * failure wearing a derivation (round-3 review, both lanes, medium). So the
+ * LOOSE scan chooses the file, and the strict read must then succeed on that
+ * file. A form this guard cannot parse fails loudly here instead of quietly
+ * asserting against a superseded body.
+ *
+ * The text is returned in its original case. Lowercasing it would let a future
+ * definition comparing against 'DECLINED' — which never matches the lowercase
+ * status Postgres stores, so the cap gate would never engage — satisfy an
+ * assertion looking for 'declined' (round-3 review, Codex, medium).
+ */
+function effectiveSql(name: string): string {
+  const dir = path.join(__dirname, '..', '..', 'supabase', 'migrations');
+  const read = (f: string) => readFileSync(path.join(dir, f), 'utf8');
+  // Files only: `revert/` is a subdirectory, and its rollback text restates
+  // these functions. Names are zero-padded, so lexical order is numeric order.
+  const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+  const touching = files.filter((f) => touchesDefinition(read(f), name));
+  expect(touching.length, `no migration states ${name}`).toBeGreaterThan(0);
+
+  const last = touching[touching.length - 1];
+  const sql = withoutComments(read(last));
+  expect(
+    definitionIndex(sql, name),
+    `${last} is the last migration to state ${name}, but this guard cannot read a ` +
+      `definition out of it — it may only drop the function, or state it in a form ` +
+      `definitionIndex does not accept. Fix the matcher rather than letting the guard ` +
+      `fall back to a superseded file.`,
+  ).toBeGreaterThan(-1);
+  return sql;
+}
+
+/** The body of one stated function, up to its closing $$. */
 function functionBody(sql: string, name: string): string {
-  const start = sql.indexOf(`create or replace function public.${name}`);
-  expect(start, `${name} not found in 0046`).toBeGreaterThan(-1);
+  const start = definitionIndex(sql, name);
+  expect(start, `${name} not found in the migration under test`).toBeGreaterThan(-1);
   const end = sql.indexOf('$$;', start);
   expect(end, `${name} has no terminator`).toBeGreaterThan(start);
   return sql.slice(start, end);
@@ -258,12 +371,14 @@ function functionBody(sql: string, name: string): string {
  * functions. They were written against 0046 and stayed pointed there after 0048
  * superseded it (fresh-cycle round-2 review, Claude) — a guard aimed at dead
  * text, which is the same claim-drifted-from-artifact failure it exists to
- * catch. They now read SQL_0048; if a later migration re-states these
- * functions again, this constant is what has to move with it.
+ * catch. Each `it` below now derives its text through effectiveSql(), so it
+ * reads whichever migration currently DEFINES the function it names. Nothing
+ * here has to be moved when the next migration re-states one of them — the
+ * remembering is what kept failing.
  */
-describe('effective night_out RPC ordering invariants (currently 0048)', () => {
+describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
-    const body = functionBody(SQL_0048, 'join_night_out_by_token');
+    const body = functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token');
     const lock = body.indexOf('pg_advisory_xact_lock');
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
     const capCheck = body.indexOf('member_cap', conversion);
@@ -276,14 +391,14 @@ describe('effective night_out RPC ordering invariants (currently 0048)', () => {
   });
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
-    const body = functionBody(SQL_0048, 'decline_night_out_by_token');
+    const body = functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token');
     expect(body).not.toMatch(/member_cap/);
     // Still serialised, so a concurrent invite cannot swallow the decline.
     expect(body).toMatch(/pg_advisory_xact_lock/);
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = functionBody(SQL_0048, 'respond_night_out');
+    const body = functionBody(effectiveSql('respond_night_out'), 'respond_night_out');
     expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
       /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
     );
@@ -296,7 +411,7 @@ describe('effective night_out RPC ordering invariants (currently 0048)', () => {
     // There is exactly one count now — night_out_seat_count — so this is the
     // only place the rule can be wrong. 0048's exactly-once assertion is what
     // keeps it that way.
-    const body = functionBody(SQL_0048, 'night_out_seat_count');
+    const body = functionBody(effectiveSql('night_out_seat_count'), 'night_out_seat_count');
     expect(body, 'the seat count includes declined rows').toMatch(/invite_status <> 'declined'/);
   });
 

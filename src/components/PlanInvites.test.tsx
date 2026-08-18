@@ -18,7 +18,11 @@ let respondOk = true;
 // Lets a test say "the row had already moved on" — the reason a real refusal
 // happens, and the thing the card has to notice.
 let onRefusal: (() => void) | null = null;
-const responded: Array<[string, boolean]> = [];
+const responded: Array<[string, boolean, number]> = [];
+/** How many times the list has been read. A click-time re-fetch shows up here. */
+let getMyNightOutsCalls = 0;
+/** Reads observed AT SEND time. A post-success re-sync read must not be mistaken for a pre-send re-fetch. */
+let readsAtSend = -1;
 const pushed: string[] = [];
 let authStatus = 'signed-in';
 
@@ -28,8 +32,9 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ status: authStatus }) }));
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
 vi.mock('@/lib/nightOuts.server', () => ({
-  getMyNightOuts: async () =>
-    rows.map((r) => ({
+  getMyNightOuts: async () => {
+    getMyNightOutsCalls += 1;
+    return rows.map((r) => ({
       nightOutId: r.id,
       night: r.night ?? '2026-08-20',
       title: r.title ?? 'Friday night in the LES',
@@ -42,9 +47,21 @@ vi.mock('@/lib/nightOuts.server', () => ({
       shareToken: r.shareToken ?? null,
       planUpdated: r.planUpdated ?? false,
       isPast: r.isPast ?? false,
-    })),
-  respondNightOut: async (_s: unknown, id: string, accept: boolean) => {
-    responded.push([id, accept]);
+      myRevision: r.myRevision ?? 0,
+    }));
+  },
+  respondNightOut: async (
+    _s: unknown,
+    id: string,
+    accept: boolean,
+    _expectedStatus: string,
+    expectedRevision: number,
+  ) => {
+    // The revision is captured so a test can assert the card sends the value it
+    // RENDERED. Sending a re-fetched one would re-open the replay window in the
+    // client, and nothing else in the suite would notice.
+    readsAtSend = getMyNightOutsCalls;
+    responded.push([id, accept, expectedRevision]);
     if (respondOk && accept) {
       rows = rows.map((r) =>
         r.id === id ? { ...r, myStatus: 'accepted', shareToken: 'tok-1' } : r,
@@ -65,6 +82,8 @@ beforeEach(() => {
   respondOk = true;
   onRefusal = null;
   responded.length = 0;
+  getMyNightOutsCalls = 0;
+  readsAtSend = -1;
   pushed.length = 0;
   authStatus = 'signed-in';
 });
@@ -84,7 +103,7 @@ describe('Social → Plans invitation cards', () => {
     const user = userEvent.setup();
     render(<PlanInvites />);
     await user.click(await screen.findByRole('button', { name: 'Accept' }));
-    await waitFor(() => expect(responded).toEqual([['p1', true]]));
+    await waitFor(() => expect(responded).toEqual([['p1', true, 0]]));
     expect(await screen.findByTestId('invite-accepted-confirm')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'View plan' }));
     // share_token only exists once accepted — that is the 0047 rule, and it is
@@ -97,8 +116,37 @@ describe('Social → Plans invitation cards', () => {
     const user = userEvent.setup();
     const { container } = render(<PlanInvites />);
     await user.click(await screen.findByRole('button', { name: 'Decline' }));
-    await waitFor(() => expect(responded).toEqual([['p1', false]]));
+    await waitFor(() => expect(responded).toEqual([['p1', false, 0]]));
     await waitFor(() => expect(container.querySelector('[data-testid="plan-invites"]')).toBeNull());
+  });
+
+  test('the card sends the revision it RENDERED, not a default and not a re-fetch', async () => {
+    // 0059: the revision is what makes the replay guard reliable, and it only
+    // works if the value travelling with the tap is the one the card was drawn
+    // from. A card rendered at revision 4 that sends 0 — or re-fetches at click
+    // time — hands the RPC a version the user never saw, which is the ABA
+    // window moved into the client.
+    //
+    // ROUND 2: the first version of this test left `rows` untouched between
+    // render and click, so a click-time re-fetch would have returned the same 4
+    // and passed. Both review lanes caught that the comment claimed more than
+    // the assertion proved. The backend now MOVES after the card is drawn, which
+    // is the only way to tell "what was rendered" from "what is true now".
+    // Keep the two values different.
+    rows = [{ id: 'p1', myStatus: 'pending', myRevision: 4 }];
+    const user = userEvent.setup();
+    render(<PlanInvites />);
+    const accept = await screen.findByRole('button', { name: 'Accept' });
+    const afterRender = getMyNightOutsCalls;
+
+    // Someone else responded; the rendered card is now stale.
+    rows = [{ id: 'p1', myStatus: 'pending', myRevision: 91 }];
+    expect(afterRender, 'the list had not loaded before the backend moved').toBeGreaterThan(0);
+
+    await user.click(accept);
+    // 4 = rendered. 91 = re-fetched at click time. 0 = fabricated default.
+    await waitFor(() => expect(responded).toEqual([['p1', true, 4]]));
+    expect(readsAtSend, 'the card re-read the list BEFORE sending').toBe(afterRender);
   });
 
   test('an already-accepted invite reads as already responded, not as new', async () => {
