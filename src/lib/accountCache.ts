@@ -436,7 +436,19 @@ function dropParkedNightOut(userId?: string): void {
     }
     const raw = window.localStorage.getItem(STARTED_NIGHT_OUT_KEY);
     if (raw === null) return;
-    const parsed: unknown = JSON.parse(raw);
+    // A value we cannot parse is a value we cannot be SELECTIVE about, and the
+    // one thing known about it is that it is this key (round-3 panel, Codex):
+    // truncated JSON still contains the deleted user's id and plan id in
+    // plaintext. Erasing it whole is the only honest option — falling through
+    // to the catch left those identifiers on the device after the strongest
+    // erase the app offers.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      window.localStorage.removeItem(STARTED_NIGHT_OUT_KEY);
+      return;
+    }
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       window.localStorage.removeItem(STARTED_NIGHT_OUT_KEY);
       return;
@@ -448,8 +460,10 @@ function dropParkedNightOut(userId?: string): void {
     }
     window.localStorage.setItem(STARTED_NIGHT_OUT_KEY, JSON.stringify(rest));
   } catch {
-    // Unreadable or unwritable store: a malformed value is already ignored by
-    // every reader, and there is no third place to put the erase.
+    // The STORE itself is unavailable (private mode, quota, a blocked origin).
+    // A malformed VALUE no longer reaches here — it is erased above — so this
+    // is only the case where no write of any kind can land, and there is no
+    // third place to put the erase.
   }
 }
 

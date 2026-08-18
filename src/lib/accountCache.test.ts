@@ -367,6 +367,22 @@ describe('cache ownership is separate from the import latch', () => {
     expect(window.localStorage.getItem(STARTED)).toBeNull();
   });
 
+  it('account deletion erases a MALFORMED parked value instead of leaving it', () => {
+    // Round-3 panel (Codex, medium). Truncated JSON still contains the deleted
+    // user's id and plan id in plaintext; JSON.parse threw into a catch that
+    // removed nothing, so the identifiers survived the strongest erase.
+    const STARTED = 'next-bar:started-night-out:v1';
+    window.localStorage.setItem(
+      STARTED,
+      '{"user-a":{"planId":"plan-a","nightKey":"2026-08-1',
+    );
+    destroyAccountDataOnDeletion('user-a');
+    expect(
+      window.localStorage.getItem(STARTED),
+      'a truncated value kept the deleted account’s identifiers on the device',
+    ).toBeNull();
+  });
+
   it('sign-out seal: no-op on an anonymous device, but always bumps the epoch', () => {
     window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
     const before = getCacheEpoch();

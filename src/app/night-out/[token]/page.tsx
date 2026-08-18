@@ -151,7 +151,16 @@ export default function NightOutPage({
     // plan A's member list — names, statuses, the whole board — would otherwise
     // sit on screen under plan B's URL. That is the identical leak as the async
     // one the epoch guard blocks, arriving synchronously instead.
-    setState((current) => (current.kind === 'member' ? { kind: 'loading' } : current));
+    //
+    // EVERY settled kind, not just 'member' (round-3 panel, Codex, HIGH). Only
+    // the member view was cleared, because the reasoning above was about
+    // LEAKING private data and a preview is public bearer data. That missed
+    // what the stale view can still DO: plan A's preview stayed on screen and
+    // stayed interactive under plan B's URL, and its Join button reads `token`
+    // from the current render — so tapping the "Join" under A's title and A's
+    // host accepted membership in B. A settled view whose identity has moved on
+    // is not a display problem, it is a live control wired to the wrong plan.
+    setState((current) => (current.kind === 'loading' ? current : { kind: 'loading' }));
     // This effect is declared BEFORE the loading effect, so on either change the
     // epoch has already moved by the time the new load captures it.
   }, [auth.status, token]);

@@ -254,4 +254,64 @@ describe('the plan page never paints an answer the view has moved on from', () =
     ).toBeNull();
     expect(screen.getByText("B's night out")).toBeTruthy();
   });
+
+  test("plan A's preview stops being a live control the moment the token changes", async () => {
+    /**
+     * Round-3 panel (Codex, HIGH). The epoch effect cleared only the 'member'
+     * view, because the argument for clearing was about LEAKING private data
+     * and a preview is public bearer data. What that missed is what a stale
+     * view can still DO: plan A's preview stayed on screen under plan B's URL,
+     * and its Join button reads `token` from the CURRENT render — so tapping
+     * the Join under A's title and A's host joined B.
+     */
+    const heldPreviewB = new Deferred<{
+      night: string; title: string; ownerHandle: string;
+      ownerDisplayName: string; acceptedCount: number;
+    }>();
+
+    // Signed-in non-member on plan A: the page settles on A's preview.
+    resolveByToken.mockResolvedValue(null);
+    previewNightOut.mockResolvedValueOnce({
+      night: '2026-08-20',
+      title: "A's night out",
+      ownerHandle: 'host',
+      ownerDisplayName: 'Host',
+      acceptedCount: 2,
+    });
+
+    const view = render(<NightOutPage params={{ token: TOKEN_A }} />);
+    await screen.findByRole('button', { name: /join this night out/i });
+    expect(screen.getByText("A's night out")).toBeTruthy();
+
+    // Client-side navigation to plan B. B's preview is held open, which is the
+    // whole window: whatever is on screen now belongs to A but is addressed by
+    // B's token.
+    previewNightOut.mockReturnValueOnce(heldPreviewB.promise);
+    view.rerender(<NightOutPage params={{ token: TOKEN_B }} />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText("A's night out"),
+        "plan A's preview stayed on screen under plan B's URL",
+      ).toBeNull(),
+    );
+    expect(
+      screen.queryByRole('button', { name: /join this night out/i }),
+      "plan A's Join button survived the token change, wired to plan B",
+    ).toBeNull();
+    expect(
+      joinNightOutByToken,
+      'a join fired from a view whose identity had already moved on',
+    ).not.toHaveBeenCalled();
+
+    // And the new view still arrives normally once its own read settles.
+    heldPreviewB.resolve({
+      night: '2026-08-20',
+      title: "B's night out",
+      ownerHandle: 'host',
+      ownerDisplayName: 'Host',
+      acceptedCount: 1,
+    });
+    expect(await screen.findByText("B's night out")).toBeTruthy();
+  });
 });
