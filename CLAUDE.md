@@ -9,19 +9,27 @@ Before claiming a change is verified, all three of these run and pass:
 
 ```
 npm run typecheck
-npm test          # vitest
-npm run test:e2e  # Playwright, both viewports
+npm test                              # vitest
+PLAYWRIGHT_RELEASE=1 npm run test:e2e # Playwright, production build, both viewports
 ```
+
+Run the e2e leg in **release mode**. Plain `npm run test:e2e` uses the dev
+server, which carries a navigation race that is not a product defect: a
+`page.goto()` issued straight after a load can be interrupted by the app's own
+client-side navigation while the route is still cold-compiling. Measured
+2026-08-17 on `app-store-pack.spec.ts:16` — **3/3 red on dev, 5/5 green on a
+production build of the same commit**. Dev mode is fine for iterating on one
+spec; it is not the thing to gate on.
 
 `npm test` runs **vitest only**. Between 2026-08-13 and 2026-08-16 every
 "full suite green" reported during the V8 work meant vitest alone — the browser
 specs were never invoked, and the suite had been red and invisible for weeks.
 A gate that omits `test:e2e` is not a gate; say which of the three you ran.
 
-For the release gate add `PLAYWRIGHT_RELEASE=1` (production build, 3 workers,
-zero retries). Do NOT pass `--reporter=list` on the command line: it overrides
-the config's `[['list'], ['html']]`, so the run produces no HTML report and no
-traces — exactly when a failure most needs them.
+`PLAYWRIGHT_RELEASE=1` is production build, 3 workers, zero retries. Do NOT
+pass `--reporter=list` on the command line: it overrides the config's
+`[['list'], ['html']]`, so the run produces no HTML report and no traces —
+exactly when a failure most needs them.
 
 ## Testing principle: every interactive feature gets an e2e test
 
@@ -46,11 +54,14 @@ have been caught by Playwright. Don't repeat that.
    regressed independently.
 
 **Known dev-server flake to expect, not chase:** the Next.js dev server
-cold-compile of `/quiz` occasionally races with `page.goto('/quiz')` from
-Playwright workers. Failure signature: `Error: page.goto: Navigation to
-"http://localhost:3000/quiz" is interrupted by another navigation to "/"`.
-Production builds are unaffected. If you see ONLY this one flake, re-run
-once before debugging.
+cold-compile races with `page.goto()` from Playwright workers. Failure
+signature: `Error: page.goto: Navigation to "http://localhost:3000/<route>" is
+interrupted by another navigation to "/"`. **Not confined to `/quiz`** — hit on
+`/map` (app-store-pack.spec.ts:16) on 2026-08-17, where it was not intermittent
+at all but 3/3 reproducible on a cold server, which reads exactly like a real
+regression. What settles it is the mode, not the repeat count: the same commit
+was 5/5 green under `PLAYWRIGHT_RELEASE=1`. Re-run it in release mode before
+debugging, and gate in release mode so it cannot cost anyone this hour again.
 
 ## Database migrations
 
