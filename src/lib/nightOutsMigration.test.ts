@@ -258,107 +258,102 @@ const SQL_0046 = readFileSync(
 
 /**
  * ASCII-only lowercase. Indexes into the result map 1:1 onto the original text,
- * which is what lets these helpers search case-insensitively and still slice the
- * original bytes.
+ * which is what lets these helpers match case-insensitively and still slice the
+ * original bytes — so an assertion looking for 'declined' is not satisfied by a
+ * definition that wrote 'DECLINED', which never matches the lowercase status
+ * Postgres stores (round-3 review, Codex, medium).
  */
 function asciiLower(sql: string): string {
   return sql.replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
-/** Strip `--` line comments so a commented-out statement never counts. */
+/** Both comment forms, so a commented-out statement never counts. */
 function withoutComments(sql: string): string {
-  return sql.replace(/--.*/g, '');
+  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--.*/g, '');
 }
 
 /**
- * Whether `sql` contains a statement position for `name` — the LOOSE scan. It
- * deliberately accepts far more than definitionIndex can parse, because its job
- * is to notice that a migration touched this function at all, including a bare
- * `drop function`.
+ * One statement that creates or drops a function, in any spelling Postgres
+ * accepts: optional OR REPLACE, optional IF [NOT] EXISTS, optional public.
+ * qualification, optional double quotes, and any whitespace — including a
+ * newline, or a block comment, already removed above — between the name and its
+ * argument list. A DROP may end at `;` instead.
+ *
+ * It is anchored on the verb on purpose. `grant execute on function
+ * public.respond_night_out(...)` and `revoke all on function ...` also contain
+ * the name followed by an argument list, and an earlier version keyed on that
+ * substring alone, so a grants-only migration (0047 is the precedent in this
+ * tree) looked like a definer and failed this guard on a correct migration
+ * (round-4 review, Claude, medium).
+ *
+ * The name is CAPTURED rather than interpolated, so callers compare it exactly.
+ * That is also what keeps get_night_out from matching get_night_out_board.
  */
-function touchesDefinition(sql: string, name: string): boolean {
-  const lower = asciiLower(withoutComments(sql));
-  for (const lead of [`function public.${name}`, `function if exists public.${name}`]) {
-    let at = lower.indexOf(lead);
-    while (at > -1) {
-      // An argument list or a bare `;`. Requiring one of the two is what keeps
-      // get_night_out from matching get_night_out_board.
-      if (/^\s*[(;]/.test(lower.slice(at + lead.length, at + lead.length + 40))) return true;
-      at = lower.indexOf(lead, at + 1);
-    }
-  }
-  return false;
-}
+const FUNCTION_STATEMENT =
+  /(create|drop)\s+(?:or\s+replace\s+)?function\s+(?:if\s+(?:not\s+)?exists\s+)?(?:"?public"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?\s*[(;]/g;
 
 /**
- * Where `name`'s definition starts in `sql`, or -1 — the STRICT read. Both
- * statement forms are accepted (0059 states get_night_out as `drop function`
- * plus a plain `create function`, not `create or replace`), and whitespace may
- * sit between the name and its argument list, as Postgres allows.
+ * Every migration concatenated in application order. The database applies them
+ * this way, so the LAST statement about a function is the one that wins — which
+ * is the whole question these guards ask, and asking it of the stream removes
+ * the "which file?" step that kept going wrong.
+ *
+ * Files only: `revert/` is a subdirectory and its rollback text restates these
+ * functions. Names are zero-padded, so lexical order is application order.
  */
-function definitionIndex(sql: string, name: string): number {
-  const lower = asciiLower(sql);
-  for (const form of [
-    `create or replace function public.${name}`,
-    `create function public.${name}`,
-  ]) {
-    let at = lower.indexOf(form);
-    while (at > -1) {
-      if (/^\s*\(/.test(lower.slice(at + form.length, at + form.length + 40))) return at;
-      at = lower.indexOf(form, at + 1);
-    }
-  }
-  return -1;
-}
-
-/**
- * The migration that currently DEFINES `name`: the last file that states it,
- * which is the text the database actually runs.
- *
- * Derived rather than hard-coded on purpose. Every previous version of this
- * block named its file literally, and the pointer went stale twice as
- * respond_night_out moved 0046 -> 0048 -> 0059 — each time leaving these
- * invariants asserting against dead text with the suite green, which is the one
- * failure this block exists to prevent (round-2 review, Claude, medium).
- *
- * The two-scan shape is the point, and it is what round 3 got wrong. Picking the
- * last file that the STRICT matcher can read would silently fall back to the
- * previous definer whenever a newer migration states the function in a form the
- * matcher does not know — or merely drops it — which is the same dead-text
- * failure wearing a derivation (round-3 review, both lanes, medium). So the
- * LOOSE scan chooses the file, and the strict read must then succeed on that
- * file. A form this guard cannot parse fails loudly here instead of quietly
- * asserting against a superseded body.
- *
- * The text is returned in its original case. Lowercasing it would let a future
- * definition comparing against 'DECLINED' — which never matches the lowercase
- * status Postgres stores, so the cap gate would never engage — satisfy an
- * assertion looking for 'declined' (round-3 review, Codex, medium).
- */
-function effectiveSql(name: string): string {
+function migrationStream(): string {
   const dir = path.join(__dirname, '..', '..', 'supabase', 'migrations');
-  const read = (f: string) => readFileSync(path.join(dir, f), 'utf8');
-  // Files only: `revert/` is a subdirectory, and its rollback text restates
-  // these functions. Names are zero-padded, so lexical order is numeric order.
-  const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
-  const touching = files.filter((f) => touchesDefinition(read(f), name));
-  expect(touching.length, `no migration states ${name}`).toBeGreaterThan(0);
-
-  const last = touching[touching.length - 1];
-  const sql = withoutComments(read(last));
-  expect(
-    definitionIndex(sql, name),
-    `${last} is the last migration to state ${name}, but this guard cannot read a ` +
-      `definition out of it — it may only drop the function, or state it in a form ` +
-      `definitionIndex does not accept. Fix the matcher rather than letting the guard ` +
-      `fall back to a superseded file.`,
-  ).toBeGreaterThan(-1);
-  return sql;
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f) => withoutComments(readFileSync(path.join(dir, f), 'utf8')))
+    .join('\n;\n');
 }
 
-/** The body of one stated function, up to its closing $$. */
+/**
+ * The EFFECTIVE body of `name` — its last CREATE across every migration, up to
+ * that definition's `$$;`.
+ *
+ * Derived rather than pinned to a filename. Every earlier version of this block
+ * named its file literally and the pointer went stale twice as respond_night_out
+ * moved 0046 -> 0048 -> 0059, each time leaving these invariants asserting
+ * against dead text with the suite green (round-2 review, Claude, medium).
+ *
+ * Taking the last statement in the STREAM, not the last file, is deliberate: a
+ * file that restates the same signature twice leaves the second body installed,
+ * and reading the first would assert against a body Postgres immediately
+ * replaced (round-4 review, Codex, medium).
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO: notice that a later migration DROPPED the
+ * function. A drop cannot be judged by name alone — Postgres identifies a
+ * function by name AND argument types, and dropping a superseded overload right
+ * after installing its replacement is routine (0059 does exactly that at :192,
+ * having created the four-argument form at :92). Telling that apart from a real
+ * removal means parsing and comparing argument type lists, which is more parser
+ * than this guard should own. The database-side question is answered where it
+ * can be answered honestly: the criterion-4 test in nightOutsRls.live.test.ts
+ * asks the catalog which overloads exist and pins the surviving set exactly, so
+ * a function that was genuinely removed fails there. The residual is that the
+ * live suite skips without DATABASE_URL, so on a bare CI runner a removed
+ * function would leave these ordering assertions reading its last definition.
+ */
+function effectiveBody(name: string): string {
+  const raw = migrationStream();
+  const lower = asciiLower(raw);
+  const created = [...lower.matchAll(FUNCTION_STATEMENT)].filter(
+    (m) => m[2] === name && m[1] === 'create',
+  );
+  expect(created.length, `no migration creates ${name}`).toBeGreaterThan(0);
+
+  const start = created[created.length - 1].index;
+  const end = lower.indexOf('$$;', start);
+  expect(end, `${name} has no terminator`).toBeGreaterThan(start);
+  return raw.slice(start, end);
+}
+
+/** The body of one create-or-replace function, up to its closing $$. */
 function functionBody(sql: string, name: string): string {
-  const start = definitionIndex(sql, name);
+  const start = sql.indexOf(`create or replace function public.${name}`);
   expect(start, `${name} not found in the migration under test`).toBeGreaterThan(-1);
   const end = sql.indexOf('$$;', start);
   expect(end, `${name} has no terminator`).toBeGreaterThan(start);
@@ -371,14 +366,14 @@ function functionBody(sql: string, name: string): string {
  * functions. They were written against 0046 and stayed pointed there after 0048
  * superseded it (fresh-cycle round-2 review, Claude) — a guard aimed at dead
  * text, which is the same claim-drifted-from-artifact failure it exists to
- * catch. Each `it` below now derives its text through effectiveSql(), so it
- * reads whichever migration currently DEFINES the function it names. Nothing
- * here has to be moved when the next migration re-states one of them — the
- * remembering is what kept failing.
+ * catch. Each `it` below now derives its text through effectiveBody(), which
+ * reads the last statement about the function across the whole migration
+ * stream. Nothing here has to be moved when the next migration re-states one of
+ * them — the remembering is what kept failing.
  */
 describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
-    const body = functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token');
+    const body = effectiveBody('join_night_out_by_token');
     const lock = body.indexOf('pg_advisory_xact_lock');
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
     const capCheck = body.indexOf('member_cap', conversion);
@@ -391,14 +386,14 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
   });
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
-    const body = functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token');
+    const body = effectiveBody('decline_night_out_by_token');
     expect(body).not.toMatch(/member_cap/);
     // Still serialised, so a concurrent invite cannot swallow the decline.
     expect(body).toMatch(/pg_advisory_xact_lock/);
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = functionBody(effectiveSql('respond_night_out'), 'respond_night_out');
+    const body = effectiveBody('respond_night_out');
     expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
       /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
     );
@@ -411,7 +406,7 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
     // There is exactly one count now — night_out_seat_count — so this is the
     // only place the rule can be wrong. 0048's exactly-once assertion is what
     // keeps it that way.
-    const body = functionBody(effectiveSql('night_out_seat_count'), 'night_out_seat_count');
+    const body = effectiveBody('night_out_seat_count');
     expect(body, 'the seat count includes declined rows').toMatch(/invite_status <> 'declined'/);
   });
 
