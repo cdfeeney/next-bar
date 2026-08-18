@@ -210,12 +210,24 @@ describe('notification_outbox (criteria 3, 4)', () => {
     );
   });
 
-  it('records when an event first reached a phone, independent of row status', () => {
-    // The budget counts buzzes, not statuses: a row left pending for a second
-    // device's retry has already reached the first one.
-    expect(OUTBOX_SQL).toMatch(/delivered_at\s+timestamptz null,/);
+  it('decides and records the rate limit in ONE locked statement (criterion 7)', () => {
+    // Counting in the sender and then deciding is a check-then-act, and three
+    // review rounds found three different ways for it to be wrong. The lock is
+    // per RECIPIENT, so drains working on different people never wait.
+    const admit = OUTBOX_SQL.slice(
+      OUTBOX_SQL.indexOf('create or replace function public.admit_notification_send'),
+    );
+    expect(admit).toMatch(/pg_advisory_xact_lock\(hashtext\('nb:notify:admit'\), hashtext\(v_recipient::text\)\)/);
+    // Fenced on the claim: an expired drain may not spend budget.
+    expect(admit).toMatch(/and o\.claim_token = p_claim_token/);
+    // Excludes the row being admitted, or a retry counts against itself.
+    expect(admit).toMatch(/r\.id <> p_id/);
+    // Set once: a retry keeps its original stamp instead of drifting forward.
+    expect(admit).toMatch(/set admitted_at = coalesce\(o\.admitted_at, now\(\)\)/);
+    expect(OUTBOX_SQL).toMatch(/admitted_at\s+timestamptz null,/);
+    expect(OUTBOX_SQL).toMatch(/add column if not exists admitted_at timestamptz null;/);
     expect(OUTBOX_SQL).toMatch(
-      /add column if not exists delivered_at timestamptz null;/,
+      /revoke all on function public\.admit_notification_send\(bigint, uuid, integer, integer\)\s*\n\s*from public, anon, authenticated/,
     );
   });
 
@@ -224,7 +236,7 @@ describe('notification_outbox (criteria 3, 4)', () => {
     // the one status the rate-limit query excludes - so every drained row
     // scanned the settled portion of the table.
     expect(OUTBOX_SQL).toMatch(
-      /create index if not exists notification_outbox_recent_sends_idx\s*\n\s*on public\.notification_outbox \(recipient_user_id, delivered_at\)\s*\n\s*where delivered_at is not null/,
+      /create index if not exists notification_outbox_recent_sends_idx\s*\n\s*on public\.notification_outbox \(recipient_user_id, admitted_at\)\s*\n\s*where admitted_at is not null/,
     );
     // Recreated, not merely added: the first version keyed on the status that
     // missed partially-delivered rows.

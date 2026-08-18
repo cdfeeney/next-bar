@@ -44,12 +44,12 @@ create table if not exists public.notification_outbox (
   attempts          integer     not null default 0,
   last_error        text        null,
   processed_at      timestamptz null,
-  -- WHEN THIS EVENT FIRST REACHED A PHONE, independent of the row's status.
-  -- The rate limit used to count rows marked 'sent', which misses a row still
-  -- PENDING because a second device needs a retry - the recipient's phone
-  -- buzzed, the budget did not notice, and they could be sent past the limit.
-  -- Stamped whenever a pass delivers to at least one device.
-  delivered_at      timestamptz null,
+  -- WHEN THIS ROW WAS ADMITTED THROUGH THE RATE LIMIT, set once and never
+  -- moved. This is the budget's unit of account, and it is stamped by
+  -- admit_notification_send in the same statement that decides - see the
+  -- function at the foot of this file for why counting after the fact could
+  -- not be made correct.
+  admitted_at       timestamptz null,
   -- LEASE. A drain must CLAIM rows before sending, or two overlapping drains
   -- both read the same pending rows and both send — the user gets the same
   -- notification twice (cold panel, both lanes, HIGH). A timestamp rather than
@@ -79,25 +79,26 @@ alter table public.notification_outbox
 alter table public.notification_outbox
   add column if not exists claim_token uuid null;
 alter table public.notification_outbox
-  add column if not exists delivered_at timestamptz null;
+  add column if not exists admitted_at timestamptz null;
 
 -- The drain query: oldest pending first.
 create index if not exists notification_outbox_pending_idx
   on public.notification_outbox (created_at, id)
   where status = 'pending';
 
--- The rate-limit window read, which countRecentSends actually issues:
--- recipient + delivered_at over rows that reached a phone. The pending index
--- above cannot serve it, so without this every drained row scanned the settled
--- portion of the outbox, up to a hundred times per batch.
+-- The rate-limit window read, issued inside admit_notification_send: recipient
+-- + admitted_at. The pending index above cannot serve it, so without this
+-- every drained row scanned the settled portion of the outbox, up to a hundred
+-- times per batch.
 --
--- Recreated rather than added: the first version keyed on (recipient,
--- processed_at) over status = 'sent', which is the count that missed
--- partially-delivered rows.
+-- Recreated rather than added, twice now: the first version keyed on
+-- (recipient, processed_at) over status = 'sent', which missed a row still
+-- pending for a second device's retry, and the second keyed on delivered_at,
+-- which was stamped after the decision and so could not bound it.
 drop index if exists public.notification_outbox_recent_sends_idx;
 create index if not exists notification_outbox_recent_sends_idx
-  on public.notification_outbox (recipient_user_id, delivered_at)
-  where delivered_at is not null;
+  on public.notification_outbox (recipient_user_id, admitted_at)
+  where admitted_at is not null;
 
 alter table public.notification_outbox enable row level security;
 revoke all on table public.notification_outbox from public, anon, authenticated;
@@ -376,6 +377,7 @@ create trigger night_outs_notify
 --   drop function if exists public.night_outs_bump_plan_revision();
 --   alter table public.night_outs drop column if exists plan_revision;
 --   drop table if exists public.notification_deliveries;
+--   drop function if exists public.admit_notification_send(bigint, uuid, integer, integer);
 --   drop function if exists public.claim_notification_outbox(integer, integer, integer);
 --   drop table if exists public.notification_outbox;
 ------------------------------------------------------------------------------
@@ -459,4 +461,77 @@ $$;
 
 -- Service-role only. This hands out sendable work; no client role may call it.
 revoke all on function public.claim_notification_outbox(integer, integer, integer)
+  from public, anon, authenticated;
+
+------------------------------------------------------------------------------
+-- Rate-limit admission (criterion 7) - decide and record in one statement
+------------------------------------------------------------------------------
+-- Counting recent sends in the sender and then deciding cannot be made
+-- correct, and three review rounds are the evidence:
+--
+--   * Counting rows marked 'sent' missed a row still pending because a SECOND
+--     device needed a retry - the recipient's phone had already buzzed.
+--   * Counting a delivery timestamp written AFTER the decision let a row
+--     count against itself on its own retry, and let a worker that died
+--     between the send and the write leave a real delivery uncounted.
+--   * Any read-then-decide, however it counts, lets two concurrent drains
+--     holding DIFFERENT rows for the same recipient both read the same total
+--     and both send.
+--
+-- So the count and the stamp happen together, under a per-recipient advisory
+-- lock held for the transaction - the same device-cap pattern 0060 uses. The
+-- lock is taken on the RECIPIENT, so drains working on different people never
+-- wait for each other.
+--
+-- Admission is charged BEFORE the send, not after it: a row admitted whose
+-- sends then fail still spent its slot for the window. That errs toward
+-- suppressing, which is the right direction for a phone that buzzes.
+-- `coalesce` means a retry of an already-admitted row keeps its original
+-- stamp, so a deferred row neither drifts its own window forward nor counts
+-- against itself (it is excluded by id anyway).
+create or replace function public.admit_notification_send(
+  p_id bigint,
+  p_claim_token uuid,
+  p_window_seconds integer,
+  p_limit integer
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_recipient uuid;
+  v_recent    integer;
+begin
+  -- Fenced on the claim: a drain whose lease expired may not spend budget.
+  select o.recipient_user_id into v_recipient
+    from public.notification_outbox o
+   where o.id = p_id
+     and o.claim_token = p_claim_token;
+  if v_recipient is null then
+    return false;
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('nb:notify:admit'), hashtext(v_recipient::text));
+
+  select count(*) into v_recent
+    from public.notification_outbox r
+   where r.recipient_user_id = v_recipient
+     and r.id <> p_id
+     and r.admitted_at >= now() - make_interval(secs => greatest(p_window_seconds, 0));
+  if v_recent >= p_limit then
+    return false;
+  end if;
+
+  update public.notification_outbox o
+     set admitted_at = coalesce(o.admitted_at, now())
+   where o.id = p_id
+     and o.claim_token = p_claim_token;
+  return true;
+end;
+$$;
+
+-- Service-role only. This spends a recipient's notification budget.
+revoke all on function public.admit_notification_send(bigint, uuid, integer, integer)
   from public, anon, authenticated;

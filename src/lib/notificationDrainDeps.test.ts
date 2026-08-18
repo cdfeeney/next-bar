@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { buildDrainDeps } from './notificationDrainDeps';
 import {
   MAX_ATTEMPTS,
+  RATE_LIMIT_PER_WINDOW,
+  RATE_LIMIT_WINDOW_MS,
   drainNotificationOutbox,
   type OutboxRow,
 } from './notificationOutbox';
@@ -155,13 +157,13 @@ describe('mutation adapters surface database errors', () => {
     ],
     [
       'markOutbox',
-      (deps) => deps.markOutbox(7, 'claim-token-1', 'sent', null, true),
+      (deps) => deps.markOutbox(7, 'claim-token-1', 'sent', null),
       'notification_outbox',
       'outbox status write unavailable',
     ],
     [
       'deferOutbox',
-      (deps) => deps.deferOutbox(7, 'claim-token-1', 'ServiceUnavailable', false),
+      (deps) => deps.deferOutbox(7, 'claim-token-1', 'ServiceUnavailable'),
       'notification_outbox',
       'outbox defer unavailable',
     ],
@@ -367,7 +369,7 @@ describe('claim ownership fence', () => {
     const { admin, calls } = fakeAdmin({});
     const deps = buildDrainDeps(admin, SEND);
 
-    await deps.markOutbox(7, 'claim-token-1', 'sent', null, true);
+    await deps.markOutbox(7, 'claim-token-1', 'sent', null);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
@@ -378,38 +380,55 @@ describe('claim ownership fence', () => {
     });
   });
 
-  it('stamps delivered_at only when the pass actually reached a phone', async () => {
-    const { admin, calls } = fakeAdmin({});
+  it('spends the budget through the atomic admission RPC, carrying the policy', async () => {
+    // The window and the budget live in one place in TypeScript and are handed
+    // to the statement that decides; nothing counts and then decides here.
+    const rpcArgs: Array<{ fn: string; args: unknown }> = [];
+    const { admin } = fakeAdmin({});
+    (admin as unknown as { rpc: unknown }).rpc = async (fn: string, args: unknown) => {
+      rpcArgs.push({ fn, args });
+      return { data: true, error: null };
+    };
     const deps = buildDrainDeps(admin, SEND);
 
-    await deps.markOutbox(7, CLAIM, 'sent', null, true);
-    await deps.markOutbox(8, CLAIM, 'suppressed', 'opted_out', false);
+    await expect(deps.admitSend(7, CLAIM)).resolves.toBe(true);
 
-    expect(calls[0].payload).toHaveProperty('delivered_at');
-    expect(calls[1].payload).not.toHaveProperty('delivered_at');
+    expect(rpcArgs[0]).toEqual({
+      fn: 'admit_notification_send',
+      args: {
+        p_id: 7,
+        p_claim_token: CLAIM,
+        p_window_seconds: RATE_LIMIT_WINDOW_MS / 1000,
+        p_limit: RATE_LIMIT_PER_WINDOW,
+      },
+    });
   });
 
-  it('counts the rate-limit window on delivered_at, not on the row status', async () => {
-    // Counting rows marked 'sent' missed a row still pending for a second
-    // device's retry, even though the first device already had it.
-    const { admin, calls } = fakeAdmin({});
-    const deps = buildDrainDeps(admin, SEND);
+  it('treats anything but an explicit true as NOT admitted', async () => {
+    for (const answer of [null, false, undefined]) {
+      const { admin } = fakeAdmin({});
+      (admin as unknown as { rpc: unknown }).rpc = async () => ({ data: answer, error: null });
+      await expect(buildDrainDeps(admin, SEND).admitSend(7, CLAIM)).resolves.toBe(false);
+    }
+  });
 
-    await deps.countRecentSends('user-1', '2026-08-18T00:00:00.000Z');
-
-    expect(calls[0]).toMatchObject({
-      table: 'notification_outbox',
-      operation: 'select',
-      recipient_user_id: 'user-1',
+  it('THROWS when admission cannot be decided, so the drain defers', async () => {
+    const { admin } = fakeAdmin({});
+    (admin as unknown as { rpc: unknown }).rpc = async () => ({
+      data: null,
+      error: { code: '42501' },
     });
-    expect(calls[0]).not.toHaveProperty('status');
+
+    await expect(buildDrainDeps(admin, SEND).admitSend(7, CLAIM)).rejects.toThrow(
+      /rate-limit admission unavailable/,
+    );
   });
 
   it('releases the claim on defer so the next drain need not wait out the lease', async () => {
     const { admin, calls } = fakeAdmin({});
     const deps = buildDrainDeps(admin, SEND);
 
-    await deps.deferOutbox(7, 'claim-token-1', 'ServiceUnavailable', false);
+    await deps.deferOutbox(7, 'claim-token-1', 'ServiceUnavailable');
 
     expect(calls[0]).toMatchObject({
       table: 'notification_outbox',

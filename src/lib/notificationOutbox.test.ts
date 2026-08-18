@@ -5,9 +5,7 @@ import {
   DEFAULT_PREFERENCES,
   drainNotificationOutbox,
   isEventAllowed,
-  isWithinRateLimit,
   MAX_ATTEMPTS,
-  RATE_LIMIT_PER_WINDOW,
   type DeviceToken,
   type DrainDeps,
   type NotificationContext,
@@ -62,15 +60,14 @@ type Recorded = {
     claimToken: string;
     status: string;
     error: string | null;
-    delivered: boolean;
   }>;
   deferred: Array<{
     id: number;
     claimToken: string;
     error: string | null;
-    delivered: boolean;
   }>;
   order: string[];
+  admitted: Array<{ outboxId: number; claimToken: string }>;
   revoked: string[];
   revokedTokens: string[];
   sentTo: string[];
@@ -80,7 +77,7 @@ function harness(options: {
   rows: OutboxRow[];
   devices?: readonly DeviceToken[];
   preferences?: NotificationPreferences | null;
-  recentSends?: number;
+  admitted?: boolean;
   context?: NotificationContext | null;
   outcomes?: Record<string, { outcome: ApnsOutcome; status: number; reason: string | null }>;
   /** Devices a previous pass settled without delivering — never retaken. */
@@ -99,6 +96,7 @@ function harness(options: {
     revoked: [],
     revokedTokens: [],
     order: [],
+    admitted: [],
     sentTo: [],
   };
   const taken = new Set(options.alreadyReserved ?? []);
@@ -112,7 +110,10 @@ function harness(options: {
     fetchContext: async () =>
       options.context === undefined ? CONTEXT : options.context,
     fetchLiveTokens: async () => devices,
-    countRecentSends: async () => options.recentSends ?? 0,
+    admitSend: async (outboxId, claimToken) => {
+      recorded.admitted.push({ outboxId, claimToken });
+      return options.admitted ?? true;
+    },
     send: async (deviceToken: string, _payload: ApnsPayload) => {
       recorded.sentTo.push(deviceToken);
       return (
@@ -148,14 +149,13 @@ function harness(options: {
       recorded.revoked.push(id);
       recorded.revokedTokens.push(token);
     },
-    markOutbox: async (id, claimToken, status, error, delivered) => {
+    markOutbox: async (id, claimToken, status, error) => {
       if (options.failing?.markOutbox) throw new Error('outbox status write unavailable');
-      recorded.outbox.push({ id, claimToken, status, error, delivered });
+      recorded.outbox.push({ id, claimToken, status, error });
     },
-    deferOutbox: async (id, claimToken, error, delivered) => {
-      recorded.deferred.push({ id, claimToken, error, delivered });
+    deferOutbox: async (id, claimToken, error) => {
+      recorded.deferred.push({ id, claimToken, error });
     },
-    now: () => NOW,
   };
 
   return { deps, recorded };
@@ -175,14 +175,6 @@ describe('isEventAllowed (criterion 7)', () => {
     expect(isEventAllowed(preferences, 'invited')).toBe(true);
     expect(isEventAllowed(preferences, 'accepted')).toBe(true);
     expect(isEventAllowed(preferences, 'plan_changed')).toBe(true);
-  });
-});
-
-describe('isWithinRateLimit (criterion 7)', () => {
-  it('allows sends below the window budget and blocks at it', () => {
-    expect(isWithinRateLimit(RATE_LIMIT_PER_WINDOW - 1)).toBe(true);
-    expect(isWithinRateLimit(RATE_LIMIT_PER_WINDOW)).toBe(false);
-    expect(isWithinRateLimit(RATE_LIMIT_PER_WINDOW + 5)).toBe(false);
   });
 });
 
@@ -230,7 +222,7 @@ describe('drainNotificationOutbox', () => {
     expect(summary).toMatchObject({ processed: 1, sent: 1, suppressed: 0 });
     expect(recorded.sentTo).toHaveLength(2);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'sent', error: null, delivered: true },
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
     ]);
   });
 
@@ -245,21 +237,21 @@ describe('drainNotificationOutbox', () => {
     expect(summary.suppressed).toBe(1);
     expect(recorded.sentTo).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'opted_out', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'opted_out' },
     ]);
   });
 
   it('suppresses once the recipient is over the rate-limit budget (criterion 7)', async () => {
     const { deps, recorded } = harness({
       rows: [row()],
-      recentSends: RATE_LIMIT_PER_WINDOW,
+      admitted: false,
     });
 
     await drainNotificationOutbox(deps);
 
     expect(recorded.sentTo).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'rate_limited', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'rate_limited' },
     ]);
   });
 
@@ -291,7 +283,7 @@ describe('drainNotificationOutbox', () => {
       { outboxId: 1, deviceTokenId: 'device-alive', claimToken: CLAIM, status: 'sent' },
     ]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'sent', error: null, delivered: true },
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
     ]);
   });
 
@@ -306,7 +298,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(summary.failed).toBe(1);
     expect(recorded.deferred).toEqual([
-      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable', delivered: false },
+      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable' },
     ]);
     // Deliberately NOT marked terminal — the next drain retries it.
     expect(recorded.outbox).toEqual([]);
@@ -323,7 +315,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(recorded.deferred).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'ServiceUnavailable', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'ServiceUnavailable' },
     ]);
   });
 
@@ -339,7 +331,7 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'InvalidProviderToken', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'InvalidProviderToken' },
     ]);
     expect(recorded.deferred).toEqual([]);
   });
@@ -352,7 +344,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(summary.suppressed).toBe(1);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'no_devices', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'no_devices' },
     ]);
   });
 
@@ -362,7 +354,7 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'missing_context', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'missing_context' },
     ]);
     expect(recorded.sentTo).toEqual([]);
   });
@@ -370,7 +362,6 @@ describe('drainNotificationOutbox', () => {
   it('keeps draining the rest of the batch after one row is suppressed', async () => {
     const { deps, recorded } = harness({
       rows: [row({ id: 1 }), row({ id: 2 }), row({ id: 3 })],
-      recentSends: 0,
     });
 
     const summary = await drainNotificationOutbox(deps);
@@ -454,7 +445,7 @@ describe('drainNotificationOutbox', () => {
     expect(recorded.sentTo).toEqual([]);
     expect(summary.suppressed).toBe(1);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'already_attempted', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'already_attempted' },
     ]);
   });
 
@@ -482,7 +473,7 @@ describe('drainNotificationOutbox', () => {
     // delivered: the phone that took it counts against the budget now, not
     // once the flaky one finally settles.
     expect(recorded.deferred).toEqual([
-      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable', delivered: true },
+      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable' },
     ]);
   });
 
@@ -504,7 +495,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(recorded.deferred).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'sent', error: null, delivered: true },
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
     ]);
   });
 
@@ -530,7 +521,7 @@ describe('drainNotificationOutbox', () => {
     expect(recorded.sentTo).toEqual([flaky]);
     expect(summary.sent).toBe(1);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'sent', error: null, delivered: true },
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
     ]);
   });
 
@@ -569,7 +560,7 @@ describe('drainNotificationOutbox', () => {
     expect(summary.invalidTokensRevoked).toBe(0);
     expect(summary.deferred).toBe(0);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'Unregistered', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'Unregistered' },
     ]);
   });
 
@@ -586,28 +577,41 @@ describe('drainNotificationOutbox', () => {
     expect(recorded.deferred).toEqual([]);
   });
 
-  it('counts a partially-delivered row against the budget from the first buzz', async () => {
-    // The rate limit used to count rows marked 'sent', which misses a row left
-    // pending for a second device's retry - the phone buzzed, the budget did
-    // not notice, and the recipient could be sent past the limit.
-    const delivered = 'a'.repeat(64);
-    const flaky = 'b'.repeat(64);
-    const { deps, recorded } = harness({
-      rows: [row()],
-      devices: [
-        { id: 'device-delivered', token: delivered },
-        { id: 'device-flaky', token: flaky },
-      ],
-      outcomes: {
-        [flaky]: { outcome: 'retry', status: 503, reason: 'ServiceUnavailable' },
-      },
+  it('spends budget only on a row that is actually about to be sent', async () => {
+    // Admission sits AFTER consent, context and devices on purpose: an
+    // opted-out or device-less row must not cost the recipient a slot.
+    const optedOut = harness({
+      rows: [row({ event_type: 'bar_suggested' })],
+      preferences: { ...DEFAULT_PREFERENCES, bar_suggested: false },
     });
+    await drainNotificationOutbox(optedOut.deps);
+    expect(optedOut.recorded.admitted).toEqual([]);
 
-    await drainNotificationOutbox(deps);
+    const noDevices = harness({ rows: [row()], devices: [] });
+    await drainNotificationOutbox(noDevices.deps);
+    expect(noDevices.recorded.admitted).toEqual([]);
 
-    expect(recorded.deferred).toEqual([
-      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable', delivered: true },
-    ]);
+    const sendable = harness({ rows: [row()] });
+    await drainNotificationOutbox(sendable.deps);
+    expect(sendable.recorded.admitted).toEqual([{ outboxId: 1, claimToken: CLAIM }]);
+  });
+
+  it('defers rather than sending when admission cannot be decided', async () => {
+    // Fail-closed, exactly like an unknown preference: an unreadable answer is
+    // not permission to buzz someone's phone.
+    const { deps, recorded } = harness({ rows: [row()] });
+    const failing: DrainDeps = {
+      ...deps,
+      admitSend: async () => {
+        throw new Error('rate-limit admission unavailable');
+      },
+    };
+
+    const summary = await drainNotificationOutbox(failing);
+
+    expect(summary.deferred).toBe(1);
+    expect(recorded.sentTo).toEqual([]);
+    expect(recorded.outbox).toEqual([]);
   });
 
   it('retires a row whose claims have out-lived the attempt budget', async () => {
@@ -620,7 +624,7 @@ describe('drainNotificationOutbox', () => {
     expect(recorded.sentTo).toEqual([]);
     expect(summary.failed).toBe(1);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'max_attempts', delivered: false },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'max_attempts' },
     ]);
   });
 
@@ -632,7 +636,7 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: 'claim-token-2', status: 'sent', error: null, delivered: true },
+      { id: 1, claimToken: 'claim-token-2', status: 'sent', error: null },
     ]);
   });
 

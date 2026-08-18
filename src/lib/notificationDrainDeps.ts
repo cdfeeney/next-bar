@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   DEFAULT_PREFERENCES,
   MAX_ATTEMPTS,
+  RATE_LIMIT_PER_WINDOW,
+  RATE_LIMIT_WINDOW_MS,
   type DrainDeps,
   type NotificationPreferences,
   type OutboxRow,
@@ -123,22 +125,23 @@ export function buildDrainDeps(
       return data ?? [];
     },
 
-    async countRecentSends(userId, sinceIso) {
-      const { count, error } = await admin
-        .from('notification_outbox')
-        .select('id', { count: 'exact', head: true })
-        .eq('recipient_user_id', userId)
-        // Measured on when the recipient's phone actually BUZZED, not when the
-        // row was enqueued and not on its final status. created_at is enqueue
-        // time, so a backlog that drained at once counted as "old" and sailed
-        // past the limit; counting rows marked 'sent' then missed a row still
-        // pending for a second device's retry, even though the first device
-        // already had it. delivered_at is stamped by the first delivery.
-        .gte('delivered_at', sinceIso);
-      if (error) unavailable('recent-send count', error);
-      // A null count with no error means the head request returned nothing to
-      // count, which is genuinely zero.
-      return count ?? 0;
+    async admitSend(outboxId, claimToken) {
+      // ONE STATEMENT decides and records. Reading a count here and deciding
+      // in JavaScript is a check-then-act, and every version of it was wrong
+      // in a different way: it counted the wrong rows, it let a row count
+      // against its own retry, and it let two drains holding different rows
+      // for the same recipient both pass on the same total. The function takes
+      // a per-recipient advisory lock for its transaction, so the count it
+      // sees is the count it acts on.
+      const { data, error } = await admin.rpc('admit_notification_send', {
+        p_id: outboxId,
+        p_claim_token: claimToken,
+        p_window_seconds: Math.floor(RATE_LIMIT_WINDOW_MS / 1000),
+        p_limit: RATE_LIMIT_PER_WINDOW,
+      });
+      if (error) unavailable('rate-limit admission', error);
+      // Only an explicit true admits. An unreadable answer is not permission.
+      return data === true;
     },
 
     send,
@@ -246,48 +249,35 @@ export function buildDrainDeps(
       if (error) unavailable('token revocation', error);
     },
 
-    async markOutbox(outboxId, claimToken, status, lastError, delivered) {
+    async markOutbox(outboxId, claimToken, status, lastError) {
       // FENCED on the claim token. Without it a drain whose lease had expired
       // could still write a terminal status over the row a second drain was
       // actively working. Matching no row is not an error - it is precisely
       // the superseded write being discarded.
-      const now = new Date().toISOString();
       const { error } = await admin
         .from('notification_outbox')
         .update({
           status,
           last_error: lastError,
-          processed_at: now,
-          // Only ever set, never cleared: a row that reached a phone stays
-          // counted against the recipient's budget whatever happens after.
-          ...(delivered ? { delivered_at: now } : {}),
+          processed_at: new Date().toISOString(),
         })
         .eq('id', outboxId)
         .eq('claim_token', claimToken);
       if (error) unavailable('outbox status write', error);
     },
 
-    async deferOutbox(outboxId, claimToken, lastError, delivered) {
+    async deferOutbox(outboxId, claimToken, lastError) {
       // Releases the claim rather than counting it: the attempt was already
       // charged by claim_notification_outbox, and clearing the lease lets the
       // next drain retry immediately instead of waiting it out. The read /
       // increment / write this replaced could also lose a concurrent update.
       const { error } = await admin
         .from('notification_outbox')
-        .update({
-          last_error: lastError,
-          claimed_at: null,
-          claim_token: null,
-          // A deferred row that already reached one phone counts NOW, not when
-          // its last device finally settles. Re-stamping on a later pass only
-          // moves the window forward, which errs toward suppressing.
-          ...(delivered ? { delivered_at: new Date().toISOString() } : {}),
-        })
+        .update({ last_error: lastError, claimed_at: null, claim_token: null })
         .eq('id', outboxId)
         .eq('claim_token', claimToken);
       if (error) unavailable('outbox defer', error);
     },
 
-    now: () => Date.now(),
   };
 }

@@ -47,19 +47,17 @@ export function isEventAllowed(
  * times in a minute, which is the fastest way to get every notification
  * disabled at the OS level.
  *
- * ponytail: a fixed rolling window per recipient, counted from the deliveries
- * already recorded. Per-event-type budgets or a token bucket are only worth it
- * if this proves too blunt in real use.
+ * The DECISION is not made here. Counting in the sender and then deciding is a
+ * check-then-act, and three review rounds found three different ways for it to
+ * be wrong; the window and the budget below are passed to
+ * admit_notification_send, which counts and stamps in one statement under a
+ * per-recipient lock. These constants are the policy, in one place.
+ *
+ * ponytail: a fixed rolling window per recipient. Per-event-type budgets or a
+ * token bucket are only worth it if this proves too blunt in real use.
  */
 export const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 export const RATE_LIMIT_PER_WINDOW = 8;
-
-export function isWithinRateLimit(
-  recentSendCount: number,
-  limit: number = RATE_LIMIT_PER_WINDOW,
-): boolean {
-  return recentSendCount < limit;
-}
 
 export type OutboxRow = {
   readonly id: number;
@@ -150,8 +148,7 @@ export type OutboxStatus = 'sent' | 'failed' | 'suppressed';
  * `already-sent` is not merely "skip": a row deferred for one flaky phone
  * comes back with the other phone's delivery already recorded, and a pass that
  * forgot it marked the whole row `failed` even though someone got the
- * notification — which also kept it out of the rate-limit count, since that
- * counts outbox rows marked `sent`.
+ * notification.
  */
 export type ReserveOutcome = 'reserved' | 'already-sent' | 'settled';
 
@@ -160,7 +157,12 @@ export type DrainDeps = {
   fetchPreferences(userId: string): Promise<NotificationPreferences | null>;
   fetchContext(row: OutboxRow): Promise<NotificationContext | null>;
   fetchLiveTokens(userId: string): Promise<readonly DeviceToken[]>;
-  countRecentSends(userId: string, sinceIso: string): Promise<number>;
+  /**
+   * Spend one of this recipient's slots, or refuse. Atomic: the count and the
+   * stamp happen in the same statement, so two drains holding different rows
+   * for the same person cannot both be admitted on the same total.
+   */
+  admitSend(outboxId: number, claimToken: string): Promise<boolean>;
   send(
     deviceToken: string,
     payload: ApnsPayload,
@@ -170,7 +172,7 @@ export type DrainDeps = {
    * sent to. The other two both mean "skip the send" but are NOT
    * interchangeable: `'already-sent'` is a delivery of this event that a later
    * pass must still count, and treating it as `'settled'` is what once marked
-   * partially-delivered rows failed and hid them from the rate limit.
+   * partially-delivered rows terminally failed.
    */
   reserveDelivery(
     outboxId: number,
@@ -196,27 +198,18 @@ export type DrainDeps = {
    * previous one came back rejected.
    */
   revokeToken(deviceTokenId: string, token: string): Promise<void>;
-  /**
-   * Settle the row. `delivered` records that this event reached at least one
-   * phone, which is what the rate limit counts — a status alone cannot say it,
-   * because a row can be terminal without ever arriving and pending after it
-   * already has.
-   */
   markOutbox(
     outboxId: number,
     claimToken: string,
     status: OutboxStatus,
     lastError: string | null,
-    delivered: boolean,
   ): Promise<void>;
   /** Release the claim so the next drain retries. The attempt is already spent. */
   deferOutbox(
     outboxId: number,
     claimToken: string,
     lastError: string | null,
-    delivered: boolean,
   ): Promise<void>;
-  now(): number;
 };
 
 export type DrainSummary = {
@@ -286,7 +279,7 @@ async function processOutboxRow(
   // was exactly how an exhausted row kept coming back. This stays as a guard
   // for a database that has not had the migration applied yet.
   if (row.attempts > MAX_ATTEMPTS) {
-    await deps.markOutbox(row.id, row.claim_token, 'failed', 'max_attempts', false);
+    await deps.markOutbox(row.id, row.claim_token, 'failed', 'max_attempts');
     summary.failed += 1;
     return;
   }
@@ -304,23 +297,7 @@ async function processOutboxRow(
     return;
   }
   if (!isEventAllowed(preferences, row.event_type)) {
-    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'opted_out', false);
-    summary.suppressed += 1;
-    return;
-  }
-
-  // Same reasoning for the rate limit: a failed count used to read as zero,
-  // which is "no recent sends" — the most permissive answer available.
-  const sinceIso = new Date(deps.now() - RATE_LIMIT_WINDOW_MS).toISOString();
-  let recent: number;
-  try {
-    recent = await deps.countRecentSends(row.recipient_user_id, sinceIso);
-  } catch {
-    summary.deferred += 1;
-    return;
-  }
-  if (!isWithinRateLimit(recent)) {
-    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'rate_limited', false);
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'opted_out');
     summary.suppressed += 1;
     return;
   }
@@ -339,7 +316,7 @@ async function processOutboxRow(
   if (!context) {
     // The plan was deleted between enqueue and drain. There is nothing to
     // deep-link to, so this is terminal rather than retryable.
-    await deps.markOutbox(row.id, row.claim_token, 'failed', 'missing_context', false);
+    await deps.markOutbox(row.id, row.claim_token, 'failed', 'missing_context');
     summary.failed += 1;
     return;
   }
@@ -354,7 +331,25 @@ async function processOutboxRow(
   if (devices.length === 0) {
     // Not a failure of ours: the user has no registered device, or revoked
     // the only one. Recorded as suppressed so it is never retried forever.
-    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'no_devices', false);
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'no_devices');
+    summary.suppressed += 1;
+    return;
+  }
+
+  // RATE LIMIT, checked here rather than earlier on purpose: budget is only
+  // spent on a row that is actually about to be sent, so an opted-out or
+  // device-less row never costs the recipient a slot. Admission is atomic and
+  // fail-closed — an unknown answer leaves the row pending, exactly like an
+  // unknown preference.
+  let admitted: boolean;
+  try {
+    admitted = await deps.admitSend(row.id, row.claim_token);
+  } catch {
+    summary.deferred += 1;
+    return;
+  }
+  if (!admitted) {
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'rate_limited');
     summary.suppressed += 1;
     return;
   }
@@ -452,26 +447,22 @@ async function processOutboxRow(
     // Left pending on purpose so the next drain retries it. Counted as a
     // failure of THIS pass so the caller's numbers stay honest; which devices
     // actually got it lives in notification_deliveries, not in this status.
-    // `anySent` here includes a device an earlier pass delivered to, so a
-    // partially-delivered row counts against the recipient's budget from the
-    // moment their phone first buzzed - not only once the last device settles.
-    await deps.deferOutbox(row.id, row.claim_token, lastReason, anySent);
+    await deps.deferOutbox(row.id, row.claim_token, lastReason);
     summary.failed += 1;
   } else if (anySent) {
-    await deps.markOutbox(row.id, row.claim_token, 'sent', null, true);
+    await deps.markOutbox(row.id, row.claim_token, 'sent', null);
     summary.sent += 1;
   } else if (!attemptedAny) {
     // Every device is SETTLED — delivered, or its token retired — so this row
     // has nothing left to do. Nothing was decided HERE and nothing failed
     // here: `suppressed` is the existing vocabulary for "we chose not to
-    // send", and it keeps the row out of the rate-limit count, which only
-    // sums rows marked 'sent'.
+    // send". The budget was already spent when this row was admitted, and a
+    // status never changes that.
     await deps.markOutbox(
       row.id,
       row.claim_token,
       'suppressed',
       'already_attempted',
-      false,
     );
     summary.suppressed += 1;
   } else {
@@ -480,7 +471,6 @@ async function processOutboxRow(
       row.claim_token,
       'failed',
       lastReason ?? 'no_delivery',
-      false,
     );
     summary.failed += 1;
   }
