@@ -187,6 +187,32 @@ describe('NotificationPreferences — signed in', () => {
     ).toBeTruthy();
   });
 
+  test('a FAILED read renders an error and NO toggles, so nothing can be written over it', async () => {
+    // The fail-open this replaced: an unreadable row rendered the all-on
+    // defaults, and one tap then wrote those four fabricated values over the
+    // user's real opt-outs.
+    prefsError = { code: '08006' };
+    render(<NotificationPreferences />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/Couldn.t load your notification settings/i);
+    expect(screen.queryAllByRole('switch')).toHaveLength(0);
+    expect(rpcCalls).toEqual([]);
+  });
+
+  test('a MISSING row still renders the four defaults', async () => {
+    // The other half of the same distinction: no row is a real answer.
+    prefsRow = null;
+    prefsError = null;
+    render(<NotificationPreferences />);
+
+    const switches = await screen.findAllByRole('switch');
+    expect(switches).toHaveLength(LABELS.length);
+    for (const control of switches) {
+      expect(control.getAttribute('aria-checked')).toBe('true');
+    }
+  });
+
   test('a native registration failure shows an explanatory error, not a crash', async () => {
     nativeAvailable = true;
     nativeResult = 'permission-denied';

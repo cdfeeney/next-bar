@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { Capacitor } from '@capacitor/core';
 
 /**
- * Native APNs device-token registration (V8-4, migration 0055).
+ * Native APNs device-token registration (V8-4, migration 0060).
  *
  * DELIBERATELY separate from the DARK web-push module in push.ts — this
  * targets the Capacitor iOS shell only, stores into native_device_tokens,
@@ -21,7 +21,7 @@ import { Capacitor } from '@capacitor/core';
 const INSTALLATION_ID_KEY = 'next-bar:native-push-installation:v1';
 const PROMPTED_KEY = 'next-bar:native-push-prompted:v1';
 
-// Mirrors the CHECK constraints on native_device_tokens (0055) — validating
+// Mirrors the CHECK constraints on native_device_tokens (0060) — validating
 // client-side before an RPC round trip is a courtesy, not the boundary; the
 // database still enforces its own copy of both regexes.
 const INSTALLATION_RE = /^[0-9a-zA-Z-]{8,64}$/;
@@ -112,7 +112,7 @@ async function saveToken(rawToken: string): Promise<NativePushResult> {
       p_platform: 'ios',
       p_installation: getInstallationId(),
     });
-    // false covers both a missing RPC (pre-0055) and a device-cap refusal —
+    // false covers both a missing RPC (pre-0060) and a device-cap refusal —
     // neither is a crash, both are simply "not registered".
     return !error && data === true ? 'registered' : 'failed';
   } catch {
@@ -142,7 +142,7 @@ async function ensureListeners(plugin: PushNotificationsPlugin): Promise<void> {
 
 /**
  * Full opt-in flow: permission -> register() -> the 'registration' listener
- * yields a token -> save via the 0055 RPC. Any failure is a plain result
+ * yields a token -> save via the 0060 RPC. Any failure is a plain result
  * string; this never throws.
  */
 /**

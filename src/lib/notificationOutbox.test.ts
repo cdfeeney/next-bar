@@ -25,6 +25,7 @@ import {
 
 const NOW = Date.UTC(2026, 7, 16, 21, 0, 0);
 const TOKEN = '11111111-2222-4333-8444-555555555555';
+const CLAIM = 'claim-token-1';
 
 function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
   return {
@@ -34,7 +35,9 @@ function row(overrides: Partial<OutboxRow> = {}): OutboxRow {
     recipient_user_id: 'user-recipient',
     actor_id: 'user-actor',
     bar_id: null,
-    attempts: 0,
+    // The claim charges the attempt, so a freshly claimed row arrives at 1.
+    attempts: 1,
+    claim_token: CLAIM,
     ...overrides,
   };
 }
@@ -47,8 +50,9 @@ const CONTEXT: NotificationContext = {
 
 type Recorded = {
   deliveries: Array<{ outboxId: number; deviceTokenId: string; status: string }>;
-  outbox: Array<{ id: number; status: string; error: string | null }>;
-  deferred: Array<{ id: number; error: string | null }>;
+  reserved: string[];
+  outbox: Array<{ id: number; claimToken: string; status: string; error: string | null }>;
+  deferred: Array<{ id: number; claimToken: string; error: string | null }>;
   revoked: string[];
   sentTo: string[];
 };
@@ -60,14 +64,20 @@ function harness(options: {
   recentSends?: number;
   context?: NotificationContext | null;
   outcomes?: Record<string, { outcome: ApnsOutcome; status: number; reason: string | null }>;
+  /** Devices a previous pass already reserved — reserveDelivery refuses these. */
+  alreadyReserved?: readonly string[];
+  /** Adapters that must reject, to stand in for a failed database write. */
+  failing?: Partial<Record<'recordDelivery' | 'markOutbox' | 'revokeToken', true>>;
 }): { deps: DrainDeps; recorded: Recorded } {
   const recorded: Recorded = {
     deliveries: [],
+    reserved: [],
     outbox: [],
     deferred: [],
     revoked: [],
     sentTo: [],
   };
+  const taken = new Set(options.alreadyReserved ?? []);
   const devices = options.devices ?? [{ id: 'device-1', token: 'a'.repeat(64) }];
 
   const deps: DrainDeps = {
@@ -88,7 +98,15 @@ function harness(options: {
         }
       );
     },
+    reserveDelivery: async (outboxId, deviceTokenId) => {
+      const key = `${outboxId}:${deviceTokenId}`;
+      if (taken.has(key)) return false;
+      taken.add(key);
+      recorded.reserved.push(key);
+      return true;
+    },
     recordDelivery: async (input) => {
+      if (options.failing?.recordDelivery) throw new Error('delivery record unavailable');
       recorded.deliveries.push({
         outboxId: input.outboxId,
         deviceTokenId: input.deviceTokenId,
@@ -96,13 +114,15 @@ function harness(options: {
       });
     },
     revokeToken: async (id) => {
+      if (options.failing?.revokeToken) throw new Error('token revocation unavailable');
       recorded.revoked.push(id);
     },
-    markOutbox: async (id, status, error) => {
-      recorded.outbox.push({ id, status, error });
+    markOutbox: async (id, claimToken, status, error) => {
+      if (options.failing?.markOutbox) throw new Error('outbox status write unavailable');
+      recorded.outbox.push({ id, claimToken, status, error });
     },
-    deferOutbox: async (id, error) => {
-      recorded.deferred.push({ id, error });
+    deferOutbox: async (id, claimToken, error) => {
+      recorded.deferred.push({ id, claimToken, error });
     },
     now: () => NOW,
   };
@@ -178,7 +198,9 @@ describe('drainNotificationOutbox', () => {
 
     expect(summary).toMatchObject({ processed: 1, sent: 1, suppressed: 0 });
     expect(recorded.sentTo).toHaveLength(2);
-    expect(recorded.outbox).toEqual([{ id: 1, status: 'sent', error: null }]);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
+    ]);
   });
 
   it('suppresses an opted-out event without contacting APNs at all (criterion 7)', async () => {
@@ -191,7 +213,9 @@ describe('drainNotificationOutbox', () => {
 
     expect(summary.suppressed).toBe(1);
     expect(recorded.sentTo).toEqual([]);
-    expect(recorded.outbox).toEqual([{ id: 1, status: 'suppressed', error: 'opted_out' }]);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'opted_out' },
+    ]);
   });
 
   it('suppresses once the recipient is over the rate-limit budget (criterion 7)', async () => {
@@ -203,7 +227,9 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.sentTo).toEqual([]);
-    expect(recorded.outbox).toEqual([{ id: 1, status: 'suppressed', error: 'rate_limited' }]);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'rate_limited' },
+    ]);
   });
 
   it('retires an invalid token and STILL delivers to the healthy device (criteria 4, 10)', async () => {
@@ -230,20 +256,24 @@ describe('drainNotificationOutbox', () => {
       { outboxId: 1, deviceTokenId: 'device-dead', status: 'invalid_token' },
       { outboxId: 1, deviceTokenId: 'device-alive', status: 'sent' },
     ]);
-    expect(recorded.outbox).toEqual([{ id: 1, status: 'sent', error: null }]);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
+    ]);
   });
 
   it('leaves a retryable failure pending and counts the attempt', async () => {
     const token = 'a'.repeat(64);
     const { deps, recorded } = harness({
-      rows: [row({ attempts: 0 })],
+      rows: [row({ attempts: 1 })],
       outcomes: { [token]: { outcome: 'retry', status: 503, reason: 'ServiceUnavailable' } },
     });
 
     const summary = await drainNotificationOutbox(deps);
 
     expect(summary.failed).toBe(1);
-    expect(recorded.deferred).toEqual([{ id: 1, error: 'ServiceUnavailable' }]);
+    expect(recorded.deferred).toEqual([
+      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable' },
+    ]);
     // Deliberately NOT marked terminal — the next drain retries it.
     expect(recorded.outbox).toEqual([]);
   });
@@ -251,7 +281,7 @@ describe('drainNotificationOutbox', () => {
   it('stops retrying at MAX_ATTEMPTS instead of looping forever', async () => {
     const token = 'a'.repeat(64);
     const { deps, recorded } = harness({
-      rows: [row({ attempts: MAX_ATTEMPTS - 1 })],
+      rows: [row({ attempts: MAX_ATTEMPTS })],
       outcomes: { [token]: { outcome: 'retry', status: 503, reason: 'ServiceUnavailable' } },
     });
 
@@ -259,7 +289,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(recorded.deferred).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, status: 'failed', error: 'ServiceUnavailable' },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'ServiceUnavailable' },
     ]);
   });
 
@@ -275,7 +305,7 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.outbox).toEqual([
-      { id: 1, status: 'failed', error: 'InvalidProviderToken' },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'InvalidProviderToken' },
     ]);
     expect(recorded.deferred).toEqual([]);
   });
@@ -287,7 +317,9 @@ describe('drainNotificationOutbox', () => {
     const summary = await drainNotificationOutbox(deps);
 
     expect(summary.suppressed).toBe(1);
-    expect(recorded.outbox).toEqual([{ id: 1, status: 'suppressed', error: 'no_devices' }]);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'no_devices' },
+    ]);
   });
 
   it('fails terminally when the plan vanished between enqueue and drain', async () => {
@@ -295,7 +327,9 @@ describe('drainNotificationOutbox', () => {
 
     await drainNotificationOutbox(deps);
 
-    expect(recorded.outbox).toEqual([{ id: 1, status: 'failed', error: 'missing_context' }]);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'missing_context' },
+    ]);
     expect(recorded.sentTo).toEqual([]);
   });
 
@@ -312,7 +346,7 @@ describe('drainNotificationOutbox', () => {
   });
 
   it('records one delivery row per (event, device) — the idempotency unit (criterion 3)', async () => {
-    // The unique (outbox_id, device_token_id) constraint in 0052 is what makes
+    // The unique (outbox_id, device_token_id) constraint in 0061 is what makes
     // a re-drained row a no-op at the device level; this asserts the sender
     // writes exactly the key that constraint indexes.
     const { deps, recorded } = harness({
@@ -328,5 +362,103 @@ describe('drainNotificationOutbox', () => {
     const keys = recorded.deliveries.map((d) => `${d.outboxId}:${d.deviceTokenId}`);
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toEqual(['1:device-1', '1:device-2']);
+  });
+
+  it('RESERVES each device before calling APNs (criterion 3)', async () => {
+    // Order matters and is the whole fix: the reservation is committed first,
+    // so a drain that dies after the send still leaves the device taken.
+    const order: string[] = [];
+    const { deps } = harness({ rows: [row()] });
+    const reserve = deps.reserveDelivery;
+    const send = deps.send;
+    const instrumented: DrainDeps = {
+      ...deps,
+      reserveDelivery: async (outboxId, deviceTokenId) => {
+        order.push('reserve');
+        return reserve(outboxId, deviceTokenId);
+      },
+      send: async (token, payload) => {
+        order.push('send');
+        return send(token, payload);
+      },
+    };
+
+    await drainNotificationOutbox(instrumented);
+
+    expect(order).toEqual(['reserve', 'send']);
+  });
+
+  it('does NOT re-send to a device an earlier pass already reserved', async () => {
+    // The crash-after-send case. The row comes back after its lease expires;
+    // the reserved device must be skipped rather than buzzed twice.
+    const { deps, recorded } = harness({
+      rows: [row()],
+      devices: [
+        { id: 'device-1', token: 'a'.repeat(64) },
+        { id: 'device-2', token: 'b'.repeat(64) },
+      ],
+      alreadyReserved: ['1:device-1'],
+    });
+
+    await drainNotificationOutbox(deps);
+
+    expect(recorded.sentTo).toEqual(['b'.repeat(64)]);
+  });
+
+  it('does not send at all when every device was already reserved', async () => {
+    const { deps, recorded } = harness({
+      rows: [row()],
+      alreadyReserved: ['1:device-1'],
+    });
+
+    const summary = await drainNotificationOutbox(deps);
+
+    expect(recorded.sentTo).toEqual([]);
+    expect(summary.suppressed).toBe(1);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'already_attempted' },
+    ]);
+  });
+
+  it('retires a row whose claims have out-lived the attempt budget', async () => {
+    // A drain that dies mid-row still spends the attempt at claim time, so a
+    // row that kills every worker eventually stops being handed out.
+    const { deps, recorded } = harness({ rows: [row({ attempts: MAX_ATTEMPTS + 1 })] });
+
+    const summary = await drainNotificationOutbox(deps);
+
+    expect(recorded.sentTo).toEqual([]);
+    expect(summary.failed).toBe(1);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'max_attempts' },
+    ]);
+  });
+
+  it('fences every write on the claim token it was handed', async () => {
+    const { deps, recorded } = harness({
+      rows: [row({ claim_token: 'claim-token-2' })],
+    });
+
+    await drainNotificationOutbox(deps);
+
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: 'claim-token-2', status: 'sent', error: null },
+    ]);
+  });
+
+  it('defers rather than deciding when a WRITE fails, and keeps the batch going', async () => {
+    // A failed status write is not a decision. The row stays pending and the
+    // next row in the batch is still processed.
+    const { deps, recorded } = harness({
+      rows: [row({ id: 1 }), row({ id: 2 })],
+      failing: { markOutbox: true },
+    });
+
+    const summary = await drainNotificationOutbox(deps);
+
+    expect(summary.processed).toBe(2);
+    expect(summary.deferred).toBe(2);
+    expect(summary.sent).toBe(0);
+    expect(recorded.outbox).toEqual([]);
   });
 });

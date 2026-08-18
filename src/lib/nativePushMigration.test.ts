@@ -28,8 +28,8 @@ function migration(name: string): string {
   ).replace(/\r\n/g, '\n');
 }
 
-const TOKENS_SQL = migration('0055_native_device_tokens.sql');
-const OUTBOX_SQL = migration('0056_notification_outbox.sql');
+const TOKENS_SQL = migration('0060_native_device_tokens.sql');
+const OUTBOX_SQL = migration('0061_notification_outbox.sql');
 
 const EVENT_TYPES = ['invited', 'accepted', 'bar_suggested', 'plan_changed'];
 
@@ -179,6 +179,32 @@ describe('notification_outbox (criteria 3, 4)', () => {
   it('can never deliver the same event to the same device twice (criterion 3)', () => {
     expect(OUTBOX_SQL).toMatch(
       /constraint notification_deliveries_once unique \(outbox_id, device_token_id\)/,
+    );
+  });
+
+  it('claims work atomically, charges an attempt, and stamps an owner', () => {
+    // Three separate defects live in this one statement. `for update skip
+    // locked` is what stops two drains taking the same rows. Incrementing
+    // attempts AT CLAIM is what bounds a worker that dies before it can defer.
+    // claim_token is what stops a drain whose lease expired from writing over
+    // the claim that replaced it.
+    const claim = OUTBOX_SQL.slice(
+      OUTBOX_SQL.indexOf('create or replace function public.claim_notification_outbox'),
+    );
+    expect(claim).toMatch(/for update skip locked/);
+    expect(claim).toMatch(/claim_token = gen_random_uuid\(\)/);
+    expect(claim).toMatch(/attempts\s*= o\.attempts \+ 1/);
+    expect(OUTBOX_SQL).toMatch(
+      /revoke all on function public\.claim_notification_outbox\(integer, integer\) from public, anon, authenticated/,
+    );
+  });
+
+  it('lets a delivery be RESERVED before APNs is called (criterion 3)', () => {
+    // The unique key alone only deduplicates the audit row, which is written
+    // after Apple already has the push. A non-terminal 'pending' status is
+    // what lets the sender take the pair first and make the send at-most-once.
+    expect(OUTBOX_SQL).toMatch(
+      /check \(status in \('pending', 'sent', 'failed', 'invalid_token'\)\)/,
     );
   });
 

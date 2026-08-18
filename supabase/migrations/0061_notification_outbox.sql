@@ -1,7 +1,10 @@
--- Next Bar — 0052 server-owned notification outbox (V8-4)
+-- Next Bar — 0061 server-owned notification outbox (V8-4)
 --
 -- ⚠ COMMITTED UNAPPLIED. Applying to staging is an ATTENDED action and is not
--- performed by this goal. Numbered above the live maximum per CLAUDE.md.
+-- performed by this goal. Numbered ABOVE every ordinal the trunk has minted
+-- (0059 is the highest) per CLAUDE.md, together with 0060 - the earlier
+-- 0052 and 0056 numbers sorted BELOW migrations already applied to the
+-- serving database, which a ledger-aware runner refuses.
 --
 -- Generates EXACTLY the four PRD event types — invited, accepted,
 -- bar_suggested, plan_changed — into a server-owned outbox. The vocabulary is
@@ -47,6 +50,13 @@ create table if not exists public.notification_outbox (
   -- a boolean so a drain that dies mid-batch does not strand its rows: the
   -- claim expires and they become claimable again.
   claimed_at        timestamptz null,
+  -- OWNERSHIP FENCE. claimed_at alone says a claim EXISTS, never WHOSE it is:
+  -- once a lease expired, a second drain could claim the row while the first
+  -- was still sending, and the first drain's later status write would land on
+  -- work it no longer owned. Every drain write is now conditioned on the token
+  -- it was handed at claim time, so a superseded worker's update matches no row
+  -- and is discarded instead of clobbering the live claim.
+  claim_token       uuid        null,
   created_at        timestamptz not null default now(),
   constraint notification_outbox_dedupe_key unique (dedupe_key),
   constraint notification_outbox_event_check
@@ -56,6 +66,12 @@ create table if not exists public.notification_outbox (
   constraint notification_outbox_bar_check
     check (bar_id is null or bar_id ~ '^[a-z0-9-]{1,60}$')
 );
+
+-- Additive for an already-created table (this migration is re-runnable).
+alter table public.notification_outbox
+  add column if not exists claimed_at timestamptz null;
+alter table public.notification_outbox
+  add column if not exists claim_token uuid null;
 
 -- The drain query: oldest pending first.
 create index if not exists notification_outbox_pending_idx
@@ -77,13 +93,25 @@ create table if not exists public.notification_deliveries (
   apns_status     integer     null,
   apns_reason     text        null,
   created_at      timestamptz not null default now(),
-  -- This is the (event, recipient, device) half of criterion 3: the same
-  -- event can never be delivered to the same device twice, even if the outbox
-  -- row is drained more than once (crash between send and status write).
+  -- This is the (event, recipient, device) half of criterion 3. The unique
+  -- key alone only deduplicates the AUDIT ROW, which is written after APNs has
+  -- already been called - it cannot stop a second SEND. The sender therefore
+  -- RESERVES this row with status 'pending' BEFORE calling APNs, so the
+  -- reservation is committed first and a re-drained row finds the device
+  -- already taken and skips it. That makes the send at-most-once per
+  -- (event, device), which is the direction to fail in: a notification the
+  -- user never sees beats the same notification buzzing twice.
   constraint notification_deliveries_once unique (outbox_id, device_token_id),
   constraint notification_deliveries_status_check
-    check (status in ('sent', 'failed', 'invalid_token'))
+    check (status in ('pending', 'sent', 'failed', 'invalid_token'))
 );
+
+-- Re-runnable widening for an already-created table.
+alter table public.notification_deliveries
+  drop constraint if exists notification_deliveries_status_check;
+alter table public.notification_deliveries
+  add constraint notification_deliveries_status_check
+  check (status in ('pending', 'sent', 'failed', 'invalid_token'));
 
 -- The sender's rate-limit window read.
 create index if not exists notification_deliveries_recent_idx
@@ -306,6 +334,7 @@ create trigger night_outs_notify
 --   drop function if exists public.night_outs_bump_plan_revision();
 --   alter table public.night_outs drop column if exists plan_revision;
 --   drop table if exists public.notification_deliveries;
+--   drop function if exists public.claim_notification_outbox(integer, integer);
 --   drop table if exists public.notification_outbox;
 ------------------------------------------------------------------------------
 
@@ -320,6 +349,13 @@ create trigger night_outs_notify
 -- Rows whose claim has expired are re-claimable, so a drain that crashes
 -- between claiming and sending delays those notifications by the lease rather
 -- than losing them.
+--
+-- The claim also CONSUMES AN ATTEMPT and stamps a fresh ownership token.
+-- Counting attempts only on a graceful defer meant a worker that DIED after
+-- claiming left the counter untouched, so a row that killed its drain every
+-- time was re-claimed forever and never reached MAX_ATTEMPTS. Charging the
+-- attempt at claim time makes the retry budget cover crashes as well as
+-- refusals, and it is a single statement so it cannot be lost.
 create or replace function public.claim_notification_outbox(
   p_limit integer default 100,
   p_lease_seconds integer default 300
@@ -340,7 +376,9 @@ as $$
      for update skip locked
   )
   update public.notification_outbox o
-     set claimed_at = now()
+     set claimed_at  = now(),
+         claim_token = gen_random_uuid(),
+         attempts    = o.attempts + 1
     from claimable c
    where o.id = c.id
   returning o.*

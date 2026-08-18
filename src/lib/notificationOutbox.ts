@@ -7,7 +7,7 @@ import type {
 /**
  * V8-4 — draining the server-owned outbox. SERVER ONLY.
  *
- * The outbox itself (0052) decides WHAT happened and to WHOM; this module
+ * The outbox itself (0061) decides WHAT happened and to WHOM; this module
  * decides whether it may be delivered and to which devices, then records the
  * result. Everything it needs from the database arrives through `DrainDeps`,
  * so the delivery rules below are unit-testable against mocked APNs responses
@@ -68,15 +68,29 @@ export type OutboxRow = {
   readonly recipient_user_id: string;
   readonly actor_id: string | null;
   readonly bar_id: string | null;
-  /** Drains already spent on this row. Bounded by MAX_ATTEMPTS below. */
+  /**
+   * Drains already spent on this row, INCLUDING the one handing it to us: the
+   * claim charges the attempt, so a drain that dies mid-row still burns one.
+   * Bounded by MAX_ATTEMPTS below.
+   */
   readonly attempts: number;
+  /**
+   * Proof this drain owns the row. Minted fresh by every claim; every write
+   * back to the row is conditioned on it, so a drain whose lease expired
+   * cannot overwrite the claim that replaced it.
+   */
+  readonly claim_token: string;
 };
 
 /**
  * A retryable APNs answer leaves the row pending so the next drain picks it up
  * — but "retry forever" is how an outbox turns into an infinite send loop
- * against a permanently sick token. After this many passes the row is failed
+ * against a permanently sick token. After this many CLAIMS the row is failed
  * with its last APNs reason recorded, and a human can read why.
+ *
+ * Counted at claim time rather than on a graceful defer, because the row that
+ * most needs a ceiling is the one that kills its drain before any defer can
+ * run: that row used to be re-claimed forever with attempts still at zero.
  */
 export const MAX_ATTEMPTS = 5;
 
@@ -140,6 +154,12 @@ export type DrainDeps = {
     deviceToken: string,
     payload: ApnsPayload,
   ): Promise<{ outcome: ApnsOutcome; status: number; reason: string | null }>;
+  /**
+   * Take this (row, device) pair BEFORE calling APNs. `false` means an earlier
+   * pass already took it and this device must be skipped — the fence that
+   * makes a re-drained row at-most-once per device rather than a second buzz.
+   */
+  reserveDelivery(outboxId: number, deviceTokenId: string): Promise<boolean>;
   recordDelivery(input: {
     outboxId: number;
     deviceTokenId: string;
@@ -150,11 +170,16 @@ export type DrainDeps = {
   revokeToken(deviceTokenId: string): Promise<void>;
   markOutbox(
     outboxId: number,
+    claimToken: string,
     status: OutboxStatus,
     lastError: string | null,
   ): Promise<void>;
-  /** Leave the row pending for the next drain, but count the attempt. */
-  deferOutbox(outboxId: number, lastError: string | null): Promise<void>;
+  /** Release the claim so the next drain retries. The attempt is already spent. */
+  deferOutbox(
+    outboxId: number,
+    claimToken: string,
+    lastError: string | null,
+  ): Promise<void>;
   now(): number;
 };
 
@@ -164,10 +189,11 @@ export type DrainSummary = {
   suppressed: number;
   failed: number;
   /**
-   * Left pending because something we needed could not be READ — a preference
-   * or a recent-send count. Distinct from `suppressed` (a decision was made)
-   * and from `failed` (terminal). A deferred row is retried next drain, which
-   * is the only safe answer when consent is unknown.
+   * Left pending because something we needed could not be READ or WRITTEN — a
+   * preference, a recent-send count, a status update. Distinct from
+   * `suppressed` (a decision was made) and from `failed` (terminal). A
+   * deferred row is retried next drain, which is the only safe answer when
+   * consent — or whether our own write landed — is unknown.
    */
   deferred: number;
   invalidTokensRevoked: number;
@@ -192,135 +218,182 @@ export async function drainNotificationOutbox(
 
   for (const row of pending) {
     summary.processed += 1;
-
-    // CONSENT IS FAIL-CLOSED. The adapter previously swallowed query errors and
-    // returned null here, which isEventAllowed treats as DEFAULT_PREFERENCES —
-    // and every default is `true`. A database blip therefore NOTIFIED people
-    // who had opted out (cold panel, both lanes). An unknown preference is not
-    // permission: leave the row pending and try again next drain.
-    let preferences: NotificationPreferences | null;
+    // An UNEXPECTED throw below is a write we could not confirm. It must not
+    // abandon the rest of the batch, and it must not be read as a decision:
+    // the row keeps its pending status and the next drain sees it again.
     try {
-      preferences = await deps.fetchPreferences(row.recipient_user_id);
+      await processOutboxRow(deps, row, summary);
     } catch {
       summary.deferred += 1;
-      continue;
-    }
-    if (!isEventAllowed(preferences, row.event_type)) {
-      await deps.markOutbox(row.id, 'suppressed', 'opted_out');
-      summary.suppressed += 1;
-      continue;
-    }
-
-    // Same reasoning for the rate limit: a failed count used to read as zero,
-    // which is "no recent sends" — the most permissive answer available.
-    const sinceIso = new Date(deps.now() - RATE_LIMIT_WINDOW_MS).toISOString();
-    let recent: number;
-    try {
-      recent = await deps.countRecentSends(row.recipient_user_id, sinceIso);
-    } catch {
-      summary.deferred += 1;
-      continue;
-    }
-    if (!isWithinRateLimit(recent)) {
-      await deps.markOutbox(row.id, 'suppressed', 'rate_limited');
-      summary.suppressed += 1;
-      continue;
-    }
-
-    // fetchContext and fetchLiveTokens now surface read errors rather than
-    // swallowing them, so an unreadable answer must defer rather than be
-    // mistaken for "no plan" (terminal) or "no devices" (suppressed) — both of
-    // which would retire a notification that was perfectly deliverable.
-    let context: NotificationContext | null;
-    try {
-      context = await deps.fetchContext(row);
-    } catch {
-      summary.deferred += 1;
-      continue;
-    }
-    if (!context) {
-      // The plan was deleted between enqueue and drain. There is nothing to
-      // deep-link to, so this is terminal rather than retryable.
-      await deps.markOutbox(row.id, 'failed', 'missing_context');
-      summary.failed += 1;
-      continue;
-    }
-
-    let devices: Awaited<ReturnType<DrainDeps['fetchLiveTokens']>>;
-    try {
-      devices = await deps.fetchLiveTokens(row.recipient_user_id);
-    } catch {
-      summary.deferred += 1;
-      continue;
-    }
-    if (devices.length === 0) {
-      // Not a failure of ours: the user has no registered device, or revoked
-      // the only one. Recorded as suppressed so it is never retried forever.
-      await deps.markOutbox(row.id, 'suppressed', 'no_devices');
-      summary.suppressed += 1;
-      continue;
-    }
-
-    const payload = buildNotificationPayload(row, context);
-    let anySent = false;
-    let anyRetryable = false;
-    let lastReason: string | null = null;
-
-    for (const device of devices) {
-      const result = await deps.send(device.token, payload);
-      lastReason = result.reason;
-
-      if (result.outcome === 'sent') {
-        anySent = true;
-        await deps.recordDelivery({
-          outboxId: row.id,
-          deviceTokenId: device.id,
-          status: 'sent',
-          apnsStatus: result.status,
-          apnsReason: result.reason,
-        });
-        continue;
-      }
-
-      if (result.outcome === 'invalid-token') {
-        // Criterion 4: an invalid token is retired, not retried. Revoking
-        // rather than deleting keeps the audit trail and lets a later
-        // re-registration on the same installation simply un-revoke.
-        await deps.revokeToken(device.id);
-        summary.invalidTokensRevoked += 1;
-        await deps.recordDelivery({
-          outboxId: row.id,
-          deviceTokenId: device.id,
-          status: 'invalid_token',
-          apnsStatus: result.status,
-          apnsReason: result.reason,
-        });
-        continue;
-      }
-
-      if (result.outcome === 'retry') anyRetryable = true;
-      await deps.recordDelivery({
-        outboxId: row.id,
-        deviceTokenId: device.id,
-        status: 'failed',
-        apnsStatus: result.status,
-        apnsReason: result.reason,
-      });
-    }
-
-    if (anySent) {
-      await deps.markOutbox(row.id, 'sent', null);
-      summary.sent += 1;
-    } else if (anyRetryable && row.attempts + 1 < MAX_ATTEMPTS) {
-      // Left pending on purpose so the next drain retries it. Still counted as
-      // a failure of THIS pass so the caller's numbers are honest.
-      await deps.deferOutbox(row.id, lastReason);
-      summary.failed += 1;
-    } else {
-      await deps.markOutbox(row.id, 'failed', lastReason ?? 'no_delivery');
-      summary.failed += 1;
     }
   }
 
   return summary;
+}
+
+async function processOutboxRow(
+  deps: DrainDeps,
+  row: OutboxRow,
+  summary: DrainSummary,
+): Promise<void> {
+  // The claim already charged an attempt, so a row that has out-lived the
+  // budget arrives here instead of being re-claimed forever. Retire it
+  // before spending an APNs call on it.
+  if (row.attempts > MAX_ATTEMPTS) {
+    await deps.markOutbox(row.id, row.claim_token, 'failed', 'max_attempts');
+    summary.failed += 1;
+    return;
+  }
+
+  // CONSENT IS FAIL-CLOSED. The adapter previously swallowed query errors and
+  // returned null here, which isEventAllowed treats as DEFAULT_PREFERENCES —
+  // and every default is `true`. A database blip therefore NOTIFIED people
+  // who had opted out (cold panel, both lanes). An unknown preference is not
+  // permission: leave the row pending and try again next drain.
+  let preferences: NotificationPreferences | null;
+  try {
+    preferences = await deps.fetchPreferences(row.recipient_user_id);
+  } catch {
+    summary.deferred += 1;
+    return;
+  }
+  if (!isEventAllowed(preferences, row.event_type)) {
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'opted_out');
+    summary.suppressed += 1;
+    return;
+  }
+
+  // Same reasoning for the rate limit: a failed count used to read as zero,
+  // which is "no recent sends" — the most permissive answer available.
+  const sinceIso = new Date(deps.now() - RATE_LIMIT_WINDOW_MS).toISOString();
+  let recent: number;
+  try {
+    recent = await deps.countRecentSends(row.recipient_user_id, sinceIso);
+  } catch {
+    summary.deferred += 1;
+    return;
+  }
+  if (!isWithinRateLimit(recent)) {
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'rate_limited');
+    summary.suppressed += 1;
+    return;
+  }
+
+  // fetchContext and fetchLiveTokens now surface read errors rather than
+  // swallowing them, so an unreadable answer must defer rather than be
+  // mistaken for "no plan" (terminal) or "no devices" (suppressed) — both of
+  // which would retire a notification that was perfectly deliverable.
+  let context: NotificationContext | null;
+  try {
+    context = await deps.fetchContext(row);
+  } catch {
+    summary.deferred += 1;
+    return;
+  }
+  if (!context) {
+    // The plan was deleted between enqueue and drain. There is nothing to
+    // deep-link to, so this is terminal rather than retryable.
+    await deps.markOutbox(row.id, row.claim_token, 'failed', 'missing_context');
+    summary.failed += 1;
+    return;
+  }
+
+  let devices: Awaited<ReturnType<DrainDeps['fetchLiveTokens']>>;
+  try {
+    devices = await deps.fetchLiveTokens(row.recipient_user_id);
+  } catch {
+    summary.deferred += 1;
+    return;
+  }
+  if (devices.length === 0) {
+    // Not a failure of ours: the user has no registered device, or revoked
+    // the only one. Recorded as suppressed so it is never retried forever.
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'no_devices');
+    summary.suppressed += 1;
+    return;
+  }
+
+  const payload = buildNotificationPayload(row, context);
+  let anySent = false;
+  let anyRetryable = false;
+  let attemptedAny = false;
+  let lastReason: string | null = null;
+
+  for (const device of devices) {
+    // RESERVE, then send. The reservation is committed before Apple is
+    // contacted, so a device an earlier pass already reached is skipped
+    // rather than buzzed a second time.
+    if (!(await deps.reserveDelivery(row.id, device.id))) continue;
+    attemptedAny = true;
+    const result = await deps.send(device.token, payload);
+    lastReason = result.reason;
+
+    if (result.outcome === 'sent') {
+      anySent = true;
+      await deps.recordDelivery({
+        outboxId: row.id,
+        deviceTokenId: device.id,
+        status: 'sent',
+        apnsStatus: result.status,
+        apnsReason: result.reason,
+      });
+      continue;
+    }
+
+    if (result.outcome === 'invalid-token') {
+      // Criterion 4: an invalid token is retired, not retried. Revoking
+      // rather than deleting keeps the audit trail and lets a later
+      // re-registration on the same installation simply un-revoke.
+      await deps.revokeToken(device.id);
+      summary.invalidTokensRevoked += 1;
+      await deps.recordDelivery({
+        outboxId: row.id,
+        deviceTokenId: device.id,
+        status: 'invalid_token',
+        apnsStatus: result.status,
+        apnsReason: result.reason,
+      });
+      continue;
+    }
+
+    if (result.outcome === 'retry') anyRetryable = true;
+    await deps.recordDelivery({
+      outboxId: row.id,
+      deviceTokenId: device.id,
+      status: 'failed',
+      apnsStatus: result.status,
+      apnsReason: result.reason,
+    });
+  }
+
+  if (anySent) {
+    await deps.markOutbox(row.id, row.claim_token, 'sent', null);
+    summary.sent += 1;
+  } else if (!attemptedAny) {
+    // Every device was already reserved by an earlier pass, so this row's
+    // sends have all happened. Nothing was decided HERE and nothing failed
+    // here — `suppressed` is the existing vocabulary for "we chose not to
+    // send", and it keeps the row out of the rate-limit count, which only
+    // sums rows marked 'sent'.
+    await deps.markOutbox(
+      row.id,
+      row.claim_token,
+      'suppressed',
+      'already_attempted',
+    );
+    summary.suppressed += 1;
+  } else if (anyRetryable && row.attempts < MAX_ATTEMPTS) {
+    // Left pending on purpose so the next drain retries it. Still counted as
+    // a failure of THIS pass so the caller's numbers are honest.
+    await deps.deferOutbox(row.id, row.claim_token, lastReason);
+    summary.failed += 1;
+  } else {
+    await deps.markOutbox(
+      row.id,
+      row.claim_token,
+      'failed',
+      lastReason ?? 'no_delivery',
+    );
+    summary.failed += 1;
+  }
 }

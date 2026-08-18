@@ -1,25 +1,21 @@
 import { NextResponse } from 'next/server';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 import {
   readApnsConfig,
   sendApnsNotification,
   buildProviderToken,
 } from '@/lib/apnsSender';
-import {
-  DEFAULT_PREFERENCES,
-  drainNotificationOutbox,
-  type DrainDeps,
-  type NotificationPreferences,
-  type OutboxRow,
-} from '@/lib/notificationOutbox';
+import { buildDrainDeps } from '@/lib/notificationDrainDeps';
+import { drainNotificationOutbox } from '@/lib/notificationOutbox';
 
 /**
  * POST /api/notifications/drain — send whatever the outbox has queued.
  *
- * The outbox is written by database triggers (0056); something has to drain
+ * The outbox is written by database triggers (0061); something has to drain
  * it. This is that something: a small, secret-guarded endpoint a scheduler can
- * poke. All the delivery RULES live in src/lib/notificationOutbox.ts and are
- * unit-tested there — this file is only the wiring.
+ * poke. All the delivery RULES live in src/lib/notificationOutbox.ts and every
+ * database adapter lives in src/lib/notificationDrainDeps.ts — both unit-tested
+ * there. This file is only the guards and the wiring.
  *
  * SECURITY MODEL (same shape as /api/account/delete):
  *   - SUPABASE_SERVICE_ROLE_KEY and every APNS_* variable are read server-side
@@ -45,13 +41,6 @@ export const dynamic = 'force-dynamic';
 
 const BATCH_SIZE = 100;
 
-/**
- * How long a claim holds a row. Long enough that a slow APNs batch finishes
- * inside it; short enough that a drain killed mid-batch does not delay those
- * notifications for long.
- */
-const CLAIM_LEASE_SECONDS = 300;
-
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -59,142 +48,6 @@ function timingSafeEqual(a: string, b: string): boolean {
     diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
   }
   return diff === 0;
-}
-
-function buildDeps(
-  admin: SupabaseClient,
-  send: DrainDeps['send'],
-): DrainDeps {
-  return {
-    async fetchPending(limit) {
-      // CLAIM, do not select. A plain read let two overlapping drains take the
-      // same pending rows and send the same notification twice (cold panel,
-      // both lanes, HIGH). claim_notification_outbox marks the rows under
-      // `for update skip locked` in one statement, so concurrent drains get
-      // disjoint sets and a crashed drain's rows return after the lease.
-      const { data, error } = await admin.rpc('claim_notification_outbox', {
-        p_limit: limit,
-        p_lease_seconds: CLAIM_LEASE_SECONDS,
-      });
-      if (error) throw new Error(`outbox unclaimable: ${error.code ?? 'unknown'}`);
-      return (data ?? []) as OutboxRow[];
-    },
-
-    async fetchPreferences(userId) {
-      const { data, error } = await admin
-        .from('notification_preferences')
-        .select('invited, accepted, bar_suggested, plan_changed')
-        .eq('user_id', userId)
-        .maybeSingle();
-      // THROW rather than fall back. `?? DEFAULT_PREFERENCES` made a failed
-      // read indistinguishable from "no row", and every default is true — so a
-      // database error granted consent nobody gave. A missing ROW is a genuine
-      // default; a missing ANSWER is not.
-      if (error) throw new Error(`preferences unavailable: ${error.code ?? 'unknown'}`);
-      return (data as NotificationPreferences | null) ?? DEFAULT_PREFERENCES;
-    },
-
-    async fetchContext(row) {
-      const { data: plan } = await admin
-        .from('night_outs')
-        .select('share_token, title')
-        .eq('id', row.night_out_id)
-        .maybeSingle();
-      if (!plan?.share_token) return null;
-
-      let actorName: string | null = null;
-      if (row.actor_id) {
-        const { data: actor } = await admin
-          .from('profiles')
-          .select('display_name, handle')
-          .eq('id', row.actor_id)
-          .maybeSingle();
-        actorName = actor?.display_name ?? actor?.handle ?? null;
-      }
-
-      return {
-        nightOutToken: plan.share_token as string,
-        nightOutTitle: (plan.title as string | null) ?? null,
-        actorName,
-      };
-    },
-
-    async fetchLiveTokens(userId) {
-      const { data, error } = await admin
-        .from('native_device_tokens')
-        .select('id, token')
-        .eq('user_id', userId)
-        .is('revoked_at', null);
-      // An unreadable token list is not "no devices" — suppressing on it would
-      // permanently mark a deliverable notification as undeliverable.
-      if (error) throw new Error(`device tokens unavailable: ${error.code ?? 'unknown'}`);
-      return data ?? [];
-    },
-
-    async countRecentSends(userId, sinceIso) {
-      const { count, error } = await admin
-        .from('notification_outbox')
-        .select('id', { count: 'exact', head: true })
-        .eq('recipient_user_id', userId)
-        // Measured on when it was PROCESSED, not when it was enqueued.
-        // created_at is enqueue time, so a backlog that drains all at once
-        // counted as "old" and sailed straight past the limit (cold panel,
-        // both lanes). processed_at is set by markOutbox at send time.
-        .eq('status', 'sent')
-        .gte('processed_at', sinceIso);
-      if (error) throw new Error(`recent-send count unavailable: ${error.code ?? 'unknown'}`);
-      // A null count with no error means the head request returned nothing to
-      // count, which is genuinely zero.
-      return count ?? 0;
-    },
-
-    send,
-
-    async recordDelivery(input) {
-      await admin.from('notification_deliveries').upsert(
-        {
-          outbox_id: input.outboxId,
-          device_token_id: input.deviceTokenId,
-          status: input.status,
-          apns_status: input.apnsStatus,
-          apns_reason: input.apnsReason,
-        },
-        { onConflict: 'outbox_id,device_token_id', ignoreDuplicates: true },
-      );
-    },
-
-    async revokeToken(deviceTokenId) {
-      await admin
-        .from('native_device_tokens')
-        .update({ revoked_at: new Date().toISOString() })
-        .eq('id', deviceTokenId);
-    },
-
-    async markOutbox(outboxId, status, lastError) {
-      await admin
-        .from('notification_outbox')
-        .update({
-          status,
-          last_error: lastError,
-          processed_at: new Date().toISOString(),
-        })
-        .eq('id', outboxId);
-    },
-
-    async deferOutbox(outboxId, lastError) {
-      const { data } = await admin
-        .from('notification_outbox')
-        .select('attempts')
-        .eq('id', outboxId)
-        .maybeSingle();
-      await admin
-        .from('notification_outbox')
-        .update({ attempts: ((data?.attempts as number) ?? 0) + 1, last_error: lastError })
-        .eq('id', outboxId);
-    },
-
-    now: () => Date.now(),
-  };
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -268,7 +121,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     Math.floor(Date.now() / 1000),
   );
 
-  const deps = buildDeps(admin, (deviceToken, payload) =>
+  const deps = buildDrainDeps(admin, (deviceToken, payload) =>
     sendApnsNotification(
       config,
       { deviceToken, payload, collapseId: payload.nightOutToken },

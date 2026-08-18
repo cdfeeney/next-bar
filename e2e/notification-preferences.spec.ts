@@ -3,7 +3,7 @@
  *
  * Supabase is STUBBED at the browser boundary (page.route), same pattern as
  * account-delete.spec.ts and night-out.spec.ts: no request reaches a live
- * database (migration 0051 is committed unapplied). Signed-in tests use the
+ * database (migration 0060 is committed unapplied). Signed-in tests use the
  * fake-session-cookie pattern from those specs.
  *
  * Covers, per CLAUDE.md's "every interactive feature gets an e2e test":
@@ -183,6 +183,34 @@ test.describe('/settings — notification preferences (V8-4)', () => {
     // something that was never true on this page.
     await expect(notificationsSection(page).getByRole('switch')).toHaveCount(4);
     await expect(page.getByRole('heading', { name: /^Account$/ })).toBeVisible();
+  });
+
+  test('signed-in: a failed READ shows an error and NO toggles, so nothing overwrites stored opt-outs', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubSignedInSettings(page);
+    // Registered LAST, so it wins over the stub above.
+    await page.route(
+      '**/rest/v1/notification_preferences**',
+      fulfillJson(500, { message: 'boom' }),
+    );
+
+    await page.goto('/settings');
+
+    await expect(notificationsSection(page).getByRole('alert')).toContainText(
+      /Couldn.t load your notification settings/i,
+    );
+    // The negative assertion that matters: an unreadable row must not render
+    // fabricated defaults, because one tap would write all four over the
+    // user's real preferences.
+    await expect(notificationsSection(page).getByRole('switch')).toHaveCount(0);
+    await expect(page).toHaveURL(/\/settings$/);
   });
 
   test('signed-in: a failed save reverts the toggle and reports an error instead of pretending it worked', async ({

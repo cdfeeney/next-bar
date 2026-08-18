@@ -2,10 +2,15 @@
 
 /**
  * NotificationPreferences — Settings section for the four V8-4 Night Out
- * push event types (migration 0055). A missing `notification_preferences`
- * row means "never touched this screen" — the RPC's own documented default
- * is all four ON, so a read failure or a missing row both fall back to that
- * same default rather than silently going dark.
+ * push event types (migration 0060). A missing `notification_preferences`
+ * row means "never touched this screen" — the RPC's own documented default is
+ * all four ON, so a missing ROW renders the four defaults.
+ *
+ * A FAILED READ IS NOT A MISSING ROW. It used to render those same defaults,
+ * and because a toggle writes ALL FOUR columns, one user tapping one switch
+ * during a database blip silently re-enabled every opt-out they had saved.
+ * An unreadable answer now renders an error and no toggles at all: there is
+ * nothing safe to write on top of state we never read.
  *
  * Deliberately does NOT request iOS permission on mount — that would be the
  * exact anti-pattern the PRD calls out (asking before the user has done
@@ -36,7 +41,7 @@ const DEFAULT_PREFS: Prefs = {
 };
 
 // Fixed order the four toggles render in — matches the RPC's own parameter
-// order (0055 set_notification_preferences), so there is one vocabulary
+// order (0060 set_notification_preferences), so there is one vocabulary
 // rather than a UI order that can drift from the write path.
 /**
  * The section is a labelled landmark, not a bare div. Two reasons, and the
@@ -75,6 +80,7 @@ type PrefRow = {
 export default function NotificationPreferences(): JSX.Element {
   const auth = useAuth();
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<PrefKey | null>(null);
@@ -97,7 +103,13 @@ export default function NotificationPreferences(): JSX.Element {
       .maybeSingle()
       .then(({ data, error }) => {
         if (cancelled || getCacheEpoch() !== epoch) return;
-        const row = !error ? (data as PrefRow | null) : null;
+        if (error) {
+          // Stay UNLOADED. Rendering toggles here would show fabricated
+          // state, and the first tap would write it over the real row.
+          setLoadError(true);
+          return;
+        }
+        const row = data as PrefRow | null;
         setPrefs(
           row === null
             ? DEFAULT_PREFS
@@ -116,7 +128,9 @@ export default function NotificationPreferences(): JSX.Element {
   }, [auth.status]);
 
   const handleToggle = async (key: PrefKey): Promise<void> => {
-    if (auth.status !== 'signed-in' || busyKey !== null) return;
+    // `loaded` is the proof these four values came from the database. Without
+    // it every write is built from defaults nobody chose.
+    if (auth.status !== 'signed-in' || busyKey !== null || !loaded) return;
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     const previous = prefs;
@@ -177,7 +191,11 @@ export default function NotificationPreferences(): JSX.Element {
         Notifications
       </h2>
       <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
-        {!loaded ? (
+        {loadError ? (
+          <p className="text-accent text-sm" role="alert">
+            Couldn&apos;t load your notification settings — reload to try again.
+          </p>
+        ) : !loaded ? (
           <p className="text-muted text-sm">Loading…</p>
         ) : (
           <ul className="space-y-4">

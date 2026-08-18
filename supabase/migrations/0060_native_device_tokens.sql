@@ -1,9 +1,11 @@
--- Next Bar — 0051 native APNs device tokens + notification preferences (V8-4)
+-- Next Bar — 0060 native APNs device tokens + notification preferences (V8-4)
 --
 -- ⚠ COMMITTED UNAPPLIED. Applying to staging is an ATTENDED action and is not
--- performed by this goal. Number chosen ABOVE the live maximum (0050) per
--- CLAUDE.md; do NOT run this worktree's ledger-blind `npm run db:migrate`
--- against a shared database.
+-- performed by this goal. Numbered ABOVE every ordinal the trunk has minted
+-- (0059 is the highest) per CLAUDE.md — the earlier 0051/0052 and 0055/0056
+-- numbers sorted BELOW migrations already applied to the serving database,
+-- which a ledger-aware runner refuses. Do NOT run this worktree's
+-- ledger-blind `npm run db:migrate` against a shared database.
 --
 -- This is the NATIVE iOS push store. It is deliberately SEPARATE from
 -- 0009_push_subscriptions (Web Push / VAPID), which stays dark: the PRD is

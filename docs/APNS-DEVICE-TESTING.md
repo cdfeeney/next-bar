@@ -49,7 +49,7 @@ commit or paste actual values anywhere, including into this doc:
 ## 3. Test matrix — four event types x three app states
 
 The PRD defines exactly four notification event types, generated server-side
-by triggers in `supabase/migrations/0052_notification_outbox.sql`: `invited`,
+by triggers in `supabase/migrations/0061_notification_outbox.sql`: `invited`,
 `accepted`, `bar_suggested`, `plan_changed`. Test each in each app state.
 
 Setup common to all rows: two accounts (A = owner, B = invitee/member) on two
@@ -60,17 +60,19 @@ opened the app once, sent or accepted an invitation (see permission timing in
 
 | Event | Trigger action | FOREGROUND (app open) | BACKGROUND (app suspended) | TERMINATED (app force-quit) |
 |---|---|---|---|---|
-| `invited` | A invites B to a Night Out | B sees an in-app banner/toast, no system banner | B gets a system notification banner; badge increments | B gets a system notification; tapping cold-launches the app |
-| `accepted` | B accepts A's invite | A sees an in-app update, no system banner | A gets a system notification banner | A gets a system notification; tapping cold-launches the app |
-| `bar_suggested` | An accepted member suggests a bar | Other accepted members see an in-app update, no system banner | Other accepted members get a system notification | Other accepted members get a system notification; tapping cold-launches the app |
-| `plan_changed` | A changes the night/title/status/decided bar | All accepted members see an in-app update, no system banner | All accepted members get a system notification | All accepted members get a system notification; tapping cold-launches the app |
+| `invited` | A invites B to a Night Out | B gets a system banner while the app is open | B gets a system notification banner; badge increments | B gets a system notification; tapping cold-launches the app |
+| `accepted` | B accepts A's invite | A gets a system banner while the app is open | A gets a system notification banner | A gets a system notification; tapping cold-launches the app |
+| `bar_suggested` | An accepted member suggests a bar | Other accepted members get a system banner while the app is open | Other accepted members get a system notification | Other accepted members get a system notification; tapping cold-launches the app |
+| `plan_changed` | A changes the night/title/status/decided bar | All accepted members get a system banner while the app is open | All accepted members get a system notification | All accepted members get a system notification; tapping cold-launches the app |
 
-Expected result for every FOREGROUND row: **no system notification banner**
-is acceptable and correct — iOS suppresses the system banner if the app
-handles the foreground presentation itself, and `presentationOptions:
-['badge', 'sound', 'alert']` in `capacitor.config.ts` means the app is
-opting IN to a system banner even in foreground. Verify you see either a
-system banner or an equivalent in-app indication, but not silence.
+Expected result for every FOREGROUND row: **a system notification banner**,
+with sound and a badge increment. `capacitor.config.ts` ships
+`presentationOptions: ['badge', 'sound', 'alert']`, which is the app opting IN
+to the full system presentation while it is in the foreground; the app
+registers no `pushNotificationReceived` handler and therefore draws no in-app
+banner of its own. A foreground event that produces **silence** is a failure,
+and so is one that produces only an in-app toast — that would mean the
+presentation options are not the ones this repository ships.
 
 ## 4. Deep-link verification
 
@@ -116,7 +118,7 @@ verify:
   for the same install. Confirm `save_native_device_token` updates the
   existing row (same `installation_id`, new `token`) rather than creating a
   duplicate — see the `on conflict ... do update` in
-  `save_native_device_token` (`supabase/migrations/0051_native_device_tokens.sql`).
+  `save_native_device_token` (`supabase/migrations/0060_native_device_tokens.sql`).
 - **Reinstall**: delete and reinstall the app on the same device/account.
   This produces a new `installation_id`. Confirm the stale token row for the
   old installation is cleaned up if the same physical token comes back (see
