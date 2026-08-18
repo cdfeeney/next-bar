@@ -245,6 +245,35 @@ describe('NotificationPreferences — signed in', () => {
     expect(rpcCalls).toEqual([]);
   });
 
+  test('signing out and back into the SAME account never shows all-ON defaults as loaded', async () => {
+    // The regression the owner-tagged snapshot exists to prevent. While the
+    // owner and the values were separate pieces of state, the sign-out reset
+    // the values but left the owner, so re-login rendered fabricated all-ON
+    // defaults as this account's loaded preferences — and one tap wrote them
+    // over every saved opt-out.
+    prefsRow = { invited: false, accepted: false, bar_suggested: false, plan_changed: false };
+    const view = render(<NotificationPreferences />);
+    const first = await screen.findAllByRole('switch');
+    expect(first.every((s) => s.getAttribute('aria-checked') === 'false')).toBe(true);
+
+    authState = { status: 'signed-out' };
+    view.rerender(<NotificationPreferences />);
+    expect(screen.queryAllByRole('switch')).toHaveLength(0);
+
+    // Same account back. Assert BEFORE the refetch resolves.
+    authState = { status: 'signed-in', user: { id: 'user-1' } };
+    view.rerender(<NotificationPreferences />);
+    expect(
+      screen.queryAllByRole('switch').some((s) => s.getAttribute('aria-checked') === 'true'),
+    ).toBe(false);
+    expect(rpcCalls).toEqual([]);
+
+    await waitFor(() => {
+      const switches = screen.getAllByRole('switch');
+      expect(switches.every((s) => s.getAttribute('aria-checked') === 'false')).toBe(true);
+    });
+  });
+
   test('a save interrupted by a sign-out does not wedge the toggles', async () => {
     // The busy flag was set before the await and cleared after a guard that
     // RETURNED first, so a sign-out landing mid-save left every toggle

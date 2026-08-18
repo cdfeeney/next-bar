@@ -19,7 +19,7 @@
  * night-out/[token]/page.tsx, fired after a real invite/accept action.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
@@ -70,6 +70,15 @@ const NATIVE_RESULT_MESSAGE: Partial<Record<NativePushResult, string>> = {
   failed: "Couldn't enable notifications — try again in a moment.",
 };
 
+/**
+   * A loaded answer and the account it belongs to, indivisible. `status`
+   * distinguishes "these are their real preferences" from "we could not read
+   * them", which must never render as the defaults.
+   */
+type Snapshot =
+  | { readonly userId: string; readonly status: 'loaded'; readonly prefs: Prefs }
+  | { readonly userId: string; readonly status: 'error' };
+
 type PrefRow = {
   invited: boolean | null;
   accepted: boolean | null;
@@ -84,29 +93,43 @@ export default function NotificationPreferences(): JSX.Element {
   // that already showed the previous account's toggles as loaded — one tap in
   // that window wrote their values into the new account's row. Comparing the
   // owner makes an account switch take effect in the same render.
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
-  const [loadErrorFor, setLoadErrorFor] = useState<string | null>(null);
-  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
+  //
+  // The owner and the VALUES are one piece of state for the same reason. While
+  // they were separate, the effect reset the values on every account change
+  // but left the owner alone, so signing out and back into the SAME account
+  // rendered all-ON defaults as that account's loaded preferences — and one
+  // tap wrote those fabricated defaults over their real opt-outs. They can
+  // only be written together now, so they cannot disagree.
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [busyKey, setBusyKey] = useState<PrefKey | null>(null);
+  /**
+   * The in-flight save, tagged with a sequence number so only the save that
+   * set it can clear it. A save that resolved after the account changed used
+   * to clear whatever flag it found, releasing the NEW account's guard and
+   * letting two whole-row writes overlap.
+   */
+  const [busy, setBusy] = useState<{ key: PrefKey; seq: number } | null>(null);
+  const saveSeq = useRef(0);
   const [nativeBusy, setNativeBusy] = useState(false);
   const [nativeResult, setNativeResult] = useState<NativePushResult | null>(null);
 
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
-  const loaded = userId !== null && loadedFor === userId;
-  const loadError = userId !== null && loadErrorFor === userId;
+  const mine = snapshot !== null && snapshot.userId === userId ? snapshot : null;
+  const loaded = mine?.status === 'loaded';
+  const loadError = mine?.status === 'error';
+  const prefs = mine?.status === 'loaded' ? mine.prefs : DEFAULT_PREFS;
 
   useEffect(() => {
     // Keyed on the USER, not just the status: a switch from one signed-in user
-    // straight to another used not to refetch at all. The state cleared below
-    // is for tidiness — correctness does NOT depend on this effect running
-    // first, because `loaded` and `loadError` are derived from the owner above.
-    setPrefs(DEFAULT_PREFS);
+    // straight to another used not to refetch at all. Nothing here is
+    // load-bearing for correctness — `loaded`, `loadError` and `prefs` all
+    // come from the owner-tagged snapshot above, so they are already right in
+    // the first render after a change.
     setSaveError(null);
-    // These two DO depend on it: a save or a device registration still in
+    // These DO depend on the effect: a save or a device registration still in
     // flight when the account changed left its busy flag set, and every later
-    // tap was silently dropped by the `busyKey !== null` guard until a remount.
-    setBusyKey(null);
+    // tap was silently dropped by the busy guard until a remount.
+    setBusy(null);
     setNativeBusy(false);
     setNativeResult(null);
     if (userId === null) return;
@@ -127,21 +150,23 @@ export default function NotificationPreferences(): JSX.Element {
         if (error) {
           // Stay UNLOADED. Rendering toggles here would show fabricated
           // state, and the first tap would write it over the real row.
-          setLoadErrorFor(userId);
+          setSnapshot({ userId, status: 'error' });
           return;
         }
         const row = data as PrefRow | null;
-        setPrefs(
-          row === null
-            ? DEFAULT_PREFS
-            : {
-                invited: row.invited ?? true,
-                accepted: row.accepted ?? true,
-                bar_suggested: row.bar_suggested ?? true,
-                plan_changed: row.plan_changed ?? true,
-              },
-        );
-        setLoadedFor(userId);
+        setSnapshot({
+          userId,
+          status: 'loaded',
+          prefs:
+            row === null
+              ? DEFAULT_PREFS
+              : {
+                  invited: row.invited ?? true,
+                  accepted: row.accepted ?? true,
+                  bar_suggested: row.bar_suggested ?? true,
+                  plan_changed: row.plan_changed ?? true,
+                },
+        });
       });
     return () => {
       cancelled = true;
@@ -149,29 +174,39 @@ export default function NotificationPreferences(): JSX.Element {
   }, [userId]);
 
   const handleToggle = async (key: PrefKey): Promise<void> => {
-    // `loaded` is the proof these four values came from the database. Without
-    // it every write is built from defaults nobody chose.
-    if (auth.status !== 'signed-in' || busyKey !== null || !loaded) return;
+    // `loaded` is the proof these four values came from the database, and it
+    // is tied to the account they came from. Without it every write is built
+    // from defaults nobody chose.
+    if (userId === null || busy !== null || !loaded) return;
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     const previous = prefs;
     const next: Prefs = { ...prefs, [key]: !prefs[key] };
     const epoch = getCacheEpoch();
+    const seq = (saveSeq.current += 1);
     setSaveError(null);
-    setBusyKey(key);
-    setPrefs(next); // optimistic — reverted below on failure
+    setBusy({ key, seq });
+    // Optimistic — reverted below on failure. Written against this account, so
+    // a snapshot that has since moved on is left alone.
+    setSnapshot({ userId, status: 'loaded', prefs: next });
     const { data, error } = await supabase.rpc('set_notification_preferences', {
       p_invited: next.invited,
       p_accepted: next.accepted,
       p_bar_suggested: next.bar_suggested,
       p_plan_changed: next.plan_changed,
     });
-    // Cleared FIRST. Returning before it left every toggle disabled for the
-    // next account on a page that stays mounted across a sign-out.
-    setBusyKey(null);
+    // Cleared FIRST, and only if it is still OURS. Returning before clearing
+    // left every toggle disabled for the next account on a page that stays
+    // mounted across a sign-out; clearing unconditionally released a newer
+    // account's guard and let two whole-row writes overlap.
+    setBusy((current) => (current?.seq === seq ? null : current));
     if (getCacheEpoch() !== epoch) return;
     if (error || data !== true) {
-      setPrefs(previous);
+      setSnapshot((current) =>
+        current?.userId === userId && current.status === 'loaded'
+          ? { userId, status: 'loaded', prefs: previous }
+          : current,
+      );
       setSaveError("That didn't save — try again.");
     }
   };
@@ -232,7 +267,7 @@ export default function NotificationPreferences(): JSX.Element {
                   role="switch"
                   aria-checked={prefs[key]}
                   aria-label={PREF_LABELS[key]}
-                  disabled={busyKey === key}
+                  disabled={busy?.key === key}
                   onClick={() => void handleToggle(key)}
                   className={[
                     'shrink-0 relative w-12 h-7 rounded-full border transition-colors touch-manipulation disabled:opacity-50',

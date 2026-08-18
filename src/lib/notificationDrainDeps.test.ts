@@ -146,7 +146,7 @@ describe('mutation adapters surface database errors', () => {
     ],
     [
       'revokeToken',
-      (deps) => deps.revokeToken('device-1'),
+      (deps) => deps.revokeToken('device-1', 'a'.repeat(64)),
       'native_device_tokens',
       'token revocation unavailable',
     ],
@@ -177,7 +177,7 @@ describe('reserveDelivery', () => {
     const { admin, calls } = fakeAdmin({});
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe(true);
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe('reserved');
     expect(calls).toEqual([
       {
         table: 'notification_deliveries',
@@ -192,15 +192,19 @@ describe('reserveDelivery', () => {
     ]);
   });
 
-  it('reports a duplicate as taken, NOT as an error', async () => {
+  it('treats a unique violation as a decision, NOT as an error', async () => {
     // The unique violation is the fence doing its job: another pass already
-    // reached this device and it must not be sent to again.
+    // reached this device. It resolves to an outcome rather than throwing.
     const { admin } = fakeAdmin({
-      results: { 'notification_deliveries:insert': { data: null, error: { code: '23505' } }, 'notification_deliveries:update': { data: [], error: null } },
+      results: {
+        'notification_deliveries:insert': { data: null, error: { code: '23505' } },
+        'notification_deliveries:update': { data: [], error: null },
+        'notification_deliveries:select': { data: { status: 'sent' }, error: null },
+      },
     });
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe(false);
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.not.toBe('reserved');
   });
 
   it('RETAKES an unsettled reservation, and only an unsettled one', async () => {
@@ -217,7 +221,7 @@ describe('reserveDelivery', () => {
     });
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe(true);
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe('reserved');
     expect(calls[1]).toMatchObject({
       table: 'notification_deliveries',
       operation: 'update',
@@ -255,6 +259,23 @@ describe('reserveDelivery', () => {
     });
   });
 
+  it('revokes the exact TOKEN it sent, not merely the row', async () => {
+    // save_native_device_token rotates a token in place for the same
+    // installation, so revoking by id alone could retire a fresh working token
+    // because a send for the previous one came back rejected.
+    const { admin, calls } = fakeAdmin({});
+    const deps = buildDrainDeps(admin, SEND);
+
+    await deps.revokeToken('device-1', 'a'.repeat(64));
+
+    expect(calls[0]).toMatchObject({
+      table: 'native_device_tokens',
+      operation: 'update',
+      id: 'device-1',
+      token: 'a'.repeat(64),
+    });
+  });
+
   it('takes OWNERSHIP of a retaken reservation, so the superseded drain cannot settle it', async () => {
     const { admin, calls } = fakeAdmin({
       results: {
@@ -278,18 +299,34 @@ describe('reserveDelivery', () => {
     });
   });
 
-  it('does NOT retake a settled reservation', async () => {
-    // A row recorded 'sent' or 'invalid_token' matches no branch of the filter,
-    // so the update reports no rows and the device is skipped.
+  it('reports a device an earlier pass DELIVERED to as already-sent, not merely settled', async () => {
+    // The difference matters: a row deferred for one flaky phone comes back
+    // with the other phone already served, and a pass that read that as
+    // nothing marked the whole row failed and kept it out of the rate-limit
+    // count.
     const { admin } = fakeAdmin({
       results: {
         'notification_deliveries:insert': { data: null, error: { code: '23505' } },
         'notification_deliveries:update': { data: [], error: null },
+        'notification_deliveries:select': { data: { status: 'sent' }, error: null },
       },
     });
     const deps = buildDrainDeps(admin, SEND);
 
-    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe(false);
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe('already-sent');
+  });
+
+  it('reports a retired token as settled, which is not a delivery', async () => {
+    const { admin } = fakeAdmin({
+      results: {
+        'notification_deliveries:insert': { data: null, error: { code: '23505' } },
+        'notification_deliveries:update': { data: [], error: null },
+        'notification_deliveries:select': { data: { status: 'invalid_token' }, error: null },
+      },
+    });
+    const deps = buildDrainDeps(admin, SEND);
+
+    await expect(deps.reserveDelivery(7, 'device-1', CLAIM)).resolves.toBe('settled');
   });
 
   it('passes the attempt ceiling to the claim so SQL can enforce it too', async () => {

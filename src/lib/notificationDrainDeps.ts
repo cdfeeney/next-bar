@@ -5,6 +5,7 @@ import {
   type DrainDeps,
   type NotificationPreferences,
   type OutboxRow,
+  type ReserveOutcome,
 } from './notificationOutbox';
 
 /**
@@ -154,7 +155,7 @@ export function buildDrainDeps(
         status: 'pending',
         claim_token: claimToken,
       });
-      if (!error) return true;
+      if (!error) return 'reserved';
       if (error.code !== UNIQUE_VIOLATION) unavailable('delivery reservation', error);
 
       // A row already exists. Whether we may take it back depends on what it
@@ -191,7 +192,23 @@ export function buildDrainDeps(
         .in('status', ['pending', 'failed'])
         .select('id');
       if (retakeError) unavailable('delivery reservation', retakeError);
-      return (data ?? []).length > 0;
+      if ((data ?? []).length > 0) return 'reserved';
+
+      // Settled, and WHICH settlement matters. A device already recorded
+      // `sent` is a delivery of this event that a later pass must not forget:
+      // a row deferred for one flaky phone comes back with the other phone
+      // already served, and treating that as nothing marked the whole row
+      // failed. Read only on this rare conflict path, never on the hot one.
+      const { data: settled, error: settledError } = await admin
+        .from('notification_deliveries')
+        .select('status')
+        .eq('outbox_id', outboxId)
+        .eq('device_token_id', deviceTokenId)
+        .maybeSingle();
+      if (settledError) unavailable('delivery reservation', settledError);
+      return ((settled as { status?: string } | null)?.status === 'sent'
+        ? 'already-sent'
+        : 'settled') as ReserveOutcome;
     },
 
     async recordDelivery(input) {
@@ -214,11 +231,17 @@ export function buildDrainDeps(
       if (error) unavailable('delivery record', error);
     },
 
-    async revokeToken(deviceTokenId) {
+    async revokeToken(deviceTokenId, token) {
+      // Matched on the VALUE as well as the row. save_native_device_token
+      // rotates a token in place for the same installation, so revoking by id
+      // alone could retire a fresh, working token because a send for the
+      // PREVIOUS one came back rejected. Matching no row means the token has
+      // already moved on and there is nothing of ours left to retire.
       const { error } = await admin
         .from('native_device_tokens')
         .update({ revoked_at: new Date().toISOString() })
-        .eq('id', deviceTokenId);
+        .eq('id', deviceTokenId)
+        .eq('token', token);
       if (error) unavailable('token revocation', error);
     },
 

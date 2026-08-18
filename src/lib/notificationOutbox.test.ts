@@ -60,6 +60,7 @@ type Recorded = {
   outbox: Array<{ id: number; claimToken: string; status: string; error: string | null }>;
   deferred: Array<{ id: number; claimToken: string; error: string | null }>;
   revoked: string[];
+  revokedTokens: string[];
   sentTo: string[];
 };
 
@@ -70,8 +71,10 @@ function harness(options: {
   recentSends?: number;
   context?: NotificationContext | null;
   outcomes?: Record<string, { outcome: ApnsOutcome; status: number; reason: string | null }>;
-  /** Devices a previous pass already reserved — reserveDelivery refuses these. */
+  /** Devices a previous pass settled without delivering — never retaken. */
   alreadyReserved?: readonly string[];
+  /** Devices a previous pass DELIVERED to — still a delivery of this event. */
+  alreadySent?: readonly string[];
   /** Adapters that must reject, to stand in for a failed database write. */
   failing?: Partial<Record<'recordDelivery' | 'markOutbox' | 'revokeToken', true>>;
 }): { deps: DrainDeps; recorded: Recorded } {
@@ -82,9 +85,11 @@ function harness(options: {
     outbox: [],
     deferred: [],
     revoked: [],
+    revokedTokens: [],
     sentTo: [],
   };
   const taken = new Set(options.alreadyReserved ?? []);
+  const delivered = new Set(options.alreadySent ?? []);
   const devices = options.devices ?? [{ id: 'device-1', token: 'a'.repeat(64) }];
 
   const deps: DrainDeps = {
@@ -108,10 +113,11 @@ function harness(options: {
     reserveDelivery: async (outboxId, deviceTokenId, claimToken) => {
       recorded.reserveTokens.push(claimToken);
       const key = `${outboxId}:${deviceTokenId}`;
-      if (taken.has(key)) return false;
+      if (delivered.has(key)) return 'already-sent';
+      if (taken.has(key)) return 'settled';
       taken.add(key);
       recorded.reserved.push(key);
-      return true;
+      return 'reserved';
     },
     recordDelivery: async (input) => {
       if (options.failing?.recordDelivery) throw new Error('delivery record unavailable');
@@ -122,9 +128,10 @@ function harness(options: {
         status: input.status,
       });
     },
-    revokeToken: async (id) => {
+    revokeToken: async (id, token) => {
       if (options.failing?.revokeToken) throw new Error('token revocation unavailable');
       recorded.revoked.push(id);
+      recorded.revokedTokens.push(token);
     },
     markOutbox: async (id, claimToken, status, error) => {
       if (options.failing?.markOutbox) throw new Error('outbox status write unavailable');
@@ -260,6 +267,9 @@ describe('drainNotificationOutbox', () => {
     const summary = await drainNotificationOutbox(deps);
 
     expect(recorded.revoked).toEqual(['device-dead']);
+    // The VALUE goes with it: a rotated token must not be retired because a
+    // send for the previous one came back rejected.
+    expect(recorded.revokedTokens).toEqual([dead]);
     expect(summary.invalidTokensRevoked).toBe(1);
     expect(recorded.deliveries).toEqual([
       { outboxId: 1, deviceTokenId: 'device-dead', claimToken: CLAIM, status: 'invalid_token' },
@@ -476,6 +486,32 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.deferred).toEqual([]);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
+    ]);
+  });
+
+  it('remembers a delivery an earlier pass made when it settles the row', async () => {
+    // The partial-delivery case across drains: one phone was served last pass,
+    // the other fails terminally now. Forgetting the first marked the whole row
+    // failed and kept it out of the rate-limit count.
+    const flaky = 'b'.repeat(64);
+    const { deps, recorded } = harness({
+      rows: [row({ attempts: MAX_ATTEMPTS })],
+      devices: [
+        { id: 'device-delivered', token: 'a'.repeat(64) },
+        { id: 'device-flaky', token: flaky },
+      ],
+      alreadySent: ['1:device-delivered'],
+      outcomes: {
+        [flaky]: { outcome: 'failed', status: 403, reason: 'BadDeviceToken' },
+      },
+    });
+
+    const summary = await drainNotificationOutbox(deps);
+
+    expect(recorded.sentTo).toEqual([flaky]);
+    expect(summary.sent).toBe(1);
     expect(recorded.outbox).toEqual([
       { id: 1, claimToken: CLAIM, status: 'sent', error: null },
     ]);

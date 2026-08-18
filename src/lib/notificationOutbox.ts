@@ -144,6 +144,17 @@ export function buildNotificationPayload(
 export type DeliveryStatus = 'sent' | 'failed' | 'invalid_token';
 export type OutboxStatus = 'sent' | 'failed' | 'suppressed';
 
+/**
+ * What happened when this drain tried to take a (row, device) pair.
+ *
+ * `already-sent` is not merely "skip": a row deferred for one flaky phone
+ * comes back with the other phone's delivery already recorded, and a pass that
+ * forgot it marked the whole row `failed` even though someone got the
+ * notification — which also kept it out of the rate-limit count, since that
+ * counts outbox rows marked `sent`.
+ */
+export type ReserveOutcome = 'reserved' | 'already-sent' | 'settled';
+
 export type DrainDeps = {
   fetchPending(limit: number): Promise<readonly OutboxRow[]>;
   fetchPreferences(userId: string): Promise<NotificationPreferences | null>;
@@ -164,7 +175,7 @@ export type DrainDeps = {
     outboxId: number,
     deviceTokenId: string,
     claimToken: string,
-  ): Promise<boolean>;
+  ): Promise<ReserveOutcome>;
   /**
    * Settle a reservation THIS drain made. Fenced on the same claim token, so a
    * drain whose lease expired cannot overwrite a delivery a later one settled.
@@ -177,7 +188,13 @@ export type DrainDeps = {
     apnsStatus: number | null;
     apnsReason: string | null;
   }): Promise<void>;
-  revokeToken(deviceTokenId: string): Promise<void>;
+  /**
+   * Retire the token APNs rejected. The VALUE matters, not just the row: an
+   * installation that re-registers rotates the token in place, so revoking by
+   * id alone could retire a fresh, working token because an older send for the
+   * previous one came back rejected.
+   */
+  revokeToken(deviceTokenId: string, token: string): Promise<void>;
   markOutbox(
     outboxId: number,
     claimToken: string,
@@ -335,7 +352,16 @@ async function processOutboxRow(
     // RESERVE, then send. The reservation is committed before Apple is
     // contacted, so a device an earlier pass already reached is skipped
     // rather than buzzed a second time.
-    if (!(await deps.reserveDelivery(row.id, device.id, row.claim_token))) {
+    const reservation = await deps.reserveDelivery(
+      row.id,
+      device.id,
+      row.claim_token,
+    );
+    if (reservation !== 'reserved') {
+      // A device an earlier pass already DELIVERED to still counts as a
+      // delivery of this event; forgetting that is how a partially-delivered
+      // row ended up terminally `failed`.
+      if (reservation === 'already-sent') anySent = true;
       continue;
     }
     attemptedAny = true;
@@ -359,8 +385,13 @@ async function processOutboxRow(
       // Criterion 4: an invalid token is retired, not retried. Revoking
       // rather than deleting keeps the audit trail and lets a later
       // re-registration on the same installation simply un-revoke.
-      await deps.revokeToken(device.id);
-      summary.invalidTokensRevoked += 1;
+      //
+      // SETTLE THE DELIVERY FIRST. Revoking first and then failing to record
+      // left the reservation `pending` while the device dropped out of the
+      // live-token list, so nothing could ever retake it and the audit row
+      // stayed stuck. Recording first means a failed revoke merely defers: the
+      // next drain finds the delivery already settled and moves on, and the
+      // still-live token is retired the next time APNs rejects it.
       await deps.recordDelivery({
         outboxId: row.id,
         deviceTokenId: device.id,
@@ -369,6 +400,8 @@ async function processOutboxRow(
         apnsStatus: result.status,
         apnsReason: result.reason,
       });
+      await deps.revokeToken(device.id, device.token);
+      summary.invalidTokensRevoked += 1;
       continue;
     }
 
