@@ -44,6 +44,12 @@ create table if not exists public.notification_outbox (
   attempts          integer     not null default 0,
   last_error        text        null,
   processed_at      timestamptz null,
+  -- WHEN THIS EVENT FIRST REACHED A PHONE, independent of the row's status.
+  -- The rate limit used to count rows marked 'sent', which misses a row still
+  -- PENDING because a second device needs a retry - the recipient's phone
+  -- buzzed, the budget did not notice, and they could be sent past the limit.
+  -- Stamped whenever a pass delivers to at least one device.
+  delivered_at      timestamptz null,
   -- LEASE. A drain must CLAIM rows before sending, or two overlapping drains
   -- both read the same pending rows and both send — the user gets the same
   -- notification twice (cold panel, both lanes, HIGH). A timestamp rather than
@@ -72,6 +78,8 @@ alter table public.notification_outbox
   add column if not exists claimed_at timestamptz null;
 alter table public.notification_outbox
   add column if not exists claim_token uuid null;
+alter table public.notification_outbox
+  add column if not exists delivered_at timestamptz null;
 
 -- The drain query: oldest pending first.
 create index if not exists notification_outbox_pending_idx
@@ -79,13 +87,17 @@ create index if not exists notification_outbox_pending_idx
   where status = 'pending';
 
 -- The rate-limit window read, which countRecentSends actually issues:
--- recipient + processed_at over SENT rows. The pending index above cannot
--- serve it - it is partial on status = 'pending', the one status this query
--- excludes - so without this every drained row scanned the settled portion of
--- the outbox, up to a hundred times per batch.
+-- recipient + delivered_at over rows that reached a phone. The pending index
+-- above cannot serve it, so without this every drained row scanned the settled
+-- portion of the outbox, up to a hundred times per batch.
+--
+-- Recreated rather than added: the first version keyed on (recipient,
+-- processed_at) over status = 'sent', which is the count that missed
+-- partially-delivered rows.
+drop index if exists public.notification_outbox_recent_sends_idx;
 create index if not exists notification_outbox_recent_sends_idx
-  on public.notification_outbox (recipient_user_id, processed_at)
-  where status = 'sent';
+  on public.notification_outbox (recipient_user_id, delivered_at)
+  where delivered_at is not null;
 
 alter table public.notification_outbox enable row level security;
 revoke all on table public.notification_outbox from public, anon, authenticated;

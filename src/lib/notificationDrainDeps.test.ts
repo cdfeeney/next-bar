@@ -43,7 +43,10 @@ function fakeAdmin(options: {
       update: () => chain,
       upsert: () => chain,
       is: () => chain,
-      gte: () => chain,
+      gte: (column: string, value: unknown) => {
+        filters[column] = value;
+        return chain;
+      },
       in: (column: string, values: unknown) => {
         filters[column] = values;
         return chain;
@@ -152,13 +155,13 @@ describe('mutation adapters surface database errors', () => {
     ],
     [
       'markOutbox',
-      (deps) => deps.markOutbox(7, 'claim-token-1', 'sent', null),
+      (deps) => deps.markOutbox(7, 'claim-token-1', 'sent', null, true),
       'notification_outbox',
       'outbox status write unavailable',
     ],
     [
       'deferOutbox',
-      (deps) => deps.deferOutbox(7, 'claim-token-1', 'ServiceUnavailable'),
+      (deps) => deps.deferOutbox(7, 'claim-token-1', 'ServiceUnavailable', false),
       'notification_outbox',
       'outbox defer unavailable',
     ],
@@ -364,7 +367,7 @@ describe('claim ownership fence', () => {
     const { admin, calls } = fakeAdmin({});
     const deps = buildDrainDeps(admin, SEND);
 
-    await deps.markOutbox(7, 'claim-token-1', 'sent', null);
+    await deps.markOutbox(7, 'claim-token-1', 'sent', null, true);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
@@ -375,11 +378,38 @@ describe('claim ownership fence', () => {
     });
   });
 
+  it('stamps delivered_at only when the pass actually reached a phone', async () => {
+    const { admin, calls } = fakeAdmin({});
+    const deps = buildDrainDeps(admin, SEND);
+
+    await deps.markOutbox(7, CLAIM, 'sent', null, true);
+    await deps.markOutbox(8, CLAIM, 'suppressed', 'opted_out', false);
+
+    expect(calls[0].payload).toHaveProperty('delivered_at');
+    expect(calls[1].payload).not.toHaveProperty('delivered_at');
+  });
+
+  it('counts the rate-limit window on delivered_at, not on the row status', async () => {
+    // Counting rows marked 'sent' missed a row still pending for a second
+    // device's retry, even though the first device already had it.
+    const { admin, calls } = fakeAdmin({});
+    const deps = buildDrainDeps(admin, SEND);
+
+    await deps.countRecentSends('user-1', '2026-08-18T00:00:00.000Z');
+
+    expect(calls[0]).toMatchObject({
+      table: 'notification_outbox',
+      operation: 'select',
+      recipient_user_id: 'user-1',
+    });
+    expect(calls[0]).not.toHaveProperty('status');
+  });
+
   it('releases the claim on defer so the next drain need not wait out the lease', async () => {
     const { admin, calls } = fakeAdmin({});
     const deps = buildDrainDeps(admin, SEND);
 
-    await deps.deferOutbox(7, 'claim-token-1', 'ServiceUnavailable');
+    await deps.deferOutbox(7, 'claim-token-1', 'ServiceUnavailable', false);
 
     expect(calls[0]).toMatchObject({
       table: 'notification_outbox',

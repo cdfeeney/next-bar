@@ -75,9 +75,20 @@ const NATIVE_RESULT_MESSAGE: Partial<Record<NativePushResult, string>> = {
    * distinguishes "these are their real preferences" from "we could not read
    * them", which must never render as the defaults.
    */
-type Snapshot =
-  | { readonly userId: string; readonly status: 'loaded'; readonly prefs: Prefs }
-  | { readonly userId: string; readonly status: 'error' };
+type Snapshot = {
+  readonly userId: string;
+  /**
+   * The account-cache epoch this answer was read under. Every sign-out flavour
+   * bumps it (sealAccountCacheOnSignOut), so a snapshot from a session that has
+   * ENDED stops matching even when the same account signs back in - which it
+   * otherwise did, leaving the previous session's values rendered as loaded
+   * while the fresh read was still in flight.
+   */
+  readonly epoch: number;
+} & (
+  | { readonly status: 'loaded'; readonly prefs: Prefs }
+  | { readonly status: 'error' }
+);
 
 type PrefRow = {
   invited: boolean | null;
@@ -114,7 +125,11 @@ export default function NotificationPreferences(): JSX.Element {
   const [nativeResult, setNativeResult] = useState<NativePushResult | null>(null);
 
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
-  const mine = snapshot !== null && snapshot.userId === userId ? snapshot : null;
+  const epoch = getCacheEpoch();
+  const mine =
+    snapshot !== null && snapshot.userId === userId && snapshot.epoch === epoch
+      ? snapshot
+      : null;
   const loaded = mine?.status === 'loaded';
   const loadError = mine?.status === 'error';
   const prefs = mine?.status === 'loaded' ? mine.prefs : DEFAULT_PREFS;
@@ -139,23 +154,24 @@ export default function NotificationPreferences(): JSX.Element {
     // Epoch guard (accountCache convention, used throughout settings/page.tsx):
     // a sign-out wipe mid-fetch must abandon the hydrate rather than
     // repopulate the next account's screen with this account's toggles.
-    const epoch = getCacheEpoch();
+    const readEpoch = getCacheEpoch();
     supabase
       .from('notification_preferences')
       .select('invited, accepted, bar_suggested, plan_changed')
       .eq('user_id', userId)
       .maybeSingle()
       .then(({ data, error }) => {
-        if (cancelled || getCacheEpoch() !== epoch) return;
+        if (cancelled || getCacheEpoch() !== readEpoch) return;
         if (error) {
           // Stay UNLOADED. Rendering toggles here would show fabricated
           // state, and the first tap would write it over the real row.
-          setSnapshot({ userId, status: 'error' });
+          setSnapshot({ userId, epoch: readEpoch, status: 'error' });
           return;
         }
         const row = data as PrefRow | null;
         setSnapshot({
           userId,
+          epoch: readEpoch,
           status: 'loaded',
           prefs:
             row === null
@@ -182,13 +198,12 @@ export default function NotificationPreferences(): JSX.Element {
     if (!supabase) return;
     const previous = prefs;
     const next: Prefs = { ...prefs, [key]: !prefs[key] };
-    const epoch = getCacheEpoch();
     const seq = (saveSeq.current += 1);
     setSaveError(null);
     setBusy({ key, seq });
     // Optimistic — reverted below on failure. Written against this account, so
     // a snapshot that has since moved on is left alone.
-    setSnapshot({ userId, status: 'loaded', prefs: next });
+    setSnapshot({ userId, epoch, status: 'loaded', prefs: next });
     const { data, error } = await supabase.rpc('set_notification_preferences', {
       p_invited: next.invited,
       p_accepted: next.accepted,
@@ -203,8 +218,10 @@ export default function NotificationPreferences(): JSX.Element {
     if (getCacheEpoch() !== epoch) return;
     if (error || data !== true) {
       setSnapshot((current) =>
-        current?.userId === userId && current.status === 'loaded'
-          ? { userId, status: 'loaded', prefs: previous }
+        current?.userId === userId &&
+        current.epoch === epoch &&
+        current.status === 'loaded'
+          ? { userId, epoch, status: 'loaded', prefs: previous }
           : current,
       );
       setSaveError("That didn't save — try again.");

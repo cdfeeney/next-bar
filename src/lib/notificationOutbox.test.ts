@@ -57,8 +57,20 @@ type Recorded = {
   }>;
   reserved: string[];
   reserveTokens: string[];
-  outbox: Array<{ id: number; claimToken: string; status: string; error: string | null }>;
-  deferred: Array<{ id: number; claimToken: string; error: string | null }>;
+  outbox: Array<{
+    id: number;
+    claimToken: string;
+    status: string;
+    error: string | null;
+    delivered: boolean;
+  }>;
+  deferred: Array<{
+    id: number;
+    claimToken: string;
+    error: string | null;
+    delivered: boolean;
+  }>;
+  order: string[];
   revoked: string[];
   revokedTokens: string[];
   sentTo: string[];
@@ -86,6 +98,7 @@ function harness(options: {
     deferred: [],
     revoked: [],
     revokedTokens: [],
+    order: [],
     sentTo: [],
   };
   const taken = new Set(options.alreadyReserved ?? []);
@@ -120,6 +133,7 @@ function harness(options: {
       return 'reserved';
     },
     recordDelivery: async (input) => {
+      recorded.order.push(`record:${input.status}`);
       if (options.failing?.recordDelivery) throw new Error('delivery record unavailable');
       recorded.deliveries.push({
         outboxId: input.outboxId,
@@ -129,16 +143,17 @@ function harness(options: {
       });
     },
     revokeToken: async (id, token) => {
+      recorded.order.push('revoke');
       if (options.failing?.revokeToken) throw new Error('token revocation unavailable');
       recorded.revoked.push(id);
       recorded.revokedTokens.push(token);
     },
-    markOutbox: async (id, claimToken, status, error) => {
+    markOutbox: async (id, claimToken, status, error, delivered) => {
       if (options.failing?.markOutbox) throw new Error('outbox status write unavailable');
-      recorded.outbox.push({ id, claimToken, status, error });
+      recorded.outbox.push({ id, claimToken, status, error, delivered });
     },
-    deferOutbox: async (id, claimToken, error) => {
-      recorded.deferred.push({ id, claimToken, error });
+    deferOutbox: async (id, claimToken, error, delivered) => {
+      recorded.deferred.push({ id, claimToken, error, delivered });
     },
     now: () => NOW,
   };
@@ -215,7 +230,7 @@ describe('drainNotificationOutbox', () => {
     expect(summary).toMatchObject({ processed: 1, sent: 1, suppressed: 0 });
     expect(recorded.sentTo).toHaveLength(2);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null, delivered: true },
     ]);
   });
 
@@ -230,7 +245,7 @@ describe('drainNotificationOutbox', () => {
     expect(summary.suppressed).toBe(1);
     expect(recorded.sentTo).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'opted_out' },
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'opted_out', delivered: false },
     ]);
   });
 
@@ -244,7 +259,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(recorded.sentTo).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'rate_limited' },
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'rate_limited', delivered: false },
     ]);
   });
 
@@ -276,7 +291,7 @@ describe('drainNotificationOutbox', () => {
       { outboxId: 1, deviceTokenId: 'device-alive', claimToken: CLAIM, status: 'sent' },
     ]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null, delivered: true },
     ]);
   });
 
@@ -291,7 +306,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(summary.failed).toBe(1);
     expect(recorded.deferred).toEqual([
-      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable' },
+      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable', delivered: false },
     ]);
     // Deliberately NOT marked terminal — the next drain retries it.
     expect(recorded.outbox).toEqual([]);
@@ -308,7 +323,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(recorded.deferred).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'ServiceUnavailable' },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'ServiceUnavailable', delivered: false },
     ]);
   });
 
@@ -324,7 +339,7 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'InvalidProviderToken' },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'InvalidProviderToken', delivered: false },
     ]);
     expect(recorded.deferred).toEqual([]);
   });
@@ -337,7 +352,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(summary.suppressed).toBe(1);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'no_devices' },
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'no_devices', delivered: false },
     ]);
   });
 
@@ -347,7 +362,7 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'missing_context' },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'missing_context', delivered: false },
     ]);
     expect(recorded.sentTo).toEqual([]);
   });
@@ -439,7 +454,7 @@ describe('drainNotificationOutbox', () => {
     expect(recorded.sentTo).toEqual([]);
     expect(summary.suppressed).toBe(1);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'already_attempted' },
+      { id: 1, claimToken: CLAIM, status: 'suppressed', error: 'already_attempted', delivered: false },
     ]);
   });
 
@@ -464,8 +479,10 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.outbox).toEqual([]);
+    // delivered: the phone that took it counts against the budget now, not
+    // once the flaky one finally settles.
     expect(recorded.deferred).toEqual([
-      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable' },
+      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable', delivered: true },
     ]);
   });
 
@@ -487,7 +504,7 @@ describe('drainNotificationOutbox', () => {
 
     expect(recorded.deferred).toEqual([]);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null, delivered: true },
     ]);
   });
 
@@ -513,7 +530,83 @@ describe('drainNotificationOutbox', () => {
     expect(recorded.sentTo).toEqual([flaky]);
     expect(summary.sent).toBe(1);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null, delivered: true },
+    ]);
+  });
+
+  it('SETTLES the delivery before retiring the token, so a failed revoke cannot strand it', async () => {
+    // Revoking first and then failing to record left the reservation pending
+    // while the device dropped out of the live-token list, so nothing could
+    // ever retake it. Order is the fix, so order is what is asserted.
+    const dead = 'a'.repeat(64);
+    const { deps, recorded } = harness({
+      rows: [row()],
+      outcomes: {
+        [dead]: { outcome: 'invalid-token', status: 410, reason: 'Unregistered' },
+      },
+    });
+
+    await drainNotificationOutbox(deps);
+
+    expect(recorded.order).toEqual(['record:invalid_token', 'revoke']);
+  });
+
+  it('reports a failed revocation instead of failing the row over it', async () => {
+    // The delivery is already settled, so deferring would only spend another
+    // pass on a device we know is dead. Counted, not swallowed.
+    const dead = 'a'.repeat(64);
+    const { deps, recorded } = harness({
+      rows: [row()],
+      failing: { revokeToken: true },
+      outcomes: {
+        [dead]: { outcome: 'invalid-token', status: 410, reason: 'Unregistered' },
+      },
+    });
+
+    const summary = await drainNotificationOutbox(deps);
+
+    expect(summary.revocationFailures).toBe(1);
+    expect(summary.invalidTokensRevoked).toBe(0);
+    expect(summary.deferred).toBe(0);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'Unregistered', delivered: false },
+    ]);
+  });
+
+  it('defers rather than deciding when the DELIVERY write fails', async () => {
+    const { deps, recorded } = harness({
+      rows: [row()],
+      failing: { recordDelivery: true },
+    });
+
+    const summary = await drainNotificationOutbox(deps);
+
+    expect(summary.deferred).toBe(1);
+    expect(recorded.outbox).toEqual([]);
+    expect(recorded.deferred).toEqual([]);
+  });
+
+  it('counts a partially-delivered row against the budget from the first buzz', async () => {
+    // The rate limit used to count rows marked 'sent', which misses a row left
+    // pending for a second device's retry - the phone buzzed, the budget did
+    // not notice, and the recipient could be sent past the limit.
+    const delivered = 'a'.repeat(64);
+    const flaky = 'b'.repeat(64);
+    const { deps, recorded } = harness({
+      rows: [row()],
+      devices: [
+        { id: 'device-delivered', token: delivered },
+        { id: 'device-flaky', token: flaky },
+      ],
+      outcomes: {
+        [flaky]: { outcome: 'retry', status: 503, reason: 'ServiceUnavailable' },
+      },
+    });
+
+    await drainNotificationOutbox(deps);
+
+    expect(recorded.deferred).toEqual([
+      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable', delivered: true },
     ]);
   });
 
@@ -527,7 +620,7 @@ describe('drainNotificationOutbox', () => {
     expect(recorded.sentTo).toEqual([]);
     expect(summary.failed).toBe(1);
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: CLAIM, status: 'failed', error: 'max_attempts' },
+      { id: 1, claimToken: CLAIM, status: 'failed', error: 'max_attempts', delivered: false },
     ]);
   });
 
@@ -539,7 +632,7 @@ describe('drainNotificationOutbox', () => {
     await drainNotificationOutbox(deps);
 
     expect(recorded.outbox).toEqual([
-      { id: 1, claimToken: 'claim-token-2', status: 'sent', error: null },
+      { id: 1, claimToken: 'claim-token-2', status: 'sent', error: null, delivered: true },
     ]);
   });
 

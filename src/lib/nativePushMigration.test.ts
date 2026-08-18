@@ -210,12 +210,26 @@ describe('notification_outbox (criteria 3, 4)', () => {
     );
   });
 
+  it('records when an event first reached a phone, independent of row status', () => {
+    // The budget counts buzzes, not statuses: a row left pending for a second
+    // device's retry has already reached the first one.
+    expect(OUTBOX_SQL).toMatch(/delivered_at\s+timestamptz null,/);
+    expect(OUTBOX_SQL).toMatch(
+      /add column if not exists delivered_at timestamptz null;/,
+    );
+  });
+
   it('indexes the read the rate limiter actually issues', () => {
     // The only outbox index used to be partial on status = 'pending', which is
     // the one status the rate-limit query excludes - so every drained row
     // scanned the settled portion of the table.
     expect(OUTBOX_SQL).toMatch(
-      /create index if not exists notification_outbox_recent_sends_idx\s*\n\s*on public\.notification_outbox \(recipient_user_id, processed_at\)\s*\n\s*where status = 'sent'/,
+      /create index if not exists notification_outbox_recent_sends_idx\s*\n\s*on public\.notification_outbox \(recipient_user_id, delivered_at\)\s*\n\s*where delivered_at is not null/,
+    );
+    // Recreated, not merely added: the first version keyed on the status that
+    // missed partially-delivered rows.
+    expect(OUTBOX_SQL).toMatch(
+      /drop index if exists public\.notification_outbox_recent_sends_idx;/,
     );
   });
 

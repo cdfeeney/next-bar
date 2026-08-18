@@ -166,10 +166,11 @@ export type DrainDeps = {
     payload: ApnsPayload,
   ): Promise<{ outcome: ApnsOutcome; status: number; reason: string | null }>;
   /**
-   * Take this (row, device) pair BEFORE calling APNs. `false` means the device
-   * is SETTLED — an earlier pass recorded it delivered, or its token retired —
-   * and must be skipped, so a re-drained row can never repeat a delivery that
-   * already happened.
+   * Take this (row, device) pair BEFORE calling APNs. Only `'reserved'` may be
+   * sent to. The other two both mean "skip the send" but are NOT
+   * interchangeable: `'already-sent'` is a delivery of this event that a later
+   * pass must still count, and treating it as `'settled'` is what once marked
+   * partially-delivered rows failed and hid them from the rate limit.
    */
   reserveDelivery(
     outboxId: number,
@@ -195,17 +196,25 @@ export type DrainDeps = {
    * previous one came back rejected.
    */
   revokeToken(deviceTokenId: string, token: string): Promise<void>;
+  /**
+   * Settle the row. `delivered` records that this event reached at least one
+   * phone, which is what the rate limit counts — a status alone cannot say it,
+   * because a row can be terminal without ever arriving and pending after it
+   * already has.
+   */
   markOutbox(
     outboxId: number,
     claimToken: string,
     status: OutboxStatus,
     lastError: string | null,
+    delivered: boolean,
   ): Promise<void>;
   /** Release the claim so the next drain retries. The attempt is already spent. */
   deferOutbox(
     outboxId: number,
     claimToken: string,
     lastError: string | null,
+    delivered: boolean,
   ): Promise<void>;
   now(): number;
 };
@@ -224,6 +233,13 @@ export type DrainSummary = {
    */
   deferred: number;
   invalidTokensRevoked: number;
+  /**
+   * Tokens APNs rejected that we could not retire. Reported rather than
+   * swallowed, and rather than failing the row: the delivery is already
+   * recorded, so deferring would only re-run a send to a device we know is
+   * dead. The token is retired the next time an event reaches it.
+   */
+  revocationFailures: number;
 };
 
 const DEFAULT_BATCH = 100;
@@ -239,6 +255,7 @@ export async function drainNotificationOutbox(
     failed: 0,
     deferred: 0,
     invalidTokensRevoked: 0,
+    revocationFailures: 0,
   };
 
   const pending = await deps.fetchPending(batchSize);
@@ -269,7 +286,7 @@ async function processOutboxRow(
   // was exactly how an exhausted row kept coming back. This stays as a guard
   // for a database that has not had the migration applied yet.
   if (row.attempts > MAX_ATTEMPTS) {
-    await deps.markOutbox(row.id, row.claim_token, 'failed', 'max_attempts');
+    await deps.markOutbox(row.id, row.claim_token, 'failed', 'max_attempts', false);
     summary.failed += 1;
     return;
   }
@@ -287,7 +304,7 @@ async function processOutboxRow(
     return;
   }
   if (!isEventAllowed(preferences, row.event_type)) {
-    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'opted_out');
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'opted_out', false);
     summary.suppressed += 1;
     return;
   }
@@ -303,7 +320,7 @@ async function processOutboxRow(
     return;
   }
   if (!isWithinRateLimit(recent)) {
-    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'rate_limited');
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'rate_limited', false);
     summary.suppressed += 1;
     return;
   }
@@ -322,7 +339,7 @@ async function processOutboxRow(
   if (!context) {
     // The plan was deleted between enqueue and drain. There is nothing to
     // deep-link to, so this is terminal rather than retryable.
-    await deps.markOutbox(row.id, row.claim_token, 'failed', 'missing_context');
+    await deps.markOutbox(row.id, row.claim_token, 'failed', 'missing_context', false);
     summary.failed += 1;
     return;
   }
@@ -337,7 +354,7 @@ async function processOutboxRow(
   if (devices.length === 0) {
     // Not a failure of ours: the user has no registered device, or revoked
     // the only one. Recorded as suppressed so it is never retried forever.
-    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'no_devices');
+    await deps.markOutbox(row.id, row.claim_token, 'suppressed', 'no_devices', false);
     summary.suppressed += 1;
     return;
   }
@@ -400,8 +417,17 @@ async function processOutboxRow(
         apnsStatus: result.status,
         apnsReason: result.reason,
       });
-      await deps.revokeToken(device.id, device.token);
-      summary.invalidTokensRevoked += 1;
+      try {
+        await deps.revokeToken(device.id, device.token);
+        summary.invalidTokensRevoked += 1;
+      } catch {
+        // NOT fatal to the row. The delivery is already settled above, so
+        // deferring here would spend another pass on a device we know is dead
+        // and would never reach the revocation again anyway. Counted so the
+        // caller can see it; the token is retired the next time an event
+        // reaches it and APNs rejects it again.
+        summary.revocationFailures += 1;
+      }
       continue;
     }
 
@@ -426,10 +452,13 @@ async function processOutboxRow(
     // Left pending on purpose so the next drain retries it. Counted as a
     // failure of THIS pass so the caller's numbers stay honest; which devices
     // actually got it lives in notification_deliveries, not in this status.
-    await deps.deferOutbox(row.id, row.claim_token, lastReason);
+    // `anySent` here includes a device an earlier pass delivered to, so a
+    // partially-delivered row counts against the recipient's budget from the
+    // moment their phone first buzzed - not only once the last device settles.
+    await deps.deferOutbox(row.id, row.claim_token, lastReason, anySent);
     summary.failed += 1;
   } else if (anySent) {
-    await deps.markOutbox(row.id, row.claim_token, 'sent', null);
+    await deps.markOutbox(row.id, row.claim_token, 'sent', null, true);
     summary.sent += 1;
   } else if (!attemptedAny) {
     // Every device is SETTLED — delivered, or its token retired — so this row
@@ -442,6 +471,7 @@ async function processOutboxRow(
       row.claim_token,
       'suppressed',
       'already_attempted',
+      false,
     );
     summary.suppressed += 1;
   } else {
@@ -450,6 +480,7 @@ async function processOutboxRow(
       row.claim_token,
       'failed',
       lastReason ?? 'no_delivery',
+      false,
     );
     summary.failed += 1;
   }

@@ -128,12 +128,13 @@ export function buildDrainDeps(
         .from('notification_outbox')
         .select('id', { count: 'exact', head: true })
         .eq('recipient_user_id', userId)
-        // Measured on when it was PROCESSED, not when it was enqueued.
-        // created_at is enqueue time, so a backlog that drains all at once
-        // counted as "old" and sailed straight past the limit (cold panel,
-        // both lanes). processed_at is set by markOutbox at send time.
-        .eq('status', 'sent')
-        .gte('processed_at', sinceIso);
+        // Measured on when the recipient's phone actually BUZZED, not when the
+        // row was enqueued and not on its final status. created_at is enqueue
+        // time, so a backlog that drained at once counted as "old" and sailed
+        // past the limit; counting rows marked 'sent' then missed a row still
+        // pending for a second device's retry, even though the first device
+        // already had it. delivered_at is stamped by the first delivery.
+        .gte('delivered_at', sinceIso);
       if (error) unavailable('recent-send count', error);
       // A null count with no error means the head request returned nothing to
       // count, which is genuinely zero.
@@ -245,31 +246,43 @@ export function buildDrainDeps(
       if (error) unavailable('token revocation', error);
     },
 
-    async markOutbox(outboxId, claimToken, status, lastError) {
+    async markOutbox(outboxId, claimToken, status, lastError, delivered) {
       // FENCED on the claim token. Without it a drain whose lease had expired
       // could still write a terminal status over the row a second drain was
       // actively working. Matching no row is not an error - it is precisely
       // the superseded write being discarded.
+      const now = new Date().toISOString();
       const { error } = await admin
         .from('notification_outbox')
         .update({
           status,
           last_error: lastError,
-          processed_at: new Date().toISOString(),
+          processed_at: now,
+          // Only ever set, never cleared: a row that reached a phone stays
+          // counted against the recipient's budget whatever happens after.
+          ...(delivered ? { delivered_at: now } : {}),
         })
         .eq('id', outboxId)
         .eq('claim_token', claimToken);
       if (error) unavailable('outbox status write', error);
     },
 
-    async deferOutbox(outboxId, claimToken, lastError) {
+    async deferOutbox(outboxId, claimToken, lastError, delivered) {
       // Releases the claim rather than counting it: the attempt was already
       // charged by claim_notification_outbox, and clearing the lease lets the
       // next drain retry immediately instead of waiting it out. The read /
       // increment / write this replaced could also lose a concurrent update.
       const { error } = await admin
         .from('notification_outbox')
-        .update({ last_error: lastError, claimed_at: null, claim_token: null })
+        .update({
+          last_error: lastError,
+          claimed_at: null,
+          claim_token: null,
+          // A deferred row that already reached one phone counts NOW, not when
+          // its last device finally settles. Re-stamping on a later pass only
+          // moves the window forward, which errs toward suppressing.
+          ...(delivered ? { delivered_at: new Date().toISOString() } : {}),
+        })
         .eq('id', outboxId)
         .eq('claim_token', claimToken);
       if (error) unavailable('outbox defer', error);

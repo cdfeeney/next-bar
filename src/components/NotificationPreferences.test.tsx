@@ -256,16 +256,18 @@ describe('NotificationPreferences — signed in', () => {
     const first = await screen.findAllByRole('switch');
     expect(first.every((s) => s.getAttribute('aria-checked') === 'false')).toBe(true);
 
+    // A real sign-out bumps the account-cache epoch (every flavour does, via
+    // sealAccountCacheOnSignOut), which is what retires the old snapshot.
     authState = { status: 'signed-out' };
+    cacheEpoch = 2;
     view.rerender(<NotificationPreferences />);
     expect(screen.queryAllByRole('switch')).toHaveLength(0);
 
-    // Same account back. Assert BEFORE the refetch resolves.
+    // Same account back. Assert BEFORE the refetch resolves: the previous
+    // session's answer must not be reused, so there is nothing to tap yet.
     authState = { status: 'signed-in', user: { id: 'user-1' } };
     view.rerender(<NotificationPreferences />);
-    expect(
-      screen.queryAllByRole('switch').some((s) => s.getAttribute('aria-checked') === 'true'),
-    ).toBe(false);
+    expect(screen.queryAllByRole('switch')).toHaveLength(0);
     expect(rpcCalls).toEqual([]);
 
     await waitFor(() => {
@@ -277,18 +279,30 @@ describe('NotificationPreferences — signed in', () => {
   test('a save interrupted by a sign-out does not wedge the toggles', async () => {
     // The busy flag was set before the await and cleared after a guard that
     // RETURNED first, so a sign-out landing mid-save left every toggle
-    // disabled — for the next account too, since /settings stays mounted.
+    // disabled — for the next account too, since /settings stays mounted and
+    // nothing else cleared the flag.
     onRpc = () => {
+      // What a real sign-out does to the account cache, mid-flight.
       cacheEpoch = 2;
     };
     const user = userEvent.setup();
-    render(<NotificationPreferences />);
+    const view = render(<NotificationPreferences />);
     const toggle = (await screen.findAllByRole('switch'))[0];
 
     await user.click(toggle);
 
+    // The session that owned that save has ended, so the surface goes back to
+    // signed-out and then to a fresh session for the same account.
+    authState = { status: 'signed-out' };
+    view.rerender(<NotificationPreferences />);
+    authState = { status: 'signed-in', user: { id: 'user-1' } };
+    onRpc = null;
+    view.rerender(<NotificationPreferences />);
+
+    // Usable again: nothing is left holding the busy guard.
     await waitFor(() => {
-      expect((screen.getAllByRole('switch')[0] as HTMLButtonElement).disabled).toBe(false);
+      const switches = screen.getAllByRole('switch');
+      expect(switches.every((s) => !(s as HTMLButtonElement).disabled)).toBe(true);
     });
   });
 
