@@ -1,8 +1,11 @@
-// The release gate is `PLAYWRIGHT_RELEASE=1 npm run test:e2e`, and `VAR=1 cmd`
-// is a parse error in PowerShell — this repo's primary shell (CLAUDE.md: "Connor
-// is on Windows"). Documenting a gate command that half the project's shells
-// cannot run is how a gate goes unrun, which is the exact failure this goal
-// exists to fix. Set the variable here so the gate is ONE command everywhere.
+// This IS `npm run test:e2e` — the standard gate's browser leg, which must run
+// against a production build (PLAYWRIGHT_RELEASE=1).
+//
+// The variable is set here rather than in the command because `VAR=1 cmd` is a
+// parse error in PowerShell, this repo's primary shell (CLAUDE.md: "Connor is
+// on Windows"). A gate command half the project's shells cannot run is how a
+// gate goes unrun, which is the exact failure this goal exists to fix. Use
+// `npm run test:e2e:dev` for the dev-server run.
 //
 // Spawn the CLI through `process.execPath` rather than `npx`/`.bin/playwright`:
 // no shell, so no quoting or `.cmd`-spawn platform difference, and extra argv

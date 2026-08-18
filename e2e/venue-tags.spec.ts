@@ -40,6 +40,48 @@ async function openLightbox(page: Page) {
   await cards.first().getByRole('button', { name: /See photos and hours/i }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
+  // The Hours card is client-only state: BarLightbox sets `rows` in its mount
+  // effect and renders `{rows ? <hours> : null}` (src/components/BarLightbox.tsx:114-124,
+  // 307). So "dialog is visible" is NOT "dialog is laid out" — the card is
+  // inserted a frame or two later and pushes everything below it down.
+  //
+  // Every geometry assertion in this file reads a boundingBox against that
+  // layout. Measured 2026-08-18 on Pixel 7 under the release gate: tags at
+  // y=193.5 (pre-insert) compared against hours at y=210.5 (post-insert), and
+  // the bottom-of-lightbox assertion failed on a stale number while the DOM
+  // order was correct all along. Worse is the silent direction — read a moment
+  // earlier and the Hours heading has count 0, so the check skips itself and
+  // the test passes having proved nothing.
+  //
+  // Wait for the dialog's own height to stop changing rather than for the
+  // Hours card specifically: whether a bar HAS hours differs by fixture, so
+  // waiting on the card would hang for the ones that legitimately never show
+  // it. Bounded and best-effort — a dialog that never settles must fail on a
+  // real assertion, not here.
+  await dialog
+    .evaluate(
+      (el) =>
+        new Promise<void>((resolve) => {
+          let last = -1;
+          let stable = 0;
+          const tick = (): void => {
+            const h = el.scrollHeight;
+            if (h === last) stable += 1;
+            else {
+              last = h;
+              stable = 0;
+            }
+            if (stable >= 2) resolve();
+            else requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        }),
+      undefined,
+      { timeout: 5_000 },
+    )
+    .catch(() => {
+      /* see above */
+    });
   return dialog;
 }
 

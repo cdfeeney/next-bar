@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "test:e2e:release": "node scripts/run-e2e-release.mjs",
+    "test:e2e": "node scripts/run-e2e-release.mjs",
+    "test:e2e:dev": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "db:migrate": "tsx scripts/apply-migrations.ts",
     "check:catalog-bundle": "node scripts/check-client-catalog-bundle.mjs"

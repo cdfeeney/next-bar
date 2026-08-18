@@ -70,11 +70,12 @@ The validation phase is intentionally web-only. The iOS app launches in week 8+ 
 | `npm run start` | Run the production build |
 | `npm run typecheck` | Type-check without emitting |
 | `npm test` | Unit/component tests (vitest) |
-| `npm run test:e2e` | Browser tests against the dev server (iterating on one spec) |
-| `npm run test:e2e:release` | Browser tests against a production build — the gate leg |
+| `npm run test:e2e` | Browser tests against a production build — the gate leg |
+| `npm run test:e2e:dev` | Same specs against the dev server, for iterating on one spec |
 
-`typecheck` + `test` + `test:e2e:release` together are the standard gate —
-`npm test` alone does **not** cover the browser specs. Gate on the `:release`
-leg, not the plain one: the dev server carries a cold-compile navigation race
-that is not a product defect (see CLAUDE.md). CI runs typecheck, vitest, and
-the production build only, so a green CI is **not** the full gate.
+`typecheck` + `test` + `test:e2e` together are the standard gate — `npm test`
+alone does **not** cover the browser specs. `test:e2e` is the production-build
+run; the `:dev` variant is an explicit opt-in and carries a cold-compile
+navigation race that is not a product defect (see CLAUDE.md). CI runs
+typecheck, vitest, and the production build only, so a green CI is **not** the
+full gate.

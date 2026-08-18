@@ -9,27 +9,38 @@ Before claiming a change is verified, all three of these run and pass:
 
 ```
 npm run typecheck
-npm test                  # vitest
-npm run test:e2e:release  # Playwright, production build, both viewports
+npm test           # vitest
+npm run test:e2e   # Playwright, production build, both viewports
 ```
 
-`test:e2e:release` is the portable spelling of `PLAYWRIGHT_RELEASE=1 npm run
-test:e2e`. Use it: `VAR=1 cmd` is a parse error in PowerShell, which is this
-machine's primary shell, so the env-prefixed form is not a command Connor can
-run.
+**`npm run test:e2e` IS the release run** — it is `scripts/run-e2e-release.mjs`,
+which sets `PLAYWRIGHT_RELEASE=1` itself. The gate is the default spelling on
+purpose: the env-prefixed form `PLAYWRIGHT_RELEASE=1 npm run test:e2e` is a
+parse error in PowerShell, this machine's primary shell, and a gate command
+half the project's shells cannot run is a gate that does not get run. The dev
+run is `npm run test:e2e:dev` — an explicit opt-in for iterating on one spec.
 
-Run the e2e leg in **release mode**. Plain `npm run test:e2e` uses the dev
-server, which carries a navigation race that is not a product defect: a
-`page.goto()` issued straight after a load can be interrupted by the app's own
-client-side navigation while the route is still cold-compiling. Measured
-2026-08-17 on `app-store-pack.spec.ts:16` — **3/3 red on dev, 5/5 green on a
-production build of the same commit**. Dev mode is fine for iterating on one
-spec; it is not the thing to gate on.
+Gate on release, not dev. The dev server carries a navigation race that is not
+a product defect: a `page.goto()` issued straight after a load can be
+interrupted by the app's own client-side navigation while the route is still
+cold-compiling. Measured 2026-08-17 on `app-store-pack.spec.ts:16` — **3/3 red
+on dev, 5/5 green on a production build of the same commit**.
+
+**Two specs are known-red under `test:e2e:dev` and green under the gate**,
+measured on the same commit 2026-08-18 (dev: 2 failed / 438 passed; release:
+0 failed / 440 passed). Both fail on iPhone 13 only:
+- `app-store-pack.spec.ts:16` — the navigation-interrupt race above.
+- `native-shell-contract.spec.ts:617` (lightbox focus restore) —
+  `toBeFocused` receives `inactive`, i.e. the element IS `activeElement` but
+  the document is not the active one. A headless-contention artifact of the
+  slower dev compile, not a focus-management defect.
+They are NOT quarantined: they pass in the gate, and skipping them there would
+delete real coverage to silence a mode nobody gates on.
 
 `npm test` runs **vitest only**. Between 2026-08-13 and 2026-08-16 every
 "full suite green" reported during the V8 work meant vitest alone — the browser
 specs were never invoked, and the suite had been red and invisible for weeks.
-A gate that omits `test:e2e` is not a gate; say which of the three you ran.
+A gate that omits the browser specs is not a gate; say which of the three you ran.
 
 Release mode is production build, 3 workers, zero retries. Do NOT pass
 `--reporter=list` on the command line: it overrides the config's
@@ -66,7 +77,7 @@ interrupted by another navigation to "/"`. **Not confined to `/quiz`** — hit o
 `/map` (app-store-pack.spec.ts:16) on 2026-08-17, where it was not intermittent
 at all but 3/3 reproducible on a cold server, which reads exactly like a real
 regression. What settles it is the mode, not the repeat count: the same commit
-was 5/5 green under `npm run test:e2e:release`. Re-run it in release mode before
+was 5/5 green under `npm run test:e2e`. Re-run it in release mode before
 debugging, and gate in release mode so it cannot cost anyone this hour again.
 
 ## Database migrations

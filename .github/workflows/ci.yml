@@ -6,7 +6,7 @@ name: CI
 # reach main (today's edge-bundle-size failure would have been caught at the PR).
 #
 # THIS IS NOT THE FULL GATE. The local standard gate is typecheck + vitest +
-# `npm run test:e2e:release` (CLAUDE.md); this job runs the first two and the
+# `npm run test:e2e` (CLAUDE.md); this job runs the first two and the
 # build, and does NOT run the browser specs. A green check here therefore does
 # not mean the e2e suite passed — that is the same invisibility that let the
 # Playwright suite sit red for weeks, so it is stated rather than assumed.
