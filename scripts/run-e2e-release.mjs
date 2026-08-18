@@ -26,15 +26,28 @@ import { config as loadEnvFile } from 'dotenv';
 // 0-failed-90-skipped run reads exactly like a full pass in a summary line.
 // That is this goal's whole subject: a gate is only a gate if it runs the suite
 // it claims to.
+//
+// The check reads `.env.local` and NOT `process.env`, which looks stricter than
+// necessary and is not. Seven specs (account-delete, claim-handle,
+// follow-requests, friends-real, onboarding-identity, suggestions, vibe-vote)
+// each `readFileSync('.env.local')` and regex the value out themselves, then
+// `test.skip` when it is absent. Credentials exported into the shell but never
+// written to the file satisfy `process.env`, so a preflight honouring it would
+// wave the run through while those same specs skip — the exact
+// reads-like-a-full-pass outcome this block exists to stop, now with the gate
+// asserting it had checked. The consumers' source of truth is the file, so the
+// gate's has to be the file too.
 const REQUIRED_ENV = ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY'];
 const fileEnv = loadEnvFile({ path: '.env.local', quiet: true }).parsed ?? {};
-const missing = REQUIRED_ENV.filter((key) => !process.env[key] && !fileEnv[key]);
+const missing = REQUIRED_ENV.filter((key) => !fileEnv[key]);
 if (missing.length > 0) {
   console.error(
     [
       '',
-      `npm run test:e2e cannot run: ${missing.join(', ')} missing from the environment`,
-      'and from .env.local.',
+      `npm run test:e2e cannot run: ${missing.join(', ')} missing from .env.local.`,
+      '',
+      'Exporting them into the shell is not enough: seven specs read .env.local',
+      'directly and skip themselves when the value is not in that file.',
       '',
       'Without them ~90 specs skip themselves and ~19 more fail on assertions that do',
       'not name the cause, so the run is not the gate.',
