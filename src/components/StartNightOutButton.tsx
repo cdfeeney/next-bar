@@ -231,6 +231,17 @@ export default function StartNightOutButton(): JSX.Element | null {
       mounted.current = false;
     };
   }, []);
+  /**
+   * THIS instance is the one still opening the plan.
+   *
+   * The create-settled tick below re-derives state from the parked record, and a
+   * parked record means "created but not opened" — which is true from the moment
+   * the plan is parked, including while this instance's own follow-up read is
+   * still in flight. Without this guard, releasing the marker at park time (see
+   * `settleCreate`) paints the "couldn't open it" recovery panel over a read that
+   * is about to succeed and navigate.
+   */
+  const opening = useRef(false);
 
   // Re-arm the recovery affordance instead of the Start button. A plan created
   // in this session but never opened is the one state where offering "Start" is
@@ -359,6 +370,10 @@ export default function StartNightOutButton(): JSX.Element | null {
    */
   useEffect(() => {
     if (userId === null) return;
+    // Our own read is still in flight: this instance already knows the plan is
+    // parked and will report the outcome itself. Re-deriving here would announce
+    // a read failure that has not happened.
+    if (opening.current) return;
     setBusy(creatingOwners.has(userId));
     const parked = recallStarted(userId);
     if (parked === null || parked.nightKey !== nycNightKey()) return;
@@ -411,6 +426,13 @@ export default function StartNightOutButton(): JSX.Element | null {
     if (creatingOwners.has(owner)) return;
     creatingOwners.add(owner);
     markCreatingChanged();
+    /**
+     * Idempotent, so it can be called the moment the create is genuinely over
+     * and again from `finally` without double-notifying.
+     */
+    const settleCreate = (): void => {
+      if (creatingOwners.delete(owner)) markCreatingChanged();
+    };
     setBusy(true);
     setError(false);
     try {
@@ -440,9 +462,22 @@ export default function StartNightOutButton(): JSX.Element | null {
       // one where the read is still in flight and the user navigates away.
       rememberStarted(owner, { planId, nightKey });
       setCreatedPlanId(planId);
+      // The CREATE is over here, not after the read (round 3, Codex). Holding
+      // the marker until the follow-up read settles means a component that was
+      // unmounted mid-create — the one case this marker exists for — leaves the
+      // REMOUNTED screen on a disabled "Starting…" for as long as the read takes,
+      // with no "Open it", even though the plan is already parked and ready. A
+      // read that never settles makes that permanent. From this line the only
+      // thing still pending is opening the plan, which is this instance's own
+      // business and is tracked in `opening`.
+      opening.current = true;
+      settleCreate();
       const plan = await getNightOut(supabase, planId);
       if (owner !== liveUserId.current) return;
       if (plan === null) {
+        // Nothing will clear `busy` for us any more — the tick that used to do
+        // it fired at park time, and this instance was skipping it.
+        setBusy(false);
         setReadFailed(true);
         return;
       }
@@ -454,8 +489,8 @@ export default function StartNightOutButton(): JSX.Element | null {
       // orphan would be a permanent lockout for that account, strictly worse
       // than the duplicate the marker prevents. The notification is here too,
       // so it fires after every storage mutation above has already happened.
-      creatingOwners.delete(owner);
-      markCreatingChanged();
+      opening.current = false;
+      settleCreate();
     }
   };
 

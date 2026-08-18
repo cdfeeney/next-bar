@@ -461,6 +461,64 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     ).toBe(true);
   });
 
+  test('a remounted screen recovers even while the dead instance’s read hangs', async () => {
+    // Cycle 3 round 3 (Codex, medium). The previous fix told live instances the
+    // create had settled from `finally` — which is reached only AFTER the
+    // follow-up read. So the DEAD instance parked the plan and then sat on a
+    // read that may never answer, while the remounted screen stayed on a
+    // disabled "Starting…" with no "Open it" for exactly as long as that read
+    // took. The round-2 test missed it because its read returned immediately.
+    let releaseCreate: (value: unknown) => void = () => {};
+    heldCreate = new Promise((resolve) => {
+      releaseCreate = resolve;
+    });
+    // The read never settles.
+    heldRead = new Promise(() => {});
+
+    const user = userEvent.setup();
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    view.unmount();
+    render(<StartNightOutButton />);
+
+    releaseCreate(PLAN_ID);
+
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      'the live screen waited on a read belonging to a component that is gone',
+    ).toBeTruthy();
+    const start = screen.getByRole('button', {
+      name: /Start the official Night Out/i,
+    }) as HTMLButtonElement;
+    expect(start.disabled, 'Start must stay disabled while a plan is unopened').toBe(true);
+    expect(createCalls).toBe(1);
+  });
+
+  test('a slow read does NOT flash the recovery panel before it settles', async () => {
+    // The other half of settling the create at park time: the instance doing the
+    // read must not be told by its own notification that the read failed.
+    let releaseRead: (value: unknown) => void = () => {};
+    heldRead = new Promise((resolve) => {
+      releaseRead = resolve;
+    });
+
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      screen.queryByRole('button', { name: /open it/i }),
+      'a read still in flight was reported to the user as a failure',
+    ).toBeNull();
+
+    releaseRead({ id: PLAN_ID, shareToken: 'tok-1', status: 'open' });
+    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+  });
+
   test('a failed create for A is not shown as B’s failure after an in-place switch', async () => {
     // Cycle 3 (Claude). The reset effect cleared everything except `error`.
     createResult = null;
