@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet-gesture-handling/dist/leaflet-gesture-handling.css';
 import { GestureHandling } from 'leaflet-gesture-handling';
@@ -218,7 +218,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
         <div
           className={
             fill
-              ? 'h-full w-full overflow-hidden'
+              ? 'map-fill h-full w-full overflow-hidden'
               : 'rounded-2xl border border-border overflow-hidden'
           }
           style={{
@@ -246,8 +246,19 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
             scrollWheelZoom={false}
             doubleClickZoom={false}
             tap={true}
+            // `fill` maps (the /map surface) draw their OWN search/Filters/Locate
+            // column over the top-left corner, which is where Leaflet puts the
+            // zoom stack. At leaflet's stock 30px the two only grazed; once
+            // 76c6f80 grew the buttons to the 44px a11y minimum the zoom-out
+            // button landed squarely on the Filters button's centre and ate its
+            // click (map-interaction.spec.ts, both viewports). Move the stack to
+            // the free right edge instead of shrinking a control back below the
+            // accessible minimum. Embedded maps have no such column and keep the
+            // stock corner.
+            zoomControl={false}
             style={{ height: '100%', width: '100%' }}
           >
+            <ZoomControl position={fill ? 'bottomright' : 'topleft'} />
             {oneFingerPan ? null : <GestureController />}
             {fitToBars ? <FitBounds bars={bars} /> : null}
             {panToUser ? <PanToUser coords={userCoords} /> : null}

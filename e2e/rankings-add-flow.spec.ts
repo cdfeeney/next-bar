@@ -13,7 +13,13 @@ async function addScore(page: Page, name: string, score: string): Promise<void> 
   await typeInto(dialog.getByLabel('Search bars'), name);
   await dialog.locator('li button').filter({ hasText: name }).first().click();
   await expect(dialog).toContainText(`Score ${name}`);
-  await dialog.getByLabel('Your score').fill(score);
+  // Type and ASSERT, the same way the search field above is driven. A bare
+  // fill() on this control is a silent precondition: the score input is
+  // `required`, so if the value has not landed when submit fires the browser
+  // blocks the form and the dialog simply stays open — which is how this failed
+  // once in the 2026-08-17 full run, reported 10s later as the useless
+  // "dialog is still visible" rather than "the score never arrived".
+  await typeInto(dialog.getByLabel('Your score'), score);
   await dialog.getByRole('button', { name: 'Save score' }).click();
   await expect(dialog).not.toBeVisible();
 }

@@ -67,6 +67,16 @@ body::before {
   line-height: 44px;
 }
 
+/* The /map surface is full-bleed UNDER the fixed 5-tab nav, so anything Leaflet
+   parks in the bottom corners lands behind it — the OSM/CARTO attribution has
+   been sitting there unreadable, and the zoom stack moved down here would too.
+   Lift the whole bottom-right stack clear of the nav using the same measurement
+   the map legend already uses. Scoped to `.map-fill`: embedded maps are cards in
+   a scrolling page and the nav is not over them. */
+.map-fill .leaflet-bottom.leaflet-right {
+  margin-bottom: calc(4.5rem + max(0.5rem, env(safe-area-inset-bottom)));
+}
+
 .touch-card {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;

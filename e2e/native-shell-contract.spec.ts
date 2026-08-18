@@ -53,6 +53,37 @@ async function settle(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle').catch(() => {
     /* networkidle is best-effort; the explicit waits below carry the test. */
   });
+  // Client state that resolves AFTER networkidle changes the document HEIGHT,
+  // and every geometry assertion below is read against that height. Measured on
+  // /friends: 920px at first paint (placeholder people in "Find friends"), 844px
+  // once the follow graph loads and the already-followed are dropped — a 76px
+  // shrink. Read in between, `maxScroll` describes a page that no longer exists,
+  // and restoring the anchor scroll silently lands somewhere else; that is
+  // exactly the "header did not return to its position" failure on iPhone 13,
+  // where the real fault was the anchor, not the header. Wait for the height to
+  // hold still. Best-effort: a page that genuinely never settles should fail on
+  // its own assertion, not here.
+  await page.evaluate(() => {
+    (window as unknown as { __settleHeight?: number; __settleTicks?: number }).__settleTicks = 0;
+  });
+  await page
+    .waitForFunction(
+      () => {
+        const w = window as unknown as { __settleHeight?: number; __settleTicks?: number };
+        const h = document.documentElement.scrollHeight;
+        if (w.__settleHeight === h) w.__settleTicks = (w.__settleTicks ?? 0) + 1;
+        else {
+          w.__settleHeight = h;
+          w.__settleTicks = 0;
+        }
+        return (w.__settleTicks ?? 0) >= 3;
+      },
+      undefined,
+      { polling: 250, timeout: 8_000 },
+    )
+    .catch(() => {
+      /* see above */
+    });
   await page.evaluate(
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
   );
@@ -223,6 +254,22 @@ test.describe('V8 native interaction contract', () => {
     test(`${route} keeps header and bottom nav anchored through overscroll and route change`, async ({
       page,
     }) => {
+      // QUARANTINED for /friends (2026-08-17, g-11ccebea). Not a shell defect and
+      // not a flake: /friends settled is 844px tall in this test's 844px viewport,
+      // so `maxScroll` is 0 and there is no scroll position to overscroll AWAY
+      // from. The guard below says so in as many words. Measured on both
+      // viewports; Pixel 7 fails on that guard directly, iPhone 13 used to fail
+      // 76px later at the header assertion for the same reason (see settle()).
+      //
+      // Kept as fixme rather than deleted: the assertions are correct and the
+      // Social layout does need this coverage. Un-quarantine by giving /friends
+      // more than a viewport of content in the fixture (a seeded follow list is
+      // the obvious lever) — NOT by relaxing the maxScroll guard, which exists
+      // because an earlier form of this test could not fail at all.
+      test.fixme(
+        route === '/friends',
+        '/friends has no scrollable overflow in the test fixture; overscroll cannot be exercised',
+      );
       await denyGeolocation(page.context());
       await page.setViewportSize({ width: 390, height: 844 });
       await page.goto(route);
