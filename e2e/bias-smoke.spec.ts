@@ -43,7 +43,15 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     await expect(page.getByText('What energy are you bringing?')).toBeVisible();
     await page.getByRole('button', { name: 'Mellow — we wanna talk' }).click();
 
-    // Setting question (garden/rooftop axis, 2026-07-24)
+    // Setting question (garden/rooftop axis, 2026-07-24). ASSERT the question
+    // first, like every other step in this walk does — this was the one step
+    // that clicked blind. Playwright auto-waits for the option button, so it
+    // usually worked, but "usually" is the whole problem: the click could land
+    // during the Q2 -> Q3 re-render and be swallowed, and the failure then
+    // surfaced one step later as "Soundtrack of the night? not found", which
+    // names the wrong question entirely. Observed on iPhone 13 under the
+    // zero-retry release gate 2026-08-18, in both specs that walk this quiz.
+    await expect(page.getByText('Where do you wanna be?')).toBeVisible();
     await page.getByRole('button', { name: 'Tucked away inside' }).click();
 
     await expect(page.getByText('Soundtrack of the night?')).toBeVisible();

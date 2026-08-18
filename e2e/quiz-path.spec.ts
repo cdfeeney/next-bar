@@ -27,7 +27,15 @@ async function completeQuiz(page: Page): Promise<void> {
   await expect(page.getByText('What energy are you bringing?')).toBeVisible();
   await page.getByRole('button', { name: 'Mellow — we wanna talk' }).click();
 
-  // Setting question (garden/rooftop axis, 2026-07-24)
+  // Setting question (garden/rooftop axis, 2026-07-24). ASSERT the question
+  // first, like every other step in this walk does — this was the one step
+  // that clicked blind. Playwright auto-waits for the option button, so it
+  // usually worked, but "usually" is the whole problem: the click could land
+  // during the Q2 -> Q3 re-render and be swallowed, and the failure then
+  // surfaced one step later as "Soundtrack of the night? not found", which
+  // names the wrong question entirely. Observed on iPhone 13 under the
+  // zero-retry release gate 2026-08-18, in both specs that walk this quiz.
+  await expect(page.getByText('Where do you wanna be?')).toBeVisible();
   await page.getByRole('button', { name: 'Tucked away inside' }).click();
 
   await expect(page.getByText('Soundtrack of the night?')).toBeVisible();
@@ -62,6 +70,15 @@ async function reachQuizResults(page: Page): Promise<void> {
 }
 
 test.describe('Quiz path', () => {
+  // Every test here walks the full quiz. That walk costs ~11s on iPhone 13 and
+  // ~7s on Pixel 7 when the host is quiet — against a 30s project budget, which
+  // is only ~3x headroom on a machine that builds other worktrees concurrently.
+  // It ran out on 2026-08-18 under the zero-retry release gate. bias-smoke.spec
+  // already carries test.slow() for the identical walk; this is the same walk
+  // and gets the same budget. It weakens no assertion — a genuinely broken quiz
+  // still fails, just on the assertion rather than on the clock.
+  test.slow();
+
   test('navigates to /quiz, completes 6-question quiz, picks neighborhood, sees 3 result cards', async ({ page }) => {
     await reachQuizResults(page);
 
