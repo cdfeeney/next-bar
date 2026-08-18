@@ -78,7 +78,17 @@ test.describe('Bias smoke — Midtown geolocation', () => {
       // sometimes mid-click (it can flash enabled). The click is therefore
       // BEST-EFFORT with a short cap; the results assertion below is the
       // real gate either way.
-      if (await useLocationBtn.isEnabled().catch(() => false)) {
+      // BOUNDED, and that bound is the whole fix. `isEnabled()` auto-waits for
+      // the element to attach, and with no `actionTimeout` in the config the
+      // default is 0 — wait forever. The results replace this button while we
+      // are asking about it, so on the granted path the locator resolves to
+      // nothing and this call NEVER SETTLES: `.catch()` cannot help, because the
+      // promise does not reject. The trace shows the quiz walk finishing at 8.1s
+      // and `isEnabled` still pending when the 90s test timeout fired.
+      //
+      // This is why raising the budget never worked (180s and 300s were both
+      // tried): an unbounded wait does not care how large the budget is.
+      if (await useLocationBtn.isEnabled({ timeout: 2_000 }).catch(() => false)) {
         await useLocationBtn.click({ timeout: 5_000 }).catch(() => {});
       }
     }
