@@ -35,8 +35,8 @@ import {
 
 // Normally the worktree's own migrations. CI overrides it so the code that RUNS
 // comes from the trusted base commit while the PR's tree is read only as data —
-// see the migration-ledger job in .github/workflows/ci.yml. Only filenames are
-// ever read from here; nothing in it is executed.
+// see .github/workflows/migration-ledger.yml. Only filenames are ever read
+// from here; nothing in it is executed.
 const MIGRATIONS_DIR = process.env.MIGRATION_LEDGER_DIR
   ? resolve(process.env.MIGRATION_LEDGER_DIR)
   : join(process.cwd(), 'supabase', 'migrations');

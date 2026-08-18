@@ -20,6 +20,14 @@ name: Migration ledger
 # and the guard only calls readdirSync on the PR directory. Never add a step
 # that runs `pr/`'s scripts, installs its dependencies, or builds it.
 #
+# THE OTHER HALF OF THE RULE: `pull_request_target` takes the workflow
+# DEFINITION from the default branch, but `github.event.pull_request.base.sha`
+# is whatever branch the PR targets — which anyone who can push a branch could
+# create. Without the `branches: [main]` filter below, a PR opened against an
+# attacker-made base would have that base's `check:migrations` script run with
+# the secret. The filter is what makes "check out the base commit" mean "check
+# out a commit on the protected default branch".
+#
 # Two consequences, both fail-closed and both intentional: a PR that changes the
 # guard itself is validated by the guard on the default branch, and this file
 # has no effect until it is ON the default branch (pull_request_target always
@@ -42,6 +50,8 @@ on:
   push:
     branches: [main]
   pull_request_target:
+    # Load-bearing, not tidiness — see the note above.
+    branches: [main]
 
 # Read-only. pull_request_target otherwise hands out a write-scoped token.
 permissions:
