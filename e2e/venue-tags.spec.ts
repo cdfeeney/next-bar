@@ -114,17 +114,26 @@ test.describe('venue tags in the bar lightbox', () => {
     const tags = dialog.locator('[data-venue-tags]');
     await expect(tags).toHaveCount(1);
 
+    // The hours card renders only for bars that carry hours — the emergency
+    // core set used offline does not. Check for it rather than waiting on it
+    // (boundingBox() would block until the 30s test timeout); when it IS
+    // there, the tags must come after it.
+    //
+    // Read hours FIRST and the things it MOVES second. Written the other way
+    // round this compared a tags.y captured before the Hours card mounted
+    // against an hours.y captured after — 193.5 vs 210.5 on Pixel 7,
+    // 2026-08-18, a failure with the DOM order correct all along. Hours is the
+    // only late arrival here (it is client-only state, BarLightbox.tsx:114-124),
+    // so measuring it first makes the comparison self-consistent whichever
+    // side of the mount the reads land on.
+    const hours = dialog.getByRole('heading', { name: 'Hours' });
+    const hoursBox = (await hours.count()) > 0 ? await hours.boundingBox() : null;
+
     const tagsBox = await tags.boundingBox();
     const actionBox = await dialog.getByRole('link', { name: /Rank it/i }).boundingBox();
 
     expect(tagsBox).not.toBeNull();
     expect(actionBox).not.toBeNull();
-    // The hours card renders only for bars that carry hours — the emergency
-    // core set used offline does not. Check for it rather than waiting on it
-    // (boundingBox() would block until the 30s test timeout); when it IS
-    // there, the tags must come after it.
-    const hours = dialog.getByRole('heading', { name: 'Hours' });
-    const hoursBox = (await hours.count()) > 0 ? await hours.boundingBox() : null;
     if (hoursBox) {
       expect(
         tagsBox!.y,

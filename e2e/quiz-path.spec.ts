@@ -19,38 +19,21 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { pickOption } from './helpers/quizWalk';
 
 async function completeQuiz(page: Page): Promise<void> {
+  // Every step goes through pickOption, which clicks and then proves the quiz
+  // advanced. See e2e/helpers/quizWalk.ts: the option buttons are server-
+  // rendered and hit-testable before React hydrates them, so a click can
+  // dispatch into nothing and the failure then names the NEXT question.
   await expect(page.getByText('Friday, 11pm. What sounds good?')).toBeVisible({ timeout: 30_000 });
-  await page.getByRole('button', { name: 'A hidden cocktail spot' }).click();
-
-  await expect(page.getByText('What energy are you bringing?')).toBeVisible();
-  await page.getByRole('button', { name: 'Mellow — we wanna talk' }).click();
-
-  // Setting question (garden/rooftop axis, 2026-07-24). ASSERT the question
-  // first, like every other step in this walk does — this was the one step
-  // that clicked blind. Playwright auto-waits for the option button, so it
-  // usually worked, but "usually" is the whole problem: the click could land
-  // during the Q2 -> Q3 re-render and be swallowed, and the failure then
-  // surfaced one step later as "Soundtrack of the night? not found", which
-  // names the wrong question entirely. Observed on iPhone 13 under the
-  // zero-retry release gate 2026-08-18, in both specs that walk this quiz.
-  await expect(page.getByText('Where do you wanna be?')).toBeVisible();
-  await page.getByRole('button', { name: 'Tucked away inside' }).click();
-
-  await expect(page.getByText('Soundtrack of the night?')).toBeVisible();
-  await page.getByRole('button', { name: 'Jazz / lounge' }).click();
-
-  await expect(page.getByText('Who do you wanna be around?')).toBeVisible();
-  await page.getByRole('button', { name: 'Industry / creative' }).click();
-
-  await expect(page.getByText('Who are you out with?')).toBeVisible();
-  await page.getByRole('button', { name: 'On a date' }).click();
-
-  await expect(page.getByText('Spending vibe tonight?')).toBeVisible();
-  await page.getByRole('button', { name: 'Treating myself' }).click();
-
-  await expect(page.getByText('Any neighborhoods you love?')).toBeVisible();
+  await pickOption(page, 'A hidden cocktail spot', 'What energy are you bringing?');
+  await pickOption(page, 'Mellow — we wanna talk', 'Where do you wanna be?');
+  await pickOption(page, 'Tucked away inside', 'Soundtrack of the night?');
+  await pickOption(page, 'Jazz / lounge', 'Who do you wanna be around?');
+  await pickOption(page, 'Industry / creative', 'Who are you out with?');
+  await pickOption(page, 'On a date', 'Spending vibe tonight?');
+  await pickOption(page, 'Treating myself', 'Any neighborhoods you love?');
   await page.getByRole('button', { name: 'Anywhere works' }).click();
 }
 
