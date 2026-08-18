@@ -233,6 +233,14 @@ export default function NightOutPage({
       if (!ok) {
         const supabase = capacityRefusable ? getBrowserSupabase() : null;
         const full = supabase ? await isNightOutFullByToken(supabase, token) : false;
+        // Re-read BEFORE advising a retry (round-2 review, Codex, medium).
+        // 0059's expected-status/revision guard makes a rejection deterministic:
+        // this view still holds the revision the RPC just refused, so retrying
+        // from it re-sends the same rejected pair and fails identically until
+        // the user reloads by hand. Refreshing first means the next tap carries
+        // the truth. Awaited, not fired-and-forgotten, so the error below
+        // survives the re-render rather than racing it.
+        if (state.kind === 'member') await loadMemberView(state.plan.id);
         setActionError(
           full
             ? 'This night out is full.'
