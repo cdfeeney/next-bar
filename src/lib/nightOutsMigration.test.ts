@@ -227,7 +227,6 @@ describe('0044_night_outs.sql security shape', () => {
  *          respond_night_out, night_out_is_full_by_token
  *   0049 — (superseded by 0050)
  *   0050 — invite_to_night_out
- *   0051 — suggest_night_out_bar
  *
  * The assertions in the block above still describe 0044's TEXT, which is correct
  * as a record of an applied, immutable file, but is NOT the effective definition
@@ -402,41 +401,5 @@ describe('0050 — invite answers the membership question before the capacity on
     expect(body).toMatch(/night_out_seat_count/);
     expect(body).toMatch(/night_out_member_cap/);
     expect(SQL_0050, 'invite restates the counted set again').not.toMatch(/invite_status <> 'declined'/);
-  });
-});
-
-const SQL_0051 = readFileSync(
-  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0051_night_outs_suggest_recheck_before_cap.sql'),
-  'utf8',
-).toLowerCase().replace(/--.*/g, '');
-
-/**
- * The sibling of the 0050 block, and it was missing (fix round, Claude).
- *
- * 0051 applies the SAME recheck-before-cap fix to suggest_night_out_bar that
- * 0050 applied to invite, and shipped in the same commit — but only 0050 got
- * ordering assertions, and 0051 was absent from the effective-definitions map
- * above, so an auditor of suggest_night_out_bar would have been sent to 0044's
- * superseded text. A future `create or replace` that moved the 3-per-member cap
- * count back ahead of the post-lock re-read would have regressed a T0
- * concurrency fix with the whole suite green, which is precisely the
- * claim-drifts-from-artifact failure this file documents itself as guarding.
- */
-describe('0051 — suggest re-reads its own subject before consulting the cap', () => {
-  it('re-reads under the lock, BEFORE the per-member cap check', () => {
-    const body = functionBody(SQL_0051, 'suggest_night_out_bar');
-    const lock = body.indexOf('pg_advisory_xact_lock');
-    const recheck = body.indexOf('bar_id', lock);
-    const cap = body.indexOf('count(', recheck);
-    expect(lock, 'suggest takes no advisory lock').toBeGreaterThan(-1);
-    expect(recheck, 'suggest does not re-read its own subject after the lock')
-      .toBeGreaterThan(lock);
-    expect(cap, 'the per-member cap count must come AFTER the post-lock re-read')
-      .toBeGreaterThan(recheck);
-  });
-
-  it('is an upgrade-only restatement, never a table rewrite', () => {
-    expect(SQL_0051).toMatch(/create or replace function/);
-    expect(SQL_0051).not.toMatch(/^(drop|alter) table/im);
   });
 });

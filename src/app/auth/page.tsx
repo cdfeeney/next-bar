@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { peekPendingInvite } from '@/lib/pendingInvite';
 
 /**
  * /auth — conventional email + password sign-in (operator call 2026-07-23:
@@ -94,8 +95,30 @@ export default function AuthPage() {
     router.replace('/auth', { scroll: false });
   }, [router]);
 
-  const callbackUrl = (): string =>
-    `${window.location.origin}/auth/callback?redirect_to=${AFTER_AUTH_PATH}`;
+  /**
+   * Where /auth/callback should land after it exchanges the code.
+   *
+   * Cold-panel round 2 (Codex, HIGH): this carried `AFTER_AUTH_PATH`
+   * unconditionally, so an invite survived sign-up only when the confirmation
+   * link opened in the SAME browser profile that started it — Web Storage is
+   * scoped to an origin within one profile, and `pendingInvite` says so itself.
+   * Open the invite in an in-app browser and confirm from the system mail app
+   * (the common shape on a phone) and neither store is reachable: the user
+   * lands on /settings with no route back to the plan they were invited to.
+   *
+   * The token therefore rides the callback URL, which is the one channel that
+   * crosses profiles. It is not a new trust surface: /auth/callback already
+   * refuses any `redirect_to` that is not a plain same-origin path, and the
+   * plan page authorizes the token itself — a bearer link is exactly what the
+   * user was sent.
+   */
+  const callbackUrl = (): string => {
+    const pending = peekPendingInvite();
+    const params = new URLSearchParams({
+      redirect_to: pending === null ? AFTER_AUTH_PATH : `/night-out/${pending}`,
+    });
+    return `${window.location.origin}/auth/callback?${params.toString()}`;
+  };
 
   const handleForgotSubmit = async (): Promise<void> => {
     const supabase = getBrowserSupabase();

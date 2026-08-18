@@ -156,11 +156,26 @@ export default function NightOutPage({
     // epoch has already moved by the time the new load captures it.
   }, [auth.status, token]);
 
+  /**
+   * `startedAt` is the epoch the CALLER was looking at, and it defaults to the
+   * current one only for callers with nothing in flight ahead of them.
+   *
+   * Cold-panel round 2 (Codex): reading `viewEpoch.current` here was too late.
+   * Every direct caller awaits a WRITE first (join, decline, an action refresh),
+   * and only then calls this — so a user who taps Join on plan A and navigates
+   * to plan B before the RPC answers reaches this line after the epoch has
+   * already moved, captures plan B's epoch, and paints plan A's private member
+   * board under plan B's URL. The guard compared the load against itself.
+   *
+   * The view identity has to be captured before the FIRST await of the whole
+   * sequence, not before the last one.
+   */
   const loadMemberView = useCallback(
-    async (planId: string): Promise<boolean> => {
+    async (planId: string, startedAt?: number): Promise<boolean> => {
       const supabase = getBrowserSupabase();
       if (!supabase) return false;
-      const epoch = viewEpoch.current;
+      const epoch = startedAt ?? viewEpoch.current;
+      if (epoch !== viewEpoch.current) return false;
       const [plan, members, board] = await Promise.all([
         getNightOut(supabase, planId),
         getNightOutMembers(supabase, planId),
@@ -243,11 +258,16 @@ export default function NightOutPage({
   const withRefresh =
     (action: () => Promise<boolean>, capacityRefusable = false) =>
     async (): Promise<void> => {
+      const startedAt = viewEpoch.current;
       setActionError(null);
       const ok = await action();
+      // The view this action belonged to is gone — neither its error banner nor
+      // its refresh addresses whatever is on screen now.
+      if (startedAt !== viewEpoch.current) return;
       if (!ok) {
         const supabase = capacityRefusable ? getBrowserSupabase() : null;
         const full = supabase ? await isNightOutFullByToken(supabase, token) : false;
+        if (startedAt !== viewEpoch.current) return;
         setActionError(
           full
             ? 'This night out is full.'
@@ -255,7 +275,7 @@ export default function NightOutPage({
         );
         return;
       }
-      if (state.kind === 'member') void loadMemberView(state.plan.id);
+      if (state.kind === 'member') void loadMemberView(state.plan.id, startedAt);
     };
 
   if (state.kind === 'loading') {
@@ -320,8 +340,10 @@ export default function NightOutPage({
               void (async () => {
                 const supabase = getBrowserSupabase();
                 if (!supabase) return;
+                const startedAt = viewEpoch.current;
                 setActionError(null);
                 const planId = await joinNightOutByToken(supabase, token);
+                if (startedAt !== viewEpoch.current) return;
                 if (planId === null) {
                   // The link is fine when the plan is merely full; saying it
                   // expired sends the user to ask for a new one.
@@ -330,7 +352,7 @@ export default function NightOutPage({
                       ? 'This night out is full.'
                       : "Couldn't join — the link may have expired.",
                   );
-                } else if (!(await loadMemberView(planId))) {
+                } else if (!(await loadMemberView(planId, startedAt))) {
                   // The join SUCCEEDED and the membership is stored; only the
                   // follow-up read failed. Reporting "full" here contradicted
                   // the database when the join took the last seat (fresh-cycle
@@ -355,9 +377,11 @@ export default function NightOutPage({
               void (async () => {
                 const supabase = getBrowserSupabase();
                 if (!supabase) return;
+                const startedAt = viewEpoch.current;
                 setActionError(null);
                 const planId = await declineNightOutByToken(supabase, token);
-                if (planId === null || !(await loadMemberView(planId))) {
+                if (startedAt !== viewEpoch.current) return;
+                if (planId === null || !(await loadMemberView(planId, startedAt))) {
                   setActionError("Couldn't send that — the link may have expired.");
                 }
               })();

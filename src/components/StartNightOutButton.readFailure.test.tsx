@@ -81,6 +81,7 @@ beforeEach(() => {
   currentUser = USER_A;
   authStatus = 'signed-in';
   nightKey = '2026-08-17';
+  window.localStorage.clear();
   window.sessionStorage.clear();
 });
 
@@ -168,9 +169,9 @@ describe('StartNightOutButton — a created plan is never lost', () => {
   });
 
   test('another account NEVER inherits the parked plan, and is not locked out', async () => {
-    // Round 2, filed by BOTH lanes. sessionStorage is per tab, not per account,
-    // and accountCache wipes localStorage only — so without user scoping the
-    // next person to sign in on this tab got A's recovery UI, a disabled Start,
+    // Round 2, filed by BOTH lanes. The store is per tab or per origin, never
+    // per account, and this key is in no wipe set — so without user scoping the
+    // next person to sign in here got A's recovery UI, a disabled Start,
     // and an "Open it" that silently no-ops under their own RLS. They could not
     // create a night out for the rest of the session.
     readFails = true;
@@ -538,9 +539,43 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     );
   });
 
+  test('a parked plan survives the tab closing, so tomorrow-morning Start is not a second plan', async () => {
+    // Cold-panel round 2 (Codex). The record lived in sessionStorage, which the
+    // browser discards when the TAB closes — so a create whose follow-up read
+    // failed was forgotten the moment the user closed the tab, and the next
+    // Start on the same night made a SECOND plan. `create_night_out` has no
+    // per-(owner, night) uniqueness, so nothing downstream catches it.
+    //
+    // Closing a tab IS clearing sessionStorage: that is the whole definition of
+    // the store, so clearing it here is the faithful expression of the trigger.
+    readFails = true;
+    const user = userEvent.setup();
+    const first = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button'));
+    await waitFor(() => expect(createCalls).toBe(1));
+    await screen.findByRole('button', { name: /open it/i });
+    first.unmount();
+
+    // The tab closes and a new one opens on the same night, same account.
+    window.sessionStorage.clear();
+    render(<StartNightOutButton />);
+
+    expect(
+      await screen.findByRole('button', { name: /open it/i }),
+      'the created plan was forgotten when the tab closed',
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', {
+        name: /start the official night out/i,
+      }) as HTMLButtonElement).disabled,
+      'Start re-armed after a tab close, so the next tap creates a second plan',
+    ).toBe(true);
+    expect(createCalls, 'a second create was issued for the same night').toBe(1);
+  });
+
   test('a plan parked on an earlier night does not disable Start today', async () => {
-    // Codex, round 2: mobile browsers restore sessionStorage, so an unopened
-    // plan from last night would otherwise keep Start disabled the next day.
+    // Codex, round 2: the record outlives the tab, so an unopened plan from
+    // last night would otherwise keep Start disabled the next day.
     readFails = true;
     const user = userEvent.setup();
     const first = render(<StartNightOutButton />);

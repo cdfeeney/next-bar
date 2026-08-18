@@ -41,6 +41,7 @@ const getNightOut = vi.fn();
 const getNightOutMembers = vi.fn();
 const getNightOutBoard = vi.fn();
 const previewNightOut = vi.fn();
+const joinNightOutByToken = vi.fn();
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -74,7 +75,7 @@ vi.mock('@/lib/nightOuts.server', () => ({
   decideNightOut: vi.fn(),
   declineNightOutByToken: vi.fn(),
   isNightOutFullByToken: vi.fn(),
-  joinNightOutByToken: vi.fn(),
+  joinNightOutByToken: (...a: unknown[]) => joinNightOutByToken(...a),
   respondNightOut: vi.fn(),
   suggestNightOutBar: vi.fn(),
   voteNightOutBar: vi.fn(),
@@ -195,6 +196,61 @@ describe('the plan page never paints an answer the view has moved on from', () =
     expect(
       screen.queryByText(OWNER_PRIVATE_NAME),
       "plan A's member list leaked into plan B's view",
+    ).toBeNull();
+    expect(screen.getByText("B's night out")).toBeTruthy();
+  });
+
+  test('a join issued on plan A cannot paint plan A after navigating to plan B', async () => {
+    /**
+     * The hole the epoch guard still had (cold-panel round 2, Codex).
+     *
+     * `loadMemberView` read the epoch when IT was called, but every direct
+     * caller awaits a write first. So the sequence "tap Join on A / navigate to
+     * B / A's join resolves" reached the guard after the epoch had already
+     * moved, captured B's epoch, compared it against itself, and passed — then
+     * painted A's private member board under B's URL. The view identity has to
+     * be captured before the write, not before the read that follows it.
+     */
+    const heldJoin = new Deferred<string>();
+
+    // Signed-in NON-member: the page settles on the bearer preview, which is
+    // the only surface that offers Join.
+    resolveByToken.mockResolvedValue(null);
+    previewNightOut.mockResolvedValue({
+      night: '2026-08-20',
+      title: "A's night out",
+      ownerHandle: 'host',
+      ownerDisplayName: 'Host',
+      acceptedCount: 2,
+    });
+    joinNightOutByToken.mockReturnValue(heldJoin.promise);
+
+    const view = render(<NightOutPage params={{ token: TOKEN_A }} />);
+    const join = await screen.findByRole('button', { name: /join this night out/i });
+    join.click();
+    await waitFor(() => expect(joinNightOutByToken).toHaveBeenCalled());
+
+    // Client-side navigation to plan B while the join RPC is still open.
+    resolveByToken.mockResolvedValue('plan-B');
+    getNightOut.mockResolvedValue(planFor("B's night out"));
+    getNightOutMembers.mockResolvedValue([]);
+    getNightOutBoard.mockResolvedValue([]);
+    view.rerender(<NightOutPage params={{ token: TOKEN_B }} />);
+    await waitFor(() => expect(screen.getByText("B's night out")).toBeTruthy());
+
+    // Plan A's join finally lands. Its follow-up read must never be issued.
+    getNightOut.mockResolvedValue(planFor("A's night out"));
+    getNightOutMembers.mockResolvedValue(PRIVATE_MEMBERS);
+    heldJoin.resolve('plan-A');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(
+      screen.queryByText("A's night out"),
+      "a join for plan A repainted the screen while plan B was open",
+    ).toBeNull();
+    expect(
+      screen.queryByText(OWNER_PRIVATE_NAME),
+      "plan A's member list leaked into plan B's view through the join handler",
     ).toBeNull();
     expect(screen.getByText("B's night out")).toBeTruthy();
   });

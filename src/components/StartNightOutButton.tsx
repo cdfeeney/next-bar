@@ -18,12 +18,26 @@ import { createNightOut, getNightOut } from '@/lib/nightOuts.server';
  * is the exact duplicate-plan defect criterion 4 exists to prevent, reached by a
  * different door than the one that was closed.
  *
- * sessionStorage, not localStorage: an unopened plan is one tab's in-flight
- * intent. It should not outlive the session or leak across tabs — the plan is
- * durable in the database either way. (It is NOT yet reachable from a plan
- * list: no surface lists plans you own. That gap is recorded as a residual
- * product gap in V8-3-HANDOFF-2026-08-16b.md, which is why this recovery path
- * carries more weight than it looks like it should.)
+ * localStorage, not sessionStorage. sessionStorage was the original choice and
+ * the reasoning was "an unopened plan is one tab's in-flight intent, it should
+ * not outlive the session". Cold-panel round 2 (Codex) showed that reasoning
+ * defeats the criterion it was written to serve: sessionStorage dies with the
+ * TAB, so a create that succeeded while its follow-up read failed is forgotten
+ * the moment the user closes the tab. Reopen the page the same night, press
+ * Start, and `create_night_out` — which has no per-(owner, night) uniqueness —
+ * makes a SECOND plan. That is criterion 4's exact defect, reached by closing a
+ * tab instead of by navigating within one.
+ *
+ * The two properties that made sessionStorage feel safe now live in the VALUE,
+ * not the store: the record is keyed by user id (so it cannot leak to another
+ * account) and stamped with its night key (so it cannot outlive the night it
+ * belongs to, and stale nights are pruned on every write). What is left is a
+ * record that survives exactly as long as it is still true.
+ *
+ * (The plan is NOT yet reachable from a plan list: no surface lists plans you
+ * own. That gap is recorded as a residual product gap in
+ * V8-3-HANDOFF-2026-08-16b.md, which is why this recovery path carries more
+ * weight than it looks like it should.)
  */
 const STARTED_KEY = 'next-bar:started-night-out:v1';
 
@@ -33,15 +47,16 @@ const UUID_RE =
 /**
  * WHOSE plan, and for WHICH night. Round 2 filed the unscoped version twice.
  *
- * Claude (HIGH): sessionStorage is per TAB, not per account, and this key is in
- * no wipe set — `accountCache` clears localStorage only. So user A parks an
+ * Claude (HIGH): the store is per TAB or per ORIGIN, never per account, and
+ * this key is in no wipe set. So user A parks an
  * unopened plan, signs out, and user B signing in to the same tab inherits A's
  * plan id: Start is disabled, "Open it" silently no-ops because getNightOut
  * returns null under B's RLS, and nothing ever clears the key. B cannot create a
  * night out for the rest of the session.
  *
- * Codex, independently: also unscoped by night, so a mobile browser restoring
- * the tab tomorrow keeps Start disabled for yesterday's plan.
+ * Codex, independently: also unscoped by night, so a browser reopened tomorrow
+ * keeps Start disabled for yesterday's plan. Now that the record outlives the
+ * tab, the night stamp is what bounds it — it is load bearing, not defensive.
  *
  * Both are the same missing idea — a parked plan is only meaningful for the
  * identity and the night that created it.
@@ -68,8 +83,8 @@ type ParkedPlan = { planId: string; nightKey: string };
 type ParkedByUser = Record<string, ParkedPlan>;
 
 /**
- * Last-resort store for when sessionStorage throws (Safari private mode at
- * quota, some webviews).
+ * Last-resort store for when the store throws (Safari private mode at quota,
+ * some webviews).
  *
  * Codex (round 2): a purely best-effort write left criterion 4 unfixed exactly
  * where storage is unavailable — the duplicate-plan bug came back for those
@@ -156,7 +171,7 @@ function readAll(): ParkedByUser {
   if (!storageUsable) return inMemoryParked;
   let raw: string | null = null;
   try {
-    raw = window.sessionStorage.getItem(STARTED_KEY);
+    raw = window.localStorage.getItem(STARTED_KEY);
   } catch {
     return inMemoryParked;
   }
@@ -181,7 +196,7 @@ function readAll(): ParkedByUser {
 function writeAll(next: ParkedByUser): void {
   inMemoryParked = next;
   try {
-    window.sessionStorage.setItem(STARTED_KEY, JSON.stringify(next));
+    window.localStorage.setItem(STARTED_KEY, JSON.stringify(next));
     storageUsable = true;
   } catch {
     // Covered by inMemoryParked — never let this throw block navigation.
@@ -190,7 +205,15 @@ function writeAll(next: ParkedByUser): void {
 }
 
 function rememberStarted(userId: string, parked: ParkedPlan): void {
-  writeAll({ ...readAll(), [userId]: parked });
+  // Drop every record whose night has rolled over, not just our own. A store
+  // that now outlives the tab would otherwise accumulate one dead entry per
+  // account per night forever; a record for a past night is already ignored by
+  // every reader, so this only removes what nothing can use.
+  const kept: ParkedByUser = {};
+  for (const [id, record] of Object.entries(readAll())) {
+    if (record.nightKey === parked.nightKey) kept[id] = record;
+  }
+  writeAll({ ...kept, [userId]: parked });
 }
 
 function recallStarted(userId: string): ParkedPlan | null {
