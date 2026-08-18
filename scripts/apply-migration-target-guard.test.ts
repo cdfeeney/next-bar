@@ -62,6 +62,30 @@ describe('checkMigrationTarget', () => {
     })).toContain('could not determine the Supabase project ref');
   });
 
+  // Round-2 panel finding: a whitespace-only NEXT_BAR_PRODUCTION_PROJECT_REF is
+  // truthy, so it passed the missing-ref check and then never equalled a real
+  // ref. With the staging list naming the production ref, the guard accepted
+  // production under --env staging.
+  it('refuses a whitespace-only production ref instead of treating it as configured', () => {
+    const refusal = checkMigrationTarget({
+      env: 'staging', ref: PROD, productionRef: '   ', stagingRefs: [PROD],
+    });
+    expect(refusal).toContain('NEXT_BAR_PRODUCTION_PROJECT_REF is not set');
+  });
+
+  it('refuses a whitespace-only staging list instead of treating it as configured', () => {
+    const refusal = checkMigrationTarget({
+      env: 'staging', ref: STAGING, productionRef: PROD, stagingRefs: ['  ', ''],
+    });
+    expect(refusal).toContain('NEXT_BAR_STAGING_PROJECT_REFS is not set');
+  });
+
+  it('still matches the production ref when the configured value is padded', () => {
+    expect(checkMigrationTarget({
+      env: 'staging', ref: PROD, productionRef: ` ${PROD} `, stagingRefs: [STAGING],
+    })).toContain('PRODUCTION project ref');
+  });
+
   it('accepts the configured staging target when both variables are set', () => {
     expect(checkMigrationTarget({
       env: 'staging', ref: STAGING, productionRef: PROD, stagingRefs: [STAGING],

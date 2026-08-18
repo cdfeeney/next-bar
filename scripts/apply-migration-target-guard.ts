@@ -26,7 +26,15 @@ export interface MigrationTarget {
 
 /** Returns the refusal reason, or null when the target is verified. */
 export function checkMigrationTarget(target: MigrationTarget): string | null {
-  const { env, ref, productionRef, stagingRefs } = target;
+  const { env } = target;
+  // Normalize HERE, not at the call site. A whitespace-only
+  // NEXT_BAR_PRODUCTION_PROJECT_REF is not a configured ref: untrimmed it is
+  // truthy, so it passes the missing-ref check below and then never equals a
+  // real ref, which is the same fail-open this module exists to close. Doing it
+  // inside the guard covers every caller rather than one call site.
+  const ref = target.ref.trim();
+  const productionRef = target.productionRef.trim();
+  const stagingRefs = target.stagingRefs.map((value) => value.trim()).filter(Boolean);
 
   if (!ref) return 'could not determine the Supabase project ref from DATABASE_URL';
 
