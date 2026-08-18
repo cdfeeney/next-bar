@@ -68,6 +68,18 @@ async function undersizedTargets(page: Page): Promise<string[]> {
       // owe the 44px minimum. Round-1 review caught it: a scope written to
       // silence a false positive had quietly masked a real one.
       if (el.closest('.leaflet-marker-icon')) continue;
+      // The Leaflet ATTRIBUTION credit is a line of text, not a control: it
+      // renders as `Leaflet | (c) OpenStreetMap contributors` inside
+      // `.leaflet-control-attribution`, and WCAG 2.2 SC 2.5.8 exempts a target
+      // that is inline in a sentence or block of text — the same reason the
+      // `A` inside a `p` above is exempt. Sizing it to 44px would put a thick
+      // bar across the bottom of the map to satisfy a rule that does not apply.
+      //
+      // Scoped to `.leaflet-control-attribution` ONLY, deliberately. The earlier
+      // `.leaflet-container` exclusion (see the marker note above) is what hid a
+      // REAL 30x30 zoom-control defect for weeks; that defect is now fixed rather
+      // than hidden, and this exclusion is kept narrow so it cannot repeat.
+      if (el.closest('.leaflet-control-attribution')) continue;
       if (rect.height < 44) {
         bad.push(
           `<${el.tagName.toLowerCase()}> "${(el.textContent ?? '').trim().slice(0, 40)}" height ${rect.height.toFixed(1)}px`,
