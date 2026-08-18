@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   DEFAULT_PREFERENCES,
+  MAX_ATTEMPTS,
   type DrainDeps,
   type NotificationPreferences,
   type OutboxRow,
@@ -53,6 +54,11 @@ export function buildDrainDeps(
       const { data, error } = await admin.rpc('claim_notification_outbox', {
         p_limit: limit,
         p_lease_seconds: CLAIM_LEASE_SECONDS,
+        // The ceiling is enforced in SQL as well as here. A worker killed
+        // between the claim committing and the loop reading `attempts` never
+        // reaches the caller-side check, so the statement itself has to refuse
+        // an exhausted row and retire it.
+        p_max_attempts: MAX_ATTEMPTS,
       });
       if (error) unavailable('outbox', error);
       return (data ?? []) as OutboxRow[];
@@ -150,21 +156,31 @@ export function buildDrainDeps(
       if (!error) return true;
       if (error.code !== UNIQUE_VIOLATION) unavailable('delivery reservation', error);
 
-      // A row already exists. Whether we may take it back depends entirely on
-      // what it says:
-      //   'sent' / 'invalid_token' - settled, and re-sending is a duplicate.
-      //   'pending' - a previous pass reserved it and we never learned the
-      //               outcome. Apple may already have the push, so this is the
-      //               ambiguous case and it stays ours to leave alone.
-      //   'failed'  - APNs told us it did NOT arrive. That is the retry the
-      //               outbox's whole attempt budget exists for.
-      // The filtered update is the test: it matches only the retryable row.
+      // A row already exists. Whether we may take it back depends on what it
+      // says:
+      //   'sent' / 'invalid_token' - SETTLED. Re-sending would be a duplicate
+      //                              of a delivery that demonstrably happened,
+      //                              so these are never retaken.
+      //   'failed'  - APNs told us it did not arrive. That is the retry the
+      //               outbox's attempt budget exists for.
+      //   'pending' - reserved by a pass that never came back. Only an EXPIRED
+      //               outbox claim can put such a row in front of a second
+      //               drain, because the claim fence gives one drain at a time
+      //               the right to this row - so the reserving worker is gone,
+      //               and it may or may not have reached Apple first.
+      //
+      // Retaking 'pending' is a deliberate choice between two bad outcomes.
+      // Refusing it strands the reservation forever and the invitation is
+      // silently never delivered; taking it can repeat a push, but only when a
+      // sender stayed wedged for the whole lease, and every push carries a
+      // collapse id so Apple folds a repeat for the same Night Out together.
+      // A lost invitation is worse than a collapsed duplicate.
       const { data, error: retakeError } = await admin
         .from('notification_deliveries')
         .update({ status: 'pending', apns_status: null, apns_reason: null })
         .eq('outbox_id', outboxId)
         .eq('device_token_id', deviceTokenId)
-        .eq('status', 'failed')
+        .in('status', ['pending', 'failed'])
         .select('id');
       if (retakeError) unavailable('delivery reservation', retakeError);
       return (data ?? []).length > 0;

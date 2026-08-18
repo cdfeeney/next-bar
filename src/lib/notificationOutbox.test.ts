@@ -420,6 +420,54 @@ describe('drainNotificationOutbox', () => {
     ]);
   });
 
+  it('RETRIES rather than terminalizing when one device sent and another can retry', async () => {
+    // The two-phone case. Marking the row 'sent' because ONE device took it
+    // stranded the other phone forever; the reservation fence means deferring
+    // costs nothing, because the next drain skips the phone that already has
+    // it and retries only the one that does not.
+    const delivered = 'a'.repeat(64);
+    const flaky = 'b'.repeat(64);
+    const { deps, recorded } = harness({
+      rows: [row()],
+      devices: [
+        { id: 'device-delivered', token: delivered },
+        { id: 'device-flaky', token: flaky },
+      ],
+      outcomes: {
+        [flaky]: { outcome: 'retry', status: 503, reason: 'ServiceUnavailable' },
+      },
+    });
+
+    await drainNotificationOutbox(deps);
+
+    expect(recorded.outbox).toEqual([]);
+    expect(recorded.deferred).toEqual([
+      { id: 1, claimToken: CLAIM, error: 'ServiceUnavailable' },
+    ]);
+  });
+
+  it('marks the row sent once the retry budget is gone, even with a dead device', async () => {
+    const delivered = 'a'.repeat(64);
+    const flaky = 'b'.repeat(64);
+    const { deps, recorded } = harness({
+      rows: [row({ attempts: MAX_ATTEMPTS })],
+      devices: [
+        { id: 'device-delivered', token: delivered },
+        { id: 'device-flaky', token: flaky },
+      ],
+      outcomes: {
+        [flaky]: { outcome: 'retry', status: 503, reason: 'ServiceUnavailable' },
+      },
+    });
+
+    await drainNotificationOutbox(deps);
+
+    expect(recorded.deferred).toEqual([]);
+    expect(recorded.outbox).toEqual([
+      { id: 1, claimToken: CLAIM, status: 'sent', error: null },
+    ]);
+  });
+
   it('retires a row whose claims have out-lived the attempt budget', async () => {
     // A drain that dies mid-row still spends the attempt at claim time, so a
     // row that kills every worker eventually stops being handed out.

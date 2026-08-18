@@ -87,8 +87,20 @@ export default function NotificationPreferences(): JSX.Element {
   const [nativeBusy, setNativeBusy] = useState(false);
   const [nativeResult, setNativeResult] = useState<NativePushResult | null>(null);
 
+  const userId = auth.status === 'signed-in' ? auth.user.id : null;
+
   useEffect(() => {
-    if (auth.status !== 'signed-in') return;
+    // Keyed on the USER, not just the status, and it resets before refetching.
+    // Neither was true before: an account change left the previous account's
+    // toggles on screen still flagged `loaded`, and because a toggle writes all
+    // four columns, tapping one during the new account's fetch wrote the old
+    // account's preferences into the new account's row. A switch from one
+    // signed-in user straight to another did not refetch at all.
+    setLoaded(false);
+    setLoadError(false);
+    setPrefs(DEFAULT_PREFS);
+    setSaveError(null);
+    if (userId === null) return;
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     let cancelled = false;
@@ -99,7 +111,7 @@ export default function NotificationPreferences(): JSX.Element {
     supabase
       .from('notification_preferences')
       .select('invited, accepted, bar_suggested, plan_changed')
-      .eq('user_id', auth.user.id)
+      .eq('user_id', userId)
       .maybeSingle()
       .then(({ data, error }) => {
         if (cancelled || getCacheEpoch() !== epoch) return;
@@ -125,7 +137,7 @@ export default function NotificationPreferences(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [auth.status]);
+  }, [userId]);
 
   const handleToggle = async (key: PrefKey): Promise<void> => {
     // `loaded` is the proof these four values came from the database. Without

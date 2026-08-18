@@ -155,9 +155,10 @@ export type DrainDeps = {
     payload: ApnsPayload,
   ): Promise<{ outcome: ApnsOutcome; status: number; reason: string | null }>;
   /**
-   * Take this (row, device) pair BEFORE calling APNs. `false` means an earlier
-   * pass already took it and this device must be skipped — the fence that
-   * makes a re-drained row at-most-once per device rather than a second buzz.
+   * Take this (row, device) pair BEFORE calling APNs. `false` means the device
+   * is SETTLED — an earlier pass recorded it delivered, or its token retired —
+   * and must be skipped, so a re-drained row can never repeat a delivery that
+   * already happened.
    */
   reserveDelivery(outboxId: number, deviceTokenId: string): Promise<boolean>;
   recordDelivery(input: {
@@ -236,9 +237,11 @@ async function processOutboxRow(
   row: OutboxRow,
   summary: DrainSummary,
 ): Promise<void> {
-  // The claim already charged an attempt, so a row that has out-lived the
-  // budget arrives here instead of being re-claimed forever. Retire it
-  // before spending an APNs call on it.
+  // Belt and braces. claim_notification_outbox already refuses to hand out a
+  // row at or past the budget and retires it in the same statement, which is
+  // where the ceiling has to live: a worker killed before this line could run
+  // was exactly how an exhausted row kept coming back. This stays as a guard
+  // for a database that has not had the migration applied yet.
   if (row.attempts > MAX_ATTEMPTS) {
     await deps.markOutbox(row.id, row.claim_token, 'failed', 'max_attempts');
     summary.failed += 1;
@@ -366,13 +369,25 @@ async function processOutboxRow(
     });
   }
 
-  if (anySent) {
+  // A RETRYABLE DEVICE OUTRANKS A DELIVERED ONE. `anySent` used to be tested
+  // first, so a two-phone user whose second phone got a 503 had the row marked
+  // terminally 'sent' and that phone was never tried again. Deferring costs
+  // nothing now that reserveDelivery refuses to retake a settled device: the
+  // next drain skips the phone that already has it and retries only the one
+  // that does not.
+  if (anyRetryable && row.attempts < MAX_ATTEMPTS) {
+    // Left pending on purpose so the next drain retries it. Counted as a
+    // failure of THIS pass so the caller's numbers stay honest; which devices
+    // actually got it lives in notification_deliveries, not in this status.
+    await deps.deferOutbox(row.id, row.claim_token, lastReason);
+    summary.failed += 1;
+  } else if (anySent) {
     await deps.markOutbox(row.id, row.claim_token, 'sent', null);
     summary.sent += 1;
   } else if (!attemptedAny) {
-    // Every device was already reserved by an earlier pass, so this row's
-    // sends have all happened. Nothing was decided HERE and nothing failed
-    // here — `suppressed` is the existing vocabulary for "we chose not to
+    // Every device is SETTLED — delivered, or its token retired — so this row
+    // has nothing left to do. Nothing was decided HERE and nothing failed
+    // here: `suppressed` is the existing vocabulary for "we chose not to
     // send", and it keeps the row out of the rate-limit count, which only
     // sums rows marked 'sent'.
     await deps.markOutbox(
@@ -382,11 +397,6 @@ async function processOutboxRow(
       'already_attempted',
     );
     summary.suppressed += 1;
-  } else if (anyRetryable && row.attempts < MAX_ATTEMPTS) {
-    // Left pending on purpose so the next drain retries it. Still counted as
-    // a failure of THIS pass so the caller's numbers are honest.
-    await deps.deferOutbox(row.id, row.claim_token, lastReason);
-    summary.failed += 1;
   } else {
     await deps.markOutbox(
       row.id,

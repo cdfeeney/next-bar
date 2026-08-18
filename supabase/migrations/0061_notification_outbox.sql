@@ -78,6 +78,15 @@ create index if not exists notification_outbox_pending_idx
   on public.notification_outbox (created_at, id)
   where status = 'pending';
 
+-- The rate-limit window read, which countRecentSends actually issues:
+-- recipient + processed_at over SENT rows. The pending index above cannot
+-- serve it - it is partial on status = 'pending', the one status this query
+-- excludes - so without this every drained row scanned the settled portion of
+-- the outbox, up to a hundred times per batch.
+create index if not exists notification_outbox_recent_sends_idx
+  on public.notification_outbox (recipient_user_id, processed_at)
+  where status = 'sent';
+
 alter table public.notification_outbox enable row level security;
 revoke all on table public.notification_outbox from public, anon, authenticated;
 
@@ -96,11 +105,18 @@ create table if not exists public.notification_deliveries (
   -- This is the (event, recipient, device) half of criterion 3. The unique
   -- key alone only deduplicates the AUDIT ROW, which is written after APNs has
   -- already been called - it cannot stop a second SEND. The sender therefore
-  -- RESERVES this row with status 'pending' BEFORE calling APNs, so the
-  -- reservation is committed first and a re-drained row finds the device
-  -- already taken and skips it. That makes the send at-most-once per
-  -- (event, device), which is the direction to fail in: a notification the
-  -- user never sees beats the same notification buzzing twice.
+  -- RESERVES this row with status 'pending' BEFORE calling APNs.
+  --
+  -- What that buys, precisely: a device recorded 'sent' or 'invalid_token' is
+  -- SETTLED and is never sent to again, so a re-drained outbox row cannot
+  -- repeat a delivery that already happened. A row still 'pending' or 'failed'
+  -- is retakeable, because only an outbox claim that has already EXPIRED can
+  -- present one to a second drain - the claim fence gives one drain at a time
+  -- the right to touch the row. So the residual duplicate window is a sender
+  -- wedged past the whole lease, and the alternative - refusing to retake a
+  -- 'pending' row - silently drops the notification whenever a worker dies
+  -- between reserving and calling Apple. A collapse-id is set on every push,
+  -- so Apple folds a repeat of the same Night Out together anyway.
   constraint notification_deliveries_once unique (outbox_id, device_token_id),
   constraint notification_deliveries_status_check
     check (status in ('pending', 'sent', 'failed', 'invalid_token'))
@@ -113,7 +129,10 @@ alter table public.notification_deliveries
   add constraint notification_deliveries_status_check
   check (status in ('pending', 'sent', 'failed', 'invalid_token'));
 
--- The sender's rate-limit window read.
+-- Per-device delivery history: the audit read, and the lookup reserveDelivery
+-- does on every send. NOT the rate-limit read - that one is on the outbox and
+-- has its own index below. This comment used to claim it was, which sent a
+-- reader looking for a query that does not exist.
 create index if not exists notification_deliveries_recent_idx
   on public.notification_deliveries (device_token_id, created_at);
 
@@ -334,7 +353,7 @@ create trigger night_outs_notify
 --   drop function if exists public.night_outs_bump_plan_revision();
 --   alter table public.night_outs drop column if exists plan_revision;
 --   drop table if exists public.notification_deliveries;
---   drop function if exists public.claim_notification_outbox(integer, integer);
+--   drop function if exists public.claim_notification_outbox(integer, integer, integer);
 --   drop table if exists public.notification_outbox;
 ------------------------------------------------------------------------------
 
@@ -356,19 +375,50 @@ create trigger night_outs_notify
 -- time was re-claimed forever and never reached MAX_ATTEMPTS. Charging the
 -- attempt at claim time makes the retry budget cover crashes as well as
 -- refusals, and it is a single statement so it cannot be lost.
+--
+-- AND THE BUDGET IS ENFORCED HERE, not only by the caller. Charging the
+-- attempt was not enough on its own: a worker killed between the claim
+-- committing and the sender reading `attempts` never ran the caller's ceiling
+-- check, so the counter climbed forever while the row kept being handed out.
+-- The `retired` CTE retires an exhausted row and `claimable` refuses to return
+-- one, so the loop terminates in SQL whatever the caller does. The two CTEs
+-- touch disjoint rows - `attempts >= p_max_attempts` versus `<` - so no row is
+-- updated twice in the one statement.
+--
+-- The two-argument signature is dropped first: `create or replace` with an
+-- extra defaulted parameter OVERLOADS rather than replaces, which would leave
+-- the old unbounded version callable.
+drop function if exists public.claim_notification_outbox(integer, integer);
+
 create or replace function public.claim_notification_outbox(
   p_limit integer default 100,
-  p_lease_seconds integer default 300
+  p_lease_seconds integer default 300,
+  p_max_attempts integer default 5
 )
 returns setof public.notification_outbox
 language sql
 security definer
 set search_path = public
 as $$
-  with claimable as (
+  with retired as (
+    update public.notification_outbox o
+       set status       = 'failed',
+           last_error   = coalesce(o.last_error, 'max_attempts'),
+           processed_at = now()
+     where o.status = 'pending'
+       and o.attempts >= p_max_attempts
+       -- Only once the claim is gone. A row on its LAST legitimate attempt is
+       -- live work: retiring it out from under the drain holding it would
+       -- discard a send that is still in flight.
+       and (o.claimed_at is null
+            or o.claimed_at < now() - make_interval(secs => p_lease_seconds))
+    returning o.id
+  ),
+  claimable as (
     select o.id
       from public.notification_outbox o
      where o.status = 'pending'
+       and o.attempts < p_max_attempts
        and (o.claimed_at is null
             or o.claimed_at < now() - make_interval(secs => p_lease_seconds))
      order by o.created_at, o.id
@@ -385,4 +435,5 @@ as $$
 $$;
 
 -- Service-role only. This hands out sendable work; no client role may call it.
-revoke all on function public.claim_notification_outbox(integer, integer) from public, anon, authenticated;
+revoke all on function public.claim_notification_outbox(integer, integer, integer)
+  from public, anon, authenticated;

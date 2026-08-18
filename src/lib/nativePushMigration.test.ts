@@ -192,10 +192,30 @@ describe('notification_outbox (criteria 3, 4)', () => {
       OUTBOX_SQL.indexOf('create or replace function public.claim_notification_outbox'),
     );
     expect(claim).toMatch(/for update skip locked/);
+    // The ceiling has to live in SQL too: a worker killed between the claim
+    // committing and the caller reading `attempts` never runs the caller's
+    // check, and the row was handed out again forever.
+    expect(claim).toMatch(/attempts >= p_max_attempts/);
+    expect(claim).toMatch(/attempts < p_max_attempts/);
+    expect(claim).toMatch(/set status\s*= 'failed'/);
+    // `create or replace` with an extra defaulted parameter OVERLOADS, so the
+    // unbounded two-argument version must be dropped or it stays callable.
+    expect(OUTBOX_SQL).toMatch(
+      /drop function if exists public\.claim_notification_outbox\(integer, integer\);/,
+    );
     expect(claim).toMatch(/claim_token = gen_random_uuid\(\)/);
     expect(claim).toMatch(/attempts\s*= o\.attempts \+ 1/);
     expect(OUTBOX_SQL).toMatch(
-      /revoke all on function public\.claim_notification_outbox\(integer, integer\) from public, anon, authenticated/,
+      /revoke all on function public\.claim_notification_outbox\(integer, integer, integer\)\s*\n\s*from public, anon, authenticated/,
+    );
+  });
+
+  it('indexes the read the rate limiter actually issues', () => {
+    // The only outbox index used to be partial on status = 'pending', which is
+    // the one status the rate-limit query excludes - so every drained row
+    // scanned the settled portion of the table.
+    expect(OUTBOX_SQL).toMatch(
+      /create index if not exists notification_outbox_recent_sends_idx\s*\n\s*on public\.notification_outbox \(recipient_user_id, processed_at\)\s*\n\s*where status = 'sent'/,
     );
   });
 

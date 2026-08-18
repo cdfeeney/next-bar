@@ -1,7 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { buildDrainDeps } from './notificationDrainDeps';
-import { drainNotificationOutbox, type OutboxRow } from './notificationOutbox';
+import {
+  MAX_ATTEMPTS,
+  drainNotificationOutbox,
+  type OutboxRow,
+} from './notificationOutbox';
 
 /**
  * The database half of the drain, against a fake Supabase client.
@@ -40,6 +44,10 @@ function fakeAdmin(options: {
       upsert: () => chain,
       is: () => chain,
       gte: () => chain,
+      in: (column: string, values: unknown) => {
+        filters[column] = values;
+        return chain;
+      },
       eq: (column: string, value: unknown) => {
         filters[column] = value;
         return chain;
@@ -188,9 +196,12 @@ describe('reserveDelivery', () => {
     await expect(deps.reserveDelivery(7, 'device-1')).resolves.toBe(false);
   });
 
-  it('RETAKES a reservation a previous pass recorded as failed', async () => {
-    // APNs said the push did not arrive, so re-sending is the retry the
-    // attempt budget exists for - not a duplicate.
+  it('RETAKES an unsettled reservation, and only an unsettled one', async () => {
+    // 'failed' means APNs said it did not arrive; 'pending' means the pass that
+    // reserved it never came back, and only an EXPIRED outbox claim can show
+    // such a row to a second drain. Both are retryable. 'sent' and
+    // 'invalid_token' are settled and must never appear in this filter, or a
+    // delivered push would be repeated.
     const { admin, calls } = fakeAdmin({
       results: {
         'notification_deliveries:insert': { data: null, error: { code: '23505' } },
@@ -205,16 +216,15 @@ describe('reserveDelivery', () => {
       operation: 'update',
       outbox_id: 7,
       device_token_id: 'device-1',
-      // The filter that makes this safe: only a FAILED row is retakeable.
-      status: 'failed',
+      status: ['pending', 'failed'],
     });
+    expect(calls[1].status).not.toContain('sent');
+    expect(calls[1].status).not.toContain('invalid_token');
   });
 
-  it('does NOT retake a settled or still-ambiguous reservation', async () => {
-    // 'sent' and 'invalid_token' are settled; 'pending' means an earlier pass
-    // reserved it and we never learned whether Apple got the push. The
-    // status='failed' filter matches none of them, so the update returns no
-    // rows and the device is skipped.
+  it('does NOT retake a settled reservation', async () => {
+    // A row recorded 'sent' or 'invalid_token' matches no branch of the filter,
+    // so the update reports no rows and the device is skipped.
     const { admin } = fakeAdmin({
       results: {
         'notification_deliveries:insert': { data: null, error: { code: '23505' } },
@@ -224,6 +234,26 @@ describe('reserveDelivery', () => {
     const deps = buildDrainDeps(admin, SEND);
 
     await expect(deps.reserveDelivery(7, 'device-1')).resolves.toBe(false);
+  });
+
+  it('passes the attempt ceiling to the claim so SQL can enforce it too', async () => {
+    // A worker killed between the claim committing and the drain reading
+    // `attempts` never runs the caller-side ceiling check, so the statement
+    // itself has to refuse an exhausted row.
+    const rpcArgs: unknown[] = [];
+    const { admin } = fakeAdmin({});
+    (admin as unknown as { rpc: unknown }).rpc = async (fn: string, args: unknown) => {
+      rpcArgs.push({ fn, args });
+      return { data: [], error: null };
+    };
+    const deps = buildDrainDeps(admin, SEND);
+
+    await deps.fetchPending(100);
+
+    expect(rpcArgs[0]).toMatchObject({
+      fn: 'claim_notification_outbox',
+      args: { p_limit: 100, p_max_attempts: MAX_ATTEMPTS },
+    });
   });
 
   it('still throws on any OTHER write failure', async () => {

@@ -213,6 +213,29 @@ describe('NotificationPreferences — signed in', () => {
     }
   });
 
+  test('an account change refetches and never writes the previous account values', async () => {
+    // The effect used to depend on auth.status alone and never reset, so the
+    // outgoing account's toggles stayed on screen flagged as loaded. Since one
+    // tap writes all four columns, that wrote user A's preferences into user
+    // B's row.
+    prefsRow = { invited: false, accepted: false, bar_suggested: false, plan_changed: false };
+    const view = render(<NotificationPreferences />);
+    const first = await screen.findAllByRole('switch');
+    expect(first[0].getAttribute('aria-checked')).toBe('false');
+
+    // User B, whose stored row has everything ON.
+    authState = { status: 'signed-in', user: { id: 'user-2' } };
+    prefsRow = { invited: true, accepted: true, bar_suggested: true, plan_changed: true };
+    view.rerender(<NotificationPreferences />);
+
+    await waitFor(() => {
+      const switches = screen.getAllByRole('switch');
+      expect(switches[0].getAttribute('aria-checked')).toBe('true');
+    });
+    // Nothing was written while the new account's row was in flight.
+    expect(rpcCalls).toEqual([]);
+  });
+
   test('a native registration failure shows an explanatory error, not a crash', async () => {
     nativeAvailable = true;
     nativeResult = 'permission-denied';
