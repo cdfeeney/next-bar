@@ -217,9 +217,11 @@ describe('0044_night_outs.sql security shape', () => {
  * respond_night_out — the one function round 3 existed to fix — which would
  * send an auditor of the 20-member cap to 0044's uncapped, unlocked text):
  *
- *   0044 — night_out_role, create_night_out, cancel_night_out, decide_night_out,
- *          suggest/vote, the member-scoped reads, preview, resolve-by-token
- *   0045 — get_night_out (invite_to_night_out superseded by 0049)
+ *   0044 — night_out_role, cancel_night_out, decide_night_out, vote_night_out_bar,
+ *          get_night_out_board, get_night_out_members, preview_night_out,
+ *          resolve_night_out_by_token, revoke_night_out_link
+ *          (create_night_out superseded by 0054, suggest_night_out_bar by 0051)
+ *   0045 — (get_night_out superseded by 0059; invite_to_night_out by 0049)
  *   0046 — (superseded by 0048)
  *   0047 — night_outs column grants
  *   0048 — night_out_member_cap, night_out_seat_count, and three callers:
@@ -227,8 +229,12 @@ describe('0044_night_outs.sql security shape', () => {
  *          night_out_is_full_by_token
  *   0049 — (superseded by 0050)
  *   0050 — invite_to_night_out
+ *   0051 — suggest_night_out_bar
+ *   0053 — nyc_night_key
+ *   0054 — create_night_out
  *   0057/0058 — (respond_night_out, superseded by 0059)
- *   0059 — respond_night_out, get_night_out, get_my_night_outs
+ *   0059 — respond_night_out, get_night_out, get_my_night_outs,
+ *          night_out_members_bump_revision
  *
  * respond_night_out moved OUT of 0048 in the 0057 -> 0058 -> 0059 chain. It is
  * called out here because the map was written after an auditor of the 20-member

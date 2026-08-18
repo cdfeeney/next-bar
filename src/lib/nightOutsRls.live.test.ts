@@ -1076,7 +1076,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * "No caller can invoke the unguarded form" was only ever proved from the
    * migration TEXT: 0057 drops the 2-argument overload, 0059 drops the
    * 3-argument one. But `drop function if exists` is silently a no-op if the
-   * overload is later re-created, and four applied files (0044/0045/0046/0048)
+   * overload is later re-created, and three applied files (0044/0046/0048)
    * still contain a `create or replace` of the 2-argument form — a partial
    * hand-apply or a replayed hotfix puts it back. Every other call in this file
    * now uses the 4-argument form, so nothing here would notice; the replay hole
