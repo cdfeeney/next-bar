@@ -282,6 +282,16 @@ type Region = {
   end: number;
 };
 
+/**
+ * Is `sql[i]` part of an identifier word?
+ *
+ * Used both to tell a dollar QUOTE from a dollar inside a name, and to tell the
+ * `e` of an E'' string from the tail of some longer word ending in e.
+ */
+function isWordChar(sql: string, i: number): boolean {
+  return i >= 0 && /[A-Za-z0-9_$]/.test(sql[i]);
+}
+
 /** Where a dollar tag opens at `i`, or null. */
 function dollarTagAt(sql: string, i: number): string | null {
   if (sql[i] !== '$') return null;
@@ -289,7 +299,7 @@ function dollarTagAt(sql: string, i: number): string | null {
   // `select 1 as guard$mask$` is a legal alias, and pairing those two `$mask$`
   // substrings would blank whatever sat between them (round-7 review, Codex,
   // medium).
-  if (i > 0 && /[A-Za-z0-9_$]/.test(sql[i - 1])) return null;
+  if (isWordChar(sql, i - 1)) return null;
   // Bounded slice: a tag is short, and slicing the whole remainder on every `$`
   // would be quadratic over the concatenated stream.
   const tag = /^\$[a-zA-Z_][a-zA-Z0-9_]*\$|^\$\$/.exec(sql.slice(i, i + 64));
@@ -346,11 +356,38 @@ function scanRegions(sql: string, from = 0, to = sql.length): Region[] {
       continue;
     }
     if (sql[i] === QUOTE) {
-      // A doubled quote inside a string is an escaped quote, not the end of one.
+      // An E'' string takes BACKSLASH escapes, so E'don\'t' does not end at that
+      // middle quote. Reading it as a plain string mis-paired every quote after
+      // it and could blank a later CREATE out of existence (round-8 review,
+      // Claude, medium). The `e` must be a word of its own — `three'...'` is a
+      // plain string, not an escape string.
+      const escapes = (sql[i - 1] === 'e' || sql[i - 1] === 'E') && !isWordChar(sql, i - 2);
       let j = i + 1;
       while (j < to) {
+        if (escapes && sql[j] === '\\') { j += 2; continue; }
         if (sql[j] !== QUOTE) { j += 1; continue; }
+        // A doubled quote inside a string is an escaped quote, not the end of one.
         if (sql[j + 1] === QUOTE) { j += 2; continue; }
+        break;
+      }
+      const stop = Math.min(j + 1, to);
+      found.push({ kind: 'string', contentStart: i + 1, contentEnd: Math.min(j, to), end: stop });
+      i = stop;
+      continue;
+    }
+    if (sql[i] === '"') {
+      // A double-quoted IDENTIFIER may legally contain --, a single quote, or a
+      // dollar tag. Not lexing it let "night_out_members_user--v2" comment out
+      // the rest of its line, "members'_idx" open a string that ran to the next
+      // quote anywhere in the stream, and "$mask$" pair as a dollar quote — each
+      // blanking a later weakened CREATE out of the masked text and leaving the
+      // guard reading a superseded definition (round-8 review, both lanes,
+      // medium). Content is blanked like a string: the name is executable, the
+      // text inside it is not something an invariant may match.
+      let j = i + 1;
+      while (j < to) {
+        if (sql[j] !== '"') { j += 1; continue; }
+        if (sql[j + 1] === '"') { j += 2; continue; } // "" is an escaped quote
         break;
       }
       const stop = Math.min(j + 1, to);
@@ -380,9 +417,18 @@ function scanRegions(sql: string, from = 0, to = sql.length): Region[] {
  * One pass over a character array rather than a slice-and-rejoin per region:
  * scanning inside bodies multiplied the region count, and rebuilding the whole
  * concatenated stream once per region is quadratic.
+ *
+ * split('') and NOT [...sql]: the spread iterates CODE POINTS, so one astral
+ * character (an emoji in a migration comment is enough) takes a single slot
+ * where the string spends two UTF-16 units. Every offset scanRegions produced is
+ * a UTF-16 offset, so after the first such character the writes land a position
+ * early — and blanking a surrogate pair to one space made the result SHORTER
+ * than the input, desynchronising the two blanked copies this file derives from
+ * the same stream. split('') is code units, which is the same space the offsets
+ * live in, and join() puts the pairs back (round-8 review, both lanes, medium).
  */
 function blank(sql: string, regions: Region[]): string {
-  const out = [...sql];
+  const out = sql.split('');
   for (const r of regions) {
     for (let i = r.contentStart; i < r.contentEnd; i += 1) out[i] = ' ';
   }
@@ -409,6 +455,83 @@ function blank(sql: string, regions: Region[]): string {
  */
 const FUNCTION_STATEMENT =
   /(create|drop)\s+(?:or\s+replace\s+)?function\s+(?:if\s+(?:not\s+)?exists\s+)?(?:"?public"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?\s*[(;]/g;
+
+/**
+ * The effective definition of one function: its text, plus the stretches of that
+ * text that are NOT executable code. Assertions read the text and check the
+ * match landed in code — see matchesCode/indexOfCode.
+ */
+type EffectiveBody = {
+  text: string;
+  inert: { contentStart: number; contentEnd: number }[];
+};
+
+/**
+ * The argument TYPES of one create-or-drop statement, normalised for comparison.
+ *
+ * `masked` has every comment, string and body blanked, so the only parentheses
+ * left are real ones and the argument list can be taken by counting depth.
+ *
+ * A CREATE names its parameters (`p_night_out uuid`) and a DROP does not
+ * (`uuid`), so the parameter name is dropped from the create side only. That
+ * asymmetry is the whole trick, and it is also this function's limit: a create
+ * parameter with no name, or a drop written with a multi-word type such as
+ * `character varying`, compares wrong. Neither appears in this tree — every
+ * migration names its parameters and uses single-word types — and the cost of
+ * being wrong is a missed catch on an exotic DROP, not a false failure on a
+ * correct one. The live catalog test is what proves the real overload set.
+ */
+function argTypes(masked: string, m: RegExpMatchArray, verb: 'create' | 'drop'): string[] {
+  const open = masked.indexOf('(', m.index! + m[0].length - 1);
+  if (open === -1) return [];
+  let depth = 0;
+  let close = open;
+  for (; close < masked.length; close += 1) {
+    if (masked[close] === '(') depth += 1;
+    else if (masked[close] === ')') { depth -= 1; if (depth === 0) break; }
+  }
+  if (depth !== 0) return [];
+
+  const params: string[] = [];
+  let current = '';
+  depth = 0;
+  for (let i = open + 1; i < close; i += 1) {
+    const c = masked[i];
+    if (c === '(') depth += 1;
+    if (c === ')') depth -= 1;
+    if (c === ',' && depth === 0) { params.push(current); current = ''; continue; }
+    current += c;
+  }
+  params.push(current);
+
+  return params
+    .map((p) => p.split(/\bdefault\b|=/)[0].trim().split(/\s+/).filter(Boolean))
+    .filter((tokens) => tokens.length > 0)
+    .map((tokens) => {
+      const withoutMode = ['in', 'out', 'inout', 'variadic'].includes(tokens[0]) && tokens.length > 1
+        ? tokens.slice(1)
+        : tokens;
+      const withoutName = verb === 'create' && withoutMode.length > 1
+        ? withoutMode.slice(1)
+        : withoutMode;
+      return withoutName.join(' ');
+    })
+    .map((type) => TYPE_ALIASES[type] ?? type);
+}
+
+/** Postgres spells the same type several ways; a DROP may use any of them. */
+const TYPE_ALIASES: Record<string, string> = {
+  int: 'integer',
+  int4: 'integer',
+  int8: 'bigint',
+  bool: 'boolean',
+  varchar: 'character varying',
+  timestamptz: 'timestamp with time zone',
+};
+
+function sameSignature(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((type, i) => type === b[i]);
+}
 
 /**
  * Every migration concatenated in application order. The database applies them
@@ -450,37 +573,80 @@ function migrationStream(): string {
  * comments blanked, INCLUDING the ones inside that body, so no assertion can be
  * satisfied by commentary and no comment can turn a correct body red.
  *
- * String CONTENT is deliberately left intact: the invariants below are partly
- * about string literals ('night_out_members:', 'declined'), so blanking strings
- * would delete the very text they assert. These remain text assertions over SQL
- * text, which is what they have always been.
+ * String CONTENT is deliberately left intact: the invariants are partly about
+ * string literals ('night_out_members:', 'declined'), so blanking strings would
+ * delete the very text they assert. That is exactly why the returned value is
+ * NOT a bare string. Leaving literal text readable also let INERT DATA satisfy a
+ * safety assertion — `perform $note$pg_advisory_xact_lock(...) member_cap
+ * v_current = 'declined'$note$;` is a no-op to Postgres and matched all three
+ * (round-8 review, both lanes, medium). So the regions come back with the text,
+ * and matchesCode/indexOfCode below require a match to START in executable
+ * territory. A literal can still be READ, which is what the assertions need; it
+ * can no longer BE the thing asserted.
  *
- * WHAT THIS DELIBERATELY DOES NOT DO: decide WHICH OVERLOAD is under test, or
- * notice that a later migration DROPPED the function. Both need argument-type
- * comparison — Postgres identifies a function by name AND argument types, and
- * dropping a superseded overload right after installing its replacement is
- * routine (0059 creates the four-argument respond_night_out at :92 and drops the
- * three-argument form at :192). That is more parser than this guard should own,
- * so it is answered where it can be answered exactly: the overload-set test in
- * nightOutsRls.live.test.ts pins the catalog for ALL FOUR names this helper
- * resolves, so a removal, a rename, or an added overload fails there. The
- * residual, stated rather than hidden: that suite skips on a bare CI runner with
- * no DATABASE_URL, and there those changes would leave these assertions reading
- * the last definition.
+ * A later DROP of the same signature is honoured. Postgres identifies a function
+ * by name AND argument types, and dropping a superseded overload right after
+ * installing its replacement is routine (0059 creates the four-argument
+ * respond_night_out at :92 and drops the three-argument form at :192), so a
+ * name-only rule would fail on a correct tree. Signatures are compared instead —
+ * see sameSignature.
+ *
+ * WHAT THIS STILL DOES NOT DO: resolve which of several live overloads a caller
+ * reaches. That is answered where it can be answered exactly: the overload-set
+ * test in nightOutsRls.live.test.ts pins the catalog for ALL FOUR names this
+ * helper resolves. The residual, stated rather than hidden: that suite skips on a
+ * bare CI runner with no DATABASE_URL.
  */
-function effectiveBody(name: string): string {
-  const raw = migrationStream();
+function effectiveBody(name: string, raw = migrationStream()): EffectiveBody {
   const regions = scanRegions(raw);
   const masked = asciiLower(blank(raw, regions));
-  const created = [...masked.matchAll(FUNCTION_STATEMENT)].filter(
-    (m) => m[2] === name && m[1] === 'create',
-  );
+  const statements = [...masked.matchAll(FUNCTION_STATEMENT)].filter((m) => m[2] === name);
+  const created = statements.filter((m) => m[1] === 'create');
   expect(created.length, `no migration creates ${name}`).toBeGreaterThan(0);
 
-  const start = created[created.length - 1].index;
-  const body = regions.find((r) => r.kind === 'body' && r.contentStart > start);
-  expect(body, `${name} has no terminator`).toBeDefined();
-  return blank(raw, regions.filter((r) => r.kind === 'comment')).slice(start, body!.end);
+  const last = created[created.length - 1];
+  const start = last.index;
+  const own = regions.find((r) => r.kind === 'body' && r.contentStart > start);
+  expect(own, `${name} has no terminator`).toBeDefined();
+
+  // A DROP of THIS signature after the last CREATE means the function these
+  // invariants describe is not there any more.
+  const signature = argTypes(masked, last, 'create');
+  const droppedAfter = statements.some(
+    (m) => m[1] === 'drop' && m.index > start && sameSignature(argTypes(masked, m, 'drop'), signature),
+  );
+  expect(droppedAfter, `a later migration drops ${name}(${signature.join(', ')})`).toBe(false);
+
+  const text = asciiLower(blank(raw, regions.filter((r) => r.kind === 'comment')))
+    .slice(start, own!.end);
+  // Everything in the slice that is NOT executable code, rebased onto it. The
+  // function's OWN body is excluded: it is the thing being read, not inert data.
+  const inert = regions
+    .filter((r) => r !== own && r.contentEnd > start && r.contentStart < own!.end)
+    .map((r) => ({
+      contentStart: Math.max(r.contentStart, start) - start,
+      contentEnd: Math.min(r.contentEnd, own!.end) - start,
+    }));
+  return { text, inert };
+}
+
+/** Is `offset` inside the function's executable code rather than inert data? */
+function isCode(body: EffectiveBody, offset: number): boolean {
+  return !body.inert.some((r) => offset >= r.contentStart && offset < r.contentEnd);
+}
+
+/** Does `re` match starting in executable code? */
+function matchesCode(body: EffectiveBody, re: RegExp): boolean {
+  const all = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+  return [...body.text.matchAll(all)].some((m) => isCode(body, m.index));
+}
+
+/** Where `needle` first appears in executable code at or after `from`, or -1. */
+function indexOfCode(body: EffectiveBody, needle: string, from = 0): number {
+  for (let at = body.text.indexOf(needle, from); at !== -1; at = body.text.indexOf(needle, at + 1)) {
+    if (isCode(body, at)) return at;
+  }
+  return -1;
 }
 
 /** The body of one create-or-replace function, up to its closing $$. */
@@ -503,12 +669,99 @@ function functionBody(sql: string, name: string): string {
  * stream. Nothing here has to be moved when the next migration re-states one of
  * them — the remembering is what kept failing.
  */
+/**
+ * The guard above is only as good as the lexer under it, and three review rounds
+ * running found a different construct it mis-read — an identifier holding a
+ * dollar tag, a nested block comment, a quoted name holding `--`, an emoji, an
+ * E'' escape. Each was proven once with a throwaway migration and then had
+ * nothing holding it. These are that proof, kept.
+ *
+ * Every case is the same shape: a synthetic stream whose LAST definition of
+ * respond_night_out is WEAK (no lock), preceded by decoration designed to hide
+ * it. If the lexer is fooled, the guard reads the strong first definition and
+ * `lockHolds` comes back true — which is the bug, so every case asserts false.
+ */
+describe('the SQL lexer the guards read through', () => {
+  const STRONG = `create or replace function public.respond_night_out(p_night_out uuid)
+returns boolean language plpgsql as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended('night_out_members:' || p_night_out::text, 0));
+  return true;
+end;
+$$;`;
+  const WEAK = `create or replace function public.respond_night_out(p_night_out uuid)
+returns boolean language plpgsql as $$
+begin
+  return true;
+end;
+$$;`;
+  const LOCK =
+    /pg_advisory_xact_lock\(\s*hashtextextended\(\s*'night_out_members:'\s*\|\|\s*p_night_out::text\s*,\s*0\s*\)\s*\)/;
+
+  const lockHolds = (stream: string) =>
+    matchesCode(effectiveBody('respond_night_out', stream), LOCK);
+
+  it('reads the last definition when nothing is hiding it', () => {
+    expect(lockHolds(`${WEAK}\n${STRONG}`), 'the later STRONG definition should win').toBe(true);
+    expect(lockHolds(`${STRONG}\n${WEAK}`), 'the later WEAK definition should win').toBe(false);
+  });
+
+  const HIDING_PLACES: [string, string][] = [
+    ['a dollar tag inside an identifier', `select 1 as guard$m$;\n${WEAK}\nselect 1 as guard$m$;`],
+    ['a quoted identifier holding a dollar tag', `select 1 as "$m$";\n${WEAK}\nselect 1 as "$m$";`],
+    ['a quoted identifier holding --', `create index "a--b" on t (c); ${WEAK}`],
+    ['a quoted identifier holding a quote', `create index "a'b" on t (c);\n${WEAK}`],
+    ['an E-string holding an escaped quote', `comment on table t is E'don\\'t';\n${WEAK}`],
+    ['an astral character', `-- \u{1F389}\u{1F680}\n${WEAK}`],
+    ['a nested block comment', `${WEAK}\n/* outer /* inner */ ${STRONG} */`],
+  ];
+  it.each(HIDING_PLACES)('is not fooled by %s', (_what, decoration) => {
+    expect(lockHolds(`${STRONG}\n${decoration}`)).toBe(false);
+  });
+
+  it('will not accept inert data in place of an executable guard', () => {
+    // Both spellings are no-ops to Postgres, and both contain every character the
+    // assertion looks for.
+    const asDollarQuoted = `create or replace function public.respond_night_out(p_night_out uuid)
+returns boolean language plpgsql as $$
+begin
+  perform $note$pg_advisory_xact_lock(hashtextextended('night_out_members:' || p_night_out::text, 0))$note$;
+  return true;
+end;
+$$;`;
+    const asComment = `create or replace function public.respond_night_out(p_night_out uuid)
+returns boolean language plpgsql as $$
+begin
+  -- pg_advisory_xact_lock(hashtextextended('night_out_members:' || p_night_out::text, 0))
+  return true;
+end;
+$$;`;
+    expect(lockHolds(`${STRONG}\n${asDollarQuoted}`), 'a dollar-quoted literal is not a lock').toBe(false);
+    expect(lockHolds(`${STRONG}\n${asComment}`), 'a comment is not a lock').toBe(false);
+  });
+
+  it('honours a later DROP of the same signature, and ignores one of another', () => {
+    expect(() => effectiveBody('respond_night_out', `${STRONG}\ndrop function public.respond_night_out(uuid);`))
+      .toThrow(/drops respond_night_out/);
+    // 0059 does exactly this: installs its replacement, drops the old overload.
+    expect(lockHolds(`${STRONG}\ndrop function public.respond_night_out(uuid, boolean, text);`))
+      .toBe(true);
+  });
+
+  it('keeps every offset aligned when it blanks', () => {
+    // blank() must be length-preserving even across surrogate pairs, or the two
+    // blanked copies effectiveBody derives drift apart.
+    const sql = `-- \u{1F389}\nselect '\u{1F680}';\n`;
+    expect(blank(sql, scanRegions(sql))).toHaveLength(sql.length);
+  });
+});
+
 describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
     const body = effectiveBody('join_night_out_by_token');
-    const lock = body.indexOf('pg_advisory_xact_lock');
-    const conversion = body.indexOf("set invite_status = 'accepted'", lock);
-    const capCheck = body.indexOf('member_cap', conversion);
+    const lock = indexOfCode(body, 'pg_advisory_xact_lock');
+    const conversion = indexOfCode(body, "set invite_status = 'accepted'", lock);
+    const capCheck = indexOfCode(body, 'member_cap', conversion);
     expect(lock, 'join takes no advisory lock').toBeGreaterThan(-1);
     expect(conversion, 'no own-row conversion after the lock').toBeGreaterThan(lock);
     // The whole defect was asking about capacity before knowing whether this
@@ -519,9 +772,11 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
     const body = effectiveBody('decline_night_out_by_token');
-    expect(body).not.toMatch(/member_cap/);
+    // Absence is asserted over the WHOLE text, not just its executable part: a
+    // cap mentioned anywhere here is worth failing on.
+    expect(body.text).not.toMatch(/member_cap/);
     // Still serialised, so a concurrent invite cannot swallow the decline.
-    expect(body).toMatch(/pg_advisory_xact_lock/);
+    expect(matchesCode(body, /pg_advisory_xact_lock/), 'decline takes no advisory lock').toBe(true);
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
@@ -537,12 +792,18 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
     // declined members rejoin a full plan concurrently (round-7 review, Codex,
     // medium). join/decline lock on a resolved local instead, so this shape is
     // asserted only where the plan id is the parameter.
-    expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
-      /pg_advisory_xact_lock\(\s*hashtextextended\(\s*'night_out_members:'\s*\|\|\s*p_night_out::text\s*,\s*0\s*\)\s*\)/,
-    );
-    expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
-    expect(body, 'the cap only applies when a declined row re-enters the counted set')
-      .toMatch(/v_current = 'declined'/);
+    expect(
+      matchesCode(
+        body,
+        /pg_advisory_xact_lock\(\s*hashtextextended\(\s*'night_out_members:'\s*\|\|\s*p_night_out::text\s*,\s*0\s*\)\s*\)/,
+      ),
+      'the rejoin path must take the same per-plan lock',
+    ).toBe(true);
+    expect(matchesCode(body, /member_cap/), 'the rejoin path must consult member_cap').toBe(true);
+    expect(
+      matchesCode(body, /v_current = 'declined'/),
+      'the cap only applies when a declined row re-enters the counted set',
+    ).toBe(true);
   });
 
   it('the one counted set excludes declined rows', () => {
@@ -550,7 +811,10 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
     // only place the rule can be wrong. 0048's exactly-once assertion is what
     // keeps it that way.
     const body = effectiveBody('night_out_seat_count');
-    expect(body, 'the seat count includes declined rows').toMatch(/invite_status <> 'declined'/);
+    expect(
+      matchesCode(body, /invite_status <> 'declined'/),
+      'the seat count includes declined rows',
+    ).toBe(true);
   });
 
   it('is create-or-replace only — additive over an applied migration (criterion 11)', () => {
