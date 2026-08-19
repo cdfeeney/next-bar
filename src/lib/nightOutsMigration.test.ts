@@ -292,6 +292,12 @@ function effectiveSql(name: GuardedFunction): string {
   expect(file, `no migration defines ${name}`).not.toBeNull();
   return readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8')
     .toLowerCase()
+    // BOTH comment forms. Only `--` was stripped, so a later migration could
+    // move the expected pg_advisory_xact_lock(...) call inside a /* */ block,
+    // drop the executable one, and every lock assertion below would still find
+    // its text and pass (round-4 review, Codex, medium). Comments are the one
+    // thing in a migration that provably does not run.
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/--.*/g, '');
 }
 

@@ -1205,8 +1205,12 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     // applied ONCE, not that what is committed here is what ran: an amended file
     // or a branch carrying a different copy still returns the row, and the
     // ordering invariants would keep asserting against text the database never
-    // ran (round-2 review, Claude, medium). CLAUDE.md records exactly that
-    // divergence for eleven 0000-0010 files, so this is not hypothetical.
+    // ran (round-2 review, Claude, medium): an amended file, or a branch
+    // carrying a different copy of the same filename, still returns the row.
+    // This cited CLAUDE.md's eleven-file divergence until the same candidate
+    // corrected that passage — leaving a comment pointing at its own opposite,
+    // in front of the db:migrate decision CLAUDE.md exists to guard (round-4
+    // review, Claude, medium). The reason above needs no citation.
     const { rows } = await db.query(
       'select name, checksum from public.schema_migrations where name = any($1::text[])',
       [resolved],
@@ -1231,16 +1235,23 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   });
 
   /**
-   * CRITERION 5, which the test above does NOT reach.
+   * CRITERION 5, as far as this ledger can carry it.
    *
    * "What is applied is byte-identical to what is committed for 0057" is a claim
    * about 0057 specifically. definingMigration resolves respond_night_out to
-   * 0059, so removing 0057's ledger row or changing its checksum left that test
-   * green (round-3 review, Codex, medium). 0058 is named for the same reason:
-   * the guard chain is 0057 -> 0058 -> 0059 and a hole in the middle is a hole.
+   * 0059, so removing 0057's ledger row or changing its checksum left the test
+   * above green (round-3 review, Codex, medium). 0058 is named for the same
+   * reason: the chain is 0057 -> 0058 -> 0059 and a hole in the middle is a hole.
    *
    * Named literally on purpose. These two files are FROZEN history — a criterion
    * about 0057 cannot be satisfied by whatever the resolver points at today.
+   *
+   * THE LIMIT, STATED RATHER THAN IMPLIED: schema_migrations records a
+   * NORMALISED digest, so what passes here is "identical up to line endings and
+   * trailing whitespace", not byte-for-byte. Nothing can do better from this
+   * ledger, because a raw digest was never recorded to compare against (round-4
+   * review, Codex, medium). Proving literal byte identity needs an artifact the
+   * database does not hold — do not read a green run as more than it is.
    */
   it('0057 and 0058 are applied here at their committed checksums (criterion 5)', async () => {
     const chain = [

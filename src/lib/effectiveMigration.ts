@@ -56,16 +56,29 @@ export function definitionIndex(sql: string, name: string): number {
 }
 
 /**
- * True when `sql` names `name` in something that looks like a definition but is
- * not one this module can read.
+ * True when `sql` names `name` in the DEFINITION HEADER of a create-function
+ * statement that this module nonetheless cannot read.
  *
- * A near-miss must be LOUD. Silently skipping the file is what let the resolver
- * walk backwards to superseded text; refusing is the fail-closed answer, and a
- * file that merely CALLS the function is not a near miss.
+ * A near-miss must be LOUD: silently skipping the file is what let the resolver
+ * walk backwards to superseded text. But a FALSE near-miss is just as bad in the
+ * other direction — it reds a correct repository, and the obvious repair under
+ * time pressure is to delete this check, which reopens the hole.
+ *
+ * So the name must sit immediately after `function`, where a definition puts it,
+ * and nowhere else. The first version allowed 200 characters of anything between
+ * the two, which matched a migration that merely CALLED the function from inside
+ * some other function's body — both lanes found it independently (round-4
+ * review, Codex and Claude, medium). `language sql` definitions have no
+ * semicolon before their body, so a bound on distance can never separate a
+ * header from a body; only anchoring can.
  */
 export function looksLikeUnreadableDefinition(sql: string, name: string): boolean {
   if (definitionIndex(sql, name) > -1) return false;
-  return new RegExp(String.raw`create\s+(?:or\s+replace\s+)?function[^;]{0,200}?${name}`).test(sql);
+  // Same anchor as definitionIndex, minus the strictness that makes it readable:
+  // any separator between the qualifier and the name, and no required open paren.
+  return new RegExp(
+    String.raw`create\s+(?:or\s+replace\s+)?function\s+(?:"?public"?\s*\.\s*)?"?${name}\b`,
+  ).test(sql);
 }
 
 /**
@@ -132,16 +145,38 @@ export function definingMigration(name: string): string | null {
  * both were written by comparing raw bytes to a normalised ledger:
  *   - scripts/apply-migration-set.ts said raw bytes were "the convention the
  *     existing ledger already uses (verified against 0044's recorded row)".
- *     0044's row is exactly what disproves it. That script now calls this
- *     function, so the two cannot drift apart again (round-3 review, Claude,
+ *     0044's row is exactly what disproves it. That script now shares this
+ *     algorithm, so the two cannot drift apart again (round-3 review, Claude,
  *     medium: an apply through it would have written rows this gate rejects).
  *   - CLAUDE.md said eleven 0000–0010 files "differ from the checksums recorded
  *     in the live ledger". Under the ledger's own algorithm they do not: all
  *     eleven are present and all eleven match. Corrected there.
+ *
+ * WHAT THIS CAN AND CANNOT PROVE. Because it normalises, it proves a file is
+ * identical to what was applied UP TO line endings and trailing whitespace — not
+ * byte-for-byte. Byte identity is not provable from this ledger by anyone: the
+ * only thing it records is this normalised digest, so there is no raw hash to
+ * compare against (round-4 review, Codex, medium). Do not describe a passing
+ * provenance test as proving byte identity.
+ */
+export function checksumOfSql(sql: string): string {
+  return createHash('sha256')
+    .update(sql.replace(/\r\n/g, '\n').replace(/\s+$/, ''), 'utf8')
+    .digest('hex');
+}
+
+/**
+ * The same checksum for a migration FILE, read from this module's own
+ * MIGRATIONS_DIR.
+ *
+ * A caller that already holds the bytes must hash THOSE bytes with
+ * checksumOfSql instead. apply-migration-set.ts learned that the hard way: it
+ * executed a buffer read from its cwd-relative directory while recording a
+ * checksum this function re-read from a __dirname-relative one, so running the
+ * script by path from a second checkout applied one file and certified another
+ * — and a second read is a second snapshot even within one checkout (round-4
+ * review, Codex HIGH, corroborated by Claude).
  */
 export function migrationChecksum(file: string): string {
-  const sql = readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')
-    .replace(/\r\n/g, '\n')
-    .replace(/\s+$/, '');
-  return createHash('sha256').update(sql, 'utf8').digest('hex');
+  return checksumOfSql(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8'));
 }

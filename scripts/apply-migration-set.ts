@@ -25,9 +25,16 @@
  *     the target is mandatory rather than inferred.
  *   - Anything at all without --execute. Dry-run is the default.
  *
- * Checksums come from migrationChecksum() in src/lib/effectiveMigration.ts, so
- * this script and the live provenance test in src/lib/nightOutsRls.live.test.ts
+ * Checksums come from checksumOfSql() in src/lib/effectiveMigration.ts, so this
+ * script and the live provenance test in src/lib/nightOutsRls.live.test.ts
  * cannot disagree about what a ledger row means.
+ *
+ * It hashes the EXACT buffer this script is about to execute, never a second
+ * read of the same path. A file-taking helper was tried first and was wrong: its
+ * directory is resolved from the module's own location while `raw` below comes
+ * from process.cwd(), so invoking this script by path from another checkout
+ * executed one file and recorded the other's checksum — and even in one
+ * checkout, a second read is a second snapshot (round-4 review, Codex HIGH).
  *
  * This header used to claim RAW BYTES, "verified against 0044's recorded row".
  * That was wrong, and 0044's row is what disproves it: the ledger holds the
@@ -51,7 +58,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 
-import { migrationChecksum } from '../src/lib/effectiveMigration';
+import { checksumOfSql } from '../src/lib/effectiveMigration';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -170,7 +177,7 @@ async function main(): Promise<void> {
     } catch (error) {
       return fail(`cannot read ${name}: ${(error as Error).message}`);
     }
-    return { name, raw, checksum: migrationChecksum(name) };
+    return { name, raw, checksum: checksumOfSql(raw.toString('utf8')) };
   });
 
   const client = new Client({ connectionString: databaseUrl });
