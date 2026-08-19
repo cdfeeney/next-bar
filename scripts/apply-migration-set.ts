@@ -51,9 +51,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
-import {
-  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
-} from './apply-migration-target-guard';
+import { authorizeMigrationTarget, redactUrl } from './apply-migration-target-guard';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -87,15 +85,6 @@ function parseArgs(argv: string[]): {
   return { env, execute, files, secretsFile };
 }
 
-function redactUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.username}:***@${parsed.host}${parsed.pathname}`;
-  } catch {
-    return '<invalid url>';
-  }
-}
-
 async function main(): Promise<void> {
   const { env, execute, files, secretsFile } = parseArgs(process.argv.slice(2));
 
@@ -119,129 +108,14 @@ async function main(): Promise<void> {
   loadEnv({ path: '.env.local' });
   loadEnv({ path: '.env' });
 
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) fail('DATABASE_URL is not set');
-
-  const actualEnv = process.env.NEXT_BAR_DATABASE_ENVIRONMENT;
-  if (!actualEnv) {
-    fail('NEXT_BAR_DATABASE_ENVIRONMENT is not set, so the target cannot be identified');
-  }
-  if (actualEnv !== env) {
-    fail(
-      `you named --env ${JSON.stringify(env)} but the loaded environment is `
-      + `${JSON.stringify(actualEnv)}.`,
-    );
-  }
-
-  // A matching LABEL proves only that the same word was typed in two places
-  // (cold panel, Codex, HIGH). Verify the actual Supabase project behind
-  // DATABASE_URL, using pg's own resolution rather than the URL authority —
-  // query parameters override the authority, which is how the live RLS suite's
-  // first guard was bypassable. Same check, same reason; it should have been
-  // reused here the first time.
-  // TLS IS NOT OPTIONAL for a tool that ships DDL and sends a role password.
-  // pg's default when the connection string says nothing is NO TLS at all
-  // (connection-parameters.js falls back to defaults.ssl === false), and
-  // PGSSLMODE=disable can turn it off from the environment - passing ssl
-  // explicitly beats that variable. The CA comes from PGSSLROOTCERT; a
-  // connection string naming sslrootcert wins over this config and pg loads that
-  // file itself. What this config resolves to is CHECKED below, after the target
-  // refusals, because a wrong target is the more useful error to show first.
-  const caPath = (process.env.PGSSLROOTCERT ?? '').trim();
-  let ca = '';
-  if (caPath) {
-    try {
-      ca = readFileSync(caPath, 'utf8');
-    } catch (error) {
-      fail(`cannot read PGSSLROOTCERT ${caPath}: ${(error as Error).message}`);
-    }
-  }
-  const clientConfig = {
-    connectionString: databaseUrl,
-    ssl: ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: true },
-  };
-  // The probe must be built from the SAME config as the connection it authorises,
-  // or it is answering a question about a different connection.
-  const probe = new Client(clientConfig) as unknown as {
-    connectionParameters?: {
-      user?: string; host?: string; port?: number | string; options?: string;
-      ssl?: unknown;
-    };
-  };
-  const effectiveUser = probe.connectionParameters?.user ?? '';
-  const effectiveHost = probe.connectionParameters?.host ?? '';
-  const effectivePort = String(probe.connectionParameters?.port ?? '');
-  const effectiveOptions = probe.connectionParameters?.options ?? '';
-  const ref = resolveProjectRef(effectiveUser);
-
-  // The ref says WHICH PROJECT; the endpoint says WHICH SERVER. Checking only
-  // the ref verifies a target the tool never inspected, because pg lets
-  // `?host=` / `?port=` override the authority the operator reads below.
-  let authority = { host: '', port: '' };
-  try {
-    const parsed = new URL(databaseUrl);
-    authority = { host: parsed.hostname, port: parsed.port };
-  } catch {
-    fail('DATABASE_URL is not a parsable URL, so the connection target cannot be verified');
-  }
-  const endpointRefusal = checkConnectionEndpoint(
-    { host: effectiveHost, port: effectivePort, options: effectiveOptions }, authority,
-  );
-  if (endpointRefusal) fail(endpointRefusal);
-  const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
-  const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
-    .split(',').map((value) => value.trim()).filter(Boolean);
-
-  const refusal = checkMigrationTarget({ env, ref, productionRef, stagingRefs });
-  if (refusal) fail(refusal);
-
-  // Node's global kill switch turns tls.connect's default verification off, and
-  // pg leaves rejectUnauthorized undefined for sslmode=verify-full, so without
-  // this the guard would report a verified peer that nothing verified.
-  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
-    fail('NODE_TLS_REJECT_UNAUTHORIZED=0 disables certificate verification for the whole process, '
-      + 'so the pooler host cannot be authenticated. Unset it and re-run.');
-  }
-
-  // sslmode=disable in the connection string still wins over the default above.
-  const resolvedSsl = probe.connectionParameters?.ssl as {
-    rejectUnauthorized?: boolean; checkServerIdentity?: unknown; ca?: unknown;
-  } | false | undefined;
-  if (!resolvedSsl) {
-    fail('DATABASE_URL disables TLS, so the migration set and the role password would cross the '
-      + 'network in the clear and the pooler host could not be authenticated');
-  }
-  // ENCRYPTED IS NOT AUTHENTICATED. pg leaves rejectUnauthorized undefined for
-  // sslmode=verify-full (tls.connect then verifies by default), but hands back a
-  // truthy { rejectUnauthorized: false } for sslmode=no-verify - and under
-  // uselibpqcompat for plain require/prefer - while verify-ca replaces
-  // checkServerIdentity with a no-op, which keeps the chain but drops the
-  // hostname. Every one of those is a certificate that proves nothing about WHO
-  // answered, and this guard's whole identity chain (the .pooler.supabase.com
-  // suffix, the ref in the username) is strings the operator wrote. The
-  // certificate is what makes the peer behind that name actually Supabase.
-  const ssl = resolvedSsl as { rejectUnauthorized?: boolean; checkServerIdentity?: unknown; ca?: unknown };
-  if (ssl.rejectUnauthorized === false || typeof ssl.checkServerIdentity === 'function') {
-    fail("DATABASE_URL turns off peer certificate verification (sslmode=no-verify, verify-ca or a "
-      + 'libpq-compat mode), so the pooler host cannot be authenticated and the target could be '
-      + 'substituted by whatever answers that name');
-  }
-
-  // The pooler's chain is SELF-SIGNED, so "verify against the system store" can
-  // never succeed here - proven by pointing the live RLS suite at the real
-  // staging pooler with rejectUnauthorized:true: "self-signed certificate in
-  // certificate chain". Verification needs Supabase's CA, so ask the RESOLVED
-  // config whether it has one rather than whether one was configured: pg merges
-  // the parsed connection string OVER this config, and parsing any ssl parameter
-  // replaces the whole ssl object - so `?sslmode=verify-full` with PGSSLROOTCERT
-  // set silently drops the CA and would die later in the handshake, pointing
-  // away from the cause.
-  if (!ssl.ca) {
-    fail("the connection carries no CA certificate for the pooler, whose chain is self-signed. Set "
-      + "PGSSLROOTCERT to Supabase's CA file (dashboard - Settings - Database - SSL configuration). "
-      + 'If DATABASE_URL names sslmode or any other ssl parameter, it REPLACES that CA, so the path '
-      + 'has to go there too: ?sslmode=verify-full&sslrootcert=<path>.');
-  }
+  // Every target refusal, in the order that reports the most useful error
+  // first, plus the client config those refusals authorise. The sequence used
+  // to live inline here, which is precisely why the sibling applier had none of
+  // it: one resolver, every caller.
+  const authorized = authorizeMigrationTarget(env);
+  if (authorized.refusal !== null) fail(authorized.refusal);
+  const { clientConfig, effective, env: actualEnv } = authorized.target;
+  const databaseUrl = clientConfig.connectionString;
 
   // Read and hash first: a missing or unreadable file must stop us before we
   // open a transaction on anything.
@@ -300,7 +174,7 @@ async function main(): Promise<void> {
     }
 
     console.log(`\n[apply-set] target   : ${redactUrl(databaseUrl)}`);
-    console.log(`[apply-set] effective: ${effectiveUser}@${effectiveHost}:${effectivePort} (pg's own resolution)`);
+    console.log(`[apply-set] effective: ${effective.user}@${effective.host}:${effective.port} (pg's own resolution)`);
     console.log('[apply-set] tls      : on, peer certificate verified');
     console.log(`[apply-set] env      : ${actualEnv}`);
     console.log(`[apply-set] head     : ${ledgerHead}`);
