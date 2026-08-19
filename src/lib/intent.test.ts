@@ -105,8 +105,11 @@ describe('wasOutLastNight (E2.4 nightPhase input)', () => {
     window.localStorage.clear();
   });
 
-  const SAT_9AM = new Date('2026-07-25T09:00:00');
-  const SUN_9AM = new Date('2026-07-26T09:00:00');
+  // Absolute instants like the rest of this file: July is EDT (UTC-4), so
+  // 9am NYC is 13:00Z. Bare local strings made these assertions depend on the
+  // runner's zone once the rollover moved to America/New_York.
+  const SAT_9AM = new Date('2026-07-25T13:00:00Z'); // Sat 9am NYC
+  const SUN_9AM = new Date('2026-07-26T13:00:00Z'); // Sun 9am NYC
 
   it('true the morning after a committed night (here / going)', () => {
     window.localStorage.setItem(
@@ -160,14 +163,18 @@ describe('wasOutLastNight (E2.4 nightPhase input)', () => {
   it('crosses month and year boundaries with calendar math', () => {
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ status: 'here', setAt: '2026-07-31T23:00:00' }),
+      // Fri 2026-07-31 11pm NYC (EDT, UTC-4) — July's last night.
+      JSON.stringify({ status: 'here', setAt: '2026-08-01T03:00:00Z' }),
     );
-    expect(wasOutLastNight(new Date('2026-08-01T09:00:00'))).toBe(true);
+    // Sat 2026-08-01 9am NYC — the morning after, one month later.
+    expect(wasOutLastNight(new Date('2026-08-01T13:00:00Z'))).toBe(true);
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ status: 'here', setAt: '2026-12-31T23:00:00' }),
+      // Thu 2026-12-31 11pm NYC (EST, UTC-5) — the year's last night.
+      JSON.stringify({ status: 'here', setAt: '2027-01-01T04:00:00Z' }),
     );
-    expect(wasOutLastNight(new Date('2027-01-01T09:00:00'))).toBe(true);
+    // Fri 2027-01-01 9am NYC (EST) — the morning after, one year later.
+    expect(wasOutLastNight(new Date('2027-01-01T14:00:00Z'))).toBe(true);
   });
 
   // DST regression (review finding): a raw 24h-in-ms subtraction lands an hour

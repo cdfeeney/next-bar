@@ -23,7 +23,8 @@
  * extracted numbers (no local-zone arithmetic anywhere).
  */
 
-const NIGHT_ROLLOVER_HOUR = 6;
+/** THE rollover hour. Exported so no caller has to declare its own copy. */
+export const NIGHT_ROLLOVER_HOUR = 6;
 
 const nycParts = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
@@ -71,4 +72,20 @@ export function nycNightKey(now: Date = new Date()): string {
  */
 export function nycNightDay(now: Date = new Date()): number {
   return nycNight(now).getUTCDay();
+}
+
+/**
+ * The New York wall-clock hour (0-23) at `now`, or NaN when the Date is
+ * invalid. Callers that reason about "which hour of the night is it" resolve
+ * it here: getHours() answers in the runner's or the user's zone, which is the
+ * exact mismatch this module exists to delete.
+ */
+export function nycHour(now: Date): number {
+  try {
+    const parts = nycParts.formatToParts(now);
+    // Intl can report midnight as hour 24 in some engines - normalize.
+    return Number(parts.find((p) => p.type === 'hour')?.value ?? NaN) % 24;
+  } catch {
+    return NaN; // invalid Date - let the caller's fail-safe take over
+  }
 }

@@ -1,4 +1,5 @@
 import type { IntentStatus } from '@/lib/intent';
+import { NIGHT_ROLLOVER_HOUR, nycHour } from '@/lib/nightKey';
 
 /**
  * nightPhase — derive which phase of a night out the user is in (E0.3).
@@ -16,8 +17,12 @@ import type { IntentStatus } from '@/lib/intent';
  * now derives 'out'.
  *
  * Pure function; persistence of the override (nightKey-scoped
- * localStorage, resets at the 5am rollover per R11) is the E2.4/E3.4
+ * localStorage, resets at the ONE rollover per R11) is the E2.4/E3.4
  * UI's concern.
+ *
+ * Every hour below is a NEW YORK hour, from src/lib/nightKey.ts. This module
+ * used to declare its own MORNING_START = 5 and read now.getHours(), so its
+ * morning boundary disagreed with the one rollover by an hour AND by a zone.
  */
 
 export type NightPhase = 'planning' | 'out' | 'recap';
@@ -41,7 +46,8 @@ export type NightPhaseInputs = {
   override: NightPhase | null;
 };
 
-const MORNING_START = 5; // the rollover hour — mornings begin where nights end
+// Mornings begin exactly where nights end — the one rollover, not a copy of it.
+const MORNING_START = NIGHT_ROLLOVER_HOUR;
 const MIDDAY_START = 12;
 const EVENING_START = 17;
 
@@ -59,7 +65,7 @@ export function deriveNightPhase(inputs: NightPhaseInputs): NightPhase {
   // Physically at a bar tonight — the strongest signal there is.
   if (signal === 'here') return 'out';
 
-  const hour = now.getHours();
+  const hour = nycHour(now);
   if (Number.isNaN(hour)) return 'out'; // fail-safe on broken clocks
 
   const isMorning = hour >= MORNING_START && hour < MIDDAY_START;
