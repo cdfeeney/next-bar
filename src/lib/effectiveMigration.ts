@@ -38,6 +38,74 @@ export const GUARDED_FUNCTIONS = [
 export type GuardedFunction = (typeof GUARDED_FUNCTIONS)[number];
 
 /**
+ * SQL as Postgres would read it, for text matching.
+ *
+ * Not a parser, and deliberately not the "SQL scanner" a previous round added
+ * and then deleted — that one tried to DERIVE which file defines a function.
+ * This one only normalises text; derivation is still the plain
+ * highest-numbered-file rule below. Do not merge the two again.
+ *
+ * It does exactly three things, and each one closes a hole a reviewer landed:
+ *
+ *  - Removes comments, INCLUDING NESTED block comments, which Postgres nests and
+ *    a non-greedy regex does not. The regex form stopped at the first `*​/` and
+ *    left the code after it visible, so a lock call could be commented out of the
+ *    database while still satisfying the guard (round-5 review, Codex, medium).
+ *    Line comments matter just as much: this repo's own migration headers quote
+ *    `create or replace function` in prose (0045:10, 0046:7), and the resolver
+ *    read them (round-5 review, Claude, medium).
+ *  - Blanks the CONTENTS of single-quoted literals, so `select 'create function
+ *    public.respond_night_out'` is not a definition (round-5 review, Codex,
+ *    medium). Dollar-quoted bodies are left alone — that is where the code is.
+ *  - Lowercases everything EXCEPT literal contents. Identifiers and keywords are
+ *    case-insensitive in Postgres, so lowercasing them prevents a false red;
+ *    literals are not, so lowercasing THEM let a key of `'NIGHT_OUT_MEMBERS:'`
+ *    take a different advisory lock while the guard still matched (round-5
+ *    review, Codex, medium).
+ *
+ * Returns both views because they answer different questions: `code` keeps
+ * literals (the lock KEY is a literal), `skeleton` blanks them (a definition is
+ * never inside one).
+ */
+export function sqlView(sql: string): { code: string; skeleton: string } {
+  let code = '';
+  let skeleton = '';
+  let i = 0;
+  let depth = 0; // nested /* */
+  while (i < sql.length) {
+    if (depth > 0) {
+      if (sql.startsWith('/*', i)) { depth += 1; i += 2; continue; }
+      if (sql.startsWith('*/', i)) { depth -= 1; i += 2; continue; }
+      // A comment is whitespace to the reader, and newlines must survive so a
+      // following line comment still terminates.
+      const ch = sql[i] === '\n' ? '\n' : ' ';
+      code += ch; skeleton += ch; i += 1;
+      continue;
+    }
+    if (sql.startsWith('/*', i)) { depth = 1; i += 2; code += '  '; skeleton += '  '; continue; }
+    if (sql.startsWith('--', i)) {
+      while (i < sql.length && sql[i] !== '\n') { code += ' '; skeleton += ' '; i += 1; }
+      continue;
+    }
+    if (sql[i] === "'") {
+      // '' inside a literal is an escaped quote, not a terminator.
+      code += "'"; skeleton += "'"; i += 1;
+      while (i < sql.length) {
+        if (sql[i] === "'" && sql[i + 1] === "'") { code += "''"; skeleton += '  '; i += 2; continue; }
+        if (sql[i] === "'") break;
+        code += sql[i]; skeleton += ' '; i += 1;
+      }
+      code += "'"; skeleton += "'"; i += 1;
+      continue;
+    }
+    code += sql[i].toLowerCase();
+    skeleton += sql[i].toLowerCase();
+    i += 1;
+  }
+  return { code, skeleton };
+}
+
+/**
  * Where `name` is stated in `sql`, or -1.
  *
  * `create or replace` is optional because 0059 states get_night_out as
@@ -112,7 +180,10 @@ export function definingMigration(name: string): string | null {
   // order is numeric order.
   const defining: string[] = [];
   for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
-    const sql = readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8').toLowerCase();
+    // The SKELETON: comments gone, literal contents blanked. Prose in a header
+    // and a function name inside a string are not definitions, and reading the
+    // raw text treated both as one (round-5 review, both lanes).
+    const sql = sqlView(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')).skeleton;
     if (definitionIndex(sql, name) > -1) defining.push(file);
     else if (looksLikeUnreadableDefinition(sql, name)) {
       throw new Error(
@@ -127,8 +198,12 @@ export function definingMigration(name: string): string | null {
 /**
  * The checksum public.schema_migrations records for a migration.
  *
- * NORMALISED — LF-normalise, strip trailing whitespace — and that is not a
- * shortcut. It is what the ledger actually holds. The repo is developed on
+ * NORMALISED — fold CRLF to LF, then strip whitespace from the END OF THE
+ * STRING; `/\s+$/` has no `m` flag, so a trailing space on an interior line is
+ * kept. Stated precisely because "trailing-whitespace stripped" reads as
+ * per-line, and an independent reimplementation from that description produces a
+ * different digest (round-5 review, Claude, medium). It is what the ledger
+ * actually holds, not a shortcut. The repo is developed on
  * Windows with core.autocrlf, so the same file hashes differently on two
  * checkouts and a raw-byte hash reports drift on every one of them.
  *

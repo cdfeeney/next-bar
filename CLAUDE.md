@@ -51,9 +51,17 @@ database that has moved well past it — including re-granting privileges that
 `0034_revoke_first_grants.sql` had tightened. That is reason enough; it does not
 depend on any checksum claim.
 
-**The ledger's checksum is NORMALISED — LF-normalised and trailing-whitespace
-stripped — not a hash of the raw bytes.** Use `migrationChecksum()` in
-`src/lib/effectiveMigration.ts`; `scripts/apply-migration-set.ts` calls it too.
+**The ledger's checksum is NORMALISED — CRLF folded to LF, then whitespace
+stripped from the END OF THE FILE (not per line) — not a hash of the raw bytes.**
+The one implementation is `src/lib/effectiveMigration.ts`. Which function you
+want depends on what you already hold: a caller with the bytes in hand — an
+applier, which must certify exactly what it runs — calls `checksumOfSql(text)`,
+as `scripts/apply-migration-set.ts` does; a caller naming a repository file calls
+`migrationChecksum(file)`. Never reach for the file-taking one from a script that
+has already read the file: its directory is resolved from the module's location,
+so it can hash a different checkout's copy, and a second read is a second
+snapshot regardless.
+
 This paragraph previously said eleven `0000`–`0010` files "differ from the
 checksums recorded in the live ledger" (verified 2026-08-16). Re-measured
 against the serving staging ledger on 2026-08-19 with the ledger's own

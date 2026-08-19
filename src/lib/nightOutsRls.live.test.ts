@@ -1235,7 +1235,9 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   });
 
   /**
-   * CRITERION 5, as far as this ledger can carry it.
+   * CRITERION 5, as far as this ledger can carry it — which is not all the way,
+   * so the test's name no longer claims the criterion (round-5 review, Codex,
+   * medium).
    *
    * "What is applied is byte-identical to what is committed for 0057" is a claim
    * about 0057 specifically. definingMigration resolves respond_night_out to
@@ -1253,7 +1255,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * review, Codex, medium). Proving literal byte identity needs an artifact the
    * database does not hold — do not read a green run as more than it is.
    */
-  it('0057 and 0058 are applied here at their committed checksums (criterion 5)', async () => {
+  it('0057 and 0058 are applied here at the checksums this repo commits', async () => {
     const chain = [
       '0057_night_outs_respond_expected_status.sql',
       '0058_night_outs_respond_expected_status_atomic.sql',

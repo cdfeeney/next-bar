@@ -6,6 +6,7 @@ import {
   MIGRATIONS_DIR,
   definingMigration,
   definitionIndex,
+  sqlView,
   type GuardedFunction,
 } from './effectiveMigration';
 
@@ -290,20 +291,29 @@ const SQL_0046 = readFileSync(
 function effectiveSql(name: GuardedFunction): string {
   const file = definingMigration(name);
   expect(file, `no migration defines ${name}`).not.toBeNull();
-  return readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8')
-    .toLowerCase()
-    // BOTH comment forms. Only `--` was stripped, so a later migration could
-    // move the expected pg_advisory_xact_lock(...) call inside a /* */ block,
-    // drop the executable one, and every lock assertion below would still find
-    // its text and pass (round-4 review, Codex, medium). Comments are the one
-    // thing in a migration that provably does not run.
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--.*/g, '');
+  // `code`, not `skeleton`: the advisory-lock KEY these guards pin is a string
+  // literal, so literal contents have to survive — with their case, which is why
+  // sqlView lowercases everything else and leaves them alone. Comment stripping
+  // is sqlView's job now, nested blocks included; the regex form here stopped at
+  // the first inner terminator (round-5 review, Codex, medium).
+  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8')).code;
 }
 
-/** The body of one stated function, up to its closing $$. */
+/**
+ * The body of the LAST statement of `name` in `sql`, up to its closing $$.
+ *
+ * Last, not first. A migration may state a function twice — Postgres keeps the
+ * second — and reading the first let a correct definition vouch for a weakened
+ * one that followed it in the same file (round-5 review, Codex, medium).
+ */
 function functionBody(sql: string, name: string): string {
-  const start = definitionIndex(sql, name);
+  let start = -1;
+  for (let from = 0; ; ) {
+    const at = definitionIndex(sql.slice(from), name);
+    if (at < 0) break;
+    start = from + at;
+    from = start + 1;
+  }
   expect(start, `${name} not found in the migration under test`).toBeGreaterThan(-1);
   const end = sql.indexOf('$$;', start);
   expect(end, `${name} has no terminator`).toBeGreaterThan(start);
@@ -362,6 +372,57 @@ function planLock(plan: string): string {
 function normalise(sql: string): string {
   return sql.replace(/\s+/g, ' ').replace(/\s*([()])\s*/g, '$1');
 }
+
+/**
+ * sqlView is the one piece of real logic in this guard, and every case below is
+ * a trigger a reviewer actually landed rather than an invented edge. If it is
+ * ever simplified back to regexes, these are what should fail first.
+ */
+describe('sqlView — SQL as Postgres reads it', () => {
+  it('nests block comments, so a commented-out call stays commented out', () => {
+    const sql = 'a /* outer /* inner */ perform lock(); */ b';
+    expect(sqlView(sql).code).not.toMatch(/perform lock/);
+    expect(sqlView(sql).code.trim().startsWith('a')).toBe(true);
+    expect(sqlView(sql).code.trim().endsWith('b')).toBe(true);
+  });
+
+  it('drops line comments, so prose quoting SQL is not code', () => {
+    // 0045 and 0046 really do carry this shape in their headers.
+    const sql = [
+      '-- supersedes create or replace function public.night_out_seat_count(x)',
+      'select 1;',
+    ].join('\n');
+    expect(sqlView(sql).skeleton).not.toMatch(/create or replace function/);
+    expect(sqlView(sql).code).toMatch(/select 1;/);
+  });
+
+  it('a line comment still ends at the newline a block comment contained', () => {
+    const sql = ['/* x', ' */ -- hidden', 'visible'].join('\n');
+    expect(sqlView(sql).code).toMatch(/visible/);
+    expect(sqlView(sql).code).not.toMatch(/hidden/);
+  });
+
+  it('blanks literal CONTENTS in the skeleton, so a quoted definition is not one', () => {
+    const sql = "select 'create function public.respond_night_out';";
+    expect(sqlView(sql).skeleton).not.toMatch(/create function/);
+    expect(sqlView(sql).code).toMatch(/create function/);
+  });
+
+  it('keeps literal CASE, so a re-cased lock key is a different key', () => {
+    const sql = "PERFORM pg_advisory_xact_lock(hashtextextended('NIGHT_OUT_MEMBERS:' || x, 0));";
+    const { code } = sqlView(sql);
+    // Keywords and identifiers folded; the literal untouched.
+    expect(code).toMatch(/perform pg_advisory_xact_lock/);
+    expect(code).toMatch(/'NIGHT_OUT_MEMBERS:'/);
+    expect(code).not.toMatch(/'night_out_members:'/);
+  });
+
+  it("treats '' inside a literal as an escaped quote, not a terminator", () => {
+    const sql = "select 'it''s fine', create_marker;";
+    expect(sqlView(sql).code).toMatch(/create_marker/);
+    expect(sqlView(sql).skeleton).toMatch(/create_marker/);
+  });
+});
 
 describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
