@@ -27,6 +27,11 @@ const RATING_NOISE_SD = 0.75;
 export const LOVED_SCORE_THRESHOLD = 8;
 /** How many quiz tags a synthetic user picks. */
 const QUIZ_TAG_COUNT = 3;
+/**
+ * Half-width of the uniform noise added to each tag's latent value before the
+ * quiz picks its top 3 — one draw per tag, so sd = QUIZ_TAG_NOISE / sqrt(3).
+ */
+const QUIZ_TAG_NOISE = 0.2;
 
 export type SyntheticUser = {
   readonly id: number;
@@ -86,9 +91,28 @@ export function makeUser(
 
   // Quiz tags are the user's genuinely favourite tags, mildly shuffled: a quiz
   // is a noisy self-report, not a perfect readout of latent taste.
-  const quizTags = [...allTags]
-    .sort((a, b) => (latent.get(b) ?? 0) + rng() * 0.4 - ((latent.get(a) ?? 0) + rng() * 0.4))
-    .slice(0, QUIZ_TAG_COUNT);
+  //
+  // The noise is drawn ONCE PER TAG and the sort is a total order (score
+  // descending, tag name breaking exact ties). Both properties are load-bearing
+  // for reproducibility, and an earlier version had neither: it redrew rng()
+  // twice inside the comparator, which (a) made cmp() intransitive and not
+  // antisymmetric, so ECMA-262 leaves the result implementation-defined, and
+  // (b) made the NUMBER of rng() draws depend on V8's comparison schedule, so
+  // every later draw — the rated sample, the rating noise — shifted with the
+  // engine. The recorded table would then have silently stopped reproducing on
+  // a Node upgrade while this file's same-process reproducibility test stayed
+  // green. Per-comparison redraw also swamped the signal: it is a fresh
+  // perturbation at every comparison rather than one offset per tag.
+  //
+  // One draw of U(-QUIZ_TAG_NOISE, +QUIZ_TAG_NOISE) has sd 0.115, against a
+  // mean gap of about 2/(|allTags|+1) = 0.056 between adjacent top latent
+  // values — so the quiz is still a genuinely noisy self-report, but a
+  // BOUNDED and stated one. The report quantifies what that costs.
+  const quizTags = allTags
+    .map((tag) => ({ tag, key: (latent.get(tag) ?? 0) + (rng() * 2 - 1) * QUIZ_TAG_NOISE }))
+    .sort((a, b) => b.key - a.key || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0))
+    .slice(0, QUIZ_TAG_COUNT)
+    .map((entry) => entry.tag);
 
   const rated = sampleDistinct(catalog, ratingCount, rng);
   const ratings: BarRating[] = rated.map((bar) => ({

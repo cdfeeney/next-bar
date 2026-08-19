@@ -29,13 +29,34 @@ Same seed, same commit, same numbers — asserted by the spec's
 `is reproducible` case, which re-runs a whole segment and requires byte-equal
 results.
 
+**This spec is part of `npm test`.** `src/lib/__evals__/**` matches the vitest
+config's include glob, so the 900-user replay runs in the ordinary suite (~13s
+here). The heavy work is in `beforeAll`, not in the `describe` body: in the body
+it ran at COLLECTION time, which meant every `npm test` paid for it whatever was
+selected, `-t` could not skip it, and a failure surfaced as a suite collection
+error instead of a failing test. If the replay ever needs to leave the default
+gate, that is a change to `vitest.config.ts` and belongs to a goal that owns
+that file — not to this one.
+
+**Scope of that guarantee.** The `is reproducible` case re-runs in the same
+process, so it proves the replay is a pure function of the seed but cannot by
+itself prove the seeded draw *sequence* is engine-independent. That property is
+held by construction instead: every random draw is one call to the LCG in
+`makeRng`, and no draw happens inside a sort comparator, so the number of draws
+does not depend on V8's comparison schedule. An earlier version of this harness
+violated that — the quiz-tag sort called `rng()` twice per comparison — which
+made the comparator intransitive and the whole downstream stream
+engine-defined. It was found in review and fixed before these numbers were
+taken; **the table below is from the fixed harness** and differs from the first
+draft's numbers for that reason.
+
 ## Results
 
 | segment | users (n) | median ratings | held-out pool | cascade NDCG@5 | prev NDCG@5 | NDCG delta (95% CI) | cascade median mi | prev median mi | miles delta |
 |---|---|---|---|---|---|---|---|---|---|
-| 0-4 ratings | 300 | 2 | 400 | 0.7957 | 0.8255 | **-0.0298** ± 0.0082 | 0.707 | 1.374 | -0.667 |
-| 5-20 ratings | 300 | 13 | 389 | 0.8026 | 0.8155 | **-0.0129** ± 0.0094 | 0.795 | 1.516 | -0.721 |
-| 100+ ratings | 300 | 124 | 278 | 0.8497 | 0.8282 | **+0.0215** ± 0.0105 | 0.841 | 1.547 | -0.706 |
+| 0-4 ratings | 300 | 2 | 400 | 0.7994 | 0.8334 | **-0.0340** ± 0.0086 | 0.683 | 1.521 | -0.837 |
+| 5-20 ratings | 300 | 12 | 390 | 0.8091 | 0.8172 | **-0.0080** ± 0.0095 | 0.811 | 1.598 | -0.787 |
+| 100+ ratings | 300 | 125 | 278 | 0.8503 | 0.8276 | **+0.0228** ± 0.0108 | 0.805 | 1.687 | -0.883 |
 
 Every segment carries n = 300 users, comfortably above the 30-user floor the
 spec would have flagged as not meaningful; no segment is reported as an
@@ -45,13 +66,14 @@ their five from.
 
 The NDCG delta is **paired per user** (both rankers saw the identical user,
 identical pool) and its interval is a 95% normal CI on that paired difference.
-All three intervals exclude zero, so all three differences are real at this
-sample size, not noise.
+The 0-4 and 100+ intervals exclude zero; **the 5-20 interval does not**
+(-0.0080 ± 0.0095), so that segment shows no separation between the two
+rankers at n = 300 and must not be quoted as a regression.
 
 ## 1. Median distance of the five recommendations
 
-Cascade: **0.707 / 0.795 / 0.841 miles** across the three segments.
-Previous: **1.374 / 1.516 / 1.547 miles**.
+Cascade: **0.683 / 0.811 / 0.805 miles** across the three segments.
+Previous: **1.521 / 1.598 / 1.687 miles**.
 
 The cascade roughly **halves** the median distance of a page in every segment.
 This is the band-first step working exactly as specified, and it is the
@@ -59,7 +81,7 @@ cascade's largest measured effect by a wide margin.
 
 ## 2. Held-out NDCG@5
 
-Cascade: **0.7957 / 0.8026 / 0.8497**. Previous: **0.8255 / 0.8155 / 0.8282**.
+Cascade: **0.7994 / 0.8091 / 0.8503**. Previous: **0.8334 / 0.8172 / 0.8276**.
 
 Relevance ground truth is the synthetic user's latent per-tag utility; gain is
 linear in utility and the ideal DCG is taken from the best five bars actually
@@ -75,12 +97,14 @@ Reported in the table above at 0-4, 5-20 and 100+ ratings.
 Stated plainly, because this is the part of the report that is worth having:
 
 - **The cascade is WORSE on taste relevance at cold start.** At 0-4 ratings it
-  loses 0.0298 NDCG@5 (CI ±0.0082) to the ranker it replaced. That is the
+  loses 0.0340 NDCG@5 (CI ±0.0086) to the ranker it replaced. That is the
   largest regression in the table and it lands on exactly the users who have
   given the product the least — new ones.
-- **It is still WORSE at 5-20 ratings**, by 0.0129 (CI ±0.0094). Smaller, and
-  the interval only just clears zero, but it is a loss and it is real.
-- **It only wins on taste at 100+ ratings**, by 0.0215 (CI ±0.0105).
+- **It is still WORSE at 5-20 ratings**, by 0.0080 (CI ±0.0095). Note this
+  interval **does not exclude zero**: at 5-20 ratings the two rankers are not
+  separated at n = 300. Read it as "no measured taste advantage either way",
+  not as a confirmed loss.
+- **It only wins on taste at 100+ ratings**, by 0.0228 (CI ±0.0108).
 
 This is the shape `c = N/(N+10)` predicts: with N = 2 the learned term carries
 c ≈ 0.17 and the page is ordered almost entirely by the quiz prior *within a
@@ -88,9 +112,9 @@ distance band*, whereas the old ranker let vibe Jaccard drive the whole pool at
 weight 0.5. Taste evidence has to accumulate before band-first ordering pays
 for the freedom it gives up.
 
-**What the trade actually is:** roughly 0.03 NDCG at cold start, decaying to a
-0.02 gain by 100+ ratings, bought with ~0.7 miles off the median page
-everywhere. Whether that is a good trade is a **product** decision and this
+**What the trade actually is:** roughly 0.034 NDCG at cold start, passing
+through no measurable difference at 5-20, to a 0.023 gain by 100+ ratings,
+bought with ~0.8 miles off the median page everywhere. Whether that is a good trade is a **product** decision and this
 report does not make it. No oracle here weighs a mile against a unit of taste
 relevance; inventing one would have meant inventing the answer. The two numbers
 are reported side by side on purpose.
@@ -111,21 +135,35 @@ Checked on **every one of the 900 pages**, against the same post-filter pool
 - **Learned-taste-within-band** — 0 violations. The bars taken from a band were
   its top scorers by `rankScore`, in non-increasing score order, with no
   higher-scoring bar in that band skipped.
-- **Exact-miles-final-tie-break** — 0 violations. Where two adjacent results
-  had bit-exact equal scores, the nearer came first, and miles never decided a
-  non-tie.
+- **Exact-miles-final-tie-break** — 0 violations, and **not vacuously**: the
+  run recorded **1,012 bit-exact score ties** where the tie-break actually had
+  something to decide. Zero violations of a check that never fires would be
+  worth nothing, so the checker counts its own exercise (`exactTiesExercised`)
+  and the spec prints a VACUOUS warning if that count is ever 0. Both the
+  adjacent-pair case and the page-boundary case are covered — a tied-but-nearer
+  bar left in the pool while a farther tied bar was taken is a violation even
+  at cap 1, where no adjacent pair exists.
+
+**The checker is itself tested.** `rankingReplay.eval.test.ts` plants two pages
+that a naive checker accepts — a page whose per-band quotas are right but whose
+band ORDER is wrong, and a cap-1 page that skips a tied-but-nearer bar — and
+requires the checker to flag both. Without those cases "0 violations across 900
+pages" could not be distinguished from a checker that cannot fail. Both cases
+were in fact accepted by the first draft of `cascadeInvariants.ts`, which
+partitioned the page by band before counting (discarding order) and compared
+miles only between adjacent selected results.
 
 ## Follow-ups (recorded, not fixed here)
 
 **F1 — near-tie ordering is decided by float noise, not by miles (LOW).**
-7 of 900 pages contained adjacent results whose `rankScore` differed by
-≤ 1e-12 — observed deltas were 8.7e-19 to 2.8e-17, i.e. bars that are
+6 of 900 pages contained adjacent results whose `rankScore` differed by
+≤ 1e-12 — observed deltas were 2.8e-17 to 5.6e-17, i.e. bars that are
 mathematically tied — yet were ordered **farther-first**. The cause is that
 `matches()` breaks ties with `b.score - a.score || a.miles - b.miles`, which
 falls through to miles only on *bit-exact* equality; `learnedTasteScore` sums a
 bar's tags in catalog order, so two bars with the same tag set summed in a
-different order land a few ULPs apart. Worst observed case: a 0.48-mile bar
-placed above a 0.01-mile bar. Real but small (0.8% of pages, and the affected
+different order land a few ULPs apart. Worst observed case: a 1.49-mile bar
+placed above a 0.24-mile bar. Real but small (0.7% of pages, and the affected
 pairs are genuinely equal in taste). The fix is a comparator epsilon, which is
 a ranker behavior change and therefore belongs to its own goal — this lane must
 not make it.
@@ -143,7 +181,7 @@ not make it.
    user's home or taste. A real history is biased on both axes. Uniform is the
    choice least likely to hand the cascade its own distance prior back as
    evidence, but it is still a choice.
-3. **The 100+ segment is unrealistic at this catalog size.** A median of 124
+3. **The 100+ segment is unrealistic at this catalog size.** A median of 125
    ratings against 403 bars means the user has rated 31% of the catalog and the
    held-out pool has shrunk to 278. The direction of that result is trustworthy;
    the magnitude is not directly transferable to a larger catalog.
@@ -157,3 +195,14 @@ not make it.
    5-slot page.
 6. **Late-night bias is off** (`biasNow` omitted), so these numbers describe the
    planning surface, not a 1am live page.
+7. **The quiz prior is a modelled noisy self-report, and the cold-start result
+   is sensitive to how noisy.** Each tag's latent value gets one draw of
+   U(-0.2, +0.2) (sd 0.115) before the top 3 are taken, against a mean gap of
+   about 0.056 between adjacent top latent values — so the quiz is deliberately
+   an imperfect readout of taste. At 0-4 ratings `c = N/(N+10)` is ≈ 0.17, so
+   roughly 83% of the cascade's within-band score IS that quiz prior, and the
+   baseline both gates admission and weights vibe at 0.5 on the same tags.
+   The -0.0340 cold-start regression is therefore the number in this report
+   most sensitive to this modelling choice; a cleaner or noisier quiz would
+   move it. The choice is stated rather than tuned, because tuning it to a
+   preferred answer is exactly what this lane must not do.

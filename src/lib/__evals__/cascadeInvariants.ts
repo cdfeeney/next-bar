@@ -33,6 +33,15 @@ export type InvariantViolations = {
    * docs/RANKING-EVAL-2026-08-19.md "Follow-ups".
    */
   nearTieFartherFirst: string[];
+  /**
+   * MEASUREMENT, not a violation: how many times the exact-miles tie-break
+   * actually had something to decide — a taken bar sharing a BIT-EXACT score
+   * with another in-band candidate. Without this, `exactMilesFinalTieBreak: []`
+   * is indistinguishable from "the tie-break was never exercised", and
+   * reporting a vacuous check as a confirmed invariant is exactly the kind of
+   * passing grade this lane exists not to hand out.
+   */
+  exactTiesExercised: number;
 };
 
 export function bandOf(miles: number): number {
@@ -45,6 +54,7 @@ export function emptyViolations(): InvariantViolations {
     learnedTasteWithinBand: [],
     exactMilesFinalTieBreak: [],
     nearTieFartherFirst: [],
+    exactTiesExercised: 0,
   };
 }
 
@@ -71,7 +81,11 @@ export function checkCascade(args: {
   const poolBands = [0, 1, 2].map((k) => pool.filter((b) => bandOf(milesOf(b)) === k));
   const pageBands = [0, 1, 2].map((k) => page.filter((b) => bandOf(milesOf(b)) === k));
 
-  // 1. Closest band first: the page is filled from band 0, then 1, then 2.
+  // 1. Closest band first, which is TWO claims — the right QUOTA per band, and
+  //    the right ORDER within the page. Checking quotas alone passes a page
+  //    that interleaves bands (a band-1 result ahead of a band-0 one), because
+  //    partitioning the page by band before counting discards exactly the
+  //    ordering the invariant is named after.
   let remaining = cap;
   for (let k = 0; k < 3; k++) {
     const expected = Math.min(remaining, poolBands[k].length);
@@ -81,6 +95,14 @@ export function checkCascade(args: {
         `(pool ${poolBands[k].length}, ${remaining} slots left)`);
     }
     remaining -= pageBands[k].length;
+  }
+  for (let i = 1; i < page.length; i++) {
+    const prev = bandOf(milesOf(page[i - 1]));
+    const here = bandOf(milesOf(page[i]));
+    if (here < prev) {
+      into.closestBandFirst.push(
+        `${label}: position ${i} is band ${here} but follows band ${prev}`);
+    }
   }
 
   // 2. Learned taste within band: the bars taken from a band are its top
@@ -118,6 +140,33 @@ export function checkCascade(args: {
         `(score delta ${delta}, ${milesOf(taken[i - 1])}mi then ${milesOf(taken[i])}mi)`;
       if (delta === 0) into.exactMilesFinalTieBreak.push(message);
       else if (Math.abs(delta) <= EPSILON) into.nearTieFartherFirst.push(message);
+    }
+
+    // The adjacent-pair scan above only sees ties the page kept BOTH halves of.
+    // The tie-break's sharpest case is the page boundary: a bit-exact tie where
+    // the FARTHER bar was taken and the nearer one left in the pool. At cap 1
+    // there is no adjacent pair at all, and check 2's skipped-candidate scan
+    // requires a STRICTLY higher score, so a tied-but-nearer skip slips past
+    // both. Same pass counts how often the tie-break had anything to decide,
+    // so "0 violations" can be read as "held" rather than "never fired".
+    if (taken.length === 0) continue;
+    const takenIds = new Set(taken.map((b) => b.id));
+    const byScore = new Map<number, Bar[]>();
+    for (const bar of poolBands[k]) {
+      const bucket = byScore.get(scoreOf(bar));
+      if (bucket) bucket.push(bar);
+      else byScore.set(scoreOf(bar), [bar]);
+    }
+    for (const bar of taken) {
+      const tied = byScore.get(scoreOf(bar)) ?? [];
+      if (tied.length > 1) into.exactTiesExercised += 1;
+      const nearerSkipped = tied.find(
+        (other) => !takenIds.has(other.id) && milesOf(other) < milesOf(bar));
+      if (nearerSkipped) {
+        into.exactMilesFinalTieBreak.push(
+          `${label}: band ${k} took ${bar.id} at ${milesOf(bar)}mi while skipping ` +
+          `${nearerSkipped.id} at ${milesOf(nearerSkipped)}mi on a bit-exact score tie`);
+      }
     }
   }
 

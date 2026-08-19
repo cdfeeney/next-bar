@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
 import { bars as catalog } from '@/lib/bars';
-import { matches } from '@/lib/matching';
+import { matches, rankScore } from '@/lib/matching';
+import { haversineMiles } from '@/lib/distance';
 import { deriveLearnedTaste } from '@/lib/tasteAffinity';
 import { daysAgo } from '@/lib/freshness';
 import { LAST_VERIFIED_HARD_FILTER_DAYS, RESULTS_COUNT } from '@/lib/constants';
@@ -18,6 +19,7 @@ import {
   type SyntheticUser,
 } from './replayHarness';
 import {
+  bandOf,
   checkCascade,
   emptyViolations,
   violationCount,
@@ -199,8 +201,16 @@ function reportTable(results: readonly SegmentResult[]): string {
 }
 
 describe('eval: V8 cascade offline replay', () => {
+  // The 900-user replay runs in beforeAll, NOT in the describe body. In the
+  // body it executed at COLLECTION time: every `npm test` paid for it whatever
+  // was selected, `-t` could not skip it, and any failure surfaced as a suite
+  // collection error rather than a failing test. beforeAll runs only when a
+  // test in this suite is actually selected.
   const violations = emptyViolations();
-  const results = SEGMENTS.map((segment, i) => runSegment(segment, SEED + i, violations));
+  let results: SegmentResult[] = [];
+  beforeAll(() => {
+    results = SEGMENTS.map((segment, i) => runSegment(segment, SEED + i, violations));
+  });
 
   it('reports the release numbers (seed 20260819)', () => {
     // eslint-disable-next-line no-console
@@ -210,7 +220,9 @@ describe('eval: V8 cascade offline replay', () => {
       `near-tie (|delta| <= 1e-12) pairs ordered farther-first: ` +
       `${violations.nearTieFartherFirst.length} of ` +
       `${USERS_PER_SEGMENT * SEGMENTS.length} pages\n` +
-      `${violations.nearTieFartherFirst.slice(0, 3).join('\n')}\n`);
+      `${violations.nearTieFartherFirst.slice(0, 3).join('\n')}\n` +
+      `bit-exact score ties the miles tie-break actually had to decide: ` +
+      `${violations.exactTiesExercised}\n`);
     expect(results).toHaveLength(SEGMENTS.length);
     for (const r of results) {
       expect(r.users).toBeGreaterThanOrEqual(MIN_MEANINGFUL_USERS);
@@ -222,6 +234,18 @@ describe('eval: V8 cascade offline replay', () => {
     expect(violations.learnedTasteWithinBand.slice(0, 3)).toEqual([]);
     expect(violations.exactMilesFinalTieBreak.slice(0, 3)).toEqual([]);
     expect(violationCount(violations)).toBe(0);
+
+    // Zero violations of a check that never fired is not a confirmed invariant.
+    // Printed rather than asserted: the replay must not fail because the real
+    // catalog happens to produce no bit-exact ties, but nobody should read the
+    // line above as evidence the tie-break works if it never had to decide.
+    if (violations.exactTiesExercised === 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        '\nNOTE: exact-miles tie-break VACUOUS on this run — no bit-exact score ' +
+        'tie was ever exercised, so its 0 violations confirm nothing. ' +
+        'See docs/RANKING-EVAL-2026-08-19.md.\n');
+    }
   });
 
   // NOT an invariant assertion. The cascade's tie-break fires on bit-exact
@@ -236,5 +260,63 @@ describe('eval: V8 cascade offline replay', () => {
   it('is reproducible — the same seed reproduces the same numbers', () => {
     const again = runSegment(SEGMENTS[1], SEED + 1, emptyViolations());
     expect(again).toEqual(results[1]);
+  });
+});
+
+/**
+ * The invariant checker's own tests.
+ *
+ * "0 violations across 900 pages" is worth nothing unless the checker can
+ * actually fail. Both cases below are pages the previous version of
+ * `checkCascade` accepted silently: it partitioned the page by band before
+ * counting, so band ORDER was never examined, and it compared miles only
+ * between adjacent SELECTED results, so the page boundary — where the
+ * tie-break matters most — was invisible.
+ */
+describe('cascadeInvariants: the checker catches planted violations', () => {
+  const template = catalog[0];
+  /** Same tags as the template, so rankScore returns a BIT-EXACT equal score. */
+  const at = (id: string, lat: number, lng: number): Bar => ({ ...template, id, lat, lng });
+  const origin = { lat: template.lat, lng: template.lng };
+  /** ~0.7mi north (band 0) and ~2.8mi north (band 1) of the origin. */
+  const near = at('near', template.lat + 0.010, template.lng);
+  const mid = at('mid', template.lat + 0.014, template.lng);
+  const far = at('far', template.lat + 0.040, template.lng);
+  const noTaste = deriveLearnedTaste([], catalog);
+  const check = (page: Bar[], pool: Bar[], cap: number) => checkCascade({
+    page, pool, coords: origin, quizTags: template.tags.slice(0, 1),
+    taste: noTaste, cap, label: 'planted', into: emptyViolations(),
+  });
+
+  it('fixture bands and scores are what the two cases need', () => {
+    expect([bandOf(haversineMiles(origin, near)), bandOf(haversineMiles(origin, mid))]).toEqual([0, 0]);
+    expect(bandOf(haversineMiles(origin, far))).toBe(1);
+    // Bit-exact, not merely close: the tie-break fires on `===`.
+    expect(rankScore(near, template.tags.slice(0, 1), noTaste))
+      .toBe(rankScore(mid, template.tags.slice(0, 1), noTaste));
+  });
+
+  it('flags a page that puts a farther band ahead of a nearer one', () => {
+    // Per-band QUOTAS are correct here (1 from each band, both pools hold 1).
+    // Only the ordering is wrong, which is the case count-only checking missed.
+    const v = check([far, near], [near, far], 2);
+    expect(v.closestBandFirst).toHaveLength(1);
+    expect(v.closestBandFirst[0]).toContain('position 1 is band 0 but follows band 1');
+  });
+
+  it('flags a tied-but-nearer bar skipped at the page boundary', () => {
+    // cap 1: no adjacent pair exists, and the skipped candidate ties rather
+    // than outscores, so neither the ordering scan nor the "better skipped"
+    // scan can see it.
+    const v = check([mid], [near, mid], 1);
+    expect(v.exactMilesFinalTieBreak).toHaveLength(1);
+    expect(v.exactMilesFinalTieBreak[0]).toContain('bit-exact score tie');
+    expect(v.learnedTasteWithinBand).toEqual([]);
+    expect(v.exactTiesExercised).toBe(1);
+  });
+
+  it('accepts the correctly ordered page', () => {
+    const v = check([near, far], [near, far], 2);
+    expect(violationCount(v)).toBe(0);
   });
 });
