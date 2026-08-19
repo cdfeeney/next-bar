@@ -131,11 +131,14 @@ async function main(): Promise<void> {
   // first guard was bypassable. Same check, same reason; it should have been
   // reused here the first time.
   const probe = new Client({ connectionString: databaseUrl }) as unknown as {
-    connectionParameters?: { user?: string; host?: string; port?: number | string };
+    connectionParameters?: {
+      user?: string; host?: string; port?: number | string; options?: string;
+    };
   };
   const effectiveUser = probe.connectionParameters?.user ?? '';
   const effectiveHost = probe.connectionParameters?.host ?? '';
   const effectivePort = String(probe.connectionParameters?.port ?? '');
+  const effectiveOptions = probe.connectionParameters?.options ?? '';
   const ref = resolveProjectRef(effectiveUser);
 
   // The ref says WHICH PROJECT; the endpoint says WHICH SERVER. Checking only
@@ -149,7 +152,7 @@ async function main(): Promise<void> {
     fail('DATABASE_URL is not a parsable URL, so the connection target cannot be verified');
   }
   const endpointRefusal = checkConnectionEndpoint(
-    { host: effectiveHost, port: effectivePort }, authority,
+    { host: effectiveHost, port: effectivePort, options: effectiveOptions }, authority,
   );
   if (endpointRefusal) fail(endpointRefusal);
   const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';

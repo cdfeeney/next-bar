@@ -11,9 +11,10 @@ import { afterAll, describe, expect, it } from 'vitest';
  * is enforced (round-3 panel, Claude). A reordering that moved the refusal
  * after `client.connect()`, or dropped it entirely, would ship green.
  *
- * So this runs the real CLI. Every fixture points DATABASE_URL at 127.0.0.1:1,
- * which nothing listens on: a refusal must arrive with no connection attempt,
- * and the one accepted case must fail at CONNECT rather than at the guard.
+ * So this runs the real CLI. Every fixture points DATABASE_URL at port 1 of a
+ * pooler hostname that does not resolve: a refusal must arrive with no
+ * connection attempt at all, and the one accepted case must get PAST the guard
+ * and die afterwards.
  */
 const REF_A = 'stagingrefbbbbbbbbbb';
 const REF_B = 'prodrefaaaaaaaaaaaaa';
@@ -84,6 +85,18 @@ describe('apply-migration-set CLI target guard', () => {
     }));
     expect(result.status).toBe(1);
     expect(result.output).toContain('not a Supabase pooler host');
+    expect(result.output).not.toContain('ECONNREFUSED');
+  }, 120_000);
+
+  it('refuses, without connecting, when the connection carries startup options', () => {
+    const result = runApplySet(secretsFile('startup-options', {
+      NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
+      NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
+      NEXT_BAR_STAGING_PROJECT_REFS: REF_A,
+      DATABASE_URL: `${url(REF_A)}?options=reference%3D${REF_B}`,
+    }));
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('startup options');
     expect(result.output).not.toContain('ECONNREFUSED');
   }, 120_000);
 

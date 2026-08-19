@@ -107,7 +107,7 @@ describe('checkMigrationTarget', () => {
 // allowlisted, and the operator's banner showed the authority.
 describe('checkConnectionEndpoint', () => {
   const HOST = 'aws-0-us-east-1.pooler.supabase.com';
-  const at = (host: string, port: string) => ({ host, port });
+  const at = (host: string, port: string, options = '') => ({ host, port, options });
 
   it('refuses when pg resolves a different host than the URL authority', () => {
     expect(checkConnectionEndpoint(at('somewhere-else.pooler.supabase.com', '5432'), at(HOST, '5432')))
@@ -204,14 +204,14 @@ describe('checkMigrationTarget with malformed configuration', () => {
 describe('checkConnectionEndpoint outside the Supabase pooler', () => {
   it('refuses an allowlisted-looking username sent to an unrelated server', () => {
     expect(checkConnectionEndpoint(
-      { host: 'production-proxy.example.com', port: '5432' },
+      { host: 'production-proxy.example.com', port: '5432', options: '' },
       { host: 'production-proxy.example.com', port: '5432' },
     )).toContain('not a Supabase pooler host');
   });
 
   it('refuses a host that merely contains the pooler domain', () => {
     expect(checkConnectionEndpoint(
-      { host: 'pooler.supabase.com.evil.example', port: '5432' },
+      { host: 'pooler.supabase.com.evil.example', port: '5432', options: '' },
       { host: 'pooler.supabase.com.evil.example', port: '5432' },
     )).toContain('not a Supabase pooler host');
   });
@@ -232,5 +232,33 @@ describe('project ref shape', () => {
 
   it('resolves nothing from a ref of the wrong length', () => {
     expect(resolveProjectRef('postgres.tooshort')).toBe('');
+  });
+});
+
+// Round-4 panel: libpq `options` reaches the server in the startup packet, and
+// Supabase's pooler documents `options=reference=<ref>` as a tenant selector -
+// a second target-naming input the ref check never saw, suppliable through
+// PGOPTIONS without touching DATABASE_URL.
+describe('checkConnectionEndpoint with startup options', () => {
+  const HOST = 'aws-0-us-east-1.pooler.supabase.com';
+
+  it('refuses a connection carrying a pooler tenant selector', () => {
+    expect(checkConnectionEndpoint(
+      { host: HOST, port: '6543', options: 'reference=' + PROD },
+      { host: HOST, port: '6543' },
+    )).toContain('startup options');
+  });
+
+  it('refuses any startup options, not only the ones it recognises', () => {
+    expect(checkConnectionEndpoint(
+      { host: HOST, port: '6543', options: '-c statement_timeout=0' },
+      { host: HOST, port: '6543' },
+    )).toContain('startup options');
+  });
+
+  it('accepts a connection with no startup options', () => {
+    expect(checkConnectionEndpoint(
+      { host: HOST, port: '6543', options: '  ' }, { host: HOST, port: '6543' },
+    )).toBeNull();
   });
 });

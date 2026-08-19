@@ -132,7 +132,7 @@ export function resolveProjectRef(effectiveUser: string): string {
  * otherwise skip the comparison entirely.
  */
 export function checkConnectionEndpoint(
-  effective: { host: string; port: string },
+  effective: { host: string; port: string; options: string },
   authority: { host: string; port: string },
 ): string | null {
   const effectiveHost = effective.host.trim();
@@ -147,6 +147,17 @@ export function checkConnectionEndpoint(
   if (!effectiveHost.toLowerCase().endsWith(POOLER_HOST_SUFFIX)) {
     return `DATABASE_URL's host is not a Supabase pooler host (${POOLER_HOST_SUFFIX}), so the `
       + 'project ref in its username cannot identify the target';
+  }
+
+  // libpq `options` reaches the server in the startup packet, and Supabase's
+  // shared pooler documents `options=reference=<project-ref>` as a way to name
+  // the tenant. That is a second target selector the ref check never sees - the
+  // same channel class as the `?user=` precedence this guard already closed -
+  // and PGOPTIONS supplies it without touching DATABASE_URL at all. This tool
+  // needs no startup options, so any value is refused rather than parsed.
+  if (effective.options.trim()) {
+    return 'the connection carries libpq startup options (from DATABASE_URL or PGOPTIONS), which can '
+      + 'name a different pooler tenant than the username, so the target cannot be verified';
   }
 
   const effectivePort = effective.port.trim();

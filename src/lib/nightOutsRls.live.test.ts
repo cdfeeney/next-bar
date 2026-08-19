@@ -76,14 +76,19 @@ const URL = databaseUrl();
  *
  * `connectionParameters` is not in @types/pg, hence the narrow cast.
  */
-function effectiveConnection(connectionString: string): { user: string; host: string; port: string } {
+function effectiveConnection(
+  connectionString: string,
+): { user: string; host: string; port: string; options: string } {
   const probe = new Client({ connectionString }) as unknown as {
-    connectionParameters?: { user?: string; host?: string; port?: number | string };
+    connectionParameters?: {
+      user?: string; host?: string; port?: number | string; options?: string;
+    };
   };
   return {
     user: probe.connectionParameters?.user ?? '',
     host: probe.connectionParameters?.host ?? '',
     port: String(probe.connectionParameters?.port ?? ''),
+    options: probe.connectionParameters?.options ?? '',
   };
 }
 
@@ -101,7 +106,7 @@ function assertStagingOnly(connectionString: string): void {
   // which a host-less authority (`postgres:///db?host=elsewhere`) produces.
   const authority = new globalThis.URL(connectionString);
   const endpointRefusal = checkConnectionEndpoint(
-    { host: effective.host, port: effective.port },
+    { host: effective.host, port: effective.port, options: effective.options },
     { host: authority.hostname, port: authority.port },
   );
   if (endpointRefusal) {
