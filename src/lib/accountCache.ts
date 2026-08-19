@@ -394,13 +394,76 @@ export function sealAccountCacheOnSignOut(): void {
  * inherited the deleted user's lists, night history, and vibe profile. The
  * strongest erase action must leave the least residue.
  */
-export function destroyAccountDataOnDeletion(): void {
+export function destroyAccountDataOnDeletion(userId?: string): void {
   if (typeof window === 'undefined') return;
   clearAccountCache();
   try {
     for (const key of FOREIGN_ONLY_KEYS) window.localStorage.removeItem(key);
   } catch {
     // Private mode / quota — the account-cache wipe above already ran.
+  }
+  dropParkedNightOut(userId);
+}
+
+/**
+ * The parked unopened-plan record, which is neither an account-cache key nor a
+ * personal local-only one: it is a MAP keyed by server user id.
+ *
+ * Round-2 panel (Codex, medium). It used to live in sessionStorage, where it
+ * died with the tab; V8-3b moved it to localStorage so a created-but-unopened
+ * plan survives a tab close, and that made it durable residue this function was
+ * not clearing — a deleted account's user id and plan uuid stayed on the device
+ * after the strongest erase action the app offers.
+ *
+ * Only the deleted user's ENTRY is removed, not the key. Another account signed
+ * in on this device has its own entry in the same map, and destroying it would
+ * re-arm that user's Start button over a plan they already created — the exact
+ * duplicate-plan defect the record exists to prevent. Without a user id (a
+ * deletion whose session was already gone) there is nothing to be selective
+ * with, so the whole key goes.
+ *
+ * The literal is repeated from StartNightOutButton on purpose: storage keys must
+ * appear as literals to stay visible to `storageInventory.test.ts`, which is the
+ * guard that makes `docs/V8-DATA-CONTINUITY-2026-08-14.md` executable.
+ */
+const STARTED_NIGHT_OUT_KEY = 'next-bar:started-night-out:v1';
+
+function dropParkedNightOut(userId?: string): void {
+  try {
+    if (userId === undefined) {
+      window.localStorage.removeItem(STARTED_NIGHT_OUT_KEY);
+      return;
+    }
+    const raw = window.localStorage.getItem(STARTED_NIGHT_OUT_KEY);
+    if (raw === null) return;
+    // A value we cannot parse is a value we cannot be SELECTIVE about, and the
+    // one thing known about it is that it is this key (round-3 panel, Codex):
+    // truncated JSON still contains the deleted user's id and plan id in
+    // plaintext. Erasing it whole is the only honest option — falling through
+    // to the catch left those identifiers on the device after the strongest
+    // erase the app offers.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      window.localStorage.removeItem(STARTED_NIGHT_OUT_KEY);
+      return;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      window.localStorage.removeItem(STARTED_NIGHT_OUT_KEY);
+      return;
+    }
+    const { [userId]: _deleted, ...rest } = parsed as Record<string, unknown>;
+    if (Object.keys(rest).length === 0) {
+      window.localStorage.removeItem(STARTED_NIGHT_OUT_KEY);
+      return;
+    }
+    window.localStorage.setItem(STARTED_NIGHT_OUT_KEY, JSON.stringify(rest));
+  } catch {
+    // The STORE itself is unavailable (private mode, quota, a blocked origin).
+    // A malformed VALUE no longer reaches here — it is erased above — so this
+    // is only the case where no write of any kind can land, and there is no
+    // third place to put the erase.
   }
 }
 

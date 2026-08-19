@@ -27,9 +27,24 @@ import {
   setOwnDisplayName,
 } from '@/lib/profile.server';
 import { useHandleAvailability } from '@/hooks/useHandleAvailability';
-import { setPromptedFlag } from '@/components/OnboardingGate';
+import { isSafeReturnPath, setPromptedFlag } from '@/components/OnboardingGate';
 
 const CHARSET_HINT = '3–20 characters: letters, numbers, underscores.';
+
+/**
+ * Where onboarding ends. OnboardingGate records the route it interrupted as
+ * `?next=` — criterion 1: a brand-new account that arrived on an invite link
+ * must land back on THAT plan once onboarding completes, not on `/`.
+ *
+ * Read from `window.location` rather than `useSearchParams()`: every caller is
+ * already browser-only, and the hook would force this page under a Suspense
+ * boundary for a value used exactly at navigation time.
+ */
+function returnDestination(): string {
+  if (typeof window === 'undefined') return '/';
+  const next = new URLSearchParams(window.location.search).get('next');
+  return isSafeReturnPath(next) ? (next as string) : '/';
+}
 
 type SubmitStatus =
   | { kind: 'idle' }
@@ -61,7 +76,7 @@ export default function OnboardingPage(): JSX.Element {
     fetchOwnProfile(supabase).then((profile) => {
       if (cancelled || getCacheEpoch() !== epoch) return;
       if (profile !== null && profile.handle !== null) {
-        router.replace('/');
+        router.replace(returnDestination());
         return;
       }
       // Prefill a previously saved name (e.g. an earlier partial attempt).
@@ -75,7 +90,7 @@ export default function OnboardingPage(): JSX.Element {
 
   const skip = (): void => {
     setPromptedFlag();
-    router.replace('/');
+    router.replace(returnDestination());
   };
 
   const submit = async (event: React.FormEvent): Promise<void> => {
@@ -126,8 +141,9 @@ export default function OnboardingPage(): JSX.Element {
     // spares one profile fetch per session.
     setPromptedFlag();
     // Full navigation (auth-page pattern) so every consumer boots with the
-    // fresh identity.
-    window.location.assign('/');
+    // fresh identity — and back to whatever the gate interrupted, which for an
+    // invite signup is the plan itself.
+    window.location.assign(returnDestination());
   };
 
   return (

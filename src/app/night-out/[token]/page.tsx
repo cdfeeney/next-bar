@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
+import { forgetStartedNightOut } from '@/components/StartNightOutButton';
 import {
   cancelNightOut,
   decideNightOut,
@@ -119,44 +120,108 @@ export default function NightOutPage({
   const token = decodeURIComponent(params.token);
 
   /**
-   * Monotonic epoch, bumped whenever the auth status changes. Every member load
-   * captures it and refuses to paint if it has moved on.
+   * Monotonic epoch identifying WHICH VIEW is on screen — the pair (auth
+   * identity, plan token). Every member load captures it and refuses to paint
+   * if it has moved on.
    *
    * Cold panel (Codex): loadMemberView called setState unconditionally and never
    * saw the effect's `cancelled` flag, so an authenticated load started before a
    * sign-out could settle afterwards and put PRIVATE member data back on screen
    * for a signed-out viewer. The effect's own cancel flag could not cover it —
    * the direct callers (join, rejoin, refresh) are outside that closure.
+   *
+   * Fix round 1 (both lanes): the guard covered auth ONLY, which left the same
+   * defect shape alive one axis over. Next's client router REUSES this component
+   * across `/night-out/A` → `/night-out/B`, so a load for plan A could settle and
+   * paint A's private member state under B's URL — no remount, no sign-out, and
+   * the auth epoch never moves. The epoch is the whole view identity now, which
+   * is why it is no longer called authEpoch: naming it for one of its two axes is
+   * what made adding the second one feel out of scope.
    */
-  const authEpoch = useRef(0);
+  const viewEpoch = useRef(0);
   // Guards every withRefresh action against re-entrant taps. See withRefresh.
   const actionInFlight = useRef(false);
-  useEffect(() => {
-    authEpoch.current += 1;
+  /**
+   * LAYOUT effect, not a passive one (round-5 panel, Codex).
+   *
+   * Passive effects flush in a task AFTER paint, so between React committing a
+   * new (auth, token) pair and this effect running there is a window where
+   * `viewEpoch.current` still holds the OLD value. A member read resolving in
+   * that window compares the old epoch against itself, passes, and paints the
+   * previous plan's private data into the committed new view — the exact defect
+   * the epoch exists to stop, arriving through the guard rather than around it.
+   *
+   * `StartNightOutButton` already learned this on its own identity ref and says
+   * so in its comments; the page did not get the lesson. A layout effect runs
+   * synchronously inside the commit, so no external task can observe the epoch
+   * stale against a committed UI. It still runs before the passive loading
+   * effect below, which is the ordering that effect depends on.
+   */
+  useLayoutEffect(() => {
+    viewEpoch.current += 1;
     // Blocking a stale load from painting is only half of it (cold panel 2,
     // Codex): on a sign-out the member view ALREADY on screen stayed rendered
     // until the anonymous preview settled, so accepted-member data sat in front
     // of a signed-out viewer for as long as that request took. Drop it now and
-    // let the reload decide what a signed-out viewer may see.
-    if (auth.status !== 'signed-in') {
-      setState((current) => (current.kind === 'member' ? { kind: 'loading' } : current));
-    }
-  }, [auth.status]);
+    // let the reload decide what the new viewer may see.
+    //
+    // The same argument applies unchanged to a token change, which is why this
+    // clears on ANY epoch bump rather than on sign-out only: while plan B loads,
+    // plan A's member list — names, statuses, the whole board — would otherwise
+    // sit on screen under plan B's URL. That is the identical leak as the async
+    // one the epoch guard blocks, arriving synchronously instead.
+    //
+    // EVERY settled kind, not just 'member' (round-3 panel, Codex, HIGH). Only
+    // the member view was cleared, because the reasoning above was about
+    // LEAKING private data and a preview is public bearer data. That missed
+    // what the stale view can still DO: plan A's preview stayed on screen and
+    // stayed interactive under plan B's URL, and its Join button reads `token`
+    // from the current render — so tapping the "Join" under A's title and A's
+    // host accepted membership in B. A settled view whose identity has moved on
+    // is not a display problem, it is a live control wired to the wrong plan.
+    setState((current) => (current.kind === 'loading' ? current : { kind: 'loading' }));
+    // Everything else on screen belongs to the view that is leaving, too
+    // (round-5 panel, Codex). `shareNotice` is the one that bites: when the
+    // clipboard write is refused the notice holds plan A's share URL as a
+    // selectable fallback, and it sat there under plan B — offering one plan's
+    // invite link from another plan's page. `actionError` and `suggestInput`
+    // are the same argument with a smaller blast radius.
+    setShareNotice(null);
+    setActionError(null);
+    setSuggestInput('');
+    // This effect is declared BEFORE the loading effect, so on either change the
+    // epoch has already moved by the time the new load captures it.
+  }, [auth.status, token]);
 
+  /**
+   * `startedAt` is the epoch the CALLER was looking at, and it defaults to the
+   * current one only for callers with nothing in flight ahead of them.
+   *
+   * Cold-panel round 2 (Codex): reading `viewEpoch.current` here was too late.
+   * Every direct caller awaits a WRITE first (join, decline, an action refresh),
+   * and only then calls this — so a user who taps Join on plan A and navigates
+   * to plan B before the RPC answers reaches this line after the epoch has
+   * already moved, captures plan B's epoch, and paints plan A's private member
+   * board under plan B's URL. The guard compared the load against itself.
+   *
+   * The view identity has to be captured before the FIRST await of the whole
+   * sequence, not before the last one.
+   */
   const loadMemberView = useCallback(
-    async (planId: string): Promise<boolean> => {
+    async (planId: string, startedAt?: number): Promise<boolean> => {
       const supabase = getBrowserSupabase();
       if (!supabase) return false;
-      const epoch = authEpoch.current;
+      const epoch = startedAt ?? viewEpoch.current;
+      if (epoch !== viewEpoch.current) return false;
       const [plan, members, board] = await Promise.all([
         getNightOut(supabase, planId),
         getNightOutMembers(supabase, planId),
         getNightOutBoard(supabase, planId),
       ]);
       if (plan === null) return false;
-      // Auth moved while we were away: this answer belongs to a session that is
-      // no longer the one looking at the screen.
-      if (epoch !== authEpoch.current) return false;
+      // The view moved while we were away: this answer belongs to a session, or
+      // a plan, that is no longer the one on screen.
+      if (epoch !== viewEpoch.current) return false;
       setState({
         kind: 'member',
         plan,
@@ -181,7 +246,19 @@ export default function NightOutPage({
   useEffect(() => {
     if (!isSettled(state.kind)) return;
     if (peekPendingInvite() === token) consumePendingInvite();
-  }, [state.kind, token]);
+    // THIS is what "opened" means (round-9 panel, Codex). StartNightOutButton
+    // used to clear its parked record and then call `router.push`, which is
+    // fire-and-forget — a navigation that failed or was superseded before the
+    // route committed dropped the record anyway, and a later remount armed
+    // Start into a duplicate plan. The record is spent where the plan actually
+    // renders, for the member who owns it, and nowhere else.
+    // ...and only for THIS plan (round-10 panel, Codex): clearing whatever the
+    // user had parked meant opening any plan they belong to spent plan A's
+    // record, re-arming Start into a duplicate.
+    if (state.kind === 'member' && auth.status === 'signed-in') {
+      forgetStartedNightOut(auth.user.id, state.plan.id);
+    }
+  }, [state, token, auth]);
 
   useEffect(() => {
     if (auth.status === 'loading') return;
@@ -191,20 +268,32 @@ export default function NightOutPage({
       return;
     }
     let cancelled = false;
+    // The epoch this effect belongs to, captured before its first await, exactly
+    // as `loadMemberView` documents its contract (round-6 panel, Claude).
+    //
+    // `cancelled` alone does NOT cover this, and the layout effect above made
+    // that worse rather than better: the epoch bump now happens synchronously
+    // inside the commit, while THIS effect's cleanup runs in the later passive
+    // flush. In the window between them the epoch has already moved and
+    // `cancelled` is still false, so a resolve settling there passed both
+    // guards and painted the previous view's private board under the new token.
+    // Every other caller got this fix; the one that runs on every navigation
+    // did not.
+    const startedAt = viewEpoch.current;
     void (async () => {
       if (auth.status === 'signed-in') {
         // Viewing never mutates (review round 1, both lanes): an existing
         // member — pending, accepted, or declined — RESOLVES straight to
         // their plan view. Joining is always the explicit button below.
         const planId = await resolveNightOutByToken(supabase, token);
-        if (cancelled) return;
-        if (planId !== null && (await loadMemberView(planId))) return;
-        if (cancelled) return;
+        if (cancelled || startedAt !== viewEpoch.current) return;
+        if (planId !== null && (await loadMemberView(planId, startedAt))) return;
+        if (cancelled || startedAt !== viewEpoch.current) return;
       }
       // Signed-out, non-member, or the link is dead/cancelled: bearer
       // preview only.
       const preview = await previewNightOut(supabase, token);
-      if (cancelled) return;
+      if (cancelled || startedAt !== viewEpoch.current) return;
       setState(preview !== null ? { kind: 'preview', preview } : { kind: 'gone' });
     })();
     return () => {
@@ -237,12 +326,17 @@ export default function NightOutPage({
       // that actually succeeded.
       if (actionInFlight.current) return;
       actionInFlight.current = true;
+      const startedAt = viewEpoch.current;
       setActionError(null);
       try {
         const ok = await action();
+        // The view this action belonged to is gone — neither its error banner nor
+        // its refresh addresses whatever is on screen now.
+        if (startedAt !== viewEpoch.current) return;
         if (!ok) {
           const supabase = capacityRefusable ? getBrowserSupabase() : null;
           const full = supabase ? await isNightOutFullByToken(supabase, token) : false;
+          if (startedAt !== viewEpoch.current) return;
           // Re-read BEFORE advising a retry (round-2 review, Codex, medium).
           // 0059's expected-status/revision guard makes a rejection
           // deterministic: this view still holds the revision the RPC just
@@ -251,7 +345,8 @@ export default function NightOutPage({
           // means the next tap carries the truth. Awaited, not
           // fired-and-forgotten, so the error below survives the re-render
           // rather than racing it.
-          if (state.kind === 'member') await loadMemberView(state.plan.id);
+          if (state.kind === 'member') await loadMemberView(state.plan.id, startedAt);
+          if (startedAt !== viewEpoch.current) return;
           setActionError(
             full
               ? 'This night out is full.'
@@ -259,7 +354,7 @@ export default function NightOutPage({
           );
           return;
         }
-        if (state.kind === 'member') await loadMemberView(state.plan.id);
+        if (state.kind === 'member') await loadMemberView(state.plan.id, startedAt);
       } finally {
         actionInFlight.current = false;
       }
@@ -327,21 +422,34 @@ export default function NightOutPage({
               void (async () => {
                 const supabase = getBrowserSupabase();
                 if (!supabase) return;
+                const startedAt = viewEpoch.current;
                 setActionError(null);
                 const planId = await joinNightOutByToken(supabase, token);
+                if (startedAt !== viewEpoch.current) return;
                 if (planId === null) {
                   // The link is fine when the plan is merely full; saying it
                   // expired sends the user to ask for a new one.
+                  const full = await isNightOutFullByToken(supabase, token);
+                  // Round 4 (Codex): the capacity probe is another await, and
+                  // the banner it produces belongs to the view that asked.
+                  if (startedAt !== viewEpoch.current) return;
                   setActionError(
-                    (await isNightOutFullByToken(supabase, token))
+                    full
                       ? 'This night out is full.'
                       : "Couldn't join — the link may have expired.",
                   );
-                } else if (!(await loadMemberView(planId))) {
+                } else if (!(await loadMemberView(planId, startedAt))) {
                   // The join SUCCEEDED and the membership is stored; only the
                   // follow-up read failed. Reporting "full" here contradicted
                   // the database when the join took the last seat (fresh-cycle
                   // review, Codex).
+                  //
+                  // Round 4 (Codex): `loadMemberView` returning false is
+                  // AMBIGUOUS — it means either "the read failed" or "the view
+                  // moved on and I refused to paint". Only the first is a
+                  // failure to report. Without this, a stale abort announced
+                  // "You're in" over whatever plan is now on screen.
+                  if (startedAt !== viewEpoch.current) return;
                   setActionError("You're in — but this page couldn't load. Refresh to see it.");
                 }
               })();
@@ -362,9 +470,14 @@ export default function NightOutPage({
               void (async () => {
                 const supabase = getBrowserSupabase();
                 if (!supabase) return;
+                const startedAt = viewEpoch.current;
                 setActionError(null);
                 const planId = await declineNightOutByToken(supabase, token);
-                if (planId === null || !(await loadMemberView(planId))) {
+                if (startedAt !== viewEpoch.current) return;
+                if (planId === null || !(await loadMemberView(planId, startedAt))) {
+                  // Same ambiguity as the join branch above (round 4, Codex):
+                  // a refused paint is not a failed decline.
+                  if (startedAt !== viewEpoch.current) return;
                   setActionError("Couldn't send that — the link may have expired.");
                 }
               })();
@@ -461,14 +574,21 @@ export default function NightOutPage({
             type="button"
             onClick={() => {
               void (async () => {
+                // The clipboard write is an await like any other, so its
+                // continuation belongs to the view that started it (round-6
+                // panel, Codex). A late rejection otherwise printed plan A's
+                // bearer URL under plan B.
+                const startedAt = viewEpoch.current;
                 const url = `${window.location.origin}/night-out/${token}`;
                 try {
                   await navigator.clipboard.writeText(url);
+                  if (startedAt !== viewEpoch.current) return;
                   setShareNotice('Invite link copied.');
                 } catch {
                   // Clipboard is permission-gated and absent in some in-app
                   // browsers; show the link so it can still be copied by hand
                   // rather than failing silently.
+                  if (startedAt !== viewEpoch.current) return;
                   setShareNotice(url);
                 }
               })();

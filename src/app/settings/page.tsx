@@ -158,10 +158,14 @@ export default function SettingsPage(): JSX.Element {
     // account then passed the foreign guard and inherited them). try/finally
     // (Opus review): the redirect must happen even if signOut throws — the
     // account no longer exists, staying on a signed-in-looking page lies.
+    // Captured BEFORE signOut: the parked unopened-plan record is a map keyed
+    // by user id, and by the time the `finally` runs `auth` no longer names the
+    // account being deleted (round-2 panel, Codex).
+    const deletedUserId = auth.status === 'signed-in' ? auth.user.id : undefined;
     try {
       await auth.signOut();
     } finally {
-      destroyAccountDataOnDeletion();
+      destroyAccountDataOnDeletion(deletedUserId);
       window.location.assign('/');
     }
   };

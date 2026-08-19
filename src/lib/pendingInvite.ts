@@ -2,10 +2,9 @@
  * Invite-context handoff across the sign-in flow (V8-3 criterion 7).
  *
  * Opening a Night Out share link signed-out must land the user back on THAT
- * exact plan after they sign in. The auth flow redirects to a fixed post-auth
- * path, so the context rides sessionStorage: the share page stores the token
- * before pushing to /auth, and PendingInviteRedirect (mounted in the root
- * layout) consumes it on the first signed-in render anywhere in the app.
+ * exact plan after they sign in. The share page stores the token before pushing
+ * to /auth, and PendingInviteRedirect (mounted in the root layout) consumes it
+ * on the first signed-in render anywhere in the app.
  *
  * sessionStorage ALONE was the original design — "one tab's in-flight intent,
  * must not leak to other tabs or survive the session". That reasoning is sound
@@ -17,9 +16,38 @@
  * which is who an invite link is usually for.
  *
  * So the token is written to BOTH: sessionStorage for the same-tab case, and
- * localStorage with a short TTL for the cross-tab handoff. The TTL is what
+ * localStorage with a short TTL for the cross-TAB handoff. The TTL is what
  * keeps the original concern honest — the context still must not survive as
- * durable state, it just has to outlive a tab. Consume clears both.
+ * durable state, it just has to outlive a tab.
+ *
+ * THIS FILE IS NOT THE WHOLE HANDOFF ANY MORE. Web Storage is scoped to an
+ * origin within ONE browser profile, so these two stores recover the new-tab
+ * case and nothing else:
+ *
+ *   new tab, same browser      RECOVERED by the localStorage copy
+ *   a different browser        NOT recoverable — separate storage, and PKCE
+ *                              refuses the code exchange there anyway
+ *   a mail app's webview       usually NOT recoverable — same two reasons
+ *
+ * `/auth` also puts the token in the confirmation link's own `redirect_to` when
+ * a signup begins with an invite pending. That is NOT a cross-profile fix, and
+ * saying so was the round-6 correction: `@supabase/ssr` pins PKCE, so the code
+ * exchange needs the verifier held by the profile that started the signup, and
+ * a link opened elsewhere fails before any redirect runs. What the URL copy
+ * actually buys is surviving the 30-minute TTL below within the same profile.
+ * The last two rows stay OPEN — see docs/V8-3-HANDOFF-2026-08-16b.md.
+ *
+ * (This header previously said the cross-profile case "remains OPEN" and needed
+ * "a different goal" — round 4, Claude. That was true when it was written and
+ * false by the time it was read, which is the exact failure mode this goal has
+ * filed against its own docs three times. If you change where the token can
+ * ride, change this paragraph.)
+ *
+ * What is genuinely still open: a signup that begins with NO readable pending
+ * invite. If both stores refuse a write — private mode at quota — nothing is
+ * stored, so nothing can ride the URL either, and the user lands on the default
+ * post-auth page. Password RECOVERY deliberately never carries an invite: that
+ * link exists to reach the account card's "Set a password" (round 4, Codex).
  */
 
 const PENDING_INVITE_KEY = 'next-bar:pending-invite:v1';

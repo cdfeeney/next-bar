@@ -204,6 +204,23 @@ if (!URL && !SKIP_ALLOWED) {
 }
 const describeLive = URL ? describe : describe.skip;
 
+/**
+ * Every other test in this file runs inside a transaction that ROLLS BACK,
+ * which is what makes pointing it at the serving database safe. Criterion 3's
+ * two-session race cannot be expressed that way — one connection never observes
+ * its own uncommitted rows as a race — so that one test COMMITS and cleans up
+ * after itself.
+ *
+ * Committing to the serving database is an attended action here, so it is
+ * opt-in and the default is off. Note the direction: an unset flag means "not
+ * authorized", never "assume yes". That is the opposite of the fail-open skip
+ * this round fixed in the e2e spec — there, absent config silently voided
+ * coverage that was supposed to have run; here, absent authorization declines
+ * to write, which is the safe answer and a visible skip in the run output.
+ */
+const COMMITTING_ALLOWED = process.env.NEXT_BAR_ALLOW_COMMITTING_TESTS === '1';
+const itCommitting = COMMITTING_ALLOWED ? it : it.skip;
+
 describeLive('0044 night_outs — live RLS/RPC denials', () => {
   let db: Client;
 
@@ -668,11 +685,27 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * (on_auth_user_created) creates the profile row. Inside a rolled-back
    * transaction that is a fixture factory, and it always was.
    */
-  async function makeIdentities(count: number): Promise<string[]> {
+  /**
+   * `onCreated` fires the instant a row is real, BEFORE anything that can throw.
+   *
+   * Round-8 panel (Codex). The committing test collects ids incrementally so a
+   * failure part-way through still cleans up — but the leak had moved INSIDE
+   * this helper: the insert autocommits, and the profile-trigger assertion below
+   * runs before the return, so a failed assertion stranded a row the caller
+   * never learned about. Collecting incrementally at the call site cannot fix
+   * that, because the call site is exactly what never runs.
+   *
+   * Only the committing test passes a sink; the rollback tests do not need one.
+   */
+  async function makeIdentities(
+    count: number,
+    onCreated?: (id: string) => void,
+  ): Promise<string[]> {
     const ids: string[] = [];
     for (let i = 0; i < count; i += 1) {
       const id = randomUUID();
       await db.query('insert into auth.users (id) values ($1)', [id]);
+      onCreated?.(id);
       ids.push(id);
     }
     // The trigger owes us a profile for each, or the FK below would fail anyway.
@@ -1594,6 +1627,175 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       expect(after.plan, 'get_night_out does not carry the live revision').toBe(moved);
       expect(after.list, 'get_my_night_outs does not carry the live revision').toBe(moved);
     });
+  });
+
+  /**
+   * Criterion 3, and the ONLY test in this file that commits.
+   *
+   * 0050 fixed a check-then-act seam that exists only ACROSS two sessions: B's
+   * pre-lock duplicate check runs against a snapshot taken before A's insert
+   * commits, so B reaches the advisory lock believing the target is not a
+   * member, and — before 0050 — asked about capacity instead of re-reading its
+   * own subject, returning false for an invite that had in fact just succeeded.
+   *
+   * A single connection inside a rolled-back transaction cannot express that:
+   * one session never observes its own uncommitted rows as a race. So the
+   * fixture is committed and torn down in `finally` instead. Two facts make
+   * that acceptable on the serving database: the rows are synthetic identities
+   * created by this file, and the plan cascade removes everything hanging off
+   * it. Nothing here touches a row it did not create.
+   *
+   * The handoff is gated on `pg_stat_activity` showing B parked on a Lock
+   * rather than on a sleep. That is not a speed optimisation — a sleep would
+   * make the test pass for the wrong reason whenever B had not yet reached the
+   * lock, which is exactly the interleaving under test.
+   */
+  itCommitting('a concurrent duplicate invite at the cap boundary is idempotent, not a failure (criterion 3)', async () => {
+    const db2 = new Client({
+      connectionString: URL as string,
+      ssl: { rejectUnauthorized: false },
+      statement_timeout: 30000,
+      application_name: 'v8-3-invite-race-b',
+    });
+    await db2.connect();
+
+    let planId: string | null = null;
+    let identities: string[] = [];
+    try {
+      // The cleanup can only delete what it knows about, so it has to learn
+      // each id at the moment that id becomes real — which is inside the helper,
+      // right after the autocommitted insert and BEFORE the profile-trigger
+      // assertion that can throw (round 8, Codex). Collecting the helper's
+      // RETURN value incrementally, which is what this loop used to do, still
+      // lost every row whenever that assertion failed.
+      await makeIdentities(21, (id) => identities.push(id));
+      const [owner, target, extra, ...fillers] = identities;
+
+      // Committed fixture: 19 seats (owner + 18 fillers), one seat left, and
+      // `target` deliberately NOT yet a member. This transaction COMMITS —
+      // `SET LOCAL ROLE` and the jwt claim are transaction-scoped, so the
+      // fixture has to be built inside one and then made visible to session B.
+      await db.query('BEGIN');
+      await asRole('authenticated', owner);
+      const { rows: made } = await db.query(
+        'select public.create_night_out(current_date, $1) as id',
+        ['invite race probe'],
+      );
+      planId = made[0].id as string;
+      for (const uid of fillers.slice(0, 18)) {
+        await db.query('select public.invite_to_night_out($1,$2) as ok', [planId, uid]);
+      }
+      await db.query('COMMIT');
+
+      expect(
+        (await db.query('select public.night_out_seat_count($1) as n', [planId])).rows[0].n,
+        'the fixture did not stop one seat short of the cap',
+      ).toBe(19);
+      // Baseline, not a hard-coded fixture count: the invariant under test is
+      // that the DUPLICATE adds no event, whatever the setup happened to emit.
+      const { rows: before } = await db.query(
+        "select count(*)::int as n from public.night_out_events"
+        + " where night_out_id=$1 and kind='invited'",
+        [planId],
+      );
+      const invitedEventsBefore = before[0].n as number;
+
+      const { rows: pidRows } = await db2.query('select pg_backend_pid() as pid');
+      const bPid = pidRows[0].pid as number;
+
+      // A: invite target, hold the transaction open. The lock is held and the
+      // insert is uncommitted.
+      await db.query('BEGIN');
+      await asRole('authenticated', owner);
+      const { rows: aRows } = await db.query(
+        'select public.invite_to_night_out($1,$2) as ok',
+        [planId, target],
+      );
+      expect(aRows[0].ok, 'the uncontended invite failed before the race started').toBe(true);
+
+      // B: the same invite. Passes the fast path (A is uncommitted, so target
+      // is invisible), then parks on the advisory lock.
+      const bInvite = (async () => {
+        await db2.query('BEGIN');
+        await db2.query('SET LOCAL ROLE authenticated');
+        await db2.query("SELECT set_config('request.jwt.claims', $1, true)", [
+          JSON.stringify({ sub: owner, role: 'authenticated' }),
+        ]);
+        return db2.query('select public.invite_to_night_out($1,$2) as ok', [planId, target]);
+      })();
+
+      // Wait for B to be genuinely blocked ON THE LOCK before releasing A.
+      let blocked = false;
+      for (let attempt = 0; attempt < 100 && !blocked; attempt += 1) {
+        const { rows } = await db.query(
+          "select 1 from pg_stat_activity where pid = $1 and wait_event_type = 'Lock'",
+          [bPid],
+        );
+        blocked = rows.length === 1;
+        if (!blocked) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(blocked, 'session B never reached the advisory lock; the race did not happen').toBe(true);
+
+      await db.query('COMMIT');
+
+      // THE ASSERTION. Seats are now 20 and target is already a member. Before
+      // 0050 this returned false — "your invite failed" for an invite that had
+      // just succeeded.
+      const bResult = await bInvite;
+      expect(
+        bResult.rows[0].ok,
+        'a duplicate invite at the cap boundary reported failure instead of being idempotent',
+      ).toBe(true);
+      await db2.query('COMMIT');
+
+      // Idempotent means idempotent: one row, one event, one seat consumed.
+      const { rows: memberRows } = await db.query(
+        'select count(*)::int as n from public.night_out_members where night_out_id=$1 and user_id=$2',
+        [planId, target],
+      );
+      expect(memberRows[0].n, 'the racing invites created two membership rows').toBe(1);
+      expect(
+        (await db.query('select public.night_out_seat_count($1) as n', [planId])).rows[0].n,
+        'the race consumed more than one seat',
+      ).toBe(20);
+      const { rows: eventRows } = await db.query(
+        "select count(*)::int as n from public.night_out_events"
+        + " where night_out_id=$1 and kind='invited'",
+        [planId],
+      );
+      expect(
+        eventRows[0].n - invitedEventsBefore,
+        'the racing pair emitted more than the one invited event that actually happened',
+      ).toBe(1);
+
+      // And the cap still holds for a genuinely new member — the idempotent
+      // answer must not have become "always true". Rolled back: this one is
+      // only interesting for its return value.
+      await db.query('BEGIN');
+      await asRole('authenticated', owner);
+      const { rows: over } = await db.query(
+        'select public.invite_to_night_out($1,$2) as ok',
+        [planId, extra],
+      );
+      expect(over[0].ok, 'the cap stopped being enforced for a new member').toBe(false);
+      await db.query('ROLLBACK');
+    } finally {
+      // Best-effort unwind, in reverse order of creation. Any transaction left
+      // open by a failed assertion is rolled back first, or the deletes block
+      // on their own locks.
+      await db2.query('ROLLBACK').catch(() => {});
+      await db.query('ROLLBACK').catch(() => {});
+      await db.query('RESET ROLE').catch(() => {});
+      if (planId !== null) {
+        await db.query('delete from public.night_outs where id=$1', [planId]).catch(() => {});
+      }
+      if (identities.length > 0) {
+        await db
+          .query('delete from auth.users where id = any($1::uuid[])', [identities])
+          .catch(() => {});
+      }
+      await db2.end().catch(() => {});
+    }
   });
 
   it('two plans on the SAME night stay isolated from each other (criterion 9)', async () => {

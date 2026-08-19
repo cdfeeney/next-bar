@@ -162,7 +162,17 @@ test.describe('identity onboarding (signed in)', () => {
     await stubSupabase(page, { profileHandle: null });
     await page.goto('/settings');
 
-    await page.waitForURL('**/onboarding');
+    // The gate now carries the route it interrupted as ?next= (criterion 1), so
+    // the URL is no longer a bare /onboarding — a glob of '**/onboarding' stops
+    // matching the moment a query string exists. Assert the pathname and the
+    // carried value separately, which pins the behaviour instead of the shape.
+    await page.waitForURL(/\/onboarding\?next=/);
+    const gateUrl = new URL(page.url());
+    expect(gateUrl.pathname).toBe('/onboarding');
+    expect(
+      gateUrl.searchParams.get('next'),
+      'the gate must carry the interrupted route so onboarding can return to it',
+    ).toBe('/settings');
     await expect(
       page.getByRole('heading', { name: /pick how friends see you/i }),
     ).toBeVisible();
