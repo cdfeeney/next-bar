@@ -108,6 +108,13 @@ console.log(`[apply-one] file     : ${file}  sha256 ${
 const pg = new Client(clientConfig);
 try {
   await pg.connect();
+  // The same two bounds apply-migration-set.ts sets, for the same reason: an
+  // unbounded DDL wait holds its locks while every later query queues behind
+  // it, with no recourse but killing the process. Plain SET, not SET LOCAL —
+  // there is no surrounding transaction here for LOCAL to attach to, and
+  // SET LOCAL outside one is a warning that changes nothing.
+  await pg.query("SET lock_timeout = '10s'");
+  await pg.query("SET statement_timeout = '300s'");
   await pg.query(sql);
   console.log(`ok ${file}`);
 } catch (err) {
