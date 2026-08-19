@@ -425,14 +425,29 @@ export function useFollows(): UseFollowsReturn {
           prev.filter((p) => p.handle.toLowerCase() !== target),
         );
         if (!pending.id) return;
-        void cancelFollowRequest(supabase, pending.id).then((removed) => {
-          if (removed || getCacheEpoch() !== epoch) return;
+        // Wrapped like the other two writes (round-6 panel, BOTH lanes). It is
+        // the only optimistic write that was not, and `requested` is re-read by
+        // the same hydrate: a revalidation in the air across a withdrawal put
+        // "Requested" back after the server had already cancelled it. That is
+        // reachable only because THIS candidate added the revalidation path —
+        // at the base commit the hydrate ran on auth change alone.
+        const finishCancel = beginCircleWrite();
+        const restoreRequest = (): void =>
           setRequested((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
               ? prev
               : [...prev, pending],
           );
-        });
+        void cancelFollowRequest(supabase, pending.id)
+          .then((removed) => {
+            if (removed || getCacheEpoch() !== epoch) return;
+            restoreRequest();
+          })
+          .catch(() => {
+            if (getCacheEpoch() !== epoch) return;
+            restoreRequest();
+          })
+          .finally(finishCancel);
         return;
       }
 

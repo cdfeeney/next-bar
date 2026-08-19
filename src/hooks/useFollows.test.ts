@@ -644,6 +644,39 @@ describe('useFollows — followers + mutuals (B3c)', () => {
     unmount();
   });
 
+  it('a revalidation in flight across a withdrawal does not restore the request', async () => {
+    // Withdrawing an outgoing request is an optimistic write like the others,
+    // and `requested` is re-read by the same hydrate. Left unwrapped, an older
+    // hydrate landed after the server had cancelled and put "Requested" back
+    // (round-6 panel, BOTH lanes).
+    fetchFollowsMock.mockResolvedValue([]);
+    fetchOutgoingRequestsMock.mockResolvedValue([MAYA]);
+    const { result, unmount } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.isRequested('Claire_R')).toBe(true));
+
+    // Put a hydrate in the air (the tab came back), then withdraw while it is
+    // still out. Its `requested: [MAYA]` answer must be dropped, not applied.
+    let settleHydrate: () => void = () => {};
+    fetchOutgoingRequestsMock.mockImplementation(
+      () => new Promise((resolve) => { settleHydrate = () => resolve([MAYA]); }),
+    );
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    cancelFollowRequestMock.mockResolvedValue(true);
+    act(() => result.current.toggleFollow('Claire_R'));
+    expect(result.current.isRequested('Claire_R')).toBe(false);
+
+    fetchOutgoingRequestsMock.mockResolvedValue([]);
+    await act(async () => {
+      settleHydrate();
+    });
+
+    await waitFor(() => expect(result.current.isRequested('Claire_R')).toBe(false));
+    unmount();
+  });
+
   it('coming back to the tab re-checks the circle', async () => {
     // The cross-tab ping is a best-effort localStorage write — quota or private
     // mode swallows it. Returning to the tab must re-check regardless, without
