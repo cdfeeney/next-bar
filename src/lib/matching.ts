@@ -12,7 +12,7 @@ import {
   type LearnedTaste,
 } from '@/lib/tasteAffinity';
 import { daysAgo } from '@/lib/freshness';
-import { nycHour, nycNightKey } from '@/lib/nightKey';
+import { nycHour } from '@/lib/nightKey';
 import {
   LATE_CLUB_BOOST,
   LATE_NIGHT_END_HOUR,
@@ -208,47 +208,17 @@ export function matches(args: MatchesArgs): Bar[] {
 
   const top = ranked.slice(0, cap).map((r) => r.bar);
 
-  // Exploration slot (B7b — ε-greedy, simplified): on surfaces showing 10+
-  // results, the last slot goes to a QUALIFIED long-tail pick (still vibe-
-  // matched at or above the Jaccard floor) instead of the Nth-best score —
-  // pure exploit never re-surfaces the catalog's depth. Deterministically
-  // seeded from (profile tags, day): stable within a day, rotates daily.
-  // Small surfaces (default MAX_RESULTS = 3) are never taxed a slot.
-  if (cap >= EXPLORATION_MIN_RESULTS && ranked.length > cap) {
-    // OPEN CONFLICT (Codex review 2026-08-19, unresolved): "qualified" used
-    // to mean "cleared the adaptive Jaccard gate". The V8 cascade removed that
-    // gate, so the tail is now simply the band-ordered remainder — the pick is
-    // no longer filtered for vibe at all. On a 10-slot surface this also means
-    // the last slot is NOT ordered by learned taste or exact miles, which
-    // contradicts cascade steps 3-4. Only surfaces at EXPLORATION_MIN_RESULTS
-    // or above are affected; Next Bar?'s five slots never enter this branch.
-    const tail = ranked.slice(cap);
-    const seed = explorationSeed(profile.tags, now ?? new Date());
-    top[cap - 1] = tail[seed % tail.length].bar;
-  }
+  // The B7b exploration slot used to overwrite the last result on 10+ slot
+  // surfaces with a deterministic long-tail pick. REMOVED 2026-08-19 by
+  // operator direction: V8 ranking correctness wins over the old exploration
+  // behavior, and every returned result must be ordered by
+  // distance band -> learned taste -> exact miles. The overwrite bypassed
+  // steps 3 and 4 for the Map's tenth result. If exploration is wanted again
+  // it returns as its own goal, designed to fit the cascade rather than to
+  // punch a hole in it. The deleted implementation (explorationSeed, the
+  // deterministic night-keyed pick and its evals) is recoverable from git at
+  // e4299f4 — do not rebuild it from scratch.
 
   return top;
 }
 
-/**
- * FNV-1a hash of (sorted profile tags + effective NIGHT) — deterministic
- * for a given profile/night so the pick doesn't jitter between renders,
- * rotating at the NYC 6am rollover (nightKey.ts), never mid-evening
- * (DeepSeek review: a UTC-midnight key rotated at 8pm ET — prime time for
- * a NYC product; a LOCAL rollover, which this used to use, only got that
- * right for users whose device happened to be in New York).
- *
- * KNOWN + ACCEPTED FOR BETA: no per-user salt — users with identical tag
- * profiles share a night's pick. Decorrelating needs an identity/device
- * input this pure module doesn't have; revisit with the analytics
- * decision (escalation queue).
- */
-function explorationSeed(tags: VibeTag[], now: Date): number {
-  const input = `${[...tags].sort().join(',')}|${nycNightKey(now)}`;
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash;
-}

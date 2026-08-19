@@ -129,7 +129,7 @@ describe('eval: neighborhood-filter honesty (MED-12)', () => {
   });
 });
 
-describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
+describe('eval: no exploration slot — every result is cascade-ordered', () => {
   function bigPool(): Bar[] {
     // 30 bars sharing profile tags with descending extra overlap so the
     // score order is unambiguous, all fresh, one neighborhood.
@@ -143,7 +143,11 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
     );
   }
 
-  it('surfaces with >= EXPLORATION_MIN_RESULTS reserve the LAST slot for a qualified long-tail pick', () => {
+  // The B7b exploration slot was REMOVED on 2026-08-19 (operator direction:
+  // V8 ranking correctness wins). These pin its absence — every returned
+  // result, including the last one on a 10-slot surface, must come straight
+  // from the cascade order.
+  it('no slot is sacrificed: the last result IS the cascade-ordered Nth', () => {
     const results = matches({
       profile: PROFILE,
       coords: null,
@@ -155,30 +159,18 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
     });
     expect(results).toHaveLength(EXPLORATION_MIN_RESULTS);
 
-    // Re-rank without exploration by scoring directly.
     const pureTop = [...bigPool()]
       .map((b) => ({ b, s: rankScore(b, PROFILE.tags, EMPTY_TASTE) }))
       .sort((a, z) => z.s - a.s)
       .slice(0, EXPLORATION_MIN_RESULTS)
-      .map((r) => r.b.id);
+      .map((x) => x.b.id);
 
-    // First N-1 slots are the pure top; the last is from OUTSIDE it.
-    for (let i = 0; i < EXPLORATION_MIN_RESULTS - 1; i++) {
-      expect(results[i].id).toBe(pureTop[i]);
-    }
-    expect(pureTop).not.toContain(results[EXPLORATION_MIN_RESULTS - 1].id);
-
-    // NOTE: the old "qualified = clears JACCARD_FLOOR" assertion was removed
-    // with the admission gate it depended on. Whether the exploration slot
-    // should survive the V8 cascade at all is an open product question.
+    // EVERY slot matches — previously the loop stopped at N-1 because the
+    // last one was deliberately overwritten.
+    expect(results.map((b) => b.id)).toEqual(pureTop);
   });
 
-  it('the pick is deterministic for (profile, night) and rotates across nights — at the 6am NYC rollover, not UTC midnight', () => {
-    // ABSOLUTE instants at a NEW YORK wall clock. July is EDT (UTC-4), so NYC
-    // hour + 4 = the UTC hour; hours past 20 roll into the next UTC day, which
-    // is exactly the point. These used to be `new Date(2026, 6, d, hour)` —
-    // the RUNNER's zone — and asserted a 5am LOCAL rollover that no longer
-    // exists anywhere (round-2 panel, Codex).
+  it('results no longer rotate with the night — ordering is stable', () => {
     const run = (dayOfMonth: number, nycHour = 12) =>
       matches({
         profile: PROFILE,
@@ -188,20 +180,13 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
         bars: bigPool(),
         maxResults: EXPLORATION_MIN_RESULTS,
         now: new Date(Date.UTC(2026, 6, dayOfMonth, nycHour + 4)),
-      })[EXPLORATION_MIN_RESULTS - 1].id;
+      }).map((b) => b.id);
 
-    expect(run(25)).toBe(run(25));
-    // 2am belongs to the PREVIOUS night (the ONE rollover, src/lib/nightKey.ts
-    // via cadence.ts): the pick must NOT rotate mid-evening or at midnight.
-    expect(run(26, 2)).toBe(run(25, 23));
-    // 5am is still the previous night too — that is the hour the deleted 5am
-    // rule got wrong, so pin it rather than only the easy 2am case.
-    expect(run(26, 5)).toBe(run(25, 23));
-    // …and 6am NYC starts the new one.
-    expect(run(26, 6)).not.toBe(run(25, 23));
-    // Across many nights the pick must not be constant (rotation works).
-    const nights = [25, 26, 27, 28, 29].map((d) => run(d));
-    expect(new Set(nights).size).toBeGreaterThan(1);
+    // The daily rotation was a property of the removed exploration pick. With
+    // it gone, `now` only drives staleness filtering, so the page is stable
+    // across nights for an unchanged catalog and profile.
+    expect(run(26, 2)).toEqual(run(25, 23));
+    expect(run(27, 12)).toEqual(run(25, 12));
   });
 
   it('small default surfaces (MAX_RESULTS) never sacrifice a slot', () => {
@@ -223,7 +208,7 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
 });
 
 describe('eval: 5k-bar perf ceiling', () => {
-  it('a full match over 5k bars (with exploration path) stays under the CI ceiling', () => {
+  it('a full match over 5k bars stays under the CI ceiling', () => {
     const rng = makeRng(4);
     const pool = syntheticPool(5000, rng);
     const start = performance.now();
