@@ -159,13 +159,21 @@ describe('findUnconventionalRows', () => {
 
 describe('the real supabase/migrations directory', () => {
   const files = readdirSync(join(process.cwd(), 'supabase', 'migrations'));
+  // Derived, never typed in. A hardcoded head silently becomes a LOWER number
+  // than the real one the moment another branch lands a migration, and the
+  // fixture then stops describing the case it names (0060 arrived in the v8
+  // convergence and did exactly that).
+  const headNumber = Math.max(
+    ...files.map((name) => Number(name.slice(0, 4))).filter(Number.isInteger),
+  ) + 1;
+  const HEAD_FROM_ANOTHER_BRANCH = `${String(headNumber).padStart(4, '0')}_head_from_another_branch.sql`;
 
   // Criterion 2's regression fixture, run against the actual on-disk filename
   // rather than a string typed into this test. 0052 is below head 0059 and IS
   // applied, so it must never be flagged.
-  it('does not flag 0052_night_outs_my_invites.sql against head 0059', () => {
+  it('does not flag 0052_night_outs_my_invites.sql against a higher head', () => {
     expect(files).toContain('0052_night_outs_my_invites.sql');
-    const ledger = [...files, '0059_head_from_another_branch.sql'];
+    const ledger = [...files, HEAD_FROM_ANOTHER_BRANCH];
     expect(findUnappliable(files, ledger)).toEqual([]);
   });
 
@@ -176,10 +184,10 @@ describe('the real supabase/migrations directory', () => {
   });
 
   it('flags a real migration once the ledger stops knowing about it', () => {
-    const ledger = [...files, '0059_head_from_another_branch.sql']
+    const ledger = [...files, HEAD_FROM_ANOTHER_BRANCH]
       .filter((name) => name !== '0052_night_outs_my_invites.sql');
     expect(findUnappliable(files, ledger)).toEqual([
-      { name: '0052_night_outs_my_invites.sql', number: 52, head: 59 },
+      { name: '0052_night_outs_my_invites.sql', number: 52, head: headNumber },
     ]);
   });
 });

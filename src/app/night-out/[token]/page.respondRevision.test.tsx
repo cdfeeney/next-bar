@@ -59,7 +59,9 @@ let respondResult: boolean | Promise<boolean> = true;
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
-vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ status: 'signed-in', userId: 'u1' }) }));
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ status: 'signed-in', user: { id: 'u1' } }),
+}));
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
 vi.mock('@/lib/catalog', () => ({ getBarById: () => null }));
 vi.mock('@/lib/pendingInvite', () => ({
