@@ -11,10 +11,18 @@ import type { LearnedTaste } from '@/lib/tasteAffinity';
 import { RADIUS_CAB, RADIUS_WALK } from '@/lib/constants';
 
 /**
- * Tolerance for the ORDERING checks (a later result may not outscore an earlier
- * one by more than float noise).
+ * Width of the NEAR-TIE MEASUREMENT band only — see `nearTieFartherFirst`.
+ *
+ * It is deliberately NOT a tolerance on the ordering checks. The ranker sorts
+ * on exact score (`b.score - a.score || a.miles - b.miles`), so any score
+ * inversion at all is a violation, and any strictly-higher-scoring bar left in
+ * the pool is a violation. Allowing 1e-12 of slack on those two checks made
+ * them blind to exactly the regime this catalog actually produces: the observed
+ * float noise between mathematically tied bars is 1e-17, five orders of
+ * magnitude INSIDE the old tolerance, so a cascade that picked the marginally
+ * worse of two near-tied bars was indistinguishable from a correct one.
  */
-const EPSILON = 1e-12;
+const NEAR_TIE_BAND = 1e-12;
 
 export type InvariantViolations = {
   closestBandFirst: string[];
@@ -26,8 +34,9 @@ export type InvariantViolations = {
    */
   exactMilesFinalTieBreak: string[];
   /**
-   * MEASUREMENT, not a violation: adjacent results whose scores differ by no
-   * more than EPSILON — i.e. equal to every meaningful digit — that were
+   * MEASUREMENT, not a violation: adjacent PAIRS (not pages — one page can
+   * contribute more than one) whose scores differ by no more than
+   * NEAR_TIE_BAND — i.e. equal to every meaningful digit — that were
    * nonetheless ordered farther-first, because the last bits of the float
    * decided instead of the miles. Reported, never asserted; see
    * docs/RANKING-EVAL-2026-08-19.md "Follow-ups".
@@ -111,7 +120,7 @@ export function checkCascade(args: {
     const taken = pageBands[k];
     if (taken.length === 0) continue;
     for (let i = 1; i < taken.length; i++) {
-      if (scoreOf(taken[i]) > scoreOf(taken[i - 1]) + EPSILON) {
+      if (scoreOf(taken[i]) > scoreOf(taken[i - 1])) {
         into.learnedTasteWithinBand.push(
           `${label}: band ${k} position ${i} outscores position ${i - 1}`);
       }
@@ -119,7 +128,7 @@ export function checkCascade(args: {
     const takenIds = new Set(taken.map((b) => b.id));
     const worstTaken = Math.min(...taken.map(scoreOf));
     const better = poolBands[k].find(
-      (b) => !takenIds.has(b.id) && scoreOf(b) > worstTaken + EPSILON);
+      (b) => !takenIds.has(b.id) && scoreOf(b) > worstTaken);
     if (better) {
       into.learnedTasteWithinBand.push(
         `${label}: band ${k} skipped ${better.id} (score ${scoreOf(better)}) ` +
@@ -139,7 +148,7 @@ export function checkCascade(args: {
         `${label}: band ${k} position ${i} ordered farther-first ` +
         `(score delta ${delta}, ${milesOf(taken[i - 1])}mi then ${milesOf(taken[i])}mi)`;
       if (delta === 0) into.exactMilesFinalTieBreak.push(message);
-      else if (Math.abs(delta) <= EPSILON) into.nearTieFartherFirst.push(message);
+      else if (Math.abs(delta) <= NEAR_TIE_BAND) into.nearTieFartherFirst.push(message);
     }
 
     // The adjacent-pair scan above only sees ties the page kept BOTH halves of.

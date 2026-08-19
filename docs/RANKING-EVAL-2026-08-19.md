@@ -4,9 +4,19 @@
 
 ## What was measured, and against what
 
+Two different revisions matter here and the table keeps them apart. The
+**measured ranker revision** is the frozen `matching.ts` / `tasteAffinity.ts`
+these numbers describe. The **evaluator revision** is the harness that produced
+them — which is this document's own commit, because the report and the four
+files under `src/lib/__evals__/` ship together and none of them existed at the
+measured ranker revision. Running the reproduce command *at* `d1739488` is
+therefore impossible; run it at the evaluator revision, where `matching.ts` and
+`tasteAffinity.ts` are still the frozen blobs named below.
+
 | | |
 |---|---|
-| Measured commit | `d17394886310041d6240e6ecf3465a85a11bcf19` |
+| Measured ranker revision | `d17394886310041d6240e6ecf3465a85a11bcf19` |
+| Evaluator revision (harness + this report) | this document's own commit — `git log --oneline -- docs/RANKING-EVAL-2026-08-19.md src/lib/__evals__/` |
 | `src/lib/matching.ts` blob | `1a6929a9b2abeddf49c2a3a8d43c3089ca5df039` |
 | `src/lib/tasteAffinity.ts` blob | `38249a3d77529627f8aec5ff51e55ffb7e85e8e8` |
 | Baseline ("previous ranker") | weighted sum VIBE 0.5 / DIST 0.4 / RATING 0.1 with adaptive-Jaccard admission, recovered from `2221cbf` (the parent of `233009a`) |
@@ -29,9 +39,17 @@ Same seed, same commit, same numbers — asserted by the spec's
 `is reproducible` case, which re-runs a whole segment and requires byte-equal
 results.
 
+**Timeouts are budgeted explicitly.** vitest's defaults are a 10s hook timeout
+and a 5s test timeout, and `vitest.config.ts` overrides neither. The 900-user
+hook measures ~3s and the single-segment reproducibility case ~1-2s here, which
+is comfortable but unbudgeted — so the spec passes 120s and 60s explicitly. A
+slower machine now produces a slow run rather than a red `npm test` that looks
+like a ranker regression and is not one.
+
 **This spec is part of `npm test`.** `src/lib/__evals__/**` matches the vitest
 config's include glob, so the 900-user replay runs in the ordinary suite (~13s
-here). The heavy work is in `beforeAll`, not in the `describe` body: in the body
+here, of which ~3s is the replay itself and the rest is jsdom setup and module
+load). The heavy work is in `beforeAll`, not in the `describe` body: in the body
 it ran at COLLECTION time, which meant every `npm test` paid for it whatever was
 selected, `-t` could not skip it, and a failure surfaced as a suite collection
 error instead of a failing test. If the replay ever needs to leave the default
@@ -52,17 +70,26 @@ draft's numbers for that reason.
 
 ## Results
 
-| segment | users (n) | median ratings | held-out pool | cascade NDCG@5 | prev NDCG@5 | NDCG delta (95% CI) | cascade median mi | prev median mi | miles delta |
-|---|---|---|---|---|---|---|---|---|---|
-| 0-4 ratings | 300 | 2 | 400 | 0.7994 | 0.8334 | **-0.0340** ± 0.0086 | 0.683 | 1.521 | -0.837 |
-| 5-20 ratings | 300 | 12 | 390 | 0.8091 | 0.8172 | **-0.0080** ± 0.0095 | 0.811 | 1.598 | -0.787 |
-| 100+ ratings | 300 | 125 | 278 | 0.8503 | 0.8276 | **+0.0228** ± 0.0108 | 0.805 | 1.687 | -0.883 |
+| segment | users (n) | median ratings | held-out pool | cascade NDCG@5 | prev NDCG@5 | NDCG delta (95% CI) | random-arm NDCG@5 (floor) | cascade median mi | prev median mi | miles delta |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0-4 ratings | 300 | 2 | 400 | 0.7994 | 0.8334 | **-0.0340** ± 0.0086 | 0.6615 | 0.683 | 1.521 | -0.837 |
+| 5-20 ratings | 300 | 12 | 390 | 0.8091 | 0.8172 | **-0.0080** ± 0.0095 | 0.6540 | 0.811 | 1.598 | -0.787 |
+| 100+ ratings | 300 | 125 | 278 | 0.8503 | 0.8276 | **+0.0228** ± 0.0108 | 0.6635 | 0.805 | 1.687 | -0.883 |
 
 Every segment carries n = 300 users, comfortably above the 30-user floor the
 spec would have flagged as not meaningful; no segment is reported as an
 average over too few users. "Held-out pool" is the median number of catalog
 bars left after removing that user's rated bars — the set both rankers chose
 their five from.
+
+**Read the NDCG column against the floor, not against 0.** Gain is affine in
+utility, and an unrelated bar has utility ≈ 0 and therefore gain ≈ 0.5, so
+NDCG@5 here does not bottom out at zero. The `random-arm` column measures where
+it does bottom out: five bars drawn at random from the same held-out pool score
+**0.654–0.664**. The usable range is therefore about **0.34 wide, not 1.0**, and
+the cold-start regression of 0.0340 is roughly **10% of achievable headroom** —
+not the 3.4% a 0-to-1 reading suggests. The floor arm is driven by its own
+generator seeded per user, so it perturbs nothing else in the table.
 
 The NDCG delta is **paired per user** (both rankers saw the identical user,
 identical pool) and its interval is a 95% normal CI on that paired difference.
@@ -135,7 +162,13 @@ Checked on **every one of the 900 pages**, against the same post-filter pool
 - **Learned-taste-within-band** — 0 violations. The bars taken from a band were
   its top scorers by `rankScore`, in non-increasing score order, with no
   higher-scoring bar in that band skipped.
-- **Exact-miles-final-tie-break** — 0 violations, and **not vacuously**: the
+- **Exact-miles-final-tie-break** — 0 violations **at bit-exact score
+  equality**, which is the only condition the ranker's own comparator fires on
+  (`b.score - a.score || a.miles - b.miles`). Read that qualifier as load-bearing
+  and read **F1 below with it**: under a float-tolerant definition of "tie" the
+  same run found **6 counterexamples**, including a 1.49-mile bar placed above a
+  0.24-mile one. The invariant as the ranker defines it holds; the ranker's
+  definition of a tie is itself the open question. Not vacuously, either: the
   run recorded **1,012 bit-exact score ties** where the tie-break actually had
   something to decide. Zero violations of a check that never fires would be
   worth nothing, so the checker counts its own exercise (`exactTiesExercised`)
@@ -156,14 +189,17 @@ miles only between adjacent selected results.
 ## Follow-ups (recorded, not fixed here)
 
 **F1 — near-tie ordering is decided by float noise, not by miles (LOW).**
-6 of 900 pages contained adjacent results whose `rankScore` differed by
+6 adjacent PAIRS, on 6 distinct pages of 900, had results whose `rankScore` differed by
 ≤ 1e-12 — observed deltas were 2.8e-17 to 5.6e-17, i.e. bars that are
 mathematically tied — yet were ordered **farther-first**. The cause is that
 `matches()` breaks ties with `b.score - a.score || a.miles - b.miles`, which
 falls through to miles only on *bit-exact* equality; `learnedTasteScore` sums a
 bar's tags in catalog order, so two bars with the same tag set summed in a
 different order land a few ULPs apart. Worst observed case: a 1.49-mile bar
-placed above a 0.24-mile bar. Real but small (0.7% of pages, and the affected
+placed above a 0.24-mile bar. The pair count and the page count are reported
+separately because one page can contribute more than one pair; here they happen
+to coincide at 6, which the spec now measures rather than assumes. Real but
+small (0.7% of pages, and the affected
 pairs are genuinely equal in taste). The fix is a comparator epsilon, which is
 a ranker behavior change and therefore belongs to its own goal — this lane must
 not make it.
@@ -188,14 +224,26 @@ not make it.
 4. **`lovedTags` for the baseline is reconstructed**, not replayed: score ≥ 8.0
    stands in for a legacy Loved. The old ranker weighted that term at 0.1, so
    the reconstruction has limited leverage on the comparison.
-5. **The baseline omits the shared filters** (excludeIds, CLOSED_PERMANENTLY,
+5. **The baseline was diffed against git, not reconstructed from memory.**
+   `previousRanker.ts` was checked character-for-character against
+   `git show 2221cbf:src/lib/matching.ts` and `2221cbf:src/lib/constants.ts` —
+   the three weights, `DIST_DECAY_MILES`, the four Jaccard constants,
+   `scoreBar`'s body, `relaxTarget = Math.max(MIN_CANDIDATES, cap)`, and the
+   fact that a threshold walk which reaches `JACCARD_FLOOR` without meeting
+   `relaxTarget` keeps the SHORT candidate list rather than falling back to the
+   full pool. Note `JACCARD_FLOOR` is still exported from the live
+   `constants.ts` at the same value; the local copy is a deliberate duplicate so
+   a future retune of the live constant cannot silently move the baseline. This
+   is the assumption every comparison number rests on, so it is stated as a
+   check that was performed, not as an intention.
+6. **The baseline omits the shared filters** (excludeIds, CLOSED_PERMANENTLY,
    lastVerified, neighborhood, radius) because both rankers are handed the same
    already-filtered pool — the comparison isolates ranking, not filtering. It
    also omits the exploration slot, which fired only at cap ≥ 10 and never on a
    5-slot page.
-6. **Late-night bias is off** (`biasNow` omitted), so these numbers describe the
+7. **Late-night bias is off** (`biasNow` omitted), so these numbers describe the
    planning surface, not a 1am live page.
-7. **The quiz prior is a modelled noisy self-report, and the cold-start result
+8. **The quiz prior is a modelled noisy self-report, and the cold-start result
    is sensitive to how noisy.** Each tag's latent value gets one draw of
    U(-0.2, +0.2) (sd 0.115) before the top 3 are taken, against a mean gap of
    about 0.056 between adjacent top latent values — so the quiz is deliberately

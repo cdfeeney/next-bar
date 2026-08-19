@@ -4,9 +4,24 @@
  * __evals__, so the replay can measure the cascade against what it replaced.
  *
  * DO NOT import this from src/lib or src/components. It is a measurement
- * baseline, not a code path. Its constants were deleted from constants.ts by
- * 233009a and are re-declared locally on purpose — reintroducing them to
- * constants.ts would put a dead product assumption back in the shipping build.
+ * baseline, not a code path.
+ *
+ * On the constants below: MOST were deleted from constants.ts by 233009a and
+ * are re-declared here on purpose — reintroducing them would put a dead product
+ * assumption back in the shipping build. `JACCARD_FLOOR` is the exception: it
+ * is STILL exported from `src/lib/constants.ts` at the same value (0.10), so
+ * that one is a deliberate local duplicate rather than a recovery. It is not
+ * imported from there because this file must keep measuring the OLD ranker even
+ * if the live constant is later retuned; importing it would silently re-tune
+ * the baseline and quietly invalidate every comparison in the report.
+ *
+ * Verified against git, not memory (`git show 2221cbf:src/lib/matching.ts`,
+ * `git show 2221cbf:src/lib/constants.ts`): the three weights, DIST_DECAY_MILES,
+ * the four Jaccard constants, `scoreBar`'s body, and the admission loop —
+ * including `relaxTarget = Math.max(MIN_CANDIDATES, cap)` and the fact that a
+ * threshold walk reaching JACCARD_FLOOR without meeting relaxTarget keeps the
+ * SHORT candidate list rather than falling back to the full pool — all match
+ * character for character.
  */
 import type { Bar, Coords, VibeTag } from '@/types';
 import { haversineMiles } from '@/lib/distance';

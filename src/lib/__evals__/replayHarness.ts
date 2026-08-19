@@ -57,7 +57,8 @@ export function trueUtility(bar: Bar, latent: ReadonlyMap<VibeTag, number>): num
   return total / bar.tags.length;
 }
 
-function sampleDistinct<T>(items: readonly T[], count: number, rng: () => number): T[] {
+/** Exported so the replay can build a RANDOM-ranker arm from the same pool. */
+export function sampleDistinct<T>(items: readonly T[], count: number, rng: () => number): T[] {
   const pool = [...items];
   const take = Math.min(count, pool.length);
   for (let i = 0; i < take; i++) {
@@ -129,7 +130,17 @@ export function makeUser(
   };
 }
 
-/** Gain in [0, 1] from a utility in [-1, 1]. Linear: no extra shape assumed. */
+/**
+ * Gain in [0, 1] from a utility in [-1, 1]. Linear: no extra shape assumed.
+ *
+ * Note what this does to the SCALE of NDCG built on it. `trueUtility` is a mean
+ * over a bar's tags, so an unrelated bar sits near utility 0 and therefore near
+ * gain 0.5 — not 0. NDCG@5 here consequently has a floor well above zero (a
+ * ranker picking five bars at random scores ~0.55, measured by the replay's
+ * random arm), so a delta must be read against that floor, not against 0-to-1.
+ * Reported rather than rescaled: a monotone remap would change every number in
+ * the table to make one of them read better.
+ */
 export function gainOf(utility: number): number {
   return (utility + 1) / 2;
 }

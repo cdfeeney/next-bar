@@ -13,6 +13,7 @@ import {
   makeRng,
   makeUser,
   mean,
+  sampleDistinct,
   median,
   medianMiles,
   ndcgAt,
@@ -42,6 +43,16 @@ const NOW = new Date('2026-08-19T23:00:00.000Z');
 const USERS_PER_SEGMENT = 300;
 /** Below this a segment's numbers are reported as not meaningful. */
 const MIN_MEANINGFUL_USERS = 30;
+/**
+ * Seed for the random-ranker FLOOR arm. Separate from SEED on purpose: the
+ * floor is drawn from its own generator so adding, removing, or re-seeding it
+ * can never perturb the replay's own draw sequence.
+ */
+const RANDOM_ARM_SEED = 90000000;
+/** Budget for the 900-user replay hook, against a measured ~3s. */
+const REPLAY_TIMEOUT_MS = 120_000;
+/** Budget for the single-segment re-run in the reproducibility case (~1.1s). */
+const SEGMENT_TIMEOUT_MS = 60_000;
 
 const SEGMENTS = [
   { label: '0-4 ratings', min: 0, max: 4 },
@@ -66,6 +77,8 @@ type SegmentResult = {
   poolMedian: number;
   cascade: { ndcg: number; medianMiles: number };
   previous: { ndcg: number; medianMiles: number };
+  /** Floor arm: five bars drawn at random from the same held-out pool. */
+  randomNdcg: number;
   /** Paired per-user NDCG@5 delta (cascade - previous) and its 95% CI half-width. */
   ndcgDelta: { mean: number; ci95: number };
 };
@@ -75,6 +88,7 @@ type UserResult = {
   poolSize: number;
   cascadeNdcg: number;
   previousNdcg: number;
+  randomNdcg: number;
   cascadeMiles: number;
   previousMiles: number;
 };
@@ -132,6 +146,11 @@ function evaluateUser(
     poolSize: pool.length,
     cascadeNdcg: ndcgAt(cascadePage, pool, user.latent, RESULTS_COUNT),
     previousNdcg: ndcgAt(previousPage, pool, user.latent, RESULTS_COUNT),
+    // Floor arm. Driven by its OWN generator seeded from the user id, never by
+    // the replay's stream, so adding it cannot shift a single other number.
+    randomNdcg: ndcgAt(
+      sampleDistinct(pool, RESULTS_COUNT, makeRng(RANDOM_ARM_SEED + user.id)),
+      pool, user.latent, RESULTS_COUNT),
     cascadeMiles: medianMiles(cascadePage, user.coords),
     previousMiles: medianMiles(previousPage, user.coords),
   };
@@ -168,6 +187,7 @@ function runSegment(
       medianMiles: median(column((u) => u.previousMiles)),
     },
     ndcgDelta: { mean: mean(paired), ci95: ci95(paired) },
+    randomNdcg: mean(column((u) => u.randomNdcg)),
   };
 }
 
@@ -180,6 +200,16 @@ function lovedTagsOf(user: SyntheticUser, all: readonly Bar[]): VibeTag[] {
   return [...new Set(tags)];
 }
 
+/**
+ * Distinct PAGES that contributed a near-tie pair. `nearTieFartherFirst` counts
+ * pairs, and one page can contribute more than one, so printing its length as
+ * "N of 900 pages" overstated the page count. Each message is prefixed with the
+ * per-page label, so the page identity is the text up to the first colon.
+ */
+function nearTiePageCount(v: InvariantViolations): number {
+  return new Set(v.nearTieFartherFirst.map((m) => m.slice(0, m.indexOf(':')))).size;
+}
+
 function fmt(n: number, digits = 4): string {
   return Number.isFinite(n) ? n.toFixed(digits) : 'n/a';
 }
@@ -187,13 +217,14 @@ function fmt(n: number, digits = 4): string {
 function reportTable(results: readonly SegmentResult[]): string {
   const head =
     '| segment | users (n) | median ratings | held-out pool | cascade NDCG@5 | prev NDCG@5 | ' +
-    'NDCG delta (95% CI) | cascade median mi | prev median mi | miles delta |\n' +
-    '|---|---|---|---|---|---|---|---|---|---|';
+    'NDCG delta (95% CI) | random-arm NDCG@5 (floor) | ' +
+    'cascade median mi | prev median mi | miles delta |\n' +
+    '|---|---|---|---|---|---|---|---|---|---|---|';
   const rows = results.map((r) => {
     const note = r.users < MIN_MEANINGFUL_USERS ? ' (TOO FEW USERS — not meaningful)' : '';
     return `| ${r.label}${note} | ${r.users} | ${r.ratingsMedian} | ${fmt(r.poolMedian, 0)} | ` +
       `${fmt(r.cascade.ndcg)} | ${fmt(r.previous.ndcg)} | ` +
-      `${fmt(r.ndcgDelta.mean)} +/- ${fmt(r.ndcgDelta.ci95)} | ` +
+      `${fmt(r.ndcgDelta.mean)} +/- ${fmt(r.ndcgDelta.ci95)} | ${fmt(r.randomNdcg)} | ` +
       `${fmt(r.cascade.medianMiles, 3)} | ${fmt(r.previous.medianMiles, 3)} | ` +
       `${fmt(r.cascade.medianMiles - r.previous.medianMiles, 3)} |`;
   });
@@ -208,17 +239,23 @@ describe('eval: V8 cascade offline replay', () => {
   // test in this suite is actually selected.
   const violations = emptyViolations();
   let results: SegmentResult[] = [];
+  // Explicit budgets. vitest defaults are hookTimeout 10s / testTimeout 5s and
+  // vitest.config.ts overrides neither, so a 900-user hook and a 300-user test
+  // body were both running against a default they could cross on slower
+  // hardware — turning `npm test`, one of the three legs of the gate, red for a
+  // reason that has nothing to do with the ranker. Measured cost is well inside
+  // these numbers; they exist so the failure mode is a slow run, not a flake.
   beforeAll(() => {
     results = SEGMENTS.map((segment, i) => runSegment(segment, SEED + i, violations));
-  });
+  }, REPLAY_TIMEOUT_MS);
 
   it('reports the release numbers (seed 20260819)', () => {
     // eslint-disable-next-line no-console
     console.log(
       `\n### Ranking replay — seed ${SEED}, catalog ${catalog.length} bars, ` +
       `${ALL_TAGS.length} tags, page ${RESULTS_COUNT}\n${reportTable(results)}\n` +
-      `near-tie (|delta| <= 1e-12) pairs ordered farther-first: ` +
-      `${violations.nearTieFartherFirst.length} of ` +
+      `near-tie (|delta| <= 1e-12) adjacent PAIRS ordered farther-first: ` +
+      `${violations.nearTieFartherFirst.length}, on ${nearTiePageCount(violations)} of ` +
       `${USERS_PER_SEGMENT * SEGMENTS.length} pages\n` +
       `${violations.nearTieFartherFirst.slice(0, 3).join('\n')}\n` +
       `bit-exact score ties the miles tie-break actually had to decide: ` +
@@ -260,7 +297,7 @@ describe('eval: V8 cascade offline replay', () => {
   it('is reproducible — the same seed reproduces the same numbers', () => {
     const again = runSegment(SEGMENTS[1], SEED + 1, emptyViolations());
     expect(again).toEqual(results[1]);
-  });
+  }, SEGMENT_TIMEOUT_MS);
 });
 
 /**
@@ -313,6 +350,33 @@ describe('cascadeInvariants: the checker catches planted violations', () => {
     expect(v.exactMilesFinalTieBreak[0]).toContain('bit-exact score tie');
     expect(v.learnedTasteWithinBand).toEqual([]);
     expect(v.exactTiesExercised).toBe(1);
+  });
+
+  it('flags a within-band page that skips a higher-scoring bar', () => {
+    // The learned-taste category, which had no planted case. `better` matches
+    // the origin bar's own tag, so it outscores `mid` (same tags as template
+    // minus that overlap is not needed — the quiz tag drives rankScore).
+    const better = { ...template, id: 'better', lat: template.lat + 0.011, lng: template.lng };
+    const worse: Bar = { ...template, id: 'worse', tags: [], lat: template.lat + 0.012, lng: template.lng };
+    expect(rankScore(better, template.tags.slice(0, 1), noTaste))
+      .toBeGreaterThan(rankScore(worse, template.tags.slice(0, 1), noTaste));
+    const v = check([worse], [better, worse], 1);
+    expect(v.learnedTasteWithinBand).toHaveLength(1);
+    expect(v.learnedTasteWithinBand[0]).toContain('skipped better');
+  });
+
+  it('flags an ordering inversion smaller than the old 1e-12 tolerance', () => {
+    // The ordering checks used to allow 1e-12 of slack, which is five orders of
+    // magnitude wider than the float noise this catalog actually produces
+    // (~1e-17) — so a real inversion in that regime was invisible. Exact
+    // comparison is what the ranker itself uses.
+    const hi = { ...template, id: 'hi', lat: template.lat + 0.009, lng: template.lng };
+    const lo: Bar = { ...template, id: 'lo', tags: [], lat: template.lat + 0.011, lng: template.lng };
+    const delta = rankScore(hi, template.tags.slice(0, 1), noTaste)
+      - rankScore(lo, template.tags.slice(0, 1), noTaste);
+    expect(delta).toBeGreaterThan(0);
+    const v = check([lo, hi], [hi, lo], 2);
+    expect(v.learnedTasteWithinBand[0]).toContain('position 1 outscores position 0');
   });
 
   it('accepts the correctly ordered page', () => {
