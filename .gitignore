@@ -16,3 +16,7 @@ tsconfig.tsbuildinfo
 scripts/data/
 .env.local
 .env.*.local
+
+# OSM Overpass response cache (dev reconnaissance, not source)
+.osm-cache/
+.site-cache/

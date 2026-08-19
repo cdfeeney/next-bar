@@ -103,3 +103,30 @@ there's no schema_migrations ledger yet.
 - **Pre-existing dev-server cold-compile flake** on `/quiz` is documented in
   memory. Don't try to "fix" it by adding waits or restructuring — it's a
   Next.js dev artifact, not a product bug.
+
+## Environments (added 2026-08-18 — keep values out, pointers only)
+
+- **Two Supabase PROJECTS, operator-confirmed 2026-08-18** (beware: the dashboard labels the
+  main branch of EVERY project "production", including the staging project — the branch label
+  is not the project):
+  - **`next-bar`** = production, ref `nuhqlvneokucxomguxhi`. Live v7 users. Repo-root
+    `.env.local` points here. Ledger head **0032**, no night-out schema (2026-08-18). The
+    2026-08-18 Supabase advisory (RLS off on `schema_migrations`) was about THIS project and
+    was fixed same day: RLS enabled + anon/authenticated grants revoked, ledger intact (33 rows).
+  - **`next-bar-staging`** = staging, ref `wqxovhiovgcijmfzxgby`. Serving database for
+    pre-release streams, ~16 migrations ahead. Read its ledger head before migration decisions
+    (still pending 2026-08-18); apply the same `schema_migrations` RLS fix there.
+  Guard env vars: `NEXT_BAR_PRODUCTION_PROJECT_REF=nuhqlvneokucxomguxhi`,
+  `NEXT_BAR_STAGING_PROJECT_REFS=wqxovhiovgcijmfzxgby` (set in gitignored `.env.local`).
+- **The canonical local env lives in the repo-root `.env.local`** (main checkout only — it is
+  gitignored, so **worktrees do NOT inherit it**; that gap caused a day of "missing env"
+  failures on 2026-08-18). A worktree that needs DB access gets a curated STAGING-ONLY copy:
+  staging URL, anon key, staging DATABASE_URL, its pinned PLAYWRIGHT_PORT. **Never copy
+  production credentials (service role key, prod DATABASE_URL) into a worktree an unattended
+  worker runs in.**
+- **Credentials policy:** connection strings, passwords, and keys are never committed and never
+  recorded in this file. Source: Supabase dashboard → project → Settings → Database, or the
+  operator. Hand them to a session via its environment or gitignored `.env.local` only.
+- **Migration truth:** a migration file in the repo is NOT applied anywhere until the target
+  project's ledger says so; this repo's `db:migrate` is ledger-blind. When in doubt, read the
+  ledger, not the filesystem.
