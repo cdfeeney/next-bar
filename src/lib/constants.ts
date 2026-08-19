@@ -47,13 +47,18 @@ export const RADIUS_WALK = 1.5;
 
 // Late-night ranking bias (operator 2026-07-27: "past a certain time the
 // algorithm biases towards bars and clubs and away from restaurants").
-// Applied on LIVE surfaces only, additive at tie-breaker scale (same
-// order of magnitude as the 0.1 affinity term — it reorders near-ties,
-// never buries a strong match).
+// Applied on LIVE surfaces only, additive at tie-breaker scale — it reorders
+// near-ties, never buries a strong match.
+//
+// Rescaled 0.06 -> 0.12 on 2026-08-19 (operator-approved) when the V8 cascade
+// landed. These were calibrated against the old ranker, where vibe entered at
+// VIBE_WEIGHT = 0.5; the cascade ranks on the blended taste/prior at full
+// weight, which halved the nudge's relative authority. Doubling restores the
+// 2026-07-27 intent exactly — the NUMBER changed so the BEHAVIOR would not.
 export const LATE_NIGHT_START_HOUR = 22; // 10pm…
 export const LATE_NIGHT_END_HOUR = 4;    // …through 3:59am
-export const LATE_CLUB_BOOST = 0.06;
-export const LATE_RESTAURANT_PENALTY = 0.06;
+export const LATE_CLUB_BOOST = 0.12;
+export const LATE_RESTAURANT_PENALTY = 0.12;
 export const RADIUS_CAB = 4;
 export const RADIUS_ANYWHERE = null;
 

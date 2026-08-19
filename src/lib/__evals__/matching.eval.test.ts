@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
-import { jaccard, matches, scoreBar } from '@/lib/matching';
+import { jaccard, matches, rankScore } from '@/lib/matching';
+import { EMPTY_TASTE } from '@/lib/tasteAffinity';
 import {
   EXPLORATION_MIN_RESULTS,
   JACCARD_FLOOR,
@@ -76,26 +77,37 @@ describe('eval: matching score monotonicity', () => {
       if (!missing) continue;
       const b1 = bar('m1', { tags: barTags as VibeTag[] });
       const b2 = bar('m2', { tags: [...barTags, missing] as VibeTag[] });
-      const s1 = scoreBar(b1, userTags as VibeTag[], null, []);
-      const s2 = scoreBar(b2, userTags as VibeTag[], null, []);
+      const s1 = rankScore(b1, userTags as VibeTag[], EMPTY_TASTE);
+      const s2 = rankScore(b2, userTags as VibeTag[], EMPTY_TASTE);
       expect(s2).toBeGreaterThanOrEqual(s1);
     }
   });
 
-  it('score is non-increasing in distance (moving a bar farther never helps)', () => {
+  // V8: distance left the ranking score entirely — it selects the BAND and
+  // breaks ties. The monotonicity that still matters is therefore expressed
+  // against matches(): an equal-taste bar in a nearer band always outranks a
+  // farther one, and within a band the closer of two equals leads.
+  it('a nearer band always outranks a farther one at equal taste', () => {
     const rng = makeRng(2);
     const coords = { lat: 40.728, lng: -73.985 };
     for (let trial = 0; trial < 200; trial++) {
       const tags = [...ALL_TAGS].sort(() => rng() - 0.5).slice(0, 3) as VibeTag[];
       const near = bar('n', { tags, lat: coords.lat + 0.001, lng: coords.lng });
+      // 0.1-0.3 deg latitude ~= 7-21 miles: always past RADIUS_CAB.
       const far = bar('f', {
         tags,
-        lat: coords.lat + 0.001 + rng() * 0.2,
+        lat: coords.lat + 0.1 + rng() * 0.2,
         lng: coords.lng,
       });
-      const sNear = scoreBar(near, PROFILE.tags, coords, []);
-      const sFar = scoreBar(far, PROFILE.tags, coords, []);
-      expect(sNear).toBeGreaterThanOrEqual(sFar);
+      const ids = matches({
+        profile: PROFILE,
+        coords,
+        preferredNeighborhoods: [],
+        maxMiles: null,
+        bars: [far, near],
+        maxResults: 2,
+      }).map((b) => b.id);
+      expect(ids[0]).toBe('n');
     }
   });
 });
@@ -146,7 +158,7 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
 
     // Re-rank without exploration by scoring directly.
     const pureTop = [...bigPool()]
-      .map((b) => ({ b, s: scoreBar(b, PROFILE.tags, null, []) }))
+      .map((b) => ({ b, s: rankScore(b, PROFILE.tags, EMPTY_TASTE) }))
       .sort((a, z) => z.s - a.s)
       .slice(0, EXPLORATION_MIN_RESULTS)
       .map((r) => r.b.id);
@@ -204,7 +216,7 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
       now: NOW,
     });
     const pureTop = [...bigPool()]
-      .map((b) => ({ b, s: scoreBar(b, PROFILE.tags, null, []) }))
+      .map((b) => ({ b, s: rankScore(b, PROFILE.tags, EMPTY_TASTE) }))
       .sort((a, z) => z.s - a.s)
       .slice(0, MAX_RESULTS)
       .map((r) => r.b.id);

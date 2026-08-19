@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Bar, Coords, VibeProfile, VibeTag } from '@/types';
 import type { BarRating } from '@/types/ratings';
+import { deriveLearnedTaste } from '@/lib/tasteAffinity';
 import { matches } from '@/lib/matching';
 import { deriveArchetype } from '@/lib/quiz';
 import { loadProfile } from '@/lib/storedProfile';
@@ -27,7 +28,7 @@ export type ComputeSuggestionsArgs = {
  * `matches()` invocation ResultsView makes on the home (Where-next) flow:
  *
  *  - no rating-derived exclusion (V8 Option B: low scores rank down, never out),
- *  - the flattened tags of Loved bars feed the loved-affinity ranking term,
+ *  - graded learned taste from numeric scores feeds the ranking,
  *  - the profile's preferred neighborhoods filter applies,
  *  - maxMiles is null (no hard radius — the map shows the whole catalog).
  *
@@ -43,20 +44,6 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
     now,
   } = args;
 
-  // Flatten the vibe tags of every bar the user has Loved, so matches() can
-  // nudge bars with a similar taste profile up the rank (loved-affinity term).
-  const lovedBarIds = new Set(
-    ratings.filter((r) => r.rating === 'loved').map((r) => r.barId),
-  );
-  const lovedTagSet = new Set<VibeTag>();
-  if (lovedBarIds.size > 0) {
-    for (const b of bars) {
-      if (lovedBarIds.has(b.id)) {
-        for (const t of b.tags) lovedTagSet.add(t);
-      }
-    }
-  }
-
   return matches({
     profile,
     coords,
@@ -67,7 +54,7 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
     // suggests from the whole catalog; a low score only ranks a bar down.
     maxResults,
     now,
-    lovedTags: Array.from(lovedTagSet),
+    taste: deriveLearnedTaste(ratings, bars),
   });
 }
 
