@@ -405,4 +405,51 @@ describe('useFollows — followers + mutuals (B3c)', () => {
     expect(result.current.followers).toEqual([]);
     expect(result.current.mutuals).toEqual([]);
   });
+
+  it('circleReady is false while the hydrate is in flight and after it FAILS', async () => {
+    // null = the fetch failed. `loading` resolves either way, so an empty
+    // circle after a failure is indistinguishable from "no friends" — which is
+    // exactly the state that let a night out go out with nobody invited.
+    fetchFollowsMock.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useFollows());
+    expect(result.current.circleReady).toBe(false);
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.circle).toEqual([]);
+    expect(result.current.circleReady).toBe(false);
+  });
+
+  it('a follow still in flight keeps the NEXT mount from claiming readiness', async () => {
+    // The navigation case: the user follows someone and moves to another page
+    // before the RPC lands. The new mount fetches a snapshot that predates the
+    // follow — genuine, and already out of date. Reporting it ready is how the
+    // invite list silently loses that person.
+    let settleFollow: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settleFollow = resolve;
+        }),
+    );
+
+    const first = renderHook(() => useFollows());
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    expect(first.result.current.circleReady).toBe(true);
+
+    act(() => first.result.current.toggleFollow('maya'));
+    first.unmount();
+
+    const second = renderHook(() => useFollows());
+    await waitFor(() => expect(second.result.current.loading).toBe(false));
+    expect(second.result.current.circleReady).toBe(false);
+
+    // Once the server answers, the pending write clears and readiness returns.
+    await act(async () => {
+      settleFollow({ profile: MAYA, status: 'followed' });
+    });
+    await waitFor(() => expect(second.result.current.circleReady).toBe(true));
+    second.unmount();
+  });
 });

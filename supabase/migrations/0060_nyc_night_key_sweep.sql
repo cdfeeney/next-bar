@@ -4,6 +4,13 @@
 -- Additive correction, and AUTHOR-ONLY: this branch does not apply it. Numbered
 -- above the highest file here (0059) per CLAUDE.md.
 --
+-- ⚠ PREREQUISITE: 0053 MUST BE LIVE. Every body below calls
+-- `public.nyc_night_key(timestamptz)`, which nothing before 0053 creates. Apply
+-- this file to a database that never received 0053 and all five RPCs start
+-- failing at their FIRST call with errcode 42883 (undefined_function) — a
+-- working guard replaced by a broken one. Confirm the function exists before
+-- applying, not after.
+--
 -- ⚠ READ THE LEDGER BEFORE APPLYING. This file cannot tell you which of its
 -- five predecessors are live, and the repository disagrees with itself about
 -- that: `public.schema_migrations` (created by 0036) is the only authority, and
@@ -19,7 +26,8 @@
 -- used to return a token starts raising errcode 22023. That is 0035's intended
 -- change (it is an anti-amplification bound, see its header), but an operator
 -- applying this file must know they are landing it. The other four functions
--- (0011, 0012, 0013, 0017) are pure swaps whatever the ledger says.
+-- (0011, 0012, 0013, 0017) are pure swaps — given the prerequisite above, and
+-- given that their own files are the live definitions.
 --
 -- (Round-1 panel, BOTH lanes: Codex medium + Claude/OPUS medium) 0053 swept
 -- `current_date` out of the two places it appeared in a night_outs definition

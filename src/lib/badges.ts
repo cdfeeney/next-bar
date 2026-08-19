@@ -44,6 +44,12 @@ function shiftNightKey(key: string, days: number): string {
  * broken for someone who went out Sunday night (round-2 panel, Claude).
  */
 function saturdayKeyOf(date: Date): string | null {
+  // Intl throws on an invalid Date where getUTCDay() merely returned NaN, so
+  // this guard is load-bearing, not defensive: ratedAt comes from localStorage
+  // and loadRatings only checks that it is a string. Without it one corrupt
+  // timestamp turns a skipped rating into a crash while Settings renders its
+  // badges (round-3 panel, both lanes). Same guard nightLog.ts:133 already uses.
+  if (Number.isNaN(date.getTime())) return null;
   const day = nycNightDay(date); // Sun=0 … Sat=6, on the 6am NYC rollover
   let offsetDays: number;
   if (day === 5) offsetDays = 1; // Fri night → tomorrow's Sat

@@ -152,5 +152,16 @@ describe('ConsensusPage — starting a night out while follows load', () => {
 
     expect(createNightOut).not.toHaveBeenCalled();
     expect(inviteToNightOut).not.toHaveBeenCalled();
+
+    // …and the user is told why, rather than staring at a dead button.
+    expect(
+      screen.getByText(/couldn't load your circle/i),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing about a failed circle while it is still loading', async () => {
+    render(<ConsensusPage />);
+    expect(startButton()).toBeDisabled();
+    expect(screen.queryByText(/couldn't load your circle/i)).toBeNull();
   });
 });

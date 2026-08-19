@@ -7,7 +7,7 @@ import type {
 } from '@/types';
 import { haversineMiles } from '@/lib/distance';
 import { daysAgo } from '@/lib/freshness';
-import { nycNightKey } from '@/lib/nightKey';
+import { nycHour, nycNightKey } from '@/lib/nightKey';
 import {
   DIST_DECAY_MILES,
   DIST_WEIGHT,
@@ -108,9 +108,17 @@ export function scoreBar(
   return VIBE_WEIGHT * vibe + DIST_WEIGHT * proximity + RATING_WEIGHT * affinity;
 }
 
-/** 10pm–3:59am local — when the night bias applies. */
+/**
+ * 10pm–3:59am in NEW YORK — when the night bias applies.
+ *
+ * getHours() answered in the device's zone, so a user in Los Angeles got the
+ * club boost and the restaurant penalty three hours off (round-3 panel, Codex).
+ * This is an NYC-only matcher; the hour comes from the same module as the
+ * rollover, so there is one clock here and nowhere else.
+ */
 export function isLateNight(now: Date): boolean {
-  const h = now.getHours();
+  const h = nycHour(now);
+  if (Number.isNaN(h)) return false; // broken clock: no bias rather than a wrong one
   return h >= LATE_NIGHT_START_HOUR || h < LATE_NIGHT_END_HOUR;
 }
 

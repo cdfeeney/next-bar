@@ -19,6 +19,25 @@ import { getCacheEpoch } from '@/lib/accountCache';
 const KEY = 'next-bar:follows:v1';
 
 /**
+ * Circle writes the server has not confirmed yet, keyed by normalized handle.
+ *
+ * MODULE scope on purpose: a navigation unmounts the hook, and the next page's
+ * fresh mount would otherwise fetch a snapshot that predates a follow the user
+ * has already requested — then report `circleReady` over it and let a night out
+ * go out without that person (round-3 panel, Codex, HIGH). Per-instance state
+ * cannot see across that unmount; this can. Unfollows are tracked the same way:
+ * a snapshot taken mid-unfollow can still carry someone you just dropped.
+ */
+const pendingCircleWrites = new Set<string>();
+const pendingListeners = new Set<() => void>();
+
+function markCircleWrite(handle: string, pending: boolean): void {
+  if (pending) pendingCircleWrites.add(handle);
+  else pendingCircleWrites.delete(handle);
+  for (const listener of pendingListeners) listener();
+}
+
+/**
  * Dual-mode follows (B3), cloned from the useRatings pattern:
  *
  *   - signed-out  → localStorage demo circle (handles of seeded curators;
@@ -91,12 +110,18 @@ export type UseFollowsReturn = {
   /** True until the first read (local or server fetch) resolves. */
   loading: boolean;
   /**
-   * Server mode: TRUE only once `circle` actually reflects the server's answer.
+   * Server mode: TRUE only once `circle` actually reflects the server's answer
+   * AND no circle write is still in flight.
+   *
    * A failed fetch resolves `loading` but leaves `circle` empty, and an empty
    * circle is indistinguishable from "no friends" — which is how a night out
    * could still be started with nobody invited even after the loading guard
-   * (round-2 panel, Codex, HIGH). Always true in local mode: there is no fetch
-   * to fail. Callers deriving an invitee list must require this, not `!loading`.
+   * (round-2 panel, Codex, HIGH). A follow the user requested a moment ago on
+   * another page is the same lie told the other way round: the snapshot is
+   * genuine, and already out of date (round-3 panel, Codex, HIGH).
+   *
+   * Always true in local mode: there is no fetch to fail. Callers deriving an
+   * invitee list must require this, not `!loading`.
    */
   circleReady: boolean;
 };
@@ -110,6 +135,7 @@ export function useFollows(): UseFollowsReturn {
   const [mode, setMode] = useState<FollowsMode>('pending');
   const [loading, setLoading] = useState(true);
   const [circleReady, setCircleReady] = useState(false);
+  const [pendingWrites, setPendingWrites] = useState(pendingCircleWrites.size);
   const modeRef = useRef<FollowsMode>('pending');
   // Mirrors for event-handler reads (the toggle callback must see the
   // current circle/requested without re-binding on every change).
@@ -117,6 +143,17 @@ export function useFollows(): UseFollowsReturn {
   circleRef.current = circle;
   const requestedRef = useRef<PublicProfile[]>([]);
   requestedRef.current = requested;
+
+  // Re-render when a circle write settles anywhere in the app — the pending set
+  // lives outside React, so it needs its own subscription to move `circleReady`.
+  useEffect(() => {
+    const listener = (): void => setPendingWrites(pendingCircleWrites.size);
+    pendingListeners.add(listener);
+    listener();
+    return () => {
+      pendingListeners.delete(listener);
+    };
+  }, []);
 
   // Storage listener — cross-tab propagation for local mode only (server
   // mode never writes the key, so there is nothing to hear).
@@ -237,7 +274,12 @@ export function useFollows(): UseFollowsReturn {
         setCircle((prev) =>
           prev.filter((p) => p.handle.toLowerCase() !== target),
         );
+        markCircleWrite(target, true);
         void unfollowById(supabase, existing.id).then((removed) => {
+          // Cleared FIRST, and unconditionally: an early return past this on a
+          // sign-out epoch change would strand the handle and pin circleReady
+          // false for the rest of the session.
+          markCircleWrite(target, false);
           if (removed || getCacheEpoch() !== epoch) return;
           setCircle((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
@@ -280,7 +322,9 @@ export function useFollows(): UseFollowsReturn {
         displayName: null,
       };
       setCircle((prev) => [...prev, placeholder]);
+      markCircleWrite(target, true);
       void followByHandle(supabase, handle).then((outcome) => {
+        markCircleWrite(target, false); // see the unfollow path: always cleared
         if (getCacheEpoch() !== epoch) return;
         setCircle((prev) => {
           const without = prev.filter(
@@ -329,6 +373,6 @@ export function useFollows(): UseFollowsReturn {
     isRequested,
     toggleFollow,
     loading,
-    circleReady: mode === 'server' ? circleReady : true,
+    circleReady: mode === 'server' ? circleReady && pendingWrites === 0 : true,
   };
 }

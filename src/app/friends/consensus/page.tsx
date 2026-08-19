@@ -276,6 +276,17 @@ export default function ConsensusPage(): JSX.Element {
           inviteeIds={inviteeIds}
           disabled={followsLoading || !circleReady}
         />
+        {/* A held button with no explanation is its own defect (round-3 panel,
+            Claude): the only primary CTA on the page renders greyed out for the
+            whole mount with nothing saying why. Withholding the action is still
+            right — an invite list we cannot vouch for is how a plan goes out
+            with no guests — but the user is owed the reason and a way forward. */}
+        {isServer && !followsLoading && !circleReady ? (
+          <p className="mt-2 text-sm text-red-400">
+            Couldn&apos;t load your circle, so we can&apos;t invite anyone yet.
+            Check your connection and reload.
+          </p>
+        ) : null}
       </header>
 
       <section className="max-w-md mx-auto px-6">
