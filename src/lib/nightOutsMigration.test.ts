@@ -276,11 +276,25 @@ function asciiLower(sql: string): string {
  * dollar-quoted function body.
  */
 type Region = {
-  kind: 'comment' | 'string' | 'body';
+  /**
+   * `name` is a double-quoted identifier holding a plain identifier — legal SQL
+   * for an ordinary name, so it must stay READABLE. Blanking it alongside the
+   * dangerous spellings made `public."respond_night_out"` invisible to the
+   * statement scan, which let a quoted redefinition weaken the function while the
+   * guard read the old one (round-9 review, Codex, medium).
+   */
+  kind: 'comment' | 'string' | 'body' | 'name';
+  /** Where the construct opens, including its `--`, `/*`, quote or `$tag$`. */
+  start: number;
   contentStart: number;
   contentEnd: number;
   end: number;
 };
+
+/** A quoted identifier that is just a name needs no masking; anything else does. */
+function quotedIdentifierKind(content: string): 'name' | 'string' {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(content) ? 'name' : 'string';
+}
 
 /**
  * Is `sql[i]` part of an identifier word?
@@ -334,7 +348,7 @@ function scanRegions(sql: string, from = 0, to = sql.length): Region[] {
     if (pair === '--') {
       const nl = sql.indexOf('\n', i);
       const stop = nl === -1 || nl > to ? to : nl;
-      found.push({ kind: 'comment', contentStart: i, contentEnd: stop, end: stop });
+      found.push({ kind: 'comment', start: i, contentStart: i, contentEnd: stop, end: stop });
       i = stop;
       continue;
     }
@@ -351,7 +365,7 @@ function scanRegions(sql: string, from = 0, to = sql.length): Region[] {
         j += 1;
       }
       const stop = Math.min(j, to);
-      found.push({ kind: 'comment', contentStart: i, contentEnd: stop, end: stop });
+      found.push({ kind: 'comment', start: i, contentStart: i, contentEnd: stop, end: stop });
       i = stop;
       continue;
     }
@@ -371,7 +385,7 @@ function scanRegions(sql: string, from = 0, to = sql.length): Region[] {
         break;
       }
       const stop = Math.min(j + 1, to);
-      found.push({ kind: 'string', contentStart: i + 1, contentEnd: Math.min(j, to), end: stop });
+      found.push({ kind: 'string', start: i, contentStart: i + 1, contentEnd: Math.min(j, to), end: stop });
       i = stop;
       continue;
     }
@@ -391,7 +405,14 @@ function scanRegions(sql: string, from = 0, to = sql.length): Region[] {
         break;
       }
       const stop = Math.min(j + 1, to);
-      found.push({ kind: 'string', contentStart: i + 1, contentEnd: Math.min(j, to), end: stop });
+      const contentEnd = Math.min(j, to);
+      found.push({
+        kind: quotedIdentifierKind(sql.slice(i + 1, contentEnd)),
+        start: i,
+        contentStart: i + 1,
+        contentEnd,
+        end: stop,
+      });
       i = stop;
       continue;
     }
@@ -400,7 +421,7 @@ function scanRegions(sql: string, from = 0, to = sql.length): Region[] {
       const close = sql.indexOf(tag, i + tag.length);
       if (close === -1 || close >= to) break; // unterminated: trust nothing after it
       const contentStart = i + tag.length;
-      found.push({ kind: 'body', contentStart, contentEnd: close, end: close + tag.length });
+      found.push({ kind: 'body', start: i, contentStart, contentEnd: close, end: close + tag.length });
       // Outer body pushed FIRST, then whatever lives inside it.
       found.push(...scanRegions(sql, contentStart, close));
       i = close + tag.length;
@@ -472,16 +493,19 @@ type EffectiveBody = {
  * `masked` has every comment, string and body blanked, so the only parentheses
  * left are real ones and the argument list can be taken by counting depth.
  *
- * A CREATE names its parameters (`p_night_out uuid`) and a DROP does not
- * (`uuid`), so the parameter name is dropped from the create side only. That
- * asymmetry is the whole trick, and it is also this function's limit: a create
- * parameter with no name, or a drop written with a multi-word type such as
- * `character varying`, compares wrong. Neither appears in this tree — every
- * migration names its parameters and uses single-word types — and the cost of
- * being wrong is a missed catch on an exotic DROP, not a false failure on a
- * correct one. The live catalog test is what proves the real overload set.
+ * Both sides may name their arguments: DROP FUNCTION takes an optional argmode
+ * and argname too, so `drop function f(p_night_out uuid)` and
+ * `create function f(p_night_out uuid)` describe the SAME routine. Stripping the
+ * name on the create side only made those two compare unequal, so a DROP written
+ * the long way removed the function while the guard kept asserting against it
+ * (round-9 review, both lanes, medium). The rule is symmetric now: a leading
+ * token is a NAME unless it opens a multi-word type.
  */
-function argTypes(masked: string, m: RegExpMatchArray, verb: 'create' | 'drop'): string[] {
+const MULTIWORD_TYPE_LEADS = new Set([
+  'character', 'double', 'timestamp', 'time', 'bit', 'national', 'interval',
+]);
+
+function argTypes(masked: string, m: RegExpMatchArray, _verb: 'create' | 'drop'): string[] {
   const open = masked.indexOf('(', m.index! + m[0].length - 1);
   if (open === -1) return [];
   let depth = 0;
@@ -511,7 +535,7 @@ function argTypes(masked: string, m: RegExpMatchArray, verb: 'create' | 'drop'):
       const withoutMode = ['in', 'out', 'inout', 'variadic'].includes(tokens[0]) && tokens.length > 1
         ? tokens.slice(1)
         : tokens;
-      const withoutName = verb === 'create' && withoutMode.length > 1
+      const withoutName = withoutMode.length > 1 && !MULTIWORD_TYPE_LEADS.has(withoutMode[0])
         ? withoutMode.slice(1)
         : withoutMode;
       return withoutName.join(' ');
@@ -599,15 +623,45 @@ function migrationStream(): string {
  */
 function effectiveBody(name: string, raw = migrationStream()): EffectiveBody {
   const regions = scanRegions(raw);
-  const masked = asciiLower(blank(raw, regions));
+  // 'name' regions stay readable — see Region.kind.
+  const masked = asciiLower(blank(raw, regions.filter((r) => r.kind !== 'name')));
+
+  // FAIL CLOSED on dynamic SQL. `do $$ begin execute 'create or replace function
+  // public.<name> ...'; end $$;` installs a definition this guard cannot read:
+  // the statement lives inside a body region, so it never reaches the scan, and
+  // the guard would keep certifying the older text (round-9 review, Claude,
+  // medium). Reading it properly means evaluating constructed SQL, which no
+  // amount of lexing can do, so the honest answer is to refuse rather than to
+  // report a stale body as current.
+  // Only comments are blanked here: the constructed statement lives INSIDE a
+  // string, inside a body, so blanking either would hide the very thing being
+  // looked for. A create-shaped statement anywhere other than top-level
+  // executable code is a definition this guard cannot account for.
+  const commentsOnly = asciiLower(blank(raw, regions.filter((r) => r.kind === 'comment')));
+  const quotedAway = (at: number) => regions.some(
+    (r) => (r.kind === 'body' || r.kind === 'string')
+      && at >= r.contentStart && at < r.contentEnd,
+  );
+  const dynamic = [...commentsOnly.matchAll(FUNCTION_STATEMENT)]
+    .some((m) => m[2] === name && quotedAway(m.index));
+  expect(dynamic, `dynamic SQL in the migration stream may redefine ${name}; this guard cannot read it`)
+    .toBe(false);
+
   const statements = [...masked.matchAll(FUNCTION_STATEMENT)].filter((m) => m[2] === name);
   const created = statements.filter((m) => m[1] === 'create');
   expect(created.length, `no migration creates ${name}`).toBeGreaterThan(0);
 
   const last = created[created.length - 1];
   const start = last.index;
-  const own = regions.find((r) => r.kind === 'body' && r.contentStart > start);
-  expect(own, `${name} has no terminator`).toBeDefined();
+  // The function's own body is the one introduced by AS — not a dollar-quoted
+  // parameter DEFAULT and not a dollar-quoted SET value, both of which legally
+  // precede it and both of which were being read as the body, so inert
+  // configuration text satisfied every invariant while the real body was empty
+  // (round-9 review, both lanes, high).
+  const own = regions.find(
+    (r) => r.kind === 'body' && r.start > start && /\bas\s*$/.test(masked.slice(start, r.start)),
+  );
+  expect(own, `${name} has no body introduced by AS`).toBeDefined();
 
   // A DROP of THIS signature after the last CREATE means the function these
   // invariants describe is not there any more.
@@ -743,9 +797,56 @@ $$;`;
   it('honours a later DROP of the same signature, and ignores one of another', () => {
     expect(() => effectiveBody('respond_night_out', `${STRONG}\ndrop function public.respond_night_out(uuid);`))
       .toThrow(/drops respond_night_out/);
+    // DROP FUNCTION may name its arguments too, so this is the same signature.
+    expect(() => effectiveBody('respond_night_out', `${STRONG}\ndrop function public.respond_night_out(p_night_out uuid);`))
+      .toThrow(/drops respond_night_out/);
     // 0059 does exactly this: installs its replacement, drops the old overload.
     expect(lockHolds(`${STRONG}\ndrop function public.respond_night_out(uuid, boolean, text);`))
       .toBe(true);
+  });
+
+  it('sees a CREATE whose function name is quoted', () => {
+    const quotedWeak = `create or replace function public."respond_night_out"(p_night_out uuid)
+returns boolean language plpgsql as $$
+begin
+  return true;
+end;
+$$;`;
+    expect(lockHolds(`${STRONG}\n${quotedWeak}`), 'a quoted name is the same function').toBe(false);
+  });
+
+  it('takes the body introduced by AS, not a dollar-quoted default or SET value', () => {
+    const payload =
+      "pg_advisory_xact_lock(hashtextextended('night_out_members:' || p_night_out::text, 0))";
+    const viaSet = `create or replace function public.respond_night_out(p_night_out uuid)
+returns boolean language plpgsql
+set application_name = $proof$${payload}$proof$
+as $$
+begin
+  return true;
+end;
+$$;`;
+    const viaDefault = `create or replace function public.respond_night_out(
+  p_night_out uuid, p_note text default $doc$${payload}$doc$)
+returns boolean language plpgsql
+as $$
+begin
+  return true;
+end;
+$$;`;
+    expect(lockHolds(`${STRONG}\n${viaSet}`), 'a SET value is not the body').toBe(false);
+    expect(lockHolds(`${STRONG}\n${viaDefault}`), 'a parameter default is not the body').toBe(false);
+  });
+
+  it('refuses rather than guesses when dynamic SQL may redefine the function', () => {
+    // Constructed SQL cannot be read by any amount of lexing, so the guard must
+    // fail closed instead of certifying the older text it can still see.
+    const dynamic = `do $$
+begin
+  execute 'create or replace function public.respond_night_out(p_night_out uuid) returns boolean language plpgsql as $x$ begin return true; end $x$';
+end $$;`;
+    expect(() => effectiveBody('respond_night_out', `${STRONG}\n${dynamic}`))
+      .toThrow(/dynamic SQL/);
   });
 
   it('keeps every offset aligned when it blanks', () => {
@@ -804,6 +905,14 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
       matchesCode(body, /v_current = 'declined'/),
       'the cap only applies when a declined row re-enters the counted set',
     ).toBe(true);
+    // Presence is not enough. A lock taken AFTER the capacity decision serialises
+    // nothing: two declined members can both read room for the last seat and both
+    // rejoin. The sequential live probes cannot see this, and every presence
+    // assertion above stays green through it (round-9 review, Codex, medium).
+    const lock = indexOfCode(body, 'pg_advisory_xact_lock');
+    const cap = indexOfCode(body, 'member_cap');
+    expect(lock, 'the rejoin path takes no advisory lock').toBeGreaterThan(-1);
+    expect(cap, 'the cap must be consulted AFTER the lock is held').toBeGreaterThan(lock);
   });
 
   it('the one counted set excludes declined rows', () => {
