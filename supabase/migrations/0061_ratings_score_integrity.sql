@@ -138,8 +138,12 @@ $$;
 --    IT RUNS. After the first apply, new NULLs are legitimate — a tier change
 --    clears the score (src/lib/ratings.server.ts:59). Re-running this later
 --    would overwrite those with band midpoints and change live rating
---    semantics. The apply tool refuses an already-ledgered migration, which is
---    what normally prevents this; do not defeat that.
+--    semantics.
+--    ⚠ NOTHING AUTOMATICALLY PREVENTS THIS ON THE STAGING PATH. Only
+--    apply-migration-set.ts consults the ledger (scripts/apply-migration-set.ts:191);
+--    apply-one-migration.mts — the tool used for staging — neither reads nor
+--    writes public.schema_migrations and will happily execute this file again.
+--    Promote through the SET path, or check the ledger by hand first.
 -- 3. RE-RUN THE READ-ONLY PRE-FLIGHT against production first. Staging's counts
 --    say nothing about production's shape.
 
