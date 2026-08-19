@@ -90,6 +90,15 @@ export type UseFollowsReturn = {
   toggleFollow: (handle: string) => void;
   /** True until the first read (local or server fetch) resolves. */
   loading: boolean;
+  /**
+   * Server mode: TRUE only once `circle` actually reflects the server's answer.
+   * A failed fetch resolves `loading` but leaves `circle` empty, and an empty
+   * circle is indistinguishable from "no friends" — which is how a night out
+   * could still be started with nobody invited even after the loading guard
+   * (round-2 panel, Codex, HIGH). Always true in local mode: there is no fetch
+   * to fail. Callers deriving an invitee list must require this, not `!loading`.
+   */
+  circleReady: boolean;
 };
 
 export function useFollows(): UseFollowsReturn {
@@ -100,6 +109,7 @@ export function useFollows(): UseFollowsReturn {
   const [followers, setFollowers] = useState<PublicProfile[]>([]);
   const [mode, setMode] = useState<FollowsMode>('pending');
   const [loading, setLoading] = useState(true);
+  const [circleReady, setCircleReady] = useState(false);
   const modeRef = useRef<FollowsMode>('pending');
   // Mirrors for event-handler reads (the toggle callback must see the
   // current circle/requested without re-binding on every change).
@@ -140,6 +150,7 @@ export function useFollows(): UseFollowsReturn {
       setRequested([]);
       setFollowers([]);
       setLocalFollows(loadFollows());
+      setCircleReady(true); // local mode: no fetch, nothing to fail
       setLoading(false);
       return;
     }
@@ -147,6 +158,7 @@ export function useFollows(): UseFollowsReturn {
     modeRef.current = 'server';
     setMode('server');
     setLoading(true);
+    setCircleReady(false);
 
     let cancelled = false;
     // Epoch guard (accountCache): a sign-out wipe while this fetch is in
@@ -163,7 +175,10 @@ export function useFollows(): UseFollowsReturn {
       // null = fetch FAILED (not "zero friends") — keep prior state rather
       // than blanking a circle on a transient failure. Never fall back to
       // the demo seed here: demo handles aren't real accounts.
-      if (server !== null) setCircle(server);
+      if (server !== null) {
+        setCircle(server);
+        setCircleReady(true);
+      }
       // Pre-0008 the outgoing RPC doesn't exist yet → null → keep [] (no
       // requests can exist before the migration lands either).
       if (outgoing !== null) setRequested(outgoing);
@@ -314,5 +329,6 @@ export function useFollows(): UseFollowsReturn {
     isRequested,
     toggleFollow,
     loading,
+    circleReady: mode === 'server' ? circleReady : true,
   };
 }

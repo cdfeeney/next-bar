@@ -82,7 +82,7 @@ export function loadIntent(now: Date = new Date()): TonightIntent | null {
 
 // The calendar day before a YYYY-MM-DD night date. Pure Date.UTC calendar
 // math — a raw 24h-in-ms subtraction lands one local hour early on the
-// spring-forward Sunday and can cross the 5am rollover (review finding),
+// spring-forward Sunday and can cross the rollover (review finding),
 // misreading "last night" for the 5:00–5:59am window that morning.
 function previousNightDate(night: string): string {
   const [y, m, d] = night.split('-').map(Number);

@@ -57,7 +57,18 @@ export default function ConsensusPage(): JSX.Element {
   // `loading` is consumed, not merely destructured: `inviteeIds` below is
   // derived from `circle`, which is EMPTY until follows resolve. Dropping it
   // is what let the Start button send a plan with an empty invitee list.
-  const { circle, mode, isFollowing, loading: followsLoading } = useFollows();
+  //
+  // `circleReady` closes the same hole on the FAILURE path (round-2 panel,
+  // Codex, HIGH): a fetch that returns null still resolves `loading`, leaving
+  // an empty circle that reads as "nobody to invite" rather than "we don't
+  // know yet" — a real plan with no guests again, one error away.
+  const {
+    circle,
+    mode,
+    isFollowing,
+    loading: followsLoading,
+    circleReady,
+  } = useFollows();
   const { ratings } = useRatings();
   const auth = useAuth();
   const isServer = mode === 'server';
@@ -263,7 +274,7 @@ export default function ConsensusPage(): JSX.Element {
             lands on its invite-link surface. */}
         <StartNightOutButton
           inviteeIds={inviteeIds}
-          disabled={followsLoading}
+          disabled={followsLoading || !circleReady}
         />
       </header>
 

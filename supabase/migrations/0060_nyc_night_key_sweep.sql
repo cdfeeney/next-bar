@@ -1,9 +1,25 @@
 ------------------------------------------------------------------------------
--- 0060_nyc_night_key_sweep.sql — the LAST four `current_date ± 2` guards
+-- 0060_nyc_night_key_sweep.sql — the LAST five `current_date ± 2` guards
 ------------------------------------------------------------------------------
--- Additive correction. 0011-0059 are applied and checksum-recorded, so they are
--- immutable and every fix is a new file. NOT APPLIED BY THIS BRANCH: authored
--- and reviewed only, numbered above the live maximum per CLAUDE.md.
+-- Additive correction, and AUTHOR-ONLY: this branch does not apply it. Numbered
+-- above the highest file here (0059) per CLAUDE.md.
+--
+-- ⚠ READ THE LEDGER BEFORE APPLYING. This file cannot tell you which of its
+-- five predecessors are live, and the repository disagrees with itself about
+-- that: `public.schema_migrations` (created by 0036) is the only authority, and
+-- CLAUDE.md records that eleven of this branch's 0000-0010 files no longer match
+-- the checksums recorded there. 0035's own header states "NOT APPLIED. The live
+-- ledger ends at 0032; 0033, 0034 and now 0035 are authored and reviewed only",
+-- and 0044 is likewise marked author-only.
+--
+-- That has a consequence this file must not hide. If 0035 was never applied, the
+-- live `share_night` is 0016's body, which has NO date validation at all — so
+-- for that ONE function this file does not swap a guard, it introduces 0035's
+-- ±2 bound for the first time, and a share_night call outside the window that
+-- used to return a token starts raising errcode 22023. That is 0035's intended
+-- change (it is an anti-amplification bound, see its header), but an operator
+-- applying this file must know they are landing it. The other four functions
+-- (0011, 0012, 0013, 0017) are pure swaps whatever the ledger says.
 --
 -- (Round-1 panel, BOTH lanes: Codex medium + Claude/OPUS medium) 0053 swept
 -- `current_date` out of the two places it appeared in a night_outs definition
@@ -28,10 +44,12 @@
 -- once the window slides — which is why all five move together rather than only
 -- the one the goal spec named.
 --
--- Each body below is its current definition verbatim, with the guard's two
--- `current_date` references replaced by `public.nyc_night_key()` (0053) and the
--- surrounding comment corrected. Nothing else changes: no signature, no grant,
--- no lock key, no conflict target. `create or replace function` is idempotent.
+-- Each body below is the definition in THIS REPOSITORY verbatim, with the
+-- guard's two `current_date` references replaced by `public.nyc_night_key()`
+-- (0053) and the surrounding comment corrected. Relative to those files nothing
+-- else changes: no signature, no grant, no lock key, no conflict target.
+-- `create or replace function` is idempotent. Relative to a DATABASE that never
+-- received 0035, see the share_night note above.
 ------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------

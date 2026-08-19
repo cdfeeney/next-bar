@@ -163,9 +163,13 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
     ).toBeGreaterThanOrEqual(JACCARD_FLOOR);
   });
 
-  it('the pick is deterministic for (profile, night) and rotates across nights — at the 5am LOCAL rollover, not UTC midnight', () => {
-    // Local-noon dates: unambiguous nights in any timezone.
-    const run = (dayOfMonth: number, hour = 12) =>
+  it('the pick is deterministic for (profile, night) and rotates across nights — at the 6am NYC rollover, not UTC midnight', () => {
+    // ABSOLUTE instants at a NEW YORK wall clock. July is EDT (UTC-4), so NYC
+    // hour + 4 = the UTC hour; hours past 20 roll into the next UTC day, which
+    // is exactly the point. These used to be `new Date(2026, 6, d, hour)` —
+    // the RUNNER's zone — and asserted a 5am LOCAL rollover that no longer
+    // exists anywhere (round-2 panel, Codex).
+    const run = (dayOfMonth: number, nycHour = 12) =>
       matches({
         profile: PROFILE,
         coords: null,
@@ -173,13 +177,18 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
         maxMiles: null,
         bars: bigPool(),
         maxResults: EXPLORATION_MIN_RESULTS,
-        now: new Date(2026, 6, dayOfMonth, hour),
+        now: new Date(Date.UTC(2026, 6, dayOfMonth, nycHour + 4)),
       })[EXPLORATION_MIN_RESULTS - 1].id;
 
     expect(run(25)).toBe(run(25));
-    // 2am belongs to the PREVIOUS night (5am rollover, cadence.ts): the
-    // pick must NOT rotate mid-evening or at midnight.
+    // 2am belongs to the PREVIOUS night (the ONE rollover, src/lib/nightKey.ts
+    // via cadence.ts): the pick must NOT rotate mid-evening or at midnight.
     expect(run(26, 2)).toBe(run(25, 23));
+    // 5am is still the previous night too — that is the hour the deleted 5am
+    // rule got wrong, so pin it rather than only the easy 2am case.
+    expect(run(26, 5)).toBe(run(25, 23));
+    // …and 6am NYC starts the new one.
+    expect(run(26, 6)).not.toBe(run(25, 23));
     // Across many nights the pick must not be constant (rotation works).
     const nights = [25, 26, 27, 28, 29].map((d) => run(d));
     expect(new Set(nights).size).toBeGreaterThan(1);

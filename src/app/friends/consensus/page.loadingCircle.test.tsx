@@ -22,6 +22,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * page's <StartNightOutButton> and the click below reaches handleStart with an
  * empty invitee list — createNightOut fires and this test fails. Any fixture
  * that only checks the loaded state would stay green through that revert.
+ *
+ * The THIRD case covers the same defect one error away (round-2 panel, Codex,
+ * HIGH): useFollows resolves `loading` even when the fetch returned null, so a
+ * failed hydrate left an empty circle that reads as "nobody to invite". Only
+ * `circleReady` tells those two apart.
  */
 
 const FRIEND_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -33,6 +38,7 @@ let follows: {
   circle: Array<{ id: string; handle: string; displayName: string | null }>;
   mode: string;
   loading: boolean;
+  circleReady: boolean;
 };
 
 const createNightOut =
@@ -91,7 +97,7 @@ const startButton = (): HTMLButtonElement =>
 describe('ConsensusPage — starting a night out while follows load', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    follows = { circle: [], mode: 'server', loading: true };
+    follows = { circle: [], mode: 'server', loading: true, circleReady: false };
   });
 
   it('cannot start a night out while the followed circle is still loading', async () => {
@@ -119,6 +125,7 @@ describe('ConsensusPage — starting a night out while follows load', () => {
       circle: [{ id: FRIEND_ID, handle: 'claire', displayName: 'Claire R' }],
       mode: 'server',
       loading: false,
+      circleReady: true,
     };
     rerender(<ConsensusPage />);
 
@@ -129,5 +136,21 @@ describe('ConsensusPage — starting a night out while follows load', () => {
     // …and the invitee list is the loaded circle, not the empty one.
     expect(inviteToNightOut).toHaveBeenCalledTimes(1);
     expect(inviteToNightOut.mock.calls[0][2]).toBe(FRIEND_ID);
+  });
+
+  it('cannot start a night out when the circle fetch FAILED', async () => {
+    const { rerender } = render(<ConsensusPage />);
+
+    // What useFollows actually does when fetchFollows returns null: loading
+    // resolves, the circle stays empty, and nothing else changes. Gating on
+    // `loading` alone re-arms the button here.
+    follows = { circle: [], mode: 'server', loading: false, circleReady: false };
+    rerender(<ConsensusPage />);
+
+    expect(startButton()).toBeDisabled();
+    await userEvent.click(startButton(), { pointerEventsCheck: 0 });
+
+    expect(createNightOut).not.toHaveBeenCalled();
+    expect(inviteToNightOut).not.toHaveBeenCalled();
   });
 });
