@@ -95,6 +95,11 @@ describe('nightOuts.server write RPCs', () => {
   });
 
   it('respondNightOut sends the state the caller observed', async () => {
+    // All four params by name: 0057 dropped the 2-argument respond_night_out
+    // and 0059 the 3-argument one, so (uuid, boolean, text, integer) is the
+    // only overload the serving database has — both review lanes filed the
+    // 2-argument call as a HIGH (Accept and Decline resolved no function).
+    //
     // Without it, a replayed accept reversed a LATER decline and recorded the
     // person as coming when they had said no (cold panel, Codex, HIGH). If the
     // expected state stops reaching the RPC, that protection is gone silently.
@@ -240,7 +245,7 @@ describe('nightOuts.server reads', () => {
           share_token: UUID2,
           caller_role: 'member',
           caller_status: 'accepted',
-          caller_revision: 2,
+          caller_revision: 4,
         },
       ],
     });
@@ -250,7 +255,9 @@ describe('nightOuts.server reads', () => {
       status: 'open',
       callerRole: 'member',
       callerStatus: 'accepted',
-      callerRevision: 2,
+      // The revision the response guard is built on: it must survive the row
+      // mapping, or every caller sends a made-up version.
+      callerRevision: 4,
       shareToken: UUID2,
     });
   });

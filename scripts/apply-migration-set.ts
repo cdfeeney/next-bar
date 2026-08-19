@@ -70,6 +70,8 @@ import { authorizeMigrationTarget, redactUrl } from './apply-migration-target-gu
 
 import { checksumOfSql, normalisedSql } from '../src/lib/effectiveMigration';
 
+import { resolveTarget, TargetRefusal } from './lib/migration-target-guard';
+
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
 function fail(message: string): never {
@@ -105,11 +107,18 @@ function parseArgs(argv: string[]): {
 async function main(): Promise<void> {
   const { env, execute, files, secretsFile } = parseArgs(process.argv.slice(2));
 
+  // Snapshot BEFORE any dotenv load. dotenv defaults to override:false, so a
+  // DATABASE_URL exported in the shell survives every load below and is
+  // indistinguishable afterwards from one a file supplied — which is exactly
+  // how a production connection string pairs with .env.local's staging label.
+  const shellDatabaseUrl = process.env.DATABASE_URL;
+
   // A separate --secrets-file is how you reach a NON-default target without editing
   // .env.local. Repointing .env.local at production is the obvious workaround
   // and it is a trap: it silently redirects every other tool in the repo,
   // including the live RLS suite, and it stays repointed until someone
   // remembers to undo it. One command, one file, no lingering state.
+  let secretsParsed: Record<string, string> | undefined;
   if (secretsFile !== null) {
     if (secretsFile === '') fail('--secrets-file needs a path');
     // NOTE: this option is deliberately NOT called --env-file. That name is a
@@ -120,15 +129,38 @@ async function main(): Promise<void> {
     // .env.local and point this at whatever THAT names. A guard that does not
     // guard is worse than no guard, because it is trusted.
     if (!existsSync(secretsFile)) fail(`--secrets-file ${secretsFile} does not exist`);
-    loadEnv({ path: secretsFile, override: true });
+    secretsParsed = loadEnv({ path: secretsFile, override: true }).parsed;
   }
   loadEnv({ path: '.env.local' });
   loadEnv({ path: '.env' });
 
-  // Every target refusal, in the order that reports the most useful error
-  // first, plus the client config those refusals authorise. The sequence used
-  // to live inline here, which is precisely why the sibling applier had none of
-  // it: one resolver, every caller.
+  // TWO different questions, both mandatory, in this order.
+  //
+  // First: did the URL and the LABEL come from the SAME file? A DATABASE_URL
+  // exported in the shell, or a --secrets-file supplying only one of the pair,
+  // survives dotenv's override:false and gets paired with .env.local's label —
+  // a production connection string wearing the word "staging". Nothing
+  // downstream can catch that: the shared pooler URL cannot tell the two apart.
+  // (scripts/lib/migration-target-guard.ts, pure, no I/O.)
+  try {
+    resolveTarget({
+      env,
+      secretsFile,
+      secretsParsed,
+      shellDatabaseUrl,
+      databaseUrl: process.env.DATABASE_URL,
+      actualEnv: process.env.NEXT_BAR_DATABASE_ENVIRONMENT,
+    });
+  } catch (error) {
+    if (error instanceof TargetRefusal) fail(error.message);
+    throw error;
+  }
+
+  // Second: which PROJECT and which SERVER does that pair actually reach, and
+  // is the channel authenticated? Every target refusal in the order that
+  // reports the most useful error first, plus the client config those refusals
+  // authorise. The sequence used to live inline here, which is precisely why
+  // the sibling applier had none of it: one resolver, every caller.
   const authorized = authorizeMigrationTarget(env);
   if (authorized.refusal !== null) fail(authorized.refusal);
   const { clientConfig, effective, env: actualEnv } = authorized.target;

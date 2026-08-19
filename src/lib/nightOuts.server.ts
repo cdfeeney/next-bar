@@ -125,6 +125,12 @@ export async function inviteToNightOut(
  * `expectedStatus` and `expectedRevision` are the state the UI was showing when
  * the user acted. Pass BOTH, and pass what was RENDERED.
  *
+ * This signature is not a preference — it is the only `respond_night_out` the
+ * serving database has. 0057 dropped the 2-argument overload this module used to
+ * call and 0059 dropped the 3-argument one, leaving
+ * `(uuid, boolean, text, integer)` alone. Both review lanes filed the 2-argument
+ * call as a HIGH: Accept and Decline resolved no function and failed live.
+ *
  * Without the status, a replayed accept — a retried fetch, a double tap, a
  * request that sat in a queue — reversed a LATER decline and recorded the person
  * as coming when they had said no (cold panel, Codex, HIGH).
@@ -260,7 +266,7 @@ type NightOutRow = {
   share_token: string | null;
   caller_role: NightOut['callerRole'];
   caller_status: NightOut['callerStatus'];
-  caller_revision: number | null;
+  caller_revision?: number | null;
 };
 
 /** Member-scoped plan read. Null = error OR the caller is not a member. */
@@ -285,7 +291,11 @@ export async function getNightOut(
     shareToken: row.share_token,
     callerRole: row.caller_role,
     callerStatus: row.caller_status,
-    callerRevision: row.caller_revision,
+    // Normalised to null, never left undefined: a row without the column at
+    // all must take the same "no revision was rendered" branch in callers as an
+    // explicit null, instead of slipping past a null check and reaching the RPC
+    // as undefined.
+    callerRevision: row.caller_revision ?? null,
   };
 }
 
@@ -339,6 +349,12 @@ type MyNightOutRow = {
 /**
  * "What am I invited to?" — the query that did not exist until 0052, which is
  * why account-targeted invitations were invisible to their recipients.
+ *
+ * The columns read here are the SERVING function's, which is 0059's revision of
+ * it, not the 0052 body in this tree. 0052 is applied and checksum-recorded, so
+ * it is immutable; 0053 and 0059 corrected it additively (NYC rollover for
+ * `is_past`, owner rows excluded, soonest-night ordering, and `my_revision`).
+ * Reading this file alone will understate the live shape by one column.
  */
 export async function getMyNightOuts(
   supabase: SupabaseClient,

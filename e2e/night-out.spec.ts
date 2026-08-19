@@ -113,6 +113,10 @@ const PLAN_ROW = {
   share_token: TOKEN,
   caller_role: 'member',
   caller_status: 'accepted',
+  // 0059 added the caller's response revision to get_night_out, and
+  // respond_night_out will not take a response without it. A fixture missing it
+  // makes the decline below unsendable rather than merely untyped.
+  caller_revision: 0,
 };
 
 async function stubMemberRpcs(page: Page): Promise<void> {
@@ -217,8 +221,15 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     let declineCalled = false;
     await page.route('**/rest/v1/rpc/respond_night_out*', async (route) => {
       declineCalled = true;
-      const body = route.request().postDataJSON() as { p_accept: boolean };
-      expect(body.p_accept).toBe(false);
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      // All four params of the only overload the serving database has, carrying
+      // the state this page RENDERED (0057 dropped the 2-argument form).
+      expect(body).toEqual({
+        p_night_out: PLAN_ID,
+        p_accept: false,
+        p_expected_status: 'accepted',
+        p_expected_revision: 0,
+      });
       await fulfillJson(200, true)(route);
     });
 
@@ -234,6 +245,49 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await expect
       .poll(() => declineCalled, { timeout: 5000 })
       .toBe(true);
+  });
+
+  test('a REFUSED response re-reads the plan before telling you to try again', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    // Round-2 review (Codex, medium). 0059's expected-status/revision guard
+    // makes a rejection DETERMINISTIC: the view still holds the revision the
+    // RPC just refused, so "try again" from the same render re-sends the same
+    // rejected pair and fails identically, forever. Reproduced by declining the
+    // plan in another tab first — the classic stale-tab case. The page must
+    // re-read before advising a retry, or the advice can never succeed.
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page);
+
+    let planReads = 0;
+    await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
+      const url = route.request().url();
+      if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
+      if (url.includes('get_night_out_board')) return fulfillJson(200, [])(route);
+      planReads += 1;
+      return fulfillJson(200, [PLAN_ROW])(route);
+    });
+    // The row moved on in the other tab, so this render's pair is stale.
+    await page.route('**/rest/v1/rpc/respond_night_out*', fulfillJson(200, false));
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByRole('heading', { name: /birthday crawl/i })).toBeVisible();
+    await expect.poll(() => planReads, { timeout: 10_000 }).toBeGreaterThan(0);
+    const readsBeforeTap = planReads;
+
+    await page.getByRole('button', { name: /not tonight/i }).click();
+
+    // The advice is only honest if the state behind it was refreshed.
+    await expect(page.getByText(/didn't go through/i)).toBeVisible();
+    expect(
+      planReads,
+      'the page advised a retry without re-reading the state the RPC just refused',
+    ).toBeGreaterThan(readsBeforeTap);
   });
 
   test('signed-in non-member declines from the preview WITHOUT joining first', async ({
