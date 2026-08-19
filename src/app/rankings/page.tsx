@@ -30,8 +30,9 @@ type RatedEntry = {
 };
 
 export default function RankingsPage(): JSX.Element {
-  // 0019 swap-day rule: getBarById reader — subscribe for live swaps.
-  useBars();
+  // 0019 swap-day rule: getBarById reader — subscribe for live swaps. The
+  // value is USED, not just subscribed to: see `sortedEntries` below.
+  const catalog = useBars();
   const { ratings } = useRatings();
   const auth = useAuth();
   // U2-3 deep link (?add=<barId> from "Rank it →" on suggestion cards):
@@ -65,7 +66,17 @@ export default function RankingsPage(): JSX.Element {
       if (bar) result.push({ rating: r, bar });
     }
     return result;
-  }, [ratings]);
+    // `catalog` is a dependency because `getBarById` reads the module-level
+    // catalog, which CatalogRefresh swaps in AFTER hydration. Subscribing via
+    // useBars() re-renders this component, but with `[ratings]` alone the memo
+    // did not recompute, so the list stayed frozen against the ~39-bar
+    // emergency fallback whenever the swap landed after the ratings hydrate.
+    // Every rated bar outside that core — Bar 54 among them, which the V8 PRD
+    // names as required retained state — silently vanished from Rankings on a
+    // V7→V8 upgrade, purely on load ordering. Browser-dependent, which is why
+    // it survived: WebKit happened to swap before the hydrate, Chromium after.
+    // Covered by e2e/v7-continuity.spec.ts ("Bar 54 renders by name…").
+  }, [ratings, catalog]);
 
   const hasNoRatings = ratings.length === 0;
 

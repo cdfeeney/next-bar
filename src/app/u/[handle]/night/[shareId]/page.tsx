@@ -6,6 +6,7 @@ import Avatar from '@/components/Avatar';
 import BarVisualTile from '@/components/BarVisualTile';
 import ShareButton from '@/components/ShareButton';
 import { getBarById } from '@/lib/catalog';
+import { useBars } from '@/lib/useBars';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { fetchSharedNight, type SharedNight } from '@/lib/nights.server';
 import { buildNightPath, shareNightText } from '@/lib/share';
@@ -54,6 +55,14 @@ export default function SharedNightPage({
   params: { handle: string; shareId: string };
 }): JSX.Element {
   const auth = useAuth();
+  // 0019 swap-day rule: the route below is built from getBarById, which reads
+  // the module-level catalog CatalogRefresh swaps in AFTER hydration. Without
+  // this subscription the component never re-rendered on the swap, so a shared
+  // night containing any bar outside the ~39-bar emergency core rendered with
+  // those stops — and a loved bar among them — silently missing. Shared-night
+  // state is one of the V8 PRD's required-retained items; see
+  // e2e/v7-continuity.spec.ts ("a V7 shared night still renders…").
+  useBars();
   const { isFollowing, toggleFollow } = useFollows();
   const [state, setState] = useState<NightState>({ kind: 'loading' });
   // Decode once; every use below (fetch, spoof check, share-onward link)
