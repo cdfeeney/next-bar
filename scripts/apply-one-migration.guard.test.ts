@@ -15,9 +15,10 @@ import { afterAll, describe, expect, it } from 'vitest';
  * moved below `client.connect()` — or an import that silently dropped — would
  * ship green against unit tests of the pure functions.
  *
- * Every fixture points DATABASE_URL at port 1 of a pooler hostname that does
- * not resolve, so a refusal must arrive with no connection attempt at all, and
- * the accepted case must get PAST the guard and die afterwards.
+ * Every fixture names its own DATABASE_URL, and every case but one runs with
+ * the recorder below attached, so "no connection was attempted" and "the
+ * migration was applied, over TLS the guard authorised" are OBSERVED rather
+ * than inferred from which error string happened to appear.
  */
 const REF_A = 'stagingrefbbbbbbbbbb';
 const REF_B = 'prodrefaaaaaaaaaaaaa';
@@ -32,6 +33,54 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 // only a readable file, which is what the tool checks for before connecting.
 const caFile = join(dir, 'pooler-ca.crt');
 writeFileSync(caFile, ['-----BEGIN CERTIFICATE-----', 'not-a-real-certificate', '-----END CERTIFICATE-----', ''].join('\n'));
+
+/**
+ * The recorder. It replaces pg's SOCKET — connect/query/end on the REAL Client
+ * prototype — inside the spawned child, and nothing else: the same CLI, the
+ * same guard, pg's own resolution of the same connection string. What that buys
+ * is a direct OBSERVATION in place of two inferences the earlier version of this
+ * file was making.
+ *
+ *   * A refusal used to be trusted because the output lacked 'ECONNREFUSED'.
+ *     That is absence of one error string, not absence of a connection: a
+ *     connect that was attempted and swallowed, or that failed with ENOTFOUND
+ *     instead, looked identical. Now every refusal case asserts ZERO recorded
+ *     connects.
+ *   * An accepted run used to be trusted because it printed the banner and then
+ *     died. It died in DNS, so it never reached a query — deleting
+ *     `await pg.query(sql)` from the applier left all of it green. Now the
+ *     accepted case asserts the exact sequence, and the connect line carries the
+ *     TLS state of the client that actually connected, so rebuilding that client
+ *     from the connection string alone (dropping the CA and the explicit ssl the
+ *     guard authorised) goes red instead of shipping DDL in the clear.
+ *
+ * NODE_OPTIONS, not --require: tsx's CLI re-spawns node, and a flag given to the
+ * parent never reaches the child that runs the script. Forward slashes: node's
+ * NODE_OPTIONS parser treats a backslash inside quotes as an escape, so a
+ * Windows temp path arrives as `C:Userscdfee...` and the preload is not found.
+ */
+const recorder = join(dir, 'record-queries.cjs');
+writeFileSync(recorder, [
+  "const { createHash } = require('node:crypto');",
+  "const { Client } = require(require.resolve('pg', { paths: [process.cwd()] }));",
+  "const sha = (t) => createHash('sha256').update(String(t)).digest('hex');",
+  'Client.prototype.connect = async function () {',
+  '  const ssl = this.connectionParameters && this.connectionParameters.ssl;',
+  "  console.log(`[probe] connect ssl=${ssl ? 'on' : 'off'} rejectUnauthorized=${",
+  "    ssl ? String(ssl.rejectUnauthorized) : 'n/a'} ca=${ssl && ssl.ca ? 'yes' : 'no'}`);",
+  '};',
+  'Client.prototype.query = async function (text) {',
+  "  console.log(`[probe] query ${sha(typeof text === 'string' ? text : text && text.text)}`);",
+  '  return { rows: [], rowCount: 0 };',
+  '};',
+  'Client.prototype.end = async function () {};',
+  '',
+].join('\n'));
+const RECORDING = { NODE_OPTIONS: `--require "${recorder.split('\\').join('/')}"` };
+
+/** Every line the recorder emitted, in order. Empty means no client ever connected. */
+const probed = (output: string): string[] => output
+  .split('\n').map((line) => line.trim()).filter((line) => line.startsWith('[probe]'));
 
 const url = (ref: string, host = POOLER) => `postgresql://postgres.${ref}:pw@${host}:1/postgres`;
 
@@ -51,7 +100,8 @@ function secretsFile(vars: Record<string, string>): string {
 
 function runApplyOne(
   vars: Record<string, string>,
-  { args, env = {} }: { args?: string[]; env?: Record<string, string> } = {},
+  { args, env = {}, record = true }:
+  { args?: string[]; env?: Record<string, string>; record?: boolean } = {},
 ): { status: number; output: string } {
   const file = secretsFile(vars);
   try {
@@ -63,7 +113,7 @@ function runApplyOne(
         cwd: process.cwd(),
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, PGSSLROOTCERT: caFile, ...env },
+        env: { ...process.env, PGSSLROOTCERT: caFile, ...(record ? RECORDING : {}), ...env },
       },
     );
     return { status: 0, output: stdout };
@@ -85,21 +135,21 @@ describe('apply-one-migration CLI target guard', () => {
     const result = runApplyOne(staging, { args: [MIGRATION] });
     expect(result.status).toBe(2);
     expect(result.output).toContain('--env <label> is required');
-    expect(result.output).not.toContain('ECONNREFUSED');
+    expect(probed(result.output)).toEqual([]);
   }, 120_000);
 
   it('refuses, without connecting, when the production ref is unset', () => {
     const result = runApplyOne({ ...staging, NEXT_BAR_PRODUCTION_PROJECT_REF: '' });
     expect(result.status).toBe(1);
     expect(result.output).toContain('NEXT_BAR_PRODUCTION_PROJECT_REF is not set');
-    expect(result.output).not.toContain('ECONNREFUSED');
+    expect(probed(result.output)).toEqual([]);
   }, 120_000);
 
   it('refuses, without connecting, when the ref is outside the staging allowlist', () => {
     const result = runApplyOne({ ...staging, NEXT_BAR_STAGING_PROJECT_REFS: 'otherrefccccccccccc0' });
     expect(result.status).toBe(1);
     expect(result.output).toContain('not in NEXT_BAR_STAGING_PROJECT_REFS');
-    expect(result.output).not.toContain('ECONNREFUSED');
+    expect(probed(result.output)).toEqual([]);
   }, 120_000);
 
   it('refuses, without connecting, when DATABASE_URL points at the production ref', () => {
@@ -110,7 +160,7 @@ describe('apply-one-migration CLI target guard', () => {
     });
     expect(result.status).toBe(1);
     expect(result.output).toContain('PRODUCTION project ref');
-    expect(result.output).not.toContain('ECONNREFUSED');
+    expect(probed(result.output)).toEqual([]);
   }, 120_000);
 
   // pg gives ?host= / ?port= precedence over the authority the operator reads,
@@ -120,71 +170,57 @@ describe('apply-one-migration CLI target guard', () => {
     const result = runApplyOne({ ...staging, DATABASE_URL: `${url(REF_A)}?host=elsewhere.example.com` });
     expect(result.status).toBe(1);
     expect(result.output).toContain('effective connection host does not match');
-    expect(result.output).not.toContain('ECONNREFUSED');
+    expect(probed(result.output)).toEqual([]);
   }, 120_000);
 
   it('refuses, without connecting, when ?port= moves the connection off the authority', () => {
     const result = runApplyOne({ ...staging, DATABASE_URL: `${url(REF_A)}?port=6543` });
     expect(result.status).toBe(1);
     expect(result.output).toContain('effective connection port does not match');
-    expect(result.output).not.toContain('ECONNREFUSED');
+    expect(probed(result.output)).toEqual([]);
   }, 120_000);
 
   it('refuses, without connecting, when no pooler CA is configured', () => {
     const result = runApplyOne({ ...staging, PGSSLROOTCERT: '' });
     expect(result.status).toBe(1);
     expect(result.output).toContain('no CA certificate for the pooler');
-    expect(result.output).not.toContain('ECONNREFUSED');
+    expect(probed(result.output)).toEqual([]);
   }, 120_000);
 
   // The other half of the proof: a guard that refused everything would also
-  // "pass" every case above. The host is a pooler name that does not resolve,
-  // so an authorised run dies in DNS instead of reaching anyone real.
+  // "pass" every case above. This is the ONE case that runs against unmodified
+  // pg — record: false — so something in the suite still reaches the real
+  // network stack. The host is a pooler name that does not resolve, so it dies
+  // in DNS instead of reaching anyone real.
   it('accepts the configured staging target and fails only afterwards', () => {
     const result = runApplyOne({
       ...staging,
       DATABASE_URL: url(REF_A, 'no-such-target.pooler.supabase.com'),
-    });
+    }, { record: false });
     expect(result.output).not.toContain('REFUSING');
     expect(result.output).toContain('[apply-one] tls      : on, peer certificate verified');
     expect(result.status).not.toBe(0);
   }, 120_000);
 
   // ...and the other half of THAT. Dying in DNS proves the guard let the run
-  // through, and nothing more: delete `await pg.query(sql)` from the applier
-  // and every case above still passes, because no case ever gets far enough to
-  // notice. This one does. It replaces pg's SOCKET (connect/query/end on the
-  // real Client prototype) and leaves everything else real — the same CLI, the
-  // same guard, pg's own resolution of the same connection string — so what it
-  // asserts is the exact query sequence an authorised apply issues.
-  //
-  // NODE_OPTIONS, not --require: tsx's CLI re-spawns node, and a flag passed to
-  // the parent never reaches the child that actually runs the script.
-  it('applies the migration on an authorised staging target, in order', () => {
-    const recorder = join(dir, 'record-queries.cjs');
-    writeFileSync(recorder, [
-      "const { createHash } = require('node:crypto');",
-      "const { Client } = require(require.resolve('pg', { paths: [process.cwd()] }));",
-      "const sha = (t) => createHash('sha256').update(String(t)).digest('hex');",
-      "Client.prototype.connect = async function () { console.log('[probe] connect'); };",
-      'Client.prototype.query = async function (text) {',
-      "  console.log(`[probe] query ${sha(typeof text === 'string' ? text : text && text.text)}`);",
-      '  return { rows: [], rowCount: 0 };',
-      '};',
-      'Client.prototype.end = async function () {};',
-      '',
-    ].join('\n'));
-
-    const result = runApplyOne(staging, { env: { NODE_OPTIONS: `--require "${recorder.split('\\').join('/')}"` } });
+  // through and nothing more. This asserts what an authorised apply actually
+  // issues, and over what: the connect line carries the resolved TLS state of
+  // the client that connected, which is the only thing that distinguishes the
+  // authorised clientConfig from a client rebuilt out of its connection string.
+  // apply-migration-target-guard.ts says why that distinction matters — rebuilt,
+  // the CA and the explicit ssl are gone and pg's default for a URL naming no
+  // sslmode is no TLS at all, so the DDL and the role password would cross the
+  // network in the clear while the banner still claimed a verified peer.
+  it('applies the migration over the authorised TLS config, in order', () => {
+    const result = runApplyOne(staging);
     const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 
-    expect(result.output.split('\n').map((line) => line.trim()).filter((line) => line.startsWith('[probe]')))
-      .toEqual([
-        '[probe] connect',
-        `[probe] query ${sha("SET lock_timeout = '10s'")}`,
-        `[probe] query ${sha("SET statement_timeout = '300s'")}`,
-        `[probe] query ${sha(readFileSync(MIGRATION, 'utf8'))}`,
-      ]);
+    expect(probed(result.output)).toEqual([
+      '[probe] connect ssl=on rejectUnauthorized=true ca=yes',
+      `[probe] query ${sha("SET lock_timeout = '10s'")}`,
+      `[probe] query ${sha("SET statement_timeout = '300s'")}`,
+      `[probe] query ${sha(readFileSync(MIGRATION, 'utf8'))}`,
+    ]);
     expect(result.output).toContain(`ok ${MIGRATION}`);
     expect(result.status).toBe(0);
   }, 120_000);
