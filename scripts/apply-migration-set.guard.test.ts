@@ -151,6 +151,24 @@ describe('apply-migration-set CLI target guard', () => {
     }), { PGSSLROOTCERT: '' });
     expect(result.status).toBe(1);
     expect(result.output).toContain('no CA certificate for the pooler');
+    expect(result.output).toContain('PGSSLROOTCERT');
+    expect(result.output).not.toContain('ECONNREFUSED');
+  }, 120_000);
+
+  // pg merges the parsed connection string OVER the client config, and parsing
+  // any ssl parameter replaces the whole ssl object - so a correctly configured
+  // PGSSLROOTCERT is silently dropped and the handshake would fail later,
+  // pointing away from the cause.
+  it('refuses, without connecting, when DATABASE_URL ssl parameters drop the configured CA', () => {
+    const result = runApplySet(secretsFile('sslmode-drops-ca', {
+      NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
+      NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
+      NEXT_BAR_STAGING_PROJECT_REFS: REF_A,
+      DATABASE_URL: `${url(REF_A)}?sslmode=verify-full`,
+    }));
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('no CA certificate for the pooler');
+    expect(result.output).toContain('sslrootcert');
     expect(result.output).not.toContain('ECONNREFUSED');
   }, 120_000);
 

@@ -203,24 +203,9 @@ async function main(): Promise<void> {
       + 'so the pooler host cannot be authenticated. Unset it and re-run.');
   }
 
-  // The pooler's chain is SELF-SIGNED, so "verify against the system store" can
-  // never succeed here - proven by pointing the live RLS suite at the real
-  // staging pooler with rejectUnauthorized:true: "self-signed certificate in
-  // certificate chain". Verification therefore needs Supabase's CA, and a tool
-  // that demands verification without saying where the CA comes from is a false
-  // refusal with no way out. A connection string naming sslrootcert wins over
-  // this default and pg loads that file itself.
-  const caInUrl = /[?&]sslrootcert=/.test(databaseUrl);
-  if (!caPath && !caInUrl) {
-    fail("no CA certificate for the pooler: set PGSSLROOTCERT to Supabase's CA file (dashboard - "
-      + 'Settings - Database - SSL configuration), or add ?sslmode=verify-full&sslrootcert=<path> to '
-      + 'DATABASE_URL. The pooler chain is self-signed, so it cannot be verified without it, and an '
-      + 'unverified connection would leave the target unauthenticated.');
-  }
-
   // sslmode=disable in the connection string still wins over the default above.
   const resolvedSsl = probe.connectionParameters?.ssl as {
-    rejectUnauthorized?: boolean; checkServerIdentity?: unknown;
+    rejectUnauthorized?: boolean; checkServerIdentity?: unknown; ca?: unknown;
   } | false | undefined;
   if (!resolvedSsl) {
     fail('DATABASE_URL disables TLS, so the migration set and the role password would cross the '
@@ -235,11 +220,27 @@ async function main(): Promise<void> {
   // answered, and this guard's whole identity chain (the .pooler.supabase.com
   // suffix, the ref in the username) is strings the operator wrote. The
   // certificate is what makes the peer behind that name actually Supabase.
-  const ssl = resolvedSsl as { rejectUnauthorized?: boolean; checkServerIdentity?: unknown };
+  const ssl = resolvedSsl as { rejectUnauthorized?: boolean; checkServerIdentity?: unknown; ca?: unknown };
   if (ssl.rejectUnauthorized === false || typeof ssl.checkServerIdentity === 'function') {
     fail("DATABASE_URL turns off peer certificate verification (sslmode=no-verify, verify-ca or a "
       + 'libpq-compat mode), so the pooler host cannot be authenticated and the target could be '
       + 'substituted by whatever answers that name');
+  }
+
+  // The pooler's chain is SELF-SIGNED, so "verify against the system store" can
+  // never succeed here - proven by pointing the live RLS suite at the real
+  // staging pooler with rejectUnauthorized:true: "self-signed certificate in
+  // certificate chain". Verification needs Supabase's CA, so ask the RESOLVED
+  // config whether it has one rather than whether one was configured: pg merges
+  // the parsed connection string OVER this config, and parsing any ssl parameter
+  // replaces the whole ssl object - so `?sslmode=verify-full` with PGSSLROOTCERT
+  // set silently drops the CA and would die later in the handshake, pointing
+  // away from the cause.
+  if (!ssl.ca) {
+    fail("the connection carries no CA certificate for the pooler, whose chain is self-signed. Set "
+      + "PGSSLROOTCERT to Supabase's CA file (dashboard - Settings - Database - SSL configuration). "
+      + 'If DATABASE_URL names sslmode or any other ssl parameter, it REPLACES that CA, so the path '
+      + 'has to go there too: ?sslmode=verify-full&sslrootcert=<path>.');
   }
 
   // Read and hash first: a missing or unreadable file must stop us before we

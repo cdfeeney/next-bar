@@ -38,14 +38,29 @@ function envValue(key: string): string | null {
   }
 }
 
-/** Supabase's CA, when the operator has pointed PGSSLROOTCERT at it. */
+/**
+ * Supabase's CA, when the operator has pointed PGSSLROOTCERT at it. Read from
+ * .env.local as well as the environment: that is where .env.example says to put
+ * it and where this file already reads DATABASE_URL from, and nothing loads
+ * .env.local into process.env for vitest (vitest.setup.ts only imports
+ * jest-dom). Reading process.env alone meant an operator who followed the
+ * documentation silently got the unverified path.
+ */
 function caCertificate(): string {
-  const path = (process.env.PGSSLROOTCERT ?? '').trim();
+  // `||`, not `??`: an EMPTY PGSSLROOTCERT in the environment is not a
+  // configured value, and letting it shadow .env.local would reintroduce the
+  // same silent downgrade.
+  const path = (process.env.PGSSLROOTCERT ?? '').trim() || (envValue('PGSSLROOTCERT') ?? '').trim();
   if (!path) return '';
+  // A configured-but-unreadable CA is a misconfiguration, not a licence to
+  // connect unverified: swallowing it was the same silent downgrade.
   try {
     return readFileSync(path, 'utf8');
-  } catch {
-    return '';
+  } catch (error) {
+    throw new Error(
+      `nightOutsRls.live.test.ts refuses to run: PGSSLROOTCERT is set to ${path}, which cannot be `
+      + `read (${(error as Error).message}). Fix the path or unset it deliberately.`,
+    );
   }
 }
 
