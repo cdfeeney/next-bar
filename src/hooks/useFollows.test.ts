@@ -539,21 +539,125 @@ describe('useFollows — followers + mutuals (B3c)', () => {
     unmount();
   });
 
+  it('a revalidation never flips `loading` back on — lists must not blank', async () => {
+    // /friends/following and /friends/followers replace their whole list with a
+    // "Loading…" placeholder whenever `loading` is true. Re-running the hydrate
+    // on every settled write used to do exactly that for a full three-RPC round
+    // trip after each unfollow (round-5 panel, Claude, HIGH).
+    fetchFollowsMock.mockResolvedValue([MAYA]);
+    unfollowByIdMock.mockResolvedValue(true);
+
+    const loadingSeen: boolean[] = [];
+    const { result, unmount } = renderHook(() => {
+      const value = useFollows();
+      loadingSeen.push(value.loading);
+      return value;
+    });
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+    loadingSeen.length = 0;
+
+    fetchFollowsMock.mockResolvedValue([]);
+    await act(async () => {
+      result.current.toggleFollow('Claire_R');
+    });
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+
+    expect(loadingSeen).not.toContain(true);
+    unmount();
+  });
+
+  it('a superseded hydrate does not overwrite a newer optimistic write', async () => {
+    // The re-hydrate a settled write triggers is in the air while the user taps
+    // again. Applying that older snapshot wipes the placeholder the double-tap
+    // guard depends on, so the button flips back to Follow (round-5 panel,
+    // both lanes).
+    fetchFollowsMock.mockResolvedValue([]);
+    const { result, unmount } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+
+    // Hold the next hydrate open, then start a write while it is in flight.
+    let settleHydrate: (value: typeof MAYA[]) => void = () => {};
+    fetchFollowsMock.mockImplementation(
+      () => new Promise<typeof MAYA[]>((resolve) => { settleHydrate = resolve; }),
+    );
+    let settleWrite: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settleWrite = resolve;
+        }),
+    );
+
+    // Trigger the re-hydrate the way the app does — another tab's ping.
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: 'next-bar:follows:dirty' }),
+      );
+    });
+    act(() => result.current.toggleFollow('ava_p'));
+    expect(result.current.isFollowing('ava_p')).toBe(true);
+
+    // The older snapshot lands. It must be dropped, not applied.
+    await act(async () => {
+      settleHydrate([]);
+    });
+    expect(result.current.isFollowing('ava_p')).toBe(true);
+
+    // Leave nothing in flight: the pending set is module state, so an unsettled
+    // write would pin circleReady false for every later test in this file.
+    fetchFollowsMock.mockResolvedValue([]);
+    await act(async () => {
+      settleWrite(null);
+    });
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+    unmount();
+  });
+
   it('another tab settling a write makes this tab re-hydrate before reporting ready', async () => {
     fetchFollowsMock.mockResolvedValue([]);
     const { result, unmount } = renderHook(() => useFollows());
     await waitFor(() => expect(result.current.circleReady).toBe(true));
 
-    // The other tab followed someone; all we see is its storage ping.
-    fetchFollowsMock.mockResolvedValue([MAYA]);
+    // The other tab followed someone; all we see is its storage ping. Hold the
+    // re-hydrate open: nothing is pending in THIS tab, so the only thing that
+    // can withhold readiness here is the snapshot's generation being older than
+    // the current one. That window is a full round trip wide in production.
+    let settleRefetch: (value: typeof MAYA[]) => void = () => {};
+    fetchFollowsMock.mockImplementation(
+      () => new Promise<typeof MAYA[]>((resolve) => { settleRefetch = resolve; }),
+    );
     await act(async () => {
       window.dispatchEvent(
         new StorageEvent('storage', { key: 'next-bar:follows:dirty' }),
       );
     });
 
+    expect(result.current.circle).toEqual([]);
+    expect(result.current.circleReady).toBe(false);
+
+    await act(async () => {
+      settleRefetch([MAYA]);
+    });
     await waitFor(() => expect(result.current.circle).toEqual([MAYA]));
     expect(result.current.circleReady).toBe(true);
+    unmount();
+  });
+
+  it('coming back to the tab re-checks the circle', async () => {
+    // The cross-tab ping is a best-effort localStorage write — quota or private
+    // mode swallows it. Returning to the tab must re-check regardless, without
+    // depending on the other tab having succeeded (round-5 panel, Codex).
+    fetchFollowsMock.mockResolvedValue([]);
+    const { result, unmount } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+
+    fetchFollowsMock.mockResolvedValue([MAYA]);
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(result.current.circle).toEqual([MAYA]));
     unmount();
   });
 

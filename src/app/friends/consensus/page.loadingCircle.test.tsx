@@ -39,6 +39,7 @@ let follows: {
   mode: string;
   loading: boolean;
   circleReady: boolean;
+  circleFailed: boolean;
 };
 
 const createNightOut =
@@ -97,7 +98,13 @@ const startButton = (): HTMLButtonElement =>
 describe('ConsensusPage — starting a night out while follows load', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    follows = { circle: [], mode: 'server', loading: true, circleReady: false };
+    follows = {
+      circle: [],
+      mode: 'server',
+      loading: true,
+      circleReady: false,
+      circleFailed: false,
+    };
   });
 
   it('cannot start a night out while the followed circle is still loading', async () => {
@@ -126,6 +133,7 @@ describe('ConsensusPage — starting a night out while follows load', () => {
       mode: 'server',
       loading: false,
       circleReady: true,
+      circleFailed: false,
     };
     rerender(<ConsensusPage />);
 
@@ -144,7 +152,13 @@ describe('ConsensusPage — starting a night out while follows load', () => {
     // What useFollows actually does when fetchFollows returns null: loading
     // resolves, the circle stays empty, and nothing else changes. Gating on
     // `loading` alone re-arms the button here.
-    follows = { circle: [], mode: 'server', loading: false, circleReady: false };
+    follows = {
+      circle: [],
+      mode: 'server',
+      loading: false,
+      circleReady: false,
+      circleFailed: true, // the fetch answered null, not "no friends"
+    };
     rerender(<ConsensusPage />);
 
     expect(startButton()).toBeDisabled();
@@ -161,6 +175,24 @@ describe('ConsensusPage — starting a night out while follows load', () => {
 
   it('says nothing about a failed circle while it is still loading', async () => {
     render(<ConsensusPage />);
+    expect(startButton()).toBeDisabled();
+    expect(screen.queryByText(/couldn't load your circle/i)).toBeNull();
+  });
+
+  it('holds Start for an UNSETTLED write without claiming the load failed', async () => {
+    // circleReady is false for three different reasons; only one of them is a
+    // failure. Telling a user mid-follow to "reload" is untrue and would throw
+    // their write away.
+    const { rerender } = render(<ConsensusPage />);
+    follows = {
+      circle: [],
+      mode: 'server',
+      loading: false,
+      circleReady: false,
+      circleFailed: false, // nothing failed — a follow is simply in flight
+    };
+    rerender(<ConsensusPage />);
+
     expect(startButton()).toBeDisabled();
     expect(screen.queryByText(/couldn't load your circle/i)).toBeNull();
   });

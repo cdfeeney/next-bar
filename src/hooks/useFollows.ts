@@ -151,6 +151,14 @@ export type UseFollowsReturn = {
   /** True until the first read (local or server fetch) resolves. */
   loading: boolean;
   /**
+   * Server mode: the last completed hydrate FAILED (the RPC returned null).
+   * Distinct from `!circleReady`, which is also false while a write is merely
+   * unsettled — telling the user "couldn't load your circle" in that case is a
+   * lie, and the advice that follows it ("reload") discards their write
+   * (round-5 panel, Claude). Always false in local mode.
+   */
+  circleFailed: boolean;
+  /**
    * Server mode: TRUE only once `circle` actually reflects the server's answer
    * AND no circle write is still in flight.
    *
@@ -179,6 +187,11 @@ export function useFollows(): UseFollowsReturn {
   // server answer. A number, not a boolean: readiness has to be able to go
   // stale, and a boolean can only say "we finished a fetch once".
   const [readyGeneration, setReadyGeneration] = useState<number | null>(null);
+  // Mirror for the effect, which must know whether this is a FIRST read or a
+  // background revalidation without taking readyGeneration as a dependency.
+  const readyGenerationRef = useRef<number | null>(null);
+  readyGenerationRef.current = readyGeneration;
+  const [fetchFailed, setFetchFailed] = useState(false);
   const [circleState, setCircleState] = useState(() => ({
     generation: circleGeneration,
     pending: pendingCircleWrites.size,
@@ -222,8 +235,18 @@ export function useFollows(): UseFollowsReturn {
         setLocalFollows(loadFollows());
       }
     }
+    // The cross-tab ping is best-effort — a quota or private-mode failure
+    // swallows it (round-5 panel, Codex). Re-checking when the tab comes back
+    // costs one hydrate and does not depend on the other tab having succeeded.
+    function handleVisible(): void {
+      if (document.visibilityState === 'visible') invalidateCircle();
+    }
     window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
+    document.addEventListener('visibilitychange', handleVisible);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      document.removeEventListener('visibilitychange', handleVisible);
+    };
   }, []);
 
   // Auth-driven mode switch (useRatings pattern, minus the merge step —
@@ -252,8 +275,18 @@ export function useFollows(): UseFollowsReturn {
 
     modeRef.current = 'server';
     setMode('server');
-    setLoading(true);
-    setReadyGeneration(null);
+
+    // A REVALIDATION is not a load. Re-running this effect on every settled
+    // write used to flip `loading` back to true, and /friends/following and
+    // /friends/followers replace their whole list with a "Loading…" placeholder
+    // while it is (round-5 panel, Claude, HIGH). `loading` means "we have never
+    // read"; staleness is `circleReady`'s job, and it goes false on its own
+    // because readyGeneration no longer equals the current generation.
+    const isRevalidation = readyGenerationRef.current !== null;
+    if (!isRevalidation) {
+      setLoading(true);
+      setReadyGeneration(null);
+    }
 
     // The generation this fetch answers FOR. Anything that settles while it is
     // in flight bumps the module counter, so the result lands stale and the
@@ -271,6 +304,19 @@ export function useFollows(): UseFollowsReturn {
         fetchFollowers(supabase),
       ]);
       if (cancelled || getCacheEpoch() !== epoch) return;
+      setLoading(false);
+      setFetchFailed(server === null);
+
+      // SUPERSEDED: something changed while this was in the air. Applying it
+      // would overwrite newer optimistic state with an older snapshot and erase
+      // the placeholder the double-tap guard depends on (round-5 panel, both
+      // lanes). Whatever moved the generation also queues the next fetch, and a
+      // draining pending set bumps it too, so dropping this answer loses
+      // nothing.
+      if (circleGeneration !== fetchGeneration || pendingCircleWrites.size > 0) {
+        return;
+      }
+
       // null = fetch FAILED (not "zero friends") — keep prior state rather
       // than blanking a circle on a transient failure. Never fall back to
       // the demo seed here: demo handles aren't real accounts.
@@ -283,7 +329,6 @@ export function useFollows(): UseFollowsReturn {
       if (outgoing !== null) setRequested(outgoing);
       // Same rule pre-0010 for followers.
       if (followerList !== null) setFollowers(followerList);
-      setLoading(false);
     })();
 
     return () => {
@@ -462,6 +507,7 @@ export function useFollows(): UseFollowsReturn {
     isRequested,
     toggleFollow,
     loading,
+    circleFailed: mode === 'server' ? fetchFailed : false,
     circleReady:
       mode === 'server'
         ? readyGeneration !== null

@@ -68,6 +68,7 @@ export default function ConsensusPage(): JSX.Element {
     isFollowing,
     loading: followsLoading,
     circleReady,
+    circleFailed,
   } = useFollows();
   const { ratings } = useRatings();
   const auth = useAuth();
@@ -280,8 +281,11 @@ export default function ConsensusPage(): JSX.Element {
             Claude): the only primary CTA on the page renders greyed out for the
             whole mount with nothing saying why. Withholding the action is still
             right — an invite list we cannot vouch for is how a plan goes out
-            with no guests — but the user is owed the reason and a way forward. */}
-        {isServer && !followsLoading && !circleReady ? (
+            with no guests — but the user is owed the reason and a way forward.
+            Keyed to circleFailed, NOT !circleReady: the latter is also false
+            while a follow is merely unsettled, where "reload" would be both
+            untrue and destructive (round-5 panel, Claude). */}
+        {isServer && circleFailed ? (
           <p className="mt-2 text-sm text-red-400">
             Couldn&apos;t load your circle, so we can&apos;t invite anyone yet.
             Check your connection and reload.

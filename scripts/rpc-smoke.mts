@@ -24,6 +24,10 @@
 import { config } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { Client } from 'pg';
+// THE night definition, imported rather than mirrored. These files each
+// carried their own `getHours() < 6` copy built on a toLocaleString round trip,
+// which is not even the same computation (round-5 panel, Codex).
+import { nycNightKey } from '../src/lib/nightKey.js';
 
 config({ path: '.env.local' });
 
@@ -44,15 +48,6 @@ const STAMP = Date.now().toString(36);
 const TEST_EMAIL = `nextbar.rpc.smoke.${STAMP}@example.com`;
 const TEST_PASSWORD = `rpc-smoke-${STAMP}-Aa1!`;
 
-/** Mirror src/lib/nightKey.ts: NYC date, previous day before 6am. */
-function nycNightKey(): string {
-  const nyc = new Date(
-    new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }),
-  );
-  if (nyc.getHours() < 6) nyc.setDate(nyc.getDate() - 1);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${nyc.getFullYear()}-${p(nyc.getMonth() + 1)}-${p(nyc.getDate())}`;
-}
 
 let failures = 0;
 function check(label: string, ok: boolean, detail?: unknown) {
