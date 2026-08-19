@@ -105,6 +105,23 @@ export function lateNightAdjustment(bar: Pick<Bar, 'tags'>): number {
 }
 
 /**
+ * Explicit-intent weighting — APPROVED product assumption (operator,
+ * 2026-08-19). Do not re-tune silently; a change here is a product decision.
+ *
+ * An APPLIED Tweak-the-vibe pick is an instruction the user just gave, not a
+ * prior to be shrunk away. Routed through the quiz term it was weighted
+ * (1 - c), so at 200 ratings (c = 0.952) an explicit pick carried 4.8% of the
+ * ranking — a matching cocktail bar lost to a nonmatching pub the user simply
+ * had more history with. On the explicit path the split is FIXED at 80/20 and
+ * independent of c.
+ *
+ * This is a SEPARATE path, not a re-tuning of the (1 - c) prior: with no
+ * tweak applied, rankScore and the band walk below behave exactly as before.
+ */
+const EXPLICIT_VIBE_WEIGHT = 0.8;
+const EXPLICIT_TASTE_WEIGHT = 1 - EXPLICIT_VIBE_WEIGHT;
+
+/**
  * A bar's WITHIN-BAND ordering value — the cascade's step 3.
  *
  *   c·learnedTaste + (1 - c)·quizPrior  (+ the late-night nudge)
@@ -114,6 +131,9 @@ export function lateNightAdjustment(bar: Pick<Bar, 'tags'>): number {
  * Distance is deliberately ABSENT: it selects the band and breaks ties, it is
  * not a ranking term. Exported as the offline-eval oracle (it replaces the
  * removed scoreBar in that role) — matches() is its only production caller.
+ *
+ * Used when NO vibe tweak is active; an applied tweak ranks by
+ * explicitVibeScore instead.
  */
 export function rankScore(
   bar: Bar,
@@ -127,6 +147,48 @@ export function rankScore(
     (1 - c) * jaccard(quizTags, bar.tags) +
     (late ? lateNightAdjustment(bar) : 0)
   );
+}
+
+/**
+ * rankScore's counterpart for an ACTIVE vibe tweak:
+ *
+ *   0.8·vibeMatch + 0.2·learnedTaste  (+ the same late-night nudge)
+ *
+ * No confidence term — that is the whole point. Learned taste still shapes
+ * the order (it breaks ties among equally matching bars, and pushes a bar the
+ * user has scored badly down), but it can no longer outvote what the user
+ * just asked for. Exported alongside rankScore as the offline-eval oracle for
+ * the explicit path.
+ */
+export function explicitVibeScore(
+  bar: Bar,
+  vibeTags: VibeTag[],
+  taste: LearnedTaste,
+  late = false,
+): number {
+  return (
+    EXPLICIT_VIBE_WEIGHT * jaccard(vibeTags, bar.tags) +
+    EXPLICIT_TASTE_WEIGHT * learnedTasteScore(bar, taste) +
+    (late ? lateNightAdjustment(bar) : 0)
+  );
+}
+
+/**
+ * The band fill order an ACTIVE tweak walks: every band's MATCHING bars
+ * first, then every band's nonmatching ones.
+ *
+ * So a matching bar a cab ride away outranks a nonmatching bar underfoot,
+ * but only once the closer bands are out of matches — expansion before
+ * fallback. A bar matches when it carries at least one picked tag; the
+ * bands and their radii are untouched, only the visit order changes.
+ */
+function vibeMatchFillOrder(bands: Bar[][], vibeTags: VibeTag[]): Bar[][] {
+  const picked = new Set(vibeTags);
+  const isMatch = (bar: Bar): boolean => bar.tags.some((t) => picked.has(t));
+  return [
+    ...bands.map((band) => band.filter(isMatch)),
+    ...bands.map((band) => band.filter((bar) => !isMatch(bar))),
+  ];
 }
 
 export function matches(args: MatchesArgs): Bar[] {
@@ -176,7 +238,17 @@ export function matches(args: MatchesArgs): Bar[] {
   // no bar is rejected for tag mismatch any more. Ordering carries taste, and
   // the quiz prior fades as c grows with rating history.
   const late = biasNow !== undefined && isLateNight(biasNow);
-  const rankOf = (bar: Bar): number => rankScore(bar, profile.tags, taste, late);
+
+  // The explicit-intent path (EXPLICIT_VIBE_WEIGHT). Active only for an
+  // APPLIED tweak carrying at least one tag — an empty pick is a CLEARED
+  // tweak, which must rank exactly like no tweak at all.
+  const explicitTags =
+    profile.isExplicitVibe === true && profile.tags.length > 0
+      ? profile.tags
+      : null;
+  const rankOf = explicitTags
+    ? (bar: Bar): number => explicitVibeScore(bar, explicitTags, taste, late)
+    : (bar: Bar): number => rankScore(bar, profile.tags, taste, late);
 
   // Step 2 — fill from the CLOSEST band first, expanding only when the closer
   // band cannot fill the page. Bands reuse the existing distance-chip
@@ -194,10 +266,17 @@ export function matches(args: MatchesArgs): Bar[] {
     }
   }
 
+  // Step 2b — an active tweak fills from matching candidates across every
+  // band before it falls back to nonmatching ones. Without a tweak this is
+  // the same `bands` array, so the walk is unchanged.
+  const fillOrder = explicitTags
+    ? vibeMatchFillOrder(bands, explicitTags)
+    : bands;
+
   // Steps 3 + 4 — within a band, learned taste orders; EXACT MILES are only
   // the final tie-breaker, never a ranking term of their own.
   const ranked: { bar: Bar; score: number; miles: number }[] = [];
-  for (const band of bands) {
+  for (const band of fillOrder) {
     if (ranked.length >= cap) break;
     ranked.push(
       ...band
