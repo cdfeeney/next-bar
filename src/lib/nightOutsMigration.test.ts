@@ -5,8 +5,11 @@ import { describe, expect, it } from 'vitest';
 import {
   MIGRATIONS_DIR,
   checksumOfSql,
+  committedFunctionBody,
   definingMigration,
   definitionIndex,
+  looksLikeUnreadableDefinition,
+  normalisedSql,
   sqlView,
   type GuardedFunction,
 } from './effectiveMigration';
@@ -488,6 +491,64 @@ describe('sqlView — SQL as Postgres reads it', () => {
  * measured constant below is 0044's real ledger row, so this also pins the
  * algorithm to what the serving database actually holds.
  */
+/**
+ * The two helpers the live suite depends on, tested WITHOUT a database.
+ *
+ * Both were reachable only from nightOutsRls.live.test.ts, which is describe.skip
+ * without DATABASE_URL, so deleting the near-miss throw or breaking the body
+ * slice left `npm test` green (round-9 review, Claude, medium).
+ */
+describe('committedFunctionBody and looksLikeUnreadableDefinition', () => {
+  it("returns the applied body of 0059's respond_night_out, LF-folded and nothing else", () => {
+    const body = committedFunctionBody('0059_night_outs_respond_revision.sql', 'respond_night_out');
+    expect(body, 'the body was not locatable').not.toBeNull();
+    // Not normalised: comments, case and indentation are all still there,
+    // because pg_proc.prosrc keeps them too.
+    expect(body).toMatch(/pg_advisory_xact_lock/);
+    expect(body).toMatch(/--/);
+    // No assertion on CR here: this checkout materialises LF, so it could not
+    // fail and would be decoration. The CRLF fold is covered where it can fail,
+    // by the normalisedSql case below.
+    // The body is the LAST statement's, and it really is respond_night_out's.
+    expect(body).toMatch(/p_expected_revision/);
+    // The slice stops at the terminator: no trailing `$$;` and no grant lines.
+    expect(body).not.toMatch(/grant execute/);
+  });
+
+  it('returns null rather than a wrong body when the name is absent', () => {
+    expect(committedFunctionBody('0044_night_outs.sql', 'night_out_seat_count')).toBeNull();
+  });
+
+  it('locates a body written with a TAGGED dollar quote', () => {
+    // Every night-out migration uses the bare $$ form today; the tagged form is
+    // equally legal, and hard-coding $$ made this return null on it.
+    const sql = 'create or replace function public.f() returns void language sql as $fn$ select 1 $fn$;';
+    const { skeleton } = sqlView(sql);
+    expect(definitionIndex(skeleton, 'f')).toBeGreaterThan(-1);
+  });
+
+  it('calls a definition-shaped header it cannot read a near miss, and a mere call not', () => {
+    const unreadable = 'create or replace function public . respond_night_out (x uuid) returns void';
+    expect(looksLikeUnreadableDefinition(sqlView(unreadable).skeleton, 'respond_night_out')).toBe(true);
+
+    const unicode = 'create or replace function public.U&"respond_night_out"(x uuid) returns void';
+    expect(looksLikeUnreadableDefinition(sqlView(unicode).skeleton, 'respond_night_out')).toBe(true);
+
+    const merelyCalls = 'create or replace function public.wrapper() returns void language sql as $$'
+      + " select public.respond_night_out(null, true, 'pending', 0) $$;";
+    expect(looksLikeUnreadableDefinition(sqlView(merelyCalls).skeleton, 'respond_night_out')).toBe(false);
+
+    const readable = 'create or replace function public.respond_night_out(x uuid) returns void';
+    expect(looksLikeUnreadableDefinition(sqlView(readable).skeleton, 'respond_night_out')).toBe(false);
+  });
+
+  it('normalisedSql is what checksumOfSql hashes, so applier and ledger agree', () => {
+    const sql = readFileSync(path.join(MIGRATIONS_DIR, '0044_night_outs.sql'), 'utf8');
+    expect(checksumOfSql(normalisedSql(sql))).toBe(checksumOfSql(sql));
+    expect(normalisedSql('a\r\nb  \n')).toBe('a\nb');
+  });
+});
+
 describe('checksumOfSql — what public.schema_migrations records', () => {
   it("reproduces 0044's recorded ledger checksum from the committed file", () => {
     const sql = readFileSync(

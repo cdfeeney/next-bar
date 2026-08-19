@@ -169,6 +169,29 @@ function scan(sql: string, insideBody: boolean): { code: string; skeleton: strin
       continue;
     }
 
+    if (sql[i] === '"') {
+      // A DOUBLE-quoted identifier is a name, never a call. Leaving its text
+      // visible let `perform 1 as "pg_advisory_xact_lock(hashtextextended(...))"`
+      // — a column alias Postgres does nothing with — satisfy the lock assertion
+      // while the real lock was gone (round-9 review, Codex, medium). Contents
+      // are blanked in BOTH views; "" is an escaped quote inside one.
+      const start = i;
+      i += 1;
+      while (i < sql.length) {
+        if (sql[i] === '"' && sql[i + 1] === '"') { i += 2; continue; }
+        if (sql[i] === '"') { i += 1; break; }
+        i += 1;
+      }
+      // Blanked in `code` only. `skeleton` is where DEFINITIONS are located and
+      // a quoted identifier is a name — `public.U&"respond_night_out"` must stay
+      // findable there, or the round-8 near-miss guard stops firing on it. The
+      // two views answer different questions and this is the sharpest example.
+      const ident = sql.slice(start, i);
+      code += `"${ident.slice(1, -1).replace(/[^\n]/g, ' ')}"`;
+      skeleton += ident.toLowerCase();
+      continue;
+    }
+
     if (sql[i] === "'") {
       // E'...' honours backslash escapes; a plain literal does not. Getting that
       // wrong at one apostrophe flipped literal/code parity for the whole rest
@@ -326,11 +349,16 @@ export function committedFunctionBody(file: string, name: string): string | null
     from = at + 1;
   }
   if (at < 0) return null;
-  const open = skeleton.indexOf('$$', at);
-  if (open < 0) return null;
-  const close = skeleton.indexOf('$$;', open + 2);
+  // ANY dollar tag, not just `$$`. Every night-out migration uses the bare form
+  // today, but `as $fn$ ... $fn$;` is equally legal and hard-coding `$$` made
+  // this return null on it — a latent "body not locatable" (round-9 review,
+  // Claude, medium).
+  const tag = /\$[A-Za-z_]?[A-Za-z0-9_]*\$/.exec(skeleton.slice(at))?.[0];
+  if (!tag) return null;
+  const open = skeleton.indexOf(tag, at);
+  const close = skeleton.indexOf(tag, open + tag.length);
   if (close < 0) return null;
-  return raw.slice(open + 2, close);
+  return raw.slice(open + tag.length, close);
 }
 
 /**
@@ -376,10 +404,22 @@ export function committedFunctionBody(file: string, name: string): string | null
  * compare against (round-4 review, Codex, medium). Do not describe a passing
  * provenance test as proving byte identity.
  */
+/**
+ * The exact text an applier should EXECUTE, so that what runs is what the
+ * checksum describes.
+ *
+ * apply-migration-set.ts hashed this and executed the raw buffer, which on a
+ * CRLF checkout meant the ledger row described LF text while the server stored
+ * CRLF — and the applied-versus-committed body comparison in
+ * nightOutsRls.live.test.ts would then fail for anything applied through it
+ * (round-9 review, Claude, medium). Hash and execute the same string.
+ */
+export function normalisedSql(sql: string): string {
+  return sql.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+}
+
 export function checksumOfSql(sql: string): string {
-  return createHash('sha256')
-    .update(sql.replace(/\r\n/g, '\n').replace(/\s+$/, ''), 'utf8')
-    .digest('hex');
+  return createHash('sha256').update(normalisedSql(sql), 'utf8').digest('hex');
 }
 
 /**

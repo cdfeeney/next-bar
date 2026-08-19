@@ -1236,7 +1236,18 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   });
 
   /**
-   * CRITERION 5, CARRIED BY THE ARTIFACT RATHER THAN BY A DIGEST.
+   * WHAT THE DATABASE IS RUNNING, COMPARED TO WHAT THIS REPO COMMITS.
+   *
+   * Criterion 5 is worded about migration 0057's file bytes, and that wording is
+   * NOT verifiable and is recorded here as such: 0057's definition was
+   * superseded by 0058 then 0059, so its bytes are not what runs; the ledger
+   * records only a normalised digest; and no raw apply-time artifact was ever
+   * retained (round-9 review, Codex, medium — "record the criterion as
+   * unverifiable rather than treating current prosrc as proof"). This test does
+   * not claim it.
+   *
+   * What it does prove is the property the criterion was written to protect,
+   * and proves it more directly than any digest could.
    *
    * "What is applied is byte-identical to what is committed" was argued about
    * for three rounds against the ledger, and the ledger cannot settle it: its
@@ -1255,27 +1266,44 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * server stores LF. Nothing else is normalised: not case, not whitespace, not
    * comments. A one-character difference fails.
    */
-  it('every guarded function RUNS the exact text this repo commits (criterion 5)', async () => {
+  it('every guarded function RUNS the exact text and attributes this repo commits', async () => {
+    // prosecdef and proconfig too, not only the body. A function can be replaced
+    // with a byte-identical body and no `security definer` or no
+    // `set search_path = public` — prosrc is unchanged, the signature is
+    // unchanged, and every other control here still passes, while the security
+    // shape the migration promised is gone (round-9 review, Claude, medium).
     const { rows } = await db.query(
-      `select p.proname as name, p.prosrc as applied
+      `select p.proname as name, p.prosrc as applied, p.prosecdef as definer,
+              coalesce(array_to_string(p.proconfig, ','), '') as config
          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
         where n.nspname = 'public' and p.proname = any($1)`,
       [[...GUARDED_FUNCTIONS]],
     );
-    const applied = new Map(
-      (rows as Array<{ name: string; applied: string }>).map((r) => [r.name, r.applied]),
-    );
+    type Row = { name: string; applied: string; definer: boolean; config: string };
+    // Keyed by name, and a DUPLICATE is a failure rather than a silent
+    // last-one-wins: two rows for one name means an unexpected overload.
+    const applied = new Map<string, Row>();
+    for (const row of rows as Row[]) {
+      expect(applied.has(row.name), `${row.name} has more than one overload here`).toBe(false);
+      applied.set(row.name, row);
+    }
     const verdict = Object.fromEntries(GUARDED_FUNCTIONS.map((name) => {
       const file = definingMigration(name);
       if (!file) return [name, 'no committed migration defines it'];
       const committed = committedFunctionBody(file, name);
       if (committed === null) return [name, `body not locatable in ${file}`];
-      if (!applied.has(name)) return [name, 'not installed on this database'];
-      return [name, applied.get(name) === committed ? `matches ${file}` : `DIFFERS from ${file}`];
+      const row = applied.get(name);
+      if (!row) return [name, 'not installed on this database'];
+      if (row.applied !== committed) return [name, `body DIFFERS from ${file}`];
+      if (!row.definer) return [name, 'installed WITHOUT security definer'];
+      if (row.config !== 'search_path=public') {
+        return [name, `search_path is "${row.config}", not public`];
+      }
+      return [name, `matches ${file}`];
     }));
     expect(
       verdict,
-      'the database is running text this repo does not commit',
+      'the database is running text or attributes this repo does not commit',
     ).toEqual(Object.fromEntries(GUARDED_FUNCTIONS.map((name) => [
       name,
       `matches ${definingMigration(name)}`,

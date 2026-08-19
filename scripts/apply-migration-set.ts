@@ -58,7 +58,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 
-import { checksumOfSql } from '../src/lib/effectiveMigration';
+import { checksumOfSql, normalisedSql } from '../src/lib/effectiveMigration';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -177,7 +177,14 @@ async function main(): Promise<void> {
     } catch (error) {
       return fail(`cannot read ${name}: ${(error as Error).message}`);
     }
-    return { name, raw, checksum: checksumOfSql(raw.toString('utf8')) };
+    // ONE string: what gets executed is exactly what the checksum describes.
+    // Hashing normalised text while executing the raw buffer meant that on a
+    // CRLF checkout the ledger row described LF while the server stored CRLF,
+    // and the applied-versus-committed body comparison in
+    // nightOutsRls.live.test.ts would fail for anything applied here
+    // (round-9 review, Claude, medium).
+    const sql = normalisedSql(raw.toString('utf8'));
+    return { name, raw, sql, checksum: checksumOfSql(sql) };
   });
 
   const client = new Client({ connectionString: databaseUrl });
@@ -249,7 +256,7 @@ async function main(): Promise<void> {
     try {
       for (const entry of planned) {
         process.stdout.write(`  applying ${entry.name} ... `);
-        await client.query(entry.raw.toString('utf8'));
+        await client.query(entry.sql);
         await client.query(
           'insert into public.schema_migrations (name, checksum) values ($1, $2)',
           [entry.name, entry.checksum],
