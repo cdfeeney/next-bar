@@ -102,12 +102,23 @@ const URL = databaseUrl();
  *
  * `connectionParameters` is not in @types/pg, hence the narrow cast.
  */
+/**
+ * The TLS config this suite connects with: verified against Supabase's CA when
+ * the operator has one, encrypted-only otherwise (see the ceiling note below).
+ */
+function sslOption(): { rejectUnauthorized: boolean; ca?: string } {
+  const ca = caCertificate();
+  return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
+}
+
 function effectiveConnection(
   connectionString: string,
-): { user: string; host: string; port: string; options: string } {
-  const probe = new Client({ connectionString }) as unknown as {
+): { user: string; host: string; port: string; options: string; ssl: unknown } {
+  // Same config as the real client below, or this answers a question about a
+  // different connection - including whether it is encrypted at all.
+  const probe = new Client({ connectionString, ssl: sslOption() }) as unknown as {
     connectionParameters?: {
-      user?: string; host?: string; port?: number | string; options?: string;
+      user?: string; host?: string; port?: number | string; options?: string; ssl?: unknown;
     };
   };
   return {
@@ -115,6 +126,7 @@ function effectiveConnection(
     host: probe.connectionParameters?.host ?? '',
     port: String(probe.connectionParameters?.port ?? ''),
     options: probe.connectionParameters?.options ?? '',
+    ssl: probe.connectionParameters?.ssl,
   };
 }
 
@@ -130,6 +142,16 @@ function assertStagingOnly(connectionString: string): void {
   // an allowlisted user. This is the migration guard's own check, imported
   // rather than copied — the copy short-circuited when either side was empty,
   // which a host-less authority (`postgres:///db?host=elsewhere`) produces.
+  // pg parses the connection string OVER the explicit ssl option, so
+  // `?sslmode=disable` turns the option above back off and this suite would send
+  // the role password and its DML in the clear while claiming otherwise.
+  if (!effective.ssl) {
+    throw new Error(
+      'nightOutsRls.live.test.ts refuses to run: DATABASE_URL disables TLS, so the role password and '
+      + "this suite's DML would cross the network in the clear.",
+    );
+  }
+
   const authority = new globalThis.URL(connectionString);
   const endpointRefusal = checkConnectionEndpoint(
     { host: effective.host, port: effective.port, options: effective.options },
@@ -191,9 +213,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       // unauthenticated. Hard-refusing would make the suite unrunnable on a
       // machine that has not downloaded the CA, which is a test-harness
       // decision; the APPLY tool refuses, because that is the path that writes.
-      ssl: caCertificate()
-        ? { rejectUnauthorized: true, ca: caCertificate() }
-        : { rejectUnauthorized: false },
+      ssl: sslOption(),
       statement_timeout: 30000,
       application_name: 'v8-3-rls-negatives',
     });
