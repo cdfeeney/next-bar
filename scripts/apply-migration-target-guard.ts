@@ -13,8 +13,23 @@
  * target is refused; it is never assumed safe.
  */
 
-/** Supabase project refs are a flat alphanumeric slug. Anything else is malformed. */
-const PROJECT_REF = /^[a-z0-9]+$/i;
+/**
+ * A Supabase project ref is exactly 20 lowercase alphanumeric characters.
+ * Accepting any alphanumeric string let a placeholder like `production` sit in
+ * NEXT_BAR_PRODUCTION_PROJECT_REF, pass validation, and then never equal the
+ * real ref - the original fail-open, spelled differently (round-3 panel).
+ */
+const PROJECT_REF = /^[a-z0-9]{20}$/;
+
+/**
+ * The username only carries a project ref on Supabase's shared pooler. On any
+ * other server `<role>.<something>` is just a role name, so an allowlisted ref
+ * sent to an unrelated host would otherwise be accepted by every check: the
+ * ref resolves, and the endpoint agrees with its own URL (round-3 panel, both
+ * lanes, the higher-severity one). Requiring the pooler is what makes the
+ * username-borne ref mean "this project" again.
+ */
+const POOLER_HOST_SUFFIX = '.pooler.supabase.com';
 
 export interface MigrationTarget {
   /** The --env label the operator named. */
@@ -127,6 +142,11 @@ export function checkConnectionEndpoint(
   if (effectiveHost !== authorityHost) {
     return "the effective connection host does not match DATABASE_URL's authority, "
       + 'so the target was overridden by a query parameter';
+  }
+
+  if (!effectiveHost.toLowerCase().endsWith(POOLER_HOST_SUFFIX)) {
+    return `DATABASE_URL's host is not a Supabase pooler host (${POOLER_HOST_SUFFIX}), so the `
+      + 'project ref in its username cannot identify the target';
   }
 
   const effectivePort = effective.port.trim();

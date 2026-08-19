@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 import {
-  checkConnectionEndpoint, resolveProjectRef,
+  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
 } from '../../scripts/apply-migration-target-guard';
 
 /**
@@ -108,34 +108,18 @@ function assertStagingOnly(connectionString: string): void {
     throw new Error(`nightOutsRls.live.test.ts refuses to run: ${endpointRefusal}.`);
   }
 
-  if (allowlist.length === 0) {
+  // Config comparison is the migration guard's job, not a second copy of it:
+  // the copy accepted a malformed production ref (a trailing comma made it
+  // truthy but never equal), which is the fail-open that guard exists to close.
+  // Same three questions here as there - is the config valid, is this
+  // production, is it the named staging target.
+  const refusal = checkMigrationTarget({
+    env: 'staging', ref, productionRef: productionRef ?? '', stagingRefs: allowlist,
+  });
+  if (refusal) {
     throw new Error(
-      'nightOutsRls.live.test.ts refuses to run: NEXT_BAR_STAGING_PROJECT_REFS is not set in '
-      + '.env.local. This suite writes to the database it connects to, so the staging target must '
-      + 'be named explicitly. An unset allowlist is never treated as permission.',
-    );
-  }
-  // Unset is UNVERIFIABLE, not "no objection". Without the production ref this
-  // suite cannot prove the allowlisted ref it is about to write to is not the
-  // production one — the same fail-open scripts/apply-migration-target-guard.ts
-  // exists to close, and the allowlist alone is a weaker claim because its own
-  // refusal below invites adding a ref deliberately.
-  if (!productionRef) {
-    throw new Error(
-      'nightOutsRls.live.test.ts refuses to run: NEXT_BAR_PRODUCTION_PROJECT_REF is not set in '
-      + '.env.local, so this target cannot be shown to be anything other than production.',
-    );
-  }
-  if (ref === productionRef) {
-    throw new Error(
-      'nightOutsRls.live.test.ts refuses to run: DATABASE_URL points at NEXT_BAR_PRODUCTION_PROJECT_REF. '
-      + 'Production writes are an attended gate and never happen from a test run.',
-    );
-  }
-  if (!allowlist.includes(ref)) {
-    throw new Error(
-      "nightOutsRls.live.test.ts refuses to run: DATABASE_URL's project ref is not in "
-      + 'NEXT_BAR_STAGING_PROJECT_REFS. Point .env.local at staging, or add the ref deliberately.',
+      `nightOutsRls.live.test.ts refuses to run: ${refusal}. This suite writes to the database it `
+      + 'connects to, so the staging target must be named explicitly and verifiably.',
     );
   }
 }

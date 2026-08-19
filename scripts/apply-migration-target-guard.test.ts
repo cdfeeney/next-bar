@@ -4,8 +4,8 @@ import {
   checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
 } from './apply-migration-target-guard';
 
-const PROD = 'prodrefaaaaaaaaaaaa';
-const STAGING = 'stagingrefbbbbbbbb';
+const PROD = 'prodrefaaaaaaaaaaaaa';
+const STAGING = 'stagingrefbbbbbbbbbb';
 
 describe('checkMigrationTarget', () => {
   it('refuses a non-production env when NEXT_BAR_PRODUCTION_PROJECT_REF is unset', () => {
@@ -33,14 +33,14 @@ describe('checkMigrationTarget', () => {
 
   it('refuses a non-production env when NEXT_BAR_STAGING_PROJECT_REFS is unset', () => {
     const refusal = checkMigrationTarget({
-      env: 'staging', ref: 'someotherrefccccccc', productionRef: PROD, stagingRefs: [],
+      env: 'staging', ref: 'someotherrefcccccccc', productionRef: PROD, stagingRefs: [],
     });
     expect(refusal).toContain('NEXT_BAR_STAGING_PROJECT_REFS is not set');
   });
 
   it('refuses a configured ref that is not in the staging list', () => {
     const refusal = checkMigrationTarget({
-      env: 'staging', ref: 'someotherrefccccccc', productionRef: PROD, stagingRefs: [STAGING],
+      env: 'staging', ref: 'someotherrefcccccccc', productionRef: PROD, stagingRefs: [STAGING],
     });
     expect(refusal).toContain('not in NEXT_BAR_STAGING_PROJECT_REFS');
   });
@@ -110,7 +110,7 @@ describe('checkConnectionEndpoint', () => {
   const at = (host: string, port: string) => ({ host, port });
 
   it('refuses when pg resolves a different host than the URL authority', () => {
-    expect(checkConnectionEndpoint(at('somewhere-else.internal', '5432'), at(HOST, '5432')))
+    expect(checkConnectionEndpoint(at('somewhere-else.pooler.supabase.com', '5432'), at(HOST, '5432')))
       .toContain('host does not match');
   });
 
@@ -122,7 +122,7 @@ describe('checkConnectionEndpoint', () => {
   // A host-less authority parses cleanly, so a check that skips empty sides
   // skips itself: `postgres:///postgres?host=elsewhere`.
   it('refuses when the authority names no host', () => {
-    expect(checkConnectionEndpoint(at('db.other.example.com', '5432'), at('', '')))
+    expect(checkConnectionEndpoint(at('db.other.pooler.supabase.com', '5432'), at('', '')))
       .toContain('DATABASE_URL has no host');
   });
 
@@ -195,5 +195,42 @@ describe('checkMigrationTarget with malformed configuration', () => {
     expect(checkMigrationTarget({
       env: 'staging', ref: STAGING, productionRef: PROD, stagingRefs: [STAGING, 'not a ref'],
     })).toContain('not a project ref');
+  });
+});
+
+// Round-3 panel, both lanes, the highest-severity finding: the endpoint check
+// only proved pg agreed with the URL the operator wrote. A username is a
+// project ref ONLY on the shared pooler; anywhere else it is just a role name.
+describe('checkConnectionEndpoint outside the Supabase pooler', () => {
+  it('refuses an allowlisted-looking username sent to an unrelated server', () => {
+    expect(checkConnectionEndpoint(
+      { host: 'production-proxy.example.com', port: '5432' },
+      { host: 'production-proxy.example.com', port: '5432' },
+    )).toContain('not a Supabase pooler host');
+  });
+
+  it('refuses a host that merely contains the pooler domain', () => {
+    expect(checkConnectionEndpoint(
+      { host: 'pooler.supabase.com.evil.example', port: '5432' },
+      { host: 'pooler.supabase.com.evil.example', port: '5432' },
+    )).toContain('not a Supabase pooler host');
+  });
+});
+
+// Round-3 panel: /^[a-z0-9]+$/i accepted placeholders, so a stand-in value in
+// the production variable passed validation and then never equalled a real ref.
+describe('project ref shape', () => {
+  it('refuses a placeholder production ref that is alphanumeric but not a ref', () => {
+    expect(checkMigrationTarget({
+      env: 'staging', ref: PROD, productionRef: 'production', stagingRefs: [PROD],
+    })).toContain('not a valid project ref');
+  });
+
+  it('resolves nothing from an uppercase ref, which no Supabase project uses', () => {
+    expect(resolveProjectRef('postgres.' + PROD.toUpperCase())).toBe('');
+  });
+
+  it('resolves nothing from a ref of the wrong length', () => {
+    expect(resolveProjectRef('postgres.tooshort')).toBe('');
   });
 });
