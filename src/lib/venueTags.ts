@@ -1,5 +1,6 @@
 import type { VibeTag } from '@/types';
 import { TAG_VOCABULARY } from '@/lib/catalog';
+import { MAX_VENUE_TAGS, PRICE_TAG_GLYPHS, TAG_PRIORITY } from '@/lib/tagDisplay';
 
 /**
  * Deterministic venue tagging for `public.bars` (V8 PRD P1: "up to five
@@ -18,65 +19,24 @@ import { TAG_VOCABULARY } from '@/lib/catalog';
  * matcher, the quiz and the bit-mask in catalog.ts all key off that union).
  */
 
-/** PRD cap: a bar shows at most five tags. */
-export const MAX_VENUE_TAGS = 5;
-
 /**
- * The drop order for tags six and seven, most-keepable first.
+ * The cap and the drop order both come from `tagDisplay.ts`, which already
+ * declares itself "the single source of truth ... there is no second ordering
+ * anywhere". An earlier draft of this file minted its own TAG_PRIORITY that
+ * ranked price third; because `topVenueTags()` DROPS price chips (the lightbox
+ * renders price from `priceTier`), storing a price tag inside the five cost the
+ * venue a visible chip. One ordering, so the five that are stored are the five
+ * that render.
  *
- * Ordered by how much the tag tells a customer choosing a bar tonight:
- *
- *  1. VENUE TYPE — what kind of place it is. The PRD's own examples
- *     ("cocktail, pub, rooftop, nightclub, wine … lounge") are all this
- *     category, so it survives every trim.
- *  2. SOUND — rare and strongly identifying when present; "jazz" is a
- *     reason to pick a bar, and only a handful of rows carry it.
- *  3. PRICE — deliberately ABOVE crowd/texture/energy: the quiz emits price
- *     tags ('cheap', 'pricey', 'splurge' in src/lib/quiz.ts) and matching
- *     scores tag overlap, so trimming price off the 100 over-tagged rows
- *     would quietly degrade their match quality.
- *  4. CROWD — who is there; useful, but largely implied by type + price.
- *  5. TEXTURE — how it feels; the most subjective category.
- *  6. ENERGY — 'chill' / 'buzzy' / 'loud'. The most generic and the most
- *     widely applied, so it is the cheapest thing to lose.
- *
- * Within a category, more specific before more general. This is a TOTAL
- * order over the whole vocabulary, so the trim is never arbitrary and never
- * depends on the order a row happened to store its tags in.
+ * The trade that buys: an over-cap row no longer keeps its price tag, so its
+ * quiz price overlap in `jaccard(quizTags, bar.tags)` is lost. That term is a
+ * cold-start prior, not a permanent weighted one, and `bars.price_tier` still
+ * carries the price — a chip a customer sees on every view is worth more.
  */
-export const TAG_PRIORITY: readonly VibeTag[] = [
-  // venue type
-  'dive', 'cocktail', 'speakeasy', 'wine', 'beer', 'pub', 'club', 'rooftop',
-  'garden', 'dance', 'lounge', 'restaurant-bar',
-  // sound
-  'jazz', 'live', 'hiphop', 'house', 'indie',
-  // price
-  'cheap', 'mid', 'pricey', 'splurge',
-  // crowd
-  'date', 'locals', 'industry', 'post-work', 'tourist',
-  // texture
-  'old-nyc', 'romantic', 'rough', 'polished', 'trendy', 'instagrammable',
-  // energy
-  'chill', 'loud', 'buzzy',
-];
+export { MAX_VENUE_TAGS };
 
-const PRIORITY_RANK = new Map<VibeTag, number>(
-  TAG_PRIORITY.map((tag, index) => [tag, index]),
-);
-
-// Module-load invariant, the same house pattern as catalog.ts's bit-position
-// check: TAG_PRIORITY must be a PERMUTATION of the vocabulary. A tag missing
-// here would rank as `undefined`, and the comparator would then keep or drop
-// it depending on where it happened to sit in the input — silent, and exactly
-// the "arbitrary drop" this file exists to prevent. Fail at import, not in
-// one test, so a future tag added to the union cannot ship half-ranked.
-if (
-  PRIORITY_RANK.size !== TAG_PRIORITY.length
-  || TAG_PRIORITY.length !== TAG_VOCABULARY.length
-  || TAG_VOCABULARY.some((tag) => !PRIORITY_RANK.has(tag))
-) {
-  throw new Error('venueTags: TAG_PRIORITY must be a permutation of TAG_VOCABULARY');
-}
+/** Price tags never render as chips, so they can never satisfy "has a tag". */
+const isPriceTag = (tag: VibeTag): boolean => Object.hasOwn(PRICE_TAG_GLYPHS, tag);
 
 const KNOWN_TAGS: ReadonlySet<string> = new Set(TAG_VOCABULARY);
 
@@ -117,6 +77,13 @@ const PRICE_TAGS: Readonly<Record<number, VibeTag>> = {
 /** The price tag for a row whose price_tier is missing or out of range. */
 const DEFAULT_PRICE_TAG: VibeTag = 'mid';
 
+/**
+ * The venue tag for a row that produced no displayable tag at all — same
+ * fallback, and the same reasoning, as `scripts/ingest-bars.ts`'s
+ * `if (tags.size === 0) tags.add('cocktail')`.
+ */
+const DEFAULT_VENUE_TAG: VibeTag = 'cocktail';
+
 /** The columns of a `bars` row that tagging is allowed to look at. */
 export type TaggableRow = {
   name: string;
@@ -133,8 +100,9 @@ function priceTag(priceTier: number | null | undefined): VibeTag {
 
 /**
  * Tags for a row that has none: keyword hits over name + blurb, plus the
- * price tag. The price tag ALWAYS fires, which is why this can never return
- * an empty list and why every bar ends up with at least one tag.
+ * price tag. The price tag ALWAYS fires, so this is never empty — but a row
+ * that matched no keyword comes back price-only, which renders as no chips at
+ * all. venueTags() below is where that is made displayable.
  */
 function deriveTags(row: TaggableRow): VibeTag[] {
   const text = `${row.name ?? ''} ${row.blurb ?? ''}`;
@@ -160,7 +128,8 @@ function deriveTags(row: TaggableRow): VibeTag[] {
  * A row that already has usable tags keeps them, in their stored order — the
  * point of this pass is the 132 empty rows and the 100 over-cap ones, not a
  * rewrite of ~1,400 rows that are already correct. Only a row over the cap is
- * re-ordered, and then by TAG_PRIORITY.
+ * re-ordered, and then by tagDisplay's TAG_PRIORITY, so `topVenueTags()` over
+ * the result renders exactly what it rendered over the untrimmed row.
  */
 export function venueTags(row: TaggableRow): VibeTag[] {
   const stored: VibeTag[] = [];
@@ -170,9 +139,17 @@ export function venueTags(row: TaggableRow): VibeTag[] {
     seen.add(tag);
     stored.push(tag as VibeTag);
   }
-  const tags = stored.length > 0 ? stored : deriveTags(row);
+  const derived = stored.length > 0 ? stored : deriveTags(row);
+  // "At least one tag" has to mean at least one tag a customer SEES.
+  // topVenueTags() filters every price tag out, so a price-only row renders an
+  // empty chip row and the backfill would report it fixed while it is not.
+  const tags = derived.some((tag) => !isPriceTag(tag))
+    ? derived
+    : [DEFAULT_VENUE_TAG, ...derived];
   if (tags.length <= MAX_VENUE_TAGS) return tags;
+  // Price ranks last in TAG_PRIORITY, so the survivors are the highest-ranked
+  // displayable tags — the same five, in the same order, the lightbox picks.
   return [...tags]
-    .sort((a, b) => (PRIORITY_RANK.get(a) as number) - (PRIORITY_RANK.get(b) as number))
+    .sort((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b])
     .slice(0, MAX_VENUE_TAGS);
 }

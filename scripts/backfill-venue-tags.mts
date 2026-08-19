@@ -52,15 +52,23 @@ if (!url || !service) {
  * which is pooler-specific — does not apply. Anything that is not exactly
  * that shape resolves to '' and the guard below refuses it: an unverifiable
  * target is never assumed safe.
+ *
+ * The hostname alone is NOT enough. `http://<allowlisted-ref>.supabase.co`
+ * names a permitted project and still ships the service-role key in clear
+ * text to whoever answers on port 80, with no certificate proving the host
+ * is the project it claims to be. The transport is part of the identity, so
+ * anything but HTTPS on the default port resolves to '' and is refused.
  */
 function refFromRestUrl(rest: string): string {
-  let host: string;
+  let parsed: URL;
   try {
-    host = new URL(rest).hostname;
+    parsed = new URL(rest);
   } catch {
     return '';
   }
-  const match = /^([a-z0-9]{20})\.supabase\.(co|in)$/.exec(host.toLowerCase());
+  if (parsed.protocol !== 'https:') return '';
+  if (parsed.port !== '' && parsed.port !== '443') return '';
+  const match = /^([a-z0-9]{20})\.supabase\.(co|in)$/.exec(parsed.hostname.toLowerCase());
   return match ? match[1] : '';
 }
 
@@ -189,6 +197,11 @@ for (const change of targets) {
   else written++;
 }
 console.log(`\nWROTE ${written}/${targets.length} rows.`);
-for (const failure of failures) console.log(`  FAILED ${failure.id}: ${failure.reason}`);
-if (written === 0) process.exit(1);
+// ANY failure is a failed run. `written === 0` let 99-of-100 failed updates
+// exit 0, so a wrapper or a `&&` chain read a half-applied table as done.
+for (const failure of failures) console.error(`  FAILED ${failure.id}: ${failure.reason}`);
+if (failures.length > 0) {
+  console.error(`${failures.length}/${targets.length} rows still violate the tag contract.`);
+  process.exit(1);
+}
 console.log('Re-run without --apply to confirm a zero-change second pass.');

@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { TAG_VOCABULARY } from '@/lib/catalog';
 import { bars as staticCatalog } from '@/lib/bars';
-import {
-  MAX_VENUE_TAGS,
-  TAG_PRIORITY,
-  venueTags,
-  type TaggableRow,
-} from '@/lib/venueTags';
+import { MAX_VENUE_TAGS, TAG_PRIORITY, topVenueTags } from '@/lib/tagDisplay';
+import { venueTags, type TaggableRow } from '@/lib/venueTags';
 import type { VibeTag } from '@/types';
 
 const row = (over: Partial<TaggableRow> = {}): TaggableRow => ({
@@ -17,17 +13,24 @@ const row = (over: Partial<TaggableRow> = {}): TaggableRow => ({
   ...over,
 });
 
-describe('TAG_PRIORITY', () => {
-  it('is a total order over the whole tag vocabulary', () => {
-    expect([...TAG_PRIORITY].sort()).toEqual([...TAG_VOCABULARY].sort());
-    expect(new Set(TAG_PRIORITY).size).toBe(TAG_PRIORITY.length);
+describe('venueTags — one ordering, shared with the lightbox', () => {
+  const SEVEN: VibeTag[] = [
+    'chill', 'buzzy', 'date', 'polished', 'cocktail', 'pricey', 'speakeasy',
+  ];
+
+  it('stores the five tags the lightbox would have rendered from the full set', () => {
+    // The regression this suite exists to prevent: trimming for STORAGE used to
+    // keep a price tag, which topVenueTags() drops, so an over-cap venue
+    // rendered four chips after the backfill where it rendered five before.
+    expect(topVenueTags(venueTags(row({ tags: SEVEN })))).toEqual(topVenueTags(SEVEN));
+    expect(topVenueTags(venueTags(row({ tags: SEVEN })))).toHaveLength(MAX_VENUE_TAGS);
   });
 
-  it('ranks price above crowd, texture and energy so the quiz keeps matching', () => {
-    const rank = (tag: VibeTag): number => TAG_PRIORITY.indexOf(tag);
+  it('ranks by tagDisplay TAG_PRIORITY, so price is what a trim gives up', () => {
+    const rank = (tag: VibeTag): number => TAG_PRIORITY[tag];
     for (const price of ['cheap', 'mid', 'pricey', 'splurge'] as const) {
-      for (const weaker of ['date', 'locals', 'polished', 'chill', 'buzzy'] as const) {
-        expect(rank(price)).toBeLessThan(rank(weaker));
+      for (const displayable of ['date', 'locals', 'polished', 'chill', 'buzzy'] as const) {
+        expect(rank(price)).toBeGreaterThan(rank(displayable));
       }
     }
   });
@@ -45,10 +48,10 @@ describe('venueTags — the cap', () => {
     const seven: VibeTag[] = [
       'chill', 'buzzy', 'date', 'polished', 'cocktail', 'pricey', 'speakeasy',
     ];
-    // venue type first (cocktail, speakeasy), then price, then crowd, then
-    // texture; 'chill' and 'buzzy' are energy and are what gets dropped.
+    // tagDisplay's order: venue types lead, then character, then energy, and
+    // price ranks last of all — so 'pricey' and 'date' are what get dropped.
     expect(venueTags(row({ tags: seven }))).toEqual([
-      'cocktail', 'speakeasy', 'pricey', 'date', 'polished',
+      'cocktail', 'speakeasy', 'polished', 'chill', 'buzzy',
     ]);
   });
 
@@ -68,20 +71,32 @@ describe('venueTags — the cap', () => {
 });
 
 describe('venueTags — the empty rows', () => {
-  it('always returns at least one tag, even with no name signal at all', () => {
-    expect(venueTags(row({ name: '', blurb: null, tags: null }))).toEqual(['mid']);
+  it('always returns at least one DISPLAYABLE tag, with no name signal at all', () => {
+    // A price-only row satisfies "has a tag" in the table and renders nothing
+    // at all in the lightbox, which is the defect this pass exists to close.
+    expect(venueTags(row({ name: '', blurb: null, tags: null }))).toEqual(['cocktail', 'mid']);
+    expect(topVenueTags(venueTags(row({ name: '', blurb: null, tags: null })))).not.toEqual([]);
   });
 
   it('falls back to the price tag for every price tier', () => {
-    expect(venueTags(row({ priceTier: 1 }))).toEqual(['cheap']);
-    expect(venueTags(row({ priceTier: 2 }))).toEqual(['mid']);
-    expect(venueTags(row({ priceTier: 3 }))).toEqual(['pricey']);
-    expect(venueTags(row({ priceTier: 4 }))).toEqual(['splurge']);
+    expect(venueTags(row({ priceTier: 1 }))).toEqual(['cocktail', 'cheap']);
+    expect(venueTags(row({ priceTier: 2 }))).toEqual(['cocktail', 'mid']);
+    expect(venueTags(row({ priceTier: 3 }))).toEqual(['cocktail', 'pricey']);
+    expect(venueTags(row({ priceTier: 4 }))).toEqual(['cocktail', 'splurge']);
   });
 
   it('falls back to mid when price_tier is missing or out of range', () => {
-    expect(venueTags(row({ priceTier: null }))).toEqual(['mid']);
-    expect(venueTags(row({ priceTier: 9 }))).toEqual(['mid']);
+    expect(venueTags(row({ priceTier: null }))).toEqual(['cocktail', 'mid']);
+    expect(venueTags(row({ priceTier: 9 }))).toEqual(['cocktail', 'mid']);
+  });
+
+  it('does not add the default when a keyword already gave a displayable tag', () => {
+    expect(venueTags(row({ name: 'The Rooftop at Sixty', priceTier: 3 })))
+      .not.toContain('cocktail');
+  });
+
+  it('adds the default when every stored tag is a price tag', () => {
+    expect(venueTags(row({ tags: ['pricey'] }))).toEqual(['cocktail', 'pricey']);
   });
 
   it('derives from the name', () => {
@@ -124,7 +139,7 @@ describe('venueTags — vocabulary and hygiene', () => {
 
   it('derives when every stored tag is unknown, rather than returning nothing', () => {
     expect(venueTags(row({ name: 'Nowhere', tags: ['sports'], priceTier: 3 })))
-      .toEqual(['pricey']);
+      .toEqual(['cocktail', 'pricey']);
   });
 
   it('de-duplicates repeated stored tags', () => {
@@ -156,6 +171,29 @@ describe('venueTags — the PRD invariant over the real catalog', () => {
   it('leaves no venue over the five-tag cap', () => {
     expect(tagged.filter((bar) => bar.tags.length > MAX_VENUE_TAGS).map((bar) => bar.id))
       .toEqual([]);
+  });
+
+  it('leaves no venue without a tag the lightbox will actually render', () => {
+    expect(tagged.filter((bar) => topVenueTags(bar.tags).length === 0).map((bar) => bar.id))
+      .toEqual([]);
+  });
+
+  it('never costs an already-tagged venue a chip it renders today', () => {
+    // The storage trim and the display trim must agree: for every venue that
+    // already has tags, what the lightbox shows after this pass is exactly what
+    // it showed before it.
+    const regressed = staticCatalog
+      .filter((bar) => (bar.tags ?? []).length > 0)
+      .filter((bar) => {
+        const after = venueTags({
+          name: bar.name, blurb: bar.blurb, priceTier: bar.priceTier, tags: bar.tags,
+        });
+        const before = topVenueTags(bar.tags);
+        const rendered = topVenueTags(after);
+        return rendered.length !== before.length
+          || rendered.some((tag, i) => tag !== before[i]);
+      });
+    expect(regressed.map((bar) => bar.id)).toEqual([]);
   });
 
   it('emits only vocabulary tags, with no duplicates within a venue', () => {
