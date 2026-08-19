@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 
+import { definingMigration } from './effectiveMigration';
+
 /**
  * V8-3 BEHAVIORAL RLS/RPC negatives — criteria 3, 9 and 10.
  *
@@ -1165,6 +1167,48 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     // key rather than as an empty list nobody looked at.
     expect(actual, 'the guarded overload set drifted from what the static guard assumes')
       .toEqual(expected);
+  });
+
+  /**
+   * THE STATIC GUARD'S OTHER ASSUMPTION: that the file it read was APPLIED.
+   *
+   * nightOutsMigration.test.ts resolves each of these four functions to the
+   * highest-numbered COMMITTED migration that states it. That equals the text
+   * the database runs only when the stream is fully applied — and this repo
+   * routinely carries migrations numbered above the live ledger head (0059's own
+   * header says so, and 0055/0056 are applied nowhere). So the helper fixed the
+   * stale-BACKWARDS direction and left the stale-FORWARDS one: the ordering
+   * invariants can go green describing SQL that was never installed, and with no
+   * DATABASE_URL this whole file is describe.skip, so nothing notices
+   * (round-1 review, Claude, medium).
+   *
+   * This is the one run that can see a database, so it is where the assumption
+   * becomes an assertion. The overload pin above compares SIGNATURES; this
+   * compares PROVENANCE — which file the ledger says installed them.
+   */
+  it('every migration the static guard reads is actually applied here', async () => {
+    const guarded = [
+      'respond_night_out',
+      'join_night_out_by_token',
+      'decline_night_out_by_token',
+      'night_out_seat_count',
+    ];
+    const resolved = guarded.map((name) => {
+      const file = definingMigration(name);
+      expect(file, `no committed migration defines ${name}`).not.toBeNull();
+      return file as string;
+    });
+    const { rows } = await db.query(
+      'select name from public.schema_migrations where name = any($1::text[])',
+      [resolved],
+    );
+    const applied = new Set((rows as Array<{ name: string }>).map((r) => r.name));
+    // Reported per function, so the failure names which guard is reading text
+    // this database never ran rather than just listing a filename.
+    expect(
+      Object.fromEntries(guarded.map((name, i) => [name, applied.has(resolved[i])])),
+      "the static guard resolved a migration that is NOT in this database's ledger",
+    ).toEqual(Object.fromEntries(guarded.map((name) => [name, true])));
   });
 
   /**

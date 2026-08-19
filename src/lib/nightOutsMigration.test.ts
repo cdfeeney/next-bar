@@ -1,6 +1,8 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+import { MIGRATIONS_DIR, definingMigration, definitionIndex } from './effectiveMigration';
 
 /**
  * V8-3 migration guard — static assertions over 0044_night_outs.sql.
@@ -245,11 +247,20 @@ describe('0044_night_outs.sql security shape', () => {
  * as a record of an applied, immutable file, but is NOT the effective definition
  * for anything in the 0045/0046/0047 rows.
  *
- * These are ORDERING invariants, and they exist because the thing they guard
- * cannot be exercised behaviorally on staging: the 20-member boundary needs 21
- * distinct fixture identities and public.profiles is FK'd to auth.users, which
- * this suite does not manufacture. A static guard is the honest fallback, not a
- * substitute — see the residual-risk note in the goal.
+ * These are ORDERING invariants. This block used to say they exist because the
+ * 20-member boundary "cannot be exercised behaviorally on staging" — that claim
+ * is false and was false when written: makeIdentities() in
+ * nightOutsRls.live.test.ts manufactures the 21 fixture identities, and the
+ * boundary IS exercised there ('enforces the 20-member cap...' and 'refuses a
+ * declined member rejoining a full plan...'). Leaving the claim standing here
+ * would point the next auditor away from the coverage that exists, which is the
+ * same wrong-map failure the block above was just corrected for (round-1
+ * review, Claude, medium).
+ *
+ * What these assertions add over the behavioral tests is the ADVISORY LOCK KEY.
+ * The live tests are sequential on one connection, so a per-user key would pass
+ * them; only the text order below can see it. That is why they pin the key
+ * itself and not merely the presence of a lock.
  */
 const SQL_0046 = readFileSync(
   path.join(__dirname, '..', '..', 'supabase', 'migrations', '0046_night_outs_cap_and_race.sql'),
@@ -257,51 +268,18 @@ const SQL_0046 = readFileSync(
 ).toLowerCase();
 
 /**
- * Where `name` is stated in `sql`, or -1. Both statement forms are checked:
- * 0059 states get_night_out as `drop function` + plain `create function`, not
- * `create or replace`, so looking only for the latter would miss it. The open
- * paren is part of the match so get_night_out cannot hit get_night_out_board.
- */
-function definitionIndex(sql: string, name: string): number {
-  for (const form of [
-    `create or replace function public.${name}(`,
-    `create function public.${name}(`,
-  ]) {
-    const at = sql.indexOf(form);
-    if (at > -1) return at;
-  }
-  return -1;
-}
-
-/**
- * The migration that currently DEFINES `name`: the highest-numbered file that
- * states it, which is the text the database actually runs.
+ * The text of the migration that currently STATES `name`.
  *
- * This is derived rather than hard-coded on purpose. Every previous version of
- * this block named its file literally, and the pointer went stale twice as
- * respond_night_out moved 0046 -> 0048 -> 0059 — each time leaving these
- * invariants asserting against dead text with the suite green, which is the one
- * failure this block exists to prevent (round-2 review, Claude, medium). A 0060
- * re-stating any of these functions now moves the guard by itself.
- *
- * Resolution is by NAME only. It therefore cannot tell one overload from
- * another, nor a real removal from the routine drop of a superseded overload —
- * both need argument-type comparison, which text matching does not do. The
- * control for that is the live catalog probe in nightOutsRls.live.test.ts,
- * which pins the exact overload set of every name resolved here against
- * pg_proc on the serving database.
+ * Resolution lives in effectiveMigration.ts so the live suite can assert that
+ * the SAME file is recorded in the serving database's schema_migrations ledger.
+ * Read that module for what this does and does not prove — in particular, it
+ * resolves the last file in the COMMITTED stream, which is the text the
+ * database runs only when the stream is fully applied.
  */
 function effectiveSql(name: string): string {
-  const dir = path.join(__dirname, '..', '..', 'supabase', 'migrations');
-  // Files only: `revert/` is a subdirectory and its rollback text must never be
-  // mistaken for the effective definition. Names are zero-padded, so lexical
-  // order is numeric order.
-  const defining = readdirSync(dir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()
-    .filter((f) => definitionIndex(readFileSync(path.join(dir, f), 'utf8').toLowerCase(), name) > -1);
-  expect(defining.length, `no migration defines ${name}`).toBeGreaterThan(0);
-  return readFileSync(path.join(dir, defining[defining.length - 1]), 'utf8')
+  const file = definingMigration(name);
+  expect(file, `no migration defines ${name}`).not.toBeNull();
+  return readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8')
     .toLowerCase()
     .replace(/--.*/g, '');
 }
@@ -316,9 +294,9 @@ function functionBody(sql: string, name: string): string {
 }
 
 /**
- * These assert the ORDERING invariants that stand in for the untestable
- * 20-member boundary, so they must read whichever file currently DEFINES the
- * functions. They were written against 0046 and stayed pointed there after 0048
+ * These assert the ORDERING invariants that back up the behavioral 20-member
+ * boundary tests in nightOutsRls.live.test.ts, so they must read whichever file
+ * currently DEFINES the functions. They were written against 0046 and stayed pointed there after 0048
  * superseded it (fresh-cycle round-2 review, Claude) — a guard aimed at dead
  * text, which is the same claim-drifted-from-artifact failure it exists to
  * catch. Each `it` below now derives its text through effectiveSql(), so it
@@ -329,10 +307,14 @@ function functionBody(sql: string, name: string): string {
 describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
     const body = functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token');
-    const lock = body.indexOf('pg_advisory_xact_lock');
+    // The KEY, not just the call. A per-user key (hashtextextended on the uuid
+    // rather than the plan) lets two concurrent joins both see room for the last
+    // seat, and the live boundary tests are sequential on one connection so they
+    // cannot see it (round-1 review, Claude, medium).
+    const lock = body.search(/pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/);
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
     const capCheck = body.indexOf('member_cap', conversion);
-    expect(lock, 'join takes no advisory lock').toBeGreaterThan(-1);
+    expect(lock, 'join takes no per-plan advisory lock').toBeGreaterThan(-1);
     expect(conversion, 'no own-row conversion after the lock').toBeGreaterThan(lock);
     // The whole defect was asking about capacity before knowing whether this
     // call even takes capacity. Converting an existing invite is not a new seat.
@@ -343,8 +325,10 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
   it('declining is never rationed by capacity (round-2 medium)', () => {
     const body = functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token');
     expect(body).not.toMatch(/member_cap/);
-    // Still serialised, so a concurrent invite cannot swallow the decline.
-    expect(body).toMatch(/pg_advisory_xact_lock/);
+    // Still serialised on the SAME per-plan key, so a concurrent invite cannot
+    // swallow the decline. A different key would serialise nothing.
+    expect(body, 'decline takes no per-plan advisory lock')
+      .toMatch(/pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/);
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
