@@ -3,24 +3,25 @@ import { demoFriends } from './friends';
 import { demoIntentFor, demoTonightPickFor } from './intents';
 import { barById } from './index';
 
-// Local-time strings (no Z) so assertions don't depend on the runner's TZ.
-// 2026-07-23 is a Thursday.
-const THU = new Date('2026-07-23T21:00:00');
-const FRI = new Date('2026-07-24T22:00:00');
-const FRI_LATER = new Date('2026-07-24T23:30:00');
-const SAT_1AM = new Date('2026-07-25T01:00:00'); // still Friday night
-const SAT = new Date('2026-07-25T23:00:00');
-const MON = new Date('2026-07-27T21:00:00');
+// ABSOLUTE instants (Z): the rollover is an America/New_York rule, so a bare
+// local literal names a different NYC wall clock per runner. July is EDT
+// (UTC-4) — NYC wall clock + 4h = the Z value. 2026-07-23 is a Thursday.
+const THU = new Date('2026-07-24T01:00:00Z'); // Thu 9pm NYC
+const FRI = new Date('2026-07-25T02:00:00Z'); // Fri 10pm NYC
+const FRI_LATER = new Date('2026-07-25T03:30:00Z'); // Fri 11:30pm NYC
+const SAT_1AM = new Date('2026-07-25T05:00:00Z'); // Sat 1am NYC — still Friday night
+const SAT = new Date('2026-07-26T03:00:00Z'); // Sat 11pm NYC
+const MON = new Date('2026-07-28T01:00:00Z'); // Mon 9pm NYC
 
 function nightSnapshot(night: Date): string {
   return demoFriends.map((f) => demoIntentFor(f.handle, night)).join(',');
 }
 
-/** Mon 2026-07-27 through Sun 2026-08-02, all at 9pm local. */
+/** Mon 2026-07-27 through Sun 2026-08-02, all at 9pm NYC. */
 function weekOfNights(): Date[] {
   return Array.from({ length: 7 }, (_, i) => {
-    const night = new Date('2026-07-27T21:00:00');
-    night.setDate(night.getDate() + i);
+    const night = new Date('2026-07-28T01:00:00Z');
+    night.setUTCDate(night.getUTCDate() + i);
     return night;
   });
 }
@@ -35,7 +36,7 @@ describe('demoIntentFor', () => {
     expect(nightSnapshot(FRI)).toBe(nightSnapshot(FRI_LATER));
   });
 
-  it('keeps the small hours on the previous night (5am rollover)', () => {
+  it('keeps the small hours on the previous night (NYC 6am rollover)', () => {
     expect(nightSnapshot(SAT_1AM)).toBe(nightSnapshot(FRI));
   });
 

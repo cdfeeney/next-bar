@@ -18,6 +18,66 @@ import { getCacheEpoch } from '@/lib/accountCache';
 
 const KEY = 'next-bar:follows:v1';
 
+/** Cross-tab "the circle moved" ping. The value only has to CHANGE. */
+const DIRTY_KEY = 'next-bar:follows:dirty';
+
+/**
+ * Is the circle snapshot we are holding still current?
+ *
+ * Two module-level facts answer that, and both are module-level on purpose: a
+ * navigation unmounts the hook, so per-instance state cannot see across it.
+ *
+ *   - `pendingCircleWrites` — writes the server has not answered yet. Keyed by
+ *     a unique OPERATION id, never by handle: two overlapping writes for the
+ *     same handle would alias, and the first to settle would release readiness
+ *     for both (round-4 panel, Claude).
+ *   - `circleGeneration` — bumped whenever a write SETTLES, here or in another
+ *     tab. Readiness is pinned to the generation its fetch started at, so a
+ *     settled write invalidates an older snapshot in the same render rather
+ *     than merely emptying the pending set — which released readiness over a
+ *     snapshot taken before the write committed (round-4 panel, BOTH lanes).
+ *
+ * The rule this encodes: a snapshot is ready when the server answered it AND
+ * nothing has happened since. Clearing "in flight" was never the same thing.
+ */
+const pendingCircleWrites = new Set<number>();
+const circleListeners = new Set<() => void>();
+let nextCircleWriteId = 0;
+let circleGeneration = 0;
+
+function notifyCircleListeners(): void {
+  for (const listener of circleListeners) listener();
+}
+
+/** Another tab settled a write — our snapshot is stale too. */
+function invalidateCircle(): void {
+  circleGeneration += 1;
+  notifyCircleListeners();
+}
+
+/**
+ * Open a circle write. The returned finisher is idempotent and MUST run on
+ * every exit path — a stranded marker pins `circleReady` false for the rest of
+ * the session, which is why the callers below use `finally` and not `then`
+ * (round-4 panel, Codex: a rejected promise stranded it).
+ */
+function beginCircleWrite(): () => void {
+  nextCircleWriteId += 1;
+  const id = nextCircleWriteId;
+  pendingCircleWrites.add(id);
+  notifyCircleListeners();
+  return () => {
+    if (!pendingCircleWrites.delete(id)) return;
+    invalidateCircle();
+    try {
+      // Tell the other tabs. Theirs is the same snapshot, equally stale.
+      window.localStorage.setItem(DIRTY_KEY, `${Date.now()}:${nextCircleWriteId}`);
+    } catch {
+      // Quota/private mode — this tab still reconciles; the others just won't.
+    }
+  };
+}
+
 /**
  * Dual-mode follows (B3), cloned from the useRatings pattern:
  *
@@ -90,6 +150,29 @@ export type UseFollowsReturn = {
   toggleFollow: (handle: string) => void;
   /** True until the first read (local or server fetch) resolves. */
   loading: boolean;
+  /**
+   * Server mode: the last completed hydrate FAILED (the RPC returned null).
+   * Distinct from `!circleReady`, which is also false while a write is merely
+   * unsettled — telling the user "couldn't load your circle" in that case is a
+   * lie, and the advice that follows it ("reload") discards their write
+   * (round-5 panel, Claude). Always false in local mode.
+   */
+  circleFailed: boolean;
+  /**
+   * Server mode: TRUE only once `circle` actually reflects the server's answer
+   * AND no circle write is still in flight.
+   *
+   * A failed fetch resolves `loading` but leaves `circle` empty, and an empty
+   * circle is indistinguishable from "no friends" — which is how a night out
+   * could still be started with nobody invited even after the loading guard
+   * (round-2 panel, Codex, HIGH). A follow the user requested a moment ago on
+   * another page is the same lie told the other way round: the snapshot is
+   * genuine, and already out of date (round-3 panel, Codex, HIGH).
+   *
+   * Always true in local mode: there is no fetch to fail. Callers deriving an
+   * invitee list must require this, not `!loading`.
+   */
+  circleReady: boolean;
 };
 
 export function useFollows(): UseFollowsReturn {
@@ -100,6 +183,24 @@ export function useFollows(): UseFollowsReturn {
   const [followers, setFollowers] = useState<PublicProfile[]>([]);
   const [mode, setMode] = useState<FollowsMode>('pending');
   const [loading, setLoading] = useState(true);
+  // The generation the current `circle` was fetched at, or null if we have no
+  // server answer. A number, not a boolean: readiness has to be able to go
+  // stale, and a boolean can only say "we finished a fetch once".
+  const [readyGeneration, setReadyGeneration] = useState<number | null>(null);
+  // Mirror for the effect, which must know whether this is a FIRST read or a
+  // background revalidation without taking readyGeneration as a dependency.
+  const readyGenerationRef = useRef<number | null>(null);
+  readyGenerationRef.current = readyGeneration;
+  const [fetchFailed, setFetchFailed] = useState(false);
+  // Writes THIS instance has open. `readyGeneration === null` does not mean
+  // "this mount has not written" — a mount can follow someone while its very
+  // first hydrate is still in the air, and that hydrate would then erase the
+  // placeholder and flip the button back to Follow (round-8 panel, Codex).
+  const instanceWritesRef = useRef(0);
+  const [circleState, setCircleState] = useState(() => ({
+    generation: circleGeneration,
+    pending: pendingCircleWrites.size,
+  }));
   const modeRef = useRef<FollowsMode>('pending');
   // Mirrors for event-handler reads (the toggle callback must see the
   // current circle/requested without re-binding on every change).
@@ -108,17 +209,49 @@ export function useFollows(): UseFollowsReturn {
   const requestedRef = useRef<PublicProfile[]>([]);
   requestedRef.current = requested;
 
+  // Re-render when a circle write starts or settles anywhere in the app — that
+  // state lives outside React, so it needs its own subscription.
+  useEffect(() => {
+    const listener = (): void =>
+      setCircleState({
+        generation: circleGeneration,
+        pending: pendingCircleWrites.size,
+      });
+    circleListeners.add(listener);
+    listener();
+    return () => {
+      circleListeners.delete(listener);
+    };
+  }, []);
+
   // Storage listener — cross-tab propagation for local mode only (server
   // mode never writes the key, so there is nothing to hear).
   useEffect(() => {
     function handleStorage(event: StorageEvent): void {
+      // The cross-tab ping matters in SERVER mode especially, so it is handled
+      // before the local-mode guard below (round-4 panel, Codex): another tab
+      // following someone leaves this tab's snapshot stale.
+      if (event.key === DIRTY_KEY) {
+        invalidateCircle();
+        return;
+      }
       if (modeRef.current === 'server') return;
       if (event.key === KEY || event.key === null) {
         setLocalFollows(loadFollows());
       }
     }
+    // The cross-tab ping is best-effort — a quota or private-mode failure
+    // swallows it (round-5 panel, Codex). Re-checking when the tab comes back
+    // costs one hydrate and does not depend on the other tab having succeeded.
+    function handleVisible(): void {
+      if (document.visibilityState === 'visible') invalidateCircle();
+    }
     window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
+    document.addEventListener('visibilitychange', handleVisible);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      document.removeEventListener('visibilitychange', handleVisible);
+    };
   }, []);
 
   // Auth-driven mode switch (useRatings pattern, minus the merge step —
@@ -140,14 +273,30 @@ export function useFollows(): UseFollowsReturn {
       setRequested([]);
       setFollowers([]);
       setLocalFollows(loadFollows());
+      setReadyGeneration(null); // local mode reports ready without this
       setLoading(false);
       return;
     }
 
     modeRef.current = 'server';
     setMode('server');
-    setLoading(true);
 
+    // A REVALIDATION is not a load. Re-running this effect on every settled
+    // write used to flip `loading` back to true, and /friends/following and
+    // /friends/followers replace their whole list with a "Loading…" placeholder
+    // while it is (round-5 panel, Claude, HIGH). `loading` means "we have never
+    // read"; staleness is `circleReady`'s job, and it goes false on its own
+    // because readyGeneration no longer equals the current generation.
+    const isRevalidation = readyGenerationRef.current !== null;
+    if (!isRevalidation) {
+      setLoading(true);
+      setReadyGeneration(null);
+    }
+
+    // The generation this fetch answers FOR. Anything that settles while it is
+    // in flight bumps the module counter, so the result lands stale and the
+    // effect below re-runs on the new generation rather than being trusted.
+    const fetchGeneration = circleGeneration;
     let cancelled = false;
     // Epoch guard (accountCache): a sign-out wipe while this fetch is in
     // flight must abandon the hydrate — `cancelled` alone flips too late
@@ -160,22 +309,68 @@ export function useFollows(): UseFollowsReturn {
         fetchFollowers(supabase),
       ]);
       if (cancelled || getCacheEpoch() !== epoch) return;
+
+      // SUPERSEDED: something changed while this was in the air. Applying it
+      // would overwrite newer optimistic state with an older snapshot and erase
+      // the placeholder the double-tap guard depends on (round-5 panel, both
+      // lanes). Whatever moved the generation also queues the next fetch, and a
+      // draining pending set bumps it too, so dropping this answer loses
+      // nothing.
+      if (circleGeneration !== fetchGeneration || pendingCircleWrites.size > 0) {
+        // One exception, and it is the FIRST answer this mount has had
+        // (round-7 panel, Claude). Discarding it outright while clearing
+        // `loading` told the user an empty circle was settled fact, and
+        // /friends/following renders "Not following anyone yet" from exactly
+        // that — to someone who has friends. Holding `loading` instead just
+        // trades the lie for a spinner.
+        //
+        // A first mount has no optimistic state to clobber — placeholders are
+        // per-instance and this instance has made no write — so the reason to
+        // drop a superseded answer does not apply to DISPLAYING it. It is still
+        // not marked ready: it predates whatever is in flight, and the next
+        // fetch (already queued) is what earns that.
+        if (
+          readyGenerationRef.current === null
+          && instanceWritesRef.current === 0
+          && server !== null
+        ) {
+          setCircle(server);
+          if (outgoing !== null) setRequested(outgoing);
+          if (followerList !== null) setFollowers(followerList);
+          setFetchFailed(false);
+          setLoading(false);
+        }
+        return;
+      }
+
+      setLoading(false);
+      setFetchFailed(server === null);
+
       // null = fetch FAILED (not "zero friends") — keep prior state rather
       // than blanking a circle on a transient failure. Never fall back to
       // the demo seed here: demo handles aren't real accounts.
-      if (server !== null) setCircle(server);
+      if (server !== null) {
+        setCircle(server);
+        setReadyGeneration(fetchGeneration);
+      }
       // Pre-0008 the outgoing RPC doesn't exist yet → null → keep [] (no
       // requests can exist before the migration lands either).
       if (outgoing !== null) setRequested(outgoing);
       // Same rule pre-0010 for followers.
       if (followerList !== null) setFollowers(followerList);
-      setLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [auth.status, auth.status === 'signed-in' ? auth.user.id : null]);
+    // circleState.generation is a dependency, not an afterthought: a settled
+    // write anywhere — this page, another page, another tab — must re-hydrate
+    // rather than merely release the pending flag over the old snapshot.
+  }, [
+    auth.status,
+    auth.status === 'signed-in' ? auth.user.id : null,
+    circleState.generation,
+  ]);
 
   const isFollowing = useCallback(
     (handle: string) => {
@@ -195,6 +390,19 @@ export function useFollows(): UseFollowsReturn {
     },
     [mode, requested],
   );
+
+  /** Count an open write against THIS instance for as long as it runs. */
+  const trackInstanceWrite = useCallback((finish: () => void) => {
+    instanceWritesRef.current += 1;
+    let done = false;
+    return (): void => {
+      if (!done) {
+        done = true;
+        instanceWritesRef.current -= 1;
+      }
+      finish();
+    };
+  }, []);
 
   const toggleFollow = useCallback((handle: string) => {
     if (modeRef.current === 'server') {
@@ -222,14 +430,29 @@ export function useFollows(): UseFollowsReturn {
         setCircle((prev) =>
           prev.filter((p) => p.handle.toLowerCase() !== target),
         );
-        void unfollowById(supabase, existing.id).then((removed) => {
-          if (removed || getCacheEpoch() !== epoch) return;
+        const finishUnfollow = trackInstanceWrite(beginCircleWrite());
+        const restore = (): void =>
           setCircle((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
               ? prev
               : [...prev, existing],
           );
-        });
+        void unfollowById(supabase, existing.id)
+          .then((removed) => {
+            if (removed || getCacheEpoch() !== epoch) return;
+            restore();
+          })
+          // A thrown RPC is a refusal too — the old code only rolled back on an
+          // explicit false, so a network error left the row gone locally and
+          // present on the server.
+          .catch(() => {
+            if (getCacheEpoch() !== epoch) return;
+            restore();
+          })
+          // `finally`, never `then`: an early return or a rejection past this
+          // would strand the marker and pin circleReady false for the rest of
+          // the session (round-4 panel, Codex).
+          .finally(finishUnfollow);
         return;
       }
 
@@ -244,14 +467,29 @@ export function useFollows(): UseFollowsReturn {
           prev.filter((p) => p.handle.toLowerCase() !== target),
         );
         if (!pending.id) return;
-        void cancelFollowRequest(supabase, pending.id).then((removed) => {
-          if (removed || getCacheEpoch() !== epoch) return;
+        // Wrapped like the other two writes (round-6 panel, BOTH lanes). It is
+        // the only optimistic write that was not, and `requested` is re-read by
+        // the same hydrate: a revalidation in the air across a withdrawal put
+        // "Requested" back after the server had already cancelled it. That is
+        // reachable only because THIS candidate added the revalidation path —
+        // at the base commit the hydrate ran on auth change alone.
+        const finishCancel = trackInstanceWrite(beginCircleWrite());
+        const restoreRequest = (): void =>
           setRequested((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
               ? prev
               : [...prev, pending],
           );
-        });
+        void cancelFollowRequest(supabase, pending.id)
+          .then((removed) => {
+            if (removed || getCacheEpoch() !== epoch) return;
+            restoreRequest();
+          })
+          .catch(() => {
+            if (getCacheEpoch() !== epoch) return;
+            restoreRequest();
+          })
+          .finally(finishCancel);
         return;
       }
 
@@ -265,24 +503,36 @@ export function useFollows(): UseFollowsReturn {
         displayName: null,
       };
       setCircle((prev) => [...prev, placeholder]);
-      void followByHandle(supabase, handle).then((outcome) => {
-        if (getCacheEpoch() !== epoch) return;
-        setCircle((prev) => {
-          const without = prev.filter(
-            (p) => p.handle.toLowerCase() !== target,
-          );
-          return outcome?.status === 'followed'
-            ? [...without, outcome.profile]
-            : without;
-        });
-        if (outcome?.status === 'requested') {
-          setRequested((prev) =>
-            prev.some((p) => p.handle.toLowerCase() === target)
-              ? prev
-              : [...prev, outcome.profile],
-          );
-        }
-      });
+      const finishFollow = trackInstanceWrite(beginCircleWrite());
+      const dropPlaceholder = (): void =>
+        setCircle((prev) =>
+          prev.filter((p) => p.handle.toLowerCase() !== target),
+        );
+      void followByHandle(supabase, handle)
+        .then((outcome) => {
+          if (getCacheEpoch() !== epoch) return;
+          setCircle((prev) => {
+            const without = prev.filter(
+              (p) => p.handle.toLowerCase() !== target,
+            );
+            return outcome?.status === 'followed'
+              ? [...without, outcome.profile]
+              : without;
+          });
+          if (outcome?.status === 'requested') {
+            setRequested((prev) =>
+              prev.some((p) => p.handle.toLowerCase() === target)
+                ? prev
+                : [...prev, outcome.profile],
+            );
+          }
+        })
+        // A thrown RPC rolls the optimistic placeholder back, same as a null.
+        .catch(() => {
+          if (getCacheEpoch() !== epoch) return;
+          dropPlaceholder();
+        })
+        .finally(finishFollow); // see the unfollow path
       return;
     }
 
@@ -314,5 +564,12 @@ export function useFollows(): UseFollowsReturn {
     isRequested,
     toggleFollow,
     loading,
+    circleFailed: mode === 'server' ? fetchFailed : false,
+    circleReady:
+      mode === 'server'
+        ? readyGeneration !== null
+          && readyGeneration === circleState.generation
+          && circleState.pending === 0
+        : true,
   };
 }

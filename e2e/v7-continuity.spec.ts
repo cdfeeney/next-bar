@@ -1,25 +1,41 @@
-import { expect, test } from '@playwright/test';
+/**
+ * v7-continuity.spec.ts — the offline install-over guard.
+ *
+ * A V7 user upgrading to V8 must keep everything already on their device.
+ * The fixture below is a realistic V7 install: every localStorage key the
+ * inventory in `docs/V8-DATA-CONTINUITY-2026-08-14.md` lists, seeded with
+ * valid V7-shaped values, plus the session-scoped onboarding flag.
+ *
+ * The fixture covers every inventoried localStorage key, including the two
+ * `:merged-for:v1` ownership latches — see the note beside them below for why
+ * that is sound with no Supabase env configured.
+ *
+ * Survival is asserted across navigation, reload, and a simulated
+ * force-close/reopen (close the tab, open a new one in the same context —
+ * localStorage persists, sessionStorage is meant not to).
+ *
+ * Boundary: authentication, cross-device sync, real `shared_nights` rows and
+ * the physical install-over remain attended/server-backed release gates. An
+ * offline fixture cannot prove them.
+ */
+
+import { expect, test, type Page } from '@playwright/test';
 import { denyGeolocation } from './helpers/geo';
 
-const STORED = {
+/** Stale night-scoped values: the fixed clock below is the NEXT night. */
+const LAST_NIGHT = '2026-08-12';
+
+const V7_LOCAL: Record<string, string> = {
   'next-bar:ratings:v1': JSON.stringify([
+    { barId: 'attaboy', rating: 'loved', ratedAt: '2026-08-12T23:00:00-04:00', score: 8.8 },
+    { barId: 'death-and-co', rating: 'loved', ratedAt: '2026-08-12T23:30:00-04:00', score: 8.8 },
+    { barId: 'bar-54', rating: 'loved', ratedAt: '2026-08-12T23:45:00-04:00', score: 9.4 },
+  ]),
+  'next-bar:pairwise:v1': JSON.stringify([
     {
-      barId: 'attaboy',
-      rating: 'loved',
-      ratedAt: '2026-08-12T23:00:00-04:00',
-      score: 8.8,
-    },
-    {
-      barId: 'death-and-co',
-      rating: 'loved',
-      ratedAt: '2026-08-12T23:30:00-04:00',
-      score: 8.8,
-    },
-    {
-      barId: 'bar-54',
-      rating: 'loved',
-      ratedAt: '2026-08-12T23:45:00-04:00',
-      score: 9.4,
+      winnerBarId: 'bar-54',
+      loserBarId: 'attaboy',
+      comparedAt: '2026-08-12T23:50:00-04:00',
     },
   ]),
   'next-bar:lists:v1': JSON.stringify([
@@ -31,8 +47,11 @@ const STORED = {
       updatedAt: '2026-08-12T23:30:00-04:00',
     },
   ]),
+  'next-bar:list:want-to-go:v1': JSON.stringify([
+    { barId: 'employees-only', addedAt: '2026-08-12T21:00:00-04:00' },
+  ]),
   'next-bar:night-log:v1': JSON.stringify({
-    night: '2026-08-12',
+    night: LAST_NIGHT,
     visits: [
       { barId: 'attaboy', at: '2026-08-12T22:30:00-04:00' },
       { barId: 'death-and-co', at: '2026-08-12T23:30:00-04:00' },
@@ -45,18 +64,77 @@ const STORED = {
     archetype: 'Skyline Sipper',
     savedAt: '2026-08-12T20:00:00-04:00',
   }),
+  'next-bar:follows:v1': JSON.stringify(['claire_h', 'marcus_t']),
+  'next-bar:intent:v1': JSON.stringify({
+    status: 'going',
+    setAt: '2026-08-12T21:30:00-04:00',
+  }),
+  'next-bar:night-vibe:v1': JSON.stringify({
+    night: LAST_NIGHT,
+    tags: ['cocktail', 'rooftop'],
+  }),
+  'next-bar:night-phase-override:v1': JSON.stringify({
+    night: LAST_NIGHT,
+    phase: 'out',
+  }),
+  'next-bar:saved:v1': JSON.stringify([
+    { barId: 'attaboy', savedAt: '2026-08-12T20:30:00-04:00' },
+  ]),
+  // Import sentinels. A V7 user who ever signed in has these, so a faithful
+  // install-over fixture carries them. They must survive even when Supabase is
+  // configured but no session exists; ownership is now tracked separately by
+  // `next-bar:account:owner:v1`. See `src/lib/accountCache.test.ts`.
+  'next-bar:ratings:merged-for:v1': 'v7-user-11111111-2222-3333-4444-555555555555',
+  'next-bar:pairwise:merged-for:v1': 'v7-user-11111111-2222-3333-4444-555555555555',
+  'next-bar:age-ack:v1': '1',
+  'next-bar:install-nudge-dismissed:v1': '1',
+  'next-bar:handle-nudge-dismissed:v1': '1',
+  // Seeded flag set: the demo seeder is a no-op, so it can never rewrite
+  // `next-bar:ratings:v1` underneath these assertions.
+  'next-bar:demo:seeded:v1': '1',
+  'next-bar:demo:seeded-ids:v1': '[]',
 };
+
+const ONBOARDING_KEY = 'next-bar:onboarding-prompted:v1';
+
+/**
+ * Seed ONCE per tab, before any app code runs.
+ *
+ * The seeded-sentinel is load-bearing, not tidiness: `addInitScript` runs on
+ * every navigation and every reload, so an unguarded seeder silently restores
+ * V7_LOCAL right before the survival assertions — masking exactly the deletion
+ * or mutation this spec exists to catch. Removing this guard turned the whole
+ * file into a tautology once already; the Codex lane caught it.
+ */
+const SEEDED_SENTINEL = 'v7-continuity-seeded';
+
+async function seedV7Install(page: Page): Promise<void> {
+  await denyGeolocation(page.context());
+  await page.clock.setFixedTime(new Date('2026-08-13T09:00:00-04:00'));
+  await page.addInitScript(
+    ({ local, onboardingKey, sentinel }) => {
+      if (sessionStorage.getItem(sentinel)) return;
+      for (const [key, value] of Object.entries(local)) {
+        localStorage.setItem(key, value);
+      }
+      sessionStorage.setItem(onboardingKey, '1');
+      sessionStorage.setItem(sentinel, '1');
+    },
+    { local: V7_LOCAL, onboardingKey: ONBOARDING_KEY, sentinel: SEEDED_SENTINEL },
+  );
+}
+
+function readLocal(page: Page): Promise<Record<string, string | null>> {
+  return page.evaluate(
+    (keys) => Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)])),
+    Object.keys(V7_LOCAL),
+  );
+}
 
 test('V7 Bar 54, tied scores, lists, vibe profile, and night history survive navigation and reload', async ({
   page,
 }) => {
-  await denyGeolocation(page.context());
-  await page.clock.setFixedTime(new Date('2026-08-13T09:00:00-04:00'));
-  await page.addInitScript((entries) => {
-    if (sessionStorage.getItem('v7-continuity-seeded')) return;
-    for (const [key, value] of Object.entries(entries)) localStorage.setItem(key, value);
-    sessionStorage.setItem('v7-continuity-seeded', '1');
-  }, STORED);
+  await seedV7Install(page);
 
   await page.goto('/rankings');
   await expect(page.getByLabel(/^score 8\.8 out of 10/i)).toHaveCount(2);
@@ -79,10 +157,74 @@ test('V7 Bar 54, tied scores, lists, vibe profile, and night history survive nav
   await page.goto('/');
   await expect(page.getByTestId('recap-card')).toContainText('Attaboy');
   await expect(page.getByTestId('recap-card')).toContainText('Death & Co');
+
+  // Every inventoried local key is byte-identical after the whole tour.
+  await expect(readLocal(page)).resolves.toEqual(V7_LOCAL);
+  // …and the session-scoped key survives WITHIN the tab. Only the reopen test
+  // asserts it is gone, so without this a code path that deletes it on first
+  // navigation would satisfy both specs (Codex, V8-2 round-2).
   await expect(
-    page.evaluate(
-      (keys) => Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)])),
-      Object.keys(STORED),
-    ),
-  ).resolves.toEqual(STORED);
+    page.evaluate((key) => sessionStorage.getItem(key), ONBOARDING_KEY),
+  ).resolves.toBe('1');
+});
+
+test('every V7 key survives a force-close and reopen; the session-scoped flag does not', async ({
+  context,
+}) => {
+  const first = await context.newPage();
+  await seedV7Install(first);
+  await first.goto('/rankings');
+  await expect(first.getByLabel(/^score 8\.8 out of 10/i)).toHaveCount(2);
+
+  // Force-close: the tab goes away, the origin's localStorage does not.
+  await first.close();
+
+  const reopened = await context.newPage();
+  await reopened.clock.setFixedTime(new Date('2026-08-13T09:00:00-04:00'));
+  await reopened.goto('/rankings');
+
+  await expect(readLocal(reopened)).resolves.toEqual(V7_LOCAL);
+  await expect(reopened.getByLabel(/^score 8\.8 out of 10/i)).toHaveCount(2);
+
+  // sessionStorage is per-tab by design (inventory: "expiry with the tab is
+  // intentional"), so the reopened tab must NOT inherit the prompted flag.
+  await expect(
+    reopened.evaluate((key) => sessionStorage.getItem(key), ONBOARDING_KEY),
+  ).resolves.toBeNull();
+
+  // Named lists and vibe profile still render from the surviving keys.
+  await reopened.goto('/lists');
+  await expect(reopened.getByRole('button', { name: /^V7 favorites 3 bars$/ })).toBeVisible();
+  await reopened.goto('/settings');
+  await expect(reopened.getByText('Your quiz answers are saved.')).toBeVisible();
+  await reopened.close();
+});
+
+test('the shared-night surface never writes to V7 local storage', async ({ page }) => {
+  // `shared_nights` is server-owned and bearer-token addressed. The
+  // continuity property that IS provable offline is the negative one: the
+  // public night route must be read-only with respect to the device's V7
+  // keys — it may not import, mirror, or clear any of them. What the page
+  // RENDERS from a real row is covered by `e2e/night-page.spec.ts`, which
+  // needs a configured Supabase client (see this file's header).
+  const token = '123e4567-e89b-42d3-a456-426614174000';
+  await seedV7Install(page);
+
+  const response = await page.goto(`/u/conor_f/night/${token}`);
+  // The route must actually SERVE, and its own code must actually RUN.
+  // Without both, the storage assertion below passes just as happily on a 500
+  // — or on a deleted route's 404 — having never executed a line of
+  // shared-night code, so "writes no local key" would prove nothing
+  // (Codex, V8-2 rounds 1 and 2). With no Supabase configured the page
+  // resolves to its terminal "gone" state, which is the shared-night
+  // component rendering.
+  expect(response?.status()).toBe(200);
+  await expect(page.getByRole('heading', { name: /this night isn't here/i })).toBeVisible();
+  await expect(readLocal(page)).resolves.toEqual(V7_LOCAL);
+
+  // And back into the app: local history is still the LOCAL night, not the
+  // shared one — a public link must not overwrite the device's own night.
+  await page.goto('/rankings');
+  await expect(page.getByLabel(/^score 8\.8 out of 10/i)).toHaveCount(2);
+  await expect(readLocal(page)).resolves.toEqual(V7_LOCAL);
 });

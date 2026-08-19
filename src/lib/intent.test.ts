@@ -10,11 +10,13 @@ import {
 
 const KEY = 'next-bar:intent:v1';
 
-// Local-time strings (no Z) so assertions don't depend on the runner's TZ.
-const FRI_10PM = '2026-07-24T22:00:00';
-const SAT_1AM = '2026-07-25T01:00:00';
-const SAT_5AM = '2026-07-25T05:00:00';
-const SAT_9PM = '2026-07-25T21:00:00';
+// ABSOLUTE instants (Z), never local-time strings: the rollover is defined in
+// America/New_York, so a bare timestamp means a different NYC wall clock on
+// every runner. July is EDT (UTC-4) — NYC wall clock + 4h = the Z value.
+const FRI_10PM = '2026-07-25T02:00:00Z'; // Fri 10pm NYC
+const SAT_1AM = '2026-07-25T05:00:00Z'; // Sat 1am NYC — still Friday night
+const SAT_6AM = '2026-07-25T10:00:00Z'; // Sat 6am NYC — the rollover instant
+const SAT_9PM = '2026-07-26T01:00:00Z'; // Sat 9pm NYC
 
 describe('nightOf', () => {
   it('maps an evening to its own date', () => {
@@ -25,8 +27,8 @@ describe('nightOf', () => {
     expect(nightOf(SAT_1AM)).toBe('2026-07-24');
   });
 
-  it('starts a fresh night at 5am', () => {
-    expect(nightOf(SAT_5AM)).toBe('2026-07-25');
+  it('starts a fresh night at 6am NYC', () => {
+    expect(nightOf(SAT_6AM)).toBe('2026-07-25');
   });
 });
 
@@ -73,18 +75,18 @@ describe('intent storage', () => {
     expect(loadIntent(new Date(SAT_9PM))).toBeNull();
   });
 
-  it('expires exactly at the 5am boundary mid-session (F5 rollover)', () => {
-    // Set in the small hours (still Friday night)…
+  it('expires exactly at the 6am NYC boundary mid-session (F5 rollover)', () => {
+    // Set in the small hours, 4:30am NYC (still Friday night)…
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ status: 'going', setAt: '2026-07-25T04:30:00' }),
+      JSON.stringify({ status: 'going', setAt: '2026-07-25T08:30:00Z' }),
     );
-    // …still visible one second before the rollover…
+    // …still visible one second before the rollover (5:59:59am NYC)…
     expect(
-      loadIntent(new Date('2026-07-25T04:59:59'))?.status,
+      loadIntent(new Date('2026-07-25T09:59:59Z'))?.status,
     ).toBe('going');
-    // …and gone the moment the clock hits 5am, without any write.
-    expect(loadIntent(new Date('2026-07-25T05:00:00'))).toBeNull();
+    // …and gone the moment the clock hits 6am NYC, without any write.
+    expect(loadIntent(new Date('2026-07-25T10:00:00Z'))).toBeNull();
   });
 
   it('returns null on corrupted or unknown-status storage', () => {
@@ -103,8 +105,11 @@ describe('wasOutLastNight (E2.4 nightPhase input)', () => {
     window.localStorage.clear();
   });
 
-  const SAT_9AM = new Date('2026-07-25T09:00:00');
-  const SUN_9AM = new Date('2026-07-26T09:00:00');
+  // Absolute instants like the rest of this file: July is EDT (UTC-4), so
+  // 9am NYC is 13:00Z. Bare local strings made these assertions depend on the
+  // runner's zone once the rollover moved to America/New_York.
+  const SAT_9AM = new Date('2026-07-25T13:00:00Z'); // Sat 9am NYC
+  const SUN_9AM = new Date('2026-07-26T13:00:00Z'); // Sun 9am NYC
 
   it('true the morning after a committed night (here / going)', () => {
     window.localStorage.setItem(
@@ -158,34 +163,37 @@ describe('wasOutLastNight (E2.4 nightPhase input)', () => {
   it('crosses month and year boundaries with calendar math', () => {
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ status: 'here', setAt: '2026-07-31T23:00:00' }),
+      // Fri 2026-07-31 11pm NYC (EDT, UTC-4) — July's last night.
+      JSON.stringify({ status: 'here', setAt: '2026-08-01T03:00:00Z' }),
     );
-    expect(wasOutLastNight(new Date('2026-08-01T09:00:00'))).toBe(true);
+    // Sat 2026-08-01 9am NYC — the morning after, one month later.
+    expect(wasOutLastNight(new Date('2026-08-01T13:00:00Z'))).toBe(true);
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ status: 'here', setAt: '2026-12-31T23:00:00' }),
+      // Thu 2026-12-31 11pm NYC (EST, UTC-5) — the year's last night.
+      JSON.stringify({ status: 'here', setAt: '2027-01-01T04:00:00Z' }),
     );
-    expect(wasOutLastNight(new Date('2027-01-01T09:00:00'))).toBe(true);
+    // Fri 2027-01-01 9am NYC (EST) — the morning after, one year later.
+    expect(wasOutLastNight(new Date('2027-01-01T14:00:00Z'))).toBe(true);
   });
 
-  // DST regression (review finding): the 24h-in-ms subtraction this
-  // replaced lands an hour early on the spring-forward Sunday and crosses
-  // the 5am rollover for the 5:00–5:59am window. Only reproducible on a
-  // runner whose local zone observes US DST, so gate on that.
-  const observesUsDst =
-    new Date('2026-03-08T05:30:00').getTime() -
-      new Date('2026-03-07T05:30:00').getTime() ===
-    23 * 60 * 60 * 1000;
-  it.runIf(observesUsDst)(
-    'spring-forward Sunday 5am hour still sees last night (DST regression)',
-    () => {
-      window.localStorage.setItem(
-        KEY,
-        JSON.stringify({ status: 'here', setAt: '2026-03-07T23:00:00' }),
-      );
-      expect(wasOutLastNight(new Date('2026-03-08T05:30:00'))).toBe(true);
-    },
-  );
+  // DST regression (review finding): a raw 24h-in-ms subtraction lands an hour
+  // early on the spring-forward Sunday and crosses the rollover, misreading
+  // "last night" for the first morning hour. 2026-03-08 is the US spring
+  // forward (2am EST → 3am EDT), so this Sunday is a 23-hour day.
+  //
+  // No longer gated on the runner's zone: every instant here is absolute and
+  // the rollover is resolved in NYC by Intl, so this reproduces everywhere.
+  it('spring-forward Sunday morning still sees last night (DST regression)', () => {
+    window.localStorage.setItem(
+      KEY,
+      // Sat 2026-03-07 11pm NYC (EST, UTC-5) — Saturday night.
+      JSON.stringify({ status: 'here', setAt: '2026-03-08T04:00:00Z' }),
+    );
+    // Sun 6:30am NYC (EDT, UTC-4) — past the rollover, so Saturday is now
+    // LAST night. Crossing that day boundary is what the DST bug got wrong.
+    expect(wasOutLastNight(new Date('2026-03-08T10:30:00Z'))).toBe(true);
+  });
 
   it("tonight's own intent does not read as LAST night", () => {
     window.localStorage.setItem(

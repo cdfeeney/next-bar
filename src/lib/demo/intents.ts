@@ -2,15 +2,15 @@
  * Seeded "tonight" intents for the demo friends — blueprint B2.
  *
  * Day-varying but deterministic (audit F3): each friend follows a fixed
- * weekly rhythm keyed off the effective night (same 5am rollover as
- * src/lib/intent.ts), so "Claire is going out tonight" is no longer true
+ * weekly rhythm keyed off the effective night (the one rollover, from
+ * src/lib/nightKey.ts), so "Claire is going out tonight" is no longer true
  * EVERY night, yet the surface stays reproducible — no Date.now() or
  * randomness at module scope; callers pass the current date in. The UI
  * labels these rows "demo" so they can't be mistaken for real people.
  * Real friends' intents sync in the D1 Supabase pass.
  */
 
-import { effectiveNight } from '@/lib/cadence';
+import { nycNightDay } from '@/lib/nightKey';
 import type { IntentStatus } from '@/lib/intent';
 
 /**
@@ -38,7 +38,7 @@ export function demoIntentFor(
 ): IntentStatus | null {
   const rhythm = WEEKLY_INTENTS[handle];
   if (!rhythm) return null;
-  return rhythm[effectiveNight(now).getDay()] ?? null;
+  return rhythm[nycNightDay(now)] ?? null;
 }
 
 /**

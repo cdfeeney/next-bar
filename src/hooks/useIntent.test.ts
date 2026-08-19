@@ -4,9 +4,11 @@ import { useIntent, useNightRefresh } from './useIntent';
 
 const KEY = 'next-bar:intent:v1';
 
-// Local-time strings (no Z) so assertions don't depend on the runner's TZ.
-const FRI_10PM = new Date('2026-07-24T22:00:00');
-const SAT_9PM = new Date('2026-07-25T21:00:00');
+// ABSOLUTE instants at a NEW YORK wall clock (July is EDT, UTC-4). The comment
+// here used to claim bare local strings kept assertions off the runner's TZ —
+// the opposite is true now that the rollover resolves in America/New_York.
+const FRI_10PM = new Date('2026-07-25T02:00:00Z'); // Fri 10pm NYC
+const SAT_9PM = new Date('2026-07-26T01:00:00Z'); // Sat 9pm NYC
 
 function seedStoredIntent(setAt: string): void {
   window.localStorage.setItem(
@@ -48,7 +50,7 @@ describe('useIntent', () => {
     expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 
-  it('visually clears a stale intent when the 5am rollover passes while the tab stays open (F5a)', () => {
+  it('visually clears a stale intent when the night rollover passes while the tab stays open (F5a)', () => {
     seedStoredIntent('2026-07-24T22:00:00');
     const { result } = renderHook(() => useIntent());
     expect(result.current.intent?.status).toBe('going');

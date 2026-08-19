@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { NIGHT_PHASES, deriveNightPhase } from '@/lib/nightPhase';
 
-const at = (hour: number, minute = 0): Date => {
-  const d = new Date('2026-07-24T00:00:00'); // a Friday (local)
-  d.setHours(hour, minute, 0, 0);
-  return d;
-};
+// A NEW YORK wall clock on Friday 2026-07-24, as an ABSOLUTE instant. The
+// phase hours resolve in America/New_York (the one rollover), so building
+// these with setHours() would have asked the runner's zone instead and made
+// every boundary assertion below zone-dependent. July is EDT, UTC-4.
+const at = (hour: number, minute = 0): Date =>
+  new Date(Date.UTC(2026, 6, 24, hour + 4, minute, 0, 0));
 
 const base = { intent: null, override: null, wasOutLastNight: false } as const;
 
@@ -27,7 +28,11 @@ describe('deriveNightPhase (E0.3)', () => {
 
   it('morning after a night out is RECAP; otherwise mornings PLAN', () => {
     expect(deriveNightPhase({ ...base, now: at(9), wasOutLastNight: true })).toBe('recap');
-    expect(deriveNightPhase({ ...base, now: at(5), wasOutLastNight: true })).toBe('recap');
+    // The morning starts at the ONE rollover, 6am NYC. 5:59am is still the
+    // night you are having, not the morning after it: nycNightKey still says
+    // Friday, so 'out' is the honest answer and 'recap' would be a night early.
+    expect(deriveNightPhase({ ...base, now: at(5, 59), wasOutLastNight: true })).toBe('out');
+    expect(deriveNightPhase({ ...base, now: at(6), wasOutLastNight: true })).toBe('recap');
     expect(deriveNightPhase({ ...base, now: at(9) })).toBe('planning');
     expect(deriveNightPhase({ ...base, now: at(11, 59), wasOutLastNight: true })).toBe('recap');
   });

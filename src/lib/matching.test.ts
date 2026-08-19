@@ -659,8 +659,12 @@ describe('late-night bias (operator 2026-07-27: clubs up, restaurants down after
   const club = makeBar({ id: 'club', tags: ['cocktail', 'club'] });
   const resto = makeBar({ id: 'resto', tags: ['cocktail', 'restaurant-bar'] });
   const plain = makeBar({ id: 'plain', tags: ['cocktail', 'chill'] });
-  const LATE = new Date('2026-07-24T23:30:00');
-  const AFTERNOON = new Date('2026-07-24T15:00:00');
+  // 11:30pm NEW YORK on Fri 2026-07-24 (EDT, UTC-4), as an absolute instant.
+  // A bare local string put this at 11:30pm in the RUNNER's zone, which is
+  // 7:30pm NYC on a UTC runner — outside the window these tests assert.
+  const LATE = new Date('2026-07-25T03:30:00Z');
+  // 3pm NYC on the same Friday — outside the window, absolute like the rest.
+  const AFTERNOON = new Date('2026-07-24T19:00:00Z');
 
   const rank = (biasNow?: Date) =>
     matches({
@@ -699,10 +703,17 @@ describe('late-night bias (operator 2026-07-27: clubs up, restaurants down after
     expect(ids).toEqual(['hybrid', 'resto']);
   });
 
-  it('the window wraps midnight: 3:59am biased, 4:00am not', () => {
-    expect(isLateNight(new Date('2026-07-25T03:59:00'))).toBe(true);
-    expect(isLateNight(new Date('2026-07-25T04:00:00'))).toBe(false);
-    expect(isLateNight(new Date('2026-07-24T22:00:00'))).toBe(true);
-    expect(isLateNight(new Date('2026-07-24T21:59:00'))).toBe(false);
+  it('the window wraps midnight: 3:59am biased, 4:00am not — in NEW YORK', () => {
+    // Absolute instants at a NYC wall clock (July is EDT, UTC-4). These were
+    // bare local-time strings, which asked the device's zone and made the
+    // window slide by the user's offset.
+    expect(isLateNight(new Date('2026-07-25T07:59:00Z'))).toBe(true); // 3:59am NYC
+    expect(isLateNight(new Date('2026-07-25T08:00:00Z'))).toBe(false); // 4:00am NYC
+    expect(isLateNight(new Date('2026-07-25T02:00:00Z'))).toBe(true); // 10:00pm NYC
+    expect(isLateNight(new Date('2026-07-25T01:59:00Z'))).toBe(false); // 9:59pm NYC
+  });
+
+  it('a broken clock gets no night bias rather than a wrong one', () => {
+    expect(isLateNight(new Date('not a date'))).toBe(false);
   });
 });

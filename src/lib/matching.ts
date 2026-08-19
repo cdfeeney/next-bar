@@ -7,7 +7,7 @@ import type {
 } from '@/types';
 import { haversineMiles } from '@/lib/distance';
 import { daysAgo } from '@/lib/freshness';
-import { effectiveNight } from '@/lib/cadence';
+import { nycHour, nycNightKey } from '@/lib/nightKey';
 import {
   DIST_DECAY_MILES,
   DIST_WEIGHT,
@@ -108,9 +108,17 @@ export function scoreBar(
   return VIBE_WEIGHT * vibe + DIST_WEIGHT * proximity + RATING_WEIGHT * affinity;
 }
 
-/** 10pm–3:59am local — when the night bias applies. */
+/**
+ * 10pm–3:59am in NEW YORK — when the night bias applies.
+ *
+ * getHours() answered in the device's zone, so a user in Los Angeles got the
+ * club boost and the restaurant penalty three hours off (round-3 panel, Codex).
+ * This is an NYC-only matcher; the hour comes from the same module as the
+ * rollover, so there is one clock here and nowhere else.
+ */
 export function isLateNight(now: Date): boolean {
-  const h = now.getHours();
+  const h = nycHour(now);
+  if (Number.isNaN(h)) return false; // broken clock: no bias rather than a wrong one
   return h >= LATE_NIGHT_START_HOUR || h < LATE_NIGHT_END_HOUR;
 }
 
@@ -225,9 +233,10 @@ export function matches(args: MatchesArgs): Bar[] {
 /**
  * FNV-1a hash of (sorted profile tags + effective NIGHT) — deterministic
  * for a given profile/night so the pick doesn't jitter between renders,
- * rotating at the 5am LOCAL night rollover (cadence.ts), never mid-evening
+ * rotating at the NYC 6am rollover (nightKey.ts), never mid-evening
  * (DeepSeek review: a UTC-midnight key rotated at 8pm ET — prime time for
- * a NYC product).
+ * a NYC product; a LOCAL rollover, which this used to use, only got that
+ * right for users whose device happened to be in New York).
  *
  * KNOWN + ACCEPTED FOR BETA: no per-user salt — users with identical tag
  * profiles share a night's pick. Decorrelating needs an identity/device
@@ -235,9 +244,7 @@ export function matches(args: MatchesArgs): Bar[] {
  * decision (escalation queue).
  */
 function explorationSeed(tags: VibeTag[], now: Date): number {
-  const night = effectiveNight(now);
-  const day = `${night.getFullYear()}-${night.getMonth() + 1}-${night.getDate()}`;
-  const input = `${[...tags].sort().join(',')}|${day}`;
+  const input = `${[...tags].sort().join(',')}|${nycNightKey(now)}`;
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);

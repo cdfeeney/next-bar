@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PairwiseComparison } from '@/types/ratings';
+import { comparisonKey } from '@/lib/pairwise.local';
 
 /**
  * Server-mode storage for pairwise comparisons (B0.4) — the Supabase
@@ -81,12 +82,19 @@ export async function mergeLocalComparisonsToServer(
 
   const existing = await fetchServerComparisons(supabase);
   if (existing === null) return null;
-  const seen = new Set(
-    existing.map((c) => `${c.winnerBarId}|${c.loserBarId}|${c.comparedAt}`),
-  );
+  const seen = new Set(existing.map(comparisonKey));
 
+  // Dedupe against the local transcript too, not just the server's: `seen`
+  // is updated as we go, so an exact tuple repeated inside the local list
+  // uploads once. Filtering against the server set alone let a duplicated
+  // local row insert twice and skew replay (Codex review).
   const toInsert = localComparisons
-    .filter((c) => !seen.has(`${c.winnerBarId}|${c.loserBarId}|${c.comparedAt}`))
+    .filter((c) => {
+      const tuple = comparisonKey(c);
+      if (seen.has(tuple)) return false;
+      seen.add(tuple);
+      return true;
+    })
     .map((c) => ({
       user_id: userId,
       winner_bar_id: c.winnerBarId,
@@ -97,6 +105,13 @@ export async function mergeLocalComparisonsToServer(
 
   if (toInsert.length === 0) return 0;
 
+  // Concurrency note (V8-2 round-4, Codex): two tabs importing at once can
+  // both pass the dedupe above. Migration 0020 adds the unique tuple index
+  // that makes the race harmless — the losing batch errors, this returns
+  // null, the latch stays unset, and the next sign-in dedupes against the
+  // winner's rows and converges. Until 0020 is applied the window remains
+  // (documented residual), but replay is still deterministic because
+  // identical tuples sort identically.
   const { error } = await supabase.from('pairwise_comparisons').insert(toInsert);
   if (error) return null;
   return toInsert.length;

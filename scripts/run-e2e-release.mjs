@@ -13,6 +13,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import net from 'node:net';
 import { config as loadEnvFile } from 'dotenv';
 
 // The gate refuses to run without the Supabase env rather than quietly running
@@ -85,10 +86,30 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+// An unpinned run defaults to port 3000, where `reuseExistingServer` lets a
+// second worktree silently ATTACH to the first one's server and test the other
+// branch's code — a false green with nothing to notice. Ask the OS for an
+// ephemeral port instead. A caller-supplied PLAYWRIGHT_PORT always wins.
+// ponytail: there is a race between closing this listener and Next binding the
+// port; a retry loop only matters if it ever actually collides.
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => resolve(String(port)));
+    });
+  });
+}
+
+const port = process.env.PLAYWRIGHT_PORT ?? (await freePort());
+console.log(`[e2e] PLAYWRIGHT_RELEASE=1 PLAYWRIGHT_PORT=${port} playwright test ${process.argv.slice(2).join(' ')}`);
+
 const cli = createRequire(import.meta.url).resolve('@playwright/test/cli');
 const result = spawnSync(process.execPath, [cli, 'test', ...process.argv.slice(2)], {
   stdio: 'inherit',
-  env: { ...process.env, PLAYWRIGHT_RELEASE: '1' },
+  env: { ...process.env, PLAYWRIGHT_RELEASE: '1', PLAYWRIGHT_PORT: port },
 });
 
 if (result.error) throw result.error;

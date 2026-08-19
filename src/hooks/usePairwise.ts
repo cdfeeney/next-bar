@@ -6,6 +6,7 @@ import { loadRatings, writeRatings } from '@/lib/ratings';
 import {
   appendComparison,
   loadComparisons,
+  unionTranscripts,
   writeComparisons,
 } from '@/lib/pairwise.local';
 import {
@@ -27,7 +28,11 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { broadcastServerRatingSet } from '@/hooks/useRatings';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { getCacheEpoch, guardAgainstForeignCache } from '@/lib/accountCache';
+import {
+  getCacheEpoch,
+  guardAgainstForeignCache,
+  writeCacheOwner,
+} from '@/lib/accountCache';
 
 const COMPARISONS_BROADCAST = 'next-bar:pairwise:local-update';
 const MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
@@ -153,14 +158,17 @@ export function usePairwise(): UsePairwiseReturn {
     // cached transcript must be wiped, never merged into this one.
     guardAgainstForeignCache(userId);
     const local = loadComparisons();
-    const alreadyMergedFor = readMergedFlag();
 
     let cancelled = false;
     // Epoch guard — see useRatings: abandon writes if a wipe landed while
     // this block was in flight (sign-out race).
     const epoch = getCacheEpoch();
     void (async () => {
-      if (local.length > 0 && alreadyMergedFor !== userId) {
+      // Every sign-in, not only the first — see the same change in useRatings.
+      // The merge dedupes by comparisonKey against the server transcript, so
+      // re-running it inserts nothing that is already up there; short-circuiting
+      // on the latch stranded anything appended after it was written.
+      if (local.length > 0) {
         const merged = await mergeLocalComparisonsToServer(
           supabase,
           userId,
@@ -169,26 +177,42 @@ export function usePairwise(): UsePairwiseReturn {
         );
         // Latch only on a completed run — a failed merge must retry.
         if (merged !== null && getCacheEpoch() === epoch) writeMergedFlag(userId);
+      } else if (getCacheEpoch() === epoch) {
+        // Nothing to import — vacuously complete. See useRatings.
+        writeMergedFlag(userId);
       }
       const server = await fetchServerComparisons(supabase);
       // null = fetch failed — keep the local transcript rather than
       // pretending the user has never compared anything.
       if (!cancelled && server !== null) {
-        setComparisons(server);
+        // Union, never replace: if the upload above FAILED while this fetch
+        // succeeded, replacing state and cache with the server transcript
+        // silently destroyed the comparisons that never made it up —
+        // permanent loss of an append-only record. Keep any local tuple the
+        // server does not have; the merge retries on the next sign-in
+        // because its flag was not latched.
+        //
+        // Re-read rather than reusing the pre-fetch snapshot: a comparison
+        // answered WHILE this fetch was in flight is already in the cache,
+        // and unioning against the stale snapshot would drop it from both
+        // state and storage (mirrors the same re-read in useRatings).
+        const retained = unionTranscripts(server, loadComparisons());
+        setComparisons(retained);
         if (getCacheEpoch() === epoch) {
-          // OWNERSHIP marker (santa round-3, mirrors useRatings): latch the
-          // flag even when no merge ran — the guards key off it.
-          writeMergedFlag(userId);
+          // Ownership is its OWN marker now. Latching merged-for here used
+          // to double as the ownership signal, which silently marked a
+          // failed import "done" and killed its retry.
+          writeCacheOwner(userId);
           // Write-through the transcript cache (Codex review): without it a
           // later failed fetch falls back to an empty/stale transcript.
-          writeComparisons(server);
+          writeComparisons(retained);
           // Self-healing pass (Codex review): persisted scores are a
           // denormalization of (ratings, transcript) and can drift — tier
           // changes shrink a tier without re-interpolating, and a partial
           // fire-and-forget failure diverges them. Repair from the
           // authoritative transcript on every hydrate.
           const cached = loadRatings();
-          const corrected = reconcileScores(cached, server);
+          const corrected = reconcileScores(cached, retained);
           const repaired = corrected.filter(
             (r, i) => r !== cached[i],
           );
@@ -290,6 +314,12 @@ export function usePairwise(): UsePairwiseReturn {
           // mirrored into the local transcript cache so a later failed
           // fetch still has a usable fallback (Codex review).
           setComparisons((prev) => [...prev, newComparison]);
+          // Ownership on the WRITE — see useRatings.setRating. This branch
+          // write-throughs both the transcript (below) and the ratings cache,
+          // so a session that never completed a hydrate must still leave the
+          // owner key behind. Written BEFORE the data for the same
+          // failing-storage reason as useRatings.
+          writeCacheOwner(userId);
           appendComparison(newComparison);
           // Tell every OTHER mounted usePairwise instance (Codex B4 review —
           // server mode previously never broadcast, so sibling RatingControls
@@ -419,15 +449,6 @@ export function usePairwise(): UsePairwiseReturn {
     dismissPrompt,
     sessionProgress,
   };
-}
-
-function readMergedFlag(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(MERGED_KEY);
-  } catch {
-    return null;
-  }
 }
 
 function writeMergedFlag(userId: string): void {

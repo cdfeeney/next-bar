@@ -8,9 +8,13 @@
  * Supabase pass syncs real ones.
  *
  * An intent is only meaningful for ONE night out, so reads expire stale
- * entries. A "night" runs until NIGHT_ROLLOVER_HOUR (5am local): Friday
- * 10pm and Saturday 1am are the same night, Saturday evening is not.
+ * entries. "Which night" is nycNightKey's call and nobody else's — Friday
+ * 10pm and Saturday 1am are the same night, Saturday evening is not. This
+ * module used to answer that itself with a 5am LOCAL rollover, disagreeing
+ * with both the database and nightKey.ts (see nightKey.ts for the history).
  */
+
+import { nycNightKey } from '@/lib/nightKey';
 
 export type IntentStatus = 'going' | 'maybe' | 'here' | 'not-going';
 
@@ -20,9 +24,6 @@ export type TonightIntent = {
 };
 
 const KEY = 'next-bar:intent:v1';
-
-/** Small-hours cutoff: before this local hour you're still on last night. */
-const NIGHT_ROLLOVER_HOUR = 5;
 
 const VALID_STATUSES: ReadonlySet<IntentStatus> = new Set<IntentStatus>([
   'going',
@@ -44,35 +45,15 @@ function isTonightIntent(value: unknown): value is TonightIntent {
 }
 
 /**
- * The calendar date (YYYY-MM-DD, local time) of the night an instant
- * belongs to — small hours roll back to the previous date.
+ * The night (YYYY-MM-DD) an ISO instant belongs to — small hours roll back
+ * to the previous date, per the one rollover in nightKey.ts.
  */
 export function nightOf(iso: string): string {
-  const date = new Date(iso);
-  if (date.getHours() < NIGHT_ROLLOVER_HOUR) {
-    date.setDate(date.getDate() - 1);
-  }
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return nycNightKey(new Date(iso));
 }
 
 export function isSameNight(iso: string, now: Date): boolean {
-  return nightOf(iso) === nightOfDate(now);
-}
-
-// nightOf for a Date we already hold — works off local fields directly
-// (round-tripping through toISOString would shift the night in non-UTC TZs).
-function nightOfDate(date: Date): string {
-  const copy = new Date(date.getTime());
-  if (copy.getHours() < NIGHT_ROLLOVER_HOUR) {
-    copy.setDate(copy.getDate() - 1);
-  }
-  const y = copy.getFullYear();
-  const m = String(copy.getMonth() + 1).padStart(2, '0');
-  const d = String(copy.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return nightOf(iso) === nycNightKey(now);
 }
 
 function notifyChange(): void {
@@ -101,7 +82,7 @@ export function loadIntent(now: Date = new Date()): TonightIntent | null {
 
 // The calendar day before a YYYY-MM-DD night date. Pure Date.UTC calendar
 // math — a raw 24h-in-ms subtraction lands one local hour early on the
-// spring-forward Sunday and can cross the 5am rollover (review finding),
+// spring-forward Sunday and can cross the rollover (review finding),
 // misreading "last night" for the 5:00–5:59am window that morning.
 function previousNightDate(night: string): string {
   const [y, m, d] = night.split('-').map(Number);
@@ -130,7 +111,7 @@ export function wasOutLastNight(now: Date = new Date()): boolean {
     // an allowlist can't silently admit future statuses ('not-going'
     // would have slipped through the old "non-maybe" check).
     if (parsed.status !== 'going' && parsed.status !== 'here') return false;
-    return nightOf(parsed.setAt) === previousNightDate(nightOfDate(now));
+    return nightOf(parsed.setAt) === previousNightDate(nycNightKey(now));
   } catch {
     return false;
   }

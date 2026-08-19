@@ -82,11 +82,27 @@ debugging, and gate in release mode so it cannot cost anyone this hour again.
 
 ## Database migrations
 
-SQL migrations live in `supabase/migrations/` as numbered `.sql` files. Apply
-them with `npm run db:migrate` — the runner reads `DATABASE_URL` from
-`.env.local` and applies every file in lexical order. Migrations must be
-idempotent (`CREATE ... IF NOT EXISTS`, `DROP POLICY IF EXISTS`, etc.) —
-there's no schema_migrations ledger yet.
+SQL migrations live in `supabase/migrations/` as numbered `.sql` files and must
+be idempotent (`CREATE ... IF NOT EXISTS`, `DROP POLICY IF EXISTS`, etc.).
+
+**There IS a `public.schema_migrations` ledger.** It records each applied file's
+name and a checksum, and was created by `0036_protect_schema_migrations.sql`.
+This section previously said no ledger existed — it was already wrong, and it
+sat directly in front of a destructive operation.
+
+**Do not run this worktree's `npm run db:migrate` against a shared database.**
+`scripts/apply-migrations.ts` here is ledger-BLIND: it re-executes every file in
+lexical order regardless of what the ledger says. `nb-overnight`'s runner is the
+ledger-aware one (hashes each file, records it, refuses ambiguous partial state)
+and is what should be used. Verified 2026-08-16: this branch's copies of eleven
+`0000`–`0010` files differ from the checksums recorded in the live ledger, so a
+blind replay would re-run *older, different* versions of the base schema over a
+database that has moved well past them — including re-granting privileges that
+`0034_revoke_first_grants.sql` had tightened.
+
+Before applying anything: read the ledger, apply only files absent from it, and
+number new migrations ABOVE the live maximum. Two branches independently minted
+a `0020` and a `0021`; ours were renumbered to `0043`/`0044` to clear it.
 
 ## Other ground rules
 

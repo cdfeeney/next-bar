@@ -105,4 +105,30 @@ describe('weekendStreak', () => {
     const ratings = [rating('a', 'liked', '2026-07-04T02:00:00Z')];
     expect(weekendStreak(ratings, NOW)).toBe(0);
   });
+
+  it('a Sunday-NIGHT rating counts toward that weekend, not the Monday after', () => {
+    // Sun 2026-07-19 9pm NYC (EDT) is Monday 01:00Z. Deciding the weekend from
+    // the UTC calendar day dropped this rating entirely and read the streak as
+    // broken; the night it belongs to is Sunday, whose weekend is Jul 18.
+    const sundayNight = rating('a', 'liked', '2026-07-20T01:00:00Z');
+    expect(weekendStreak([sundayNight], NOW)).toBe(1);
+  });
+
+  it('a corrupt ratedAt is skipped, not thrown on', () => {
+    // loadRatings only checks that ratedAt is a string. Resolving the night
+    // through Intl throws on an invalid Date where getUTCDay() returned NaN,
+    // so one bad cached timestamp would crash Settings while rendering badges.
+    const ratings = [
+      rating('a', 'liked', 'not-a-timestamp'),
+      rating('b', 'liked', '2026-07-18T02:00:00Z'),
+    ];
+    expect(() => weekendStreak(ratings, NOW)).not.toThrow();
+    expect(weekendStreak(ratings, NOW)).toBe(1);
+  });
+
+  it('a Saturday 1am rating belongs to Friday night, same weekend', () => {
+    // Sat 2026-07-18 1am NYC = 05:00Z — before the 6am rollover, so it is
+    // Friday night, and Friday night's weekend is the Jul 18 Saturday.
+    expect(weekendStreak([rating('a', 'liked', '2026-07-18T05:00:00Z')], NOW)).toBe(1);
+  });
 });

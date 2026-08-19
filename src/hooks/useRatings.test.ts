@@ -1,10 +1,12 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BarRating } from '@/types/ratings';
+import { getDirtyRatingIds, markRatingDirty } from '@/lib/accountCache';
 import { useRatings } from './useRatings';
 
 const KEY = 'next-bar:ratings:v1';
 const MERGED_KEY = 'next-bar:ratings:merged-for:v1';
+const OWNER_KEY = 'next-bar:account:owner:v1';
 
 function looksLikeRating(arg: unknown): boolean {
   if (arg === null || typeof arg !== 'object') return false;
@@ -214,9 +216,15 @@ vi.mock('@/lib/supabase/client', () => ({
 
 vi.mock('@/lib/ratings.server', () => ({
   fetchServerRatings: vi.fn(() => Promise.resolve([])),
-  upsertServerRating: vi.fn(() => Promise.resolve()),
-  deleteServerRating: vi.fn(() => Promise.resolve()),
-  mergeLocalRatingsToServer: vi.fn(() => Promise.resolve(0)),
+  upsertServerRating: vi.fn(() => Promise.resolve(true)),
+  deleteServerRating: vi.fn(() => Promise.resolve(true)),
+  mergeLocalRatingsToServer: vi.fn(() => Promise.resolve([] as string[])),
+}));
+
+// The V7 pairwise transcript import moved onto this sign-in path (the
+// pairwise UI is unwired) — mock its IO so these tests stay network-free.
+vi.mock('@/lib/pairwise.server', () => ({
+  mergeLocalComparisonsToServer: vi.fn(() => Promise.resolve(0)),
 }));
 
 // Pull the mocked symbols after vi.mock so they're typed as the mock fns.
@@ -265,9 +273,9 @@ describe('useRatings — server mode', () => {
     vi.clearAllMocks();
     getBrowserSupabaseMock.mockReturnValue(fakeSupabase);
     fetchServerRatingsMock.mockResolvedValue([]);
-    mergeLocalRatingsToServerMock.mockResolvedValue(0);
-    upsertServerRatingMock.mockResolvedValue(undefined);
-    deleteServerRatingMock.mockResolvedValue(undefined);
+    mergeLocalRatingsToServerMock.mockResolvedValue([]);
+    upsertServerRatingMock.mockResolvedValue(true);
+    deleteServerRatingMock.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -294,7 +302,67 @@ describe('useRatings — server mode', () => {
     expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1');
   });
 
-  it('does NOT re-merge on a second mount for the same user (MERGED_KEY honored)', async () => {
+  it('a pre-journal latch triggers ONE era reconcile — old-build stranded rows re-upload (final panel, Codex)', async () => {
+    // v0.5 latched on hydrate, not upload completion: an upgrading device
+    // can hold latch==user beside rows the old build never uploaded and the
+    // journal never knew. Until the era marker names the user, the import
+    // path runs once more (insert-only, server-wins, idempotent).
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    // Stale v0.5 latch, deliberately NO journal-era marker.
+    window.localStorage.setItem(MERGED_KEY, 'user-1'); // upgrade moment
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(mergeLocalRatingsToServerMock).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(window.localStorage.getItem('next-bar:journal-era:v1')).toBe('user-1');
+    });
+  });
+
+  it('a FAILED era reconcile keeps the stranded row in the cache for the next retry (cycle-4, Claude)', async () => {
+    // The hydrate's importedNow must trust the latch only WITH the era
+    // marker: a failed reconcile plus a successful fetch previously dropped
+    // the stranded row from keepLocal and erased from the cache the very
+    // copy the next sign-in's retry needed — permanent silent loss.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1'); // v0.5 latch, no era key
+    mergeLocalRatingsToServerMock.mockResolvedValue(null); // reconcile fails
+    fetchServerRatingsMock.mockResolvedValue([]); // fetch succeeds, row absent
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(result.current.getRating('attaboy')).toBe('loved');
+    });
+    const cached = JSON.parse(window.localStorage.getItem(KEY) ?? '[]');
+    expect(
+      cached.some((r: { barId: string }) => r.barId === 'attaboy'),
+    ).toBe(true);
+    // And no era latch was written — the reconcile retries next sign-in.
+    expect(window.localStorage.getItem('next-bar:journal-era:v1')).toBeNull();
+  });
+
+  it('does NOT re-merge when the latch is set and the journal is clean (V8-2 round-3)', async () => {
+    // Round-2 re-merged everything on every sign-in to fix stranded rows;
+    // round-3 correctly flagged that as resurrection — a row deleted on
+    // another device is absent from the server, so a blind insert-only
+    // re-merge re-uploads it forever. Post-latch, only JOURNALED rows retry
+    // (next test); an untouched cache re-uploads nothing.
     window.localStorage.setItem(
       KEY,
       JSON.stringify([
@@ -302,15 +370,221 @@ describe('useRatings — server mode', () => {
       ]),
     );
     window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
     useAuthMock.mockReturnValue(signedInAuthState('user-1'));
 
     renderHook(() => useRatings());
 
-    // Server fetch still runs to load the current rating set; merge does not.
     await waitFor(() => {
       expect(fetchServerRatingsMock).toHaveBeenCalled();
     });
     expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
+    expect(upsertServerRatingMock).not.toHaveBeenCalled();
+  });
+
+  it('retries ONLY journaled rows once the latch is set — upsert with the row’s own ratedAt', async () => {
+    // The dirty journal is how a failed fire-and-forget write survives: the
+    // sign-in retry re-upserts exactly those rows, carrying the original
+    // ratedAt so a genuinely newer write from another device wins LWW.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+        { barId: 'dante', rating: 'liked', ratedAt: '2026-05-11T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
+    // dante is clean — it must NOT re-upload
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(upsertServerRatingMock).toHaveBeenCalledTimes(1);
+    });
+    expect(upsertServerRatingMock).toHaveBeenCalledWith(
+      fakeSupabase,
+      'user-1',
+      'attaboy',
+      'loved',
+      undefined,
+      '2026-05-10T00:00:00.000Z',
+    );
+    expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
+    // Acked by the retry → journal entry cleared.
+    await waitFor(() => {
+      expect(getDirtyRatingIds()).toEqual([]);
+    });
+  });
+
+  it('a journaled signed-in DELETE retries as a stamped server delete', async () => {
+    // The unacked-delete case: clearRating journaled the delete intent,
+    // removed the local row, and the fire-and-forget delete never acked.
+    // The retry carries the delete's own stamp so the server-side LWW guard
+    // spares a rating re-created later on another device (round-4, Codex).
+    window.localStorage.setItem(KEY, JSON.stringify([]));
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z', 'd');
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(deleteServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        '2026-05-10T00:00:00.000Z',
+      );
+    });
+    expect(upsertServerRatingMock).not.toHaveBeenCalled();
+  });
+
+  it('an upsert-intent entry with no local row is dropped, never replayed as a delete (round-4, Claude)', async () => {
+    // The anonymous-device case: rate X then clear X while signed out. The
+    // clear withdraws the intent, but even a stale surviving 'u' entry must
+    // NOT become a server delete — that erased the account's real rating
+    // made on another device.
+    window.localStorage.setItem(KEY, JSON.stringify([]));
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z', 'u');
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(getDirtyRatingIds()).toEqual([]);
+    });
+    expect(deleteServerRatingMock).not.toHaveBeenCalled();
+    expect(upsertServerRatingMock).not.toHaveBeenCalled();
+  });
+
+  it('the first import clears journal protection ONLY for inserted rows — a server-skipped newer row retries under LWW (round-4, Claude+Codex corroborated)', async () => {
+    // Seal wiped the latch; the user re-rated bar X while signed out (newer
+    // than the server copy); on sign-back-in the insert-only merge SKIPS X.
+    // The old bulk clear erased X's journal entry anyway and the hydrate
+    // reverted the newer rating everywhere. Now: X's entry survives the
+    // import, the retry upserts it with its own ratedAt, and when the
+    // retry cannot ack, the hydrate still keeps the newer local row.
+    const newerX = {
+      barId: 'attaboy',
+      rating: 'liked' as const,
+      ratedAt: '2026-06-01T00:00:00.000Z',
+    };
+    window.localStorage.setItem(KEY, JSON.stringify([newerX]));
+    markRatingDirty('attaboy', newerX.ratedAt); // journaled signed-out write
+    mergeLocalRatingsToServerMock.mockResolvedValue([]); // server-wins: X skipped
+    upsertServerRatingMock.mockResolvedValue(false); // retry cannot ack
+    fetchServerRatingsMock.mockResolvedValue([
+      { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+    ]);
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+
+    // The retry ran with the row's own ratedAt (not a fresh stamp).
+    await waitFor(() => {
+      expect(upsertServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        'liked',
+        undefined,
+        '2026-06-01T00:00:00.000Z',
+      );
+    });
+    // Journal protection survived the import (no bulk clear)...
+    expect(getDirtyRatingIds()).toEqual(['attaboy']);
+    // ...so the hydrate keeps the NEWER local rating over the old server row.
+    await waitFor(() => {
+      expect(result.current.getRating('attaboy')).toBe('liked');
+    });
+  });
+
+  it('the import ack is stamp-exact — a tap landing mid-merge keeps its newer protection (round-5, Claude)', async () => {
+    // The T1 row is uploaded by the import; while the merge is in flight the
+    // user taps the same bar again (T2 entry replaces T1's). The import's
+    // ack carries T1's stamp, so it must NOT clear the T2 entry.
+    const t1 = '2026-06-01T00:00:00.000Z';
+    const t2 = '2026-06-01T00:00:05.000Z';
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([{ barId: 'attaboy', rating: 'loved', ratedAt: t1 }]),
+    );
+    markRatingDirty('attaboy', t1);
+    let resolveMerge!: (v: string[]) => void;
+    mergeLocalRatingsToServerMock.mockReturnValue(
+      new Promise((res) => {
+        resolveMerge = res;
+      }),
+    );
+    upsertServerRatingMock.mockResolvedValue(false); // T2 write never acks
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+    await waitFor(() => expect(mergeLocalRatingsToServerMock).toHaveBeenCalled());
+
+    // Mid-merge tap: newer entry replaces the journal slot.
+    markRatingDirty('attaboy', t2);
+    act(() => resolveMerge(['attaboy'])); // import inserted the T1 snapshot
+
+    await waitFor(() =>
+      expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1'),
+    );
+    // The T2 entry survived the import's T1-stamped ack.
+    expect(getDirtyRatingIds()).toEqual(['attaboy']);
+  });
+
+  it('a future-stamped cached row from a skewed device does not suppress its own deletion (cycle-2 closing, Claude)', async () => {
+    // Device B (clock +30m) rated bar X; this device cached it with the
+    // future stamp; B then deleted X server-side. The unbounded freshness
+    // clause kept resurrecting X here until the local clock caught up — the
+    // upper bound drops it: not journaled, not within this flight's window.
+    const future = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([{ barId: 'attaboy', rating: 'loved', ratedAt: future }]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
+    fetchServerRatingsMock.mockResolvedValue([]); // X deleted server-side
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(result.current.getRating('attaboy')).toBeNull();
+    });
+    // And the write-through cache no longer holds the ghost either.
+    const cached = JSON.parse(window.localStorage.getItem(KEY) ?? '[]');
+    expect(
+      cached.some((r: { barId: string }) => r.barId === 'attaboy'),
+    ).toBe(false);
+  });
+
+  it('a failed retry keeps the row journaled for the next sign-in', async () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1');
+    markRatingDirty('attaboy', '2026-05-10T00:00:00.000Z');
+    upsertServerRatingMock.mockResolvedValue(false); // server never acks
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() => {
+      expect(upsertServerRatingMock).toHaveBeenCalled();
+    });
+    expect(getDirtyRatingIds()).toEqual(['attaboy']);
   });
 
   it('a genuinely anonymous cache (no merged-for flag) DOES merge on first sign-in', async () => {
@@ -369,12 +643,17 @@ describe('useRatings — server mode', () => {
     });
 
     // New rating: score arg is undefined (nothing to preserve or reset).
-    expect(upsertServerRatingMock).toHaveBeenCalledWith(
-      fakeSupabase,
-      'user-1',
-      'attaboy',
-      'loved',
-      undefined,
+    // 6th arg (round-4): the write's own stamp travels with the upsert so
+    // the journal ack matches the exact write it acknowledges.
+    await waitFor(() =>
+      expect(upsertServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        'loved',
+        undefined,
+        expect.any(String),
+      ),
     );
     // Write-through cache: localStorage mirrors the server-mode write so
     // usePairwise and the sign-out fallback read current data.
@@ -384,10 +663,15 @@ describe('useRatings — server mode', () => {
     expect(result.current.getRating('attaboy')).toBe('loved');
   });
 
-  it('latches the ownership flag on hydrate even when NO merge ran (santa round-3)', async () => {
+  it('marks cache ownership on hydrate even when NO merge ran (santa round-3)', async () => {
     // Sign-in on a device with no local data: the fetch populates the
-    // write-through cache — the flag must mark ownership anyway, or the
-    // cache reads as anonymous and a later account would merge it.
+    // write-through cache — ownership must be marked anyway, or the cache
+    // reads as anonymous and a later account would merge it.
+    //
+    // Ownership moved to its own key in the V8-2 review. It used to be the
+    // merged-for latch, which ALSO meant "import finished" — so latching it
+    // here silently marked a failed import done and killed its retry. The
+    // guarantee this test protects is unchanged; only its carrier moved.
     fetchServerRatingsMock.mockResolvedValueOnce([
       { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
     ]);
@@ -398,8 +682,38 @@ describe('useRatings — server mode', () => {
 
     expect(mergeLocalRatingsToServerMock).not.toHaveBeenCalled();
     await waitFor(() =>
+      expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1'),
+    );
+    // The import is latched as vacuously complete — there was nothing to
+    // import. Leaving it null made hasPendingImport() report a pending import
+    // forever for every account that first signed in on an empty device, so
+    // the residual wipe never fired for them again (V8-2 round-2).
+    await waitFor(() =>
       expect(window.localStorage.getItem(MERGED_KEY)).toBe('user-1'),
     );
+  });
+
+  it('retries the import on the next sign-in after a failed merge', async () => {
+    // The defect the ownership split fixes: a failed import followed by a
+    // successful fetch used to latch merged-for anyway, so the retry never
+    // came — and the later residue wipe deleted the un-uploaded rows.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    mergeLocalRatingsToServerMock.mockResolvedValueOnce(null); // import failed
+    fetchServerRatingsMock.mockResolvedValueOnce([]);
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    renderHook(() => useRatings());
+
+    await waitFor(() =>
+      expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1'),
+    );
+    // Owned (so the guards fire) but NOT marked imported (so it retries).
+    expect(window.localStorage.getItem(MERGED_KEY)).toBeNull();
   });
 
   it("never merges another account's cached ratings into this one (cross-account guard)", async () => {
@@ -439,12 +753,15 @@ describe('useRatings — server mode', () => {
       result.current.setRating('attaboy', 'liked');
     });
 
-    expect(upsertServerRatingMock).toHaveBeenCalledWith(
-      fakeSupabase,
-      'user-1',
-      'attaboy',
-      'liked',
-      null,
+    await waitFor(() =>
+      expect(upsertServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        'liked',
+        null,
+        expect.any(String),
+      ),
     );
   });
 
@@ -458,12 +775,15 @@ describe('useRatings — server mode', () => {
       result.current.setRating('attaboy', 'loved', 9.3);
     });
 
-    expect(upsertServerRatingMock).toHaveBeenCalledWith(
-      fakeSupabase,
-      'user-1',
-      'attaboy',
-      'loved',
-      9.3,
+    await waitFor(() =>
+      expect(upsertServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        'loved',
+        9.3,
+        expect.any(String),
+      ),
     );
     expect(result.current.ratings).toEqual([
       expect.objectContaining({ barId: 'attaboy', rating: 'loved', score: 9.3 }),
@@ -482,10 +802,15 @@ describe('useRatings — server mode', () => {
       result.current.clearRating('attaboy');
     });
 
-    expect(deleteServerRatingMock).toHaveBeenCalledWith(
-      fakeSupabase,
-      'user-1',
-      'attaboy',
+    // 4th arg (round-4): the delete carries its own stamp so the retry path
+    // is LWW-guarded server-side.
+    await waitFor(() =>
+      expect(deleteServerRatingMock).toHaveBeenCalledWith(
+        fakeSupabase,
+        'user-1',
+        'attaboy',
+        expect.any(String),
+      ),
     );
     expect(result.current.getRating('attaboy')).toBeNull();
   });
@@ -605,5 +930,48 @@ describe('useRatings — server mode', () => {
     expect(result.current.getRating('attaboy')).toBe('loved');
     const stored = JSON.parse(window.localStorage.getItem(KEY) ?? '[]');
     expect(stored).toHaveLength(1);
+  });
+
+  // V8-2 round-3 review (medium): ownership was latched only after a
+  // SUCCESSFUL hydrate. A signed-in session whose every fetch fails still
+  // write-throughs account rows to KEY; with no owner key that data reads as
+  // anonymous, so clearResidualAccountCache never fires on expiry and the
+  // next account merges the first one's ratings into its own.
+  it('setRating marks cache ownership even when the hydrate fetch failed', async () => {
+    fetchServerRatingsMock.mockResolvedValue(null); // hydrate failed
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+    expect(window.localStorage.getItem(OWNER_KEY)).toBeNull();
+
+    act(() => {
+      result.current.setRating('attaboy', 'loved');
+    });
+
+    expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1');
+  });
+
+  it('clearRating marks cache ownership even when the hydrate fetch failed', async () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        { barId: 'attaboy', rating: 'loved', ratedAt: '2026-05-10T00:00:00.000Z' },
+      ]),
+    );
+    window.localStorage.setItem(MERGED_KEY, 'user-1');
+    window.localStorage.setItem('next-bar:journal-era:v1', 'user-1'); // no first-sign-in merge
+    fetchServerRatingsMock.mockResolvedValue(null); // hydrate failed
+    useAuthMock.mockReturnValue(signedInAuthState('user-1'));
+
+    const { result } = renderHook(() => useRatings());
+    await waitFor(() => expect(fetchServerRatingsMock).toHaveBeenCalled());
+    expect(window.localStorage.getItem(OWNER_KEY)).toBeNull();
+
+    act(() => {
+      result.current.clearRating('attaboy');
+    });
+
+    expect(window.localStorage.getItem(OWNER_KEY)).toBe('user-1');
   });
 });

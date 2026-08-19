@@ -60,6 +60,80 @@ export function writeComparisons(items: PairwiseComparison[]): void {
 }
 
 /**
+ * Transcript row identity: the (winner, loser, instant) tuple.
+ *
+ * One definition, used by both the local union below and the server merge in
+ * `pairwise.server.ts`. A genuine re-answer carries a fresh `comparedAt`, so
+ * it is a DIFFERENT row and survives dedup; only rows naming the same instant
+ * collapse.
+ *
+ * The instant is compared as epoch milliseconds, NOT as the raw string. The
+ * client writes `new Date().toISOString()` ("…T23:50:00.000Z"), but
+ * `compared_at` is `timestamptz` (migration 0002) and PostgREST hands the
+ * stored value back in Postgres ISO form ("…T23:50:00+00:00"). Those spell
+ * the same instant and never byte-match, so a string key silently treats every
+ * already-synced row as new: the hydrate union keeps a second copy of the
+ * whole transcript, and a merge retry re-uploads it into an append-only
+ * table. Both review lanes caught this; every fake in the unit tests had
+ * masked it by echoing the client's own spelling back.
+ *
+ * An unparseable timestamp falls back to the raw string rather than collapsing
+ * every such row onto a single NaN key.
+ */
+export function comparisonKey(c: PairwiseComparison): string {
+  const instant = Date.parse(c.comparedAt);
+  const stamp = Number.isNaN(instant) ? `raw:${c.comparedAt}` : String(instant);
+  return `${c.winnerBarId}|${c.loserBarId}|${stamp}`;
+}
+
+/**
+ * Server transcript plus any local rows the server does not have, in replay
+ * order (`comparedAt`, then original position as a stable tiebreak).
+ *
+ * Used on sign-in hydrate: if the upload failed but the fetch succeeded,
+ * overwriting local state with the server's rows destroys the comparisons
+ * that never made it up. The transcript is append-only, so union is the only
+ * safe reconciliation — the failed merge retries on the next sign-in.
+ */
+export function unionTranscripts(
+  server: ReadonlyArray<PairwiseComparison>,
+  local: ReadonlyArray<PairwiseComparison>,
+): PairwiseComparison[] {
+  const seen = new Set<string>();
+  // Dedupe the SERVER side too. `pairwise_comparisons` has no uniqueness
+  // constraint (migration 0002), so an interrupted historical merge can leave
+  // the same tuple twice; copying the array wholesale kept both and
+  // double-counted it in replay (Codex, V8-2 round-2).
+  const keep = (c: PairwiseComparison): boolean => {
+    const key = comparisonKey(c);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
+  const base = server.filter(keep);
+  const extra = local.filter(keep);
+  if (extra.length === 0) return base;
+  return [...base, ...extra].sort(byInstant);
+}
+
+/**
+ * Replay order. Unparseable `comparedAt` sorts last, deterministically:
+ * returning NaN from a comparator leaves the order implementation-defined,
+ * which would let a single malformed row reshuffle score-bearing history on
+ * every rebuild (DeepSeek, V8-2 round-2).
+ */
+function byInstant(a: PairwiseComparison, b: PairwiseComparison): number {
+  const ta = Date.parse(a.comparedAt);
+  const tb = Date.parse(b.comparedAt);
+  const aBad = Number.isNaN(ta);
+  const bBad = Number.isNaN(tb);
+  if (aBad && bBad) return 0;
+  if (aBad) return 1;
+  if (bBad) return -1;
+  return ta - tb;
+}
+
+/**
  * Append a single comparison to the stored list. Returns the new full
  * list so callers can recompute scores without a follow-up read.
  *

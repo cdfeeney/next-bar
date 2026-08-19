@@ -17,7 +17,20 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { isSeededDemoRating } from '@/lib/demo/seed';
-import { getCacheEpoch, guardAgainstForeignCache } from '@/lib/accountCache';
+import {
+  ackRatingDirty,
+  clearRatingsDirty,
+  clearResidualAccountCache,
+  getCacheEpoch,
+  getDirtyRatingEntries,
+  guardAgainstForeignCache,
+  isSealDeferred,
+  markRatingDirty,
+  readCacheOwner,
+  writeCacheOwner,
+} from '@/lib/accountCache';
+import { loadComparisons } from '@/lib/pairwise.local';
+import { mergeLocalComparisonsToServer } from '@/lib/pairwise.server';
 
 /**
  * Hydrate-race repair: prefer whichever entry is fresher per bar. A rating
@@ -41,6 +54,22 @@ function mergeFreshest(
 
 const KEY = 'next-bar:ratings:v1';
 const MERGED_KEY = 'next-bar:ratings:merged-for:v1';
+// One-time journal-era reconciliation marker (final panel, Codex high): a
+// v0.5-era build latched MERGED_KEY on HYDRATE, not on upload completion, so
+// an upgrading device can carry a matching latch alongside rows whose
+// fire-and-forget upserts failed under the old build — rows the journal has
+// no entries for. Until this marker names the current user, one extra
+// insert-only merge runs (server-wins, idempotent) to pick those rows up.
+// Deliberately NOT in the account-cache wipe sets: it is a device-level
+// continuity record like the age-ack, and wiping it with the cache would
+// re-run the reconcile (and its bounded resurrection window) on every
+// sign-in cycle.
+const JOURNAL_ERA_KEY = 'next-bar:journal-era:v1';
+// The pairwise UI was deliberately unwired in the U2 batch (rank-on-rankings
+// replaced it), which orphaned usePairwise's one-time V7 transcript import —
+// it never ran in production (V8-2 round-3, Codex). The import lives HERE now,
+// on the sign-in path that actually executes.
+const PAIRWISE_MERGED_KEY = 'next-bar:pairwise:merged-for:v1';
 
 /**
  * Custom DOM event used to broadcast server-mode rating writes to every
@@ -69,6 +98,51 @@ function broadcastServerUpdate(detail: ServerBroadcastDetail): void {
   } catch {
     // Older Safari etc. — non-fatal; the next server fetch re-syncs.
   }
+}
+
+/**
+ * Per-bar serialization of server writes — MODULE level (cycle-4 round-2,
+ * Codex ×2): per-hook-instance chains ordered only one component's writes.
+ * A sign-in RETRY or a second mounted instance could still interleave with
+ * an interactive clear on the same bar, and Settings' clear-all could not
+ * await writes issued by other components. One tab-wide map fixes all
+ * three: every server mutation for a bar enqueues here, and clear-all
+ * drains the whole map before deleting server-side.
+ */
+const barWriteChains = new Map<string, Promise<unknown>>();
+
+/**
+ * BULK server syncs in flight (cycle-5 round-2, Codex — the last member of
+ * the stale-write-after-clear-all class): the first-import / era-reconcile
+ * merges are not per-bar chained, so the drain below could not see them and
+ * an already-started import landed its inserts after clear-all's server
+ * delete. Every bulk server write registers here for its flight.
+ */
+const pendingBulkSyncs = new Set<Promise<unknown>>();
+
+function trackBulkSync<T>(p: Promise<T>): Promise<T> {
+  pendingBulkSyncs.add(p);
+  const drop = () => pendingBulkSyncs.delete(p);
+  p.then(drop, drop);
+  return p;
+}
+
+function enqueueBarWrite(
+  barId: string,
+  task: () => Promise<unknown>,
+): Promise<unknown> {
+  const prev = barWriteChains.get(barId) ?? Promise.resolve();
+  const next = prev.then(task, task);
+  barWriteChains.set(barId, next);
+  return next;
+}
+
+/**
+ * Settle every pending same-tab server write — per-bar chains AND bulk
+ * imports. Used by Settings clear-all.
+ */
+export function drainBarWrites(): Promise<unknown> {
+  return Promise.allSettled([...barWriteChains.values(), ...pendingBulkSyncs]);
 }
 
 /**
@@ -182,7 +256,6 @@ export function useRatings(): UseRatingsReturn {
     const mergeableRatings = loadRatings().filter(
       (r) => !isSeededDemoRating(r),
     );
-    const alreadyMergedFor = readMergedFlag();
 
     let cancelled = false;
     // Epoch guard: if a cache wipe (sign-out) lands while this async block
@@ -191,43 +264,235 @@ export function useRatings(): UseRatingsReturn {
     // just-wiped cache (routed review finding).
     const epoch = getCacheEpoch();
     void (async () => {
-      // First-sign-in merge: only re-runs if this browser hasn't merged
-      // for this user yet. Idempotent on the server side via insert-only.
-      if (mergeableRatings.length > 0 && alreadyMergedFor !== userId) {
-        const merged = await mergeLocalRatingsToServer(
-          supabase,
-          userId,
-          mergeableRatings,
-        );
-        // Only latch the flag on a run that actually completed — a failed
-        // merge (null) must retry next sign-in, not be marked done.
-        if (merged !== null && getCacheEpoch() === epoch) writeMergedFlag(userId);
+      // Mid-flight ownership guard (V8-2 round-3, DeepSeek critical): the
+      // synchronous foreign guard above ran at effect start, but ownership
+      // can change while this block is in flight (another tab's sign-in, a
+      // seal racing this mount). Never upload under a mismatched owner — a
+      // stale closure here is how one account's rows land in another's.
+      const cacheOwner = readCacheOwner();
+      if (cacheOwner !== null && cacheOwner !== userId) return;
+
+      // Round-2 uploaded EVERYTHING on every sign-in (fixing loss), which
+      // round-3 correctly flagged as resurrection: a row deleted on another
+      // device is "local-only" again and re-inserts forever. The dirty
+      // journal resolves the tension — the one-time V7/anonymous import runs
+      // when the latch mismatches, and journaled (unacked) writes retry on
+      // EVERY pass, import included (round-4 panel: the import's server-wins
+      // skip must not strip a skipped-but-newer row's protection). Untouched
+      // rows never re-upload, so deletions made elsewhere stay deleted.
+      // A latch from a pre-journal build is NOT proof the upload finished
+      // (final panel, Codex): the old code latched on hydrate. Until the
+      // era marker names this user, treat the import as still owed — the
+      // merge is insert-only and server-wins, so re-running it once is safe
+      // and picks up any rows the old build stranded. The resurrection
+      // window this opens is a single reconcile per (device, user), bounded
+      // against the permanent silent loss it prevents.
+      const eraReconciled =
+        window.localStorage.getItem(JOURNAL_ERA_KEY) === userId;
+      const alreadyImported =
+        eraReconciled && window.localStorage.getItem(MERGED_KEY) === userId;
+      if (!alreadyImported) {
+        if (mergeableRatings.length > 0) {
+          const inserted = await trackBulkSync(
+            mergeLocalRatingsToServer(supabase, userId, mergeableRatings),
+          );
+          // Only latch the flag on a run that actually completed — a failed
+          // merge (null) must retry next sign-in, not be marked done.
+          if (inserted !== null && getCacheEpoch() === epoch) {
+            writeMergedFlag(userId);
+            writeEraFlag(userId);
+            // Ack journal entries ONLY for rows the merge actually INSERTED
+            // (round-4, Claude + Codex corroborated), and per-row WITH the
+            // stamp of the snapshot row that was uploaded (round-5, Claude):
+            // a barId-only clear violated the stamp invariant — a tap landing
+            // while the merge was in flight replaces the entry with a newer
+            // stamp, and that newer write's protection must survive this ack.
+            for (const barId of inserted) {
+              const uploaded = mergeableRatings.find((r) => r.barId === barId);
+              if (uploaded) ackRatingDirty(barId, uploaded.ratedAt);
+            }
+          }
+        } else if (getCacheEpoch() === epoch) {
+          // Nothing to import: the one-time import is vacuously complete.
+          // Latch it, or the pending check reports a pending import forever
+          // for every account that first signed in on an empty device, and
+          // the residual wipe never fires for them again (V8-2 round-2).
+          writeMergedFlag(userId);
+          writeEraFlag(userId);
+        }
       }
+      {
+        // Journaled-write retry — runs on EVERY sign-in pass, whether or not
+        // the import just ran.
+        const dirtyEntries = getDirtyRatingEntries();
+        if (dirtyEntries.length > 0) {
+          // Ownership re-check directly before uploading (round-4, Codex
+          // critical): a stale tab's write can land between the guard at
+          // effect start and here.
+          if (readCacheOwner() !== null && readCacheOwner() !== userId) return;
+          const local = loadRatings().filter((r) => !isSeededDemoRating(r));
+          for (const entry of dirtyEntries) {
+            // Epoch check per entry (cycle-5 panel, Claude + Codex): a
+            // clear-all (abandonInFlightSyncs) or sign-out wipe landing
+            // mid-loop must stop FURTHER enqueues — writes enqueued after
+            // the drain snapshot landed after the server delete and
+            // restored the rows the user had just cleared.
+            if (getCacheEpoch() !== epoch) break;
+            const row = local.find((r) => r.barId === entry.barId);
+            if (entry.op === 'd') {
+              // A journaled signed-in DELETE. The stamp guards it: the
+              // server only removes a row not newer than the delete, so a
+              // rating re-created on another device survives (round-4,
+              // Codex). Enqueued on the shared per-bar chain (cycle-4
+              // round-2, Codex): an unchained retry could interleave with
+              // an interactive write on the same bar.
+              const ok = await enqueueBarWrite(entry.barId, () =>
+                deleteServerRating(supabase, userId, entry.barId, entry.stamp),
+              );
+              if (ok === true) ackRatingDirty(entry.barId, entry.stamp);
+            } else if (row) {
+              // Upsert intent with a live row — retry with the row's own
+              // ratedAt so a genuinely newer write elsewhere wins LWW.
+              const ok = await enqueueBarWrite(entry.barId, () =>
+                upsertServerRating(
+                  supabase,
+                  userId,
+                  entry.barId,
+                  row.rating,
+                  typeof row.score === 'number' ? row.score : undefined,
+                  row.ratedAt,
+                ),
+              );
+              if (ok === true) ackRatingDirty(entry.barId, entry.stamp);
+            } else {
+              // Upsert intent with no local row: the row was since removed
+              // locally (local-mode clear withdraws intent). Never replay a
+              // delete that was not made signed-in (round-4, Claude:
+              // anonymous clears must not erase the account's server data).
+              // Ack by THIS entry's stamp (round-5, Claude): a tap re-rating
+              // the bar mid-loop creates a newer entry that must survive.
+              ackRatingDirty(entry.barId, entry.stamp);
+            }
+          }
+          // A sign-out can land MID-LOOP (cycle-4 panel, Codex): the seal
+          // keeps the still-pending rows and sets the deferred flag, but
+          // the acks above then empty the journal without anyone re-running
+          // the cleanup — synced data lingered until the next launch.
+          // Interactive write acks already do this; the retry loop must too.
+          if (isSealDeferred()) clearResidualAccountCache();
+        }
+      }
+
+      // Epoch gate for the transcript merge too (cycle-5 round-2, Claude —
+      // the one call site the epoch-stop fix missed): a clear-all landing
+      // during an earlier await in this block would otherwise let this merge
+      // re-insert the entire just-cleared comparison history server-side,
+      // permanently (the local transcript is removed after, so no later pass
+      // deletes the resurrected rows).
+      if (getCacheEpoch() !== epoch) return;
+      // V7 pairwise transcript continuity. One-time per (browser, user):
+      // append-only rows deduped server-side by exact tuple, so latch-gating
+      // cannot strand data (nothing writes the local transcript anymore) and
+      // re-running cannot resurrect anything.
+      if (window.localStorage.getItem(PAIRWISE_MERGED_KEY) !== userId) {
+        const transcript = loadComparisons();
+        if (transcript.length > 0) {
+          const pwMerged = await trackBulkSync(
+            mergeLocalComparisonsToServer(supabase, userId, transcript, null),
+          );
+          if (pwMerged !== null && getCacheEpoch() === epoch) {
+            writePairwiseMergedFlag(userId);
+          }
+        } else if (getCacheEpoch() === epoch) {
+          writePairwiseMergedFlag(userId);
+        }
+      }
+
+      // Journal snapshot BEFORE the fetch (round-4 panel, Codex): a write
+      // acked while the fetch is in flight vanishes from the live journal,
+      // and hydrating from the pre-write snapshot then reverted it. The
+      // union of before/after snapshots keeps any row that was journaled at
+      // ANY point during the flight. A write created AND acked entirely
+      // inside the flight escapes both snapshots (cycle-2 panel, Codex) —
+      // `fetchStartedAt` catches it: any local row stamped after the fetch
+      // began is newer than the snapshot by construction and is retained.
+      // Remaining accepted transient: a DELETE created+acked entirely
+      // in-flight can re-render for one fetch cycle; the next hydrate heals
+      // it and no data is lost (documented in V8-DATA-CONTINUITY).
+      const dirtyAtFetchStart = getDirtyRatingEntries();
+      const fetchStartedAt = Date.now();
       const server = await fetchServerRatings(supabase);
       // null = fetch FAILED (not "no ratings") — keep whatever we have
       // rather than blanking state / wiping the localStorage cache (B0.3).
       if (!cancelled && server !== null && getCacheEpoch() === epoch) {
-        // Keep any rating tapped while this fetch was in flight (it sits in
-        // the write-through cache with a newer ratedAt than the snapshot).
-        // Seeded demo entries are EXCLUDED from the local side (Codex
-        // review): without the filter, hydrate re-merges demo rows into
-        // signed-in state/cache, from where a pairwise answer would upload
-        // them — recreating the pollution migration 0003 cleaned up.
-        const merged = mergeFreshest(
-          server,
-          loadRatings().filter((r) => !isSeededDemoRating(r)),
+        // Ownership re-check before committing the hydrate (round-4, Codex
+        // critical): a stale tab on the previous account can write between
+        // the effect-start guard and here; committing would adopt its rows
+        // into THIS account's state and cache.
+        if (readCacheOwner() !== null && readCacheOwner() !== userId) return;
+        // Local rows worth keeping over the server snapshot (V8-2 round-3):
+        //   - before the import latched (or its merge just failed): ALL local
+        //     rows — they may exist nowhere else yet.
+        //   - after: ONLY journaled upsert rows (a tap during this fetch
+        //     marks dirty, so the tap-in-flight race is covered). Keeping
+        //     every absent-from-server row here is what resurrected
+        //     deletions made on another device.
+        // Seeded demo entries are excluded either way — hydrating them into
+        // signed-in state re-created the pollution migration 0003 cleaned up.
+        // BOTH flags, exactly like the upload gate above (cycle-4 panel,
+        // Claude): trusting the bare pre-journal latch here meant a failed
+        // era-reconcile plus a successful fetch dropped the stranded row
+        // from keepLocal and writeRatings erased it from the cache — the
+        // very copy the next sign-in's retry needed. The flags are written
+        // together, so post-reconcile behavior is unchanged.
+        const importedNow =
+          window.localStorage.getItem(MERGED_KEY) === userId &&
+          window.localStorage.getItem(JOURNAL_ERA_KEY) === userId;
+        const dirtyUnion = new Map(
+          [...dirtyAtFetchStart, ...getDirtyRatingEntries()].map((e) => [
+            e.barId,
+            e.op,
+          ]),
+        );
+        // The freshness clause is bounded on BOTH ends (cycle-2 closing
+        // panel, Claude): stamps round-trip through the server, so a
+        // clock-skewed-ahead device's rating carries a FUTURE ratedAt — an
+        // unbounded `>= fetchStartedAt` retained such a row on every hydrate
+        // and suppressed its legitimate cross-device deletion until the
+        // local clock caught up. A write made by THIS tab during the flight
+        // is, by construction, stamped between fetch start and now.
+        const hydrateNow = Date.now();
+        const localRows = loadRatings().filter((r) => !isSeededDemoRating(r));
+        const keepLocal = importedNow
+          ? localRows.filter((r) => {
+              if (dirtyUnion.get(r.barId) === 'u') return true;
+              const stamp = Date.parse(r.ratedAt);
+              return stamp >= fetchStartedAt && stamp <= hydrateNow;
+            })
+          : localRows;
+        const merged = mergeFreshest(server, keepLocal).filter(
+          // A journaled signed-in DELETE whose server delete hasn't acked
+          // yet: drop the server row from state instead of resurrecting the
+          // bar the user just cleared.
+          (r) => !importedNow || dirtyUnion.get(r.barId) !== 'd',
         );
         setRatings(merged);
+        // Ownership gets its OWN key (V8-2 review). The cache now holds THIS
+        // account's data and must never look anonymous, or the foreign and
+        // residual guards would let a later account merge it. That signal
+        // used to be the merged-for latch — which also meant "import done",
+        // so one failed import was never retried and, when the session later
+        // expired, clearResidualAccountCache wiped the rows that had never
+        // reached the server. Ownership here, import bookkeeping above.
+        //
+        // BEFORE the data write (V8-2 round-2, Codex + DeepSeek): if the tab
+        // dies or storage fills between the two, account data with no owner
+        // key reads as anonymous and the next account merges it.
+        writeCacheOwner(userId);
         // Hydrate the localStorage cache with the authoritative rows
         // (including rows written on other devices) so usePairwise and the
         // sign-out fallback read current data.
         writeRatings(merged);
-        // OWNERSHIP marker, not just merge bookkeeping (santa round-3): the
-        // cache now holds THIS account's data, so latch the flag even when
-        // no merge ran (sign-in with no local data). Without it the cache
-        // is indistinguishable from anonymous data and the foreign/residual
-        // guards would let a later account merge it as its own.
-        writeMergedFlag(userId);
       }
     })();
 
@@ -277,15 +542,49 @@ export function useRatings(): UseRatingsReturn {
             const filtered = prev.filter((r) => r.barId !== barId);
             return [...filtered, entry];
           });
-          // Write-through localStorage cache so usePairwise + sign-out
-          // fallback stay coherent with server-mode writes (B0.3).
+          // Mark ownership on the WRITE, not only after a successful hydrate
+          // (V8-2 round-3 review): a signed-in session whose every hydrate
+          // fetch fails still writes account data here, and without an owner
+          // key that data looks anonymous — clearResidualAccountCache would
+          // not fire on expiry and the next account would merge it in.
+          //
+          // BEFORE the data write (V8-2 round-1, DeepSeek): if storage is
+          // failing, an owner with no data is harmless, data with no owner is
+          // the cross-account leak.
+          writeCacheOwner(auth.user.id);
+          // Journal BEFORE the fire-and-forget write (V8-2 round-3): until
+          // the server acks, this row exists nowhere else — the journal is
+          // what blocks the residual/sign-out wipe and drives the sign-in
+          // retry when the ack never comes. Stamped with this write's own
+          // ratedAt so only ITS ack clears it (round-4).
+          markRatingDirty(barId, entry.ratedAt, 'u');
+          // Write-through localStorage cache so the sign-out fallback stays
+          // coherent with server-mode writes (B0.3).
           setRatingLib(barId, rating, score);
-          void upsertServerRating(
-            supabase,
-            auth.user.id,
-            barId,
-            rating,
-            typeof score === 'number' ? score : tierChanged ? null : undefined,
+          const userId = auth.user.id;
+          void enqueueBarWrite(barId, () =>
+            upsertServerRating(
+              supabase,
+              userId,
+              barId,
+              rating,
+              typeof score === 'number' ? score : tierChanged ? null : undefined,
+              entry.ratedAt,
+            ).then((ok) => {
+              if (ok) {
+                ackRatingDirty(barId, entry.ratedAt);
+                // If the session ended while this write was in flight, the
+                // seal deliberately kept the row for its pending ack; the
+                // ack just landed, so run the residual clear now instead of
+                // leaving synced account data visible until the next launch
+                // (round-4, Codex). isSealDeferred covers the microtask gap
+                // where the auth change has not yet reached modeRef
+                // (cycle-3, Codex).
+                if (modeRef.current !== 'server' || isSealDeferred()) {
+                  clearResidualAccountCache();
+                }
+              }
+            }),
           );
           // Notify every OTHER mounted useRatings instance (self-receipt is
           // an idempotent re-apply of the optimistic update above).
@@ -294,7 +593,10 @@ export function useRatings(): UseRatingsReturn {
         }
       }
 
-      // Local mode (or server fell through).
+      // Local mode (or server fell through). Journal here too: a row rated
+      // while signed OUT on a device an account owns (post-seal) must survive
+      // the residual wipe and upload on the owner's next sign-in.
+      markRatingDirty(barId, nextEntry.ratedAt, 'u');
       setRatingLib(barId, rating, score);
       setRatings(loadRatings());
     },
@@ -307,14 +609,37 @@ export function useRatings(): UseRatingsReturn {
         const supabase = getBrowserSupabase();
         if (supabase) {
           setRatings((prev) => prev.filter((r) => r.barId !== barId));
+          // Owner before data — see setRating.
+          writeCacheOwner(auth.user.id);
+          // Journal the signed-in delete with its own stamp: the retry is
+          // LWW-guarded server-side (deleteServerRating's `at`), so it can
+          // never erase a rating re-created later on another device
+          // (round-4, Codex).
+          const stamp = new Date().toISOString();
+          markRatingDirty(barId, stamp, 'd');
           // Write-through cache (B0.3) — see setRating.
           clearRatingLib(barId);
-          void deleteServerRating(supabase, auth.user.id, barId);
+          const userId = auth.user.id;
+          void enqueueBarWrite(barId, () =>
+            deleteServerRating(supabase, userId, barId, stamp).then((ok) => {
+              if (ok) {
+                ackRatingDirty(barId, stamp);
+                if (modeRef.current !== 'server' || isSealDeferred()) {
+                  clearResidualAccountCache();
+                }
+              }
+            }),
+          );
           broadcastServerUpdate({ kind: 'clear', barId });
           return;
         }
       }
 
+      // Local-mode clear WITHDRAWS any pending upsert intent instead of
+      // journaling a delete (round-4, Claude): an anonymous device's local
+      // clear has no server meaning, and replaying it after a later sign-in
+      // deleted the account's real rating made on another device.
+      clearRatingsDirty([barId]);
       clearRatingLib(barId);
       setRatings(loadRatings());
     },
@@ -324,20 +649,29 @@ export function useRatings(): UseRatingsReturn {
   return { ratings, getRating, setRating, clearRating };
 }
 
-function readMergedFlag(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(MERGED_KEY);
-  } catch {
-    return null;
-  }
-}
-
 function writeMergedFlag(userId: string): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(MERGED_KEY, userId);
   } catch {
     // Quota / private mode — non-fatal; merge will just re-run next sign-in.
+  }
+}
+
+function writePairwiseMergedFlag(userId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PAIRWISE_MERGED_KEY, userId);
+  } catch {
+    // Non-fatal — the transcript import re-runs next sign-in.
+  }
+}
+
+function writeEraFlag(userId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(JOURNAL_ERA_KEY, userId);
+  } catch {
+    // Non-fatal — the reconcile just re-runs next sign-in (idempotent).
   }
 }
