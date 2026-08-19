@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import { Client } from 'pg';
 
 import {
   GUARDED_FUNCTIONS,
+  MIGRATIONS_DIR,
   definingMigration,
   migrationChecksum,
   type GuardedFunction,
@@ -1130,16 +1131,16 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   });
 
   /**
-   * THE SAME QUESTION, FOR THE OTHER THREE FUNCTIONS THE STATIC GUARD READS.
+   * THE SAME QUESTION, FOR EVERY OTHER FUNCTION THE STATIC GUARD READS.
    *
-   * src/lib/nightOutsMigration.test.ts derives the effective body of four
-   * functions by taking the last CREATE of that NAME in the migration stream. It
+   * src/lib/nightOutsMigration.test.ts derives the effective body of every
+   * name in GUARDED_FUNCTIONS by taking the last CREATE of that NAME in the migration stream. It
    * cannot tell one overload from another and cannot tell a real removal from
    * the routine drop of a superseded overload, because both need argument-type
    * comparison; it names this test as the control that does.
    *
    * That claim only held for respond_night_out, which is a control covering one
-   * of four uses (round-5 review, Claude, medium). Rename night_out_seat_count
+   * name of several (round-5 review, Claude, medium). Rename night_out_seat_count
    * and the static guard would keep asserting against its 0048 definition, green,
    * while the predicate that actually rations seats went unguarded. Add a
    * join_night_out_by_token(text) overload and the static guard could read THAT
@@ -1181,7 +1182,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   /**
    * THE STATIC GUARD'S OTHER ASSUMPTION: that the file it read was APPLIED.
    *
-   * nightOutsMigration.test.ts resolves each of these four functions to the
+   * nightOutsMigration.test.ts resolves each name in GUARDED_FUNCTIONS to the
    * highest-numbered COMMITTED migration that states it. That equals the text
    * the database runs only when the stream is fully applied — and this repo
    * routinely carries migrations numbered above the live ledger head (0059's own
@@ -1276,6 +1277,29 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       ])),
       'the replay-guard chain is not on this database as committed',
     ).toEqual(Object.fromEntries(chain.map((file) => [file, 'applied, checksum matches'])));
+
+    // THE HALF THE LEDGER CANNOT COVER. The digest above is normalised, so a
+    // line-ending or trailing-whitespace change to a committed file passes it
+    // (round-6 review, Codex, medium). Nothing can close that from the database
+    // side — no raw digest was ever recorded. What CAN be closed is the
+    // committed side: these two files are frozen history, so their raw bytes are
+    // pinned here. A change to either is now a red test rather than a silent
+    // re-interpretation of what criterion 5 was verified against.
+    const rawPins: Record<string, string> = {
+      '0057_night_outs_respond_expected_status.sql':
+        '9e913008f992002c35f98351e07299b7302c1def5224c342189899f3bc75128c',
+      '0058_night_outs_respond_expected_status_atomic.sql':
+        'ba079495d534576114aef8ace12c4155b2d2fd758b70b461c675e2afff705333',
+    };
+    expect(
+      Object.fromEntries(chain.map((file) => [
+        file,
+        createHash('sha256')
+          .update(readFileSync(path.join(MIGRATIONS_DIR, file)))
+          .digest('hex'),
+      ])),
+      'a frozen migration changed on this branch since criterion 5 was verified',
+    ).toEqual(rawPins);
   });
 
   /**

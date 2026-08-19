@@ -417,10 +417,26 @@ describe('sqlView — SQL as Postgres reads it', () => {
     expect(code).not.toMatch(/'night_out_members:'/);
   });
 
-  it("treats '' inside a literal as an escaped quote, not a terminator", () => {
-    const sql = "select 'it''s fine', create_marker;";
-    expect(sqlView(sql).code).toMatch(/create_marker/);
-    expect(sqlView(sql).skeleton).toMatch(/create_marker/);
+  it("ends an E'...' string where Postgres ends it, not at the escaped quote", () => {
+    // One mis-lexed apostrophe flips literal/code parity for the whole rest of
+    // the file, and every later quote then toggles the wrong way (round-6
+    // review, both lanes). The definition after it must stay findable.
+    // String.raw so the backslash reaches sqlView instead of being eaten by JS.
+    const sql = String.raw`update b set n = E'Molly\'s' where id = 1;`
+      + ' create or replace function public.respond_night_out(x uuid) returns void as $$ $$;';
+    expect(sqlView(sql).skeleton).toMatch(/create or replace function public\.respond_night_out\(/);
+    expect(sqlView(sql).skeleton).not.toMatch(/molly/i);
+  });
+
+  it('treats a NESTED dollar quote as inert text, not as code', () => {
+    // `raise notice '%', $audit$...$audit$` only LOGS its text. It must not
+    // satisfy an assertion about what the function executes (round-6 review,
+    // Codex, medium).
+    const sql = 'create or replace function public.f() returns void as $$ begin'
+      + " raise notice '%', $audit$perform pg_advisory_xact_lock(1)$audit$; end $$;";
+    expect(sqlView(sql).code).not.toMatch(/pg_advisory_xact_lock/);
+    // The body around it is still code.
+    expect(sqlView(sql).code).toMatch(/raise notice/);
   });
 });
 
@@ -454,6 +470,14 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
     expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
     expect(body, 'the cap only applies when a declined row re-enters the counted set')
       .toMatch(/v_current = 'declined'/);
+    // ORDER, not just presence. Move the lock to AFTER the cap check and every
+    // assertion above still passed, while two concurrent rejoins could both see
+    // the last seat free — and the live cap tests are sequential on one
+    // connection, so they cannot see it either (round-6 review, Codex, medium).
+    expect(
+      body.indexOf('member_cap'),
+      'the cap is consulted BEFORE the per-plan lock is held',
+    ).toBeGreaterThan(body.indexOf(planLock('p_night_out')));
   });
 
   it('the one counted set excludes declined rows', () => {

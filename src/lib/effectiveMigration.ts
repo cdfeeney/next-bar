@@ -56,7 +56,15 @@ export type GuardedFunction = (typeof GUARDED_FUNCTIONS)[number];
  *    read them (round-5 review, Claude, medium).
  *  - Blanks the CONTENTS of single-quoted literals, so `select 'create function
  *    public.respond_night_out'` is not a definition (round-5 review, Codex,
- *    medium). Dollar-quoted bodies are left alone — that is where the code is.
+ *    medium). E-prefixed strings honour backslash escapes, so `E'Molly\'s'` ends
+ *    where Postgres ends it — mis-lexing that one apostrophe flipped
+ *    literal/code parity for the whole rest of the file, and every later quote
+ *    then toggled the wrong way (round-6 review, both lanes, medium).
+ *  - Understands DOLLAR QUOTES, tag and all. The outermost one is a function
+ *    BODY and its contents are code — that is what these guards read. A nested
+ *    one is a literal and is blanked in BOTH views, because
+ *    `raise notice '%', $audit$pg_advisory_xact_lock(...)$audit$` only logs that
+ *    text while satisfying the lock assertion (round-6 review, Codex, medium).
  *  - Lowercases everything EXCEPT literal contents. Identifiers and keywords are
  *    case-insensitive in Postgres, so lowercasing them prevents a false red;
  *    literals are not, so lowercasing THEM let a key of `'NIGHT_OUT_MEMBERS:'`
@@ -64,40 +72,107 @@ export type GuardedFunction = (typeof GUARDED_FUNCTIONS)[number];
  *    review, Codex, medium).
  *
  * Returns both views because they answer different questions: `code` keeps
- * literals (the lock KEY is a literal), `skeleton` blanks them (a definition is
- * never inside one).
+ * single-quoted literals (the lock KEY is one), `skeleton` blanks them (a
+ * definition is never inside one).
+ *
+ * WHAT IT IS NOT. It is not a Postgres parser, and a migration written to evade
+ * it can still be written. What it defends is the accident — a function moving
+ * files, a guard left pointing at dead text — not a hostile author, who has a
+ * migration file and needs no cleverness. The authoritative controls are in
+ * nightOutsRls.live.test.ts, which asks the database.
  */
 export function sqlView(sql: string): { code: string; skeleton: string } {
+  return scan(sql, false);
+}
+
+/**
+ * One pass. `insideBody` says whether a dollar quote found here is a function
+ * BODY (contents are code) or a nested literal (contents are inert text).
+ */
+function scan(sql: string, insideBody: boolean): { code: string; skeleton: string } {
   let code = '';
   let skeleton = '';
   let i = 0;
-  let depth = 0; // nested /* */
+
+  /** Same length, newlines kept, so blanking cannot join two tokens. */
+  const blank = (text: string) => {
+    const spaces = text.replace(/[^\n]/g, ' ');
+    code += spaces;
+    skeleton += spaces;
+  };
+  const dollarTag = (at: number): string | null =>
+    /^\$[A-Za-z_]?[A-Za-z0-9_]*\$/.exec(sql.slice(at, at + 66))?.[0] ?? null;
+
   while (i < sql.length) {
-    if (depth > 0) {
-      if (sql.startsWith('/*', i)) { depth += 1; i += 2; continue; }
-      if (sql.startsWith('*/', i)) { depth -= 1; i += 2; continue; }
-      // A comment is whitespace to the reader, and newlines must survive so a
-      // following line comment still terminates.
-      const ch = sql[i] === '\n' ? '\n' : ' ';
-      code += ch; skeleton += ch; i += 1;
-      continue;
-    }
-    if (sql.startsWith('/*', i)) { depth = 1; i += 2; code += '  '; skeleton += '  '; continue; }
-    if (sql.startsWith('--', i)) {
-      while (i < sql.length && sql[i] !== '\n') { code += ' '; skeleton += ' '; i += 1; }
-      continue;
-    }
-    if (sql[i] === "'") {
-      // '' inside a literal is an escaped quote, not a terminator.
-      code += "'"; skeleton += "'"; i += 1;
-      while (i < sql.length) {
-        if (sql[i] === "'" && sql[i + 1] === "'") { code += "''"; skeleton += '  '; i += 2; continue; }
-        if (sql[i] === "'") break;
-        code += sql[i]; skeleton += ' '; i += 1;
+    if (sql.startsWith('/*', i)) {
+      // Postgres NESTS block comments; a non-greedy regex stops at the first
+      // inner terminator and leaves the rest visible.
+      const start = i;
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql.startsWith('/*', i)) { depth += 1; i += 2; continue; }
+        if (sql.startsWith('*/', i)) { depth -= 1; i += 2; continue; }
+        i += 1;
       }
-      code += "'"; skeleton += "'"; i += 1;
+      blank(sql.slice(start, i));
       continue;
     }
+
+    if (sql.startsWith('--', i)) {
+      const start = i;
+      while (i < sql.length && sql[i] !== '\n') i += 1;
+      blank(sql.slice(start, i));
+      continue;
+    }
+
+    const tag = dollarTag(i);
+    if (tag) {
+      const close = sql.indexOf(tag, i + tag.length);
+      const inner = sql.slice(i + tag.length, close < 0 ? sql.length : close);
+      const whole = sql.slice(i, close < 0 ? sql.length : close + tag.length);
+      if (insideBody) {
+        // A dollar quote inside a body is a LITERAL. Its text is never executed,
+        // so it must not satisfy an assertion about executable code.
+        blank(whole);
+      } else {
+        const body = scan(inner, true);
+        code += tag.toLowerCase() + body.code;
+        skeleton += tag.toLowerCase() + body.skeleton;
+        if (close >= 0) { code += tag.toLowerCase(); skeleton += tag.toLowerCase(); }
+      }
+      i += whole.length;
+      continue;
+    }
+
+    if (sql[i] === "'") {
+      // E'...' honours backslash escapes; a plain literal does not. Getting that
+      // wrong at one apostrophe flipped literal/code parity for the whole rest
+      // of the file, and every later quote then toggled the wrong way.
+      const eString = /[eE]$/.test(sql.slice(0, i)) && !/[A-Za-z0-9_][eE]$/.test(sql.slice(0, i));
+      const start = i;
+      i += 1;
+      while (i < sql.length) {
+        if (eString && sql[i] === '\\') { i += 2; continue; }
+        // No branch for '' — deliberately. Closing at the first quote of the
+        // pair and reopening at the second partitions the string identically:
+        // the text between them is literal content either way, and an odd count
+        // is malformed SQL. A reviewer asked for a test that pins that branch;
+        // there is none, because there is no behaviour to pin — deleting it and
+        // re-running left every test green (round-6 review, Claude, medium).
+        // Do not add it back without a case that fails without it.
+        if (sql[i] === "'") { i += 1; break; }
+        i += 1;
+      }
+      const literal = sql.slice(start, i);
+      // `code` keeps contents AND their case — the advisory-lock key is a
+      // literal, and 'NIGHT_OUT_MEMBERS:' is a different key. `skeleton` blanks
+      // them, because a definition is never inside a string.
+      code += literal;
+      skeleton += literal.replace(/[^\n']/g, ' ');
+      continue;
+    }
+
     code += sql[i].toLowerCase();
     skeleton += sql[i].toLowerCase();
     i += 1;
@@ -216,8 +291,10 @@ export function definingMigration(name: string): string | null {
  * (5578e1af…). The remaining 20 rows name files that live only on other
  * branches.
  *
- * TWO COMMITTED CLAIMS ARE WRONG ABOUT THIS, both in the same direction, and
- * both were written by comparing raw bytes to a normalised ledger:
+ * THREE COMMITTED CLAIMS WERE WRONG ABOUT THIS, all in the same direction, and
+ * all written by comparing raw bytes to a normalised ledger. The third was
+ * missed when this list said two, and the corrected CLAUDE.md routed the reader
+ * straight to it (round-6 review, Claude, medium):
  *   - scripts/apply-migration-set.ts said raw bytes were "the convention the
  *     existing ledger already uses (verified against 0044's recorded row)".
  *     0044's row is exactly what disproves it. That script now shares this
@@ -226,6 +303,8 @@ export function definingMigration(name: string): string | null {
  *   - CLAUDE.md said eleven 0000–0010 files "differ from the checksums recorded
  *     in the live ledger". Under the ledger's own algorithm they do not: all
  *     eleven are present and all eleven match. Corrected there.
+ *   - scripts/apply-migrations.ts carried the same eleven-file sentence in its
+ *     own header, and CLAUDE.md names that file by path. Corrected there too.
  *
  * WHAT THIS CAN AND CANNOT PROVE. Because it normalises, it proves a file is
  * identical to what was applied UP TO line endings and trailing whitespace — not

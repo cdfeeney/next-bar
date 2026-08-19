@@ -13,11 +13,18 @@
  * consult it, so it re-executes EVERY file on every run and relies purely on
  * idempotency.
  *
- * Why that matters concretely: eleven of this branch's 0000-0010 files differ
- * from the checksums recorded in the live ledger. A blind replay would re-run
- * older, different versions of the base schema over a database that has moved
- * past them — including re-granting privileges 0034_revoke_first_grants.sql had
- * deliberately tightened. Idempotency does not save you when the FILE changed.
+ * Why that matters concretely: a blind replay re-runs the base schema over a
+ * database that has moved past it — including re-granting privileges
+ * 0034_revoke_first_grants.sql had deliberately tightened. Idempotency does not
+ * save you when the ORDER is wrong.
+ *
+ * This paragraph used to add that "eleven of this branch's 0000-0010 files
+ * differ from the checksums recorded in the live ledger". They do not. That
+ * reading hashed raw bytes against a ledger that records a NORMALISED digest
+ * (see migrationChecksum in src/lib/effectiveMigration.ts); re-measured against
+ * the serving ledger, all eleven are present and all eleven match. Corrected
+ * here, in CLAUDE.md, and in apply-migration-set.ts — the same mistake was
+ * written into all three.
  *
  * Use nb-overnight's apply-migrations.ts instead: it hashes each file, records
  * it in the ledger, and refuses ambiguous partial state. Or apply named files
