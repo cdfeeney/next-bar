@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { MIGRATIONS_DIR, definingMigration, definitionIndex } from './effectiveMigration';
+import {
+  MIGRATIONS_DIR,
+  definingMigration,
+  definitionIndex,
+  type GuardedFunction,
+} from './effectiveMigration';
 
 /**
  * V8-3 migration guard — static assertions over 0044_night_outs.sql.
@@ -271,12 +276,18 @@ const SQL_0046 = readFileSync(
  * The text of the migration that currently STATES `name`.
  *
  * Resolution lives in effectiveMigration.ts so the live suite can assert that
- * the SAME file is recorded in the serving database's schema_migrations ledger.
- * Read that module for what this does and does not prove — in particular, it
- * resolves the last file in the COMMITTED stream, which is the text the
- * database runs only when the stream is fully applied.
+ * the SAME file, at the SAME checksum, is recorded in the serving database's
+ * schema_migrations ledger. Read that module for what this does and does not
+ * prove — in particular, it resolves the last file in the COMMITTED stream,
+ * which is the text the database runs only when the stream is fully applied.
+ *
+ * The parameter is GuardedFunction, not string, and that is the coverage lock:
+ * guarding a fifth function here does not compile until the name joins
+ * GUARDED_FUNCTIONS, and joining it does not compile until the live signature
+ * pin gains an entry. The three hand-kept lists that used to drift apart are now
+ * one list the type checker walks (round-2 review, Claude, medium).
  */
-function effectiveSql(name: string): string {
+function effectiveSql(name: GuardedFunction): string {
   const file = definingMigration(name);
   expect(file, `no migration defines ${name}`).not.toBeNull();
   return readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8')
@@ -304,14 +315,38 @@ function functionBody(sql: string, name: string): string {
  * here has to be moved when the next migration re-states one of them — the
  * remembering is what kept failing.
  */
+/**
+ * The COMPLETE per-plan advisory-lock expression, operand and salt included.
+ *
+ * A prefix match on `night_out_members:` is not enough: swap the operand from
+ * the plan id to the caller's uuid and the key is per-USER while the prefix
+ * still reads correctly, so two concurrent joins take different locks and both
+ * see room for the last seat. The prefix-only version of these assertions stayed
+ * green on exactly that mutation (round-2 review, Codex, medium), and the live
+ * cap tests cannot see it either — they are sequential on one connection.
+ *
+ * `plan` is the name the function under test holds the plan id in. It is a
+ * parameter rather than a wildcard because a wildcard would accept any operand,
+ * which is the hole being closed.
+ *
+ * Returned as a plain string and matched against a whitespace-flattened body,
+ * because the expression spans a line break in every migration that states it
+ * and a regex for that is all escaping and no clarity.
+ */
+function planLock(plan: string): string {
+  return `pg_advisory_xact_lock( hashtextextended('night_out_members:' || ${plan}::text, 0))`;
+}
+
+/** The same text with every run of whitespace collapsed to one space. */
+function flatten(sql: string): string {
+  return sql.replace(/\s+/g, ' ');
+}
+
 describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
-    const body = functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token');
-    // The KEY, not just the call. A per-user key (hashtextextended on the uuid
-    // rather than the plan) lets two concurrent joins both see room for the last
-    // seat, and the live boundary tests are sequential on one connection so they
-    // cannot see it (round-1 review, Claude, medium).
-    const lock = body.search(/pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/);
+    const body = flatten(functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token'));
+    // The whole KEY, not just the call — see planLock above.
+    const lock = body.indexOf(planLock('v_id'));
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
     const capCheck = body.indexOf('member_cap', conversion);
     expect(lock, 'join takes no per-plan advisory lock').toBeGreaterThan(-1);
@@ -323,19 +358,17 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
   });
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
-    const body = functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token');
+    const body = flatten(functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token'));
     expect(body).not.toMatch(/member_cap/);
     // Still serialised on the SAME per-plan key, so a concurrent invite cannot
     // swallow the decline. A different key would serialise nothing.
-    expect(body, 'decline takes no per-plan advisory lock')
-      .toMatch(/pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/);
+    expect(body, 'decline takes no per-plan advisory lock').toContain(planLock('v_id'));
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = functionBody(effectiveSql('respond_night_out'), 'respond_night_out');
-    expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
-      /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
-    );
+    const body = flatten(functionBody(effectiveSql('respond_night_out'), 'respond_night_out'));
+    expect(body, 'the rejoin path must take the same per-plan lock')
+      .toContain(planLock('p_night_out'));
     expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
     expect(body, 'the cap only applies when a declined row re-enters the counted set')
       .toMatch(/v_current = 'declined'/);

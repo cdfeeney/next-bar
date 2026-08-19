@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -13,6 +14,27 @@ import path from 'node:path';
  */
 
 export const MIGRATIONS_DIR = path.join(__dirname, '..', '..', 'supabase', 'migrations');
+
+/**
+ * The functions whose effective SQL the static ordering guard reads.
+ *
+ * ONE list, because there were three: the inline literals in
+ * nightOutsMigration.test.ts and two hand-kept copies in
+ * nightOutsRls.live.test.ts (the signature pin and the ledger check). Adding a
+ * fifth name to the static guard left both live controls silently covering four
+ * of five, with nothing failing — the same remember-to-update-the-pointer
+ * failure this module was extracted to end (round-2 review, Claude, medium).
+ * Both live tests are now keyed on this array, so a name added here without a
+ * signature entry fails to type-check.
+ */
+export const GUARDED_FUNCTIONS = [
+  'respond_night_out',
+  'join_night_out_by_token',
+  'decline_night_out_by_token',
+  'night_out_seat_count',
+] as const;
+
+export type GuardedFunction = (typeof GUARDED_FUNCTIONS)[number];
 
 /**
  * Where `name` is stated in `sql`, or -1. Both statement forms are checked:
@@ -68,4 +90,31 @@ export function definingMigration(name: string): string | null {
       name,
     ) > -1);
   return defining.length ? defining[defining.length - 1] : null;
+}
+
+/**
+ * The checksum public.schema_migrations records for a migration.
+ *
+ * NORMALISED, not raw bytes, and that is not a shortcut. The rows in the live
+ * ledger were written by nb-overnight's runner via `checksum()` in
+ * src/lib/migrationPlan.ts, which LF-normalises and strips trailing whitespace
+ * precisely because this repo is developed on Windows with core.autocrlf: the
+ * same file hashes differently on two checkouts, and a raw-byte hash would
+ * report drift on every one of them.
+ *
+ * Measured against the serving staging ledger on 2026-08-19 before this was
+ * written: hashing raw bytes matches 0 of 55 rows, and 0048/0057/0059 all
+ * DIFFER. Normalised, all 35 rows whose file exists on this branch match and
+ * none drift — the other 20 name files that live on other branches. So a
+ * raw-byte comparison here would be a permanently red test, not a stricter one.
+ *
+ * This branch also carries scripts/apply-migration-set.ts, which hashes raw
+ * bytes. It is NOT what wrote these rows. Do not take its algorithm as the
+ * ledger's.
+ */
+export function migrationChecksum(file: string): string {
+  const sql = readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')
+    .replace(/\r\n/g, '\n')
+    .replace(/\s+$/, '');
+  return createHash('sha256').update(sql, 'utf8').digest('hex');
 }

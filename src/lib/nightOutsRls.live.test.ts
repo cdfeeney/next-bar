@@ -4,7 +4,12 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 
-import { definingMigration } from './effectiveMigration';
+import {
+  GUARDED_FUNCTIONS,
+  definingMigration,
+  migrationChecksum,
+  type GuardedFunction,
+} from './effectiveMigration';
 
 /**
  * V8-3 BEHAVIORAL RLS/RPC negatives — criteria 3, 9 and 10.
@@ -1144,7 +1149,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * no more and no fewer.
    */
   it('the guarded night_out functions have exactly the overloads we expect', async () => {
-    const expected: Record<string, string[]> = {
+    // Keyed on GUARDED_FUNCTIONS, so adding a name to the static guard without
+    // a signature here is a TYPE error rather than a silent coverage hole
+    // (round-2 review, Claude, medium).
+    const expected: Record<GuardedFunction, string[]> = {
       respond_night_out: [
         'p_night_out uuid, p_accept boolean, p_expected_status text, p_expected_revision integer',
       ],
@@ -1186,29 +1194,39 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * becomes an assertion. The overload pin above compares SIGNATURES; this
    * compares PROVENANCE — which file the ledger says installed them.
    */
-  it('every migration the static guard reads is actually applied here', async () => {
-    const guarded = [
-      'respond_night_out',
-      'join_night_out_by_token',
-      'decline_night_out_by_token',
-      'night_out_seat_count',
-    ];
-    const resolved = guarded.map((name) => {
+  it('every migration the static guard reads is applied here, byte-for-byte', async () => {
+    const resolved = GUARDED_FUNCTIONS.map((name) => {
       const file = definingMigration(name);
       expect(file, `no committed migration defines ${name}`).not.toBeNull();
       return file as string;
     });
+    // The CHECKSUM too, not just the name. A name-only check proves the file was
+    // applied ONCE, not that what is committed here is what ran: an amended file
+    // or a branch carrying a different copy still returns the row, and the
+    // ordering invariants would keep asserting against text the database never
+    // ran (round-2 review, Claude, medium). CLAUDE.md records exactly that
+    // divergence for eleven 0000-0010 files, so this is not hypothetical.
     const { rows } = await db.query(
-      'select name from public.schema_migrations where name = any($1::text[])',
+      'select name, checksum from public.schema_migrations where name = any($1::text[])',
       [resolved],
     );
-    const applied = new Set((rows as Array<{ name: string }>).map((r) => r.name));
-    // Reported per function, so the failure names which guard is reading text
-    // this database never ran rather than just listing a filename.
+    const ledger = new Map(
+      (rows as Array<{ name: string; checksum: string }>).map((r) => [r.name, r.checksum]),
+    );
+    // Reported per function, so a failure names which guard is reading text this
+    // database never ran rather than just listing a filename. The value is the
+    // file when it matches and a reason when it does not, so the message says
+    // WHICH way it broke.
+    const provenance = Object.fromEntries(GUARDED_FUNCTIONS.map((name, i) => {
+      const file = resolved[i];
+      if (!ledger.has(file)) return [name, `${file} (NOT in the ledger)`];
+      if (ledger.get(file) !== migrationChecksum(file)) return [name, `${file} (DRIFTED)`];
+      return [name, file];
+    }));
     expect(
-      Object.fromEntries(guarded.map((name, i) => [name, applied.has(resolved[i])])),
-      "the static guard resolved a migration that is NOT in this database's ledger",
-    ).toEqual(Object.fromEntries(guarded.map((name) => [name, true])));
+      provenance,
+      'the static guard resolved a migration this database did not run, or ran differently',
+    ).toEqual(Object.fromEntries(GUARDED_FUNCTIONS.map((name, i) => [name, resolved[i]])));
   });
 
   /**
