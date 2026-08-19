@@ -38,6 +38,9 @@ export { MAX_VENUE_TAGS };
 /** Price tags never render as chips, so they can never satisfy "has a tag". */
 const isPriceTag = (tag: VibeTag): boolean => Object.hasOwn(PRICE_TAG_GLYPHS, tag);
 
+/** Whether a tag list puts anything at all in front of a customer. */
+const shows = (tags: readonly VibeTag[]): boolean => tags.some((tag) => !isPriceTag(tag));
+
 const KNOWN_TAGS: ReadonlySet<string> = new Set(TAG_VOCABULARY);
 
 /**
@@ -128,8 +131,9 @@ function deriveTags(row: TaggableRow): VibeTag[] {
  * A row that already has usable tags keeps them, in their stored order — the
  * point of this pass is the 132 empty rows and the 100 over-cap ones, not a
  * rewrite of ~1,400 rows that are already correct. Only a row over the cap is
- * re-ordered, and then by tagDisplay's TAG_PRIORITY, so `topVenueTags()` over
- * the result renders exactly what it rendered over the untrimmed row.
+ * trimmed, and then by tagDisplay's TAG_PRIORITY, so `topVenueTags()` over the
+ * result renders exactly what it rendered over the untrimmed row. The stored
+ * ORDER is always the row's own, because barVisual() reads tags[0].
  */
 export function venueTags(row: TaggableRow): VibeTag[] {
   const stored: VibeTag[] = [];
@@ -139,17 +143,20 @@ export function venueTags(row: TaggableRow): VibeTag[] {
     seen.add(tag);
     stored.push(tag as VibeTag);
   }
-  const derived = stored.length > 0 ? stored : deriveTags(row);
   // "At least one tag" has to mean at least one tag a customer SEES.
   // topVenueTags() filters every price tag out, so a price-only row renders an
   // empty chip row and the backfill would report it fixed while it is not.
-  const tags = derived.some((tag) => !isPriceTag(tag))
-    ? derived
-    : [DEFAULT_VENUE_TAG, ...derived];
+  // A row stored as price-only is treated like an empty one and derived from
+  // its name and blurb; keeping it would label a rooftop bar 'cocktail'.
+  const derived = shows(stored) ? stored : deriveTags(row);
+  const tags = shows(derived) ? derived : [DEFAULT_VENUE_TAG, ...derived];
   if (tags.length <= MAX_VENUE_TAGS) return tags;
-  // Price ranks last in TAG_PRIORITY, so the survivors are the highest-ranked
-  // displayable tags — the same five, in the same order, the lightbox picks.
-  return [...tags]
-    .sort((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b])
-    .slice(0, MAX_VENUE_TAGS);
+  // WHICH five survive is by priority; the ORDER they are stored in is the
+  // row's own. barVisual() reads tags[0] as the venue's primary identity, so
+  // re-sorting here would repaint Little Branch from speakeasy to cocktail.
+  // The lightbox sorts by the same priority anyway, so display is unaffected.
+  const keep = new Set(
+    [...tags].sort((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b]).slice(0, MAX_VENUE_TAGS),
+  );
+  return tags.filter((tag) => keep.has(tag));
 }

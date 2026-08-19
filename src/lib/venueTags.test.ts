@@ -18,6 +18,16 @@ describe('venueTags — one ordering, shared with the lightbox', () => {
     'chill', 'buzzy', 'date', 'polished', 'cocktail', 'pricey', 'speakeasy',
   ];
 
+  it('keeps the row’s own ordering among the survivors', () => {
+    // Little Branch, from the real catalog: it leads with 'speakeasy' and must
+    // still lead with it after the trim.
+    const littleBranch: VibeTag[] = [
+      'speakeasy', 'cocktail', 'jazz', 'date', 'pricey', 'lounge', 'romantic',
+    ];
+    expect(venueTags(row({ tags: littleBranch, priceTier: 3 })))
+      .toEqual(['speakeasy', 'cocktail', 'jazz', 'lounge', 'romantic']);
+  });
+
   it('stores the five tags the lightbox would have rendered from the full set', () => {
     // The regression this suite exists to prevent: trimming for STORAGE used to
     // keep a price tag, which topVenueTags() drops, so an over-cap venue
@@ -48,10 +58,11 @@ describe('venueTags — the cap', () => {
     const seven: VibeTag[] = [
       'chill', 'buzzy', 'date', 'polished', 'cocktail', 'pricey', 'speakeasy',
     ];
-    // tagDisplay's order: venue types lead, then character, then energy, and
-    // price ranks last of all — so 'pricey' and 'date' are what get dropped.
+    // WHICH five survive is tagDisplay's order — venue types lead, price ranks
+    // last of all, so 'pricey' and 'date' are what get dropped. The ORDER of
+    // the survivors is the row's own, because barVisual() reads tags[0].
     expect(venueTags(row({ tags: seven }))).toEqual([
-      'cocktail', 'speakeasy', 'polished', 'chill', 'buzzy',
+      'chill', 'buzzy', 'polished', 'cocktail', 'speakeasy',
     ]);
   });
 
@@ -61,12 +72,18 @@ describe('venueTags — the cap', () => {
     expect(venueTags(row({ tags: ['buzzy', 'dive'] }))).toEqual(['buzzy', 'dive']);
   });
 
-  it('trims to the same five whatever order the row stored them in', () => {
+  it('drops the same two whatever order the row stored them in', () => {
+    // WHICH five survive is a function of the SET, never of the input order —
+    // that is criterion 4. The order they come back in is the row's own, so
+    // compare the sets, not the sequences.
     const seven: VibeTag[] = [
       'chill', 'buzzy', 'date', 'polished', 'cocktail', 'pricey', 'speakeasy',
     ];
     const reversed = [...seven].reverse();
-    expect(venueTags(row({ tags: reversed }))).toEqual(venueTags(row({ tags: seven })));
+    expect([...venueTags(row({ tags: reversed }))].sort())
+      .toEqual([...venueTags(row({ tags: seven }))].sort());
+    expect(venueTags(row({ tags: reversed })))
+      .toEqual(['speakeasy', 'cocktail', 'polished', 'buzzy', 'chill']);
   });
 });
 
@@ -95,8 +112,16 @@ describe('venueTags — the empty rows', () => {
       .not.toContain('cocktail');
   });
 
-  it('adds the default when every stored tag is a price tag', () => {
-    expect(venueTags(row({ tags: ['pricey'] }))).toEqual(['cocktail', 'pricey']);
+  it('derives from the row when every stored tag is a price tag', () => {
+    // A price-only row is as good as untagged: keeping it and prepending the
+    // generic default would label a rooftop bar a cocktail bar.
+    expect(venueTags(row({ name: 'The Rooftop at Sixty', priceTier: 3, tags: ['pricey'] })))
+      .toEqual(['rooftop', 'instagrammable', 'pricey']);
+  });
+
+  it('falls back to the default only when derivation is also price-only', () => {
+    expect(venueTags(row({ name: 'Nowhere', priceTier: 2, tags: ['pricey'] })))
+      .toEqual(['cocktail', 'mid']);
   });
 
   it('derives from the name', () => {
@@ -176,6 +201,18 @@ describe('venueTags — the PRD invariant over the real catalog', () => {
   it('leaves no venue without a tag the lightbox will actually render', () => {
     expect(tagged.filter((bar) => topVenueTags(bar.tags).length === 0).map((bar) => bar.id))
       .toEqual([]);
+  });
+
+  it('keeps every venue’s primary tag, which barVisual() paints it from', () => {
+    // barVisual() reads tags[0] as the venue's identity, so a trim that
+    // re-ordered survivors would silently repaint the catalog.
+    const repainted = staticCatalog.filter((bar) => {
+      const after = venueTags({
+        name: bar.name, blurb: bar.blurb, priceTier: bar.priceTier, tags: bar.tags,
+      });
+      return (bar.tags ?? []).length > 0 && after[0] !== bar.tags[0];
+    });
+    expect(repainted.map((bar) => bar.id)).toEqual([]);
   });
 
   it('never costs an already-tagged venue a chip it renders today', () => {

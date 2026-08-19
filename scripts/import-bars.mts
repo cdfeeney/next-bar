@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
+import { venueTags } from '../src/lib/venueTags';
 import { refuseIfUnattended } from './loop-guard.mjs';
 import { rowToBar, type BarsTableRow } from '../src/lib/catalogServer';
 
@@ -95,7 +96,10 @@ for (const c of candidates) {
     name: c.name,
     lat: c.lat,
     lng: c.lng,
-    tags: c.tags,
+    // Same rule as the backfill and the seed: an imported row enters the
+    // table already inside 1..5 tags, so the invariant cannot be broken by
+    // whatever the candidate file happened to carry.
+    tags: venueTags({ name: c.name, blurb: c.blurb, priceTier: c.priceTier, tags: c.tags }),
     neighborhood: c.neighborhood,
     price_tier: c.priceTier,
     hours: null,

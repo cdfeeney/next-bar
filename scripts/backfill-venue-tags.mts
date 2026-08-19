@@ -32,10 +32,41 @@ refuseIfUnattended('bars tag backfill');
 dotenv.config({ path: '.env.local' });
 
 const APPLY = process.argv.includes('--apply');
-const limitArg = process.argv.indexOf('--limit');
-const LIMIT = limitArg !== -1 ? Number.parseInt(process.argv[limitArg + 1], 10) : Infinity;
-if (Number.isNaN(LIMIT) || LIMIT < 1) {
-  console.error('--limit takes a positive integer');
+
+// --limit is the only thing bounding the blast radius of a write, so it fails
+// CLOSED. `indexOf('--limit')` alone missed the `--limit=25` spelling entirely
+// and silently ran unlimited; an unrecognised flag is refused for the same
+// reason, since a typo'd limit is an unlimited run.
+const args = process.argv.slice(2);
+const flags = args.filter((arg) => arg.startsWith('-'));
+const limitIndex = args.indexOf('--limit');
+const limitEquals = args.find((arg) => arg.startsWith('--limit='));
+const rawLimit = limitIndex !== -1
+  ? args[limitIndex + 1]
+  : limitEquals?.slice('--limit='.length);
+const unknown = flags.filter((flag) => flag !== '--apply' && flag !== '--limit'
+  && !flag.startsWith('--limit='));
+if (unknown.length > 0) {
+  console.error(`unknown option(s): ${unknown.join(' ')}`);
+  process.exit(1);
+}
+// `--limit` with no value must not read as "no limit": Number(undefined) is
+// NaN and NaN fails the check below, so a valueless flag refuses.
+const hasLimit = limitIndex !== -1 || limitEquals !== undefined;
+const LIMIT = hasLimit ? Number(rawLimit) : Infinity;
+if (hasLimit && (!Number.isInteger(LIMIT) || LIMIT < 1)) {
+  console.error('--limit takes a positive integer (--limit 25 or --limit=25)');
+  process.exit(1);
+}
+
+// Node's global kill switch turns tls.connect's default verification off for
+// the whole process, so HTTPS below would prove nothing about the peer holding
+// the service-role key. Same refusal, and the same reasoning, as
+// authorizeMigrationTarget() in scripts/apply-migration-target-guard.ts.
+if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+  console.error('[target] refused: NODE_TLS_REJECT_UNAUTHORIZED=0 disables certificate '
+    + 'verification for the whole process, so the Supabase host cannot be authenticated. '
+    + 'Unset it and re-run.');
   process.exit(1);
 }
 
