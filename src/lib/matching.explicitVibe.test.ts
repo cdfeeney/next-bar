@@ -6,7 +6,7 @@ import {
   EMPTY_TASTE,
   type LearnedTaste,
 } from '@/lib/tasteAffinity';
-import { RADIUS_WALK } from '@/lib/constants';
+import { RADIUS_CAB, RADIUS_WALK } from '@/lib/constants';
 import type { BarRating } from '@/types/ratings';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
 
@@ -139,6 +139,52 @@ describe('matches() — active tweak', () => {
     }
   });
 
+  it('orders two MATCHING bars by the 80/20 blend, not by learned taste alone', () => {
+    // Both bars match the pick, so the match-first fill order cannot decide
+    // this one — only the weighted score can, and the WEIGHT is what decides
+    // it. With 20 observations per tag the shrinkage term stops damping and
+    // A(tag) reaches ±0.8, so:
+    //   sharp = w*1.0  + (1 - w)*(-0.8)  =  1.8w - 0.8
+    //   broad = w*0.5  + (1 - w)*(0.0)   =  0.5w
+    // sharp leads only while w > ~0.62. At the approved 0.8 it does; re-tune
+    // the constant down to 0.5 and this flips, which is what pins it.
+    const rated = [
+      ...Array.from({ length: 20 }, (_, i) =>
+        makeBar({ id: `wine-${i}`, tags: ['wine'] }),
+      ),
+      ...Array.from({ length: 20 }, (_, i) =>
+        makeBar({ id: `ck-${i}`, tags: [PICKED] }),
+      ),
+    ];
+    const taste = deriveLearnedTaste(
+      rated.map((bar) => ({
+        barId: bar.id,
+        rating: bar.tags[0] === 'wine' ? ('loved' as const) : ('pass' as const),
+        ratedAt: '2026-05-01T00:00:00.000Z',
+        score: bar.tags[0] === 'wine' ? 10 : 1,
+      })),
+      rated,
+    );
+    expect(taste.affinity.get(PICKED)).toBeCloseTo(-0.8, 10);
+    expect(taste.affinity.get('wine')).toBeCloseTo(0.8, 10);
+
+    const sharp = atMiles('sharp', 0.5, [PICKED]);
+    const broad = atMiles('broad', 0.6, [PICKED, 'wine']);
+
+    expect(
+      matches({
+        profile: tweakedProfile([PICKED]),
+        coords: ORIGIN,
+        preferredNeighborhoods: [],
+        maxMiles: RADIUS_WALK,
+        bars: [broad, sharp],
+        maxResults: 5,
+        now: NOW,
+        taste,
+      }).map((bar) => bar.id),
+    ).toEqual(['sharp', 'broad']);
+  });
+
   it('lets learned taste order bars that match the pick equally well', () => {
     // Same tag count and the same single overlap, so the 80% vibe term ties
     // exactly and the remaining 20% of learned taste is what decides.
@@ -170,11 +216,58 @@ describe('matches() — distance band expansion under an active tweak', () => {
     expect(ids).toHaveLength(5); // the page still fills from the walkables
   });
 
+  // The test above passes maxMiles: null, which NO production caller of the
+  // explicit path issues — both Next Bar surfaces pass one distance chip's
+  // exclusive ring (WhereNextFlow.tsx: minMilesExclusive + selectedRadius
+  // .maxMiles). Under that configuration the pool used to be cut to a single
+  // ring before banding, so the expansion above was unreachable on every real
+  // surface. This is the same assertion under the Walkable chip's arguments.
+  it('expands under the arguments the Walkable chip actually passes', () => {
+    const ids = matches({
+      profile: tweakedProfile([PICKED]),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      minMilesExclusive: null,
+      maxMiles: RADIUS_WALK,
+      bars: pool,
+      maxResults: 5,
+      now: NOW,
+      taste: EMPTY_TASTE,
+    }).map((bar) => bar.id);
+
+    expect(ids[0]).toBe('far-cocktail');
+    expect(ids).toHaveLength(5);
+  });
+
+  it('expands under the cab chip too, without reaching back inside it', () => {
+    const cabScoped = [
+      atMiles('walk-cocktail', 0.5, [PICKED]), // inside the chip's inner edge
+      atMiles('cab-dive', 2.0, [HISTORY]),
+      atMiles('beyond-cocktail', 6.0, [PICKED]), // past its outer edge
+    ];
+    const ids = matches({
+      profile: tweakedProfile([PICKED]),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      minMilesExclusive: RADIUS_WALK,
+      maxMiles: RADIUS_CAB,
+      bars: cabScoped,
+      maxResults: 5,
+      now: NOW,
+      taste: EMPTY_TASTE,
+    }).map((bar) => bar.id);
+
+    // Expansion goes OUTWARD only: the far match is reached, the walkable one
+    // the user deliberately excluded is not.
+    expect(ids).toEqual(['beyond-cocktail', 'cab-dive']);
+  });
+
   it('changes geographic scope only — the radius never re-weights the vibe', () => {
     const scoped = [
       atMiles('walk-dive', 0.9, [HISTORY]),
       atMiles('walk-cocktail', 0.5, [PICKED]),
       atMiles('cab-cocktail', 3.0, [PICKED]),
+      atMiles('cab-dive', 3.1, [HISTORY]),
     ];
     const common = {
       profile: tweakedProfile([PICKED]),
@@ -189,9 +282,18 @@ describe('matches() — distance band expansion under an active tweak', () => {
       (b) => b.id,
     );
 
-    expect(anywhere).toEqual(['walk-cocktail', 'cab-cocktail', 'walk-dive']);
-    // Narrowing drops the out-of-range bar and reorders nothing else.
-    expect(walkOnly).toEqual(anywhere.filter((id) => id !== 'cab-cocktail'));
+    expect(anywhere).toEqual([
+      'walk-cocktail',
+      'cab-cocktail',
+      'walk-dive',
+      'cab-dive',
+    ]);
+    // Narrowing to Walkable drops the out-of-scope NONMATCH and reorders
+    // nothing: the chip still bounds the fallback. The out-of-scope MATCH
+    // stays, because criterion 5 says an applied pick expands past the band
+    // before falling back to bars that do not match it — and its position is
+    // unchanged, so the radius has not re-weighted anything.
+    expect(walkOnly).toEqual(anywhere.filter((id) => id !== 'cab-dive'));
   });
 });
 

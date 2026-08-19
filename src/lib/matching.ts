@@ -182,9 +182,10 @@ export function explicitVibeScore(
  * fallback. A bar matches when it carries at least one picked tag; the
  * bands and their radii are untouched, only the visit order changes.
  */
-function vibeMatchFillOrder(bands: Bar[][], vibeTags: VibeTag[]): Bar[][] {
-  const picked = new Set(vibeTags);
-  const isMatch = (bar: Bar): boolean => bar.tags.some((t) => picked.has(t));
+function vibeMatchFillOrder(
+  bands: Bar[][],
+  isMatch: (bar: Bar) => boolean,
+): Bar[][] {
   return [
     ...bands.map((band) => band.filter(isMatch)),
     ...bands.map((band) => band.filter((bar) => !isMatch(bar))),
@@ -220,13 +221,34 @@ export function matches(args: MatchesArgs): Bar[] {
     pool = pool.filter((b) => allowed.has(b.neighborhood));
   }
 
+  // The explicit-intent path (EXPLICIT_VIBE_WEIGHT). Active only for an
+  // APPLIED tweak carrying at least one tag — an empty pick is a CLEARED
+  // tweak, which must rank exactly like no tweak at all. Resolved BEFORE the
+  // distance filter because an applied pick widens what that filter admits.
+  const explicitTags =
+    profile.isExplicitVibe === true && profile.tags.length > 0
+      ? profile.tags
+      : null;
+  const pickedTags = explicitTags ? new Set(explicitTags) : null;
+  const isVibeMatch = (bar: Bar): boolean =>
+    pickedTags !== null && bar.tags.some((t) => pickedTags.has(t));
+
   if (coords && (minMilesExclusive !== null || maxMiles !== null)) {
     pool = pool.filter((b) => {
       const miles = haversineMiles(coords, b);
-      return (
-        (minMilesExclusive === null || miles > minMilesExclusive) &&
-        (maxMiles === null || miles <= maxMiles)
-      );
+      if (minMilesExclusive !== null && miles <= minMilesExclusive) return false;
+      if (maxMiles === null || miles <= maxMiles) return true;
+      // Criterion 5's expansion, and the ONLY thing that makes it reachable.
+      // Every distance chip is an exclusive ring (Walkable ≤ RADIUS_WALK, cab
+      // RADIUS_WALK–RADIUS_CAB, anywhere beyond it), so filtering the pool to
+      // the selected ring first left exactly one band non-empty and the
+      // cross-band fill order below had nothing to expand into. An APPLIED
+      // pick therefore reaches PAST the ring's outer edge — but only for a bar
+      // that actually matches it, and never inside the ring's inner edge. A
+      // NONMATCHING bar outside the chosen scope is still never admitted, so
+      // the chip keeps bounding the fallback; only the vibe the user just
+      // asked for can widen it.
+      return isVibeMatch(b);
     });
   }
 
@@ -239,13 +261,6 @@ export function matches(args: MatchesArgs): Bar[] {
   // the quiz prior fades as c grows with rating history.
   const late = biasNow !== undefined && isLateNight(biasNow);
 
-  // The explicit-intent path (EXPLICIT_VIBE_WEIGHT). Active only for an
-  // APPLIED tweak carrying at least one tag — an empty pick is a CLEARED
-  // tweak, which must rank exactly like no tweak at all.
-  const explicitTags =
-    profile.isExplicitVibe === true && profile.tags.length > 0
-      ? profile.tags
-      : null;
   const rankOf = explicitTags
     ? (bar: Bar): number => explicitVibeScore(bar, explicitTags, taste, late)
     : (bar: Bar): number => rankScore(bar, profile.tags, taste, late);
@@ -269,8 +284,10 @@ export function matches(args: MatchesArgs): Bar[] {
   // Step 2b — an active tweak fills from matching candidates across every
   // band before it falls back to nonmatching ones. Without a tweak this is
   // the same `bands` array, so the walk is unchanged.
+  // Same predicate the distance filter widened on, so a bar admitted as a
+  // match can never be sorted as a nonmatch here.
   const fillOrder = explicitTags
-    ? vibeMatchFillOrder(bands, explicitTags)
+    ? vibeMatchFillOrder(bands, isVibeMatch)
     : bands;
 
   // Steps 3 + 4 — within a band, learned taste orders; EXACT MILES are only
