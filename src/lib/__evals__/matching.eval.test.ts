@@ -4,7 +4,6 @@ import { jaccard, matches, rankScore } from '@/lib/matching';
 import { EMPTY_TASTE } from '@/lib/tasteAffinity';
 import {
   EXPLORATION_MIN_RESULTS,
-  JACCARD_FLOOR,
   MAX_RESULTS,
 } from '@/lib/constants';
 
@@ -169,10 +168,9 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
     }
     expect(pureTop).not.toContain(results[EXPLORATION_MIN_RESULTS - 1].id);
 
-    // Qualified: the pick still clears the Jaccard floor.
-    expect(
-      jaccard(PROFILE.tags, results[EXPLORATION_MIN_RESULTS - 1].tags),
-    ).toBeGreaterThanOrEqual(JACCARD_FLOOR);
+    // NOTE: the old "qualified = clears JACCARD_FLOOR" assertion was removed
+    // with the admission gate it depended on. Whether the exploration slot
+    // should survive the V8 cascade at all is an open product question.
   });
 
   it('the pick is deterministic for (profile, night) and rotates across nights — at the 6am NYC rollover, not UTC midnight', () => {

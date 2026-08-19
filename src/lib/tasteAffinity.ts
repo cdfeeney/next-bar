@@ -19,6 +19,10 @@ import type { BarRating } from '@/types/ratings';
  * indistinguishable from two hundred and low scores vanished entirely.
  */
 
+/** The approved score range. Out-of-range persisted values are clamped here. */
+const SCORE_MIN = 1;
+const SCORE_MAX = 10;
+
 /** w = 0 here; the ends of the 1.0–10.0 range map to w = -1 and w = +1. */
 const SCORE_MIDPOINT = 5.5;
 const SCORE_HALF_RANGE = 4.5;
@@ -71,7 +75,14 @@ export function deriveLearnedTaste(
     if (!bar) continue;
 
     n += 1;
-    const w = (r.score - SCORE_MIDPOINT) / SCORE_HALF_RANGE;
+    // Clamp at the trust boundary. Persisted ratings are NOT score-validated
+    // (isBarRating in ratings.ts checks barId/rating/ratedAt only) and there is
+    // no DB check constraint yet, so a tampered or legacy row can carry any
+    // finite number. Unclamped, repeated extreme values overflow Σw to
+    // Infinity and mixed signs yield NaN, which silently defeats the ranking
+    // comparator and lets distance decide a non-tie.
+    const score = Math.min(SCORE_MAX, Math.max(SCORE_MIN, r.score));
+    const w = (score - SCORE_MIDPOINT) / SCORE_HALF_RANGE;
     for (const tag of bar.tags) {
       sumW.set(tag, (sumW.get(tag) ?? 0) + w);
       obs.set(tag, (obs.get(tag) ?? 0) + 1);

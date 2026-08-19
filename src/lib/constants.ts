@@ -1,9 +1,6 @@
 import type { Coords, Neighborhood } from '@/types';
 
-export const JACCARD_START = 0.25;
 export const JACCARD_FLOOR = 0.10;
-export const JACCARD_STEP = 0.05;
-export const MIN_CANDIDATES = 3;
 export const MAX_RESULTS = 3;
 /**
  * QA-6 (2026-07-27): the ONE Next Bar results view surfaces 5 suggestions
@@ -23,14 +20,10 @@ export const EXPLORATION_MIN_RESULTS = 10;
 // Blended-ranking weights (must sum to 1 so the final score stays in [0, 1] and
 // no single axis can dominate by scale). Vibe leads; proximity is a strong
 // secondary; loved-taste affinity is a small tie-breaker. See src/lib/matching.ts.
-export const VIBE_WEIGHT = 0.5;
-export const DIST_WEIGHT = 0.4;
-export const RATING_WEIGHT = 0.1;
 
 // Proximity uses a scale-free exponential decay exp(-miles / DIST_DECAY_MILES)
 // rather than pool-relative normalization (which would make a bar's rank depend
 // on the other bars in the pool). 1/e at 1.5 mi ≈ the walkable/cab boundary.
-export const DIST_DECAY_MILES = 1.5;
 
 // Bumped from 180 to 365 for v0.3.1 to buy time until per-bar verification
 // happens. Re-tighten in v0.3.2 once `bars.ts` has real lastVerified dates.

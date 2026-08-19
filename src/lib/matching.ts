@@ -19,7 +19,6 @@ import {
   LATE_NIGHT_START_HOUR,
   LATE_RESTAURANT_PENALTY,
   EXPLORATION_MIN_RESULTS,
-  JACCARD_FLOOR,
   LAST_VERIFIED_HARD_FILTER_DAYS,
   RADIUS_CAB,
   RADIUS_WALK,
@@ -216,10 +215,13 @@ export function matches(args: MatchesArgs): Bar[] {
   // seeded from (profile tags, day): stable within a day, rotates daily.
   // Small surfaces (default MAX_RESULTS = 3) are never taxed a slot.
   if (cap >= EXPLORATION_MIN_RESULTS && ranked.length > cap) {
-    // Every tail bar already cleared the adaptive Jaccard gate (which
-    // bottoms out at JACCARD_FLOOR) or the empty-profile bypass — that IS
-    // the "qualified" bar (DeepSeek review: a second floor filter here was
-    // dead code inviting divergence).
+    // OPEN CONFLICT (Codex review 2026-08-19, unresolved): "qualified" used
+    // to mean "cleared the adaptive Jaccard gate". The V8 cascade removed that
+    // gate, so the tail is now simply the band-ordered remainder — the pick is
+    // no longer filtered for vibe at all. On a 10-slot surface this also means
+    // the last slot is NOT ordered by learned taste or exact miles, which
+    // contradicts cascade steps 3-4. Only surfaces at EXPLORATION_MIN_RESULTS
+    // or above are affected; Next Bar?'s five slots never enter this branch.
     const tail = ranked.slice(cap);
     const seed = explorationSeed(profile.tags, now ?? new Date());
     top[cap - 1] = tail[seed % tail.length].bar;

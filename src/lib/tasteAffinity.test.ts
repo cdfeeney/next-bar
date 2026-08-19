@@ -111,3 +111,32 @@ describe('learnedTasteScore', () => {
     expect(learnedTasteScore(bar('x', ['dive']), EMPTY_TASTE)).toBe(0);
   });
 });
+
+describe('deriveLearnedTaste — hostile persisted scores', () => {
+  // Persisted ratings are not score-validated (ratings.ts isBarRating checks
+  // barId/rating/ratedAt only) and there is no DB check constraint yet.
+  it('clamps out-of-range finite scores into the 1.0-10.0 band', () => {
+    const wild = deriveLearnedTaste([rated('a', 1e308)], [bar('a', ['dive'])]);
+    const top = deriveLearnedTaste([rated('a', 10)], [bar('a', ['dive'])]);
+    expect(wild.affinity.get('dive')).toBeCloseTo(top.affinity.get('dive')!, 10);
+  });
+
+  it('never yields Infinity or NaN from extreme repeated scores', () => {
+    const t = deriveLearnedTaste(
+      [rated('a', Number.MAX_VALUE), rated('b', -Number.MAX_VALUE), rated('c', 1e308)],
+      [bar('a', ['dive']), bar('b', ['dive']), bar('c', ['dive'])],
+    );
+    expect(Number.isFinite(t.affinity.get('dive')!)).toBe(true);
+  });
+
+  it('keeps every affinity inside [-1, 1] whatever the input', () => {
+    const t = deriveLearnedTaste(
+      Array.from({ length: 50 }, (_, i) => rated(`b${i}`, i % 2 ? 1e12 : -1e12)),
+      Array.from({ length: 50 }, (_, i) => bar(`b${i}`, ['dive'])),
+    );
+    for (const v of t.affinity.values()) {
+      expect(v).toBeGreaterThanOrEqual(-1);
+      expect(v).toBeLessThanOrEqual(1);
+    }
+  });
+});

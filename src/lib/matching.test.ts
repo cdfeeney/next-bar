@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { isLateNight, jaccard, matches, vibeMatchBadge } from '@/lib/matching';
 import { deriveLearnedTaste, EMPTY_TASTE } from '@/lib/tasteAffinity';
+import type { BarRating } from '@/types/ratings';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
 
 // Fixed "now" used for the 180-day staleness filter.
@@ -248,7 +249,7 @@ describe('matches() — threshold relaxation', () => {
   //     intersection 1, union 5                   → 0.20 (< 0.25, >= 0.20)
   const profile = baseProfile(['cocktail', 'speakeasy', 'polished', 'industry']);
 
-  it('relaxes the threshold from 0.25 down by 0.05 steps when < MIN_CANDIDATES match', () => {
+  it('ranks stronger tag overlap above weaker, and caps the page', () => {
     const strongA = makeBar({
       id: 'strongA',
       tags: ['cocktail', 'speakeasy', 'polished', 'industry'],
@@ -276,8 +277,8 @@ describe('matches() — threshold relaxation', () => {
       now: NOW,
     });
 
-    // At 0.25 only the two strong bars match (< 3) → engine relaxes to 0.20
-    // and now all four match. Sort is jaccard-desc; cap at 3.
+    // No admission gate any more: all four are eligible. The quiz prior orders
+    // them, so the two strong-overlap bars lead and the cap takes one weak bar.
     expect(result).toHaveLength(3);
     const ids = result.map((b) => b.id);
     expect(ids.slice(0, 2).sort()).toEqual(['strongA', 'strongB']);
@@ -765,6 +766,82 @@ describe('matches() — V8 distance-band cascade', () => {
       now: NOW,
     }).map((b) => b.id);
     expect(ids).toEqual(['farther-loved', 'close-bland']);
+  });
+
+  it('a full nearer band EXCLUDES a much better-tasting farther bar', () => {
+    // Codex review: the fill tests above hold taste constant across bands, so
+    // a "rank globally by taste" implementation would also pass them. This is
+    // the clause that actually separates the cascade from a global sort — the
+    // walk band is full of bars the user has scored BADLY, and a strongly
+    // loved bar sits in the cab band. Distance band still wins.
+    const hated = deriveLearnedTaste(
+      [
+        ...Array.from({ length: 40 }, (_, i) => ({
+          barId: `bad${i}`,
+          rating: 'pass',
+          ratedAt: NOW.toISOString(),
+          score: 1,
+        })),
+        ...Array.from({ length: 40 }, (_, i) => ({
+          barId: `good${i}`,
+          rating: 'loved',
+          ratedAt: NOW.toISOString(),
+          score: 10,
+        })),
+      ] as BarRating[],
+      [
+        ...Array.from({ length: 40 }, (_, i) => makeBar({ id: `bad${i}`, tags: ['cheap'] })),
+        ...Array.from({ length: 40 }, (_, i) => makeBar({ id: `good${i}`, tags: ['club'] })),
+      ],
+    );
+    const walkBand = [0.2, 0.4, 0.6, 0.8, 1.0].map((m, i) =>
+      atMiles(`near${i}`, m, ['cheap']),
+    );
+    const belovedButFar = atMiles('beloved-far', 3.5, ['club']);
+    const ids = matches({
+      profile: baseProfile([]),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [belovedButFar, ...walkBand],
+      maxResults: 5,
+      taste: hated,
+      now: NOW,
+    }).map((b) => b.id);
+    expect(ids).toHaveLength(5);
+    expect(ids).not.toContain('beloved-far');
+    expect(ids.every((id) => id.startsWith('near'))).toBe(true);
+  });
+
+  it('learned evidence eventually overrides a conflicting quiz prior', () => {
+    // Cold-start clause: c = N/(N+10). The quiz says 'cheap'; 40 scored
+    // ratings say 'club'. Same band, so only the blend decides.
+    const clubLover = deriveLearnedTaste(
+      Array.from({ length: 40 }, (_, i) => ({
+        barId: `s${i}`,
+        rating: 'loved' as const,
+        ratedAt: NOW.toISOString(),
+        score: 10,
+      })),
+      Array.from({ length: 40 }, (_, i) => makeBar({ id: `s${i}`, tags: ['club'] })),
+    );
+    const quizPick = atMiles('quiz-pick', 0.5, ['cheap']);
+    const tastePick = atMiles('taste-pick', 0.6, ['club']);
+    const args = {
+      profile: baseProfile(['cheap']),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [quizPick, tastePick],
+      maxResults: 2,
+      now: NOW,
+    };
+    // Cold start (no history): the quiz prior alone decides.
+    expect(matches(args).map((b) => b.id)[0]).toBe('quiz-pick');
+    // With history: learned taste overtakes it.
+    expect(matches({ ...args, taste: clubLover }).map((b) => b.id)[0]).toBe(
+      'taste-pick',
+    );
   });
 
   it('uses exact miles ONLY as the final tie-breaker', () => {
