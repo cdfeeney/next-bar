@@ -30,14 +30,25 @@ function secretsFile(name: string, lines: Record<string, string>): string {
   return file;
 }
 
+// A stand-in for Supabase's CA. The refusal cases never reach TLS resolution and
+// the accept case dies in DNS first, so no case needs a real certificate - only
+// a readable file, which is what the tool checks for before connecting.
+const caFile = join(dir, 'pooler-ca.crt');
+writeFileSync(caFile, ['-----BEGIN CERTIFICATE-----', 'not-a-real-certificate', '-----END CERTIFICATE-----', ''].join('\n'));
+
 /** Runs the real script and returns what an operator would see. */
-function runApplySet(file: string): { status: number; output: string } {
+function runApplySet(file: string, env: Record<string, string> = {}): { status: number; output: string } {
   try {
     const stdout = execFileSync(
       process.execPath,
       ['node_modules/tsx/dist/cli.mjs', 'scripts/apply-migration-set.ts',
         '--secrets-file', file, '--env', 'staging', MIGRATION],
-      { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PGSSLROOTCERT: caFile, ...env },
+      },
     );
     return { status: 0, output: stdout };
   } catch (error) {
@@ -130,6 +141,32 @@ describe('apply-migration-set CLI target guard', () => {
       expect(result.output).not.toContain('ECONNREFUSED');
     }, 120_000);
   }
+
+  it('refuses, without connecting, when no pooler CA is configured', () => {
+    const result = runApplySet(secretsFile('no-ca', {
+      NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
+      NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
+      NEXT_BAR_STAGING_PROJECT_REFS: REF_A,
+      DATABASE_URL: url(REF_A),
+    }), { PGSSLROOTCERT: '' });
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('no CA certificate for the pooler');
+    expect(result.output).not.toContain('ECONNREFUSED');
+  }, 120_000);
+
+  // Node's global kill switch turns verification off underneath a config that
+  // still reads as verifying, so the guard has to look at it directly.
+  it('refuses, without connecting, when NODE_TLS_REJECT_UNAUTHORIZED=0', () => {
+    const result = runApplySet(secretsFile('tls-killswitch', {
+      NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
+      NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
+      NEXT_BAR_STAGING_PROJECT_REFS: REF_A,
+      DATABASE_URL: url(REF_A),
+    }), { NODE_TLS_REJECT_UNAUTHORIZED: '0' });
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('NODE_TLS_REJECT_UNAUTHORIZED');
+    expect(result.output).not.toContain('ECONNREFUSED');
+  }, 120_000);
 
   // The other half of the same proof: a verified target must get PAST the guard,
   // so a guard that refused everything could not pass this file either. The host

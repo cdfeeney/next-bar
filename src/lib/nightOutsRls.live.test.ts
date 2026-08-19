@@ -38,6 +38,17 @@ function envValue(key: string): string | null {
   }
 }
 
+/** Supabase's CA, when the operator has pointed PGSSLROOTCERT at it. */
+function caCertificate(): string {
+  const path = (process.env.PGSSLROOTCERT ?? '').trim();
+  if (!path) return '';
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 function databaseUrl(): string | null {
   return envValue('DATABASE_URL');
 }
@@ -154,7 +165,20 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   beforeAll(async () => {
     db = new Client({
       connectionString: URL as string,
-      ssl: { rejectUnauthorized: false },
+      // This file adopts the migration guard's identity chain above (pooler
+      // suffix, ref in the username) and then sends the role password and real
+      // DML down this connection - and those are only strings the operator
+      // wrote. So authenticate the peer WHEN WE CAN: Supabase's pooler serves a
+      // self-signed chain (rejectUnauthorized:true without a CA fails with
+      // "self-signed certificate in certificate chain"), so verification needs
+      // their CA via PGSSLROOTCERT.
+      // ponytail: unset PGSSLROOTCERT leaves this suite encrypted but
+      // unauthenticated. Hard-refusing would make the suite unrunnable on a
+      // machine that has not downloaded the CA, which is a test-harness
+      // decision; the APPLY tool refuses, because that is the path that writes.
+      ssl: caCertificate()
+        ? { rejectUnauthorized: true, ca: caCertificate() }
+        : { rejectUnauthorized: false },
       statement_timeout: 30000,
       application_name: 'v8-3-rls-negatives',
     });

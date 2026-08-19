@@ -35,6 +35,15 @@
  *
  * --secrets-file loads a target's credentials WITHOUT touching .env.local, so the
  * repo stays pointed at staging for every other tool.
+ *
+ * TLS: the connection must be encrypted AND the pooler's certificate verified.
+ * Supabase's pooler presents a SELF-SIGNED chain, so verification needs their CA
+ * (dashboard - Settings - Database - SSL configuration; one download, kept out of
+ * the repo). Point PGSSLROOTCERT at that file, or put
+ * `?sslmode=verify-full&sslrootcert=<path>` in DATABASE_URL. Without it this tool
+ * refuses rather than falling back to an unauthenticated channel: every other link
+ * in the target check is a string the operator wrote, and the certificate is the
+ * only thing that proves the peer answering that hostname is really Supabase.
  */
 
 import { config as loadEnv } from 'dotenv';
@@ -133,13 +142,24 @@ async function main(): Promise<void> {
   // TLS IS NOT OPTIONAL for a tool that ships DDL and sends a role password.
   // pg's default when the connection string says nothing is NO TLS at all
   // (connection-parameters.js falls back to defaults.ssl === false), and
-  // PGSSLMODE=disable can turn it off from the environment - an explicit option
-  // beats that variable, and the pooler-host requirement above is only worth
-  // anything if the peer presenting that name is actually authenticated.
-  // A connection string that sets sslmode wins over this default, which is how
-  // an operator supplies Supabase's CA (?sslmode=verify-full&sslrootcert=...)
-  // if the public chain ever stops validating.
-  const clientConfig = { connectionString: databaseUrl, ssl: { rejectUnauthorized: true } };
+  // PGSSLMODE=disable can turn it off from the environment - passing ssl
+  // explicitly beats that variable. The CA comes from PGSSLROOTCERT; a
+  // connection string naming sslrootcert wins over this config and pg loads that
+  // file itself. What this config resolves to is CHECKED below, after the target
+  // refusals, because a wrong target is the more useful error to show first.
+  const caPath = (process.env.PGSSLROOTCERT ?? '').trim();
+  let ca = '';
+  if (caPath) {
+    try {
+      ca = readFileSync(caPath, 'utf8');
+    } catch (error) {
+      fail(`cannot read PGSSLROOTCERT ${caPath}: ${(error as Error).message}`);
+    }
+  }
+  const clientConfig = {
+    connectionString: databaseUrl,
+    ssl: ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: true },
+  };
   // The probe must be built from the SAME config as the connection it authorises,
   // or it is answering a question about a different connection.
   const probe = new Client(clientConfig) as unknown as {
@@ -174,6 +194,29 @@ async function main(): Promise<void> {
 
   const refusal = checkMigrationTarget({ env, ref, productionRef, stagingRefs });
   if (refusal) fail(refusal);
+
+  // Node's global kill switch turns tls.connect's default verification off, and
+  // pg leaves rejectUnauthorized undefined for sslmode=verify-full, so without
+  // this the guard would report a verified peer that nothing verified.
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
+    fail('NODE_TLS_REJECT_UNAUTHORIZED=0 disables certificate verification for the whole process, '
+      + 'so the pooler host cannot be authenticated. Unset it and re-run.');
+  }
+
+  // The pooler's chain is SELF-SIGNED, so "verify against the system store" can
+  // never succeed here - proven by pointing the live RLS suite at the real
+  // staging pooler with rejectUnauthorized:true: "self-signed certificate in
+  // certificate chain". Verification therefore needs Supabase's CA, and a tool
+  // that demands verification without saying where the CA comes from is a false
+  // refusal with no way out. A connection string naming sslrootcert wins over
+  // this default and pg loads that file itself.
+  const caInUrl = /[?&]sslrootcert=/.test(databaseUrl);
+  if (!caPath && !caInUrl) {
+    fail("no CA certificate for the pooler: set PGSSLROOTCERT to Supabase's CA file (dashboard - "
+      + 'Settings - Database - SSL configuration), or add ?sslmode=verify-full&sslrootcert=<path> to '
+      + 'DATABASE_URL. The pooler chain is self-signed, so it cannot be verified without it, and an '
+      + 'unverified connection would leave the target unauthenticated.');
+  }
 
   // sslmode=disable in the connection string still wins over the default above.
   const resolvedSsl = probe.connectionParameters?.ssl as {
@@ -279,6 +322,11 @@ async function main(): Promise<void> {
     }
 
     await client.query('BEGIN');
+    // An unbounded wait holds every lock already taken while the application
+    // queues behind it, with no recourse but killing the process. Bounded, a
+    // blocked apply aborts and the whole set rolls back.
+    await client.query("SET LOCAL lock_timeout = '10s'");
+    await client.query("SET LOCAL statement_timeout = '300s'");
     try {
       for (const entry of planned) {
         process.stdout.write(`  applying ${entry.name} ... `);
