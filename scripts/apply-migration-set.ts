@@ -25,8 +25,17 @@
  *     the target is mandatory rather than inferred.
  *   - Anything at all without --execute. Dry-run is the default.
  *
- * Checksums are sha256 of each file's RAW BYTES, which is the convention the
- * existing ledger already uses (verified against 0044's recorded row).
+ * Checksums come from migrationChecksum() in src/lib/effectiveMigration.ts, so
+ * this script and the live provenance test in src/lib/nightOutsRls.live.test.ts
+ * cannot disagree about what a ledger row means.
+ *
+ * This header used to claim RAW BYTES, "verified against 0044's recorded row".
+ * That was wrong, and 0044's row is what disproves it: the ledger holds the
+ * NORMALISED hash (3514e43e...), not the raw one (5578e1af...). Read from the
+ * serving staging ledger 2026-08-19: raw matched 0 of the 35 rows whose file
+ * exists on this branch, normalised matched all 35. Applying through the old
+ * code would have written rows the provenance gate then rejected as DRIFTED
+ * (round-3 review, Claude, medium).
  *
  * Usage:
  *   npx tsx scripts/apply-migration-set.ts --env staging 0044_x.sql 0045_y.sql
@@ -38,10 +47,11 @@
  */
 
 import { config as loadEnv } from 'dotenv';
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
+
+import { migrationChecksum } from '../src/lib/effectiveMigration';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -160,7 +170,7 @@ async function main(): Promise<void> {
     } catch (error) {
       return fail(`cannot read ${name}: ${(error as Error).message}`);
     }
-    return { name, raw, checksum: createHash('sha256').update(raw).digest('hex') };
+    return { name, raw, checksum: migrationChecksum(name) };
   });
 
   const client = new Client({ connectionString: databaseUrl });

@@ -1159,6 +1159,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       join_night_out_by_token: ['p_token uuid'],
       decline_night_out_by_token: ['p_token uuid'],
       night_out_seat_count: ['p_night_out uuid'],
+      night_out_is_full_by_token: ['p_token uuid'],
     };
     const { rows } = await db.query(
       `select p.proname as name, pg_get_function_identity_arguments(p.oid) as args
@@ -1194,7 +1195,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * becomes an assertion. The overload pin above compares SIGNATURES; this
    * compares PROVENANCE — which file the ledger says installed them.
    */
-  it('every migration the static guard reads is applied here, byte-for-byte', async () => {
+  it('every migration the static guard reads is applied here at its recorded checksum', async () => {
     const resolved = GUARDED_FUNCTIONS.map((name) => {
       const file = definingMigration(name);
       expect(file, `no committed migration defines ${name}`).not.toBeNull();
@@ -1227,6 +1228,41 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       provenance,
       'the static guard resolved a migration this database did not run, or ran differently',
     ).toEqual(Object.fromEntries(GUARDED_FUNCTIONS.map((name, i) => [name, resolved[i]])));
+  });
+
+  /**
+   * CRITERION 5, which the test above does NOT reach.
+   *
+   * "What is applied is byte-identical to what is committed for 0057" is a claim
+   * about 0057 specifically. definingMigration resolves respond_night_out to
+   * 0059, so removing 0057's ledger row or changing its checksum left that test
+   * green (round-3 review, Codex, medium). 0058 is named for the same reason:
+   * the guard chain is 0057 -> 0058 -> 0059 and a hole in the middle is a hole.
+   *
+   * Named literally on purpose. These two files are FROZEN history — a criterion
+   * about 0057 cannot be satisfied by whatever the resolver points at today.
+   */
+  it('0057 and 0058 are applied here at their committed checksums (criterion 5)', async () => {
+    const chain = [
+      '0057_night_outs_respond_expected_status.sql',
+      '0058_night_outs_respond_expected_status_atomic.sql',
+    ];
+    const { rows } = await db.query(
+      'select name, checksum from public.schema_migrations where name = any($1::text[])',
+      [chain],
+    );
+    const ledger = new Map(
+      (rows as Array<{ name: string; checksum: string }>).map((r) => [r.name, r.checksum]),
+    );
+    expect(
+      Object.fromEntries(chain.map((file) => [
+        file,
+        !ledger.has(file) ? 'NOT in the ledger'
+          : ledger.get(file) !== migrationChecksum(file) ? 'DRIFTED'
+            : 'applied, checksum matches',
+      ])),
+      'the replay-guard chain is not on this database as committed',
+    ).toEqual(Object.fromEntries(chain.map((file) => [file, 'applied, checksum matches'])));
   });
 
   /**

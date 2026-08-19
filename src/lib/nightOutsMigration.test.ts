@@ -329,22 +329,37 @@ function functionBody(sql: string, name: string): string {
  * parameter rather than a wildcard because a wildcard would accept any operand,
  * which is the hole being closed.
  *
- * Returned as a plain string and matched against a whitespace-flattened body,
- * because the expression spans a line break in every migration that states it
- * and a regex for that is all escaping and no clarity.
+ * Returned as a plain string and matched against a normalised body, because the
+ * expression spans a line break in every night-out migration that states it and
+ * a regex for that is all escaping and no clarity.
+ *
+ * FORMATTING MUST NOT CHANGE THE VERDICT. The first version hard-coded one space
+ * after the open paren, which only matched because these files break the line
+ * there; the same call written on one line — the prevailing style in
+ * 0009/0011/0012/0013 — has none and would have failed a correct, identically
+ * keyed lock (round-3 review, Claude, medium). A false red here is dangerous in
+ * a specific way: the obvious repair under time pressure is to loosen this back
+ * to the `night_out_members:` prefix, which is the exact hole it exists to
+ * close. So `normalise` drops spaces around parens rather than this string
+ * getting looser.
  */
 function planLock(plan: string): string {
-  return `pg_advisory_xact_lock( hashtextextended('night_out_members:' || ${plan}::text, 0))`;
+  return `pg_advisory_xact_lock(hashtextextended('night_out_members:' || ${plan}::text, 0))`;
 }
 
-/** The same text with every run of whitespace collapsed to one space. */
-function flatten(sql: string): string {
-  return sql.replace(/\s+/g, ' ');
+/**
+ * Whitespace runs collapsed to one space, and no space adjacent to a paren.
+ *
+ * Operand and salt still have to match exactly — this only makes line breaks and
+ * indentation invisible, not the key.
+ */
+function normalise(sql: string): string {
+  return sql.replace(/\s+/g, ' ').replace(/\s*([()])\s*/g, '$1');
 }
 
 describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
-    const body = flatten(functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token'));
+    const body = normalise(functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token'));
     // The whole KEY, not just the call — see planLock above.
     const lock = body.indexOf(planLock('v_id'));
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
@@ -358,7 +373,7 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
   });
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
-    const body = flatten(functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token'));
+    const body = normalise(functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token'));
     expect(body).not.toMatch(/member_cap/);
     // Still serialised on the SAME per-plan key, so a concurrent invite cannot
     // swallow the decline. A different key would serialise nothing.
@@ -366,7 +381,7 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = flatten(functionBody(effectiveSql('respond_night_out'), 'respond_night_out'));
+    const body = normalise(functionBody(effectiveSql('respond_night_out'), 'respond_night_out'));
     expect(body, 'the rejoin path must take the same per-plan lock')
       .toContain(planLock('p_night_out'));
     expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
@@ -421,15 +436,26 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
     ).toBe(1);
   });
 
+  /**
+   * Reads the EFFECTIVE definition of each caller, not 0048's copy.
+   *
+   * This loop used to read SQL_0048 for all three, including respond_night_out —
+   * whose definition moved out of 0048 in the 0057 -> 0058 -> 0059 chain. A later
+   * migration could restate it with an inline count instead of
+   * night_out_seat_count and this assertion would keep passing against dead text,
+   * which is the single-source property it exists to protect (round-3 review,
+   * Codex, medium). The describe block's title still names 0048 because the
+   * exactly-once assertions above genuinely are about that file's text.
+   */
   it('every caller asks the helpers rather than restating the rule', () => {
-    for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token']) {
-      const body = functionBody(SQL_0048, fn);
+    for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token'] as const) {
+      const body = functionBody(effectiveSql(fn), fn);
       expect(body, `${fn} does not use night_out_seat_count`).toMatch(/night_out_seat_count/);
       expect(body, `${fn} does not use night_out_member_cap`).toMatch(/night_out_member_cap/);
       expect(body, `${fn} still carries a hard-coded cap`).not.toMatch(/member_cap constant/);
     }
     // Declining is never rationed by capacity, so it must ask neither.
-    const decline = functionBody(SQL_0048, 'decline_night_out_by_token');
+    const decline = functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token');
     expect(decline).not.toMatch(/night_out_member_cap/);
   });
 

@@ -46,11 +46,21 @@ sat directly in front of a destructive operation.
 `scripts/apply-migrations.ts` here is ledger-BLIND: it re-executes every file in
 lexical order regardless of what the ledger says. `nb-overnight`'s runner is the
 ledger-aware one (hashes each file, records it, refuses ambiguous partial state)
-and is what should be used. Verified 2026-08-16: this branch's copies of eleven
-`0000`–`0010` files differ from the checksums recorded in the live ledger, so a
-blind replay would re-run *older, different* versions of the base schema over a
-database that has moved well past them — including re-granting privileges that
-`0034_revoke_first_grants.sql` had tightened.
+and is what should be used. A blind replay re-runs the base schema over a
+database that has moved well past it — including re-granting privileges that
+`0034_revoke_first_grants.sql` had tightened. That is reason enough; it does not
+depend on any checksum claim.
+
+**The ledger's checksum is NORMALISED — LF-normalised and trailing-whitespace
+stripped — not a hash of the raw bytes.** Use `migrationChecksum()` in
+`src/lib/effectiveMigration.ts`; `scripts/apply-migration-set.ts` calls it too.
+This paragraph previously said eleven `0000`–`0010` files "differ from the
+checksums recorded in the live ledger" (verified 2026-08-16). Re-measured
+against the serving staging ledger on 2026-08-19 with the ledger's own
+algorithm: all eleven are present and all eleven MATCH, as do all 35 rows whose
+file exists on this branch, with zero drift. The 2026-08-16 reading compared raw
+bytes to a normalised ledger on a `core.autocrlf` checkout, which reports drift
+for every multi-line file. Do not re-derive that claim by hashing raw bytes.
 
 Before applying anything: read the ledger, apply only files absent from it, and
 number new migrations ABOVE the live maximum. Two branches independently minted
