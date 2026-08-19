@@ -43,7 +43,10 @@ const profile = (
 });
 
 describe('computeSuggestions — pure map-suggestion pipeline (B6)', () => {
-  it('excludes pass-rated bars from suggestions', () => {
+  // V8 Option B (resolved 2026-08-19): a low score is negative evidence, not
+  // an exclusion. This is the pin against reintroducing rating-based
+  // suppression on the map surface.
+  it('keeps low-scored (pass-tier) bars in suggestions', () => {
     const bars = [
       makeBar({ id: 'a', tags: ['dive', 'cheap'] }),
       makeBar({ id: 'b', tags: ['dive', 'cheap'] }),
@@ -55,11 +58,11 @@ describe('computeSuggestions — pure map-suggestion pipeline (B6)', () => {
       ratings: [makeRating('a', 'pass')],
       now: NOW,
     });
-    expect(result.map((b) => b.id)).not.toContain('a');
+    expect(result.map((b) => b.id)).toContain('a');
     expect(result.map((b) => b.id)).toContain('b');
   });
 
-  it('keeps loved/liked bars in the pool (only pass excludes)', () => {
+  it('keeps loved/liked bars in the pool', () => {
     const bars = [
       makeBar({ id: 'a', tags: ['dive'] }),
       makeBar({ id: 'b', tags: ['dive'] }),

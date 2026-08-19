@@ -26,7 +26,7 @@ export type ComputeSuggestionsArgs = {
  * Pure core of "run matching for the current user". Mirrors the exact
  * `matches()` invocation ResultsView makes on the home (Where-next) flow:
  *
- *  - pass-rated bars are excluded,
+ *  - no rating-derived exclusion (V8 Option B: low scores rank down, never out),
  *  - the flattened tags of Loved bars feed the loved-affinity ranking term,
  *  - the profile's preferred neighborhoods filter applies,
  *  - maxMiles is null (no hard radius — the map shows the whole catalog).
@@ -42,10 +42,6 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
     maxResults = MAP_SUGGESTION_COUNT,
     now,
   } = args;
-
-  const excludeIds = ratings
-    .filter((r) => r.rating === 'pass')
-    .map((r) => r.barId);
 
   // Flatten the vibe tags of every bar the user has Loved, so matches() can
   // nudge bars with a similar taste profile up the rank (loved-affinity term).
@@ -67,7 +63,8 @@ export function computeSuggestions(args: ComputeSuggestionsArgs): Bar[] {
     preferredNeighborhoods: profile.preferredNeighborhoods,
     maxMiles: null,
     bars,
-    excludeIds,
+    // V8 (Option B, resolved 2026-08-19): no rating-derived exclusion. The map
+    // suggests from the whole catalog; a low score only ranks a bar down.
     maxResults,
     now,
     lovedTags: Array.from(lovedTagSet),

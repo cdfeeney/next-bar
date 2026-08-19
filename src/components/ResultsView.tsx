@@ -102,13 +102,10 @@ export default function ResultsView({
     [bars, hideClosedNow, filterNow],
   );
 
-  const effectiveExcludeIds = useMemo(() => {
-    const merged = new Set(excludeIds ?? []);
-    for (const r of ratings) {
-      if (r.rating === 'pass') merged.add(r.barId);
-    }
-    return Array.from(merged);
-  }, [excludeIds, ratings]);
+  // V8 (Option B, resolved 2026-08-19): a low score is negative evidence, not
+  // an exclusion. Only caller-supplied excludeIds (tonight-exclusion, manual)
+  // suppress a bar — never a rating tier.
+  const effectiveExcludeIds = useMemo(() => excludeIds ?? [], [excludeIds]);
 
   // Flatten the vibe tags of every bar the user has Loved, so matches() can
   // nudge bars with a similar taste profile up the rank (loved-affinity term).
