@@ -677,6 +677,43 @@ describe('useFollows — followers + mutuals (B3c)', () => {
     unmount();
   });
 
+  it('a first mount during an in-flight write still SHOWS the server list', async () => {
+    // Dropping a superseded answer is right for a revalidation — it would
+    // clobber optimistic state — but on a first mount there is nothing to
+    // clobber, and discarding it renders "Not following anyone yet" to a user
+    // who has friends (round-7 panel, Claude). Show it; just don't call it
+    // ready, because it predates the write still in flight.
+    let settleWrite: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settleWrite = resolve;
+        }),
+    );
+    fetchFollowsMock.mockResolvedValue([]);
+    const first = renderHook(() => useFollows());
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    act(() => first.result.current.toggleFollow('someone_new'));
+    first.unmount();
+
+    // New page, write still outstanding. The server does have friends.
+    fetchFollowsMock.mockResolvedValue([MAYA, DEV]);
+    const second = renderHook(() => useFollows());
+    await waitFor(() => expect(second.result.current.loading).toBe(false));
+
+    expect(second.result.current.circle).toEqual([MAYA, DEV]);
+    // …but the invite list stays gated: this snapshot predates the write.
+    expect(second.result.current.circleReady).toBe(false);
+
+    // Leave nothing in flight — the pending set is module state.
+    await act(async () => {
+      settleWrite(null);
+    });
+    await waitFor(() => expect(second.result.current.circleReady).toBe(true));
+    second.unmount();
+  });
+
   it('coming back to the tab re-checks the circle', async () => {
     // The cross-tab ping is a best-effort localStorage write — quota or private
     // mode swallows it. Returning to the tab must re-check regardless, without

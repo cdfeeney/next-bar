@@ -304,8 +304,6 @@ export function useFollows(): UseFollowsReturn {
         fetchFollowers(supabase),
       ]);
       if (cancelled || getCacheEpoch() !== epoch) return;
-      setLoading(false);
-      setFetchFailed(server === null);
 
       // SUPERSEDED: something changed while this was in the air. Applying it
       // would overwrite newer optimistic state with an older snapshot and erase
@@ -314,8 +312,30 @@ export function useFollows(): UseFollowsReturn {
       // draining pending set bumps it too, so dropping this answer loses
       // nothing.
       if (circleGeneration !== fetchGeneration || pendingCircleWrites.size > 0) {
+        // One exception, and it is the FIRST answer this mount has had
+        // (round-7 panel, Claude). Discarding it outright while clearing
+        // `loading` told the user an empty circle was settled fact, and
+        // /friends/following renders "Not following anyone yet" from exactly
+        // that — to someone who has friends. Holding `loading` instead just
+        // trades the lie for a spinner.
+        //
+        // A first mount has no optimistic state to clobber — placeholders are
+        // per-instance and this instance has made no write — so the reason to
+        // drop a superseded answer does not apply to DISPLAYING it. It is still
+        // not marked ready: it predates whatever is in flight, and the next
+        // fetch (already queued) is what earns that.
+        if (readyGenerationRef.current === null && server !== null) {
+          setCircle(server);
+          if (outgoing !== null) setRequested(outgoing);
+          if (followerList !== null) setFollowers(followerList);
+          setFetchFailed(false);
+          setLoading(false);
+        }
         return;
       }
+
+      setLoading(false);
+      setFetchFailed(server === null);
 
       // null = fetch FAILED (not "zero friends") — keep prior state rather
       // than blanking a circle on a transient failure. Never fall back to
