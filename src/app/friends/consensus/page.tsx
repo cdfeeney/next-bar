@@ -11,6 +11,7 @@ import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
+import type { BarRating } from '@/types/ratings';
 import { useVibeVotes } from '@/hooks/useVibeVotes';
 import VibeVotePoll from '@/components/VibeVotePoll';
 import { boostByWinningVibe } from '@/lib/vibeVotes';
@@ -38,7 +39,8 @@ type Person = {
   label: string;
   initials: string;
   seed: string;
-  ratings: ReadonlyArray<{ barId: string; rating: 'loved' | 'liked' | 'pass'; ratedAt: string }>;
+  /** Full rating shape — `score` is what Group Favorites reads. */
+  ratings: ReadonlyArray<BarRating>;
 };
 
 function initialsFor(label: string): string {
@@ -75,10 +77,14 @@ export default function ConsensusPage(): JSX.Element {
   const isServer = mode === 'server';
 
   // REAL consensus (operator: "make where should we go real"): in server
-  // mode the people are your actual circle and their tier-rated bars come
-  // from get_friend_ratings (tier-only — scores never cross the friend
-  // boundary; scoreOf falls back to tier midpoints). Demo mode keeps the
-  // seeded curators so signed-out visitors still see the feature work.
+  // mode the people are your actual circle and their bars come from
+  // get_friend_ratings, which is TIER-ONLY by a hard security rule (0007 /
+  // 0015: scores never cross the friend boundary). Group Favorites is a
+  // score rule since 2026-08-19 — every member needs a personal score >= 8.0
+  // — so a real circle contributes no qualifying scores today and the list
+  // stays empty until that boundary carries the signal. Demo mode keeps the
+  // seeded curators, whose ratings DO carry scores, so signed-out visitors
+  // still see the feature work.
   const [friendRatings, setFriendRatings] = useState<Record<string, FriendRating[]> | null>(null);
   useEffect(() => {
     if (!isServer || auth.status !== 'signed-in') return;

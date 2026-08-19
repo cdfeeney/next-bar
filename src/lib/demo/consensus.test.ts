@@ -1,15 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { computeConsensus, type ConsensusParticipant } from './consensus';
+import {
+  computeConsensus,
+  GROUP_FAVORITE_MIN_SCORE,
+  type ConsensusParticipant,
+} from './consensus';
 import type { BarRating } from '@/types/ratings';
 
-const rating = (
-  barId: string,
-  score: number,
-): BarRating => ({
+const rating = (barId: string, score: number): BarRating => ({
   barId,
   rating: score >= 8.0 ? 'loved' : score >= 5.0 ? 'liked' : 'pass',
   ratedAt: '2026-05-01T00:00:00.000Z',
   score,
+});
+
+/** A rating entered before any pairwise comparison — tier only, no score. */
+const unscored = (barId: string, tier: BarRating['rating']): BarRating => ({
+  barId,
+  rating: tier,
+  ratedAt: '2026-05-01T00:00:00.000Z',
 });
 
 const participant = (
@@ -17,78 +25,120 @@ const participant = (
   ratings: BarRating[],
 ): ConsensusParticipant => ({ id, label: id, ratings });
 
-describe('computeConsensus', () => {
-  it('puts bars everyone rated into overlap, ranked by average score', () => {
+describe('computeConsensus — Group Favorites (founder rule 2026-08-19)', () => {
+  it('makes a bar a Group Favorite only when every member scored it >= 8.0', () => {
     const a = participant('a', [rating('x', 9.0), rating('y', 8.0)]);
     const b = participant('b', [rating('x', 8.0), rating('y', 9.0)]);
     const c = participant('c', [rating('x', 8.5), rating('y', 7.0)]);
 
-    const { overlap } = computeConsensus([a, b, c]);
+    const { overlap, alsoConsider } = computeConsensus([a, b, c]);
 
-    expect(overlap.map((e) => e.barId)).toEqual(['x', 'y']);
-    expect(overlap[0].barId).toBe('x');
+    // x: 9.0 / 8.0 / 8.5 — unanimous at or above the threshold.
+    expect(overlap.map((e) => e.barId)).toEqual(['x']);
     expect(overlap[0].avgScore).toBeCloseTo(8.5, 5);
     expect(overlap[0].ratedBy).toBe(3);
-    expect(overlap[1].avgScore).toBeCloseTo(8.0, 5);
+    // y: one 7.5-style near-miss (7.0) fails unanimity, so it is a near-miss,
+    // not a Group Favorite — and it is NOT hidden.
+    expect(alsoConsider.map((e) => e.barId)).toEqual(['y']);
   });
 
-  it('excludes a bar that any participant Passed (hard veto)', () => {
-    const a = participant('a', [rating('x', 9.5)]); // loved
-    const b = participant('b', [rating('x', 2.0)]); // pass — veto
+  it('uses 8.0 as the threshold, inclusive', () => {
+    expect(GROUP_FAVORITE_MIN_SCORE).toBe(8.0);
+    const exactly = computeConsensus([
+      participant('a', [rating('x', 8.0)]),
+      participant('b', [rating('x', 8.0)]),
+    ]);
+    expect(exactly.overlap.map((e) => e.barId)).toEqual(['x']);
+
+    const justUnder = computeConsensus([
+      participant('a', [rating('x', 8.0)]),
+      participant('b', [rating('x', 7.9)]),
+    ]);
+    expect(justUnder.overlap).toHaveLength(0);
+  });
+
+  it('does not let one low score veto a bar for the group', () => {
+    // Founder table: 9.0 / 2.0 = not a Group Favorite. It is not removed by a
+    // veto — it simply fails unanimity, same as a 7.5 does.
+    const a = participant('a', [rating('x', 9.5), rating('y', 9.5)]);
+    const b = participant('b', [rating('x', 2.0), rating('y', 7.5)]);
+
+    const { overlap } = computeConsensus([a, b]);
+
+    expect(overlap).toHaveLength(0);
+    // And a Pass-tier score never suppresses OTHER bars either.
+    const c = participant('c', [rating('x', 2.0), rating('z', 9.0)]);
+    const d = participant('d', [rating('z', 8.5)]);
+    expect(
+      computeConsensus([c, d]).overlap.map((e) => e.barId),
+    ).toEqual(['z']);
+  });
+
+  it('treats a member with no score for the bar as "not YET", never as a vote', () => {
+    // Founder table: 9.0 / no score = not YET a Group Favorite.
+    const a = participant('a', [rating('x', 9.0)]);
+    const b = participant('b', [unscored('x', 'loved')]);
 
     const { overlap, alsoConsider } = computeConsensus([a, b]);
 
-    expect(overlap.find((e) => e.barId === 'x')).toBeUndefined();
-    expect(alsoConsider.find((e) => e.barId === 'x')).toBeUndefined();
-  });
-
-  it('routes partial-overlap bars (2+ but not all) into alsoConsider', () => {
-    const a = participant('a', [rating('shared', 9.0), rating('x', 8.0)]);
-    const b = participant('b', [rating('shared', 8.0), rating('y', 8.0)]);
-    const c = participant('c', [rating('shared', 7.5)]);
-
-    const { overlap, alsoConsider } = computeConsensus([a, b, c]);
-
-    // 'shared' is rated by all 3 → overlap.
-    expect(overlap.map((e) => e.barId)).toEqual(['shared']);
-    // 'x' and 'y' are each rated by only 1 → neither list.
+    expect(overlap).toHaveLength(0);
+    // One favorable score is not a near-miss either — that needs 2.
     expect(alsoConsider).toHaveLength(0);
   });
 
-  it('surfaces a bar two of three rated into alsoConsider', () => {
+  it('never imputes a tier midpoint for an unscored rating', () => {
+    // Both `loved` with no score. Under the old tier-midpoint fallback this
+    // scored 9.0 each and became a unanimous pick; scores are the product
+    // model now, and there are none here.
+    const a = participant('a', [unscored('x', 'loved')]);
+    const b = participant('b', [unscored('x', 'loved')]);
+
+    const { overlap, alsoConsider } = computeConsensus([a, b]);
+
+    expect(overlap).toHaveLength(0);
+    expect(alsoConsider).toHaveLength(0);
+  });
+
+  it('routes a bar 2+ (not all) members scored highly into alsoConsider', () => {
     const a = participant('a', [rating('duo', 9.0), rating('solo', 9.0)]);
     const b = participant('b', [rating('duo', 8.0)]);
     const c = participant('c', [rating('other', 8.0)]);
 
     const { overlap, alsoConsider } = computeConsensus([a, b, c]);
 
-    expect(overlap).toHaveLength(0); // nothing rated by all 3
+    expect(overlap).toHaveLength(0);
     expect(alsoConsider.map((e) => e.barId)).toEqual(['duo']);
     expect(alsoConsider[0].ratedBy).toBe(2);
+    // 'solo' and 'other' have a single favourable score each — neither list.
   });
 
-  it('returns empty lists for a single participant (no consensus possible)', () => {
-    const a = participant('a', [rating('x', 9.0), rating('y', 8.0)]);
-    const { overlap, alsoConsider } = computeConsensus([a]);
-    // With one participant every bar is "rated by all" = 1, but ratedBy === total
-    // means overlap; that's fine — the UI gates on >=2 participants.
-    expect(overlap).toHaveLength(2);
+  it('keeps a near-miss out of alsoConsider without 2 favourable scores', () => {
+    const a = participant('a', [rating('x', 9.0)]);
+    const b = participant('b', [rating('x', 6.0)]);
+    const c = participant('c', [rating('x', 6.5)]);
+
+    const { overlap, alsoConsider } = computeConsensus([a, b, c]);
+
+    expect(overlap).toHaveLength(0);
     expect(alsoConsider).toHaveLength(0);
   });
 
-  it('falls back to the tier midpoint when a rating has no score', () => {
-    const a: ConsensusParticipant = {
-      id: 'a',
-      label: 'a',
-      ratings: [{ barId: 'x', rating: 'loved', ratedAt: '2026-05-01T00:00:00.000Z' }],
-    };
-    const b: ConsensusParticipant = {
-      id: 'b',
-      label: 'b',
-      ratings: [{ barId: 'x', rating: 'loved', ratedAt: '2026-05-01T00:00:00.000Z' }],
-    };
+  it('ranks both lists by average score, descending', () => {
+    const a = participant('a', [rating('hi', 9.5), rating('lo', 8.0)]);
+    const b = participant('b', [rating('hi', 9.0), rating('lo', 8.5)]);
+
     const { overlap } = computeConsensus([a, b]);
-    expect(overlap[0].avgScore).toBeCloseTo(9.0, 5); // loved midpoint
+
+    expect(overlap.map((e) => e.barId)).toEqual(['hi', 'lo']);
+  });
+
+  it('returns a single participant\'s own high scores as overlap', () => {
+    const a = participant('a', [rating('x', 9.0), rating('y', 8.0)]);
+    const { overlap, alsoConsider } = computeConsensus([a]);
+    // With one participant "everyone scored it" is trivially true; the UI
+    // gates on >= 2 participants.
+    expect(overlap).toHaveLength(2);
+    expect(alsoConsider).toHaveLength(0);
   });
 
   it('does not mutate the input ratings', () => {
@@ -99,9 +149,9 @@ describe('computeConsensus', () => {
   });
 
   it('sorts votes within an entry high→low', () => {
-    const a = participant('a', [rating('x', 7.0)]);
+    const a = participant('a', [rating('x', 8.5)]);
     const b = participant('b', [rating('x', 9.0)]);
     const { overlap } = computeConsensus([a, b]);
-    expect(overlap[0].votes.map((v) => v.score)).toEqual([9.0, 7.0]);
+    expect(overlap[0].votes.map((v) => v.score)).toEqual([9.0, 8.5]);
   });
 });
