@@ -41,6 +41,7 @@ classifies them explicitly; adding a third broadcast is a deliberate edit there.
 | `next-bar:demo:seeded:v1` | local | Demo-rating seed marker | Preserve; never merge into a signed-in account. |
 | `next-bar:demo:seeded-ids:v1` | local | IDs written by the demo seed | Preserve; never merge into a signed-in account. |
 | `next-bar:follows:v1` | local | Signed-out demo follows | Signed-in owner is existing `follows`; server replaces demo state and demo rows never merge. |
+| `next-bar:follows:dirty` | local-only, never synced | Cross-tab "the circle moved" ping | Carries no data — only the write is meaningful. One tab settling a follow/unfollow stamps it so other tabs re-hydrate before reporting the circle ready, instead of deriving an invite list from a snapshot taken before that write. Safe to drop at any time; the worst case is a stale circle in a background tab. |
 | `next-bar:ratings:v1` | local | Rating tier, numeric score, and `ratedAt` cache | Signed-in owner is existing `ratings`; retain as the V7 cache/write-through shape. |
 | `next-bar:ratings:merged-for:v1` | local | Account ownership/one-time merge latch | **Local-only, never synced** — it is a device-side latch naming a server user ID, not account data. Preserve the exact ID. See the ownership/retry caveat below. |
 | `next-bar:pairwise:v1` | local | Append-only comparison transcript | Signed-in owner is existing `pairwise_comparisons`; retain as the V7 cache shape. |

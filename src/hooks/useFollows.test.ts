@@ -167,7 +167,17 @@ describe('useFollows — server (signed-in) mode', () => {
   });
 
   it('toggleFollow on a new handle calls followByHandle and lands the resolved profile', async () => {
-    followByHandleMock.mockResolvedValue({ profile: MAYA, status: 'followed' });
+    // Deferred, because the optimistic phase asserted below only exists while
+    // the RPC is genuinely in flight. With an already-resolved mock the settle
+    // (and the re-consult it triggers) lands inside the same act() flush.
+    let settle: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settle = resolve;
+        }),
+    );
     const { result } = renderHook(() => useFollows());
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -175,6 +185,13 @@ describe('useFollows — server (signed-in) mode', () => {
 
     // Optimistic: following reads true immediately (case-insensitive).
     expect(result.current.isFollowing('Claire_R')).toBe(true);
+
+    // A settled write re-consults the server — that is how another mount or
+    // tab learns about it — so the mock answers as the server now would.
+    fetchFollowsMock.mockResolvedValue([MAYA]);
+    await act(async () => {
+      settle({ profile: MAYA, status: 'followed' });
+    });
 
     await waitFor(() =>
       expect(result.current.circle).toContainEqual(MAYA),
@@ -203,6 +220,8 @@ describe('useFollows — server (signed-in) mode', () => {
     const { result } = renderHook(() => useFollows());
     await waitFor(() => expect(result.current.circle).toHaveLength(2));
 
+    // The settled unfollow re-consults the server, which no longer lists MAYA.
+    fetchFollowsMock.mockResolvedValue([DEV]);
     act(() => result.current.toggleFollow('claire_r'));
 
     expect(result.current.isFollowing('Claire_R')).toBe(false);
@@ -210,7 +229,7 @@ describe('useFollows — server (signed-in) mode', () => {
       expect(unfollowByIdMock).toHaveBeenCalledWith(fakeSupabase, 'uuid-claire'),
     );
     expect(unfollowByHandleMock).not.toHaveBeenCalled();
-    expect(result.current.circle).toEqual([DEV]);
+    await waitFor(() => expect(result.current.circle).toEqual([DEV]));
   });
 
   it('restores the entry when the unfollow reports failure', async () => {
@@ -252,13 +271,26 @@ describe('useFollows — follow requests (B3b)', () => {
   });
 
   it("a 'requested' outcome moves the optimistic entry to requested, not the circle", async () => {
-    followByHandleMock.mockResolvedValue({ profile: MAYA, status: 'requested' });
+    let settle: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settle = resolve;
+        }),
+    );
     const { result } = renderHook(() => useFollows());
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     act(() => result.current.toggleFollow('claire_r'));
     // Optimistic phase: appears as following until the server answers.
     expect(result.current.isFollowing('Claire_R')).toBe(true);
+
+    // Post-write server state: the request exists, the circle does not have her.
+    fetchOutgoingRequestsMock.mockResolvedValue([MAYA]);
+    await act(async () => {
+      settle({ profile: MAYA, status: 'requested' });
+    });
 
     await waitFor(() => expect(result.current.isRequested('Claire_R')).toBe(true));
     expect(result.current.isFollowing('Claire_R')).toBe(false);
@@ -349,6 +381,7 @@ describe('useFollows — double-tap race on an in-flight follow (Opus B3b review
     // The server settles: private target → 'requested'. The entry must end
     // in requested ONLY — no phantom left in the circle.
     const AVA = { id: 'uuid-ava', handle: 'ava_p', displayName: 'Ava P.' };
+    fetchOutgoingRequestsMock.mockResolvedValue([AVA]);
     await act(async () => {
       resolveFollow({ profile: AVA, status: 'requested' });
       await Promise.resolve();
@@ -418,6 +451,168 @@ describe('useFollows — followers + mutuals (B3c)', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.circle).toEqual([]);
     expect(result.current.circleReady).toBe(false);
+  });
+
+  it('a settled follow re-hydrates instead of just releasing the flag', async () => {
+    // The hole round 4 left: clearing "in flight" is not the same as "the
+    // snapshot is current". The new mount's fetch is answered BEFORE the write
+    // commits, so releasing readiness when the write settles hands the caller a
+    // circle that predates it. Readiness must wait for a fetch taken AFTER.
+    let settleFollow: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settleFollow = resolve;
+        }),
+    );
+
+    const first = renderHook(() => useFollows());
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    act(() => first.result.current.toggleFollow('maya'));
+    first.unmount();
+
+    // The pre-follow snapshot arrives at the new mount.
+    const second = renderHook(() => useFollows());
+    await waitFor(() => expect(second.result.current.loading).toBe(false));
+    expect(second.result.current.circleReady).toBe(false);
+
+    // Hold the re-hydrate open so the window between "write settled" and
+    // "fresh snapshot in hand" is observable. That window is the whole point:
+    // with readiness released by an empty pending set alone, this is where a
+    // night out goes out over the stale circle.
+    let settleRefetch: (value: typeof MAYA[]) => void = () => {};
+    fetchFollowsMock.mockImplementation(
+      () => new Promise<typeof MAYA[]>((resolve) => { settleRefetch = resolve; }),
+    );
+
+    await act(async () => {
+      settleFollow({ profile: MAYA, status: 'followed' });
+    });
+
+    // Nothing is in flight any more, and the circle is STILL the stale one.
+    expect(second.result.current.circle).toEqual([]);
+    expect(second.result.current.circleReady).toBe(false);
+
+    // Only the fresh snapshot restores readiness.
+    await act(async () => {
+      settleRefetch([MAYA]);
+    });
+    await waitFor(() => expect(second.result.current.circleReady).toBe(true));
+    expect(second.result.current.circle).toEqual([MAYA]);
+    second.unmount();
+  });
+
+  it('never reports ready over a stale circle, not even for a single render', async () => {
+    // The narrow version of the same rule. Releasing the pending flag and
+    // re-hydrating happen in that order, so for one render the old snapshot is
+    // present with nothing in flight. Pinning readiness to the generation its
+    // fetch answered for closes that render; the refetch alone does not.
+    let settleFollow: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settleFollow = resolve;
+        }),
+    );
+
+    const seen: Array<{ ready: boolean; size: number }> = [];
+    const { result, unmount } = renderHook(() => {
+      const value = useFollows();
+      seen.push({ ready: value.circleReady, size: value.circle.length });
+      return value;
+    });
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+
+    act(() => result.current.toggleFollow('Claire_R'));
+    seen.length = 0; // only the settle onwards is under test
+
+    fetchFollowsMock.mockResolvedValue([MAYA]);
+    await act(async () => {
+      settleFollow({ profile: MAYA, status: 'followed' });
+    });
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+
+    // No render may have claimed readiness while the circle was still empty.
+    expect(seen.filter((r) => r.ready && r.size === 0)).toEqual([]);
+    unmount();
+  });
+
+  it('another tab settling a write makes this tab re-hydrate before reporting ready', async () => {
+    fetchFollowsMock.mockResolvedValue([]);
+    const { result, unmount } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+
+    // The other tab followed someone; all we see is its storage ping.
+    fetchFollowsMock.mockResolvedValue([MAYA]);
+    await act(async () => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: 'next-bar:follows:dirty' }),
+      );
+    });
+
+    await waitFor(() => expect(result.current.circle).toEqual([MAYA]));
+    expect(result.current.circleReady).toBe(true);
+    unmount();
+  });
+
+  it('a REJECTED follow rolls back and never strands readiness', async () => {
+    followByHandleMock.mockRejectedValue(new Error('network down'));
+
+    const { result, unmount } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+
+    await act(async () => {
+      result.current.toggleFollow('maya');
+    });
+
+    // The optimistic placeholder is gone, and readiness returns rather than
+    // being pinned false for the rest of the session by a stranded marker.
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+    expect(result.current.isFollowing('maya')).toBe(false);
+    unmount();
+  });
+
+  it('two overlapping writes for the SAME handle do not release each other', async () => {
+    // Keyed by handle, the unfollow settling would have cleared the flag the
+    // still-outstanding follow depended on (round-4 panel, Claude).
+    fetchFollowsMock.mockResolvedValue([MAYA]);
+    let settleUnfollow: (value: boolean) => void = () => {};
+    let settleFollow: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    unfollowByIdMock.mockImplementation(
+      () => new Promise<boolean>((resolve) => { settleUnfollow = resolve; }),
+    );
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settleFollow = resolve;
+        }),
+    );
+
+    const { result, unmount } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+
+    act(() => result.current.toggleFollow('Claire_R')); // unfollow, in flight
+    act(() => result.current.toggleFollow('Claire_R')); // re-follow, also in flight
+    expect(result.current.circleReady).toBe(false);
+
+    await act(async () => {
+      settleUnfollow(true);
+    });
+
+    // The follow is still outstanding, so the circle is still unsettled.
+    expect(result.current.circleReady).toBe(false);
+
+    // Settle it before leaving: the pending set is MODULE state, so a write
+    // left in flight would pin circleReady false for every later test in this
+    // file — the same way it would for the rest of a user's session.
+    await act(async () => {
+      settleFollow({ profile: MAYA, status: 'followed' });
+    });
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+    unmount();
   });
 
   it('a follow still in flight keeps the NEXT mount from claiming readiness', async () => {

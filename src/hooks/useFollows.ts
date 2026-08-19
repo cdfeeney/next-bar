@@ -18,23 +18,64 @@ import { getCacheEpoch } from '@/lib/accountCache';
 
 const KEY = 'next-bar:follows:v1';
 
-/**
- * Circle writes the server has not confirmed yet, keyed by normalized handle.
- *
- * MODULE scope on purpose: a navigation unmounts the hook, and the next page's
- * fresh mount would otherwise fetch a snapshot that predates a follow the user
- * has already requested — then report `circleReady` over it and let a night out
- * go out without that person (round-3 panel, Codex, HIGH). Per-instance state
- * cannot see across that unmount; this can. Unfollows are tracked the same way:
- * a snapshot taken mid-unfollow can still carry someone you just dropped.
- */
-const pendingCircleWrites = new Set<string>();
-const pendingListeners = new Set<() => void>();
+/** Cross-tab "the circle moved" ping. The value only has to CHANGE. */
+const DIRTY_KEY = 'next-bar:follows:dirty';
 
-function markCircleWrite(handle: string, pending: boolean): void {
-  if (pending) pendingCircleWrites.add(handle);
-  else pendingCircleWrites.delete(handle);
-  for (const listener of pendingListeners) listener();
+/**
+ * Is the circle snapshot we are holding still current?
+ *
+ * Two module-level facts answer that, and both are module-level on purpose: a
+ * navigation unmounts the hook, so per-instance state cannot see across it.
+ *
+ *   - `pendingCircleWrites` — writes the server has not answered yet. Keyed by
+ *     a unique OPERATION id, never by handle: two overlapping writes for the
+ *     same handle would alias, and the first to settle would release readiness
+ *     for both (round-4 panel, Claude).
+ *   - `circleGeneration` — bumped whenever a write SETTLES, here or in another
+ *     tab. Readiness is pinned to the generation its fetch started at, so a
+ *     settled write invalidates an older snapshot in the same render rather
+ *     than merely emptying the pending set — which released readiness over a
+ *     snapshot taken before the write committed (round-4 panel, BOTH lanes).
+ *
+ * The rule this encodes: a snapshot is ready when the server answered it AND
+ * nothing has happened since. Clearing "in flight" was never the same thing.
+ */
+const pendingCircleWrites = new Set<number>();
+const circleListeners = new Set<() => void>();
+let nextCircleWriteId = 0;
+let circleGeneration = 0;
+
+function notifyCircleListeners(): void {
+  for (const listener of circleListeners) listener();
+}
+
+/** Another tab settled a write — our snapshot is stale too. */
+function invalidateCircle(): void {
+  circleGeneration += 1;
+  notifyCircleListeners();
+}
+
+/**
+ * Open a circle write. The returned finisher is idempotent and MUST run on
+ * every exit path — a stranded marker pins `circleReady` false for the rest of
+ * the session, which is why the callers below use `finally` and not `then`
+ * (round-4 panel, Codex: a rejected promise stranded it).
+ */
+function beginCircleWrite(): () => void {
+  nextCircleWriteId += 1;
+  const id = nextCircleWriteId;
+  pendingCircleWrites.add(id);
+  notifyCircleListeners();
+  return () => {
+    if (!pendingCircleWrites.delete(id)) return;
+    invalidateCircle();
+    try {
+      // Tell the other tabs. Theirs is the same snapshot, equally stale.
+      window.localStorage.setItem(DIRTY_KEY, `${Date.now()}:${nextCircleWriteId}`);
+    } catch {
+      // Quota/private mode — this tab still reconciles; the others just won't.
+    }
+  };
 }
 
 /**
@@ -134,8 +175,14 @@ export function useFollows(): UseFollowsReturn {
   const [followers, setFollowers] = useState<PublicProfile[]>([]);
   const [mode, setMode] = useState<FollowsMode>('pending');
   const [loading, setLoading] = useState(true);
-  const [circleReady, setCircleReady] = useState(false);
-  const [pendingWrites, setPendingWrites] = useState(pendingCircleWrites.size);
+  // The generation the current `circle` was fetched at, or null if we have no
+  // server answer. A number, not a boolean: readiness has to be able to go
+  // stale, and a boolean can only say "we finished a fetch once".
+  const [readyGeneration, setReadyGeneration] = useState<number | null>(null);
+  const [circleState, setCircleState] = useState(() => ({
+    generation: circleGeneration,
+    pending: pendingCircleWrites.size,
+  }));
   const modeRef = useRef<FollowsMode>('pending');
   // Mirrors for event-handler reads (the toggle callback must see the
   // current circle/requested without re-binding on every change).
@@ -144,14 +191,18 @@ export function useFollows(): UseFollowsReturn {
   const requestedRef = useRef<PublicProfile[]>([]);
   requestedRef.current = requested;
 
-  // Re-render when a circle write settles anywhere in the app — the pending set
-  // lives outside React, so it needs its own subscription to move `circleReady`.
+  // Re-render when a circle write starts or settles anywhere in the app — that
+  // state lives outside React, so it needs its own subscription.
   useEffect(() => {
-    const listener = (): void => setPendingWrites(pendingCircleWrites.size);
-    pendingListeners.add(listener);
+    const listener = (): void =>
+      setCircleState({
+        generation: circleGeneration,
+        pending: pendingCircleWrites.size,
+      });
+    circleListeners.add(listener);
     listener();
     return () => {
-      pendingListeners.delete(listener);
+      circleListeners.delete(listener);
     };
   }, []);
 
@@ -159,6 +210,13 @@ export function useFollows(): UseFollowsReturn {
   // mode never writes the key, so there is nothing to hear).
   useEffect(() => {
     function handleStorage(event: StorageEvent): void {
+      // The cross-tab ping matters in SERVER mode especially, so it is handled
+      // before the local-mode guard below (round-4 panel, Codex): another tab
+      // following someone leaves this tab's snapshot stale.
+      if (event.key === DIRTY_KEY) {
+        invalidateCircle();
+        return;
+      }
       if (modeRef.current === 'server') return;
       if (event.key === KEY || event.key === null) {
         setLocalFollows(loadFollows());
@@ -187,7 +245,7 @@ export function useFollows(): UseFollowsReturn {
       setRequested([]);
       setFollowers([]);
       setLocalFollows(loadFollows());
-      setCircleReady(true); // local mode: no fetch, nothing to fail
+      setReadyGeneration(null); // local mode reports ready without this
       setLoading(false);
       return;
     }
@@ -195,8 +253,12 @@ export function useFollows(): UseFollowsReturn {
     modeRef.current = 'server';
     setMode('server');
     setLoading(true);
-    setCircleReady(false);
+    setReadyGeneration(null);
 
+    // The generation this fetch answers FOR. Anything that settles while it is
+    // in flight bumps the module counter, so the result lands stale and the
+    // effect below re-runs on the new generation rather than being trusted.
+    const fetchGeneration = circleGeneration;
     let cancelled = false;
     // Epoch guard (accountCache): a sign-out wipe while this fetch is in
     // flight must abandon the hydrate — `cancelled` alone flips too late
@@ -214,7 +276,7 @@ export function useFollows(): UseFollowsReturn {
       // the demo seed here: demo handles aren't real accounts.
       if (server !== null) {
         setCircle(server);
-        setCircleReady(true);
+        setReadyGeneration(fetchGeneration);
       }
       // Pre-0008 the outgoing RPC doesn't exist yet → null → keep [] (no
       // requests can exist before the migration lands either).
@@ -227,7 +289,14 @@ export function useFollows(): UseFollowsReturn {
     return () => {
       cancelled = true;
     };
-  }, [auth.status, auth.status === 'signed-in' ? auth.user.id : null]);
+    // circleState.generation is a dependency, not an afterthought: a settled
+    // write anywhere — this page, another page, another tab — must re-hydrate
+    // rather than merely release the pending flag over the old snapshot.
+  }, [
+    auth.status,
+    auth.status === 'signed-in' ? auth.user.id : null,
+    circleState.generation,
+  ]);
 
   const isFollowing = useCallback(
     (handle: string) => {
@@ -274,19 +343,29 @@ export function useFollows(): UseFollowsReturn {
         setCircle((prev) =>
           prev.filter((p) => p.handle.toLowerCase() !== target),
         );
-        markCircleWrite(target, true);
-        void unfollowById(supabase, existing.id).then((removed) => {
-          // Cleared FIRST, and unconditionally: an early return past this on a
-          // sign-out epoch change would strand the handle and pin circleReady
-          // false for the rest of the session.
-          markCircleWrite(target, false);
-          if (removed || getCacheEpoch() !== epoch) return;
+        const finishUnfollow = beginCircleWrite();
+        const restore = (): void =>
           setCircle((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
               ? prev
               : [...prev, existing],
           );
-        });
+        void unfollowById(supabase, existing.id)
+          .then((removed) => {
+            if (removed || getCacheEpoch() !== epoch) return;
+            restore();
+          })
+          // A thrown RPC is a refusal too — the old code only rolled back on an
+          // explicit false, so a network error left the row gone locally and
+          // present on the server.
+          .catch(() => {
+            if (getCacheEpoch() !== epoch) return;
+            restore();
+          })
+          // `finally`, never `then`: an early return or a rejection past this
+          // would strand the marker and pin circleReady false for the rest of
+          // the session (round-4 panel, Codex).
+          .finally(finishUnfollow);
         return;
       }
 
@@ -322,26 +401,36 @@ export function useFollows(): UseFollowsReturn {
         displayName: null,
       };
       setCircle((prev) => [...prev, placeholder]);
-      markCircleWrite(target, true);
-      void followByHandle(supabase, handle).then((outcome) => {
-        markCircleWrite(target, false); // see the unfollow path: always cleared
-        if (getCacheEpoch() !== epoch) return;
-        setCircle((prev) => {
-          const without = prev.filter(
-            (p) => p.handle.toLowerCase() !== target,
-          );
-          return outcome?.status === 'followed'
-            ? [...without, outcome.profile]
-            : without;
-        });
-        if (outcome?.status === 'requested') {
-          setRequested((prev) =>
-            prev.some((p) => p.handle.toLowerCase() === target)
-              ? prev
-              : [...prev, outcome.profile],
-          );
-        }
-      });
+      const finishFollow = beginCircleWrite();
+      const dropPlaceholder = (): void =>
+        setCircle((prev) =>
+          prev.filter((p) => p.handle.toLowerCase() !== target),
+        );
+      void followByHandle(supabase, handle)
+        .then((outcome) => {
+          if (getCacheEpoch() !== epoch) return;
+          setCircle((prev) => {
+            const without = prev.filter(
+              (p) => p.handle.toLowerCase() !== target,
+            );
+            return outcome?.status === 'followed'
+              ? [...without, outcome.profile]
+              : without;
+          });
+          if (outcome?.status === 'requested') {
+            setRequested((prev) =>
+              prev.some((p) => p.handle.toLowerCase() === target)
+                ? prev
+                : [...prev, outcome.profile],
+            );
+          }
+        })
+        // A thrown RPC rolls the optimistic placeholder back, same as a null.
+        .catch(() => {
+          if (getCacheEpoch() !== epoch) return;
+          dropPlaceholder();
+        })
+        .finally(finishFollow); // see the unfollow path
       return;
     }
 
@@ -373,6 +462,11 @@ export function useFollows(): UseFollowsReturn {
     isRequested,
     toggleFollow,
     loading,
-    circleReady: mode === 'server' ? circleReady && pendingWrites === 0 : true,
+    circleReady:
+      mode === 'server'
+        ? readyGeneration !== null
+          && readyGeneration === circleState.generation
+          && circleState.pending === 0
+        : true,
   };
 }
