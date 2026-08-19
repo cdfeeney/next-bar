@@ -20,6 +20,7 @@ import {
   LATE_RESTAURANT_PENALTY,
   EXPLORATION_MIN_RESULTS,
   LAST_VERIFIED_HARD_FILTER_DAYS,
+  RADIUS_ANYWHERE,
   RADIUS_CAB,
   RADIUS_WALK,
   MAX_RESULTS,
@@ -233,6 +234,16 @@ export function matches(args: MatchesArgs): Bar[] {
   const isVibeMatch = (bar: Bar): boolean =>
     pickedTags !== null && bar.tags.some((t) => pickedTags.has(t));
 
+  // The outer edge of THE NEXT BAND — how far criterion 5's expansion may
+  // reach, named by the existing chip radii and nothing else. A Walkable pick
+  // reaches into the cab band and stops at RADIUS_CAB; a cab pick reaches into
+  // `anywhere`, whose edge is RADIUS_ANYWHERE (null) because that band has
+  // none by construction. Reaching further than the next band would be a new
+  // threshold, which the goal forbids by name — and unbounded reach from a
+  // 1.5-mile chip is the largest new threshold there is.
+  const nextBandMaxMiles =
+    maxMiles !== null && maxMiles <= RADIUS_WALK ? RADIUS_CAB : RADIUS_ANYWHERE;
+
   if (coords && (minMilesExclusive !== null || maxMiles !== null)) {
     pool = pool.filter((b) => {
       const miles = haversineMiles(coords, b);
@@ -243,11 +254,12 @@ export function matches(args: MatchesArgs): Bar[] {
       // RADIUS_WALK–RADIUS_CAB, anywhere beyond it), so filtering the pool to
       // the selected ring first left exactly one band non-empty and the
       // cross-band fill order below had nothing to expand into. An APPLIED
-      // pick therefore reaches PAST the ring's outer edge — but only for a bar
-      // that actually matches it, and never inside the ring's inner edge. A
-      // NONMATCHING bar outside the chosen scope is still never admitted, so
-      // the chip keeps bounding the fallback; only the vibe the user just
-      // asked for can widen it.
+      // pick therefore reaches PAST the ring's outer edge — but only into the
+      // next band, only for a bar that actually matches it, and never inside
+      // the ring's inner edge. A NONMATCHING bar outside the chosen scope is
+      // still never admitted, so the chip keeps bounding the fallback; only
+      // the vibe the user just asked for can widen it, and only by one band.
+      if (nextBandMaxMiles !== null && miles > nextBandMaxMiles) return false;
       return isVibeMatch(b);
     });
   }

@@ -239,6 +239,32 @@ describe('matches() — distance band expansion under an active tweak', () => {
     expect(ids).toHaveLength(5);
   });
 
+  it('reaches the NEXT band only — a match past RADIUS_CAB stays out of a Walkable page', () => {
+    // Criterion 5 says expand to the next band reusing RADIUS_WALK /
+    // RADIUS_CAB and invent no new thresholds. Letting a Walkable pick reach
+    // an arbitrarily distant match IS a new threshold (an unbounded one), and
+    // it would let a page under a 1.5-mile chip be composed entirely of bars
+    // miles away, with no walkable bar on it at all.
+    const scoped = [
+      atMiles('walk-dive', 0.9, [HISTORY]),
+      atMiles('cab-cocktail', 3.0, [PICKED]), // next band — reachable
+      atMiles('far-cocktail', 9.0, [PICKED]), // two bands out — not
+    ];
+    const ids = matches({
+      profile: tweakedProfile([PICKED]),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      minMilesExclusive: null,
+      maxMiles: RADIUS_WALK,
+      bars: scoped,
+      maxResults: 5,
+      now: NOW,
+      taste: EMPTY_TASTE,
+    }).map((bar) => bar.id);
+
+    expect(ids).toEqual(['cab-cocktail', 'walk-dive']);
+  });
+
   it('expands under the cab chip too, without reaching back inside it', () => {
     const cabScoped = [
       atMiles('walk-cocktail', 0.5, [PICKED]), // inside the chip's inner edge
