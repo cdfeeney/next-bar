@@ -51,12 +51,22 @@
  *
  * --secrets-file loads a target's credentials WITHOUT touching .env.local, so the
  * repo stays pointed at staging for every other tool.
+ *
+ * TLS: the connection must be encrypted AND the pooler's certificate verified.
+ * Supabase's pooler presents a SELF-SIGNED chain, so verification needs their CA
+ * (dashboard - Settings - Database - SSL configuration; one download, kept out of
+ * the repo). Point PGSSLROOTCERT at that file, or put
+ * `?sslmode=verify-full&sslrootcert=<path>` in DATABASE_URL. Without it this tool
+ * refuses rather than falling back to an unauthenticated channel: every other link
+ * in the target check is a string the operator wrote, and the certificate is the
+ * only thing that proves the peer answering that hostname is really Supabase.
  */
 
 import { config as loadEnv } from 'dotenv';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
+import { authorizeMigrationTarget, redactUrl } from './apply-migration-target-guard';
 
 import { checksumOfSql, normalisedSql } from '../src/lib/effectiveMigration';
 
@@ -92,15 +102,6 @@ function parseArgs(argv: string[]): {
   return { env, execute, files, secretsFile };
 }
 
-function redactUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.username}:***@${parsed.host}${parsed.pathname}`;
-  } catch {
-    return '<invalid url>';
-  }
-}
-
 async function main(): Promise<void> {
   const { env, execute, files, secretsFile } = parseArgs(process.argv.slice(2));
 
@@ -124,49 +125,14 @@ async function main(): Promise<void> {
   loadEnv({ path: '.env.local' });
   loadEnv({ path: '.env' });
 
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) fail('DATABASE_URL is not set');
-
-  const actualEnv = process.env.NEXT_BAR_DATABASE_ENVIRONMENT;
-  if (!actualEnv) {
-    fail('NEXT_BAR_DATABASE_ENVIRONMENT is not set, so the target cannot be identified');
-  }
-  if (actualEnv !== env) {
-    fail(
-      `you named --env ${JSON.stringify(env)} but the loaded environment is `
-      + `${JSON.stringify(actualEnv)}.`,
-    );
-  }
-
-  // A matching LABEL proves only that the same word was typed in two places
-  // (cold panel, Codex, HIGH). Verify the actual Supabase project behind
-  // DATABASE_URL, using pg's own resolution rather than the URL authority —
-  // query parameters override the authority, which is how the live RLS suite's
-  // first guard was bypassable. Same check, same reason; it should have been
-  // reused here the first time.
-  const probe = new Client({ connectionString: databaseUrl }) as unknown as {
-    connectionParameters?: { user?: string; host?: string };
-  };
-  const effectiveUser = probe.connectionParameters?.user ?? '';
-  const ref = effectiveUser.split('.').pop() ?? '';
-  const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
-  const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
-    .split(',').map((value) => value.trim()).filter(Boolean);
-
-  if (!ref) fail('could not determine the Supabase project ref from DATABASE_URL');
-  if (env === 'production') {
-    if (!productionRef) fail('NEXT_BAR_PRODUCTION_PROJECT_REF is not set, so --env production cannot be verified');
-    if (ref !== productionRef) {
-      fail('--env production, but DATABASE_URL does not point at the production project ref');
-    }
-  } else {
-    if (ref === productionRef) {
-      fail(`--env ${env}, but DATABASE_URL points at the PRODUCTION project ref`);
-    }
-    if (stagingRefs.length > 0 && !stagingRefs.includes(ref)) {
-      fail(`--env ${env}, but DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS`);
-    }
-  }
+  // Every target refusal, in the order that reports the most useful error
+  // first, plus the client config those refusals authorise. The sequence used
+  // to live inline here, which is precisely why the sibling applier had none of
+  // it: one resolver, every caller.
+  const authorized = authorizeMigrationTarget(env);
+  if (authorized.refusal !== null) fail(authorized.refusal);
+  const { clientConfig, effective, env: actualEnv } = authorized.target;
+  const databaseUrl = clientConfig.connectionString;
 
   // Read and hash first: a missing or unreadable file must stop us before we
   // open a transaction on anything.
@@ -187,7 +153,7 @@ async function main(): Promise<void> {
     return { name, raw, sql, checksum: checksumOfSql(sql) };
   });
 
-  const client = new Client({ connectionString: databaseUrl });
+  const client = new Client(clientConfig);
   await client.connect();
   try {
     const { rows: ledgerRows } = await client.query(
@@ -232,6 +198,8 @@ async function main(): Promise<void> {
     }
 
     console.log(`\n[apply-set] target   : ${redactUrl(databaseUrl)}`);
+    console.log(`[apply-set] effective: ${effective.user}@${effective.host}:${effective.port} (pg's own resolution)`);
+    console.log('[apply-set] tls      : on, peer certificate verified');
     console.log(`[apply-set] env      : ${actualEnv}`);
     console.log(`[apply-set] head     : ${ledgerHead}`);
     console.log(`[apply-set] mode     : ${execute ? 'EXECUTE (one transaction)' : 'DRY RUN — nothing will be written'}`);
@@ -253,6 +221,11 @@ async function main(): Promise<void> {
     }
 
     await client.query('BEGIN');
+    // An unbounded wait holds every lock already taken while the application
+    // queues behind it, with no recourse but killing the process. Bounded, a
+    // blocked apply aborts and the whole set rolls back.
+    await client.query("SET LOCAL lock_timeout = '10s'");
+    await client.query("SET LOCAL statement_timeout = '300s'");
     try {
       for (const entry of planned) {
         process.stdout.write(`  applying ${entry.name} ... `);

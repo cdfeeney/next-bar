@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
+import {
+  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
+} from '../../scripts/apply-migration-target-guard';
 
 import {
   GUARDED_FUNCTIONS,
@@ -40,6 +43,32 @@ function envValue(key: string): string | null {
     return env.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() ?? null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Supabase's CA, when the operator has pointed PGSSLROOTCERT at it. Read from
+ * .env.local as well as the environment: that is where .env.example says to put
+ * it and where this file already reads DATABASE_URL from, and nothing loads
+ * .env.local into process.env for vitest (vitest.setup.ts only imports
+ * jest-dom). Reading process.env alone meant an operator who followed the
+ * documentation silently got the unverified path.
+ */
+function caCertificate(): string {
+  // `||`, not `??`: an EMPTY PGSSLROOTCERT in the environment is not a
+  // configured value, and letting it shadow .env.local would reintroduce the
+  // same silent downgrade.
+  const path = (process.env.PGSSLROOTCERT ?? '').trim() || (envValue('PGSSLROOTCERT') ?? '').trim();
+  if (!path) return '';
+  // A configured-but-unreadable CA is a misconfiguration, not a licence to
+  // connect unverified: swallowing it was the same silent downgrade.
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    throw new Error(
+      `nightOutsRls.live.test.ts refuses to run: PGSSLROOTCERT is set to ${path}, which cannot be `
+      + `read (${(error as Error).message}). Fix the path or unset it deliberately.`,
+    );
   }
 }
 
@@ -81,50 +110,77 @@ const URL = databaseUrl();
  *
  * `connectionParameters` is not in @types/pg, hence the narrow cast.
  */
-function effectiveConnection(connectionString: string): { user: string; host: string } {
-  const probe = new Client({ connectionString }) as unknown as {
-    connectionParameters?: { user?: string; host?: string };
+/**
+ * The TLS config this suite connects with: verified against Supabase's CA when
+ * the operator has one, encrypted-only otherwise (see the ceiling note below).
+ */
+function sslOption(): { rejectUnauthorized: boolean; ca?: string } {
+  const ca = caCertificate();
+  return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
+}
+
+function effectiveConnection(
+  connectionString: string,
+): { user: string; host: string; port: string; options: string; ssl: unknown } {
+  // Same config as the real client below, or this answers a question about a
+  // different connection - including whether it is encrypted at all.
+  const probe = new Client({ connectionString, ssl: sslOption() }) as unknown as {
+    connectionParameters?: {
+      user?: string; host?: string; port?: number | string; options?: string; ssl?: unknown;
+    };
   };
   return {
     user: probe.connectionParameters?.user ?? '',
     host: probe.connectionParameters?.host ?? '',
+    port: String(probe.connectionParameters?.port ?? ''),
+    options: probe.connectionParameters?.options ?? '',
+    ssl: probe.connectionParameters?.ssl,
   };
 }
 
 function assertStagingOnly(connectionString: string): void {
   const effective = effectiveConnection(connectionString);
-  const ref = effective.user.split('.').pop() ?? '';
+  const ref = resolveProjectRef(effective.user);
   const allowlist = (envValue('NEXT_BAR_STAGING_PROJECT_REFS') ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
   const productionRef = envValue('NEXT_BAR_PRODUCTION_PROJECT_REF');
 
-  // No host override either: the connection must go where the URL's authority
-  // says it goes, so a redirected host cannot ride along with an allowlisted user.
-  const authorityHost = new globalThis.URL(connectionString).hostname;
-  if (authorityHost && effective.host && effective.host !== authorityHost) {
+  // No endpoint override either: the connection must go where the URL's
+  // authority says it goes, so a redirected host or port cannot ride along with
+  // an allowlisted user. This is the migration guard's own check, imported
+  // rather than copied — the copy short-circuited when either side was empty,
+  // which a host-less authority (`postgres:///db?host=elsewhere`) produces.
+  // pg parses the connection string OVER the explicit ssl option, so
+  // `?sslmode=disable` turns the option above back off and this suite would send
+  // the role password and its DML in the clear while claiming otherwise.
+  if (!effective.ssl) {
     throw new Error(
-      'nightOutsRls.live.test.ts refuses to run: the effective connection host does not match the '
-      + 'connection string authority, so the target was overridden by a query parameter.',
+      'nightOutsRls.live.test.ts refuses to run: DATABASE_URL disables TLS, so the role password and '
+      + "this suite's DML would cross the network in the clear.",
     );
   }
 
-  if (allowlist.length === 0) {
-    throw new Error(
-      'nightOutsRls.live.test.ts refuses to run: NEXT_BAR_STAGING_PROJECT_REFS is not set in '
-      + '.env.local. This suite writes to the database it connects to, so the staging target must '
-      + 'be named explicitly. An unset allowlist is never treated as permission.',
-    );
+  const authority = new globalThis.URL(connectionString);
+  const endpointRefusal = checkConnectionEndpoint(
+    { host: effective.host, port: effective.port, options: effective.options },
+    { host: authority.hostname, port: authority.port },
+  );
+  if (endpointRefusal) {
+    throw new Error(`nightOutsRls.live.test.ts refuses to run: ${endpointRefusal}.`);
   }
-  if (productionRef && ref === productionRef) {
+
+  // Config comparison is the migration guard's job, not a second copy of it:
+  // the copy accepted a malformed production ref (a trailing comma made it
+  // truthy but never equal), which is the fail-open that guard exists to close.
+  // Same three questions here as there - is the config valid, is this
+  // production, is it the named staging target.
+  const refusal = checkMigrationTarget({
+    env: 'staging', ref, productionRef: productionRef ?? '', stagingRefs: allowlist,
+  });
+  if (refusal) {
     throw new Error(
-      'nightOutsRls.live.test.ts refuses to run: DATABASE_URL points at NEXT_BAR_PRODUCTION_PROJECT_REF. '
-      + 'Production writes are an attended gate and never happen from a test run.',
-    );
-  }
-  if (!allowlist.includes(ref)) {
-    throw new Error(
-      "nightOutsRls.live.test.ts refuses to run: DATABASE_URL's project ref is not in "
-      + 'NEXT_BAR_STAGING_PROJECT_REFS. Point .env.local at staging, or add the ref deliberately.',
+      `nightOutsRls.live.test.ts refuses to run: ${refusal}. This suite writes to the database it `
+      + 'connects to, so the staging target must be named explicitly and verifiably.',
     );
   }
 }
@@ -154,7 +210,18 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   beforeAll(async () => {
     db = new Client({
       connectionString: URL as string,
-      ssl: { rejectUnauthorized: false },
+      // This file adopts the migration guard's identity chain above (pooler
+      // suffix, ref in the username) and then sends the role password and real
+      // DML down this connection - and those are only strings the operator
+      // wrote. So authenticate the peer WHEN WE CAN: Supabase's pooler serves a
+      // self-signed chain (rejectUnauthorized:true without a CA fails with
+      // "self-signed certificate in certificate chain"), so verification needs
+      // their CA via PGSSLROOTCERT.
+      // ponytail: unset PGSSLROOTCERT leaves this suite encrypted but
+      // unauthenticated. Hard-refusing would make the suite unrunnable on a
+      // machine that has not downloaded the CA, which is a test-harness
+      // decision; the APPLY tool refuses, because that is the path that writes.
+      ssl: sslOption(),
       statement_timeout: 30000,
       application_name: 'v8-3-rls-negatives',
     });

@@ -1,7 +1,8 @@
 {
-  "_comment": "Next Bar risk-tier map. This project has no payments/pricing surface, so T0 is the irreversible user-data surface: schema migrations, which can corrupt or destroy account state and are not trivially revertible once applied. Application code stays at the T1 floor (still reviewed). Docs and e2e specs are T2. Every glob is verified against `git ls-files` — dead rules block the overnight preflight.",
+  "_comment": "Next Bar risk-tier map. This project has no payments/pricing surface, so T0 is the irreversible user-data surface: schema migrations, which can corrupt or destroy account state and are not trivially revertible once applied. T0 covers both the migration FILES and the TOOLING THAT APPLIES THEM — a defect in one migration affects that migration, but a defect in the apply tool selects the target database and can apply the whole set to the wrong one, so the tooling's blast radius is strictly larger than the files'. Application code stays at the T1 floor (still reviewed). Docs and e2e specs are T2. A same-class sweep of the rest of the tree (2026-08-18) is recorded in the commit message and goal evidence: the migration launcher (package.json db:migrate), the service-role catalog writers, the admin credential mutator, the shared-DB smoke writers, and the TestFlight deploy surfaces all still classify T1/null. They are REPORTED, not re-tiered — none applies migrations, and re-tiering them is a policy decision with its own process cost, not a silent side effect of this fix. Every glob is verified against `git ls-files` — dead rules block the overnight preflight.",
   "rules": [
     { "glob": "supabase/migrations/**", "tier": "T0" },
+    { "glob": "scripts/apply-*migration*", "tier": "T0" },
     { "glob": "docs/**", "tier": "T2" },
     { "glob": "e2e/**", "tier": "T2" }
   ]
