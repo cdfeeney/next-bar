@@ -130,9 +130,22 @@ async function main(): Promise<void> {
   // query parameters override the authority, which is how the live RLS suite's
   // first guard was bypassable. Same check, same reason; it should have been
   // reused here the first time.
-  const probe = new Client({ connectionString: databaseUrl }) as unknown as {
+  // TLS IS NOT OPTIONAL for a tool that ships DDL and sends a role password.
+  // pg's default when the connection string says nothing is NO TLS at all
+  // (connection-parameters.js falls back to defaults.ssl === false), and
+  // PGSSLMODE=disable can turn it off from the environment - an explicit option
+  // beats that variable, and the pooler-host requirement above is only worth
+  // anything if the peer presenting that name is actually authenticated.
+  // A connection string that sets sslmode wins over this default, which is how
+  // an operator supplies Supabase's CA (?sslmode=verify-full&sslrootcert=...)
+  // if the public chain ever stops validating.
+  const clientConfig = { connectionString: databaseUrl, ssl: { rejectUnauthorized: true } };
+  // The probe must be built from the SAME config as the connection it authorises,
+  // or it is answering a question about a different connection.
+  const probe = new Client(clientConfig) as unknown as {
     connectionParameters?: {
       user?: string; host?: string; port?: number | string; options?: string;
+      ssl?: unknown;
     };
   };
   const effectiveUser = probe.connectionParameters?.user ?? '';
@@ -162,6 +175,16 @@ async function main(): Promise<void> {
   const refusal = checkMigrationTarget({ env, ref, productionRef, stagingRefs });
   if (refusal) fail(refusal);
 
+  // sslmode=disable in the connection string still wins over the default above.
+  const resolvedSsl = probe.connectionParameters?.ssl as { rejectUnauthorized?: boolean } | false | undefined;
+  // pg leaves rejectUnauthorized undefined for sslmode=require/verify-full, and
+  // tls.connect verifies by default, so only an explicit false is unverified.
+  const tlsVerifies = Boolean(resolvedSsl) && (resolvedSsl as { rejectUnauthorized?: boolean }).rejectUnauthorized !== false;
+  if (!probe.connectionParameters?.ssl) {
+    fail('DATABASE_URL disables TLS, so the migration set and the role password would cross the '
+      + 'network in the clear and the pooler host could not be authenticated');
+  }
+
   // Read and hash first: a missing or unreadable file must stop us before we
   // open a transaction on anything.
   const planned = files.map((name) => {
@@ -174,7 +197,7 @@ async function main(): Promise<void> {
     return { name, raw, checksum: createHash('sha256').update(raw).digest('hex') };
   });
 
-  const client = new Client({ connectionString: databaseUrl });
+  const client = new Client(clientConfig);
   await client.connect();
   try {
     const { rows: ledgerRows } = await client.query(
@@ -220,6 +243,7 @@ async function main(): Promise<void> {
 
     console.log(`\n[apply-set] target   : ${redactUrl(databaseUrl)}`);
     console.log(`[apply-set] effective: ${effectiveUser}@${effectiveHost}:${effectivePort} (pg's own resolution)`);
+    console.log(`[apply-set] tls      : on, peer certificate ${tlsVerifies ? 'verified' : 'NOT verified'}`);
     console.log(`[apply-set] env      : ${actualEnv}`);
     console.log(`[apply-set] head     : ${ledgerHead}`);
     console.log(`[apply-set] mode     : ${execute ? 'EXECUTE (one transaction)' : 'DRY RUN — nothing will be written'}`);

@@ -100,6 +100,18 @@ describe('apply-migration-set CLI target guard', () => {
     expect(result.output).not.toContain('ECONNREFUSED');
   }, 120_000);
 
+  it('refuses, without connecting, when the connection string disables TLS', () => {
+    const result = runApplySet(secretsFile('tls-disabled', {
+      NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
+      NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
+      NEXT_BAR_STAGING_PROJECT_REFS: REF_A,
+      DATABASE_URL: `${url(REF_A)}?sslmode=disable`,
+    }));
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('disables TLS');
+    expect(result.output).not.toContain('ECONNREFUSED');
+  }, 120_000);
+
   // The other half of the same proof: a verified target must get PAST the guard,
   // so a guard that refused everything could not pass this file either. The host
   // is a pooler name that does not resolve, so the run dies in DNS instead of
