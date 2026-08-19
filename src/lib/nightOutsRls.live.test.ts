@@ -1296,6 +1296,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * becomes an assertion. The overload pin above compares SIGNATURES; this
    * compares PROVENANCE — which file the ledger says installed them.
    */
+  // 30s, not the 5s default: this scan is O(migrations) in both file reads and
+  // round trips to staging, so it crossed the default the moment the
+  // convergence brought 0060 in. A timeout that fails on a growing ledger
+  // reports a slow suite as a broken database.
   it('every migration the static guard reads is applied here at its recorded checksum', async () => {
     const resolved = GUARDED_FUNCTIONS.map((name) => {
       const file = definingMigration(name);
@@ -1333,7 +1337,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       provenance,
       'the static guard resolved a migration this database did not run, or ran differently',
     ).toEqual(Object.fromEntries(GUARDED_FUNCTIONS.map((name, i) => [name, resolved[i]])));
-  });
+  }, 30_000);
 
   /**
    * WHAT THE DATABASE IS RUNNING, COMPARED TO WHAT THIS REPO COMMITS.
@@ -1366,6 +1370,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * server stores LF. Nothing else is normalised: not case, not whitespace, not
    * comments. A one-character difference fails.
    */
+  // 30s, not the 5s default: this scan is O(migrations) in both file reads and
+  // round trips to staging, so it crossed the default the moment the
+  // convergence brought 0060 in. A timeout that fails on a growing ledger
+  // reports a slow suite as a broken database.
   it('every guarded function RUNS the exact text and attributes this repo commits', async () => {
     // prosecdef and proconfig too, not only the body. A function can be replaced
     // with a byte-identical body and no `security definer` or no
@@ -1408,7 +1416,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       name,
       `matches ${definingMigration(name)}`,
     ])));
-  });
+  }, 30_000);
 
   /**
    * CRITERION 5, as far as this ledger can carry it — which is not all the way,

@@ -670,6 +670,9 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
    * Codex, medium). The describe block's title still names 0048 because the
    * exactly-once assertions above genuinely are about that file's text.
    */
+  // 15s: effectiveView re-reads and re-parses the whole migration chain for
+  // each caller, so this grows with the ledger and passed the 5s default when
+  // 0060 landed.
   it('every caller asks the helpers rather than restating the rule', () => {
     for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token'] as const) {
       const body = functionBody(effectiveView(fn), fn);
@@ -680,7 +683,7 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
     // Declining is never rationed by capacity, so it must ask neither.
     const decline = functionBody(effectiveView('decline_night_out_by_token'), 'decline_night_out_by_token');
     expect(decline).not.toMatch(/night_out_member_cap/);
-  });
+  }, 15_000);
 
   it('0049 finishes the job — invite_to_night_out asks the helpers too', () => {
     // 0048 re-stated three callers and the fullness read and left invite in
