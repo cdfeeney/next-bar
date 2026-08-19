@@ -112,6 +112,25 @@ describe('apply-migration-set CLI target guard', () => {
     expect(result.output).not.toContain('ECONNREFUSED');
   }, 120_000);
 
+  // Encrypted is not authenticated: pg hands back a TRUTHY ssl config for these,
+  // so a check that only tested truthiness let them through.
+  for (const [name, query] of [
+    ['sslmode=no-verify', 'sslmode=no-verify'],
+    ['ssl=no-verify', 'ssl=no-verify'],
+  ] as const) {
+    it(`refuses, without connecting, when ${name} turns off certificate verification`, () => {
+      const result = runApplySet(secretsFile(`unverified-${name.replace(/[^a-z]/g, '')}`, {
+        NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
+        NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
+        NEXT_BAR_STAGING_PROJECT_REFS: REF_A,
+        DATABASE_URL: `${url(REF_A)}?${query}`,
+      }));
+      expect(result.status).toBe(1);
+      expect(result.output).toContain('peer certificate verification');
+      expect(result.output).not.toContain('ECONNREFUSED');
+    }, 120_000);
+  }
+
   // The other half of the same proof: a verified target must get PAST the guard,
   // so a guard that refused everything could not pass this file either. The host
   // is a pooler name that does not resolve, so the run dies in DNS instead of

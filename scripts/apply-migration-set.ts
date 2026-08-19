@@ -176,13 +176,27 @@ async function main(): Promise<void> {
   if (refusal) fail(refusal);
 
   // sslmode=disable in the connection string still wins over the default above.
-  const resolvedSsl = probe.connectionParameters?.ssl as { rejectUnauthorized?: boolean } | false | undefined;
-  // pg leaves rejectUnauthorized undefined for sslmode=require/verify-full, and
-  // tls.connect verifies by default, so only an explicit false is unverified.
-  const tlsVerifies = Boolean(resolvedSsl) && (resolvedSsl as { rejectUnauthorized?: boolean }).rejectUnauthorized !== false;
-  if (!probe.connectionParameters?.ssl) {
+  const resolvedSsl = probe.connectionParameters?.ssl as {
+    rejectUnauthorized?: boolean; checkServerIdentity?: unknown;
+  } | false | undefined;
+  if (!resolvedSsl) {
     fail('DATABASE_URL disables TLS, so the migration set and the role password would cross the '
       + 'network in the clear and the pooler host could not be authenticated');
+  }
+  // ENCRYPTED IS NOT AUTHENTICATED. pg leaves rejectUnauthorized undefined for
+  // sslmode=verify-full (tls.connect then verifies by default), but hands back a
+  // truthy { rejectUnauthorized: false } for sslmode=no-verify - and under
+  // uselibpqcompat for plain require/prefer - while verify-ca replaces
+  // checkServerIdentity with a no-op, which keeps the chain but drops the
+  // hostname. Every one of those is a certificate that proves nothing about WHO
+  // answered, and this guard's whole identity chain (the .pooler.supabase.com
+  // suffix, the ref in the username) is strings the operator wrote. The
+  // certificate is what makes the peer behind that name actually Supabase.
+  const ssl = resolvedSsl as { rejectUnauthorized?: boolean; checkServerIdentity?: unknown };
+  if (ssl.rejectUnauthorized === false || typeof ssl.checkServerIdentity === 'function') {
+    fail("DATABASE_URL turns off peer certificate verification (sslmode=no-verify, verify-ca or a "
+      + 'libpq-compat mode), so the pooler host cannot be authenticated and the target could be '
+      + 'substituted by whatever answers that name');
   }
 
   // Read and hash first: a missing or unreadable file must stop us before we
@@ -243,7 +257,7 @@ async function main(): Promise<void> {
 
     console.log(`\n[apply-set] target   : ${redactUrl(databaseUrl)}`);
     console.log(`[apply-set] effective: ${effectiveUser}@${effectiveHost}:${effectivePort} (pg's own resolution)`);
-    console.log(`[apply-set] tls      : on, peer certificate ${tlsVerifies ? 'verified' : 'NOT verified'}`);
+    console.log('[apply-set] tls      : on, peer certificate verified');
     console.log(`[apply-set] env      : ${actualEnv}`);
     console.log(`[apply-set] head     : ${ledgerHead}`);
     console.log(`[apply-set] mode     : ${execute ? 'EXECUTE (one transaction)' : 'DRY RUN — nothing will be written'}`);
