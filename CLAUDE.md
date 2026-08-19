@@ -46,10 +46,12 @@ sat directly in front of a destructive operation.
 `scripts/apply-migrations.ts` here is ledger-BLIND: it re-executes every file in
 lexical order regardless of what the ledger says. `nb-overnight`'s runner is the
 ledger-aware one (hashes each file, records it, refuses ambiguous partial state)
-and is what should be used. A blind replay re-runs the base schema over a
-database that has moved well past it — including re-granting privileges that
-`0034_revoke_first_grants.sql` had tightened. That is reason enough; it does not
-depend on any checksum claim.
+and is what should be used. This branch carries 35 migrations (`0000`–`0019`,
+then `0043`–`0059`) while the serving ledger holds 55 rows: **twenty applied
+migrations have no file here**, among them `0034_revoke_first_grants.sql`, which
+tightened grants the early base files re-grant. A blind replay therefore re-runs
+the base schema over a database that has moved twenty migrations past it. That is
+reason enough; it does not depend on any checksum claim.
 
 **The ledger's checksum is NORMALISED — CRLF folded to LF, then whitespace
 stripped from the END OF THE FILE (not per line) — not a hash of the raw bytes.**

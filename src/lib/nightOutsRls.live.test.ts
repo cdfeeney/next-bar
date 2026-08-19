@@ -6,6 +6,7 @@ import { Client } from 'pg';
 
 import {
   GUARDED_FUNCTIONS,
+  committedFunctionBody,
   definingMigration,
   migrationChecksum,
   type GuardedFunction,
@@ -1232,6 +1233,53 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       provenance,
       'the static guard resolved a migration this database did not run, or ran differently',
     ).toEqual(Object.fromEntries(GUARDED_FUNCTIONS.map((name, i) => [name, resolved[i]])));
+  });
+
+  /**
+   * CRITERION 5, CARRIED BY THE ARTIFACT RATHER THAN BY A DIGEST.
+   *
+   * "What is applied is byte-identical to what is committed" was argued about
+   * for three rounds against the ledger, and the ledger cannot settle it: its
+   * checksum is normalised, so line endings and trailing whitespace slip
+   * through, and no raw digest was ever written at apply time. A raw hash of the
+   * committed file was tried and removed — it is checkout-dependent under
+   * core.autocrlf and describes the checkout, not the database.
+   *
+   * The applied bytes DO exist, and Postgres has them: pg_proc.prosrc is the
+   * function body exactly as submitted. Compared against the same body sliced
+   * from the committed migration, this is a direct applied-versus-committed
+   * comparison of the text that actually runs — the evidence the round-8 review
+   * asked for (Codex, medium: "closing it requires the raw applied bytes").
+   *
+   * Only line endings are folded, and only on the committed side, because the
+   * server stores LF. Nothing else is normalised: not case, not whitespace, not
+   * comments. A one-character difference fails.
+   */
+  it('every guarded function RUNS the exact text this repo commits (criterion 5)', async () => {
+    const { rows } = await db.query(
+      `select p.proname as name, p.prosrc as applied
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = any($1)`,
+      [[...GUARDED_FUNCTIONS]],
+    );
+    const applied = new Map(
+      (rows as Array<{ name: string; applied: string }>).map((r) => [r.name, r.applied]),
+    );
+    const verdict = Object.fromEntries(GUARDED_FUNCTIONS.map((name) => {
+      const file = definingMigration(name);
+      if (!file) return [name, 'no committed migration defines it'];
+      const committed = committedFunctionBody(file, name);
+      if (committed === null) return [name, `body not locatable in ${file}`];
+      if (!applied.has(name)) return [name, 'not installed on this database'];
+      return [name, applied.get(name) === committed ? `matches ${file}` : `DIFFERS from ${file}`];
+    }));
+    expect(
+      verdict,
+      'the database is running text this repo does not commit',
+    ).toEqual(Object.fromEntries(GUARDED_FUNCTIONS.map((name) => [
+      name,
+      `matches ${definingMigration(name)}`,
+    ])));
   });
 
   /**

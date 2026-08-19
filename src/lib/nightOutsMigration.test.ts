@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MIGRATIONS_DIR,
+  checksumOfSql,
   definingMigration,
   definitionIndex,
   sqlView,
@@ -475,6 +476,38 @@ describe('sqlView — SQL as Postgres reads it', () => {
     expect(sqlView(sql).code).not.toMatch(/pg_advisory_xact_lock/);
     // The body around it is still code.
     expect(sqlView(sql).code).toMatch(/raise notice/);
+  });
+});
+
+/**
+ * The ledger's checksum algorithm, pinned WITHOUT a database.
+ *
+ * It had no test that runs on `npm test`: its only consumers were the applier
+ * and the live suite, which is describe.skip without DATABASE_URL, so changing
+ * the normalisation was undetectable (round-8 review, Claude, medium). The
+ * measured constant below is 0044's real ledger row, so this also pins the
+ * algorithm to what the serving database actually holds.
+ */
+describe('checksumOfSql — what public.schema_migrations records', () => {
+  it("reproduces 0044's recorded ledger checksum from the committed file", () => {
+    const sql = readFileSync(
+      path.join(MIGRATIONS_DIR, '0044_night_outs.sql'),
+      'utf8',
+    );
+    expect(checksumOfSql(sql))
+      .toBe('3514e43ed077fb86fcb691b4cbac82f66a264d16a249e84d7e44057e020d2543');
+  });
+
+  it('folds CRLF, so the digest does not depend on how git checked the file out', () => {
+    expect(checksumOfSql('a\r\nb')).toBe(checksumOfSql('a\nb'));
+  });
+
+  it('strips whitespace at the END OF THE STRING only, never per line', () => {
+    // The distinction is load-bearing: the comment describing this algorithm
+    // once read "trailing-whitespace stripped", which an independent
+    // reimplementation would apply per line and get a different digest.
+    expect(checksumOfSql('a b  \n')).toBe(checksumOfSql('a b'));
+    expect(checksumOfSql('a   \nb')).not.toBe(checksumOfSql('a\nb'));
   });
 });
 

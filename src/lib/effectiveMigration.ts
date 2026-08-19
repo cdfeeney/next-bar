@@ -146,7 +146,15 @@ function scan(sql: string, insideBody: boolean): { code: string; skeleton: strin
       // $note$create or replace function public.respond_night_out(x)$note$;` is
       // a legal statement whose text was being exposed as code, so the resolver
       // picked a migration that defines nothing (round-7 review, Codex, medium).
-      const isBody = !insideBody && /\bas\s*$/i.test(sql.slice(Math.max(0, i - 8), i));
+      //
+      // Decided from the ALREADY-EMITTED view, never from the raw source, and
+      // with no fixed window. Reading 8 raw characters got it wrong in both
+      // directions and both lanes found it (round-8 review): `as  -- body\n$$`
+      // and `as` followed by a long indent are real bodies it rejected, while a
+      // top-level comment ending in the word "as" made the next string a body.
+      // In the emitted view comments are already blanked to spaces, so neither
+      // can happen; trimming the trailing run leaves the last real token.
+      const isBody = !insideBody && /(^|[^A-Za-z0-9_$])as$/i.test(code.replace(/\s+$/, ''));
       if (!isBody) {
         // Inert text: never executed, so it must not satisfy an assertion about
         // executable code, nor look like a definition.
@@ -235,8 +243,13 @@ export function looksLikeUnreadableDefinition(sql: string, name: string): boolea
   if (definitionIndex(sql, name) > -1) return false;
   // Same anchor as definitionIndex, minus the strictness that makes it readable:
   // any separator between the qualifier and the name, and no required open paren.
+  // The optional `u&` covers Postgres's Unicode-quoted identifier spelling —
+  // `create or replace function public.U&"respond_night_out"(...)` names the
+  // same lowercase function, matched neither form, and so silently resolved
+  // backwards to the previous file (round-8 review, Codex, medium).
   return new RegExp(
-    String.raw`create\s+(?:or\s+replace\s+)?function\s+(?:"?public"?\s*\.\s*)?"?${name}\b`,
+    String.raw`create\s+(?:or\s+replace\s+)?function\s+(?:(?:u&)?"?public"?\s*\.\s*)?(?:u&)?"?${name}\b`,
+    'i',
   ).test(sql);
 }
 
@@ -284,6 +297,40 @@ export function definingMigration(name: string): string | null {
     }
   }
   return defining.length ? defining[defining.length - 1] : null;
+}
+
+/**
+ * The RAW body text of `name` in its defining migration — original case, no
+ * comment stripping, only CRLF folded to LF.
+ *
+ * This is what a `$$ ... $$` block contains, which is exactly what Postgres
+ * stores in `pg_proc.prosrc`. Comparing the two is the ONLY direct
+ * applied-versus-committed evidence available in this repository, and it is what
+ * the live suite uses to carry acceptance criterion 5: not a digest of a file,
+ * but the executed text itself (round-8 review, Codex, medium — "closing it
+ * requires the raw applied bytes").
+ *
+ * Returns null when the definition or its terminator cannot be located, so the
+ * caller fails loudly rather than comparing against an empty string.
+ */
+export function committedFunctionBody(file: string, name: string): string | null {
+  const raw = readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8').replace(/\r\n/g, '\n');
+  // Located in the normalised skeleton, sliced from the RAW text: the two are
+  // the same length, and a header quoted inside a literal is not a definition.
+  const { skeleton } = sqlView(raw);
+  let at = -1;
+  for (let from = 0; ; ) {
+    const found = definitionIndex(skeleton.slice(from), name);
+    if (found < 0) break;
+    at = from + found;
+    from = at + 1;
+  }
+  if (at < 0) return null;
+  const open = skeleton.indexOf('$$', at);
+  if (open < 0) return null;
+  const close = skeleton.indexOf('$$;', open + 2);
+  if (close < 0) return null;
+  return raw.slice(open + 2, close);
 }
 
 /**
