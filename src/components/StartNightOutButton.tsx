@@ -25,9 +25,22 @@ const UUID_RE =
 
 export default function StartNightOutButton({
   inviteeIds = [],
+  disabled = false,
 }: {
   /** Selected people from the consensus list; non-account entries are dropped. */
   inviteeIds?: readonly string[];
+  /**
+   * The invitee list is not settled yet — hold the button.
+   *
+   * `inviteeIds` is DERIVED state, and an empty array is indistinguishable
+   * from "nobody selected" once it arrives here. The consensus page builds it
+   * from the followed circle, which is empty while follows load, so starting
+   * in that window created a real plan and invited NOBODY — no error, no empty
+   * state, a night out with no guests (cold panel, both lanes, HIGH). The
+   * caller owns the readiness signal because only the caller knows whether an
+   * empty list means "still loading" or "none chosen".
+   */
+  disabled?: boolean;
 } = {}): JSX.Element | null {
   const auth = useAuth();
   const router = useRouter();
@@ -62,7 +75,9 @@ export default function StartNightOutButton({
 
   const handleStart = async (): Promise<void> => {
     const supabase = getBrowserSupabase();
-    if (!supabase || busy) return;
+    // Guarded here too, not only via the disabled attribute: a click can be
+    // dispatched programmatically, and a plan created early cannot be un-made.
+    if (!supabase || busy || disabled) return;
     setBusy(true);
     setError(false);
     if (attemptKey.current === null) attemptKey.current = crypto.randomUUID();
@@ -111,7 +126,7 @@ export default function StartNightOutButton({
       <button
         type="button"
         onClick={() => void handleStart()}
-        disabled={busy}
+        disabled={busy || disabled}
         className="rounded-full border border-accent px-5 py-2 text-accent touch-manipulation disabled:opacity-50"
       >
         {busy ? 'Starting…' : 'Start the official Night Out'}

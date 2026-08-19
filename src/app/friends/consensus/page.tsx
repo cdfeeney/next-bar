@@ -54,7 +54,10 @@ export default function ConsensusPage(): JSX.Element {
   // 0019 swap-day rule: barById feeds Group Favorites — subscribe so a
   // live server-catalog swap re-renders (checklist in catalog.ts).
   useBars();
-  const { circle, mode, isFollowing } = useFollows();
+  // `loading` is consumed, not merely destructured: `inviteeIds` below is
+  // derived from `circle`, which is EMPTY until follows resolve. Dropping it
+  // is what let the Start button send a plan with an empty invitee list.
+  const { circle, mode, isFollowing, loading: followsLoading } = useFollows();
   const { ratings } = useRatings();
   const auth = useAuth();
   const isServer = mode === 'server';
@@ -258,7 +261,10 @@ export default function ConsensusPage(): JSX.Element {
         </h1>
         {/* The canonical night_outs entry point (V8-3): creates the plan and
             lands on its invite-link surface. */}
-        <StartNightOutButton inviteeIds={inviteeIds} />
+        <StartNightOutButton
+          inviteeIds={inviteeIds}
+          disabled={followsLoading}
+        />
       </header>
 
       <section className="max-w-md mx-auto px-6">

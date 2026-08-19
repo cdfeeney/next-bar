@@ -7,7 +7,7 @@ import type {
 } from '@/types';
 import { haversineMiles } from '@/lib/distance';
 import { daysAgo } from '@/lib/freshness';
-import { effectiveNight } from '@/lib/cadence';
+import { nycNightKey } from '@/lib/nightKey';
 import {
   DIST_DECAY_MILES,
   DIST_WEIGHT,
@@ -225,9 +225,10 @@ export function matches(args: MatchesArgs): Bar[] {
 /**
  * FNV-1a hash of (sorted profile tags + effective NIGHT) — deterministic
  * for a given profile/night so the pick doesn't jitter between renders,
- * rotating at the 5am LOCAL night rollover (cadence.ts), never mid-evening
+ * rotating at the NYC 6am rollover (nightKey.ts), never mid-evening
  * (DeepSeek review: a UTC-midnight key rotated at 8pm ET — prime time for
- * a NYC product).
+ * a NYC product; a LOCAL rollover, which this used to use, only got that
+ * right for users whose device happened to be in New York).
  *
  * KNOWN + ACCEPTED FOR BETA: no per-user salt — users with identical tag
  * profiles share a night's pick. Decorrelating needs an identity/device
@@ -235,9 +236,7 @@ export function matches(args: MatchesArgs): Bar[] {
  * decision (escalation queue).
  */
 function explorationSeed(tags: VibeTag[], now: Date): number {
-  const night = effectiveNight(now);
-  const day = `${night.getFullYear()}-${night.getMonth() + 1}-${night.getDate()}`;
-  const input = `${[...tags].sort().join(',')}|${day}`;
+  const input = `${[...tags].sort().join(',')}|${nycNightKey(now)}`;
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);
