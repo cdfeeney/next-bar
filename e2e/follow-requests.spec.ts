@@ -138,10 +138,24 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     '**/rest/v1/rpc/get_profile_by_handle**',
     fulfillJson(200, opts.profileByHandle ?? []),
   );
-  await page.route(
-    '**/rest/v1/rpc/follow_user**',
-    fulfillJson(200, opts.followResult ?? 'followed'),
-  );
+  // STATEFUL outgoing list, for the same reason the inbox below is stateful:
+  // useFollows revalidates after a write, so a `requested` outcome is followed
+  // by a real get_outgoing_requests fetch. A static empty stub answers that
+  // fetch with "you requested nobody" and wipes the state the write just
+  // created — the server forgetting its own write, which no server does.
+  let outgoing: ProfileRow[] = [...(opts.outgoingRequests ?? [])];
+  await page.route('**/rest/v1/rpc/follow_user**', async (route) => {
+    const result = opts.followResult ?? 'followed';
+    if (result === 'requested') {
+      const filed = (opts.profileByHandle ?? [])[0];
+      if (filed && !outgoing.some((p) => p.id === filed.id)) outgoing = [...outgoing, filed];
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result),
+    });
+  });
   // STATEFUL inbox: resolving a request removes it from later fetches —
   // the hook refetches after accept/decline (shared-badge refresh bus),
   // and a static stub would resurrect resolved rows.
@@ -153,10 +167,13 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
       body: JSON.stringify(inbox),
     });
   });
-  await page.route(
-    '**/rest/v1/rpc/get_outgoing_requests**',
-    fulfillJson(200, opts.outgoingRequests ?? []),
-  );
+  await page.route('**/rest/v1/rpc/get_outgoing_requests**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(outgoing),
+    });
+  });
   const resolveRoute = (result: boolean) => async (route: Route) => {
     if (result) {
       const body = route.request().postDataJSON() as { requester?: string };
@@ -176,10 +193,20 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     '**/rest/v1/rpc/decline_follow_request**',
     resolveRoute(opts.declineResult ?? true),
   );
-  await page.route(
-    '**/rest/v1/rpc/cancel_follow_request**',
-    fulfillJson(200, opts.cancelResult ?? true),
-  );
+  await page.route('**/rest/v1/rpc/cancel_follow_request**', async (route) => {
+    const result = opts.cancelResult ?? true;
+    // A withdrawn request is gone from the next fetch too, or the revalidation
+    // puts the row straight back into "Requested".
+    if (result) {
+      const body = route.request().postDataJSON() as { target?: string };
+      outgoing = outgoing.filter((p) => p.id !== body?.target);
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result),
+    });
+  });
   await page.route(
     '**/rest/v1/rpc/get_followers**',
     fulfillJson(200, opts.followers ?? []),
