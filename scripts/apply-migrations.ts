@@ -13,11 +13,21 @@
  * consult it, so it re-executes EVERY file on every run and relies purely on
  * idempotency.
  *
- * Why that matters concretely: eleven of this branch's 0000-0010 files differ
- * from the checksums recorded in the live ledger. A blind replay would re-run
- * older, different versions of the base schema over a database that has moved
- * past them — including re-granting privileges 0034_revoke_first_grants.sql had
- * deliberately tightened. Idempotency does not save you when the FILE changed.
+ * Why that matters concretely, and checkable from this checkout: this branch
+ * carries 35 migrations (0000–0019, then 0043–0059) while the serving ledger
+ * holds 55 rows. TWENTY applied migrations have no file here at all — among
+ * them 0034_revoke_first_grants.sql, which tightened grants that the early base
+ * files re-grant. Replaying this branch's files therefore re-runs the base
+ * schema over a database that has since applied twenty migrations it knows
+ * nothing about. Idempotency does not save you when the SET is incomplete.
+ *
+ * This paragraph used to add that "eleven of this branch's 0000-0010 files
+ * differ from the checksums recorded in the live ledger". They do not. That
+ * reading hashed raw bytes against a ledger that records a NORMALISED digest
+ * (see migrationChecksum in src/lib/effectiveMigration.ts); re-measured against
+ * the serving ledger, all eleven are present and all eleven match. Corrected
+ * here, in CLAUDE.md, and in apply-migration-set.ts — the same mistake was
+ * written into all three.
  *
  * Use nb-overnight's apply-migrations.ts instead: it hashes each file, records
  * it in the ledger, and refuses ambiguous partial state. Or apply named files
@@ -99,8 +109,9 @@ async function assertNotLedgerBearing(client: Client): Promise<void> {
     '\n[ledger-guard] REFUSING to run.\n'
     + `  ${redactUrl(databaseUrl!)} has a public.schema_migrations ledger (head: ${head[0]?.name ?? 'unknown'}).\n`
     + '  This runner replays EVERY file in lexical order and consults no ledger, so it would\n'
-    + "  re-execute older, divergent copies of the base schema over a database that has moved past\n"
-    + '  them — including re-granting privileges 0034_revoke_first_grants.sql tightened.\n\n'
+    + "  re-execute the base schema over a database that has moved past it. Twenty applied\n"
+    + '  migrations have no file on this branch at all, among them 0034_revoke_first_grants.sql,\n'
+    + '  which tightened grants the early base files re-grant.\n\n'
     + "  Use nb-overnight's ledger-aware runner, or apply the specific file by hand after reading\n"
     + '  the ledger and numbering above its maximum. Ignore any apply checklist embedded inside an\n'
     + '  already-applied migration file; those cannot be corrected in place.\n',

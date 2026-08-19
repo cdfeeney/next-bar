@@ -94,11 +94,31 @@ sat directly in front of a destructive operation.
 `scripts/apply-migrations.ts` here is ledger-BLIND: it re-executes every file in
 lexical order regardless of what the ledger says. `nb-overnight`'s runner is the
 ledger-aware one (hashes each file, records it, refuses ambiguous partial state)
-and is what should be used. Verified 2026-08-16: this branch's copies of eleven
-`0000`–`0010` files differ from the checksums recorded in the live ledger, so a
-blind replay would re-run *older, different* versions of the base schema over a
-database that has moved well past them — including re-granting privileges that
-`0034_revoke_first_grants.sql` had tightened.
+and is what should be used. This branch carries 35 migrations (`0000`–`0019`,
+then `0043`–`0059`) while the serving ledger holds 55 rows: **twenty applied
+migrations have no file here**, among them `0034_revoke_first_grants.sql`, which
+tightened grants the early base files re-grant. A blind replay therefore re-runs
+the base schema over a database that has moved twenty migrations past it. That is
+reason enough; it does not depend on any checksum claim.
+
+**The ledger's checksum is NORMALISED — CRLF folded to LF, then whitespace
+stripped from the END OF THE FILE (not per line) — not a hash of the raw bytes.**
+The one implementation is `src/lib/effectiveMigration.ts`. Which function you
+want depends on what you already hold: a caller with the bytes in hand — an
+applier, which must certify exactly what it runs — calls `checksumOfSql(text)`,
+as `scripts/apply-migration-set.ts` does; a caller naming a repository file calls
+`migrationChecksum(file)`. Never reach for the file-taking one from a script that
+has already read the file: its directory is resolved from the module's location,
+so it can hash a different checkout's copy, and a second read is a second
+snapshot regardless.
+
+This paragraph previously said eleven `0000`–`0010` files "differ from the
+checksums recorded in the live ledger" (verified 2026-08-16). Re-measured
+against the serving staging ledger on 2026-08-19 with the ledger's own
+algorithm: all eleven are present and all eleven MATCH, as do all 35 rows whose
+file exists on this branch, with zero drift. The 2026-08-16 reading compared raw
+bytes to a normalised ledger on a `core.autocrlf` checkout, which reports drift
+for every multi-line file. Do not re-derive that claim by hashing raw bytes.
 
 Before applying anything: read the ledger, apply only files absent from it, and
 number new migrations ABOVE the live maximum. Two branches independently minted

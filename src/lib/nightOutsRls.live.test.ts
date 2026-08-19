@@ -4,6 +4,14 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 
+import {
+  GUARDED_FUNCTIONS,
+  committedFunctionBody,
+  definingMigration,
+  migrationChecksum,
+  type GuardedFunction,
+} from './effectiveMigration';
+
 /**
  * V8-3 BEHAVIORAL RLS/RPC negatives — criteria 3, 9 and 10.
  *
@@ -413,11 +421,14 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     // declined member rejoining explicitly — each landing in the right terminal
     // state with exactly one event.
     //
-    // What it does NOT cover, stated plainly: the 20-member CAP BOUNDARY, which
-    // is where the round-2 HIGH actually lived. Reaching it needs 21 distinct
-    // fixture identities and public.profiles is FK'd to auth.users, which this
-    // suite does not manufacture. The ordering invariant that fixes the
-    // boundary is guarded statically in nightOutsMigration.test.ts instead.
+    // What it does NOT cover: the 20-member CAP BOUNDARY, which is where the
+    // round-2 HIGH actually lived. This comment used to say reaching it needs 21
+    // identities "which this suite does not manufacture" — that was wrong when
+    // written and is wronger now: makeIdentities() below manufactures them, and
+    // the boundary is exercised behaviorally in this same file (round-5 review,
+    // Claude, medium). It is guarded THERE, plus redundantly by the text-order
+    // assertions in nightOutsMigration.test.ts, which catch a re-keyed advisory
+    // lock that a boundary test cannot see.
     await inRollback(async () => {
       const { rows: people } = await db.query('select id from public.profiles limit 2');
       expect(people.length, 'need 2 profiles').toBe(2);
@@ -1068,6 +1079,298 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       );
       expect(after[0].invite_status, 'a bogus expectation still changed the row').toBe('pending');
     });
+  });
+
+  /**
+   * CRITERION 4, the database-side half — the one this file was missing.
+   *
+   * "No caller can invoke the unguarded form" was only ever proved from the
+   * migration TEXT: 0057 drops the 2-argument overload, 0059 drops the
+   * 3-argument one. But `drop function if exists` is silently a no-op if the
+   * overload is later re-created, and three applied files (0044/0046/0048)
+   * still contain a `create or replace` of the 2-argument form — a partial
+   * hand-apply or a replayed hotfix puts it back. Every other call in this file
+   * now uses the 4-argument form, so nothing here would notice; the replay hole
+   * would simply be reachable again through the old signature (round-3 review,
+   * Claude, medium).
+   *
+   * 42883 is undefined_function: the name resolves to no such argument list.
+   */
+  it('the superseded respond_night_out overloads are GONE from this database (criterion 4)', async () => {
+    const superseded: Array<[string, string]> = [
+      ['2-argument (dropped by 0057)', `select public.respond_night_out('${randomUUID()}'::uuid, true)`],
+      ['3-argument (dropped by 0059)', `select public.respond_night_out('${randomUUID()}'::uuid, true, 'pending')`],
+    ];
+    for (const [label, sql] of superseded) {
+      const code = await inRollback(async () => {
+        try {
+          await db.query(sql);
+          return null;
+        } catch (error) {
+          return (error as { code?: string }).code ?? null;
+        }
+      });
+      expect(code, `the ${label} overload still resolves on this database`).toBe('42883');
+    }
+
+    // The two probes above only cover the signatures we thought to name. This
+    // is the same prove-the-list assertion the anon-denial test carries: ask the
+    // catalog what actually exists, so a THIRD overload nobody listed cannot
+    // sit there unnoticed.
+    const { rows } = await db.query(`
+      select pg_get_function_identity_arguments(p.oid) as args
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'respond_night_out'`);
+    // Argument NAMES are asserted too, not just types: PostgREST resolves an
+    // RPC by the named keys in the JSON body, so a rename is a caller-breaking
+    // change on the same footing as a signature change.
+    expect(rows.map((r) => r.args as string), 'respond_night_out has an unexpected overload set')
+      .toEqual([
+        'p_night_out uuid, p_accept boolean, p_expected_status text, p_expected_revision integer',
+      ]);
+  });
+
+  /**
+   * THE SAME QUESTION, FOR EVERY OTHER FUNCTION THE STATIC GUARD READS.
+   *
+   * src/lib/nightOutsMigration.test.ts derives the effective body of every
+   * name in GUARDED_FUNCTIONS by taking the last CREATE of that NAME in the migration stream. It
+   * cannot tell one overload from another and cannot tell a real removal from
+   * the routine drop of a superseded overload, because both need argument-type
+   * comparison; it names this test as the control that does.
+   *
+   * That claim only held for respond_night_out, which is a control covering one
+   * name of several (round-5 review, Claude, medium). Rename night_out_seat_count
+   * and the static guard would keep asserting against its 0048 definition, green,
+   * while the predicate that actually rations seats went unguarded. Add a
+   * join_night_out_by_token(text) overload and the static guard could read THAT
+   * body instead of the uuid one the app calls (round-5 review, Codex, medium).
+   *
+   * So the pin covers every name the helper resolves. Exactly these signatures,
+   * no more and no fewer.
+   */
+  it('the guarded night_out functions have exactly the overloads we expect', async () => {
+    // Keyed on GUARDED_FUNCTIONS, so adding a name to the static guard without
+    // a signature here is a TYPE error rather than a silent coverage hole
+    // (round-2 review, Claude, medium).
+    const expected: Record<GuardedFunction, string[]> = {
+      respond_night_out: [
+        'p_night_out uuid, p_accept boolean, p_expected_status text, p_expected_revision integer',
+      ],
+      join_night_out_by_token: ['p_token uuid'],
+      decline_night_out_by_token: ['p_token uuid'],
+      night_out_seat_count: ['p_night_out uuid'],
+      night_out_is_full_by_token: ['p_token uuid'],
+    };
+    const { rows } = await db.query(
+      `select p.proname as name, pg_get_function_identity_arguments(p.oid) as args
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = any($1)
+        order by p.proname, args`,
+      [Object.keys(expected)],
+    );
+    const actual: Record<string, string[]> = {};
+    for (const row of rows as Array<{ name: string; args: string }>) {
+      (actual[row.name] ??= []).push(row.args);
+    }
+    // Compared as a whole map, so a function that VANISHED shows up as a missing
+    // key rather than as an empty list nobody looked at.
+    expect(actual, 'the guarded overload set drifted from what the static guard assumes')
+      .toEqual(expected);
+  });
+
+  /**
+   * THE STATIC GUARD'S OTHER ASSUMPTION: that the file it read was APPLIED.
+   *
+   * nightOutsMigration.test.ts resolves each name in GUARDED_FUNCTIONS to the
+   * highest-numbered COMMITTED migration that states it. That equals the text
+   * the database runs only when the stream is fully applied — and this repo
+   * routinely carries migrations numbered above the live ledger head (0059's own
+   * header says so, and 0055/0056 are applied nowhere). So the helper fixed the
+   * stale-BACKWARDS direction and left the stale-FORWARDS one: the ordering
+   * invariants can go green describing SQL that was never installed, and with no
+   * DATABASE_URL this whole file is describe.skip, so nothing notices
+   * (round-1 review, Claude, medium).
+   *
+   * This is the one run that can see a database, so it is where the assumption
+   * becomes an assertion. The overload pin above compares SIGNATURES; this
+   * compares PROVENANCE — which file the ledger says installed them.
+   */
+  it('every migration the static guard reads is applied here at its recorded checksum', async () => {
+    const resolved = GUARDED_FUNCTIONS.map((name) => {
+      const file = definingMigration(name);
+      expect(file, `no committed migration defines ${name}`).not.toBeNull();
+      return file as string;
+    });
+    // The CHECKSUM too, not just the name. A name-only check proves the file was
+    // applied ONCE, not that what is committed here is what ran: an amended file
+    // or a branch carrying a different copy still returns the row, and the
+    // ordering invariants would keep asserting against text the database never
+    // ran (round-2 review, Claude, medium): an amended file, or a branch
+    // carrying a different copy of the same filename, still returns the row.
+    // This cited CLAUDE.md's eleven-file divergence until the same candidate
+    // corrected that passage — leaving a comment pointing at its own opposite,
+    // in front of the db:migrate decision CLAUDE.md exists to guard (round-4
+    // review, Claude, medium). The reason above needs no citation.
+    const { rows } = await db.query(
+      'select name, checksum from public.schema_migrations where name = any($1::text[])',
+      [resolved],
+    );
+    const ledger = new Map(
+      (rows as Array<{ name: string; checksum: string }>).map((r) => [r.name, r.checksum]),
+    );
+    // Reported per function, so a failure names which guard is reading text this
+    // database never ran rather than just listing a filename. The value is the
+    // file when it matches and a reason when it does not, so the message says
+    // WHICH way it broke.
+    const provenance = Object.fromEntries(GUARDED_FUNCTIONS.map((name, i) => {
+      const file = resolved[i];
+      if (!ledger.has(file)) return [name, `${file} (NOT in the ledger)`];
+      if (ledger.get(file) !== migrationChecksum(file)) return [name, `${file} (DRIFTED)`];
+      return [name, file];
+    }));
+    expect(
+      provenance,
+      'the static guard resolved a migration this database did not run, or ran differently',
+    ).toEqual(Object.fromEntries(GUARDED_FUNCTIONS.map((name, i) => [name, resolved[i]])));
+  });
+
+  /**
+   * WHAT THE DATABASE IS RUNNING, COMPARED TO WHAT THIS REPO COMMITS.
+   *
+   * Criterion 5 is worded about migration 0057's file bytes, and that wording is
+   * NOT verifiable and is recorded here as such: 0057's definition was
+   * superseded by 0058 then 0059, so its bytes are not what runs; the ledger
+   * records only a normalised digest; and no raw apply-time artifact was ever
+   * retained (round-9 review, Codex, medium — "record the criterion as
+   * unverifiable rather than treating current prosrc as proof"). This test does
+   * not claim it.
+   *
+   * What it does prove is the property the criterion was written to protect,
+   * and proves it more directly than any digest could.
+   *
+   * "What is applied is byte-identical to what is committed" was argued about
+   * for three rounds against the ledger, and the ledger cannot settle it: its
+   * checksum is normalised, so line endings and trailing whitespace slip
+   * through, and no raw digest was ever written at apply time. A raw hash of the
+   * committed file was tried and removed — it is checkout-dependent under
+   * core.autocrlf and describes the checkout, not the database.
+   *
+   * The applied bytes DO exist, and Postgres has them: pg_proc.prosrc is the
+   * function body exactly as submitted. Compared against the same body sliced
+   * from the committed migration, this is a direct applied-versus-committed
+   * comparison of the text that actually runs — the evidence the round-8 review
+   * asked for (Codex, medium: "closing it requires the raw applied bytes").
+   *
+   * Only line endings are folded, and only on the committed side, because the
+   * server stores LF. Nothing else is normalised: not case, not whitespace, not
+   * comments. A one-character difference fails.
+   */
+  it('every guarded function RUNS the exact text and attributes this repo commits', async () => {
+    // prosecdef and proconfig too, not only the body. A function can be replaced
+    // with a byte-identical body and no `security definer` or no
+    // `set search_path = public` — prosrc is unchanged, the signature is
+    // unchanged, and every other control here still passes, while the security
+    // shape the migration promised is gone (round-9 review, Claude, medium).
+    const { rows } = await db.query(
+      `select p.proname as name, p.prosrc as applied, p.prosecdef as definer,
+              coalesce(array_to_string(p.proconfig, ','), '') as config
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = any($1)`,
+      [[...GUARDED_FUNCTIONS]],
+    );
+    type Row = { name: string; applied: string; definer: boolean; config: string };
+    // Keyed by name, and a DUPLICATE is a failure rather than a silent
+    // last-one-wins: two rows for one name means an unexpected overload.
+    const applied = new Map<string, Row>();
+    for (const row of rows as Row[]) {
+      expect(applied.has(row.name), `${row.name} has more than one overload here`).toBe(false);
+      applied.set(row.name, row);
+    }
+    const verdict = Object.fromEntries(GUARDED_FUNCTIONS.map((name) => {
+      const file = definingMigration(name);
+      if (!file) return [name, 'no committed migration defines it'];
+      const committed = committedFunctionBody(file, name);
+      if (committed === null) return [name, `body not locatable in ${file}`];
+      const row = applied.get(name);
+      if (!row) return [name, 'not installed on this database'];
+      if (row.applied !== committed) return [name, `body DIFFERS from ${file}`];
+      if (!row.definer) return [name, 'installed WITHOUT security definer'];
+      if (row.config !== 'search_path=public') {
+        return [name, `search_path is "${row.config}", not public`];
+      }
+      return [name, `matches ${file}`];
+    }));
+    expect(
+      verdict,
+      'the database is running text or attributes this repo does not commit',
+    ).toEqual(Object.fromEntries(GUARDED_FUNCTIONS.map((name) => [
+      name,
+      `matches ${definingMigration(name)}`,
+    ])));
+  });
+
+  /**
+   * CRITERION 5, as far as this ledger can carry it — which is not all the way,
+   * so the test's name no longer claims the criterion (round-5 review, Codex,
+   * medium).
+   *
+   * "What is applied is byte-identical to what is committed for 0057" is a claim
+   * about 0057 specifically. definingMigration resolves respond_night_out to
+   * 0059, so removing 0057's ledger row or changing its checksum left the test
+   * above green (round-3 review, Codex, medium). 0058 is named for the same
+   * reason: the chain is 0057 -> 0058 -> 0059 and a hole in the middle is a hole.
+   *
+   * Named literally on purpose. These two files are FROZEN history — a criterion
+   * about 0057 cannot be satisfied by whatever the resolver points at today.
+   *
+   * THE LIMIT, STATED RATHER THAN IMPLIED: schema_migrations records a
+   * NORMALISED digest, so what passes here is "identical up to line endings and
+   * trailing whitespace", not byte-for-byte. Nothing can do better from this
+   * ledger, because a raw digest was never recorded to compare against (round-4
+   * review, Codex, medium). Proving literal byte identity needs an artifact the
+   * database does not hold — do not read a green run as more than it is.
+   */
+  it('0057 and 0058 are applied here at the checksums this repo commits', async () => {
+    const chain = [
+      '0057_night_outs_respond_expected_status.sql',
+      '0058_night_outs_respond_expected_status_atomic.sql',
+    ];
+    const { rows } = await db.query(
+      'select name, checksum from public.schema_migrations where name = any($1::text[])',
+      [chain],
+    );
+    const ledger = new Map(
+      (rows as Array<{ name: string; checksum: string }>).map((r) => [r.name, r.checksum]),
+    );
+    expect(
+      Object.fromEntries(chain.map((file) => [
+        file,
+        !ledger.has(file) ? 'NOT in the ledger'
+          : ledger.get(file) !== migrationChecksum(file) ? 'DRIFTED'
+            : 'applied, checksum matches',
+      ])),
+      'the replay-guard chain is not on this database as committed',
+    ).toEqual(Object.fromEntries(chain.map((file) => [file, 'applied, checksum matches'])));
+
+    // THE HALF NOTHING HERE CAN COVER, stated instead of papered over.
+    //
+    // A raw sha256 pin of the committed 0057/0058 bytes was tried and removed.
+    // Both lanes rejected it and both were right: the repo has no
+    // .gitattributes and core.autocrlf is on, so the constants were only valid
+    // on the checkout that produced them and went red on any other; and the pin
+    // sat inside describeLive, so the one guard on those files never ran on the
+    // CI path that has no DATABASE_URL. It also would not have proved criterion
+    // 5 anyway — it hashes the committed checkout, never the applied artifact
+    // (round-7 review, Codex and Claude, medium).
+    //
+    // So: what this test proves is that 0057 and 0058 are recorded in the
+    // serving ledger at the digest this repo computes for them. That digest is
+    // NORMALISED, so "byte-identical" in criterion 5 is not established here and
+    // is not establishable from this database — no raw digest was ever written
+    // at apply time. Criterion 5 rests on the 2026-08-17 verification recorded
+    // in the goal, plus this continuing check that the row has not moved.
+    // Closing it properly needs an apply-time artifact that does not exist.
   });
 
   /**

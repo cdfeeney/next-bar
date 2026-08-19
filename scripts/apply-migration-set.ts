@@ -25,8 +25,24 @@
  *     the target is mandatory rather than inferred.
  *   - Anything at all without --execute. Dry-run is the default.
  *
- * Checksums are sha256 of each file's RAW BYTES, which is the convention the
- * existing ledger already uses (verified against 0044's recorded row).
+ * Checksums come from checksumOfSql() in src/lib/effectiveMigration.ts, so this
+ * script and the live provenance test in src/lib/nightOutsRls.live.test.ts
+ * cannot disagree about what a ledger row means.
+ *
+ * It hashes the EXACT buffer this script is about to execute, never a second
+ * read of the same path. A file-taking helper was tried first and was wrong: its
+ * directory is resolved from the module's own location while `raw` below comes
+ * from process.cwd(), so invoking this script by path from another checkout
+ * executed one file and recorded the other's checksum — and even in one
+ * checkout, a second read is a second snapshot (round-4 review, Codex HIGH).
+ *
+ * This header used to claim RAW BYTES, "verified against 0044's recorded row".
+ * That was wrong, and 0044's row is what disproves it: the ledger holds the
+ * NORMALISED hash (3514e43e...), not the raw one (5578e1af...). Read from the
+ * serving staging ledger 2026-08-19: raw matched 0 of the 35 rows whose file
+ * exists on this branch, normalised matched all 35. Applying through the old
+ * code would have written rows the provenance gate then rejected as DRIFTED
+ * (round-3 review, Claude, medium).
  *
  * Usage:
  *   npx tsx scripts/apply-migration-set.ts --env staging 0044_x.sql 0045_y.sql
@@ -38,10 +54,11 @@
  */
 
 import { config as loadEnv } from 'dotenv';
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
+
+import { checksumOfSql, normalisedSql } from '../src/lib/effectiveMigration';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -160,7 +177,14 @@ async function main(): Promise<void> {
     } catch (error) {
       return fail(`cannot read ${name}: ${(error as Error).message}`);
     }
-    return { name, raw, checksum: createHash('sha256').update(raw).digest('hex') };
+    // ONE string: what gets executed is exactly what the checksum describes.
+    // Hashing normalised text while executing the raw buffer meant that on a
+    // CRLF checkout the ledger row described LF while the server stored CRLF,
+    // and the applied-versus-committed body comparison in
+    // nightOutsRls.live.test.ts would fail for anything applied here
+    // (round-9 review, Claude, medium).
+    const sql = normalisedSql(raw.toString('utf8'));
+    return { name, raw, sql, checksum: checksumOfSql(sql) };
   });
 
   const client = new Client({ connectionString: databaseUrl });
@@ -232,7 +256,7 @@ async function main(): Promise<void> {
     try {
       for (const entry of planned) {
         process.stdout.write(`  applying ${entry.name} ... `);
-        await client.query(entry.raw.toString('utf8'));
+        await client.query(entry.sql);
         await client.query(
           'insert into public.schema_migrations (name, checksum) values ($1, $2)',
           [entry.name, entry.checksum],

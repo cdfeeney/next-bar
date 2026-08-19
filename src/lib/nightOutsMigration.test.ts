@@ -2,6 +2,18 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import {
+  MIGRATIONS_DIR,
+  checksumOfSql,
+  committedFunctionBody,
+  definingMigration,
+  definitionIndex,
+  looksLikeUnreadableDefinition,
+  normalisedSql,
+  sqlView,
+  type GuardedFunction,
+} from './effectiveMigration';
+
 /**
  * V8-3 migration guard — static assertions over 0044_night_outs.sql.
  *
@@ -217,57 +229,357 @@ describe('0044_night_outs.sql security shape', () => {
  * respond_night_out — the one function round 3 existed to fix — which would
  * send an auditor of the 20-member cap to 0044's uncapped, unlocked text):
  *
- *   0044 — night_out_role, create_night_out, cancel_night_out, decide_night_out,
- *          suggest/vote, the member-scoped reads, preview, resolve-by-token
- *   0045 — get_night_out (invite_to_night_out superseded by 0049)
+ *   0044 — night_out_role, cancel_night_out, decide_night_out, vote_night_out_bar,
+ *          get_night_out_board, get_night_out_members, preview_night_out,
+ *          resolve_night_out_by_token, revoke_night_out_link
+ *          (create_night_out superseded by 0054, suggest_night_out_bar by 0051)
+ *   0045 — (get_night_out superseded by 0059; invite_to_night_out by 0049)
  *   0046 — (superseded by 0048)
  *   0047 — night_outs column grants
- *   0048 — night_out_member_cap, night_out_seat_count, and the four callers:
+ *   0048 — night_out_member_cap, night_out_seat_count, and three callers:
  *          join_night_out_by_token, decline_night_out_by_token,
- *          respond_night_out, night_out_is_full_by_token
+ *          night_out_is_full_by_token
  *   0049 — (superseded by 0050)
  *   0050 — invite_to_night_out
+ *   0051 — suggest_night_out_bar
+ *   0053 — nyc_night_key
+ *   0054 — create_night_out
+ *   0057/0058 — (respond_night_out, superseded by 0059)
+ *   0059 — respond_night_out, get_night_out, get_my_night_outs,
+ *          night_out_members_bump_revision
+ *
+ * respond_night_out moved OUT of 0048 in the 0057 -> 0058 -> 0059 chain. It is
+ * called out here because the map was written after an auditor of the 20-member
+ * cap was sent to the wrong file once already, and leaving 0048 as its listed
+ * home would do it a second time.
  *
  * The assertions in the block above still describe 0044's TEXT, which is correct
  * as a record of an applied, immutable file, but is NOT the effective definition
  * for anything in the 0045/0046/0047 rows.
  *
- * These are ORDERING invariants, and they exist because the thing they guard
- * cannot be exercised behaviorally on staging: the 20-member boundary needs 21
- * distinct fixture identities and public.profiles is FK'd to auth.users, which
- * this suite does not manufacture. A static guard is the honest fallback, not a
- * substitute — see the residual-risk note in the goal.
+ * These are ORDERING invariants. This block used to say they exist because the
+ * 20-member boundary "cannot be exercised behaviorally on staging" — that claim
+ * is false and was false when written: makeIdentities() in
+ * nightOutsRls.live.test.ts manufactures the 21 fixture identities, and the
+ * boundary IS exercised there ('enforces the 20-member cap...' and 'refuses a
+ * declined member rejoining a full plan...'). Leaving the claim standing here
+ * would point the next auditor away from the coverage that exists, which is the
+ * same wrong-map failure the block above was just corrected for (round-1
+ * review, Claude, medium).
+ *
+ * What these assertions add over the behavioral tests is the ADVISORY LOCK KEY.
+ * The live tests are sequential on one connection, so a per-user key would pass
+ * them; only the text order below can see it. That is why they pin the key
+ * itself and not merely the presence of a lock.
  */
 const SQL_0046 = readFileSync(
   path.join(__dirname, '..', '..', 'supabase', 'migrations', '0046_night_outs_cap_and_race.sql'),
   'utf8',
 ).toLowerCase();
 
-/** The body of one create-or-replace function, up to its closing $$. */
-function functionBody(sql: string, name: string): string {
-  const start = sql.indexOf(`create or replace function public.${name}`);
-  expect(start, `${name} not found in 0046`).toBeGreaterThan(-1);
-  const end = sql.indexOf('$$;', start);
-  expect(end, `${name} has no terminator`).toBeGreaterThan(start);
-  return sql.slice(start, end);
+/**
+ * The text of the migration that currently STATES `name`.
+ *
+ * Resolution lives in effectiveMigration.ts so the live suite can assert that
+ * the SAME file, at the SAME checksum, is recorded in the serving database's
+ * schema_migrations ledger. Read that module for what this does and does not
+ * prove — in particular, it resolves the last file in the COMMITTED stream,
+ * which is the text the database runs only when the stream is fully applied.
+ *
+ * The parameter is GuardedFunction, not string, and that is the coverage lock:
+ * guarding a fifth function here does not compile until the name joins
+ * GUARDED_FUNCTIONS, and joining it does not compile until the live signature
+ * pin gains an entry. The three hand-kept lists that used to drift apart are now
+ * one list the type checker walks (round-2 review, Claude, medium).
+ */
+function effectiveView(name: GuardedFunction): { code: string; skeleton: string } {
+  const file = definingMigration(name);
+  expect(file, `no migration defines ${name}`).not.toBeNull();
+  // BOTH views. `code` keeps literal contents — the advisory-lock KEY these
+  // guards pin is a string literal, with its case, which is why sqlView
+  // lowercases everything else and leaves literals alone. `skeleton` is where
+  // definitions are LOCATED, because a definition header quoted inside a string
+  // is not one (round-7 review, Codex, medium). The two are the same length by
+  // construction, so an index from one slices the other.
+  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8'));
 }
 
 /**
- * These assert the ORDERING invariants that stand in for the untestable
- * 20-member boundary, so they must read whichever file currently DEFINES the
- * functions. They were written against 0046 and stayed pointed there after 0048
+ * The body of the LAST statement of `name` in `sql`, up to its closing $$.
+ *
+ * Last, not first. A migration may state a function twice — Postgres keeps the
+ * second — and reading the first let a correct definition vouch for a weakened
+ * one that followed it in the same file (round-5 review, Codex, medium).
+ */
+function functionBody(
+  source: string | { code: string; skeleton: string },
+  name: string,
+): string {
+  // A plain string is its own skeleton. The 0044/0046/0048 blocks below pass raw
+  // file text on purpose — they assert about those files AS WRITTEN, immutable
+  // history, not about an effective definition.
+  const view = typeof source === 'string' ? { code: source, skeleton: source } : source;
+  expect(
+    view.code.length,
+    'the two sqlView views are not index-compatible',
+  ).toBe(view.skeleton.length);
+  let start = -1;
+  for (let from = 0; ; ) {
+    const at = definitionIndex(view.skeleton.slice(from), name);
+    if (at < 0) break;
+    start = from + at;
+    from = start + 1;
+  }
+  expect(start, `${name} not found in the migration under test`).toBeGreaterThan(-1);
+  const end = view.skeleton.indexOf('$$;', start);
+  expect(end, `${name} has no terminator`).toBeGreaterThan(start);
+  return view.code.slice(start, end);
+}
+
+/**
+ * These assert the ORDERING invariants that back up the behavioral 20-member
+ * boundary tests in nightOutsRls.live.test.ts, so they must read whichever file
+ * currently DEFINES the functions. They were written against 0046 and stayed pointed there after 0048
  * superseded it (fresh-cycle round-2 review, Claude) — a guard aimed at dead
  * text, which is the same claim-drifted-from-artifact failure it exists to
- * catch. They now read SQL_0048; if a later migration re-states these
- * functions again, this constant is what has to move with it.
+ * catch. Each `it` below now derives its text through effectiveView(), so it
+ * reads whichever migration currently DEFINES the function it names. Nothing
+ * here has to be moved when the next migration re-states one of them — the
+ * remembering is what kept failing.
  */
-describe('effective night_out RPC ordering invariants (currently 0048)', () => {
+/**
+ * The COMPLETE per-plan advisory-lock expression, operand and salt included.
+ *
+ * A prefix match on `night_out_members:` is not enough: swap the operand from
+ * the plan id to the caller's uuid and the key is per-USER while the prefix
+ * still reads correctly, so two concurrent joins take different locks and both
+ * see room for the last seat. The prefix-only version of these assertions stayed
+ * green on exactly that mutation (round-2 review, Codex, medium), and the live
+ * cap tests cannot see it either — they are sequential on one connection.
+ *
+ * `plan` is the name the function under test holds the plan id in. It is a
+ * parameter rather than a wildcard because a wildcard would accept any operand,
+ * which is the hole being closed.
+ *
+ * Returned as a plain string and matched against a normalised body, because the
+ * expression spans a line break in every night-out migration that states it and
+ * a regex for that is all escaping and no clarity.
+ *
+ * FORMATTING MUST NOT CHANGE THE VERDICT. The first version hard-coded one space
+ * after the open paren, which only matched because these files break the line
+ * there; the same call written on one line — the prevailing style in
+ * 0009/0011/0012/0013 — has none and would have failed a correct, identically
+ * keyed lock (round-3 review, Claude, medium). A false red here is dangerous in
+ * a specific way: the obvious repair under time pressure is to loosen this back
+ * to the `night_out_members:` prefix, which is the exact hole it exists to
+ * close. So `normalise` drops spaces around parens rather than this string
+ * getting looser.
+ */
+function planLock(plan: string): string {
+  return `pg_advisory_xact_lock(hashtextextended('night_out_members:' || ${plan}::text, 0))`;
+}
+
+/**
+ * Whitespace runs collapsed to one space, and no space adjacent to a paren.
+ *
+ * Operand and salt still have to match exactly — this only makes line breaks and
+ * indentation invisible, not the key.
+ */
+function normalise(sql: string): string {
+  return sql.replace(/\s+/g, ' ').replace(/\s*([()])\s*/g, '$1');
+}
+
+/**
+ * sqlView is the one piece of real logic in this guard, and every case below is
+ * a trigger a reviewer actually landed rather than an invented edge. If it is
+ * ever simplified back to regexes, these are what should fail first.
+ */
+describe('sqlView — SQL as Postgres reads it', () => {
+  it('nests block comments, so a commented-out call stays commented out', () => {
+    const sql = 'a /* outer /* inner */ perform lock(); */ b';
+    expect(sqlView(sql).code).not.toMatch(/perform lock/);
+    expect(sqlView(sql).code.trim().startsWith('a')).toBe(true);
+    expect(sqlView(sql).code.trim().endsWith('b')).toBe(true);
+  });
+
+  it('returns two views of exactly the same length, so indices are portable', () => {
+    // functionBody locates a definition in `skeleton` and slices `code`. That is
+    // only sound while every branch blanks to the same length (round-7 review,
+    // Codex, medium: a definition header quoted inside a literal was being found
+    // in `code`).
+    const sql = readFileSync(
+      path.join(MIGRATIONS_DIR, '0059_night_outs_respond_revision.sql'),
+      'utf8',
+    );
+    const { code, skeleton } = sqlView(sql);
+    expect(code.length).toBe(skeleton.length);
+    expect(code.length).toBe(sql.length);
+  });
+
+  it('does not treat a dollar-quoted STRING as a function body', () => {
+    const sql = 'select $note$create or replace function public.respond_night_out(x uuid)$note$;';
+    expect(sqlView(sql).skeleton).not.toMatch(/create or replace function/);
+    expect(definitionIndex(sqlView(sql).skeleton, 'respond_night_out')).toBe(-1);
+  });
+
+  it('does not read a dollar inside an identifier as a quote delimiter', () => {
+    // `foo$guard$bar` is a legal Postgres identifier.
+    const sql = "select foo$guard$bar, pg_advisory_xact_lock(1), baz$guard$qux;";
+    expect(sqlView(sql).code).toMatch(/pg_advisory_xact_lock/);
+  });
+
+  it('drops line comments, so prose quoting SQL is not code', () => {
+    // 0045 and 0046 really do carry this shape in their headers.
+    const sql = [
+      '-- supersedes create or replace function public.night_out_seat_count(x)',
+      'select 1;',
+    ].join('\n');
+    expect(sqlView(sql).skeleton).not.toMatch(/create or replace function/);
+    expect(sqlView(sql).code).toMatch(/select 1;/);
+  });
+
+  it('a line comment still ends at the newline a block comment contained', () => {
+    const sql = ['/* x', ' */ -- hidden', 'visible'].join('\n');
+    expect(sqlView(sql).code).toMatch(/visible/);
+    expect(sqlView(sql).code).not.toMatch(/hidden/);
+  });
+
+  it('blanks literal CONTENTS in the skeleton, so a quoted definition is not one', () => {
+    const sql = "select 'create function public.respond_night_out';";
+    expect(sqlView(sql).skeleton).not.toMatch(/create function/);
+    expect(sqlView(sql).code).toMatch(/create function/);
+  });
+
+  it('keeps literal CASE, so a re-cased lock key is a different key', () => {
+    const sql = "PERFORM pg_advisory_xact_lock(hashtextextended('NIGHT_OUT_MEMBERS:' || x, 0));";
+    const { code } = sqlView(sql);
+    // Keywords and identifiers folded; the literal untouched.
+    expect(code).toMatch(/perform pg_advisory_xact_lock/);
+    expect(code).toMatch(/'NIGHT_OUT_MEMBERS:'/);
+    expect(code).not.toMatch(/'night_out_members:'/);
+  });
+
+  it("ends an E'...' string where Postgres ends it, not at the escaped quote", () => {
+    // One mis-lexed apostrophe flips literal/code parity for the whole rest of
+    // the file, and every later quote then toggles the wrong way (round-6
+    // review, both lanes). The definition after it must stay findable.
+    // String.raw so the backslash reaches sqlView instead of being eaten by JS.
+    const sql = String.raw`update b set n = E'Molly\'s' where id = 1;`
+      + ' create or replace function public.respond_night_out(x uuid) returns void as $$ $$;';
+    expect(sqlView(sql).skeleton).toMatch(/create or replace function public\.respond_night_out\(/);
+    expect(sqlView(sql).skeleton).not.toMatch(/molly/i);
+  });
+
+  it('treats a NESTED dollar quote as inert text, not as code', () => {
+    // `raise notice '%', $audit$...$audit$` only LOGS its text. It must not
+    // satisfy an assertion about what the function executes (round-6 review,
+    // Codex, medium).
+    const sql = 'create or replace function public.f() returns void as $$ begin'
+      + " raise notice '%', $audit$perform pg_advisory_xact_lock(1)$audit$; end $$;";
+    expect(sqlView(sql).code).not.toMatch(/pg_advisory_xact_lock/);
+    // The body around it is still code.
+    expect(sqlView(sql).code).toMatch(/raise notice/);
+  });
+});
+
+/**
+ * The ledger's checksum algorithm, pinned WITHOUT a database.
+ *
+ * It had no test that runs on `npm test`: its only consumers were the applier
+ * and the live suite, which is describe.skip without DATABASE_URL, so changing
+ * the normalisation was undetectable (round-8 review, Claude, medium). The
+ * measured constant below is 0044's real ledger row, so this also pins the
+ * algorithm to what the serving database actually holds.
+ */
+/**
+ * The two helpers the live suite depends on, tested WITHOUT a database.
+ *
+ * Both were reachable only from nightOutsRls.live.test.ts, which is describe.skip
+ * without DATABASE_URL, so deleting the near-miss throw or breaking the body
+ * slice left `npm test` green (round-9 review, Claude, medium).
+ */
+describe('committedFunctionBody and looksLikeUnreadableDefinition', () => {
+  it("returns the applied body of 0059's respond_night_out, LF-folded and nothing else", () => {
+    const body = committedFunctionBody('0059_night_outs_respond_revision.sql', 'respond_night_out');
+    expect(body, 'the body was not locatable').not.toBeNull();
+    // Not normalised: comments, case and indentation are all still there,
+    // because pg_proc.prosrc keeps them too.
+    expect(body).toMatch(/pg_advisory_xact_lock/);
+    expect(body).toMatch(/--/);
+    // No assertion on CR here: this checkout materialises LF, so it could not
+    // fail and would be decoration. The CRLF fold is covered where it can fail,
+    // by the normalisedSql case below.
+    // The body is the LAST statement's, and it really is respond_night_out's.
+    expect(body).toMatch(/p_expected_revision/);
+    // The slice stops at the terminator: no trailing `$$;` and no grant lines.
+    expect(body).not.toMatch(/grant execute/);
+  });
+
+  it('returns null rather than a wrong body when the name is absent', () => {
+    expect(committedFunctionBody('0044_night_outs.sql', 'night_out_seat_count')).toBeNull();
+  });
+
+  it('locates a body written with a TAGGED dollar quote', () => {
+    // Every night-out migration uses the bare $$ form today; the tagged form is
+    // equally legal, and hard-coding $$ made this return null on it.
+    const sql = 'create or replace function public.f() returns void language sql as $fn$ select 1 $fn$;';
+    const { skeleton } = sqlView(sql);
+    expect(definitionIndex(skeleton, 'f')).toBeGreaterThan(-1);
+  });
+
+  it('calls a definition-shaped header it cannot read a near miss, and a mere call not', () => {
+    const unreadable = 'create or replace function public . respond_night_out (x uuid) returns void';
+    expect(looksLikeUnreadableDefinition(sqlView(unreadable).skeleton, 'respond_night_out')).toBe(true);
+
+    const unicode = 'create or replace function public.U&"respond_night_out"(x uuid) returns void';
+    expect(looksLikeUnreadableDefinition(sqlView(unicode).skeleton, 'respond_night_out')).toBe(true);
+
+    const merelyCalls = 'create or replace function public.wrapper() returns void language sql as $$'
+      + " select public.respond_night_out(null, true, 'pending', 0) $$;";
+    expect(looksLikeUnreadableDefinition(sqlView(merelyCalls).skeleton, 'respond_night_out')).toBe(false);
+
+    const readable = 'create or replace function public.respond_night_out(x uuid) returns void';
+    expect(looksLikeUnreadableDefinition(sqlView(readable).skeleton, 'respond_night_out')).toBe(false);
+  });
+
+  it('normalisedSql is what checksumOfSql hashes, so applier and ledger agree', () => {
+    const sql = readFileSync(path.join(MIGRATIONS_DIR, '0044_night_outs.sql'), 'utf8');
+    expect(checksumOfSql(normalisedSql(sql))).toBe(checksumOfSql(sql));
+    expect(normalisedSql('a\r\nb  \n')).toBe('a\nb');
+  });
+});
+
+describe('checksumOfSql — what public.schema_migrations records', () => {
+  it("reproduces 0044's recorded ledger checksum from the committed file", () => {
+    const sql = readFileSync(
+      path.join(MIGRATIONS_DIR, '0044_night_outs.sql'),
+      'utf8',
+    );
+    expect(checksumOfSql(sql))
+      .toBe('3514e43ed077fb86fcb691b4cbac82f66a264d16a249e84d7e44057e020d2543');
+  });
+
+  it('folds CRLF, so the digest does not depend on how git checked the file out', () => {
+    expect(checksumOfSql('a\r\nb')).toBe(checksumOfSql('a\nb'));
+  });
+
+  it('strips whitespace at the END OF THE STRING only, never per line', () => {
+    // The distinction is load-bearing: the comment describing this algorithm
+    // once read "trailing-whitespace stripped", which an independent
+    // reimplementation would apply per line and get a different digest.
+    expect(checksumOfSql('a b  \n')).toBe(checksumOfSql('a b'));
+    expect(checksumOfSql('a   \nb')).not.toBe(checksumOfSql('a\nb'));
+  });
+});
+
+describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
-    const body = functionBody(SQL_0048, 'join_night_out_by_token');
-    const lock = body.indexOf('pg_advisory_xact_lock');
+    const body = normalise(functionBody(effectiveView('join_night_out_by_token'), 'join_night_out_by_token'));
+    // The whole KEY, not just the call — see planLock above.
+    const lock = body.indexOf(planLock('v_id'));
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
     const capCheck = body.indexOf('member_cap', conversion);
-    expect(lock, 'join takes no advisory lock').toBeGreaterThan(-1);
+    expect(lock, 'join takes no per-plan advisory lock').toBeGreaterThan(-1);
     expect(conversion, 'no own-row conversion after the lock').toBeGreaterThan(lock);
     // The whole defect was asking about capacity before knowing whether this
     // call even takes capacity. Converting an existing invite is not a new seat.
@@ -276,27 +588,35 @@ describe('effective night_out RPC ordering invariants (currently 0048)', () => {
   });
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
-    const body = functionBody(SQL_0048, 'decline_night_out_by_token');
+    const body = normalise(functionBody(effectiveView('decline_night_out_by_token'), 'decline_night_out_by_token'));
     expect(body).not.toMatch(/member_cap/);
-    // Still serialised, so a concurrent invite cannot swallow the decline.
-    expect(body).toMatch(/pg_advisory_xact_lock/);
+    // Still serialised on the SAME per-plan key, so a concurrent invite cannot
+    // swallow the decline. A different key would serialise nothing.
+    expect(body, 'decline takes no per-plan advisory lock').toContain(planLock('v_id'));
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = functionBody(SQL_0048, 'respond_night_out');
-    expect(body, 'the rejoin path must take the same per-plan lock').toMatch(
-      /pg_advisory_xact_lock\(\s*hashtextextended\('night_out_members:/,
-    );
+    const body = normalise(functionBody(effectiveView('respond_night_out'), 'respond_night_out'));
+    expect(body, 'the rejoin path must take the same per-plan lock')
+      .toContain(planLock('p_night_out'));
     expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
     expect(body, 'the cap only applies when a declined row re-enters the counted set')
       .toMatch(/v_current = 'declined'/);
+    // ORDER, not just presence. Move the lock to AFTER the cap check and every
+    // assertion above still passed, while two concurrent rejoins could both see
+    // the last seat free — and the live cap tests are sequential on one
+    // connection, so they cannot see it either (round-6 review, Codex, medium).
+    expect(
+      body.indexOf('member_cap'),
+      'the cap is consulted BEFORE the per-plan lock is held',
+    ).toBeGreaterThan(body.indexOf(planLock('p_night_out')));
   });
 
   it('the one counted set excludes declined rows', () => {
     // There is exactly one count now — night_out_seat_count — so this is the
     // only place the rule can be wrong. 0048's exactly-once assertion is what
     // keeps it that way.
-    const body = functionBody(SQL_0048, 'night_out_seat_count');
+    const body = functionBody(effectiveView('night_out_seat_count'), 'night_out_seat_count');
     expect(body, 'the seat count includes declined rows').toMatch(/invite_status <> 'declined'/);
   });
 
@@ -339,15 +659,26 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
     ).toBe(1);
   });
 
+  /**
+   * Reads the EFFECTIVE definition of each caller, not 0048's copy.
+   *
+   * This loop used to read SQL_0048 for all three, including respond_night_out —
+   * whose definition moved out of 0048 in the 0057 -> 0058 -> 0059 chain. A later
+   * migration could restate it with an inline count instead of
+   * night_out_seat_count and this assertion would keep passing against dead text,
+   * which is the single-source property it exists to protect (round-3 review,
+   * Codex, medium). The describe block's title still names 0048 because the
+   * exactly-once assertions above genuinely are about that file's text.
+   */
   it('every caller asks the helpers rather than restating the rule', () => {
-    for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token']) {
-      const body = functionBody(SQL_0048, fn);
+    for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token'] as const) {
+      const body = functionBody(effectiveView(fn), fn);
       expect(body, `${fn} does not use night_out_seat_count`).toMatch(/night_out_seat_count/);
       expect(body, `${fn} does not use night_out_member_cap`).toMatch(/night_out_member_cap/);
       expect(body, `${fn} still carries a hard-coded cap`).not.toMatch(/member_cap constant/);
     }
     // Declining is never rationed by capacity, so it must ask neither.
-    const decline = functionBody(SQL_0048, 'decline_night_out_by_token');
+    const decline = functionBody(effectiveView('decline_night_out_by_token'), 'decline_night_out_by_token');
     expect(decline).not.toMatch(/night_out_member_cap/);
   });
 
