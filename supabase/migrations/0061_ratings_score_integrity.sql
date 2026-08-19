@@ -50,9 +50,16 @@
 -- reports success. That false green was observed on staging on 2026-08-19:
 -- the constraint landed, the backfill did not, and nothing said so.
 --
--- `greatest(now(), updated_at + interval '1 microsecond')` is strictly newer
--- than the stored value even for a row whose client-generated clock ran ahead
--- of the server's.
+-- The bump is `updated_at + interval '1 microsecond'` and NOT
+-- `greatest(now(), …)`. Adding a microsecond is already strictly greater for
+-- every finite timestamp, including one whose client clock ran ahead of the
+-- server, so now() buys nothing — and it costs real user data (Codex review,
+-- HIGH): advancing rows to deployment time makes every offline write stamped
+-- BEFORE the deploy lose. Such an update is silently skipped by the LWW
+-- trigger, and a stamped delete fails `.lte('updated_at', at)` at
+-- src/lib/ratings.server.ts:145. Both paths read "no error, zero rows" as
+-- acknowledgement and clear their journal, so the user's edit vanishes with no
+-- error anywhere. Keep the bump as small as the trigger allows.
 
 update public.ratings
    set score = case tier
@@ -60,8 +67,39 @@ update public.ratings
                  when 'liked' then 6.5
                  when 'pass'  then 2.5
                end,
-       updated_at = greatest(now(), updated_at + interval '1 microsecond')
- where score is null;
+       updated_at = updated_at + interval '1 microsecond'
+ where score is null
+   and tier in ('loved', 'liked', 'pass');
+
+------------------------------------------------------------------------------
+-- 1b. Prove the backfill actually landed
+------------------------------------------------------------------------------
+-- The original failure mode of this migration was a backfill that silently
+-- affected zero rows while the tool printed "ok". One assertion closes every
+-- known way that can happen again:
+--   * a `tier` value outside the three canonical ones (the CASE would return
+--     NULL and quietly re-null the row);
+--   * `updated_at = 'infinity'`, where +1 microsecond is still infinity, so the
+--     LWW trigger skips the row;
+--   * any future trigger that skips rows for a reason we have not thought of.
+-- If a null score survives this statement, STOP rather than constrain a table
+-- we only think we repaired.
+
+do $$
+declare
+  remaining bigint;
+begin
+  select count(*) into remaining from public.ratings where score is null;
+
+  if remaining > 0 then
+    raise exception
+      'backfill did not land: % row(s) still have score IS NULL. Do not assume '
+      'the UPDATE ran — check tier values outside (loved,liked,pass), an '
+      'updated_at of infinity, and the ratings_lww BEFORE UPDATE trigger.',
+      remaining;
+  end if;
+end
+$$;
 
 ------------------------------------------------------------------------------
 -- 2. Refuse to constrain data we would have to rewrite blind
@@ -85,6 +123,25 @@ begin
   end if;
 end
 $$;
+
+------------------------------------------------------------------------------
+-- PROMOTION NOTES — read before running this against production
+------------------------------------------------------------------------------
+-- 1. LOCK. `add constraint … check` takes an ACCESS EXCLUSIVE lock and scans
+--    the table, and the repository's runner holds one transaction for the whole
+--    set, so the lock is held until commit. On staging's 18 rows that is
+--    nothing; on a large, hot production table it is an outage. If production's
+--    ratings table is big, split the promotion: `add … not valid`, commit, then
+--    `validate constraint` in a SEPARATE transaction. Doing both here gains
+--    nothing (Codex review, MEDIUM).
+-- 2. NOT TEMPORALLY IDEMPOTENT. The backfill fills whatever is NULL AT THE TIME
+--    IT RUNS. After the first apply, new NULLs are legitimate — a tier change
+--    clears the score (src/lib/ratings.server.ts:59). Re-running this later
+--    would overwrite those with band midpoints and change live rating
+--    semantics. The apply tool refuses an already-ledgered migration, which is
+--    what normally prevents this; do not defeat that.
+-- 3. RE-RUN THE READ-ONLY PRE-FLIGHT against production first. Staging's counts
+--    say nothing about production's shape.
 
 ------------------------------------------------------------------------------
 -- 3. The range constraint
