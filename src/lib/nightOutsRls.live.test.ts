@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -6,7 +6,6 @@ import { Client } from 'pg';
 
 import {
   GUARDED_FUNCTIONS,
-  MIGRATIONS_DIR,
   definingMigration,
   migrationChecksum,
   type GuardedFunction,
@@ -1278,28 +1277,24 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       'the replay-guard chain is not on this database as committed',
     ).toEqual(Object.fromEntries(chain.map((file) => [file, 'applied, checksum matches'])));
 
-    // THE HALF THE LEDGER CANNOT COVER. The digest above is normalised, so a
-    // line-ending or trailing-whitespace change to a committed file passes it
-    // (round-6 review, Codex, medium). Nothing can close that from the database
-    // side — no raw digest was ever recorded. What CAN be closed is the
-    // committed side: these two files are frozen history, so their raw bytes are
-    // pinned here. A change to either is now a red test rather than a silent
-    // re-interpretation of what criterion 5 was verified against.
-    const rawPins: Record<string, string> = {
-      '0057_night_outs_respond_expected_status.sql':
-        '9e913008f992002c35f98351e07299b7302c1def5224c342189899f3bc75128c',
-      '0058_night_outs_respond_expected_status_atomic.sql':
-        'ba079495d534576114aef8ace12c4155b2d2fd758b70b461c675e2afff705333',
-    };
-    expect(
-      Object.fromEntries(chain.map((file) => [
-        file,
-        createHash('sha256')
-          .update(readFileSync(path.join(MIGRATIONS_DIR, file)))
-          .digest('hex'),
-      ])),
-      'a frozen migration changed on this branch since criterion 5 was verified',
-    ).toEqual(rawPins);
+    // THE HALF NOTHING HERE CAN COVER, stated instead of papered over.
+    //
+    // A raw sha256 pin of the committed 0057/0058 bytes was tried and removed.
+    // Both lanes rejected it and both were right: the repo has no
+    // .gitattributes and core.autocrlf is on, so the constants were only valid
+    // on the checkout that produced them and went red on any other; and the pin
+    // sat inside describeLive, so the one guard on those files never ran on the
+    // CI path that has no DATABASE_URL. It also would not have proved criterion
+    // 5 anyway — it hashes the committed checkout, never the applied artifact
+    // (round-7 review, Codex and Claude, medium).
+    //
+    // So: what this test proves is that 0057 and 0058 are recorded in the
+    // serving ledger at the digest this repo computes for them. That digest is
+    // NORMALISED, so "byte-identical" in criterion 5 is not established here and
+    // is not establishable from this database — no raw digest was ever written
+    // at apply time. Criterion 5 rests on the 2026-08-17 verification recorded
+    // in the goal, plus this continuing check that the row has not moved.
+    // Closing it properly needs an apply-time artifact that does not exist.
   });
 
   /**

@@ -100,8 +100,18 @@ function scan(sql: string, insideBody: boolean): { code: string; skeleton: strin
     code += spaces;
     skeleton += spaces;
   };
-  const dollarTag = (at: number): string | null =>
-    /^\$[A-Za-z_]?[A-Za-z0-9_]*\$/.exec(sql.slice(at, at + 66))?.[0] ?? null;
+  /**
+   * `$tag$` at `at`, or null.
+   *
+   * Not one that continues an identifier: `foo$guard$bar` is a legal Postgres
+   * identifier, and reading its `$guard$` as an opener blanked through to the
+   * next occurrence — deleting real code from the view and reddening a correct
+   * migration (round-7 review, Codex, medium).
+   */
+  const dollarTag = (at: number): string | null => {
+    if (at > 0 && /[A-Za-z0-9_$]/.test(sql[at - 1])) return null;
+    return /^\$[A-Za-z_]?[A-Za-z0-9_]*\$/.exec(sql.slice(at, at + 66))?.[0] ?? null;
+  };
 
   while (i < sql.length) {
     if (sql.startsWith('/*', i)) {
@@ -131,9 +141,15 @@ function scan(sql: string, insideBody: boolean): { code: string; skeleton: strin
       const close = sql.indexOf(tag, i + tag.length);
       const inner = sql.slice(i + tag.length, close < 0 ? sql.length : close);
       const whole = sql.slice(i, close < 0 ? sql.length : close + tag.length);
-      if (insideBody) {
-        // A dollar quote inside a body is a LITERAL. Its text is never executed,
-        // so it must not satisfy an assertion about executable code.
+      // A dollar quote is a function BODY only where Postgres puts one: right
+      // after `AS`. Anywhere else it is an ordinary string — `select
+      // $note$create or replace function public.respond_night_out(x)$note$;` is
+      // a legal statement whose text was being exposed as code, so the resolver
+      // picked a migration that defines nothing (round-7 review, Codex, medium).
+      const isBody = !insideBody && /\bas\s*$/i.test(sql.slice(Math.max(0, i - 8), i));
+      if (!isBody) {
+        // Inert text: never executed, so it must not satisfy an assertion about
+        // executable code, nor look like a definition.
         blank(whole);
       } else {
         const body = scan(inner, true);

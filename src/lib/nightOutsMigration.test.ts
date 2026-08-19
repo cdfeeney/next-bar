@@ -288,15 +288,16 @@ const SQL_0046 = readFileSync(
  * pin gains an entry. The three hand-kept lists that used to drift apart are now
  * one list the type checker walks (round-2 review, Claude, medium).
  */
-function effectiveSql(name: GuardedFunction): string {
+function effectiveView(name: GuardedFunction): { code: string; skeleton: string } {
   const file = definingMigration(name);
   expect(file, `no migration defines ${name}`).not.toBeNull();
-  // `code`, not `skeleton`: the advisory-lock KEY these guards pin is a string
-  // literal, so literal contents have to survive — with their case, which is why
-  // sqlView lowercases everything else and leaves them alone. Comment stripping
-  // is sqlView's job now, nested blocks included; the regex form here stopped at
-  // the first inner terminator (round-5 review, Codex, medium).
-  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8')).code;
+  // BOTH views. `code` keeps literal contents — the advisory-lock KEY these
+  // guards pin is a string literal, with its case, which is why sqlView
+  // lowercases everything else and leaves literals alone. `skeleton` is where
+  // definitions are LOCATED, because a definition header quoted inside a string
+  // is not one (round-7 review, Codex, medium). The two are the same length by
+  // construction, so an index from one slices the other.
+  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8'));
 }
 
 /**
@@ -306,18 +307,29 @@ function effectiveSql(name: GuardedFunction): string {
  * second — and reading the first let a correct definition vouch for a weakened
  * one that followed it in the same file (round-5 review, Codex, medium).
  */
-function functionBody(sql: string, name: string): string {
+function functionBody(
+  source: string | { code: string; skeleton: string },
+  name: string,
+): string {
+  // A plain string is its own skeleton. The 0044/0046/0048 blocks below pass raw
+  // file text on purpose — they assert about those files AS WRITTEN, immutable
+  // history, not about an effective definition.
+  const view = typeof source === 'string' ? { code: source, skeleton: source } : source;
+  expect(
+    view.code.length,
+    'the two sqlView views are not index-compatible',
+  ).toBe(view.skeleton.length);
   let start = -1;
   for (let from = 0; ; ) {
-    const at = definitionIndex(sql.slice(from), name);
+    const at = definitionIndex(view.skeleton.slice(from), name);
     if (at < 0) break;
     start = from + at;
     from = start + 1;
   }
   expect(start, `${name} not found in the migration under test`).toBeGreaterThan(-1);
-  const end = sql.indexOf('$$;', start);
+  const end = view.skeleton.indexOf('$$;', start);
   expect(end, `${name} has no terminator`).toBeGreaterThan(start);
-  return sql.slice(start, end);
+  return view.code.slice(start, end);
 }
 
 /**
@@ -326,7 +338,7 @@ function functionBody(sql: string, name: string): string {
  * currently DEFINES the functions. They were written against 0046 and stayed pointed there after 0048
  * superseded it (fresh-cycle round-2 review, Claude) — a guard aimed at dead
  * text, which is the same claim-drifted-from-artifact failure it exists to
- * catch. Each `it` below now derives its text through effectiveSql(), so it
+ * catch. Each `it` below now derives its text through effectiveView(), so it
  * reads whichever migration currently DEFINES the function it names. Nothing
  * here has to be moved when the next migration re-states one of them — the
  * remembering is what kept failing.
@@ -386,6 +398,32 @@ describe('sqlView — SQL as Postgres reads it', () => {
     expect(sqlView(sql).code.trim().endsWith('b')).toBe(true);
   });
 
+  it('returns two views of exactly the same length, so indices are portable', () => {
+    // functionBody locates a definition in `skeleton` and slices `code`. That is
+    // only sound while every branch blanks to the same length (round-7 review,
+    // Codex, medium: a definition header quoted inside a literal was being found
+    // in `code`).
+    const sql = readFileSync(
+      path.join(MIGRATIONS_DIR, '0059_night_outs_respond_revision.sql'),
+      'utf8',
+    );
+    const { code, skeleton } = sqlView(sql);
+    expect(code.length).toBe(skeleton.length);
+    expect(code.length).toBe(sql.length);
+  });
+
+  it('does not treat a dollar-quoted STRING as a function body', () => {
+    const sql = 'select $note$create or replace function public.respond_night_out(x uuid)$note$;';
+    expect(sqlView(sql).skeleton).not.toMatch(/create or replace function/);
+    expect(definitionIndex(sqlView(sql).skeleton, 'respond_night_out')).toBe(-1);
+  });
+
+  it('does not read a dollar inside an identifier as a quote delimiter', () => {
+    // `foo$guard$bar` is a legal Postgres identifier.
+    const sql = "select foo$guard$bar, pg_advisory_xact_lock(1), baz$guard$qux;";
+    expect(sqlView(sql).code).toMatch(/pg_advisory_xact_lock/);
+  });
+
   it('drops line comments, so prose quoting SQL is not code', () => {
     // 0045 and 0046 really do carry this shape in their headers.
     const sql = [
@@ -442,7 +480,7 @@ describe('sqlView — SQL as Postgres reads it', () => {
 
 describe('effective night_out RPC ordering invariants (derived, not pinned)', () => {
   it('join converts your own pending invite BEFORE it asks about capacity (round-2 HIGH)', () => {
-    const body = normalise(functionBody(effectiveSql('join_night_out_by_token'), 'join_night_out_by_token'));
+    const body = normalise(functionBody(effectiveView('join_night_out_by_token'), 'join_night_out_by_token'));
     // The whole KEY, not just the call — see planLock above.
     const lock = body.indexOf(planLock('v_id'));
     const conversion = body.indexOf("set invite_status = 'accepted'", lock);
@@ -456,7 +494,7 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
   });
 
   it('declining is never rationed by capacity (round-2 medium)', () => {
-    const body = normalise(functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token'));
+    const body = normalise(functionBody(effectiveView('decline_night_out_by_token'), 'decline_night_out_by_token'));
     expect(body).not.toMatch(/member_cap/);
     // Still serialised on the SAME per-plan key, so a concurrent invite cannot
     // swallow the decline. A different key would serialise nothing.
@@ -464,7 +502,7 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
   });
 
   it('respond_night_out gates the declined-to-accepted rejoin on the cap (round-2 medium, both lanes)', () => {
-    const body = normalise(functionBody(effectiveSql('respond_night_out'), 'respond_night_out'));
+    const body = normalise(functionBody(effectiveView('respond_night_out'), 'respond_night_out'));
     expect(body, 'the rejoin path must take the same per-plan lock')
       .toContain(planLock('p_night_out'));
     expect(body, 'the rejoin path must consult member_cap').toMatch(/member_cap/);
@@ -484,7 +522,7 @@ describe('effective night_out RPC ordering invariants (derived, not pinned)', ()
     // There is exactly one count now — night_out_seat_count — so this is the
     // only place the rule can be wrong. 0048's exactly-once assertion is what
     // keeps it that way.
-    const body = functionBody(effectiveSql('night_out_seat_count'), 'night_out_seat_count');
+    const body = functionBody(effectiveView('night_out_seat_count'), 'night_out_seat_count');
     expect(body, 'the seat count includes declined rows').toMatch(/invite_status <> 'declined'/);
   });
 
@@ -540,13 +578,13 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
    */
   it('every caller asks the helpers rather than restating the rule', () => {
     for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token'] as const) {
-      const body = functionBody(effectiveSql(fn), fn);
+      const body = functionBody(effectiveView(fn), fn);
       expect(body, `${fn} does not use night_out_seat_count`).toMatch(/night_out_seat_count/);
       expect(body, `${fn} does not use night_out_member_cap`).toMatch(/night_out_member_cap/);
       expect(body, `${fn} still carries a hard-coded cap`).not.toMatch(/member_cap constant/);
     }
     // Declining is never rationed by capacity, so it must ask neither.
-    const decline = functionBody(effectiveSql('decline_night_out_by_token'), 'decline_night_out_by_token');
+    const decline = functionBody(effectiveView('decline_night_out_by_token'), 'decline_night_out_by_token');
     expect(decline).not.toMatch(/night_out_member_cap/);
   });
 
