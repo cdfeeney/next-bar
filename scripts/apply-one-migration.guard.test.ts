@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -147,5 +148,44 @@ describe('apply-one-migration CLI target guard', () => {
     expect(result.output).not.toContain('REFUSING');
     expect(result.output).toContain('[apply-one] tls      : on, peer certificate verified');
     expect(result.status).not.toBe(0);
+  }, 120_000);
+
+  // ...and the other half of THAT. Dying in DNS proves the guard let the run
+  // through, and nothing more: delete `await pg.query(sql)` from the applier
+  // and every case above still passes, because no case ever gets far enough to
+  // notice. This one does. It replaces pg's SOCKET (connect/query/end on the
+  // real Client prototype) and leaves everything else real — the same CLI, the
+  // same guard, pg's own resolution of the same connection string — so what it
+  // asserts is the exact query sequence an authorised apply issues.
+  //
+  // NODE_OPTIONS, not --require: tsx's CLI re-spawns node, and a flag passed to
+  // the parent never reaches the child that actually runs the script.
+  it('applies the migration on an authorised staging target, in order', () => {
+    const recorder = join(dir, 'record-queries.cjs');
+    writeFileSync(recorder, [
+      "const { createHash } = require('node:crypto');",
+      "const { Client } = require(require.resolve('pg', { paths: [process.cwd()] }));",
+      "const sha = (t) => createHash('sha256').update(String(t)).digest('hex');",
+      "Client.prototype.connect = async function () { console.log('[probe] connect'); };",
+      'Client.prototype.query = async function (text) {',
+      "  console.log(`[probe] query ${sha(typeof text === 'string' ? text : text && text.text)}`);",
+      '  return { rows: [], rowCount: 0 };',
+      '};',
+      'Client.prototype.end = async function () {};',
+      '',
+    ].join('\n'));
+
+    const result = runApplyOne(staging, { env: { NODE_OPTIONS: `--require "${recorder.split('\\').join('/')}"` } });
+    const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+
+    expect(result.output.split('\n').map((line) => line.trim()).filter((line) => line.startsWith('[probe]')))
+      .toEqual([
+        '[probe] connect',
+        `[probe] query ${sha("SET lock_timeout = '10s'")}`,
+        `[probe] query ${sha("SET statement_timeout = '300s'")}`,
+        `[probe] query ${sha(readFileSync(MIGRATION, 'utf8'))}`,
+      ]);
+    expect(result.output).toContain(`ok ${MIGRATION}`);
+    expect(result.status).toBe(0);
   }, 120_000);
 });
