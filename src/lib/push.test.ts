@@ -14,10 +14,12 @@ import {
  * The rest exercises the flow against mocked browser APIs + supabase.
  */
 
-// Friday 23:00 local — inside the Thu–Sat cadence window.
-const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
-// Tuesday 23:00 — outside it.
-const TUESDAY_NIGHT = new Date('2026-07-21T23:00:00');
+// Friday 23:00 NEW YORK — inside the Thu–Sat cadence window. Absolute (EDT,
+// UTC-4): the cadence resolves its weekday in NYC, so a bare local string asked
+// the runner's zone instead.
+const FRIDAY_NIGHT = new Date('2026-07-25T03:00:00Z');
+// Tuesday 23:00 NYC — outside it.
+const TUESDAY_NIGHT = new Date('2026-07-22T03:00:00Z');
 
 const VAPID_KEY = 'BPd6ycn7EK4E1Zi8-abcdefghijklmnopqrstuvwxyz012345678';
 

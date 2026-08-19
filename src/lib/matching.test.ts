@@ -663,7 +663,8 @@ describe('late-night bias (operator 2026-07-27: clubs up, restaurants down after
   // A bare local string put this at 11:30pm in the RUNNER's zone, which is
   // 7:30pm NYC on a UTC runner — outside the window these tests assert.
   const LATE = new Date('2026-07-25T03:30:00Z');
-  const AFTERNOON = new Date('2026-07-24T15:00:00');
+  // 3pm NYC on the same Friday — outside the window, absolute like the rest.
+  const AFTERNOON = new Date('2026-07-24T19:00:00Z');
 
   const rank = (biasNow?: Date) =>
     matches({

@@ -714,6 +714,45 @@ describe('useFollows — followers + mutuals (B3c)', () => {
     second.unmount();
   });
 
+  it('a first hydrate never erases a write THIS mount made while it was in flight', async () => {
+    // The first-answer exception assumed "no readyGeneration" meant "this mount
+    // has not written". A mount can follow someone while its very first hydrate
+    // is still in the air; applying that answer erased the placeholder and
+    // flipped the button back to Follow, inviting a duplicate capped lookup
+    // (round-8 panel, Codex).
+    let settleHydrate: (value: typeof MAYA[]) => void = () => {};
+    fetchFollowsMock.mockImplementation(
+      () => new Promise<typeof MAYA[]>((resolve) => { settleHydrate = resolve; }),
+    );
+    let settleWrite: (value: Awaited<ReturnType<typeof followByHandle>>) => void =
+      () => {};
+    followByHandleMock.mockImplementation(
+      () =>
+        new Promise<Awaited<ReturnType<typeof followByHandle>>>((resolve) => {
+          settleWrite = resolve;
+        }),
+    );
+
+    const { result, unmount } = renderHook(() => useFollows());
+    // The very first hydrate is still out; write anyway.
+    act(() => result.current.toggleFollow('ava_p'));
+    expect(result.current.isFollowing('ava_p')).toBe(true);
+
+    await act(async () => {
+      settleHydrate([]);
+    });
+
+    // The optimistic entry must survive its own mount's first answer.
+    expect(result.current.isFollowing('ava_p')).toBe(true);
+
+    fetchFollowsMock.mockResolvedValue([]);
+    await act(async () => {
+      settleWrite(null);
+    });
+    await waitFor(() => expect(result.current.circleReady).toBe(true));
+    unmount();
+  });
+
   it('coming back to the tab re-checks the circle', async () => {
     // The cross-tab ping is a best-effort localStorage write — quota or private
     // mode swallows it. Returning to the tab must re-check regardless, without

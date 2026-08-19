@@ -192,6 +192,11 @@ export function useFollows(): UseFollowsReturn {
   const readyGenerationRef = useRef<number | null>(null);
   readyGenerationRef.current = readyGeneration;
   const [fetchFailed, setFetchFailed] = useState(false);
+  // Writes THIS instance has open. `readyGeneration === null` does not mean
+  // "this mount has not written" — a mount can follow someone while its very
+  // first hydrate is still in the air, and that hydrate would then erase the
+  // placeholder and flip the button back to Follow (round-8 panel, Codex).
+  const instanceWritesRef = useRef(0);
   const [circleState, setCircleState] = useState(() => ({
     generation: circleGeneration,
     pending: pendingCircleWrites.size,
@@ -324,7 +329,11 @@ export function useFollows(): UseFollowsReturn {
         // drop a superseded answer does not apply to DISPLAYING it. It is still
         // not marked ready: it predates whatever is in flight, and the next
         // fetch (already queued) is what earns that.
-        if (readyGenerationRef.current === null && server !== null) {
+        if (
+          readyGenerationRef.current === null
+          && instanceWritesRef.current === 0
+          && server !== null
+        ) {
           setCircle(server);
           if (outgoing !== null) setRequested(outgoing);
           if (followerList !== null) setFollowers(followerList);
@@ -382,6 +391,19 @@ export function useFollows(): UseFollowsReturn {
     [mode, requested],
   );
 
+  /** Count an open write against THIS instance for as long as it runs. */
+  const trackInstanceWrite = useCallback((finish: () => void) => {
+    instanceWritesRef.current += 1;
+    let done = false;
+    return (): void => {
+      if (!done) {
+        done = true;
+        instanceWritesRef.current -= 1;
+      }
+      finish();
+    };
+  }, []);
+
   const toggleFollow = useCallback((handle: string) => {
     if (modeRef.current === 'server') {
       const supabase = getBrowserSupabase();
@@ -408,7 +430,7 @@ export function useFollows(): UseFollowsReturn {
         setCircle((prev) =>
           prev.filter((p) => p.handle.toLowerCase() !== target),
         );
-        const finishUnfollow = beginCircleWrite();
+        const finishUnfollow = trackInstanceWrite(beginCircleWrite());
         const restore = (): void =>
           setCircle((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
@@ -451,7 +473,7 @@ export function useFollows(): UseFollowsReturn {
         // "Requested" back after the server had already cancelled it. That is
         // reachable only because THIS candidate added the revalidation path —
         // at the base commit the hydrate ran on auth change alone.
-        const finishCancel = beginCircleWrite();
+        const finishCancel = trackInstanceWrite(beginCircleWrite());
         const restoreRequest = (): void =>
           setRequested((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
@@ -481,7 +503,7 @@ export function useFollows(): UseFollowsReturn {
         displayName: null,
       };
       setCircle((prev) => [...prev, placeholder]);
-      const finishFollow = beginCircleWrite();
+      const finishFollow = trackInstanceWrite(beginCircleWrite());
       const dropPlaceholder = (): void =>
         setCircle((prev) =>
           prev.filter((p) => p.handle.toLowerCase() !== target),
