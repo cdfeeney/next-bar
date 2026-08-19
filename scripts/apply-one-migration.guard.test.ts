@@ -65,9 +65,10 @@ writeFileSync(recorder, [
   "const { Client } = require(require.resolve('pg', { paths: [process.cwd()] }));",
   "const sha = (t) => createHash('sha256').update(String(t)).digest('hex');",
   'Client.prototype.connect = async function () {',
-  '  const ssl = this.connectionParameters && this.connectionParameters.ssl;',
-  "  console.log(`[probe] connect ssl=${ssl ? 'on' : 'off'} rejectUnauthorized=${",
-  "    ssl ? String(ssl.rejectUnauthorized) : 'n/a'} ca=${ssl && ssl.ca ? 'yes' : 'no'}`);",
+  '  const p = this.connectionParameters || {};',
+  '  const ssl = p.ssl;',
+  "  console.log(`[probe] connect ${p.user}@${p.host}:${p.port} ssl=${ssl ? 'on' : 'off'} \\",
+  "rejectUnauthorized=${ssl ? String(ssl.rejectUnauthorized) : 'n/a'} ca=${ssl && ssl.ca ? 'yes' : 'no'}`);",
   '};',
   'Client.prototype.query = async function (text) {',
   "  console.log(`[probe] query ${sha(typeof text === 'string' ? text : text && text.text)}`);",
@@ -205,8 +206,12 @@ describe('apply-one-migration CLI target guard', () => {
   // ...and the other half of THAT. Dying in DNS proves the guard let the run
   // through and nothing more. This asserts what an authorised apply actually
   // issues, and over what: the connect line carries the resolved TLS state of
-  // the client that connected, which is the only thing that distinguishes the
-  // authorised clientConfig from a client rebuilt out of its connection string.
+  // the client that connected — its resolved user@host:port AND its TLS state,
+  // which together are what distinguish the authorised clientConfig from a
+  // client rebuilt, redirected, or downgraded after the guard had its say. pg
+  // gives `?host=`/`?port=` precedence over the authority, so appending one to
+  // the connection string on the way to `new Client` would move the connection
+  // somewhere the guard never inspected while every other assertion held.
   // apply-migration-target-guard.ts says why that distinction matters — rebuilt,
   // the CA and the explicit ssl are gone and pg's default for a URL naming no
   // sslmode is no TLS at all, so the DDL and the role password would cross the
@@ -216,7 +221,7 @@ describe('apply-one-migration CLI target guard', () => {
     const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 
     expect(probed(result.output)).toEqual([
-      '[probe] connect ssl=on rejectUnauthorized=true ca=yes',
+      `[probe] connect postgres.${REF_A}@${POOLER}:1 ssl=on rejectUnauthorized=true ca=yes`,
       `[probe] query ${sha("SET lock_timeout = '10s'")}`,
       `[probe] query ${sha("SET statement_timeout = '300s'")}`,
       `[probe] query ${sha(readFileSync(MIGRATION, 'utf8'))}`,
