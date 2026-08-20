@@ -1,8 +1,11 @@
 # Migration revert files
 
-**This file is the single source of truth for reverting `0059`.** Nothing else —
-not the migration header, not the revert SQL, not the revert-point doc — restates
-what a revert costs or when it is safe.
+**This file is the single source of truth for reverting `0059` and `0064`.**
+Nothing else — not the migration header, not the revert SQL, not the revert-point
+doc — restates what a revert costs or when it is safe.
+
+> **Order matters.** Each revert script refuses while any migration numbered
+> above it is in the ledger. `0064` is the head, so it comes off first.
 
 That rule exists because it was learned the hard way. Four review rounds on this
 change were spent almost entirely on the same claim drifting between copies of
@@ -21,7 +24,7 @@ A revert is **not** a migration. It is deliberately not numbered into the
 sequence, because applying it is a rollback and the ledger row for the migration
 it reverses is deleted rather than added.
 
-## How to run it
+## How to run it (`0059`)
 
 One command, **run from the repository root**. It works in PowerShell, cmd and
 bash alike, which is the point — the operator is on Windows, and an earlier
@@ -149,3 +152,42 @@ Two of them carry warnings worth repeating before anyone imports them:
 `REVERT-0044` is a drop of the entire Night Out feature and deletes every plan,
 member, suggestion, vote and event row (it ships commented out), and
 `REVERT-0054` discards every stored idempotency key.
+
+---
+
+## Reverting `0064` (friend-visible numeric score)
+
+One command, from anywhere — `revert-0064-transaction.sql` includes no other
+file, so nothing is resolved relative to the script:
+
+```
+psql "<connection-string>" -v ON_ERROR_STOP=1 -f supabase/migrations/revert/revert-0064-transaction.sql
+```
+
+It restores `0007`'s tier-only `get_friend_ratings()` and deletes the `0064`
+ledger row in ONE transaction, refusing up front unless `0064` is in the ledger
+and is the newest row there. Its postconditions then confirm the row is gone, the
+restored function returns no `score` column, and `anon` still holds no EXECUTE.
+
+### What reverting `0064` costs
+
+**No data is lost.** `0064` creates no table, drops no column and updates no row
+— it replaces one function definition and re-states its grants. `ratings.score`
+has existed since `0001` and is untouched, so a revert loses nothing that a
+re-apply would not immediately restore.
+
+**Re-applying afterwards is safe**, and this is the difference from `0059`: there
+is no counter to re-walk and no client-held value that becomes reachable again.
+Applying `0064` a second time is also safe on its own terms — it is
+drop-if-exists plus create-or-replace.
+
+**What a revert DOES break is the caller.** `src/lib/follows.server.ts` maps
+`row.score` through `toScore()`, which turns the now-absent column into `null`
+rather than throwing — so `fetchFriendRatings` keeps working and every score
+silently becomes `null`. Anything that reads those scores (Group Favorites'
+unanimous `>= 8.0` rule) will read them as unset, not as an error. Revert the
+code half too, or expect that.
+
+**The window is not zero.** The revert drops the function before recreating it,
+so a concurrent call in that instant errors rather than returning wrong rows.
+Prefer a quiet moment; the transaction holds the lock for milliseconds.

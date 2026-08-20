@@ -72,8 +72,9 @@ export default function PrivacyPage(): JSX.Element {
             <li>No third-party advertising or ad trackers.</li>
             <li>
               No sharing your ratings with anyone you haven&apos;t chosen to
-              connect with — friends see the tier you gave a bar, never your
-              precise scores.
+              connect with — the people who follow you see the tier AND the
+              1.0–10.0 score you gave a bar; nobody else does, and no public or
+              shared link ever carries a score.
             </li>
           </ul>
         </Block>

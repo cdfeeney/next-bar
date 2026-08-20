@@ -317,7 +317,7 @@ describe('fetchFriendRatings', () => {
     expect(calls.from).toEqual([]); // no table/view read — RPC only
   });
 
-  it('filters to the requested friend client-side and maps rows (never a score field)', async () => {
+  it('filters to the requested friend client-side and carries the numeric score (0064)', async () => {
     const { client } = fakeSupabase({
       rpcResults: {
         get_friend_ratings: {
@@ -326,18 +326,22 @@ describe('fetchFriendRatings', () => {
               user_id: 'uuid-claire',
               bar_id: 'attaboy',
               tier: 'loved',
+              score: 8.5,
               rated_at: '2026-05-10T00:00:00.000Z',
             },
             {
               user_id: 'uuid-claire',
               bar_id: 'buvette',
               tier: 'liked',
+              // Nullable column: a friend who has a tier but no score yet.
+              score: null,
               rated_at: '2026-05-11T00:00:00.000Z',
             },
             {
               user_id: 'uuid-john',
               bar_id: 'attaboy',
               tier: 'liked',
+              score: 6.0,
               rated_at: '2026-05-12T00:00:00.000Z',
             },
           ],
@@ -346,22 +350,45 @@ describe('fetchFriendRatings', () => {
     });
 
     const ratings = await fetchFriendRatings(client, 'uuid-claire');
-    expect(ratings?.every((r) => !('score' in r))).toBe(true);
 
     expect(ratings).toEqual([
       {
         userId: 'uuid-claire',
         barId: 'attaboy',
         rating: 'loved',
+        score: 8.5,
         ratedAt: '2026-05-10T00:00:00.000Z',
       },
       {
         userId: 'uuid-claire',
         barId: 'buvette',
         rating: 'liked',
+        score: null,
         ratedAt: '2026-05-11T00:00:00.000Z',
       },
     ]);
+  });
+
+  it('parses a numeric that arrives as a string, and refuses anything else (0064)', async () => {
+    // PostgREST serialises `numeric` as a JSON number today, but a decimal
+    // string is the other legitimate shape and is still a real score. Anything
+    // that is not a finite number becomes null rather than a NaN that would
+    // silently poison Group Favorites' >= 8.0 average.
+    const { client } = fakeSupabase({
+      rpcResults: {
+        get_friend_ratings: {
+          data: [
+            { user_id: 'u', bar_id: 'a', tier: 'loved', score: '8.5', rated_at: 'T' },
+            { user_id: 'u', bar_id: 'b', tier: 'loved', score: 'not a number', rated_at: 'T' },
+            { user_id: 'u', bar_id: 'c', tier: 'loved', score: undefined, rated_at: 'T' },
+            { user_id: 'u', bar_id: 'd', tier: 'loved', score: {}, rated_at: 'T' },
+          ],
+        },
+      },
+    });
+
+    expect((await fetchFriendRatings(client, 'u'))?.map((r) => r.score))
+      .toEqual([8.5, null, null, null]);
   });
 
   it('returns null on RPC error (distinguishable from "no ratings visible")', async () => {
@@ -544,14 +571,14 @@ describe('B3c followers + count + mutuals', () => {
 });
 
 describe('fetchAllFriendRatings (real consensus)', () => {
-  it('groups the single RPC result by owner, tier-only', async () => {
+  it('groups the single RPC result by owner, carrying each score (0064)', async () => {
     const { client, calls } = fakeSupabase({
       rpcResults: {
         get_friend_ratings: {
           data: [
-            { user_id: 'u-a', bar_id: 'attaboy', tier: 'loved', rated_at: '2026-07-01T00:00:00.000Z' },
-            { user_id: 'u-b', bar_id: 'attaboy', tier: 'liked', rated_at: '2026-07-02T00:00:00.000Z' },
-            { user_id: 'u-a', bar_id: 'dante', tier: 'liked', rated_at: '2026-07-03T00:00:00.000Z' },
+            { user_id: 'u-a', bar_id: 'attaboy', tier: 'loved', score: 9.0, rated_at: '2026-07-01T00:00:00.000Z' },
+            { user_id: 'u-b', bar_id: 'attaboy', tier: 'liked', score: 7.5, rated_at: '2026-07-02T00:00:00.000Z' },
+            { user_id: 'u-a', bar_id: 'dante', tier: 'liked', score: null, rated_at: '2026-07-03T00:00:00.000Z' },
           ],
         },
       },
@@ -560,12 +587,16 @@ describe('fetchAllFriendRatings (real consensus)', () => {
     expect(calls.rpc).toEqual([{ fn: 'get_friend_ratings', args: undefined }]);
     expect(Object.keys(grouped!).sort()).toEqual(['u-a', 'u-b']);
     expect(grouped!['u-a']).toHaveLength(2);
+    // Group Favorites' unanimous >= 8.0 rule needs every member's number, which
+    // is the reason 0064 exists — grouping must not drop it.
     expect(grouped!['u-b'][0]).toEqual({
       userId: 'u-b',
       barId: 'attaboy',
       rating: 'liked',
+      score: 7.5,
       ratedAt: '2026-07-02T00:00:00.000Z',
     });
+    expect(grouped!['u-a'].map((r) => r.score)).toEqual([9.0, null]);
   });
 
   it('returns null on RPC error, {} on empty', async () => {

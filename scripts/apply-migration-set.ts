@@ -252,7 +252,24 @@ async function main(): Promise<void> {
       return;
     }
 
-    await client.query('BEGIN');
+    // READ WRITE explicitly, because `BEGIN` alone inherits
+    // `default_transaction_read_only`, and Supabase's transaction pooler hands
+    // out a PINNED backend whose session carries that setting on: measured
+    // 2026-08-19 against the staging pooler, six fresh connections all landed
+    // on backend pid 1879957 with `default_transaction_read_only=on`
+    // (source=session — no role or database setting says so, and the 14 MB
+    // database is nowhere near the disk-full lockdown that would). Without this
+    // the first DDL dies with 25006 "cannot execute ... in a read-only
+    // transaction" and the operator reads it as a broken migration.
+    //
+    // This bypasses NOTHING that grants access. `default_transaction_read_only`
+    // is a soft default any session may override, not a privilege: a role that
+    // actually lacks write permission still fails on the first statement, RLS
+    // still applies, and the real guards on this tool — the named --env, the
+    // project-ref allowlist, --execute — are untouched. Scoped to the
+    // transaction, so it cannot leak back onto the shared pooler backend the
+    // way a session-level SET would.
+    await client.query('BEGIN READ WRITE');
     // An unbounded wait holds every lock already taken while the application
     // queues behind it, with no recourse but killing the process. Bounded, a
     // blocked apply aborts and the whole set rolls back.
