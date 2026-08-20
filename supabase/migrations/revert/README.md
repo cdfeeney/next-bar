@@ -184,8 +184,11 @@ match the loaded environment, the project ref behind `DATABASE_URL` must not be
 the production ref and must be in the staging allowlist, the host must be the
 Supabase pooler, pg's own resolved endpoint must match the URL's authority, no
 libpq startup options or host/port overrides may be present, and TLS must verify
-against the CA. It also refuses any revert file that is not a single explicit
-transaction, or that carries a `\`-prefixed psql metacommand.
+against the CA. It also refuses any revert file whose content does not match
+its reviewed pin — see below. It performs NO structural validation of the SQL:
+an earlier version parsed the file to prove it was a single explicit
+transaction and rejected psql metacommands, and those checks were deleted with
+the lexer that made them.
 
 It does NOT parse the SQL, wrap it, or touch `public.schema_migrations` itself.
 The file stays authoritative about its own preconditions, its ledger delete and
@@ -209,10 +212,18 @@ Supabase CLI), which is what made the missing runner urgent rather than
 theoretical.
 
 **The runner executes only files it has PINNED, and `0059` is not one.** It does
-not inspect what a revert file does — it checks that the file is byte-for-byte
-the one that was reviewed, against a checksum in `PINNED_REVERTS`, and refuses
+not inspect what a revert file does — it checks that the file's CONTENT is the
+content that was reviewed, against a checksum in `PINNED_REVERTS`, and refuses
 anything else before opening a connection. Adding a file to that map is a code
 change, so it goes through review like any other.
+
+"Content", not "bytes": the pin is `checksumOfSql`, the repository's own
+normaliser, which folds CRLF and trims trailing whitespace at the end of the
+file. Two files with the same pin can therefore differ in line endings and in
+trailing blank space, and in nothing else — neither of which can change what
+the revert does. A raw-byte pin was considered and rejected: this checkout is
+`core.autocrlf`, so it would match only on the machine that wrote it and fail
+on every fresh clone.
 
 That replaced a hand-written SQL lexer, and the reason is worth recording.
 The runner used to PROVE, by parsing, that a file was one transaction and

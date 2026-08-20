@@ -63,16 +63,27 @@ BEGIN
   -- And the ledger is a claim, not the installed state. Restoring 0007's body over
   -- a function that is ALREADY tier-only would silently "succeed" while unrecording
   -- a migration whose effect was never there.
+  --
+  -- THE EXACT BODY, not merely a `score` output (round-5 panel, Codex MEDIUM).
+  -- Probing for the column name accepts ANY same-signature definition: an
+  -- unrecorded body-only hotfix - say an emergency `WHERE false` narrowing while
+  -- an incident is investigated - still carries a `score` output, so this revert
+  -- would have overwritten it and deleted the ledger row, discarding a change
+  -- nobody had recorded anywhere. The file and target pins cannot see that: they
+  -- describe what SHOULD be installed, and this asks what IS.
+  --
+  -- Fail-closed by construction. A server that formats pg_get_functiondef
+  -- differently (a major upgrade) refuses this revert with the message below
+  -- rather than proceeding, which is the safe direction: the operator re-reads
+  -- the installed body and updates this digest deliberately.
   IF NOT EXISTS (
     SELECT 1
       FROM pg_proc p
-      CROSS JOIN LATERAL unnest(p.proargnames, p.proargmodes) AS a(name, mode)
      WHERE p.oid = 'public.get_friend_ratings()'::regprocedure
-       AND a.mode IN ('o', 'b', 't')
-       AND a.name = 'score'
+       AND md5(pg_get_functiondef(p.oid)) = 'd0b98040eeda1b1c26ea5f009a1f858a'
   ) THEN
     RAISE EXCEPTION
-      'the live get_friend_ratings() already returns no score column, so 0064 is not installed here whatever the ledger says. Refusing.';
+      'the live get_friend_ratings() is not 0064''s definition (its digest differs), so this database carries something else - an unrecorded hotfix, a later change, or a different 0064. Reverting would overwrite it and unrecord the migration. Refusing.';
   END IF;
 END
 $$;

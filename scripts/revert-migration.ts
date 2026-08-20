@@ -20,9 +20,12 @@
  * SQL, or touch `public.schema_migrations` itself. A revert file is authoritative
  * about its own preconditions, its ledger delete and its postconditions, and it
  * must stay runnable verbatim by `psql -f` as documented in
- * supabase/migrations/revert/README.md. This runner only proves the target,
- * refuses anything that is not a single explicit transaction, and hands the file
- * to the server unchanged.
+ * supabase/migrations/revert/README.md. This runner proves the TARGET and the
+ * file's CONTENT against its reviewed pin, then hands the file to the server
+ * unchanged. It performs NO structural validation of the SQL: an earlier version
+ * parsed the file to prove it was a single explicit transaction, and that check
+ * was deleted with the lexer it depended on. What stops an unsafe file is that
+ * an unpinned one never runs, not that a parser inspected it.
  *
  * Usage:
  *   npx tsx scripts/revert-migration.ts --env staging <revert-file.sql>
@@ -95,7 +98,7 @@ function parseArgs(argv: string[]): { env: string; execute: boolean; file: strin
  */
 const PINNED_REVERTS: Record<string, string> = {
   'revert-0064-transaction.sql':
-    '8d3f2c92a88d971882c6aeb41e40ed33f84910aea0f22ee6294ff208cef73962',
+    'b60814de6be304d7ae44bf0a19f36f202654f509af14c49b1bd96b3bea0d3161',
 };
 
 /** The migration number a revert file undoes, from its name. */
