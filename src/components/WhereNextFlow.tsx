@@ -63,8 +63,12 @@ type Step =
   | { kind: 'tweakVibeAuto'; coords: Coords }
   | { kind: 'pickBar' }
   | { kind: 'freeTextSeed' }
-  | { kind: 'tweakVibe'; seedBar: Bar; tags: VibeTag[] }
-  | { kind: 'results'; seedBar: Bar; tags: VibeTag[] };
+  // `isExplicitVibe` travels with the tags because the RANKER needs to know
+  // where they came from: an applied tweak outweighs learned taste 80/20,
+  // seed-bar tags are the ordinary quiz-prior path (src/lib/matching.ts).
+  // Cancel must preserve it — opening the surface changes no ranking.
+  | { kind: 'tweakVibe'; seedBar: Bar; tags: VibeTag[]; isExplicitVibe: boolean }
+  | { kind: 'results'; seedBar: Bar; tags: VibeTag[]; isExplicitVibe: boolean };
 
 /**
  * BOTH home surfaces enter on Walkable (operator, 2026-07-27 morning:
@@ -154,13 +158,17 @@ export default function WhereNextFlow() {
   // quiz profile no longer shapes this ranking silently; it lives on as
   // the PRE-FILL inside the Tweak-the-vibe surface (below), where
   // applying it makes the influence explicit and night-scoped.
+  // A cached pick reaching here was APPLIED (only Apply writes the cache), so
+  // it ranks on the explicit 80/20 path. An EMPTY pick is a cleared tweak and
+  // falls through to the untagged profile — identical to never having tweaked.
   const autoProfile = useMemo<VibeProfile>(
     () =>
-      nightVibe
+      nightVibe && nightVibe.length > 0
         ? {
             tags: nightVibe,
             archetype: deriveArchetype(nightVibe),
             preferredNeighborhoods: [],
+            isExplicitVibe: true,
           }
         : { tags: [], archetype: deriveArchetype([]), preferredNeighborhoods: [] },
     [nightVibe],
@@ -342,10 +350,14 @@ export default function WhereNextFlow() {
     // rollover. It never locks: the tweak surface always allows changing
     // it, and a fresh night falls back to the seed bar's own tags.
     const nightVibe = loadNightVibe();
+    // Only an APPLIED pick is explicit. Falling back to the seed bar's own
+    // tags is inference, not instruction, so it keeps the quiz-prior path.
+    const hasAppliedVibe = nightVibe !== null && nightVibe.length > 0;
     setStep({
       kind: 'results',
       seedBar,
-      tags: nightVibe ?? seedBar.tags,
+      tags: hasAppliedVibe ? nightVibe : seedBar.tags,
+      isExplicitVibe: hasAppliedVibe,
     });
   };
 
@@ -372,12 +384,26 @@ export default function WhereNextFlow() {
     // QA-6: a new vibe is a new ranking — the run-it-again history resets
     // (the hood override survives; vibe and hood are orthogonal).
     setShownIds([]);
-    setStep({ kind: 'results', seedBar: step.seedBar, tags: nextTags });
+    // Applying tags makes them explicit; applying an EMPTY set is a CLEAR,
+    // which must restore normal ranking exactly.
+    setStep({
+      kind: 'results',
+      seedBar: step.seedBar,
+      tags: nextTags,
+      isExplicitVibe: nextTags.length > 0,
+    });
   };
 
   const handleCancelTweak = () => {
     if (step.kind !== 'tweakVibe') return;
-    setStep({ kind: 'results', seedBar: step.seedBar, tags: step.tags });
+    // Cancel restores the ranking untouched — including where its tags came
+    // from. Opening the surface is not applying a tweak.
+    setStep({
+      kind: 'results',
+      seedBar: step.seedBar,
+      tags: step.tags,
+      isExplicitVibe: step.isExplicitVibe,
+    });
   };
 
   // QA1: the LOCATION-results twins of the pair above. Apply saves the
@@ -609,6 +635,7 @@ export default function WhereNextFlow() {
     tags: step.tags,
     archetype: deriveArchetype(step.tags),
     preferredNeighborhoods: [],
+    isExplicitVibe: step.isExplicitVibe,
   };
   const userCoordsForView: Coords = effectiveCoords ?? {
     lat: step.seedBar.lat,
@@ -629,6 +656,7 @@ export default function WhereNextFlow() {
                 kind: 'tweakVibe',
                 seedBar: step.seedBar,
                 tags: step.tags,
+                isExplicitVibe: step.isExplicitVibe,
               })
             }
             className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"

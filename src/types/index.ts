@@ -61,6 +61,17 @@ export type VibeProfile = {
   tags: VibeTag[];
   archetype: string;
   preferredNeighborhoods: Neighborhood[];
+  /**
+   * True when `tags` is an APPLIED Tweak-the-vibe pick rather than the quiz
+   * prior. The ranker treats the two differently: a quiz prior is shrunk away
+   * as rating history grows, an explicit pick is an instruction and is not
+   * (src/lib/matching.ts, EXPLICIT_VIBE_WEIGHT).
+   *
+   * Optional and absent by default, so every profile built before the tweak
+   * existed ranks exactly as it did. Night-scoped and in-memory only: it is
+   * never persisted into the stored quiz profile.
+   */
+  isExplicitVibe?: boolean;
 };
 
 /** A single open→close window, 24h "HH:MM" local (NYC) time. A close earlier

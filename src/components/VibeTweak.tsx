@@ -74,7 +74,12 @@ export default function VibeTweak({
   };
 
   return (
-    <section className="max-w-2xl mx-auto px-6 py-8">
+    // pb-28 clears the FIXED bottom nav (R5). Without it Cancel is the last
+    // element on the page and the nav sits on top of it: visually present,
+    // pointer events intercepted. Caught on iPhone 13 by
+    // e2e/vibe-tweak-ranking.spec.ts — the same class as the results
+    // surface's "Pick a different bar" spacer.
+    <section className="max-w-2xl mx-auto px-6 pt-8 pb-28">
       <h2 className="font-display text-2xl mb-2 text-center">
         Tweak the vibe
       </h2>
