@@ -254,7 +254,12 @@ export default function SettingsPage(): JSX.Element {
         <h1 className="font-display text-3xl md:text-4xl mb-2">Settings</h1>
       </header>
 
-      <section className="max-w-md mx-auto px-6 mt-8 mb-24 space-y-8">
+      {/* pb-24, not mb-24: a last-child bottom margin collapses out and
+          contributed ZERO scrollable clearance, so the footer links rested
+          underneath the fixed 5-tab nav and their centre point hit the nav
+          instead (measured 2026-08-19, both viewports). Padding cannot
+          collapse. */}
+      <section className="max-w-md mx-auto px-6 mt-8 pb-24 space-y-8">
         <div>
           <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Account
@@ -657,11 +662,11 @@ export default function SettingsPage(): JSX.Element {
               Coverage: Manhattan and parts of Brooklyn. More neighborhoods
               rolling out.
             </p>
+            <p>Hours and specials are best-effort.</p>
             <p>
-              Hours and specials are best-effort.{' '}
               <Link
                 href="mailto:hi@next-bar.app?subject=Bar+correction"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
               >
                 Tell us if something&apos;s wrong.
               </Link>
@@ -669,14 +674,14 @@ export default function SettingsPage(): JSX.Element {
             <p>
               <Link
                 href="/privacy"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
               >
                 Privacy Policy
               </Link>
               {' · '}
               <Link
                 href="/terms"
-                className="text-accent underline-offset-4 hover:underline"
+                className="text-accent underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
               >
                 Terms of Use
               </Link>
