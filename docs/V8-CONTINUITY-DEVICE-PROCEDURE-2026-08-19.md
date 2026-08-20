@@ -95,6 +95,25 @@ the continuity path, not adjacent to it.
 Fix: one `useBars()` subscription. `bars` and `loved` are already computed in the
 render body, so a re-render is all that was missing.
 
+### 3. A named list dropped a bar — `src/app/lists/page.tsx`
+
+Found by the Claude review lane on the first candidate, not by the tests, and it
+is the same defect as 1 and 2 on the third of the six PRD items. `ListCard`
+resolves each row with `barById(barId)` and drops what it cannot resolve
+(`if (!bar) return null`); `WantToGoList` does the same with `getBarById`.
+Neither the route nor either child subscribed to the catalog. Cold-load `/lists`
+— deep link, reload, PWA restore — and the card renders 2 of 3 rows while its
+badge still reads `3 bars`, and the swap fires no re-render, so it stays 2 of 3
+until the user toggles the card again.
+
+Fix: one `useBars()` subscription on the route. Nothing below it is memoised, so
+the page re-rendering re-renders both `ListCard` and `WantToGoList` — the
+component-level fix the two children would otherwise each need.
+
+Note what the badge is: `list.barIds.length`, read straight from localStorage.
+The name and the count survive an upgrade *whatever* the catalog does, which is
+why every assertion on `V7 favorites 3 bars` passed while the body was wrong.
+
 ### Same shape, not fixed here
 
 `src/app/friends/consensus/page.tsx` calls `useBars()` without capturing it and
@@ -109,7 +128,7 @@ should check it.
 | --- | --- | --- |
 | **Authentication** | Yes, for the device half | `e2e/v7-continuity.spec.ts` → *signing back in to the SAME V7 account keeps every V7 key and everything it renders*. The install-over does not end signed-out; it ends with the user signing back in, and that path runs `guardAgainstForeignCache`, `writeCacheOwner` and the ratings import — each able to delete local rows. The session is a stubbed `sb-<ref>-auth-token` cookie carrying the fixture's own user id, so what is under test is the device's behavior on sign-in. **Not proven:** that a real V7 refresh token still authenticates against the live project — server-side, attended (procedure below, steps 2 and 4). |
 | **Bar 54** | Yes | `e2e/v7-continuity.spec.ts` → *Bar 54 renders by name with its own score…* (rendered, not merely stored), and the same signed in via the authentication test above. Storage-level survival additionally by the pre-existing *V7 Bar 54, tied scores…* test. |
-| **Named lists** | Yes | `e2e/v7-continuity.spec.ts` → *V7 Bar 54, tied scores, lists…* (navigation + reload) and *every V7 key survives a force-close and reopen* (reopened tab), both asserting the list renders as `V7 favorites 3 bars`; signed in, by the authentication test above. |
+| **Named lists** | Yes, both halves | Two separate claims, and the second was missing until defect 3 above was found. **Name and count:** `e2e/v7-continuity.spec.ts` → *V7 Bar 54, tied scores, lists…* (navigation + reload) and *every V7 key survives a force-close and reopen* (reopened tab), both asserting `V7 favorites 3 bars`; signed in, by the authentication test above. That badge is `list.barIds.length` — pure localStorage, so it can never fail for a rendering reason. **The rendered body:** *a named list renders every V7 bar once the real catalog lands, with no second interaction*, which holds the catalog response to reproduce the cold-load order, asserts the body is 2 of 3 against the emergency core, releases the swap, and requires the third row (Bar 54) to appear with no further interaction. |
 | **Numeric scores including ties** | Yes | `e2e/v7-continuity.spec.ts` → *Bar 54 renders by name with its own score, and the tied pair keeps its order across a reload*. The pre-existing tests assert `toHaveCount(2)` on the 8.8 label, which passes just as happily if the two tied bars swap places on every reload, or if one is dropped and a different 8.8 bar takes its place. The new test captures the whole ordered list — position, name and score per row — and requires it to be **identical** after a reload. Local↔server tie preservation is separately proven by `src/lib/tiePreservation.test.ts`. |
 | **Night history** | Yes | `e2e/v7-continuity.spec.ts` → *night history keeps every V7 stop, Bar 54 included*. Asserts the stop **count** (3) as well as the names; the pre-existing recap assertion named two of the three bars, so a dropped visit could not fail it. |
 | **Shared-night state** | Partly | Negative half (pre-existing): *the shared-night surface never writes to V7 local storage*. Positive half (new): *a V7 shared night still renders after the upgrade, and viewing it changes no V7 key* — the `get_shared_night` RPC is stubbed, as in `e2e/night-page.spec.ts`, because the row and its bearer token are server state. **Not proven:** that the user's real pre-upgrade `shared_nights` row and token still resolve against the live project — attended (procedure below, step 6). |

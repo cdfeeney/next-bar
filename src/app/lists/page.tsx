@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import BarPicker from '@/components/BarPicker';
 import WantToGoList from '@/components/WantToGoList';
+import { useBars } from '@/lib/useBars';
 import { useLists } from '@/hooks/useLists';
 import { useRatings } from '@/hooks/useRatings';
 import { useWantToGo } from '@/hooks/useWantToGo';
@@ -17,6 +18,13 @@ import type { BarList } from '@/lib/lists';
 import { barById } from '@/lib/demo';
 
 export default function ListsPage(): JSX.Element {
+  // 0019 swap-day rule: ListCard rows and WantToGoList both resolve bar ids
+  // through the catalog (barById / getBarById), so subscribe here — nothing
+  // below is memoised, so this page re-rendering re-renders both children.
+  // Without it a cold load renders only the bars in the ~39-bar fallback and
+  // never recovers when CatalogRefresh swaps the real catalog in: Bar 54
+  // silently vanishes from a named list. Same defect as /rankings.
+  useBars();
   const { lists, createList, deleteList, addBarToList, removeBarFromList } =
     useLists();
   const { ratings } = useRatings();

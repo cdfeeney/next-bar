@@ -171,6 +171,60 @@ test('V7 Bar 54, tied scores, lists, vibe profile, and night history survive nav
   ).resolves.toBe('1');
 });
 
+/**
+ * The named-lists row of the coverage map used to rest on `V7 favorites 3 bars`
+ * alone. That badge reads `list.barIds.length` — pure localStorage — so it
+ * cannot fail for a RENDERING reason, which is exactly the distinction this
+ * spec draws for Bar 54 on /rankings. The list BODY resolves each id through
+ * the catalog and drops what it cannot resolve, so that is where a named list
+ * loses a bar.
+ *
+ * Holding the catalog response reproduces the cold-load ORDER a deep link,
+ * reload or PWA restore produces: render against the ~39-bar `coreBars`
+ * emergency set first, swap the real catalog in after. Bar 54 is not in that
+ * set, so pre-swap the card shows 2 rows while its badge still claims 3.
+ * Without a `useBars()` subscription on the route the swap fires no re-render
+ * and it stays 2 — the same silently-vanished-bar defect fixed on /rankings.
+ */
+test('a named list renders every V7 bar once the real catalog lands, with no second interaction', async ({
+  page,
+}) => {
+  await seedV7Install(page);
+
+  let releaseCatalog: () => void = () => {};
+  const heldCatalog = new Promise<void>((resolve) => {
+    releaseCatalog = resolve;
+  });
+  // Most-recently-registered wins, so this supersedes the fixture's route.
+  await page.route(CATALOG_ROUTE, async (route) => {
+    await heldCatalog;
+    await fulfillCatalog(route);
+  });
+
+  await page.goto('/lists');
+  const card = page.getByRole('button', { name: /^V7 favorites 3 bars$/ });
+  await expect(card).toBeVisible();
+  await card.click();
+
+  // One row per RESOLVED bar: the remove control is per-row and names its bar.
+  const rows = page.getByRole('button', { name: /from V7 favorites$/ });
+  await expect(rows).toHaveCount(2);
+  await expect(
+    page.getByRole('button', { name: 'Remove Bar 54 from V7 favorites' }),
+  ).toHaveCount(0);
+
+  releaseCatalog();
+
+  // No second click, no reload. The subscription is the only thing that can
+  // make this row appear.
+  await expect(rows).toHaveCount(3);
+  await expect(
+    page.getByRole('button', { name: 'Remove Bar 54 from V7 favorites' }),
+  ).toBeVisible();
+  // The badge never moved — proving the count and the body are separate claims.
+  await expect(card).toBeVisible();
+});
+
 test('every V7 key survives a force-close and reopen; the session-scoped flag does not', async ({
   context,
 }) => {
@@ -341,16 +395,30 @@ function base64Url(value: string): string {
 }
 
 /**
+ * Same shape as `readSupabaseUrl` in `e2e/account-delete.spec.ts` and
+ * `e2e/claim-handle.spec.ts`: returns null rather than throwing, so a checkout
+ * with no repo-root `.env.local` — normal for a worktree, since the file is
+ * gitignored and does not propagate — reports a visible SKIP instead of turning
+ * the release gate red for an environment reason.
+ */
+function readSupabaseUrl(): string | null {
+  try {
+    const env = readFileSync(path.join(__dirname, '..', '.env.local'), 'utf8');
+    const match = env.match(/^NEXT_PUBLIC_SUPABASE_URL=(.+)$/m);
+    return match ? match[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+const SUPABASE_URL = readSupabaseUrl();
+
+/**
  * A session cookie in the shape `@supabase/ssr` reads — the same construction
  * `e2e/account-delete.spec.ts` uses. Cookies are not port-scoped, so the URL
  * below is correct whatever ephemeral port the release runner picked.
  */
-function v7SessionCookie(): { name: string; value: string; url: string } {
-  const supabaseUrl = readFileSync(
-    path.join(__dirname, '..', '.env.local'),
-    'utf8',
-  ).match(/^NEXT_PUBLIC_SUPABASE_URL=(.+)$/m)?.[1].trim();
-  if (!supabaseUrl) throw new Error('no NEXT_PUBLIC_SUPABASE_URL in .env.local');
+function v7SessionCookie(supabaseUrl: string): { name: string; value: string; url: string } {
   const ref = new URL(supabaseUrl).hostname.split('.')[0];
   const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365;
   const accessToken = [
@@ -384,6 +452,10 @@ function v7SessionCookie(): { name: string; value: string; url: string } {
 test('signing back in to the SAME V7 account keeps every V7 key and everything it renders', async ({
   page,
 }) => {
+  test.skip(
+    SUPABASE_URL === null,
+    'NEXT_PUBLIC_SUPABASE_URL not found in .env.local',
+  );
   // The install-over does not end signed-out. It ends with the user signing
   // back in, and THAT path runs guardAgainstForeignCache, writeCacheOwner and
   // the ratings import — each of which can delete local rows. A fixture that
@@ -421,7 +493,7 @@ test('signing back in to the SAME V7 account keeps every V7 key and everything i
     route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
   );
   await seedV7InstallWithCatalog(page);
-  await page.context().addCookies([v7SessionCookie()]);
+  await page.context().addCookies([v7SessionCookie(SUPABASE_URL as string)]);
 
   await page.goto('/rankings');
   // The signed-in branch actually rendered — without this the assertions below
