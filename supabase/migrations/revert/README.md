@@ -264,16 +264,16 @@ satisfies every one of them. Proving which database you are on is the runner's
 job, done at the connection layer before a statement is sent — and on the psql
 path it is yours.
 
-So: through the runner, the target is proved before a statement is sent. Through
-psql, the preconditions still stop you reverting the wrong MIGRATION, or
-reverting twice, or reverting under a later one — but proving you are on the
-right DATABASE is yours to do. `scripts/revert-pin.test.ts` keeps the pinned
-checksum honest either way.
+So: through the runner, the target is proved before a statement is sent.
+Through psql, the script's own refusals still protect you from reverting the
+wrong MIGRATION — read them in the script — but proving you are on the right
+DATABASE is yours to do. `scripts/revert-pin.test.ts` keeps the pinned checksum
+honest either way.
 
-It restores `0007`'s tier-only `get_friend_ratings()` and deletes the `0064`
-ledger row in ONE transaction, refusing up front unless `0064` is in the ledger
-and is the newest row there. Its postconditions then confirm the row is gone, the
-restored function returns no `score` column, and `anon` still holds no EXECUTE.
+What it DOES, in one line: it restores `0007`'s tier-only
+`get_friend_ratings()` and deletes the `0064` ledger row in ONE transaction.
+Its refusals and its postconditions are stated in the script, beside the code
+that performs them — not here, for the reason above.
 
 ### What reverting `0064` costs
 
