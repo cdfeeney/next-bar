@@ -75,11 +75,67 @@ const seedAntiCocktailHistory = async (
   }, DISLIKED_COCKTAIL_BARS);
 };
 
+/**
+ * The ranked list settles in TWO phases, so a snapshot taken at first paint is
+ * not the list the user ends up looking at.
+ *
+ * The page paints from the BUNDLED catalog, then a live
+ * `/rest/v1/bars` read lands and the ranker runs again over the fuller set.
+ * Measured on this branch: the card list is up at +47ms, the REST response
+ * arrives at +749ms, and the ranking changes at +846ms - positions 4 and 5
+ * swap (Katana Kitten enters, Amor y Amargo leaves) while the top three hold.
+ *
+ * `cards.first()` becomes visible during phase one, so awaiting it proves the
+ * list is PAINTED, not that it is FINAL, and any snapshot taken then is a
+ * snapshot of the wrong list. That is what failed the cancel test 2 runs in 3,
+ * always with that same 4/5 swap: a reload the test straddled, read as Cancel
+ * quietly mutating the ranking.
+ *
+ * Waiting a fixed interval would only move the race. Waiting for the response
+ * itself is the actual event, so it is what this waits for.
+ */
+const gotoHomeWithCatalog = async (
+  page: import('@playwright/test').Page,
+): Promise<void> => {
+  const catalogLoaded = page.waitForResponse(
+    (response) =>
+      response.url().includes('/rest/v1/bars') && response.status() === 200,
+    { timeout: 20_000 },
+  );
+  await page.goto('/');
+  await catalogLoaded;
+};
+
+/**
+ * Belt to the catalog gate's braces: returns only once two consecutive reads
+ * agree, so a re-render still in flight when the response resolved cannot be
+ * captured mid-flight.
+ */
+const settledRanking = async (
+  cards: import('@playwright/test').Locator,
+): Promise<string[]> => {
+  let previous: string[] | null = null;
+  await expect
+    .poll(
+      async () => {
+        const current = await cards.locator('h3').allInnerTexts();
+        const isStable =
+          previous !== null && JSON.stringify(current) === JSON.stringify(previous);
+        previous = current;
+        return isStable;
+      },
+      { timeout: 10_000, intervals: [250, 250, 500, 500, 1000] },
+    )
+    .toBe(true);
+  return previous ?? [];
+};
+
 const seedResultsFromAttaboy = async (page: import('@playwright/test').Page) => {
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).click();
   const cards = page.locator('article').filter({ hasText: /Vibe match/i });
   await expect(cards.first()).toBeVisible();
+  await settledRanking(cards);
   return cards;
 };
 
@@ -89,10 +145,10 @@ test.describe('Tweak the vibe — ranking', () => {
   }) => {
     await denyGeolocation(page.context());
     await page.clock.setFixedTime(FRIDAY_NIGHT);
-    await page.goto('/');
+    await gotoHomeWithCatalog(page);
 
     const cards = await seedResultsFromAttaboy(page);
-    const before = await cards.locator('h3').allInnerTexts();
+    const before = await settledRanking(cards);
     expect(before.length).toBeGreaterThan(0);
 
     await page.getByRole('button', { name: /Tweak the vibe/i }).click();
@@ -103,7 +159,7 @@ test.describe('Tweak the vibe — ranking', () => {
 
     // Same bars, same order — Cancel is not a quiet Apply.
     await expect(cards.first()).toBeVisible();
-    expect(await cards.locator('h3').allInnerTexts()).toEqual(before);
+    expect(await settledRanking(cards)).toEqual(before);
     await expect(page).toHaveURL('/');
   });
 
@@ -113,14 +169,14 @@ test.describe('Tweak the vibe — ranking', () => {
     await denyGeolocation(page.context());
     await seedAntiCocktailHistory(page);
     await page.clock.setFixedTime(FRIDAY_NIGHT);
-    await page.goto('/');
+    await gotoHomeWithCatalog(page);
 
     const cards = await seedResultsFromAttaboy(page);
     // The surface pre-fills with the seed bar's OWN tags and Apply hands the
     // very same tags back (WhereNextFlow.tsx: initialTags={step.tags}), so
     // `isExplicitVibe` is the only input that changes across the click. If the
     // flag never reached the ranker this list could not move.
-    const before = await cards.locator('h3').allInnerTexts();
+    const before = await settledRanking(cards);
     // With the pick's tags scored down, the normal path buries every match.
     await expect(cards.first()).toContainText('Vibe match 0/');
 
@@ -131,6 +187,6 @@ test.describe('Tweak the vibe — ranking', () => {
     // On the explicit path a MATCHING bar outranks anything the rating
     // history merely favours, so the top card cannot be a 0-tag match.
     await expect(cards.first()).not.toContainText('Vibe match 0/');
-    expect(await cards.locator('h3').allInnerTexts()).not.toEqual(before);
+    expect(await settledRanking(cards)).not.toEqual(before);
   });
 });
