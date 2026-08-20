@@ -1,16 +1,14 @@
 -- Runnable, atomic rollback of migration 0064. This is THE rollback path.
 --
--- RUN IT FROM ANYWHERE (unlike 0059's, this file includes nothing, so `-f`
--- resolving against YOUR working directory is the only path that matters):
---
---   psql "<connection-string>" -v ON_ERROR_STOP=1 -f supabase/migrations/revert/revert-0064-transaction.sql
+-- HOW TO RUN IT: see README.md in this directory, which is the single source
+-- for the command and for what the revert costs. It is not restated here — an
+-- earlier version of this header claimed the command worked "from anywhere"
+-- while passing a working-directory-relative `-f` path, and that stale twin is
+-- exactly what the README's one-statement-one-place rule exists to prevent.
 --
 -- Restoring 0007's tier-only body and unrecording the migration MUST be one
 -- transaction. If they come apart, the ledger claims 0064 while the friend read
 -- returns no score, and every ledger-aware tool then acts on a false picture.
---
--- Read README.md in this directory BEFORE running this. It is the single source
--- for what this revert costs.
 
 \set ON_ERROR_STOP on
 

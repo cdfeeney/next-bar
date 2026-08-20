@@ -157,12 +157,34 @@ member, suggestion, vote and event row (it ships commented out), and
 
 ## Reverting `0064` (friend-visible numeric score)
 
-One command, from anywhere — `revert-0064-transaction.sql` includes no other
-file, so nothing is resolved relative to the script:
+One command, **run from the repository root** — the same rule as `0059`, and
+for the same reason. `revert-0064-transaction.sql` includes no other file, so it
+resolves nothing relative to itself; but `psql` still resolves `-f` against
+**your** working directory, so a relative path only works from the root:
 
 ```
 psql "<connection-string>" -v ON_ERROR_STOP=1 -f supabase/migrations/revert/revert-0064-transaction.sql
 ```
+
+From anywhere else, pass an absolute path:
+
+```
+psql "<connection-string>" -v ON_ERROR_STOP=1 -f D:/harness-worktrees/mig-0064/supabase/migrations/revert/revert-0064-transaction.sql
+```
+
+An earlier version of this section, and of the script's own header, claimed the
+command ran "from anywhere" while showing the relative path. Including nothing
+removes the `\ir` hazard `0059` has; it does not move `-f`.
+
+**`psql` is not installed on this machine** (checked 2026-08-20: not on PATH, no
+`C:\Program Files\PostgreSQL`, no Supabase CLI). The commands above are the path
+of record for a machine that has it. Here, the apply of record goes through
+`scripts/apply-migration-set.ts --env staging --execute <file>`, and the 0064
+revert of 2026-08-20 was executed by sending this file's SQL over `pg` to the
+same verified staging target, with the same guards the applier enforces: the
+`--env` label, refusal on the production project ref, the staging allowlist, the
+required pooler host, refusal of libpq startup options and host/port overrides,
+and CA-verified TLS. Do not discover the missing `psql` under pressure.
 
 It restores `0007`'s tier-only `get_friend_ratings()` and deletes the `0064`
 ledger row in ONE transaction, refusing up front unless `0064` is in the ledger

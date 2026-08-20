@@ -3,8 +3,10 @@ import Link from 'next/link';
 
 /**
  * /privacy — honest v1 privacy policy (H1 App-Store pack; finalized
- * 2026-07-25 on operator instruction). Written to match what the app
- * ACTUALLY does. hi@next-bar.app must be receiving mail (registrar
+ * 2026-07-25 on operator instruction, updated 2026-08-20 when migration 0064
+ * made the numeric score visible to the accounts that follow you). Written to
+ * match what the app ACTUALLY does; UPDATED must move whenever what it says
+ * about sharing changes. hi@next-bar.app must be receiving mail (registrar
  * forwarding after the domain purchase) before App Store submission.
  */
 export const metadata: Metadata = {
@@ -12,7 +14,7 @@ export const metadata: Metadata = {
   description: 'How Next Bar handles your data.',
 };
 
-const UPDATED = 'July 25, 2026';
+const UPDATED = 'August 20, 2026';
 
 export default function PrivacyPage(): JSX.Element {
   return (
