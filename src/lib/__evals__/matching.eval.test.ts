@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
-import { jaccard, matches, scoreBar } from '@/lib/matching';
+import { jaccard, matches, rankScore } from '@/lib/matching';
+import { EMPTY_TASTE } from '@/lib/tasteAffinity';
 import {
   EXPLORATION_MIN_RESULTS,
-  JACCARD_FLOOR,
   MAX_RESULTS,
 } from '@/lib/constants';
 
@@ -76,26 +76,37 @@ describe('eval: matching score monotonicity', () => {
       if (!missing) continue;
       const b1 = bar('m1', { tags: barTags as VibeTag[] });
       const b2 = bar('m2', { tags: [...barTags, missing] as VibeTag[] });
-      const s1 = scoreBar(b1, userTags as VibeTag[], null, []);
-      const s2 = scoreBar(b2, userTags as VibeTag[], null, []);
+      const s1 = rankScore(b1, userTags as VibeTag[], EMPTY_TASTE);
+      const s2 = rankScore(b2, userTags as VibeTag[], EMPTY_TASTE);
       expect(s2).toBeGreaterThanOrEqual(s1);
     }
   });
 
-  it('score is non-increasing in distance (moving a bar farther never helps)', () => {
+  // V8: distance left the ranking score entirely — it selects the BAND and
+  // breaks ties. The monotonicity that still matters is therefore expressed
+  // against matches(): an equal-taste bar in a nearer band always outranks a
+  // farther one, and within a band the closer of two equals leads.
+  it('a nearer band always outranks a farther one at equal taste', () => {
     const rng = makeRng(2);
     const coords = { lat: 40.728, lng: -73.985 };
     for (let trial = 0; trial < 200; trial++) {
       const tags = [...ALL_TAGS].sort(() => rng() - 0.5).slice(0, 3) as VibeTag[];
       const near = bar('n', { tags, lat: coords.lat + 0.001, lng: coords.lng });
+      // 0.1-0.3 deg latitude ~= 7-21 miles: always past RADIUS_CAB.
       const far = bar('f', {
         tags,
-        lat: coords.lat + 0.001 + rng() * 0.2,
+        lat: coords.lat + 0.1 + rng() * 0.2,
         lng: coords.lng,
       });
-      const sNear = scoreBar(near, PROFILE.tags, coords, []);
-      const sFar = scoreBar(far, PROFILE.tags, coords, []);
-      expect(sNear).toBeGreaterThanOrEqual(sFar);
+      const ids = matches({
+        profile: PROFILE,
+        coords,
+        preferredNeighborhoods: [],
+        maxMiles: null,
+        bars: [far, near],
+        maxResults: 2,
+      }).map((b) => b.id);
+      expect(ids[0]).toBe('n');
     }
   });
 });
@@ -118,7 +129,7 @@ describe('eval: neighborhood-filter honesty (MED-12)', () => {
   });
 });
 
-describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
+describe('eval: no exploration slot — every result is cascade-ordered', () => {
   function bigPool(): Bar[] {
     // 30 bars sharing profile tags with descending extra overlap so the
     // score order is unambiguous, all fresh, one neighborhood.
@@ -132,7 +143,11 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
     );
   }
 
-  it('surfaces with >= EXPLORATION_MIN_RESULTS reserve the LAST slot for a qualified long-tail pick', () => {
+  // The B7b exploration slot was REMOVED on 2026-08-19 (operator direction:
+  // V8 ranking correctness wins). These pin its absence — every returned
+  // result, including the last one on a 10-slot surface, must come straight
+  // from the cascade order.
+  it('no slot is sacrificed: the last result IS the cascade-ordered Nth', () => {
     const results = matches({
       profile: PROFILE,
       coords: null,
@@ -144,31 +159,18 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
     });
     expect(results).toHaveLength(EXPLORATION_MIN_RESULTS);
 
-    // Re-rank without exploration by scoring directly.
     const pureTop = [...bigPool()]
-      .map((b) => ({ b, s: scoreBar(b, PROFILE.tags, null, []) }))
+      .map((b) => ({ b, s: rankScore(b, PROFILE.tags, EMPTY_TASTE) }))
       .sort((a, z) => z.s - a.s)
       .slice(0, EXPLORATION_MIN_RESULTS)
-      .map((r) => r.b.id);
+      .map((x) => x.b.id);
 
-    // First N-1 slots are the pure top; the last is from OUTSIDE it.
-    for (let i = 0; i < EXPLORATION_MIN_RESULTS - 1; i++) {
-      expect(results[i].id).toBe(pureTop[i]);
-    }
-    expect(pureTop).not.toContain(results[EXPLORATION_MIN_RESULTS - 1].id);
-
-    // Qualified: the pick still clears the Jaccard floor.
-    expect(
-      jaccard(PROFILE.tags, results[EXPLORATION_MIN_RESULTS - 1].tags),
-    ).toBeGreaterThanOrEqual(JACCARD_FLOOR);
+    // EVERY slot matches — previously the loop stopped at N-1 because the
+    // last one was deliberately overwritten.
+    expect(results.map((b) => b.id)).toEqual(pureTop);
   });
 
-  it('the pick is deterministic for (profile, night) and rotates across nights — at the 6am NYC rollover, not UTC midnight', () => {
-    // ABSOLUTE instants at a NEW YORK wall clock. July is EDT (UTC-4), so NYC
-    // hour + 4 = the UTC hour; hours past 20 roll into the next UTC day, which
-    // is exactly the point. These used to be `new Date(2026, 6, d, hour)` —
-    // the RUNNER's zone — and asserted a 5am LOCAL rollover that no longer
-    // exists anywhere (round-2 panel, Codex).
+  it('results no longer rotate with the night — ordering is stable', () => {
     const run = (dayOfMonth: number, nycHour = 12) =>
       matches({
         profile: PROFILE,
@@ -178,20 +180,13 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
         bars: bigPool(),
         maxResults: EXPLORATION_MIN_RESULTS,
         now: new Date(Date.UTC(2026, 6, dayOfMonth, nycHour + 4)),
-      })[EXPLORATION_MIN_RESULTS - 1].id;
+      }).map((b) => b.id);
 
-    expect(run(25)).toBe(run(25));
-    // 2am belongs to the PREVIOUS night (the ONE rollover, src/lib/nightKey.ts
-    // via cadence.ts): the pick must NOT rotate mid-evening or at midnight.
-    expect(run(26, 2)).toBe(run(25, 23));
-    // 5am is still the previous night too — that is the hour the deleted 5am
-    // rule got wrong, so pin it rather than only the easy 2am case.
-    expect(run(26, 5)).toBe(run(25, 23));
-    // …and 6am NYC starts the new one.
-    expect(run(26, 6)).not.toBe(run(25, 23));
-    // Across many nights the pick must not be constant (rotation works).
-    const nights = [25, 26, 27, 28, 29].map((d) => run(d));
-    expect(new Set(nights).size).toBeGreaterThan(1);
+    // The daily rotation was a property of the removed exploration pick. With
+    // it gone, `now` only drives staleness filtering, so the page is stable
+    // across nights for an unchanged catalog and profile.
+    expect(run(26, 2)).toEqual(run(25, 23));
+    expect(run(27, 12)).toEqual(run(25, 12));
   });
 
   it('small default surfaces (MAX_RESULTS) never sacrifice a slot', () => {
@@ -204,7 +199,7 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
       now: NOW,
     });
     const pureTop = [...bigPool()]
-      .map((b) => ({ b, s: scoreBar(b, PROFILE.tags, null, []) }))
+      .map((b) => ({ b, s: rankScore(b, PROFILE.tags, EMPTY_TASTE) }))
       .sort((a, z) => z.s - a.s)
       .slice(0, MAX_RESULTS)
       .map((r) => r.b.id);
@@ -213,7 +208,7 @@ describe('eval: exploration slot (B7b ε-greedy, simplified)', () => {
 });
 
 describe('eval: 5k-bar perf ceiling', () => {
-  it('a full match over 5k bars (with exploration path) stays under the CI ceiling', () => {
+  it('a full match over 5k bars stays under the CI ceiling', () => {
     const rng = makeRng(4);
     const pool = syntheticPool(5000, rng);
     const start = performance.now();

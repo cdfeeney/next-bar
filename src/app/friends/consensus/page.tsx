@@ -11,6 +11,7 @@ import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
+import type { BarRating } from '@/types/ratings';
 import { useVibeVotes } from '@/hooks/useVibeVotes';
 import VibeVotePoll from '@/components/VibeVotePoll';
 import { boostByWinningVibe } from '@/lib/vibeVotes';
@@ -24,6 +25,7 @@ import {
 } from '@/lib/follows.server';
 import {
   computeConsensus,
+  deriveConsensusParticipants,
   demoFriends,
   barById,
   type ConsensusParticipant,
@@ -32,13 +34,22 @@ import {
 
 const YOU_ID = 'you';
 
+/**
+ * A consensus entry plus the partition it came from. Near-misses stay in the
+ * one Group Favorites list (the standing UX-B invariant — unanimous picks
+ * lead) but must never be *labelled* as Group Favorites, so the flag travels
+ * with the entry all the way to the card.
+ */
+type RankedEntry = ConsensusEntry & { isGroupFavorite: boolean };
+
 /** A selectable person on the consensus screen — demo or real. */
 type Person = {
   id: string;
   label: string;
   initials: string;
   seed: string;
-  ratings: ReadonlyArray<{ barId: string; rating: 'loved' | 'liked' | 'pass'; ratedAt: string }>;
+  /** Full rating shape — `score` is what Group Favorites reads. */
+  ratings: ReadonlyArray<BarRating>;
 };
 
 function initialsFor(label: string): string {
@@ -75,10 +86,14 @@ export default function ConsensusPage(): JSX.Element {
   const isServer = mode === 'server';
 
   // REAL consensus (operator: "make where should we go real"): in server
-  // mode the people are your actual circle and their tier-rated bars come
-  // from get_friend_ratings (tier-only — scores never cross the friend
-  // boundary; scoreOf falls back to tier midpoints). Demo mode keeps the
-  // seeded curators so signed-out visitors still see the feature work.
+  // mode the people are your actual circle and their bars come from
+  // get_friend_ratings, which is TIER-ONLY by a hard security rule (0007 /
+  // 0015: scores never cross the friend boundary). Group Favorites is a
+  // score rule since 2026-08-19 — every member needs a personal score >= 8.0
+  // — so a real circle contributes no qualifying scores today and the list
+  // stays empty until that boundary carries the signal. Demo mode keeps the
+  // seeded curators, whose ratings DO carry scores, so signed-out visitors
+  // still see the feature work.
   const [friendRatings, setFriendRatings] = useState<Record<string, FriendRating[]> | null>(null);
   useEffect(() => {
     if (!isServer || auth.status !== 'signed-in') return;
@@ -202,9 +217,9 @@ export default function ConsensusPage(): JSX.Element {
    * bars ranked, someone might not be into that and just use it as a social
    * lens." Being invited out and having rated bars are unrelated.
    *
-   * Unrated members contribute no picks to the consensus (they have none), so
-   * `participants` is unchanged; their chip is marked so an empty contribution
-   * reads as expected rather than broken.
+   * Unrated members cast no votes (they have none), but they DO count toward
+   * unanimity — see `participants` below. Their chip is marked so an empty
+   * contribution reads as expected rather than broken.
    */
   const inviteeIds: string[] = useMemo(
     () =>
@@ -216,18 +231,28 @@ export default function ConsensusPage(): JSX.Element {
     [isServer, circle, effectiveSelected],
   );
 
-  const participants: ConsensusParticipant[] = useMemo(() => {
-    const list: ConsensusParticipant[] = [];
-    if (effectiveSelected.has(YOU_ID) && youHasRatings) {
-      list.push({ id: YOU_ID, label: 'You', ratings });
-    }
-    for (const f of followedFriends) {
-      if (effectiveSelected.has(f.id)) {
-        list.push({ id: f.id, label: f.label, ratings: f.ratings });
-      }
-    }
-    return list;
-  }, [effectiveSelected, followedFriends, ratings, youHasRatings]);
+  /**
+   * The unanimity DENOMINATOR, so every selected person counts — including
+   * circle members who have ranked nothing.
+   *
+   * Panel finding (Codex, MEDIUM; founder item 6): this used to be built from
+   * `followedFriends` alone, the RATING-QUALIFIED subset, so a selected member
+   * with zero ranked bars never entered `total`. Under the founder rule a bar
+   * is a Group Favorite only when EVERY member scored it >= 8.0, and "9.0 /
+   * no score" is explicitly "not YET" — so silently dropping the unscored
+   * member let a bar qualify without the score the rule requires of them.
+   * They contribute no votes (they have none); they do count.
+   */
+  const participants: ConsensusParticipant[] = useMemo(
+    () =>
+      deriveConsensusParticipants({
+        selected: effectiveSelected,
+        you: youHasRatings ? { id: YOU_ID, label: 'You', ratings } : null,
+        ratedPeople: followedFriends,
+        unratedPeople: unratedCircle,
+      }),
+    [effectiveSelected, followedFriends, unratedCircle, ratings, youHasRatings],
+  );
 
   const { overlap, alsoConsider } = useMemo(
     () => computeConsensus(participants),
@@ -248,14 +273,28 @@ export default function ConsensusPage(): JSX.Element {
   // — "unanimous overlap leads" is the standing UX-B invariant, and the
   // top card carries the share moment). Applied before the cap so a
   // vibe-matching near-miss can still enter the tail of the top 5.
-  const groupFavorites = useMemo(() => {
+  //
+  // Panel finding (both lanes, HIGH): the two partitions used to be
+  // concatenated and rendered identically, so `alsoConsider` — which is BY
+  // DEFINITION the set that is NOT a Group Favorite — was displayed as one,
+  // star and share moment included. The founder's own "9.0 / 7.5" and
+  // "9.0 / 2.0" rows appeared as Group Favorites. Each entry now carries
+  // which partition it came from, and the card marks a near-miss.
+  const groupFavorites = useMemo<RankedEntry[]>(() => {
     const tagsOf = (entry: ConsensusEntry): readonly string[] =>
       barById(entry.barId)?.tags ?? [];
+    const flag = (
+      entries: ConsensusEntry[],
+      isGroupFavorite: boolean,
+    ): RankedEntry[] => entries.map((e) => ({ ...e, isGroupFavorite }));
     return [
-      ...boostByWinningVibe(overlap, vibeVotes.winner, tagsOf),
-      ...boostByWinningVibe(alsoConsider, vibeVotes.winner, tagsOf),
+      ...flag(boostByWinningVibe(overlap, vibeVotes.winner, tagsOf), true),
+      ...flag(boostByWinningVibe(alsoConsider, vibeVotes.winner, tagsOf), false),
     ].slice(0, 5);
   }, [overlap, alsoConsider, vibeVotes.winner]);
+
+  /** True when nothing is unanimous and the list is near-misses only. */
+  const noUnanimousPick = groupFavorites.every((e) => !e.isGroupFavorite);
 
   return (
     <main className="min-h-screen pb-28">
@@ -341,13 +380,16 @@ export default function ConsensusPage(): JSX.Element {
           />
         </div>
 
+        {/* Copy follows the denominator fix above: an unranked member DOES
+            now affect the picks — a bar is not a Group Favorite until
+            everyone selected has scored it. Saying they "don't sway the
+            picks" became untrue the moment they entered `total`. */}
         {isServer && unratedFriendCount > 0 ? (
           <p className="text-muted text-xs text-center mb-8">
             {unratedFriendCount} of your circle{' '}
             {unratedFriendCount === 1 ? "hasn't" : "haven't"} ranked any bars
-            yet — you can still bring{' '}
-            {unratedFriendCount === 1 ? 'them' : 'them'} along; they just
-            don&apos;t sway the picks.
+            yet — bring them along, but nothing is a Group Favorite until
+            everyone you pick has scored it.
           </p>
         ) : null}
 
@@ -379,21 +421,45 @@ export default function ConsensusPage(): JSX.Element {
               ) : null}
             </h2>
             {groupFavorites.length === 0 ? (
-              <p className="text-muted text-sm leading-relaxed">
-                No shared history yet — rate a few bars and this fills in.
+              <p
+                className="text-muted text-sm leading-relaxed"
+                data-testid="group-favorites-empty"
+              >
+                {isServer
+                  ? // Server mode is EXPECTED to be empty until scores cross
+                    // the friend boundary (that migration is its own T0 goal).
+                    // The old copy — "rate a few bars and this fills in" —
+                    // was advice that could not come true here, so it said the
+                    // feature was broken. Say what is actually true instead.
+                    "A bar becomes a Group Favorite once everyone here has scored it 8.0 or better. Your circle's scores aren't shared yet, so there's nothing to agree on."
+                  : 'No shared history yet — rate a few bars and this fills in.'}
               </p>
             ) : (
-              <div className="space-y-2">
-                {groupFavorites.map((entry, i) => (
-                  <ConsensusCard
-                    key={entry.barId}
-                    entry={entry}
-                    rank={i + 1}
-                    index={i}
-                    highlight={i === 0}
-                  />
-                ))}
-              </div>
+              <>
+                {noUnanimousPick ? (
+                  <p
+                    className="text-muted text-sm leading-relaxed mb-3"
+                    data-testid="no-unanimous-pick"
+                  >
+                    Nothing is unanimous yet — these are the closest.
+                  </p>
+                ) : null}
+                <div className="space-y-2">
+                  {groupFavorites.map((entry, i) => (
+                    <ConsensusCard
+                      key={entry.barId}
+                      entry={entry}
+                      rank={i + 1}
+                      index={i}
+                      /* Only a genuine Group Favorite gets the star and the
+                         share moment. Near-misses sort after the unanimous
+                         picks, so this is false for every card whenever
+                         `overlap` is empty. */
+                      highlight={i === 0 && entry.isGroupFavorite}
+                    />
+                  ))}
+                </div>
+              </>
             )}
           </div>
         )}
@@ -468,13 +534,14 @@ function ConsensusCard({
   index = 0,
   highlight = false,
 }: {
-  entry: ConsensusEntry;
+  entry: RankedEntry;
   rank?: number;
   index?: number;
   highlight?: boolean;
 }): JSX.Element {
   const bar = barById(entry.barId);
   if (!bar) return <></>;
+  const nearMiss = !entry.isGroupFavorite;
   return (
     <article
       className={[
@@ -505,6 +572,17 @@ function ConsensusCard({
       <p className="text-muted text-xs uppercase tracking-wider truncate mt-0.5">
         {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
       </p>
+      {/* A near-miss shares the one list (UX-B) but must not read as a Group
+          Favorite: someone here scored it under 8.0, or has not scored it at
+          all. Said in words, not colour alone. */}
+      {nearMiss ? (
+        <p
+          data-testid="near-miss-badge"
+          className="mt-1.5 inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
+        >
+          Not a Group Favorite yet
+        </p>
+      ) : null}
       {/* The winner-share moment lives on the TOP pick (works signed-out
           too — the share-card loop's entry). QA3: a labeled solid-outline
           button spanning the card so it's findable on mobile. */}

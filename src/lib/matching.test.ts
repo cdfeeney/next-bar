@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { isLateNight, jaccard, matches, scoreBar, vibeMatchBadge } from '@/lib/matching';
+import { isLateNight, jaccard, matches, vibeMatchBadge } from '@/lib/matching';
+import { deriveLearnedTaste, EMPTY_TASTE } from '@/lib/tasteAffinity';
+import type { BarRating } from '@/types/ratings';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
 
 // Fixed "now" used for the 180-day staleness filter.
@@ -247,7 +249,7 @@ describe('matches() — threshold relaxation', () => {
   //     intersection 1, union 5                   → 0.20 (< 0.25, >= 0.20)
   const profile = baseProfile(['cocktail', 'speakeasy', 'polished', 'industry']);
 
-  it('relaxes the threshold from 0.25 down by 0.05 steps when < MIN_CANDIDATES match', () => {
+  it('ranks stronger tag overlap above weaker, and caps the page', () => {
     const strongA = makeBar({
       id: 'strongA',
       tags: ['cocktail', 'speakeasy', 'polished', 'industry'],
@@ -275,16 +277,18 @@ describe('matches() — threshold relaxation', () => {
       now: NOW,
     });
 
-    // At 0.25 only the two strong bars match (< 3) → engine relaxes to 0.20
-    // and now all four match. Sort is jaccard-desc; cap at 3.
+    // No admission gate any more: all four are eligible. The quiz prior orders
+    // them, so the two strong-overlap bars lead and the cap takes one weak bar.
     expect(result).toHaveLength(3);
     const ids = result.map((b) => b.id);
     expect(ids.slice(0, 2).sort()).toEqual(['strongA', 'strongB']);
     expect(['weakA', 'weakB']).toContain(ids[2]);
   });
 
-  it('floors at 0.10 — when nothing meets even 0.10, returns whatever exists (no infinite loop)', () => {
-    // No bar shares any tag with the user.
+  // V8 P1: quiz tags are a COLD-START PRIOR, never an admission gate. A bar
+  // sharing no tag with the profile used to be filtered out entirely; it is
+  // now admitted and simply ordered last by the prior.
+  it('admits bars with zero tag overlap — no Jaccard admission gate', () => {
     const noOverlapA = makeBar({ id: 'noA', tags: ['beer', 'pub', 'cheap'] });
     const noOverlapB = makeBar({ id: 'noB', tags: ['wine', 'romantic'] });
 
@@ -297,8 +301,7 @@ describe('matches() — threshold relaxation', () => {
       now: NOW,
     });
 
-    // Floor hit, nothing matches, function still returns (possibly empty) array.
-    expect(result).toHaveLength(0);
+    expect(result.map((b) => b.id).sort()).toEqual(['noA', 'noB']);
   });
 });
 
@@ -360,27 +363,32 @@ describe('matches() — blended ranking (vibe + proximity + loved affinity)', ()
     expect(result.map((b) => b.id)).toEqual(['near', 'far']);
   });
 
-  it('loved-tag affinity breaks ties between otherwise equal bars', () => {
-    // Both bars have identical jaccard vs the profile (2/6 = 0.333) and no
-    // coords, so vibe and proximity tie. Only lovedTags differ.
-    const matchesLoved = makeBar({
-      id: 'matchesLoved',
+  it('learned taste breaks ties between bars with identical quiz overlap', () => {
+    // Both candidates have identical jaccard vs the profile and no coords, so
+    // the quiz prior ties them. Only learned taste — a high score on a bar
+    // carrying 'rough' — separates them.
+    const matchesTaste = makeBar({
+      id: 'matchesTaste',
       tags: ['cocktail', 'speakeasy', 'dive', 'rough'],
     });
-    const noLovedOverlap = makeBar({
-      id: 'noLovedOverlap',
+    const noTasteOverlap = makeBar({
+      id: 'noTasteOverlap',
       tags: ['cocktail', 'speakeasy', 'dive', 'cheap'],
     });
+    const seed = makeBar({ id: 'seed', tags: ['rough'] });
     const result = matches({
       profile,
       coords: null,
       preferredNeighborhoods: [],
       maxMiles: null,
-      bars: [noLovedOverlap, matchesLoved],
-      lovedTags: ['dive', 'rough', 'old-nyc'],
+      bars: [noTasteOverlap, matchesTaste],
+      taste: deriveLearnedTaste(
+        [{ barId: 'seed', rating: 'loved', ratedAt: NOW.toISOString(), score: 10 }],
+        [seed],
+      ),
       now: NOW,
     });
-    expect(result.map((b) => b.id)).toEqual(['matchesLoved', 'noLovedOverlap']);
+    expect(result.map((b) => b.id)).toEqual(['matchesTaste', 'noTasteOverlap']);
   });
 
   it('omitting lovedTags is a no-op (backward compatible)', () => {
@@ -392,14 +400,14 @@ describe('matches() — blended ranking (vibe + proximity + loved affinity)', ()
       id: 'b',
       tags: ['cocktail', 'speakeasy', 'dive', 'cheap'],
     });
-    // Equal vibe, no coords, no lovedTags → stable order, neither boosted.
+    // Equal vibe, no coords, no learned taste → stable order, neither boosted.
     const withLoved = matches({
       profile,
       coords: null,
       preferredNeighborhoods: [],
       maxMiles: null,
       bars: [a, b],
-      lovedTags: [],
+      taste: EMPTY_TASTE,
       now: NOW,
     });
     const withoutLoved = matches({
@@ -411,43 +419,6 @@ describe('matches() — blended ranking (vibe + proximity + loved affinity)', ()
       now: NOW,
     });
     expect(withLoved.map((x) => x.id)).toEqual(withoutLoved.map((x) => x.id));
-  });
-});
-
-describe('scoreBar', () => {
-  const makeBar = (tags: VibeTag[], lat = 40.755, lng = -73.984): Bar => ({
-    id: 's',
-    name: 'S',
-    neighborhood: 'Midtown',
-    address: '1 Main St',
-    lat,
-    lng,
-    priceTier: 2,
-    tags,
-    blurb: 'A bar.',
-    lastVerified: FRESH,
-  });
-  const userTags: VibeTag[] = ['cocktail', 'speakeasy', 'polished', 'industry'];
-
-  it('with no coords, score = VIBE_WEIGHT·jaccard + DIST_WEIGHT (proximity=1)', () => {
-    // jaccard = 1.0 → 0.5·1 + 0.4·1 + 0 = 0.9
-    const score = scoreBar(makeBar(userTags), userTags, null, []);
-    expect(score).toBeCloseTo(0.9, 10);
-  });
-
-  it('proximity decays with distance so a closer equal-vibe bar scores higher', () => {
-    const origin = { lat: 40.755, lng: -73.984 };
-    const near = scoreBar(makeBar(userTags, 40.7551), userTags, origin, []);
-    const far = scoreBar(makeBar(userTags, 40.764), userTags, origin, []);
-    expect(near).toBeGreaterThan(far);
-    expect(near).toBeLessThanOrEqual(0.9); // never exceeds the no-distance-penalty max
-  });
-
-  it('stays within [0, 1] even at max vibe, zero distance, full loved affinity', () => {
-    const origin = { lat: 40.755, lng: -73.984 };
-    const score = scoreBar(makeBar(userTags), userTags, origin, userTags);
-    expect(score).toBeGreaterThanOrEqual(0);
-    expect(score).toBeLessThanOrEqual(1);
   });
 });
 
@@ -715,5 +686,182 @@ describe('late-night bias (operator 2026-07-27: clubs up, restaurants down after
 
   it('a broken clock gets no night bias rather than a wrong one', () => {
     expect(isLateNight(new Date('not a date'))).toBe(false);
+  });
+});
+
+describe('matches() — V8 distance-band cascade', () => {
+  // Latitude offsets from the origin, converted to miles by haversine:
+  // ~0.0145 deg lat ~= 1 mile. Bands reuse RADIUS_WALK (1.5) / RADIUS_CAB (4).
+  const ORIGIN = { lat: 40.7550, lng: -73.9840 };
+  const atMiles = (id: string, miles: number, tags: VibeTag[] = ['dive']) =>
+    makeBar({ id, tags, lat: ORIGIN.lat + miles / 69, lng: ORIGIN.lng });
+
+  const profile = baseProfile(['dive']);
+  const run = (bars: Bar[], maxResults = 5) =>
+    matches({
+      profile,
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars,
+      maxResults,
+      now: NOW,
+    }).map((b) => b.id);
+
+  it('fills all five slots from the walk band when it can', () => {
+    const near = [0.2, 0.4, 0.6, 0.8, 1.0].map((m, i) => atMiles(`near${i}`, m));
+    const cab = [2, 2.5, 3].map((m, i) => atMiles(`cab${i}`, m));
+    const far = [5, 6].map((m, i) => atMiles(`far${i}`, m));
+    const ids = run([...far, ...cab, ...near]);
+    expect(ids).toHaveLength(5);
+    expect(ids.every((id) => id.startsWith('near'))).toBe(true);
+  });
+
+  it('expands into the cab band ONLY when the walk band cannot fill', () => {
+    const near = [0.5, 1.0].map((m, i) => atMiles(`near${i}`, m));
+    const cab = [2, 2.5, 3, 3.5].map((m, i) => atMiles(`cab${i}`, m));
+    const ids = run([...cab, ...near]);
+    expect(ids).toHaveLength(5);
+    expect(ids.slice(0, 2).sort()).toEqual(['near0', 'near1']);
+    expect(ids.slice(2).every((id) => id.startsWith('cab'))).toBe(true);
+  });
+
+  it('expands to the outer band only after walk AND cab are exhausted', () => {
+    const near = [atMiles('near0', 1.0)];
+    const cab = [atMiles('cab0', 3.0)];
+    const far = [8, 9, 10].map((m, i) => atMiles(`far${i}`, m));
+    const ids = run([...far, ...cab, ...near]);
+    expect(ids.slice(0, 2)).toEqual(['near0', 'cab0']);
+    expect(ids.slice(2).every((id) => id.startsWith('far'))).toBe(true);
+  });
+
+  it('treats the band edges as inclusive upper bounds (<= 1.5 walks, <= 4 cabs)', () => {
+    const onWalkEdge = atMiles('walk-edge', 1.49);
+    const justOver = atMiles('cab-side', 1.55);
+    const ids = run([justOver, onWalkEdge], 1);
+    expect(ids).toEqual(['walk-edge']);
+  });
+
+  it('orders WITHIN a band by learned taste, not by distance', () => {
+    // Both in the walk band. The farther bar carries the tag the user scores
+    // highly, so taste must beat proximity inside the band.
+    const closeBland = atMiles('close-bland', 0.2, ['cheap']);
+    const fartherLoved = atMiles('farther-loved', 1.2, ['club']);
+    const ids = matches({
+      profile: baseProfile([]),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [closeBland, fartherLoved],
+      maxResults: 2,
+      taste: deriveLearnedTaste(
+        Array.from({ length: 40 }, (_, i) => ({
+          barId: `seed${i}`,
+          rating: 'loved' as const,
+          ratedAt: NOW.toISOString(),
+          score: 10,
+        })),
+        Array.from({ length: 40 }, (_, i) => makeBar({ id: `seed${i}`, tags: ['club'] })),
+      ),
+      now: NOW,
+    }).map((b) => b.id);
+    expect(ids).toEqual(['farther-loved', 'close-bland']);
+  });
+
+  it('a full nearer band EXCLUDES a much better-tasting farther bar', () => {
+    // Codex review: the fill tests above hold taste constant across bands, so
+    // a "rank globally by taste" implementation would also pass them. This is
+    // the clause that actually separates the cascade from a global sort — the
+    // walk band is full of bars the user has scored BADLY, and a strongly
+    // loved bar sits in the cab band. Distance band still wins.
+    const hated = deriveLearnedTaste(
+      [
+        ...Array.from({ length: 40 }, (_, i) => ({
+          barId: `bad${i}`,
+          rating: 'pass',
+          ratedAt: NOW.toISOString(),
+          score: 1,
+        })),
+        ...Array.from({ length: 40 }, (_, i) => ({
+          barId: `good${i}`,
+          rating: 'loved',
+          ratedAt: NOW.toISOString(),
+          score: 10,
+        })),
+      ] as BarRating[],
+      [
+        ...Array.from({ length: 40 }, (_, i) => makeBar({ id: `bad${i}`, tags: ['cheap'] })),
+        ...Array.from({ length: 40 }, (_, i) => makeBar({ id: `good${i}`, tags: ['club'] })),
+      ],
+    );
+    const walkBand = [0.2, 0.4, 0.6, 0.8, 1.0].map((m, i) =>
+      atMiles(`near${i}`, m, ['cheap']),
+    );
+    const belovedButFar = atMiles('beloved-far', 3.5, ['club']);
+    const ids = matches({
+      profile: baseProfile([]),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [belovedButFar, ...walkBand],
+      maxResults: 5,
+      taste: hated,
+      now: NOW,
+    }).map((b) => b.id);
+    expect(ids).toHaveLength(5);
+    expect(ids).not.toContain('beloved-far');
+    expect(ids.every((id) => id.startsWith('near'))).toBe(true);
+  });
+
+  it('learned evidence eventually overrides a conflicting quiz prior', () => {
+    // Cold-start clause: c = N/(N+10). The quiz says 'cheap'; 40 scored
+    // ratings say 'club'. Same band, so only the blend decides.
+    const clubLover = deriveLearnedTaste(
+      Array.from({ length: 40 }, (_, i) => ({
+        barId: `s${i}`,
+        rating: 'loved' as const,
+        ratedAt: NOW.toISOString(),
+        score: 10,
+      })),
+      Array.from({ length: 40 }, (_, i) => makeBar({ id: `s${i}`, tags: ['club'] })),
+    );
+    const quizPick = atMiles('quiz-pick', 0.5, ['cheap']);
+    const tastePick = atMiles('taste-pick', 0.6, ['club']);
+    const args = {
+      profile: baseProfile(['cheap']),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars: [quizPick, tastePick],
+      maxResults: 2,
+      now: NOW,
+    };
+    // Cold start (no history): the quiz prior alone decides.
+    expect(matches(args).map((b) => b.id)[0]).toBe('quiz-pick');
+    // With history: learned taste overtakes it.
+    expect(matches({ ...args, taste: clubLover }).map((b) => b.id)[0]).toBe(
+      'taste-pick',
+    );
+  });
+
+  it('uses exact miles ONLY as the final tie-breaker', () => {
+    // Identical tags => identical taste and prior => only miles separate them.
+    const farther = atMiles('farther', 1.2);
+    const closer = atMiles('closer', 0.3);
+    expect(run([farther, closer], 2)).toEqual(['closer', 'farther']);
+  });
+
+  it('falls back to a single band when there are no coords', () => {
+    const bars = [atMiles('a', 0.5), atMiles('b', 9)];
+    const ids = matches({
+      profile,
+      coords: null,
+      preferredNeighborhoods: [],
+      maxMiles: null,
+      bars,
+      maxResults: 5,
+      now: NOW,
+    }).map((b) => b.id);
+    expect(ids.sort()).toEqual(['a', 'b']);
   });
 });

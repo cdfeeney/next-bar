@@ -1,7 +1,44 @@
 # Next Bar — agent operating notes
 
-Project context lives in `docs/PRD.md`, `docs/PRD-v0.3.1.md`, `docs/PRD-v0.5.md`,
-and `docs/ARCHITECTURE-v0.2.md`. Read those before making non-trivial changes.
+Stable repository rules live here. Current product behavior lives in
+`docs/V8-PRD-2026-08-13.md` and its explicitly linked decision records.
+`docs/PRD.md`, `docs/PRD-v0.3.1.md`, `docs/PRD-v0.5.md`, and
+`docs/ARCHITECTURE-v0.2.md` are historical reference unless the current V8 PRD
+explicitly adopts a rule from them.
+
+## Instruction precedence
+
+Use this order when sources disagree:
+
+1. Direct operator instruction.
+2. Current V8 PRD and decisions marked APPROVED.
+3. The task's acceptance criteria.
+4. Existing implementation and tests, as evidence of current behavior—not
+   automatic product authority.
+5. Older PRDs, handoffs, comments, and proposals.
+
+When two sources at the same level conflict, stop and report the conflict.
+Do not silently invent a product decision.
+
+## V8 product boundaries
+
+- `rank` means ordering recommendations; `rate` means entering a personal
+  score.
+- Next Bar? displays five ranked bars but never collects a rating, score, pass,
+  or hide action. Do not add rating controls to that surface.
+- V8 Rankings uses one numeric personal score from 1.0–10.0. Loved/Liked/Pass
+  are legacy implementation concepts, not the V8 product model.
+- There is no Hide or “never show me this again” control in V8.
+- A low score does not suppress a bar (Option B, resolved 2026-08-19). Scores
+  below 5.0 no longer exclude a bar from Next Bar?; they are negative evidence
+  only. Do not reintroduce rating-based exclusion.
+- The V8 ranker uses distance bands, learned numeric taste, and exact miles
+  only as the final tie-breaker. Quiz tags are cold-start input, not a
+  permanent weighted term or admission gate.
+
+Advisor/driver boundary: the advisor reads, verifies, and specifies; the
+driver implements the assigned task. A session must not turn a proposal into
+an approved feature without operator confirmation.
 
 ## The standard gate — `test:e2e` is part of it
 
@@ -134,8 +171,8 @@ a `0020` and a `0021`; ours were renumbered to `0043`/`0044` to clear it.
 - **5-tab bottom nav** (Next Bar? · Map · Rankings · Friends · Settings) is
   hidden on `/install`, `/join`, `/api/*` only. If you add a new tool route,
   decide explicitly whether it gets a tab or sits outside the nav.
-- **Ratings are 3-tier** (Loved · Liked · Pass) in code even though PRD-v0.3.1
-  reads 4-tier. Don't reintroduce "Meh" without explicit confirmation.
+- **Legacy rating tiers remain in code during migration.** Do not treat them as
+  the V8 product contract, and do not add new tier UI.
 - **Pre-existing dev-server cold-compile flake** on `/quiz` is documented in
   memory. Don't try to "fix" it by adding waits or restructuring — it's a
   Next.js dev artifact, not a product bug.

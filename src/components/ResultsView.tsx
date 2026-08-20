@@ -10,6 +10,7 @@ import type {
 } from '@/types';
 import { useBars } from '@/lib/useBars';
 import { excludeClosedBars } from '@/lib/openNow';
+import { deriveLearnedTaste } from '@/lib/tasteAffinity';
 import { matches } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
@@ -102,29 +103,17 @@ export default function ResultsView({
     [bars, hideClosedNow, filterNow],
   );
 
-  const effectiveExcludeIds = useMemo(() => {
-    const merged = new Set(excludeIds ?? []);
-    for (const r of ratings) {
-      if (r.rating === 'pass') merged.add(r.barId);
-    }
-    return Array.from(merged);
-  }, [excludeIds, ratings]);
+  // V8 (Option B, resolved 2026-08-19): a low score is negative evidence, not
+  // an exclusion. Only caller-supplied excludeIds (tonight-exclusion, manual)
+  // suppress a bar — never a rating tier.
+  const effectiveExcludeIds = useMemo(() => excludeIds ?? [], [excludeIds]);
 
-  // Flatten the vibe tags of every bar the user has Loved, so matches() can
-  // nudge bars with a similar taste profile up the rank (loved-affinity term).
-  const lovedTags = useMemo(() => {
-    const lovedBarIds = new Set(
-      ratings.filter((r) => r.rating === 'loved').map((r) => r.barId),
-    );
-    if (lovedBarIds.size === 0) return [] as VibeTag[];
-    const tags = new Set<VibeTag>();
-    for (const b of bars) {
-      if (lovedBarIds.has(b.id)) {
-        for (const t of b.tags) tags.add(t);
-      }
-    }
-    return Array.from(tags);
-  }, [ratings, bars]);
+  // V8 P1: graded learned taste from numeric scores, replacing the old
+  // Set-of-loved-tags term (under which one Loved bar equalled two hundred).
+  const taste = useMemo(
+    () => deriveLearnedTaste(ratings, bars),
+    [ratings, bars],
+  );
 
   const ranked = useMemo(
     () =>
@@ -137,12 +126,12 @@ export default function ResultsView({
         bars: pool,
         excludeIds: effectiveExcludeIds,
         maxResults,
-        lovedTags,
+        taste,
         // Late-night bias rides the SAME live clock as the open-now
         // filter — quiz/planning surfaces (no hideClosedNow) never bias.
         biasNow: filterNow ?? undefined,
       }),
-    [profile, userCoords, preferredNeighborhoods, minMilesExclusive, maxMiles, pool, effectiveExcludeIds, maxResults, lovedTags, filterNow],
+    [profile, userCoords, preferredNeighborhoods, minMilesExclusive, maxMiles, pool, effectiveExcludeIds, maxResults, taste, filterNow],
   );
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own
