@@ -97,6 +97,46 @@ describe('checkRevertFile', () => {
     expect(checkRevertFile("BEGIN;\nSELECT 'BEGIN; COMMIT;';\nCOMMIT;\n")).toBeNull();
   });
 
+  // Round-2 panel, BOTH lanes, HIGH. The ROLLBACK refusal was the one check
+  // reading TEXT rather than the statement list, so whitespace defeated it
+  // while every structural check still passed - the file was signed off as one
+  // transaction and its tail statements committed on their own.
+  it('refuses an INDENTED rollback, not just one at column zero', () => {
+    expect(checkRevertFile('BEGIN;\n  ROLLBACK;\nCOMMIT;\n')).toMatch(/is ROLLBACK/);
+  });
+
+  it('refuses a rollback that follows another statement on the same line', () => {
+    expect(checkRevertFile('BEGIN;\nSELECT 1; ROLLBACK;\nCOMMIT;\n')).toMatch(/is ROLLBACK/);
+  });
+
+  it('refuses the full split-state shape: rollback, then a ledger delete, then commit', () => {
+    const sql = [
+      'BEGIN READ WRITE;',
+      'DROP FUNCTION IF EXISTS public.x();',
+      '  ROLLBACK;',
+      "DELETE FROM public.schema_migrations WHERE name = '0064_friend_ratings_score.sql';",
+      'COMMIT;',
+    ].join('\n');
+    expect(checkRevertFile(sql)).toMatch(/is ROLLBACK/);
+  });
+
+  // Round-2 panel, Codex MEDIUM. E'...' honours backslash escapes, so a \'
+  // inside one does NOT end the string. Reading it like an ordinary string ended
+  // it early and swallowed the rest of the file, wrongly REFUSING a valid
+  // rollback - fail-closed, but a rollback refused mid-incident is its own hazard.
+  it('does not end an E-string at an escaped quote', () => {
+    const sql = [
+      'BEGIN READ WRITE;',
+      "SELECT E'it\\'s fine; COMMIT;';",
+      'COMMIT;',
+    ].join('\n');
+    expect(checkRevertFile(sql)).toBeNull();
+  });
+
+  it('still ends an ORDINARY string at a doubled quote, where backslash is literal', () => {
+    expect(checkRevertFile("BEGIN;\nSELECT 'it''s fine';\nCOMMIT;\n")).toBeNull();
+  });
+
   it('refuses a file containing ROLLBACK, whose outcome depends on a branch', () => {
     expect(checkRevertFile('BEGIN;\nROLLBACK;\nCOMMIT;\n')).toMatch(/ROLLBACK/);
   });

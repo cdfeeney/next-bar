@@ -94,9 +94,17 @@ export function stripNonCode(sql: string): string {
       out += ' ';
       continue;
     }
-    if (rest.startsWith("'")) {
-      i += 1;
+    // An E-prefixed string honours BACKSLASH escapes, so ' does not end it,
+    // while an ordinary string ends at the first unpaired quote and treats a
+    // backslash as an ordinary character. Reading both the same way ended an
+    // E-string early and swallowed the rest of the file, which could wrongly
+    // REFUSE a legitimate rollback (round-2 panel, Codex MEDIUM). Fail-closed,
+    // but a rollback refused mid-incident is its own hazard.
+    const escaped = /^E'/i.test(rest);
+    if (escaped || rest.startsWith("'")) {
+      i += escaped ? 2 : 1;
       while (i < sql.length) {
+        if (escaped && sql[i] === '\\') { i += 2; continue; }
         if (sql[i] === "'" && sql[i + 1] === "'") { i += 2; continue; }
         if (sql[i] === "'") { i += 1; break; }
         i += 1;
@@ -165,8 +173,19 @@ export function checkRevertFile(sql: string): string | null {
     return `${JSON.stringify(statements[statements.length - 1].slice(0, 60))} follows COMMIT, so it would `
       + 'run outside the transaction and commit on its own.';
   }
-  if (/^ROLLBACK\b/im.test(stripNonCode(sql))) {
-    return 'the file contains ROLLBACK, so what it commits depends on which branch runs.';
+  // STATEMENT-LEVEL, like every other check here. This one used to test the
+  // stripped TEXT with a line-anchored regex, so an indented or mid-line
+  // ROLLBACK sailed through while first-is-BEGIN, last-is-COMMIT and the
+  // one-each counts all passed (round-2 panel, BOTH lanes, HIGH). The file was
+  // then signed off as one transaction, and the statements after the ROLLBACK
+  // ran in a fresh implicit transaction that commits at end-of-message: the
+  // ledger DELETE lands while the body restore is rolled back, which is the
+  // precise split state this guard exists to prevent. It is the same defect as
+  // the round-1 'statement after COMMIT' HIGH, wearing whitespace.
+  const rolledBack = statements.findIndex((statement) => /^ROLLBACK\b/i.test(statement));
+  if (rolledBack !== -1) {
+    return `statement ${rolledBack + 1} is ROLLBACK, so what this file commits depends on which `
+      + 'branch runs, and anything after it commits on its own.';
   }
   return null;
 }
