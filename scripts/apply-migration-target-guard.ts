@@ -82,7 +82,11 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
     if (ref !== productionRef) {
       return '--env production, but DATABASE_URL does not point at the production project ref';
     }
-    return null;
+    // The database check belongs here TOO, and leaving it to the staging path
+    // below put the hole on the most dangerous route (round-4 panel, Codex,
+    // HIGH): a production ref reaching a second database inside the production
+    // project was accepted by every caller of this shared guard.
+    return checkDatabaseName(target.database, target.expectedDatabase, env);
   }
 
   if (ref === productionRef) {

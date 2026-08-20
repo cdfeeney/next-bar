@@ -32,19 +32,19 @@
  */
 
 import { config as loadEnv } from 'dotenv';
-import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Client } from 'pg';
 
 import { authorizeMigrationTarget, redactUrl } from './apply-migration-target-guard';
 import { resolveTarget } from './lib/migration-target-guard';
-
-/** A psql client metacommand. The server rejects these, so a file carrying one is psql-only. */
-const METACOMMAND = 92; // '\'
+import { checksumOfSql } from '../src/lib/effectiveMigration';
 
 function fail(message: string): never {
-  console.error(`\n[revert] ${message}\n`);
+  console.error(`
+[revert] ${message}
+`);
   process.exit(1);
 }
 
@@ -67,147 +67,96 @@ function parseArgs(argv: string[]): { env: string; execute: boolean; file: strin
 }
 
 /**
- * Strips what SQL says is not code, so the transaction check reads STATEMENTS
- * rather than text. Without this, a `BEGIN` inside a comment or a dollar-quoted
- * function body counts as a transaction. The first version of this file shipped
- * exactly that bug, and a reviewer found it: a file reading BEGIN, COMMIT, then
- * a DELETE passed the check, and the trailing DELETE would have committed on
- * its own — the very ledger/body split the guard claims to prevent.
+ * THE REVERT FILES THIS RUNNER MAY EXECUTE, pinned by content.
+ *
+ * This replaced a hand-written SQL lexer, and the reason is worth keeping. The
+ * runner used to try to PROVE, by parsing, that an arbitrary file was one
+ * transaction and nothing else. Four consecutive review rounds each found a
+ * different way past it: a statement after COMMIT, an indented ROLLBACK, ABORT
+ * and END as synonyms, an apostrophe inside a double-quoted identifier, a
+ * non-ASCII dollar-quote tag, BEGIN ATOMIC routine bodies. That is not a run of
+ * bad luck; statically validating arbitrary SQL needs a real parser, and a
+ * safety check that is itself a homemade parser is a liability on a T0 rollback
+ * path.
+ *
+ * So the runner no longer asks what the file MEANS. It asks whether the file is
+ * one a human reviewed and pinned. Content that does not match its pin is
+ * refused before a connection is even opened, which makes every lexical edge
+ * case irrelevant: a file the reviewers read cannot change under them, and a
+ * file they never read cannot run at all.
+ *
+ * Adding an entry is deliberately a code change, so it goes through review.
+ *
+ * NORMALISED (CRLF folded, trailing whitespace trimmed) rather than raw bytes,
+ * using the repository's own `checksumOfSql`: this checkout is `core.autocrlf`,
+ * so a raw-byte pin would match on the machine that wrote it and fail on every
+ * fresh clone - a guard nobody can satisfy is a guard that gets deleted. Any
+ * change to the file's CONTENT, down to one byte, still fails it.
  */
-export function stripNonCode(sql: string): string {
-  let out = '';
-  let i = 0;
-  while (i < sql.length) {
-    const rest = sql.slice(i);
-    if (rest.startsWith('--')) {
-      const nl = sql.indexOf('\n', i);
-      i = nl === -1 ? sql.length : nl;
-      continue;
-    }
-    if (rest.startsWith('/*')) {
-      // Postgres block comments nest, so a depth counter is required.
-      let depth = 1;
-      i += 2;
-      while (i < sql.length && depth > 0) {
-        if (sql.startsWith('/*', i)) { depth += 1; i += 2; } else if (sql.startsWith('*/', i)) { depth -= 1; i += 2; } else i += 1;
-      }
-      out += ' ';
-      continue;
-    }
-    // An E-prefixed string honours BACKSLASH escapes, so ' does not end it,
-    // while an ordinary string ends at the first unpaired quote and treats a
-    // backslash as an ordinary character. Reading both the same way ended an
-    // E-string early and swallowed the rest of the file, which could wrongly
-    // REFUSE a legitimate rollback (round-2 panel, Codex MEDIUM). Fail-closed,
-    // but a rollback refused mid-incident is its own hazard.
-    const escaped = /^E'/i.test(rest);
-    if (escaped || rest.startsWith("'")) {
-      i += escaped ? 2 : 1;
-      while (i < sql.length) {
-        if (escaped && sql[i] === '\\') { i += 2; continue; }
-        if (sql[i] === "'" && sql[i + 1] === "'") { i += 2; continue; }
-        if (sql[i] === "'") { i += 1; break; }
-        i += 1;
-      }
-      out += " '' ";
-      continue;
-    }
-    // A double-quoted IDENTIFIER is not a string, and an apostrophe inside one
-    // is just a character. Skipping this made "a'b" open a phantom string:
-    // one such identifier swallowed the file's COMMIT and wrongly refused SQL
-    // the server runs fine, and TWO re-synced quote parity while hiding every
-    // statement between them - including a ROLLBACK (round-3 panel, both
-    // lanes). U&"..." is the same construct with a prefix.
-    const identifier = /^(U&)?"/i.exec(rest);
-    if (identifier) {
-      i += identifier[0].length;
-      while (i < sql.length) {
-        if (sql[i] === '"' && sql[i + 1] === '"') { i += 2; continue; }
-        if (sql[i] === '"') { i += 1; break; }
-        i += 1;
-      }
-      out += ' "" ';
-      continue;
-    }
-    const dollar = /^\$[A-Za-z_0-9]*\$/.exec(rest);
-    if (dollar) {
-      const tag = dollar[0];
-      const close = sql.indexOf(tag, i + tag.length);
-      i = close === -1 ? sql.length : close + tag.length;
-      out += ' $$ ';
-      continue;
-    }
-    out += sql[i];
-    i += 1;
-  }
-  return out;
-}
+const PINNED_REVERTS: Record<string, string> = {
+  'revert-0064-transaction.sql':
+    '8d3f2c92a88d971882c6aeb41e40ed33f84910aea0f22ee6294ff208cef73962',
+};
+
+/** The migration number a revert file undoes, from its name. */
+const REVERT_NAME = /^revert-(\d{4})-transaction\.sql$/;
+/** The migration checksum a revert file pins in its own preconditions. */
+const PINNED_MIGRATION = /AND\s+checksum\s*=\s*'([0-9a-f]{64})'/i;
 
 /**
- * The file must be ONE explicit transaction and nothing else. A revert that
- * half-applies is the split state every revert file in this repository is
- * written to prevent: the ledger row gone while the bodies are still the new
- * ones, or the reverse. Anything after COMMIT would run outside that
- * transaction and commit on its own, which is the same failure wearing a
- * different shape.
+ * Both checksums, checked BEFORE any connection is opened.
  *
- * `BEGIN READ WRITE` is what the files use, because the Supabase transaction
- * pooler hands out a pinned backend whose session can carry
- * `default_transaction_read_only=on`.
+ * Two different questions. The revert pin answers 'is this the file that was
+ * reviewed?'. The migration pin answers 'does this revert still describe the
+ * migration it claims to undo?' - the revert refuses in-database on that same
+ * value, but finding out here means an operator learns it before a connection
+ * rather than from an aborted transaction.
  */
-export function checkRevertFile(sql: string): string | null {
-  const lines = sql.split(/\r?\n/);
-  const meta = lines.findIndex((line) => line.charCodeAt(0) === METACOMMAND);
-  if (meta !== -1) {
-    return `line ${meta + 1} is a psql metacommand (${JSON.stringify(lines[meta].trim())}), which the `
-      + 'server rejects as a syntax error. A revert file must be plain SQL so every client can run it '
-      + 'verbatim; put client options on the psql command line instead.';
+export function checkPinned(
+  fileName: string,
+  revertSql: string,
+  readMigration: (name: string) => string | null,
+  // Injectable ONLY so the migration-pin branch can be tested without
+  // mutating the shipped map. Callers use the default.
+  pins: Record<string, string> = PINNED_REVERTS,
+): string | null {
+  const pinned = pins[fileName];
+  if (pinned === undefined) {
+    return `${fileName} is not a pinned revert file. Every file this runner executes is `
+      + 'pinned by content in PINNED_REVERTS, so adding one is a reviewed code change. '
+      + 'Run an unpinned revert with psql, having verified the target yourself.';
+  }
+  const actual = checksumOfSql(revertSql);
+  if (actual !== pinned) {
+    return `${fileName} does not match its pinned content (pinned ${pinned.slice(0, 16)}…, `
+      + `found ${actual.slice(0, 16)}…). It has been edited since it was reviewed; re-read it, `
+      + 'then update the pin in the same commit.';
   }
 
-  const statements = stripNonCode(sql)
-    .split(';')
-    .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0);
-
-  if (statements.length === 0) return 'the file contains no SQL statements.';
-
-  // AN ALLOWLIST, not a blocklist, and that is the lesson of three rounds.
-  // Round 2 found a statement after COMMIT; round 3 found the same hazard
-  // wearing whitespace (an indented ROLLBACK); round 3's panel then found it
-  // wearing a synonym (ABORT, and END which commits early). Enumerating what
-  // must not appear loses that race by construction, because Postgres has more
-  // spellings than a reviewer can list. So: exactly one transaction-control
-  // statement is permitted at the front, exactly one at the back, and ANY
-  // other transaction-control statement anywhere in the file is refused,
-  // whatever it is called.
-  const TXN_CONTROL = /^(BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b/i;
-  const OPENS = /^(BEGIN|START\s+TRANSACTION)\b/i;
-  // END is COMMIT's documented synonym, so it is a legitimate closer.
-  const CLOSES = /^(COMMIT|END)\b(?!\s*PREPARED)/i;
-
-  if (!OPENS.test(statements[0])) {
-    return `the first statement is not BEGIN (${JSON.stringify(statements[0].slice(0, 60))}), so it `
-      + 'would run outside the transaction.';
+  const number = REVERT_NAME.exec(fileName)?.[1];
+  if (number === undefined) return `${fileName} is not a revert-NNNN-transaction.sql name`;
+  const migrationPin = PINNED_MIGRATION.exec(revertSql)?.[1];
+  if (migrationPin === undefined) {
+    return `${fileName} pins no migration checksum, so it cannot prove which migration it undoes`;
   }
-  const last = statements[statements.length - 1];
-  if (!CLOSES.test(last)) {
-    return `the last statement is not COMMIT (${JSON.stringify(last.slice(0, 60))}), so the file `
-      + 'either never commits or commits before its end.';
+  const migrationSql = readMigration(number);
+  if (migrationSql === null) {
+    return `no migration file numbered ${number} was found for ${fileName}`;
   }
-  if (statements.length < 2) {
-    return 'the file opens and closes a transaction with nothing inside it.';
-  }
-
-  const stray = statements.slice(1, -1).findIndex((statement) => TXN_CONTROL.test(statement));
-  if (stray !== -1) {
-    const statement = statements[stray + 1];
-    return `statement ${stray + 2} is transaction control `
-      + `(${JSON.stringify(statement.slice(0, 40))}), so this file is not one transaction: `
-      + 'everything after it commits or rolls back on its own.';
+  const migrationActual = checksumOfSql(migrationSql);
+  if (migrationActual !== migrationPin) {
+    return `${fileName} pins migration checksum ${migrationPin.slice(0, 16)}… but ${number} `
+      + `checksums to ${migrationActual.slice(0, 16)}…, so this revert no longer describes it`;
   }
   return null;
 }
 
+/** Reads the migration numbered `number`, or null when there is none. */
+function migrationByNumber(number: string): string | null {
+  const dir = resolve(process.cwd(), 'supabase', 'migrations');
+  const found = readdirSync(dir).find((n) => n.startsWith(`${number}_`) && n.endsWith('.sql'));
+  return found ? readFileSync(join(dir, found), 'utf8') : null;
+}
 async function main(): Promise<void> {
   const { env, execute, file, secretsFile } = parseArgs(process.argv.slice(2));
 
@@ -246,8 +195,12 @@ async function main(): Promise<void> {
   const path = isAbsolute(file) ? file : resolve(process.cwd(), file);
   if (!existsSync(path)) fail(`${path} does not exist`);
   const sql = readFileSync(path, 'utf8');
-  const shapeProblem = checkRevertFile(sql);
-  if (shapeProblem !== null) fail(`refusing ${path}: ${shapeProblem}`);
+  // BEFORE the connection, deliberately: a file that is not the reviewed one
+  // should never reach a database at all, not even to be refused by its own
+  // preconditions.
+  const pinProblem = checkPinned(basename(path), sql, migrationByNumber);
+  if (pinProblem !== null) fail(`refusing ${path}: ${pinProblem}`);
+  console.log(`[revert] pinned   : content and migration checksums verified before connecting`);
 
   const client = new Client(target.clientConfig);
   await client.connect();

@@ -208,14 +208,31 @@ on 2026-08-20 (checked: not on PATH, no `C:\Program Files\PostgreSQL`, no
 Supabase CLI), which is what made the missing runner urgent rather than
 theoretical.
 
-**The runner does not cover `0059`, deliberately.** `revert-0059-transaction.sql`
-pulls in `REVERT-0059-staging-20260817.sql` with `\ir`, which only psql resolves,
-and that include carries the body restore — sending the file through any other
-client would run a transaction missing half its work. The runner refuses it up
-front on the metacommand check, and `0059` keeps psql as its path of record with
-the connection-layer guards enforced by hand. `scripts/revert-migration.test.ts`
-pins that split, so adding a revert file forces a deliberate choice about which
-path it takes.
+**The runner executes only files it has PINNED, and `0059` is not one.** It does
+not inspect what a revert file does — it checks that the file is byte-for-byte
+the one that was reviewed, against a checksum in `PINNED_REVERTS`, and refuses
+anything else before opening a connection. Adding a file to that map is a code
+change, so it goes through review like any other.
+
+That replaced a hand-written SQL lexer, and the reason is worth recording.
+The runner used to PROVE, by parsing, that a file was one transaction and
+nothing else. Four consecutive review rounds each found a different way past it:
+a statement after `COMMIT`, an indented `ROLLBACK`, `ABORT` and `END` as
+synonyms, an apostrophe inside a double-quoted identifier, a non-ASCII
+dollar-quote tag, `BEGIN ATOMIC` routine bodies. Statically validating arbitrary
+SQL needs a real parser, and a safety check that is itself a homemade parser is
+a liability on the one path you reach for under pressure. Pinning makes every
+lexical edge case irrelevant: a reviewed file cannot change under its reviewers,
+and an unreviewed file cannot run at all.
+
+`0059` therefore keeps psql as its path of record — which it needed anyway,
+because its load-bearing `\ir` include only psql resolves — with the
+connection-layer guards enforced by hand.
+
+The runner also re-checks, before connecting, that the revert still pins the
+current checksum of the migration it undoes. The revert refuses in-database on
+that same value; doing it here means an operator learns it before a connection
+exists rather than from an aborted transaction.
 
 The script's own preconditions then refuse unless the ledger row for `0064`
 carries this migration's checksum AND the live `get_friend_ratings()` still

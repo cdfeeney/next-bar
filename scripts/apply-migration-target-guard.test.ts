@@ -149,6 +149,31 @@ describe('checkDatabaseName', () => {
 // The same check reached through checkMigrationTarget, which is what both the
 // applier and the live-suite guard actually call.
 describe('checkMigrationTarget with a database', () => {
+  it('checks the database on the PRODUCTION path too', () => {
+    // Round-4 panel, Codex, HIGH. The production branch returned as soon as the
+    // ref matched, so a production ref reaching a second database inside the
+    // production project was accepted - the hole sat on the most dangerous route.
+    expect(checkMigrationTarget({
+      env: 'production',
+      ref: PROD,
+      productionRef: PROD,
+      stagingRefs: [STAGING],
+      database: 'shadow',
+      expectedDatabase: 'postgres',
+    })).toContain('rather than the expected');
+  });
+
+  it('still accepts a correct production target', () => {
+    expect(checkMigrationTarget({
+      env: 'production',
+      ref: PROD,
+      productionRef: PROD,
+      stagingRefs: [STAGING],
+      database: 'postgres',
+      expectedDatabase: 'postgres',
+    })).toBeNull();
+  });
+
   it('refuses an otherwise-perfect staging target on the wrong database', () => {
     expect(checkMigrationTarget({
       env: 'staging',

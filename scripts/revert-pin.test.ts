@@ -1,79 +1,102 @@
 /**
- * revert-pin.test.ts — the pinned checksum in a revert script must equal the
- * migration it reverts.
+ * revert-pin.test.ts — the two checksums the revert runner verifies before it
+ * opens a database connection.
  *
- * WHY. revert-0064-transaction.sql refuses unless the ledger row for 0064
- * carries that migration's checksum, which is the strongest target check
- * available from inside SQL. The cost of that strength is a constant that has to
- * be kept true by hand, and the next legitimate edit to 0064 strands it silently.
- * The revert then fails CLOSED — no wrong-database downgrade — but the refusal
- * surfaces mid-incident, which is the worst possible moment to be debugging a
- * stale constant.
+ * WHY PINNING REPLACED PARSING. The runner used to prove, by lexing the SQL,
+ * that a revert file was one transaction and nothing else. Four consecutive
+ * review rounds each found a different way past that: a statement after COMMIT,
+ * an indented ROLLBACK, ABORT and END as synonyms, an apostrophe inside a
+ * double-quoted identifier, a non-ASCII dollar-quote tag, BEGIN ATOMIC routine
+ * bodies. Statically validating arbitrary SQL needs a real parser, and a safety
+ * check that is itself a homemade parser is a liability on a T0 rollback path.
  *
- * This is not a hypothetical. The same drift class landed twice inside the
- * candidate that introduced the pin: once in the revert-point document, which
- * kept quoting the pre-edit checksum, and once in the pin itself when 0064's
- * rollback comment was corrected. Both were caught by review rather than by a
- * test, and review is not run before an emergency rollback.
+ * So the runner stopped asking what a file MEANS and started asking whether it
+ * is the file a human reviewed. That makes every lexical edge case irrelevant:
+ * a reviewed file cannot change under the reviewers, and an unreviewed file
+ * cannot run at all.
  *
- * Deliberately generic: it discovers every `revert-NNNN-transaction.sql` and
- * checks any that pin a checksum, so a future revert script inherits the guard
- * by existing rather than by someone remembering to extend this file.
+ * Two checksums, two different questions:
+ *   - the REVERT pin  — is this the file that was reviewed?
+ *   - the MIGRATION pin — does this revert still describe the migration it
+ *     claims to undo? (The revert refuses in-database on the same value; this
+ *     catches it before a connection exists.)
  */
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { checkPinned } from './revert-migration';
 import { checksumOfSql } from '../src/lib/effectiveMigration';
 
 const REVERT_DIR = join(process.cwd(), 'supabase', 'migrations', 'revert');
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
-const REVERT_FILE = /^revert-(\d{4})-transaction\.sql$/;
-/** The pin as the scripts write it: `AND checksum = '<64 hex>'`. */
-const PIN = /AND\s+checksum\s*=\s*'([0-9a-f]{64})'/i;
+const PINNED = 'revert-0064-transaction.sql';
 
-function revertScripts(): { file: string; number: string; sql: string }[] {
-  return readdirSync(REVERT_DIR)
-    .map((name) => ({ name, match: REVERT_FILE.exec(name) }))
-    .filter((entry): entry is { name: string; match: RegExpExecArray } => entry.match !== null)
-    .map(({ name, match }) => ({
-      file: name,
-      number: match[1],
-      sql: readFileSync(join(REVERT_DIR, name), 'utf8'),
-    }));
-}
+const revertSql = readFileSync(join(REVERT_DIR, PINNED), 'utf8');
 
-function migrationFor(number: string): string | null {
-  const found = readdirSync(MIGRATIONS_DIR).find((name) => name.startsWith(`${number}_`) && name.endsWith('.sql'));
-  return found ? join(MIGRATIONS_DIR, found) : null;
-}
+/** The same lookup the runner uses, against the real migrations directory. */
+const readMigration = (number: string): string | null => {
+  const found = readdirSync(MIGRATIONS_DIR)
+    .find((name) => name.startsWith(`${number}_`) && name.endsWith('.sql'));
+  return found ? readFileSync(join(MIGRATIONS_DIR, found), 'utf8') : null;
+};
 
-describe('revert scripts that pin a migration checksum', () => {
-  const scripts = revertScripts();
-
-  it('finds the revert scripts to check', () => {
-    expect(scripts.length).toBeGreaterThan(0);
+describe('checkPinned', () => {
+  it('accepts the shipped revert file unchanged', () => {
+    expect(checkPinned(PINNED, revertSql, readMigration)).toBeNull();
   });
 
-  for (const script of scripts) {
-    const pinned = PIN.exec(script.sql)?.[1];
-    if (!pinned) {
-      // Not every revert pins a checksum — 0059's does not. Nothing to check,
-      // and a missing pin is a design choice rather than a defect.
-      continue;
-    }
+  // THE REGRESSION THIS DESIGN EXISTS FOR. One byte is the whole point: the pin
+  // is what lets the runner skip parsing, so if a single character can slip
+  // through, nothing else here is load-bearing.
+  it('rejects a ONE-BYTE change to the revert file', () => {
+    const tampered = revertSql.replace('DROP FUNCTION', 'DROP  FUNCTION');
+    expect(tampered).not.toBe(revertSql);
+    expect(checkPinned(PINNED, tampered, readMigration)).toMatch(/does not match its pinned content/);
+  });
 
-    it(`${script.file} pins the checksum of the migration it reverts`, () => {
-      const migration = migrationFor(script.number);
-      expect(migration, `no migration file found for ${script.number}`).not.toBeNull();
-      const actual = checksumOfSql(readFileSync(migration as string, 'utf8'));
-      expect(
-        pinned,
-        `${script.file} pins ${pinned} but ${script.number}'s file checksums to ${actual}. `
-        + 'Editing an applied migration also means reverting and reapplying it so the ledger '
-        + 'matches; update this pin in the same commit.',
-      ).toBe(actual);
+  it('rejects a one-byte change even inside a comment', () => {
+    // Comments are content. A reviewer read them, and an instruction changed
+    // after review is exactly the drift that started this whole cycle.
+    const tampered = revertSql.replace('-- Runnable, atomic rollback', '-- Runnable, atomic rollbacks');
+    expect(tampered).not.toBe(revertSql);
+    expect(checkPinned(PINNED, tampered, readMigration)).toMatch(/does not match its pinned content/);
+  });
+
+  it('refuses a revert file that is not pinned at all', () => {
+    const problem = checkPinned('revert-0059-transaction.sql', revertSql, readMigration);
+    expect(problem).toMatch(/not a pinned revert file/);
+  });
+
+  it('refuses when the revert no longer describes its migration', () => {
+    // The migration was edited without repinning. The revert's own in-database
+    // precondition would refuse too, but this says so before a connection exists.
+    // Pinned to its OWN content so the first check passes and the migration
+    // comparison is the one under test.
+    const stale = revertSql.replace(
+      /AND\s+checksum\s*=\s*'[0-9a-f]{64}'/i,
+      `AND checksum = '${'0'.repeat(64)}'`,
+    );
+    expect(stale).not.toBe(revertSql);
+    const problem = checkPinned(PINNED, stale, readMigration, {
+      [PINNED]: checksumOfSql(stale),
     });
-  }
+    expect(problem).toMatch(/no longer describes it/);
+  });
+
+  it('refuses a revert that pins no migration checksum at all', () => {
+    const unpinned = revertSql.replace(/AND\s+checksum\s*=\s*'[0-9a-f]{64}'/i, 'AND true');
+    expect(unpinned).not.toBe(revertSql);
+    expect(checkPinned(PINNED, unpinned, readMigration, {
+      [PINNED]: checksumOfSql(unpinned),
+    })).toMatch(/pins no migration checksum/);
+  });
+
+  it('the pinned constant equals the shipped file, so the runner is not pinned to a stale copy', () => {
+    // If this fails, the pin in revert-migration.ts was not updated in the same
+    // commit as the file - the exact drift class that produced the stale
+    // revert-point document earlier in this goal.
+    expect(checkPinned(PINNED, revertSql, readMigration)).toBeNull();
+  });
 });
