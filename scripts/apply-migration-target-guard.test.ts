@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  checkDatabaseName,
   checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
 } from './apply-migration-target-guard';
 
@@ -10,6 +11,7 @@ const STAGING = 'stagingrefbbbbbbbbbb';
 describe('checkMigrationTarget', () => {
   it('refuses a non-production env when NEXT_BAR_PRODUCTION_PROJECT_REF is unset', () => {
     const refusal = checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: PROD, productionRef: '', stagingRefs: [STAGING],
     });
     expect(refusal).toContain('NEXT_BAR_PRODUCTION_PROJECT_REF is not set');
@@ -20,6 +22,7 @@ describe('checkMigrationTarget', () => {
   // production. The pre-fix guard returned no refusal at all here.
   it('refuses a non-production env when BOTH ref variables are unset', () => {
     const refusal = checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: PROD, productionRef: '', stagingRefs: [],
     });
     expect(refusal).toContain('NEXT_BAR_PRODUCTION_PROJECT_REF is not set');
@@ -27,12 +30,14 @@ describe('checkMigrationTarget', () => {
 
   it('refuses --env production when NEXT_BAR_PRODUCTION_PROJECT_REF is unset', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'production', ref: PROD, productionRef: '', stagingRefs: [],
     })).toContain('NEXT_BAR_PRODUCTION_PROJECT_REF is not set');
   });
 
   it('refuses a non-production env when NEXT_BAR_STAGING_PROJECT_REFS is unset', () => {
     const refusal = checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: 'someotherrefcccccccc', productionRef: PROD, stagingRefs: [],
     });
     expect(refusal).toContain('NEXT_BAR_STAGING_PROJECT_REFS is not set');
@@ -40,6 +45,7 @@ describe('checkMigrationTarget', () => {
 
   it('refuses a configured ref that is not in the staging list', () => {
     const refusal = checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: 'someotherrefcccccccc', productionRef: PROD, stagingRefs: [STAGING],
     });
     expect(refusal).toContain('not in NEXT_BAR_STAGING_PROJECT_REFS');
@@ -47,6 +53,7 @@ describe('checkMigrationTarget', () => {
 
   it('refuses a non-production env pointed at the production ref', () => {
     const refusal = checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: PROD, productionRef: PROD, stagingRefs: [STAGING],
     });
     expect(refusal).toContain('PRODUCTION project ref');
@@ -54,12 +61,14 @@ describe('checkMigrationTarget', () => {
 
   it('refuses --env production pointed at a ref that is not production', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'production', ref: STAGING, productionRef: PROD, stagingRefs: [STAGING],
     })).toContain('does not point at the production project ref');
   });
 
   it('refuses when the ref could not be resolved from DATABASE_URL', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: '', productionRef: PROD, stagingRefs: [STAGING],
     })).toContain('could not determine the Supabase project ref');
   });
@@ -70,6 +79,7 @@ describe('checkMigrationTarget', () => {
   // production under --env staging.
   it('refuses a whitespace-only production ref instead of treating it as configured', () => {
     const refusal = checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: PROD, productionRef: '   ', stagingRefs: [PROD],
     });
     expect(refusal).toContain('NEXT_BAR_PRODUCTION_PROJECT_REF is not set');
@@ -77,6 +87,7 @@ describe('checkMigrationTarget', () => {
 
   it('refuses a whitespace-only staging list instead of treating it as configured', () => {
     const refusal = checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: STAGING, productionRef: PROD, stagingRefs: ['  ', ''],
     });
     expect(refusal).toContain('NEXT_BAR_STAGING_PROJECT_REFS is not set');
@@ -84,18 +95,21 @@ describe('checkMigrationTarget', () => {
 
   it('still matches the production ref when the configured value is padded', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: PROD, productionRef: ` ${PROD} `, stagingRefs: [STAGING],
     })).toContain('PRODUCTION project ref');
   });
 
   it('accepts the configured staging target when both variables are set', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: STAGING, productionRef: PROD, stagingRefs: [STAGING],
     })).toBeNull();
   });
 
   it('accepts the configured production target when both variables are set', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'production', ref: PROD, productionRef: PROD, stagingRefs: [STAGING],
     })).toBeNull();
   });
@@ -105,6 +119,48 @@ describe('checkMigrationTarget', () => {
 // "which server". pg gives query parameters precedence over the URL authority,
 // so ?host= / ?port= redirected a connection whose username still looked
 // allowlisted, and the operator's banner showed the authority.
+// Round-3 panel, Codex, HIGH. checkConnectionEndpoint proves pg resolved the
+// database the URL's PATH names - self-consistency, which is necessary and not
+// sufficient. A URL whose path simply says /shadow agrees with itself, and the
+// ref, host and port are all still the allowlisted ones. If that database
+// carries the pinned migration row, --execute would downgrade and unrecord an
+// unintended database. Naming which database is expected is the only thing that
+// tells two databases on one cluster apart.
+describe('checkDatabaseName', () => {
+  it('accepts the expected database', () => {
+    expect(checkDatabaseName('postgres', 'postgres', 'staging')).toBeNull();
+  });
+
+  it('refuses a second database on the same allowlisted project', () => {
+    const refusal = checkDatabaseName('shadow', 'postgres', 'staging');
+    expect(refusal).toContain('shadow');
+    expect(refusal).toContain('postgres');
+  });
+
+  it('refuses when the database could not be resolved', () => {
+    expect(checkDatabaseName('   ', 'postgres', 'staging')).toContain('could not determine');
+  });
+
+  it('refuses an empty override rather than falling back to a default', () => {
+    expect(checkDatabaseName('postgres', '   ', 'staging')).toContain('NEXT_BAR_DATABASE_NAME');
+  });
+});
+
+// The same check reached through checkMigrationTarget, which is what both the
+// applier and the live-suite guard actually call.
+describe('checkMigrationTarget with a database', () => {
+  it('refuses an otherwise-perfect staging target on the wrong database', () => {
+    expect(checkMigrationTarget({
+      env: 'staging',
+      ref: STAGING,
+      productionRef: PROD,
+      stagingRefs: [STAGING],
+      database: 'shadow',
+      expectedDatabase: 'postgres',
+    })).toContain('rather than the expected');
+  });
+});
+
 describe('checkConnectionEndpoint', () => {
   const HOST = 'aws-0-us-east-1.pooler.supabase.com';
   // `database` defaults to the ordinary Supabase database so the existing cases
@@ -208,6 +264,7 @@ describe('resolveProjectRef', () => {
 
   it('feeds the guard an unresolved ref that the guard then refuses', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: resolveProjectRef('postgres'), productionRef: PROD, stagingRefs: ['postgres'],
     })).toContain('could not determine the Supabase project ref');
   });
@@ -218,12 +275,14 @@ describe('resolveProjectRef', () => {
 describe('checkMigrationTarget with malformed configuration', () => {
   it('refuses a production ref carrying a stray separator', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: PROD, productionRef: PROD + ',', stagingRefs: [PROD],
     })).toContain('NEXT_BAR_PRODUCTION_PROJECT_REF is not a valid project ref');
   });
 
   it('refuses a staging list entry that is not a project ref', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: STAGING, productionRef: PROD, stagingRefs: [STAGING, 'not a ref'],
     })).toContain('not a project ref');
   });
@@ -253,6 +312,7 @@ describe('checkConnectionEndpoint outside the Supabase pooler', () => {
 describe('project ref shape', () => {
   it('refuses a placeholder production ref that is alphanumeric but not a ref', () => {
     expect(checkMigrationTarget({
+      database: 'postgres', expectedDatabase: 'postgres',
       env: 'staging', ref: PROD, productionRef: 'production', stagingRefs: [PROD],
     })).toContain('not a valid project ref');
   });

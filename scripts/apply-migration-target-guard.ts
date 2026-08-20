@@ -43,6 +43,10 @@ export interface MigrationTarget {
   productionRef: string;
   /** NEXT_BAR_STAGING_PROJECT_REFS, split and trimmed; empty when unset. */
   stagingRefs: string[];
+  /** pg's resolved database name. */
+  database: string;
+  /** NEXT_BAR_DATABASE_NAME, or the documented default. */
+  expectedDatabase: string;
 }
 
 /** Returns the refusal reason, or null when the target is verified. */
@@ -98,11 +102,47 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
   if (!stagingRefs.includes(ref)) {
     return `--env ${env}, but DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS`;
   }
+  return checkDatabaseName(target.database, target.expectedDatabase, env);
+}
+
+/**
+ * WHICH DATABASE, decided by CONFIGURATION rather than by the URL being asked
+ * about. `checkConnectionEndpoint` proves pg resolved the database the URL's
+ * path names — self-consistency, which is necessary and not sufficient: a URL
+ * whose path simply says `/shadow` agrees with itself, and every other check
+ * passes because the project ref, the host and the port are all still the
+ * allowlisted ones. If that database carries the pinned migration row, an
+ * --execute would downgrade and unrecord an unintended database (round-3 panel,
+ * Codex, HIGH). One cluster serves many databases; naming which one is expected
+ * is the only thing that can tell them apart.
+ *
+ * `postgres` is Supabase's database for every project, so it is the default
+ * rather than a required variable — a check nobody can run because it needs new
+ * configuration is a check that gets deleted. NEXT_BAR_DATABASE_NAME overrides
+ * it for a project that genuinely uses another.
+ */
+export function checkDatabaseName(
+  database: string,
+  expectedDatabase: string,
+  env: string,
+): string | null {
+  const actual = database.trim();
+  const expected = expectedDatabase.trim();
+  if (!expected) {
+    return `NEXT_BAR_DATABASE_NAME is set but empty, so --env ${env}'s database cannot be verified`;
+  }
+  if (!actual) return 'could not determine which database DATABASE_URL reaches';
+  if (actual !== expected) {
+    return `--env ${env}, but DATABASE_URL reaches the database ${JSON.stringify(actual)} `
+      + `rather than the expected ${JSON.stringify(expected)}`;
+  }
   return null;
 }
 
 /** libpq's default when the connection string names no port. */
 const DEFAULT_PG_PORT = '5432';
+/** Supabase serves every project from `postgres`; NEXT_BAR_DATABASE_NAME overrides it. */
+const DEFAULT_DATABASE = 'postgres';
 
 /**
  * The Supabase pooler carries the project ref in the USERNAME as
@@ -339,7 +379,14 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
   const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
-  const refusal = checkMigrationTarget({ env, ref, productionRef, stagingRefs });
+  const refusal = checkMigrationTarget({
+    env,
+    ref,
+    productionRef,
+    stagingRefs,
+    database: effective.database,
+    expectedDatabase: process.env.NEXT_BAR_DATABASE_NAME ?? DEFAULT_DATABASE,
+  });
   if (refusal) return refuse(refusal);
 
   // Node's global kill switch turns tls.connect's default verification off, and

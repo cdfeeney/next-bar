@@ -112,6 +112,23 @@ export function stripNonCode(sql: string): string {
       out += " '' ";
       continue;
     }
+    // A double-quoted IDENTIFIER is not a string, and an apostrophe inside one
+    // is just a character. Skipping this made "a'b" open a phantom string:
+    // one such identifier swallowed the file's COMMIT and wrongly refused SQL
+    // the server runs fine, and TWO re-synced quote parity while hiding every
+    // statement between them - including a ROLLBACK (round-3 panel, both
+    // lanes). U&"..." is the same construct with a prefix.
+    const identifier = /^(U&)?"/i.exec(rest);
+    if (identifier) {
+      i += identifier[0].length;
+      while (i < sql.length) {
+        if (sql[i] === '"' && sql[i + 1] === '"') { i += 2; continue; }
+        if (sql[i] === '"') { i += 1; break; }
+        i += 1;
+      }
+      out += ' "" ';
+      continue;
+    }
     const dollar = /^\$[A-Za-z_0-9]*\$/.exec(rest);
     if (dollar) {
       const tag = dollar[0];
@@ -154,38 +171,39 @@ export function checkRevertFile(sql: string): string | null {
 
   if (statements.length === 0) return 'the file contains no SQL statements.';
 
-  const isBegin = (statement: string) => /^BEGIN(\s+(READ\s+WRITE|ISOLATION|TRANSACTION)\b.*)?$/is.test(statement);
-  const begins = statements.filter(isBegin).length;
-  const commits = statements.filter((statement) => /^COMMIT\b/is.test(statement)).length;
+  // AN ALLOWLIST, not a blocklist, and that is the lesson of three rounds.
+  // Round 2 found a statement after COMMIT; round 3 found the same hazard
+  // wearing whitespace (an indented ROLLBACK); round 3's panel then found it
+  // wearing a synonym (ABORT, and END which commits early). Enumerating what
+  // must not appear loses that race by construction, because Postgres has more
+  // spellings than a reviewer can list. So: exactly one transaction-control
+  // statement is permitted at the front, exactly one at the back, and ANY
+  // other transaction-control statement anywhere in the file is refused,
+  // whatever it is called.
+  const TXN_CONTROL = /^(BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b/i;
+  const OPENS = /^(BEGIN|START\s+TRANSACTION)\b/i;
+  // END is COMMIT's documented synonym, so it is a legitimate closer.
+  const CLOSES = /^(COMMIT|END)\b(?!\s*PREPARED)/i;
 
-  if (begins === 0) {
-    return 'the file opens no explicit transaction (expected BEGIN READ WRITE;), so a failure part-way '
-      + 'through would leave the database and the ledger disagreeing.';
+  if (!OPENS.test(statements[0])) {
+    return `the first statement is not BEGIN (${JSON.stringify(statements[0].slice(0, 60))}), so it `
+      + 'would run outside the transaction.';
   }
-  if (begins > 1) return `the file opens ${begins} transactions; a revert must be exactly one.`;
-  if (commits === 0) return 'the file never COMMITs, so it is not a single complete transaction.';
-  if (commits > 1) return `the file COMMITs ${commits} times; a revert must be exactly one transaction.`;
-  if (!isBegin(statements[0])) {
-    return `the first statement is not BEGIN (${JSON.stringify(statements[0].slice(0, 60))}), so it would `
-      + 'run outside the transaction.';
+  const last = statements[statements.length - 1];
+  if (!CLOSES.test(last)) {
+    return `the last statement is not COMMIT (${JSON.stringify(last.slice(0, 60))}), so the file `
+      + 'either never commits or commits before its end.';
   }
-  if (!/^COMMIT\b/is.test(statements[statements.length - 1])) {
-    return `${JSON.stringify(statements[statements.length - 1].slice(0, 60))} follows COMMIT, so it would `
-      + 'run outside the transaction and commit on its own.';
+  if (statements.length < 2) {
+    return 'the file opens and closes a transaction with nothing inside it.';
   }
-  // STATEMENT-LEVEL, like every other check here. This one used to test the
-  // stripped TEXT with a line-anchored regex, so an indented or mid-line
-  // ROLLBACK sailed through while first-is-BEGIN, last-is-COMMIT and the
-  // one-each counts all passed (round-2 panel, BOTH lanes, HIGH). The file was
-  // then signed off as one transaction, and the statements after the ROLLBACK
-  // ran in a fresh implicit transaction that commits at end-of-message: the
-  // ledger DELETE lands while the body restore is rolled back, which is the
-  // precise split state this guard exists to prevent. It is the same defect as
-  // the round-1 'statement after COMMIT' HIGH, wearing whitespace.
-  const rolledBack = statements.findIndex((statement) => /^ROLLBACK\b/i.test(statement));
-  if (rolledBack !== -1) {
-    return `statement ${rolledBack + 1} is ROLLBACK, so what this file commits depends on which `
-      + 'branch runs, and anything after it commits on its own.';
+
+  const stray = statements.slice(1, -1).findIndex((statement) => TXN_CONTROL.test(statement));
+  if (stray !== -1) {
+    const statement = statements[stray + 1];
+    return `statement ${stray + 2} is transaction control `
+      + `(${JSON.stringify(statement.slice(0, 40))}), so this file is not one transaction: `
+      + 'everything after it commits or rolls back on its own.';
   }
   return null;
 }

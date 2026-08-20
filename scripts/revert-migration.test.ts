@@ -43,15 +43,15 @@ describe('checkRevertFile', () => {
   });
 
   it('refuses a file that opens no transaction', () => {
-    expect(checkRevertFile('DROP FUNCTION IF EXISTS public.x();\n')).toMatch(/opens no explicit transaction/);
+    expect(checkRevertFile('DROP FUNCTION IF EXISTS public.x();\n')).toMatch(/first statement is not BEGIN/);
   });
 
   it('refuses a file that never commits', () => {
-    expect(checkRevertFile('BEGIN READ WRITE;\nDROP FUNCTION IF EXISTS public.x();\n')).toMatch(/never COMMITs/);
+    expect(checkRevertFile('BEGIN READ WRITE;\nDROP FUNCTION IF EXISTS public.x();\n')).toMatch(/last statement is not COMMIT/);
   });
 
   it('does not mistake the word begin inside a comment for a transaction', () => {
-    expect(checkRevertFile('-- BEGIN; here is a comment\nCOMMIT;\n')).toMatch(/opens no explicit transaction/);
+    expect(checkRevertFile('-- BEGIN; here is a comment\nCOMMIT;\n')).toMatch(/first statement is not BEGIN/);
   });
 
   // Round-1 panel of the fresh cycle, Codex, HIGH. The first version of this
@@ -59,11 +59,11 @@ describe('checkRevertFile', () => {
   // which is not the same thing as "one transaction and nothing else".
   it('refuses a statement AFTER the commit, which would commit on its own', () => {
     const problem = checkRevertFile('BEGIN;\nCOMMIT;\nDELETE FROM public.schema_migrations;\n');
-    expect(problem).toMatch(/follows COMMIT/);
+    expect(problem).toMatch(/last statement is not COMMIT/);
   });
 
   it('refuses more than one transaction', () => {
-    expect(checkRevertFile('BEGIN;\nCOMMIT;\nBEGIN;\nCOMMIT;\n')).toMatch(/transactions|COMMITs 2 times/);
+    expect(checkRevertFile('BEGIN;\nCOMMIT;\nBEGIN;\nCOMMIT;\n')).toMatch(/transaction control/);
   });
 
   it('refuses a statement BEFORE the transaction opens', () => {
@@ -75,7 +75,7 @@ describe('checkRevertFile', () => {
     // A DO block's plpgsql BEGIN/END is not a transaction control statement, and
     // every revert file in this repository contains one.
     const sql = 'DO $$\nBEGIN\n  RAISE NOTICE \'hi\';\nEND\n$$;\n';
-    expect(checkRevertFile(sql)).toMatch(/opens no explicit transaction/);
+    expect(checkRevertFile(sql)).toMatch(/first statement is not BEGIN/);
   });
 
   it('accepts a real transaction that contains a DO block with its own BEGIN', () => {
@@ -102,11 +102,11 @@ describe('checkRevertFile', () => {
   // while every structural check still passed - the file was signed off as one
   // transaction and its tail statements committed on their own.
   it('refuses an INDENTED rollback, not just one at column zero', () => {
-    expect(checkRevertFile('BEGIN;\n  ROLLBACK;\nCOMMIT;\n')).toMatch(/is ROLLBACK/);
+    expect(checkRevertFile('BEGIN;\n  ROLLBACK;\nCOMMIT;\n')).toMatch(/transaction control/);
   });
 
   it('refuses a rollback that follows another statement on the same line', () => {
-    expect(checkRevertFile('BEGIN;\nSELECT 1; ROLLBACK;\nCOMMIT;\n')).toMatch(/is ROLLBACK/);
+    expect(checkRevertFile('BEGIN;\nSELECT 1; ROLLBACK;\nCOMMIT;\n')).toMatch(/transaction control/);
   });
 
   it('refuses the full split-state shape: rollback, then a ledger delete, then commit', () => {
@@ -117,7 +117,7 @@ describe('checkRevertFile', () => {
       "DELETE FROM public.schema_migrations WHERE name = '0064_friend_ratings_score.sql';",
       'COMMIT;',
     ].join('\n');
-    expect(checkRevertFile(sql)).toMatch(/is ROLLBACK/);
+    expect(checkRevertFile(sql)).toMatch(/transaction control/);
   });
 
   // Round-2 panel, Codex MEDIUM. E'...' honours backslash escapes, so a \'
@@ -137,8 +137,51 @@ describe('checkRevertFile', () => {
     expect(checkRevertFile("BEGIN;\nSELECT 'it''s fine';\nCOMMIT;\n")).toBeNull();
   });
 
+  // Round-3 panel, BOTH lanes. Two more spellings, which is why this check is
+  // now an ALLOWLIST: enumerating what must not appear loses to Postgres's
+  // synonym list by construction.
+  it('refuses ABORT, which is ROLLBACK under another name', () => {
+    expect(checkRevertFile('BEGIN;\nABORT;\nDELETE FROM public.schema_migrations;\nCOMMIT;\n'))
+      .toMatch(/transaction control/);
+  });
+
+  it('refuses a mid-file END, which commits early and lets the tail auto-commit', () => {
+    expect(checkRevertFile('BEGIN;\nDROP FUNCTION IF EXISTS public.x();\nEND;\nDELETE FROM t;\nCOMMIT;\n'))
+      .toMatch(/transaction control/);
+  });
+
+  it('accepts END as the final statement, since it is COMMIT under another name', () => {
+    expect(checkRevertFile('BEGIN;\nDROP FUNCTION IF EXISTS public.x();\nEND;\n')).toBeNull();
+  });
+
+  it('refuses a mid-file SAVEPOINT', () => {
+    expect(checkRevertFile('BEGIN;\nSAVEPOINT s;\nDROP FUNCTION IF EXISTS public.x();\nCOMMIT;\n'))
+      .toMatch(/transaction control/);
+  });
+
+  // Round-3 panel, BOTH lanes. An apostrophe inside a double-quoted IDENTIFIER
+  // was opening a phantom string. ONE such identifier swallowed the COMMIT and
+  // wrongly refused valid SQL; TWO re-synced quote parity and HID everything
+  // between them, including a ROLLBACK, which the guard then called clean.
+  it('does not treat an apostrophe inside a quoted identifier as a string', () => {
+    expect(checkRevertFile('BEGIN;\nSELECT "a\'b";\nCOMMIT;\n')).toBeNull();
+  });
+
+  it('sees a ROLLBACK hidden between two apostrophe-bearing identifiers', () => {
+    expect(checkRevertFile('BEGIN;\nSELECT "a\'b"; ROLLBACK; SELECT "c\'d";\nCOMMIT;\n'))
+      .toMatch(/transaction control/);
+  });
+
+  it('handles a U&-prefixed identifier the same way', () => {
+    expect(checkRevertFile('BEGIN;\nSELECT U&"a\'b";\nCOMMIT;\n')).toBeNull();
+  });
+
+  it('still pairs doubled quotes inside an identifier', () => {
+    expect(checkRevertFile('BEGIN;\nSELECT "a""b";\nCOMMIT;\n')).toBeNull();
+  });
+
   it('refuses a file containing ROLLBACK, whose outcome depends on a branch', () => {
-    expect(checkRevertFile('BEGIN;\nROLLBACK;\nCOMMIT;\n')).toMatch(/ROLLBACK/);
+    expect(checkRevertFile('BEGIN;\nROLLBACK;\nCOMMIT;\n')).toMatch(/transaction control/);
   });
 });
 

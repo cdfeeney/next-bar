@@ -178,8 +178,16 @@ function assertStagingOnly(suite: string, connectionString: string, ssl: LiveSsl
   // Config comparison is the migration guard's job, not a second copy of it:
   // the copy accepted a malformed production ref (a trailing comma made it
   // truthy but never equal), which is the fail-open that guard exists to close.
+  // The named database rides along for the same reason the ref does: a live
+  // suite pointed at a second database on the allowlisted project agrees with
+  // its own URL and passes every other check, then writes to the wrong one.
   const refusal = checkMigrationTarget({
-    env: 'staging', ref, productionRef: productionRef ?? '', stagingRefs: allowlist,
+    env: 'staging',
+    ref,
+    productionRef: productionRef ?? '',
+    stagingRefs: allowlist,
+    database: effective.database,
+    expectedDatabase: envValue('NEXT_BAR_DATABASE_NAME') ?? 'postgres',
   });
   if (refusal) {
     throw new Error(
