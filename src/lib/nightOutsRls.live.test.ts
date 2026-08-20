@@ -1,11 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
-import {
-  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
-} from '../../scripts/apply-migration-target-guard';
+import { stagingDatabaseTarget } from './liveDbTarget';
 
 import {
   GUARDED_FUNCTIONS,
@@ -33,176 +29,22 @@ import {
  * the claim inside a transaction reproduces exactly what PostgREST would do for
  * that user — without needing a running API or real JWTs.
  *
- * Skips (does not fail) when DATABASE_URL is absent, so CI without credentials
- * stays green while the operator's machine gets the real coverage.
+ * Skips only where CI=1 acknowledges that DATABASE_URL is absent; anywhere
+ * else a missing target is a loud failure, not a green run.
  */
 
-function envValue(key: string): string | null {
-  try {
-    const env = readFileSync(path.join(__dirname, '..', '..', '.env.local'), 'utf8');
-    return env.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1]?.trim() ?? null;
-  } catch {
-    return null;
-  }
-}
+const SUITE = 'nightOutsRls.live.test.ts';
 
 /**
- * Supabase's CA, when the operator has pointed PGSSLROOTCERT at it. Read from
- * .env.local as well as the environment: that is where .env.example says to put
- * it and where this file already reads DATABASE_URL from, and nothing loads
- * .env.local into process.env for vitest (vitest.setup.ts only imports
- * jest-dom). Reading process.env alone meant an operator who followed the
- * documentation silently got the unverified path.
+ * The staging-only gate, the TLS chain and the CI acknowledgement all live in
+ * ./liveDbTarget — one copy shared with the other live suite, because a second
+ * COPY of a security gate is how one of them ends up ungated. See that module's
+ * header for the refusals it makes and why each one exists.
  */
-function caCertificate(): string {
-  // `||`, not `??`: an EMPTY PGSSLROOTCERT in the environment is not a
-  // configured value, and letting it shadow .env.local would reintroduce the
-  // same silent downgrade.
-  const path = (process.env.PGSSLROOTCERT ?? '').trim() || (envValue('PGSSLROOTCERT') ?? '').trim();
-  if (!path) return '';
-  // A configured-but-unreadable CA is a misconfiguration, not a licence to
-  // connect unverified: swallowing it was the same silent downgrade.
-  try {
-    return readFileSync(path, 'utf8');
-  } catch (error) {
-    throw new Error(
-      `nightOutsRls.live.test.ts refuses to run: PGSSLROOTCERT is set to ${path}, which cannot be `
-      + `read (${(error as Error).message}). Fix the path or unset it deliberately.`,
-    );
-  }
-}
+const TARGET = stagingDatabaseTarget(SUITE);
+const URL = TARGET?.url ?? null;
 
-function databaseUrl(): string | null {
-  return envValue('DATABASE_URL');
-}
-
-const URL = databaseUrl();
-
-/**
- * STAGING-ONLY GATE (round-1 review, Codex medium: "a loaded gun pointed at
- * prod").
- *
- * This file does not merely read. It calls create_night_out, invite, join and
- * decline inside transactions, so it issues real DML, WAL and per-user advisory
- * locks against whatever DATABASE_URL names. ROLLBACK stops rows from being
- * committed; it does not stop any of that, and it is not an authorization.
- *
- * The URL itself cannot tell you which database it is: Supabase's pooler
- * hostname is shared and the project ref hides in the username, so a human
- * reading the connection string sees the same text for staging and production.
- * Therefore the target must be named explicitly, and the gate FAILS CLOSED —
- * an unset allowlist is not permission, it is a missing answer.
- *
- * Set in .env.local (see .env.example):
- *   NEXT_BAR_STAGING_PROJECT_REFS=<ref>[,<ref>...]
- *   NEXT_BAR_PRODUCTION_PROJECT_REF=<ref>
- */
-/**
- * Ask `pg` itself what it will connect AS, rather than reading the URL.
- *
- * Round-2 review (Codex): the first version of this gate parsed
- * `new URL(connectionString).username`, but pg's connection-string parser gives
- * QUERY PARAMETERS precedence over the authority. A string whose authority says
- * `postgres.<staging-ref>` while its query says `user=postgres.<production-ref>`
- * passed the gate and connected to production — the gate read one value and pg
- * used another. Building the client and inspecting its own resolved parameters
- * makes those the same question by construction.
- *
- * `connectionParameters` is not in @types/pg, hence the narrow cast.
- */
-/**
- * The TLS config this suite connects with: verified against Supabase's CA when
- * the operator has one, encrypted-only otherwise (see the ceiling note below).
- */
-function sslOption(): { rejectUnauthorized: boolean; ca?: string } {
-  const ca = caCertificate();
-  return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
-}
-
-function effectiveConnection(
-  connectionString: string,
-): { user: string; host: string; port: string; options: string; ssl: unknown } {
-  // Same config as the real client below, or this answers a question about a
-  // different connection - including whether it is encrypted at all.
-  const probe = new Client({ connectionString, ssl: sslOption() }) as unknown as {
-    connectionParameters?: {
-      user?: string; host?: string; port?: number | string; options?: string; ssl?: unknown;
-    };
-  };
-  return {
-    user: probe.connectionParameters?.user ?? '',
-    host: probe.connectionParameters?.host ?? '',
-    port: String(probe.connectionParameters?.port ?? ''),
-    options: probe.connectionParameters?.options ?? '',
-    ssl: probe.connectionParameters?.ssl,
-  };
-}
-
-function assertStagingOnly(connectionString: string): void {
-  const effective = effectiveConnection(connectionString);
-  const ref = resolveProjectRef(effective.user);
-  const allowlist = (envValue('NEXT_BAR_STAGING_PROJECT_REFS') ?? '')
-    .split(',').map((value) => value.trim()).filter(Boolean);
-  const productionRef = envValue('NEXT_BAR_PRODUCTION_PROJECT_REF');
-
-  // No endpoint override either: the connection must go where the URL's
-  // authority says it goes, so a redirected host or port cannot ride along with
-  // an allowlisted user. This is the migration guard's own check, imported
-  // rather than copied — the copy short-circuited when either side was empty,
-  // which a host-less authority (`postgres:///db?host=elsewhere`) produces.
-  // pg parses the connection string OVER the explicit ssl option, so
-  // `?sslmode=disable` turns the option above back off and this suite would send
-  // the role password and its DML in the clear while claiming otherwise.
-  if (!effective.ssl) {
-    throw new Error(
-      'nightOutsRls.live.test.ts refuses to run: DATABASE_URL disables TLS, so the role password and '
-      + "this suite's DML would cross the network in the clear.",
-    );
-  }
-
-  const authority = new globalThis.URL(connectionString);
-  const endpointRefusal = checkConnectionEndpoint(
-    { host: effective.host, port: effective.port, options: effective.options },
-    { host: authority.hostname, port: authority.port },
-  );
-  if (endpointRefusal) {
-    throw new Error(`nightOutsRls.live.test.ts refuses to run: ${endpointRefusal}.`);
-  }
-
-  // Config comparison is the migration guard's job, not a second copy of it:
-  // the copy accepted a malformed production ref (a trailing comma made it
-  // truthy but never equal), which is the fail-open that guard exists to close.
-  // Same three questions here as there - is the config valid, is this
-  // production, is it the named staging target.
-  const refusal = checkMigrationTarget({
-    env: 'staging', ref, productionRef: productionRef ?? '', stagingRefs: allowlist,
-  });
-  if (refusal) {
-    throw new Error(
-      `nightOutsRls.live.test.ts refuses to run: ${refusal}. This suite writes to the database it `
-      + 'connects to, so the staging target must be named explicitly and verifiably.',
-    );
-  }
-}
-
-if (URL) assertStagingOnly(URL);
-
-/**
- * A security gate that silently skips is not a gate (round-3 review, Codex:
- * "fail-open and incomplete"). Absent credentials are only a legitimate reason
- * to skip on a CI runner, which has none by design. Anywhere else — an operator
- * machine, a deploy box — a missing DATABASE_URL means these denials went
- * UNVERIFIED, and that must be loud rather than green.
- */
-const SKIP_ALLOWED = process.env.CI === 'true' || process.env.CI === '1';
-if (!URL && !SKIP_ALLOWED) {
-  throw new Error(
-    'nightOutsRls.live.test.ts: no DATABASE_URL in .env.local, so the behavioral '
-    + 'RLS/RPC denials were NOT verified. Set it, or set CI=1 to acknowledge that '
-    + 'this environment cannot run them.',
-  );
-}
-const describeLive = URL ? describe : describe.skip;
+const describeLive = TARGET ? describe : describe.skip;
 
 /**
  * Every other test in this file runs inside a transaction that ROLLS BACK,
@@ -227,18 +69,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   beforeAll(async () => {
     db = new Client({
       connectionString: URL as string,
-      // This file adopts the migration guard's identity chain above (pooler
-      // suffix, ref in the username) and then sends the role password and real
-      // DML down this connection - and those are only strings the operator
-      // wrote. So authenticate the peer WHEN WE CAN: Supabase's pooler serves a
-      // self-signed chain (rejectUnauthorized:true without a CA fails with
-      // "self-signed certificate in certificate chain"), so verification needs
-      // their CA via PGSSLROOTCERT.
-      // ponytail: unset PGSSLROOTCERT leaves this suite encrypted but
-      // unauthenticated. Hard-refusing would make the suite unrunnable on a
-      // machine that has not downloaded the CA, which is a test-harness
-      // decision; the APPLY tool refuses, because that is the path that writes.
-      ssl: sslOption(),
+      // Exactly the TLS the gate authorised — rebuilding it here would let the
+      // suite connect with a config nobody verified. See ./liveDbTarget for the
+      // pooler's self-signed chain and the PGSSLROOTCERT ceiling.
+      ssl: (TARGET as { ssl: object }).ssl,
       statement_timeout: 30000,
       application_name: 'v8-3-rls-negatives',
     });
@@ -251,7 +85,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
 
   /** Run fn inside a rolled-back transaction, so nothing persists. */
   async function inRollback<T>(fn: () => Promise<T>): Promise<T> {
-    await db.query('BEGIN');
+    // READ WRITE explicitly — this suite INSERTs fixtures and the pooler-pinned
+    // backend defaults to read-only. Same one-line reason as
+    // friendScoreRls.live.test.ts; transaction-scoped, so nothing leaks.
+    await db.query('BEGIN READ WRITE');
     try {
       return await fn();
     } finally {

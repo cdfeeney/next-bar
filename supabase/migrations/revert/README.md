@@ -1,8 +1,11 @@
 # Migration revert files
 
-**This file is the single source of truth for reverting `0059`.** Nothing else —
-not the migration header, not the revert SQL, not the revert-point doc — restates
-what a revert costs or when it is safe.
+**This file is the single source of truth for reverting `0059` and `0064`.**
+Nothing else — not the migration header, not the revert SQL, not the revert-point
+doc — restates what a revert costs or when it is safe.
+
+> **Order matters.** Each revert script refuses while any migration numbered
+> above it is in the ledger. `0064` is the head, so it comes off first.
 
 That rule exists because it was learned the hard way. Four review rounds on this
 change were spent almost entirely on the same claim drifting between copies of
@@ -21,7 +24,7 @@ A revert is **not** a migration. It is deliberately not numbered into the
 sequence, because applying it is a rollback and the ledger row for the migration
 it reverses is deleted rather than added.
 
-## How to run it
+## How to run it (`0059`)
 
 One command, **run from the repository root**. It works in PowerShell, cmd and
 bash alike, which is the point — the operator is on Windows, and an earlier
@@ -149,3 +152,162 @@ Two of them carry warnings worth repeating before anyone imports them:
 `REVERT-0044` is a drop of the entire Night Out feature and deletes every plan,
 member, suggestion, vote and event row (it ships commented out), and
 `REVERT-0054` discards every stored idempotency key.
+
+---
+
+## Reverting `0064` (friend-visible numeric score)
+
+**Run it through `scripts/revert-migration.ts`.** That is the path of record,
+and the reason is target identity, not convenience:
+
+```
+npx tsx scripts/revert-migration.ts --env staging supabase/migrations/revert/revert-0064-transaction.sql
+npx tsx scripts/revert-migration.ts --env staging --execute supabase/migrations/revert/revert-0064-transaction.sql
+```
+
+Dry run is the default, exactly as it is for `apply-migration-set.ts`.
+
+**Why a runner at all, when the file is plain SQL any client can send.** An
+earlier version of this section said the opposite — install `psql`, and grow no
+second way to run a rollback. That was wrong, and a round-3 reviewer said why: a
+revert script's preconditions can identify a migration VERSION (its ledger row,
+its checksum, the shape of the function it undoes) but they cannot identify the
+SERVER. A second database carrying the same migration passes every check the SQL
+can make. Target identity is a property of the CONNECTION, so it can only be
+enforced where the connection is made. The apply path has had that enforcement
+all along; the rollback path was a connection string pasted into a terminal.
+
+`revert-migration.ts` closes that by calling the SAME module the applier calls
+— `authorizeMigrationTarget`, plus `resolveTarget` for the same-file URL/label
+pairing. One implementation, not a copy that can drift: the named `--env` must
+match the loaded environment, the project ref behind `DATABASE_URL` must not be
+the production ref and must be in the staging allowlist, the host must be the
+Supabase pooler, pg's own resolved endpoint must match the URL's authority, the
+DATABASE it reaches must be the expected one (`NEXT_BAR_DATABASE_NAME`,
+defaulting to `postgres`), no libpq startup options or host/port overrides may
+be present, and TLS must verify against the CA. It also refuses any revert file whose content does not match
+its reviewed pin — see below. It performs NO structural validation of the SQL:
+an earlier version parsed the file to prove it was a single explicit
+transaction and rejected psql metacommands, and those checks were deleted with
+the lexer that made them.
+
+It does NOT parse the SQL, wrap it, or touch `public.schema_migrations` itself.
+The file stays authoritative about its own preconditions, its ledger delete and
+its postconditions — and stays runnable verbatim by `psql -f`, which remains
+correct and is what you want on a machine that has `psql`:
+
+```
+psql "<connection-string>" -v ON_ERROR_STOP=1 -f supabase/migrations/revert/revert-0064-transaction.sql
+```
+
+**Run that from the repository root**, or pass an absolute path: `psql` resolves
+`-f` against **your** working directory. Including no other file removes the
+`\ir` hazard `0059` has; it does not move `-f`. An earlier version of this
+section, and of the script's own header, claimed the command ran "from anywhere"
+while showing the relative path.
+
+Taking the `psql` route means every connection-layer guard above is yours to
+enforce by hand — and one of them is easy to miss precisely because no other
+check hints at it:
+
+> **Confirm WHICH DATABASE you are on, not just which project.** One cluster
+> serves many databases and Supabase supports more than one per project, so a
+> connection string whose path says `/shadow` carries the right project ref, the
+> right pooler host and the right port while reaching the wrong database. The
+> script's own preconditions cannot see this: they identify the MIGRATION.
+> Before running anything: `psql "<connection-string>" -Atc "select
+> current_database()"` and confirm it is what you expect.
+
+The runner performs that check for you (round-4 and round-5 panels, Codex,
+HIGH both times — once for the check being absent, once for this documented
+path not mentioning it). `psql` was not installed on this machine when 0064 was
+reverted on 2026-08-20 (checked: not on PATH, no `C:\Program Files\PostgreSQL`,
+no Supabase CLI), which is what made the missing runner urgent rather than
+theoretical.
+
+**The runner executes only files it has PINNED, and `0059` is not one.** It does
+not inspect what a revert file does — it checks that the file's CONTENT is the
+content that was reviewed, against a checksum in `PINNED_REVERTS`, and refuses
+anything else before opening a connection. Adding a file to that map is a code
+change, so it goes through review like any other.
+
+"Content", not "bytes": the pin is `checksumOfSql`, the repository's own
+normaliser, which folds CRLF and trims trailing whitespace at the end of the
+file. Two files with the same pin can therefore differ in line endings and in
+trailing blank space, and in nothing else — neither of which can change what
+the revert does. A raw-byte pin was considered and rejected: this checkout is
+`core.autocrlf`, so it would match only on the machine that wrote it and fail
+on every fresh clone.
+
+That replaced a hand-written SQL lexer, and the reason is worth recording.
+The runner used to PROVE, by parsing, that a file was one transaction and
+nothing else. Four consecutive review rounds each found a different way past it:
+a statement after `COMMIT`, an indented `ROLLBACK`, `ABORT` and `END` as
+synonyms, an apostrophe inside a double-quoted identifier, a non-ASCII
+dollar-quote tag, `BEGIN ATOMIC` routine bodies. Statically validating arbitrary
+SQL needs a real parser, and a safety check that is itself a homemade parser is
+a liability on the one path you reach for under pressure. Pinning makes every
+lexical edge case irrelevant: a reviewed file cannot change under its reviewers,
+and an unreviewed file cannot run at all.
+
+`0059` therefore keeps psql as its path of record — which it needed anyway,
+because its load-bearing `\ir` include only psql resolves — with the
+connection-layer guards enforced by hand.
+
+The runner also re-checks, before connecting, that the revert still pins the
+current checksum of the migration it undoes. The revert refuses in-database on
+that same value; doing it here means an operator learns it before a connection
+exists rather than from an aborted transaction.
+
+**The script's own preconditions are stated in the script, and deliberately not
+restated here.** Read the `DO $$` block at the top of
+`revert-0064-transaction.sql`: it names each refusal and why, next to the code
+that performs it.
+
+This paragraph used to enumerate them, and it drifted three review rounds
+running — each time the script gained or sharpened a check, this copy kept
+describing the previous one, and on a rollback path a stale precondition is
+read as a promise. That is the same failure this directory's one-statement-one-
+place rule already forbids, committed by the file that declares the rule. So the
+enumeration is gone rather than corrected again.
+
+What belongs HERE, because it is about the runner rather than the script, is the
+distinction the enumeration kept blurring: **those preconditions identify the
+MIGRATION, never the DATABASE.** A second database carrying the same migration
+satisfies every one of them. Proving which database you are on is the runner's
+job, done at the connection layer before a statement is sent — and on the psql
+path it is yours.
+
+So: through the runner, the target is proved before a statement is sent.
+Through psql, the script's own refusals still protect you from reverting the
+wrong MIGRATION — read them in the script — but proving you are on the right
+DATABASE is yours to do. `scripts/revert-pin.test.ts` keeps the pinned checksum
+honest either way.
+
+What it DOES, in one line: it restores `0007`'s tier-only
+`get_friend_ratings()` and deletes the `0064` ledger row in ONE transaction.
+Its refusals and its postconditions are stated in the script, beside the code
+that performs them — not here, for the reason above.
+
+### What reverting `0064` costs
+
+**No data is lost.** `0064` creates no table, drops no column and updates no row
+— it replaces one function definition and re-states its grants. `ratings.score`
+has existed since `0001` and is untouched, so a revert loses nothing that a
+re-apply would not immediately restore.
+
+**Re-applying afterwards is safe**, and this is the difference from `0059`: there
+is no counter to re-walk and no client-held value that becomes reachable again.
+Applying `0064` a second time is also safe on its own terms — it is
+drop-if-exists plus create-or-replace.
+
+**What a revert DOES break is the caller.** `src/lib/follows.server.ts` maps
+`row.score` through `toScore()`, which turns the now-absent column into `null`
+rather than throwing — so `fetchFriendRatings` keeps working and every score
+silently becomes `null`. Anything that reads those scores (Group Favorites'
+unanimous `>= 8.0` rule) will read them as unset, not as an error. Revert the
+code half too, or expect that.
+
+**The window is not zero.** The revert drops the function before recreating it,
+so a concurrent call in that instant errors rather than returning wrong rows.
+Prefer a quiet moment; the transaction holds the lock for milliseconds.

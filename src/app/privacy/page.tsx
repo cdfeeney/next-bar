@@ -3,8 +3,10 @@ import Link from 'next/link';
 
 /**
  * /privacy — honest v1 privacy policy (H1 App-Store pack; finalized
- * 2026-07-25 on operator instruction). Written to match what the app
- * ACTUALLY does. hi@next-bar.app must be receiving mail (registrar
+ * 2026-07-25 on operator instruction, updated 2026-08-20 when migration 0064
+ * made the numeric score visible to the accounts that follow you). Written to
+ * match what the app ACTUALLY does; UPDATED must move whenever what it says
+ * about sharing changes. hi@next-bar.app must be receiving mail (registrar
  * forwarding after the domain purchase) before App Store submission.
  */
 export const metadata: Metadata = {
@@ -12,7 +14,7 @@ export const metadata: Metadata = {
   description: 'How Next Bar handles your data.',
 };
 
-const UPDATED = 'July 25, 2026';
+const UPDATED = 'August 20, 2026';
 
 export default function PrivacyPage(): JSX.Element {
   return (
@@ -71,9 +73,17 @@ export default function PrivacyPage(): JSX.Element {
             <li>No selling or renting your personal data. Ever.</li>
             <li>No third-party advertising or ad trackers.</li>
             <li>
-              No sharing your ratings with anyone you haven&apos;t chosen to
-              connect with — friends see the tier you gave a bar, never your
-              precise scores.
+              Your 1.0–10.0 scores go to your followers and nobody else. No
+              public page and no shared link ever carries a score. Two things
+              about that are worth knowing rather than discovering: while your
+              account is public, anyone signed in can follow you without your
+              approval and will then see your scores — turn on the
+              private-account setting in Settings to approve each follower
+              first, and existing followers keep the access they already have.
+              And if you opt your list into public sharing, the tier you gave a
+              bar (loved, liked, pass) becomes visible to anyone, including
+              people who are not signed in; that opt-in is off unless you turn
+              it on, and it never exposes the numeric score.
             </li>
           </ul>
         </Block>

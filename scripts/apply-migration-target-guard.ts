@@ -43,6 +43,10 @@ export interface MigrationTarget {
   productionRef: string;
   /** NEXT_BAR_STAGING_PROJECT_REFS, split and trimmed; empty when unset. */
   stagingRefs: string[];
+  /** pg's resolved database name. */
+  database: string;
+  /** NEXT_BAR_DATABASE_NAME, or the documented default. */
+  expectedDatabase: string;
 }
 
 /** Returns the refusal reason, or null when the target is verified. */
@@ -78,7 +82,11 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
     if (ref !== productionRef) {
       return '--env production, but DATABASE_URL does not point at the production project ref';
     }
-    return null;
+    // The database check belongs here TOO, and leaving it to the staging path
+    // below put the hole on the most dangerous route (round-4 panel, Codex,
+    // HIGH): a production ref reaching a second database inside the production
+    // project was accepted by every caller of this shared guard.
+    return checkDatabaseName(target.database, target.expectedDatabase, env);
   }
 
   if (ref === productionRef) {
@@ -98,11 +106,47 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
   if (!stagingRefs.includes(ref)) {
     return `--env ${env}, but DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS`;
   }
+  return checkDatabaseName(target.database, target.expectedDatabase, env);
+}
+
+/**
+ * WHICH DATABASE, decided by CONFIGURATION rather than by the URL being asked
+ * about. `checkConnectionEndpoint` proves pg resolved the database the URL's
+ * path names — self-consistency, which is necessary and not sufficient: a URL
+ * whose path simply says `/shadow` agrees with itself, and every other check
+ * passes because the project ref, the host and the port are all still the
+ * allowlisted ones. If that database carries the pinned migration row, an
+ * --execute would downgrade and unrecord an unintended database (round-3 panel,
+ * Codex, HIGH). One cluster serves many databases; naming which one is expected
+ * is the only thing that can tell them apart.
+ *
+ * `postgres` is Supabase's database for every project, so it is the default
+ * rather than a required variable — a check nobody can run because it needs new
+ * configuration is a check that gets deleted. NEXT_BAR_DATABASE_NAME overrides
+ * it for a project that genuinely uses another.
+ */
+export function checkDatabaseName(
+  database: string,
+  expectedDatabase: string,
+  env: string,
+): string | null {
+  const actual = database.trim();
+  const expected = expectedDatabase.trim();
+  if (!expected) {
+    return `NEXT_BAR_DATABASE_NAME is set but empty, so --env ${env}'s database cannot be verified`;
+  }
+  if (!actual) return 'could not determine which database DATABASE_URL reaches';
+  if (actual !== expected) {
+    return `--env ${env}, but DATABASE_URL reaches the database ${JSON.stringify(actual)} `
+      + `rather than the expected ${JSON.stringify(expected)}`;
+  }
   return null;
 }
 
 /** libpq's default when the connection string names no port. */
 const DEFAULT_PG_PORT = '5432';
+/** Supabase serves every project from `postgres`; NEXT_BAR_DATABASE_NAME overrides it. */
+const DEFAULT_DATABASE = 'postgres';
 
 /**
  * The Supabase pooler carries the project ref in the USERNAME as
@@ -135,8 +179,8 @@ export function resolveProjectRef(effectiveUser: string): string {
  * otherwise skip the comparison entirely.
  */
 export function checkConnectionEndpoint(
-  effective: { host: string; port: string; options: string },
-  authority: { host: string; port: string },
+  effective: { host: string; port: string; options: string; database: string },
+  authority: { host: string; port: string; database: string },
 ): string | null {
   const effectiveHost = effective.host.trim();
   const authorityHost = authority.host.trim();
@@ -172,6 +216,29 @@ export function checkConnectionEndpoint(
     return "the effective connection port does not match DATABASE_URL's authority, "
       + 'so the target was overridden by a query parameter';
   }
+
+  // WHICH PROJECT, WHICH SERVER, and now WHICH DATABASE. The ref and the
+  // endpoint together still leave one selector unchecked: a Postgres cluster
+  // serves many databases, Supabase supports more than one per project, and
+  // `?dbname=` / PGDATABASE override the URL path exactly as `?host=` overrides
+  // the authority. Everything above would pass for `.../another_database` on the
+  // allowlisted project — and an in-SQL precondition cannot close it either,
+  // because a second database holding the same migration row answers every
+  // question the SQL can ask (round-1 panel, Codex, HIGH, on the revert runner).
+  //
+  // An omitted path is UNRESOLVED, not a default worth guessing: libpq falls
+  // back to the USERNAME, which on the Supabase pooler is `postgres.<ref>` and
+  // is not a database name at all. Refuse rather than infer.
+  const effectiveDatabase = effective.database.trim();
+  const authorityDatabase = authority.database.trim();
+  if (!authorityDatabase) {
+    return 'DATABASE_URL names no database, so which database it reaches cannot be verified';
+  }
+  if (!effectiveDatabase) return 'the effective database could not be resolved from DATABASE_URL';
+  if (effectiveDatabase !== authorityDatabase) {
+    return "the effective database does not match DATABASE_URL's path, "
+      + 'so the target was overridden by a query parameter or PGDATABASE';
+  }
   return null;
 }
 
@@ -203,7 +270,7 @@ export interface AuthorizedTarget {
   /** NEXT_BAR_DATABASE_ENVIRONMENT, which matched the operator's --env. */
   env: string;
   /** pg's own resolution, for the operator-facing report. */
-  effective: { user: string; host: string; port: string };
+  effective: { user: string; host: string; port: string; database: string };
   ref: string;
 }
 
@@ -275,13 +342,14 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   const probe = new Client(clientConfig) as unknown as {
     connectionParameters?: {
       user?: string; host?: string; port?: number | string; options?: string;
-      ssl?: unknown;
+      database?: string; ssl?: unknown;
     };
   };
   const effective = {
     user: probe.connectionParameters?.user ?? '',
     host: probe.connectionParameters?.host ?? '',
     port: String(probe.connectionParameters?.port ?? ''),
+    database: probe.connectionParameters?.database ?? '',
   };
   const effectiveOptions = probe.connectionParameters?.options ?? '';
   const ref = resolveProjectRef(effective.user);
@@ -289,22 +357,40 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   // The ref says WHICH PROJECT; the endpoint says WHICH SERVER. Checking only
   // the ref verifies a target the tool never inspected, because pg lets
   // `?host=` / `?port=` override the authority the operator reads.
-  let authority: { host: string; port: string };
+  let authority: { host: string; port: string; database: string };
   try {
     const parsed = new URL(databaseUrl);
-    authority = { host: parsed.hostname, port: parsed.port };
+    // `/postgres` -> `postgres`; an empty path stays empty and is refused below.
+    authority = {
+      host: parsed.hostname,
+      port: parsed.port,
+      database: decodeURIComponent(parsed.pathname.replace(/^\//, '')),
+    };
   } catch {
     return refuse('DATABASE_URL is not a parsable URL, so the connection target cannot be verified');
   }
   const endpointRefusal = checkConnectionEndpoint(
-    { host: effective.host, port: effective.port, options: effectiveOptions }, authority,
+    {
+      host: effective.host,
+      port: effective.port,
+      options: effectiveOptions,
+      database: effective.database,
+    },
+    authority,
   );
   if (endpointRefusal) return refuse(endpointRefusal);
 
   const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
   const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean);
-  const refusal = checkMigrationTarget({ env, ref, productionRef, stagingRefs });
+  const refusal = checkMigrationTarget({
+    env,
+    ref,
+    productionRef,
+    stagingRefs,
+    database: effective.database,
+    expectedDatabase: process.env.NEXT_BAR_DATABASE_NAME ?? DEFAULT_DATABASE,
+  });
   if (refusal) return refuse(refusal);
 
   // Node's global kill switch turns tls.connect's default verification off, and

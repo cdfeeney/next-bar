@@ -62,8 +62,10 @@ type ProfileState =
  *   signed-out → seeded demo curator profiles (unchanged v0.4 behavior).
  *   signed-in  → REAL lookup via get_profile_by_handle; notFound() on
  *                unknown; a friend's tier-ranked list through the
- *                friend_ratings view (tier only — scores are owner-only and
- *                never leave the server for friends).
+ *                friend_ratings view. Since migration 0064 that read
+ *                carries the numeric score as well as the tier, for accounts
+ *                the caller follows and nobody else. This page renders only
+ *                the tier today; the score is available to it.
  */
 export default function ProfilePage({
   params,
@@ -263,8 +265,9 @@ export default function ProfilePage({
         )}
 
         <p className="text-muted text-xs text-center mt-8 leading-relaxed">
-          Friends see tiers, never exact scores — those stay yours. Quiet by
-          default: no feeds, no likes.
+          People who follow you see the tier and the score you gave a bar.
+          Nothing public ever carries a score. Quiet by default: no feeds, no
+          likes.
         </p>
       </section>
     </main>

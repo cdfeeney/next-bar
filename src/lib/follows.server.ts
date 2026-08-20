@@ -14,9 +14,11 @@ import type { Rating } from '@/types/ratings';
  *     resolvable by exact handle only, per the B2 decision).
  *   - get_following()          — the caller's circle, handle-resolved.
  *   - follow_user(target) / unfollow_user(target) — edge writes.
- *   - friend_ratings view      — tier-only friend read on ratings. The
- *     `score` column is NEVER selected or exposed (blueprint hard rule:
- *     score stays owner-only; tier is the friend-visible signal).
+ *   - friend_ratings view      — friend read on ratings. Migration 0064
+ *     (founder decision 2026-08-19, Option B) added the numeric `score`
+ *     alongside the tier, superseding the earlier owner-only rule for THIS
+ *     surface only. The audience did not change: the 0007 follows edge.
+ *     Anonymous surfaces (get_public_ratings, shared nights) stay tier-only.
  *
  * B3b (migration 0008) adds the consent layer for private accounts:
  *   - follow_user now returns text — 'followed' | 'requested' | 'rejected'.
@@ -40,6 +42,15 @@ export type FriendRating = {
   userId: string;
   barId: string;
   rating: Rating;
+  /**
+   * The owner's personal 1.0-10.0 score, or null when they have not
+   * scored that bar. Crosses the friend boundary as of migration 0064
+   * (founder decision 2026-08-19, Option B) - Group Favorites needs the raw
+   * number for the unanimous >= 8.0 rule, and night-out suggestions need it
+   * to weigh. It reaches ONLY accounts the caller follows, and never any
+   * anonymous surface; see supabase/migrations/0064_friend_ratings_score.sql.
+   */
+  score: number | null;
   ratedAt: string;
 };
 
@@ -71,8 +82,27 @@ type FriendRatingRow = {
   user_id: string;
   bar_id: string;
   tier: Rating;
+  score: unknown;
   rated_at: string;
 };
+
+/**
+ * numeric(3,1) off the wire, defensively.
+ *
+ * PostgREST serialises `numeric` as a JSON number, but the column is nullable
+ * and this is a trust boundary: anything that is not a finite number becomes
+ * null rather than a NaN that silently poisons an average downstream. A
+ * numeric arriving as a decimal STRING is still a real score, so it is parsed
+ * rather than discarded.
+ */
+function toScore(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
 
 /** Trim + strip a leading @ — what users paste is "@claire", what the DB knows is "claire". */
 function cleanHandle(handle: string): string {
@@ -187,7 +217,8 @@ export async function unfollowByHandle(
 
 /**
  * A friend's ratings through the `get_friend_ratings()` definer RPC — tier
- * only, NEVER score. An RPC with a MATERIALIZED fence replaced the
+ * AND numeric score since migration 0064, for accounts the caller follows
+ * and nobody else. An RPC with a MATERIALIZED fence replaced the
  * security_barrier view (DeepSeek review): LEAKPROOF uuid `=` let the
  * planner push a caller predicate below the EXISTS gate, a timing
  * side-channel on unfollowed users. Filtering by userId happens client-side
@@ -206,6 +237,7 @@ export async function fetchFriendRatings(
       userId: row.user_id,
       barId: row.bar_id,
       rating: row.tier,
+      score: toScore(row.score),
       ratedAt: row.rated_at,
     }));
 }
@@ -336,8 +368,9 @@ export async function fetchFollowerCount(
 /**
  * ALL friends' ratings in ONE get_friend_ratings call, grouped by owner
  * (real consensus needs every participant at once — per-friend fetches
- * would spend N round-trips on the same gated result set). Tier-only by
- * design: score never crosses the friend boundary. Null on RPC error.
+ * would spend N round-trips on the same gated result set). Carries the
+ * numeric score since migration 0064 — Group Favorites' unanimous >= 8.0
+ * rule cannot be evaluated from tiers. Null on RPC error.
  */
 export async function fetchAllFriendRatings(
   supabase: SupabaseClient,
@@ -350,6 +383,7 @@ export async function fetchAllFriendRatings(
       userId: row.user_id,
       barId: row.bar_id,
       rating: row.tier,
+      score: toScore(row.score),
       ratedAt: row.rated_at,
     });
   }
