@@ -245,14 +245,24 @@ current checksum of the migration it undoes. The revert refuses in-database on
 that same value; doing it here means an operator learns it before a connection
 exists rather than from an aborted transaction.
 
-The script's own preconditions then refuse unless the ledger row for `0064`
-carries this migration's checksum AND the live `get_friend_ratings()` still
-returns a `score` column. **That is a check on the MIGRATION, not on the
-database**, and the distinction is the whole reason the runner exists: a second
-database carrying the same migration satisfies every one of those predicates.
-An earlier version of this paragraph said they refuse a wrong database, which
-contradicted the paragraph above it and offered exactly the false assurance that
-matters most on the psql path, where nothing else is checking the target.
+**The script's own preconditions are stated in the script, and deliberately not
+restated here.** Read the `DO $$` block at the top of
+`revert-0064-transaction.sql`: it names each refusal and why, next to the code
+that performs it.
+
+This paragraph used to enumerate them, and it drifted three review rounds
+running — each time the script gained or sharpened a check, this copy kept
+describing the previous one, and on a rollback path a stale precondition is
+read as a promise. That is the same failure this directory's one-statement-one-
+place rule already forbids, committed by the file that declares the rule. So the
+enumeration is gone rather than corrected again.
+
+What belongs HERE, because it is about the runner rather than the script, is the
+distinction the enumeration kept blurring: **those preconditions identify the
+MIGRATION, never the DATABASE.** A second database carrying the same migration
+satisfies every one of them. Proving which database you are on is the runner's
+job, done at the connection layer before a statement is sent — and on the psql
+path it is yours.
 
 So: through the runner, the target is proved before a statement is sent. Through
 psql, the preconditions still stop you reverting the wrong MIGRATION, or
