@@ -16,13 +16,13 @@ export default function InstallPage() {
         <nav className="flex items-center gap-5">
           <Link
             href="/"
-            className="text-muted hover:text-text underline-offset-4 hover:underline text-sm min-h-[44px] inline-flex items-center touch-manipulation"
+            className="text-muted hover:text-text underline-offset-4 hover:underline text-sm min-h-[44px] min-w-[44px] inline-flex items-center justify-center touch-manipulation"
           >
             Open the app
           </Link>
           <Link
             href="/quiz"
-            className="text-muted hover:text-text underline-offset-4 hover:underline text-sm min-h-[44px] inline-flex items-center touch-manipulation"
+            className="text-muted hover:text-text underline-offset-4 hover:underline text-sm min-h-[44px] min-w-[44px] inline-flex items-center justify-center touch-manipulation"
           >
             Quiz
           </Link>
