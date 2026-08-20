@@ -20,6 +20,16 @@
 
 BEGIN READ WRITE;
 
+-- SET LOCAL, inside this transaction, on purpose. A caller cannot set these
+-- for us: the transaction is opened HERE, so a SET LOCAL outside it belongs
+-- to no transaction and is discarded, and a session-level SET would both
+-- LEAK onto the Supabase pooler's pinned backend for whatever session is
+-- assigned it next, and not be reliably inherited in transaction mode
+-- anyway. Unbounded, a blocked DROP FUNCTION waits on the lock while HOLDING
+-- this transaction open; bounded, it aborts and the whole revert rolls back.
+SET LOCAL lock_timeout = '10s';
+SET LOCAL statement_timeout = '300s';
+
 -- PRECONDITION, checked before anything is touched: refuse unless 0064 is
 -- actually the thing being undone, and unless it is the NEWEST migration —
 -- reverting it under a later one could clobber that one's definition.

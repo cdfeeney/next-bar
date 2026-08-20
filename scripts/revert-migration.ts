@@ -42,8 +42,6 @@ import { resolveTarget } from './lib/migration-target-guard';
 
 /** A psql client metacommand. The server rejects these, so a file carrying one is psql-only. */
 const METACOMMAND = 92; // '\'
-const LOCK_TIMEOUT = '10s';
-const STATEMENT_TIMEOUT = '300s';
 
 function fail(message: string): never {
   console.error(`\n[revert] ${message}\n`);
@@ -69,9 +67,65 @@ function parseArgs(argv: string[]): { env: string; execute: boolean; file: strin
 }
 
 /**
- * The file must be ONE explicit transaction. A revert that half-applies is the
- * split state every revert file in this repository is written to prevent: the
- * ledger row gone while the bodies are still the new ones, or the reverse.
+ * Strips what SQL says is not code, so the transaction check reads STATEMENTS
+ * rather than text. Without this, a `BEGIN` inside a comment or a dollar-quoted
+ * function body counts as a transaction. The first version of this file shipped
+ * exactly that bug, and a reviewer found it: a file reading BEGIN, COMMIT, then
+ * a DELETE passed the check, and the trailing DELETE would have committed on
+ * its own — the very ledger/body split the guard claims to prevent.
+ */
+export function stripNonCode(sql: string): string {
+  let out = '';
+  let i = 0;
+  while (i < sql.length) {
+    const rest = sql.slice(i);
+    if (rest.startsWith('--')) {
+      const nl = sql.indexOf('\n', i);
+      i = nl === -1 ? sql.length : nl;
+      continue;
+    }
+    if (rest.startsWith('/*')) {
+      // Postgres block comments nest, so a depth counter is required.
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql.startsWith('/*', i)) { depth += 1; i += 2; } else if (sql.startsWith('*/', i)) { depth -= 1; i += 2; } else i += 1;
+      }
+      out += ' ';
+      continue;
+    }
+    if (rest.startsWith("'")) {
+      i += 1;
+      while (i < sql.length) {
+        if (sql[i] === "'" && sql[i + 1] === "'") { i += 2; continue; }
+        if (sql[i] === "'") { i += 1; break; }
+        i += 1;
+      }
+      out += " '' ";
+      continue;
+    }
+    const dollar = /^\$[A-Za-z_0-9]*\$/.exec(rest);
+    if (dollar) {
+      const tag = dollar[0];
+      const close = sql.indexOf(tag, i + tag.length);
+      i = close === -1 ? sql.length : close + tag.length;
+      out += ' $$ ';
+      continue;
+    }
+    out += sql[i];
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * The file must be ONE explicit transaction and nothing else. A revert that
+ * half-applies is the split state every revert file in this repository is
+ * written to prevent: the ledger row gone while the bodies are still the new
+ * ones, or the reverse. Anything after COMMIT would run outside that
+ * transaction and commit on its own, which is the same failure wearing a
+ * different shape.
+ *
  * `BEGIN READ WRITE` is what the files use, because the Supabase transaction
  * pooler hands out a pinned backend whose session can carry
  * `default_transaction_read_only=on`.
@@ -84,12 +138,35 @@ export function checkRevertFile(sql: string): string | null {
       + 'server rejects as a syntax error. A revert file must be plain SQL so every client can run it '
       + 'verbatim; put client options on the psql command line instead.';
   }
-  if (!/^\s*BEGIN(\s+READ\s+WRITE)?\s*;/m.test(sql)) {
+
+  const statements = stripNonCode(sql)
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0);
+
+  if (statements.length === 0) return 'the file contains no SQL statements.';
+
+  const isBegin = (statement: string) => /^BEGIN(\s+(READ\s+WRITE|ISOLATION|TRANSACTION)\b.*)?$/is.test(statement);
+  const begins = statements.filter(isBegin).length;
+  const commits = statements.filter((statement) => /^COMMIT\b/is.test(statement)).length;
+
+  if (begins === 0) {
     return 'the file opens no explicit transaction (expected BEGIN READ WRITE;), so a failure part-way '
       + 'through would leave the database and the ledger disagreeing.';
   }
-  if (!/^\s*COMMIT\s*;/m.test(sql)) {
-    return 'the file never COMMITs, so it is not a single complete transaction.';
+  if (begins > 1) return `the file opens ${begins} transactions; a revert must be exactly one.`;
+  if (commits === 0) return 'the file never COMMITs, so it is not a single complete transaction.';
+  if (commits > 1) return `the file COMMITs ${commits} times; a revert must be exactly one transaction.`;
+  if (!isBegin(statements[0])) {
+    return `the first statement is not BEGIN (${JSON.stringify(statements[0].slice(0, 60))}), so it would `
+      + 'run outside the transaction.';
+  }
+  if (!/^COMMIT\b/is.test(statements[statements.length - 1])) {
+    return `${JSON.stringify(statements[statements.length - 1].slice(0, 60))} follows COMMIT, so it would `
+      + 'run outside the transaction and commit on its own.';
+  }
+  if (/^ROLLBACK\b/im.test(stripNonCode(sql))) {
+    return 'the file contains ROLLBACK, so what it commits depends on which branch runs.';
   }
   return null;
 }
@@ -159,10 +236,13 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Session-level, not SET LOCAL: the file owns its own transaction, so a
-    // SET LOCAL here would belong to no transaction and be discarded.
-    await client.query(`SET lock_timeout = '${LOCK_TIMEOUT}'`);
-    await client.query(`SET statement_timeout = '${STATEMENT_TIMEOUT}'`);
+    // NO timeouts are set here, deliberately. The file owns its transaction, so
+    // a SET LOCAL from out here belongs to no transaction and is discarded; and a
+    // session-level SET would LEAK onto the Supabase pooler's pinned backend for
+    // whatever session is assigned it next, besides not being reliably inherited
+    // in transaction mode. Both were review findings against an earlier version of
+    // this file. The bounds live inside the revert transaction instead, which is
+    // the only scope that can hold them.
     try {
       await client.query(sql);
       console.log('[revert] the revert transaction committed.\n');

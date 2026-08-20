@@ -97,10 +97,11 @@ function sslOption(suite: string): LiveSsl {
 function effectiveConnection(
   connectionString: string,
   ssl: LiveSsl,
-): { user: string; host: string; port: string; options: string; ssl: unknown } {
+): { user: string; host: string; port: string; options: string; database: string; ssl: unknown } {
   const probe = new Client({ connectionString, ssl }) as unknown as {
     connectionParameters?: {
-      user?: string; host?: string; port?: number | string; options?: string; ssl?: unknown;
+      user?: string; host?: string; port?: number | string; options?: string;
+      database?: string; ssl?: unknown;
     };
   };
   return {
@@ -108,6 +109,7 @@ function effectiveConnection(
     host: probe.connectionParameters?.host ?? '',
     port: String(probe.connectionParameters?.port ?? ''),
     options: probe.connectionParameters?.options ?? '',
+    database: probe.connectionParameters?.database ?? '',
     ssl: probe.connectionParameters?.ssl,
   };
 }
@@ -152,10 +154,24 @@ function assertStagingOnly(suite: string, connectionString: string, ssl: LiveSsl
   // an allowlisted user. This is the migration guard's own check, imported
   // rather than copied — the copy short-circuited when either side was empty,
   // which a host-less authority (`postgres:///db?host=elsewhere`) produces.
+  // `database` rides along for the same reason host and port do: a cluster
+  // serves many databases, Supabase supports more than one per project, and
+  // `?dbname=`/PGDATABASE override the URL path exactly as `?host=` overrides
+  // the authority. A live suite pointed at a second database on the allowlisted
+  // project would otherwise pass every check here and write to the wrong one.
   const authority = new globalThis.URL(connectionString);
   const endpointRefusal = checkConnectionEndpoint(
-    { host: effective.host, port: effective.port, options: effective.options },
-    { host: authority.hostname, port: authority.port },
+    {
+      host: effective.host,
+      port: effective.port,
+      options: effective.options,
+      database: effective.database,
+    },
+    {
+      host: authority.hostname,
+      port: authority.port,
+      database: decodeURIComponent(authority.pathname.replace(/^\//, '')),
+    },
   );
   if (endpointRefusal) throw new Error(`${suite} refuses to run: ${endpointRefusal}.`);
 

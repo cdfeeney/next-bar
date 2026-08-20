@@ -73,14 +73,17 @@ export default function PrivacyPage(): JSX.Element {
             <li>No selling or renting your personal data. Ever.</li>
             <li>No third-party advertising or ad trackers.</li>
             <li>
-              No sharing your ratings beyond your followers. The accounts that
-              follow you see the tier AND the 1.0–10.0 score you gave a bar;
-              nobody else does, and no public or shared link ever carries a
-              score. Be aware of what “follower” means: while your account is
-              public, anyone signed in can follow you without your approval and
-              will then see those scores. Turn on the private-account setting in
-              Settings if you want to approve each follower first — existing
-              followers keep the access they already have.
+              Your 1.0–10.0 scores go to your followers and nobody else. No
+              public page and no shared link ever carries a score. Two things
+              about that are worth knowing rather than discovering: while your
+              account is public, anyone signed in can follow you without your
+              approval and will then see your scores — turn on the
+              private-account setting in Settings to approve each follower
+              first, and existing followers keep the access they already have.
+              And if you opt your list into public sharing, the tier you gave a
+              bar (loved, liked, pass) becomes visible to anyone, including
+              people who are not signed in; that opt-in is off unless you turn
+              it on, and it never exposes the numeric score.
             </li>
           </ul>
         </Block>

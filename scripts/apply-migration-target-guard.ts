@@ -135,8 +135,8 @@ export function resolveProjectRef(effectiveUser: string): string {
  * otherwise skip the comparison entirely.
  */
 export function checkConnectionEndpoint(
-  effective: { host: string; port: string; options: string },
-  authority: { host: string; port: string },
+  effective: { host: string; port: string; options: string; database: string },
+  authority: { host: string; port: string; database: string },
 ): string | null {
   const effectiveHost = effective.host.trim();
   const authorityHost = authority.host.trim();
@@ -172,6 +172,29 @@ export function checkConnectionEndpoint(
     return "the effective connection port does not match DATABASE_URL's authority, "
       + 'so the target was overridden by a query parameter';
   }
+
+  // WHICH PROJECT, WHICH SERVER, and now WHICH DATABASE. The ref and the
+  // endpoint together still leave one selector unchecked: a Postgres cluster
+  // serves many databases, Supabase supports more than one per project, and
+  // `?dbname=` / PGDATABASE override the URL path exactly as `?host=` overrides
+  // the authority. Everything above would pass for `.../another_database` on the
+  // allowlisted project — and an in-SQL precondition cannot close it either,
+  // because a second database holding the same migration row answers every
+  // question the SQL can ask (round-1 panel, Codex, HIGH, on the revert runner).
+  //
+  // An omitted path is UNRESOLVED, not a default worth guessing: libpq falls
+  // back to the USERNAME, which on the Supabase pooler is `postgres.<ref>` and
+  // is not a database name at all. Refuse rather than infer.
+  const effectiveDatabase = effective.database.trim();
+  const authorityDatabase = authority.database.trim();
+  if (!authorityDatabase) {
+    return 'DATABASE_URL names no database, so which database it reaches cannot be verified';
+  }
+  if (!effectiveDatabase) return 'the effective database could not be resolved from DATABASE_URL';
+  if (effectiveDatabase !== authorityDatabase) {
+    return "the effective database does not match DATABASE_URL's path, "
+      + 'so the target was overridden by a query parameter or PGDATABASE';
+  }
   return null;
 }
 
@@ -203,7 +226,7 @@ export interface AuthorizedTarget {
   /** NEXT_BAR_DATABASE_ENVIRONMENT, which matched the operator's --env. */
   env: string;
   /** pg's own resolution, for the operator-facing report. */
-  effective: { user: string; host: string; port: string };
+  effective: { user: string; host: string; port: string; database: string };
   ref: string;
 }
 
@@ -275,13 +298,14 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   const probe = new Client(clientConfig) as unknown as {
     connectionParameters?: {
       user?: string; host?: string; port?: number | string; options?: string;
-      ssl?: unknown;
+      database?: string; ssl?: unknown;
     };
   };
   const effective = {
     user: probe.connectionParameters?.user ?? '',
     host: probe.connectionParameters?.host ?? '',
     port: String(probe.connectionParameters?.port ?? ''),
+    database: probe.connectionParameters?.database ?? '',
   };
   const effectiveOptions = probe.connectionParameters?.options ?? '';
   const ref = resolveProjectRef(effective.user);
@@ -289,15 +313,26 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   // The ref says WHICH PROJECT; the endpoint says WHICH SERVER. Checking only
   // the ref verifies a target the tool never inspected, because pg lets
   // `?host=` / `?port=` override the authority the operator reads.
-  let authority: { host: string; port: string };
+  let authority: { host: string; port: string; database: string };
   try {
     const parsed = new URL(databaseUrl);
-    authority = { host: parsed.hostname, port: parsed.port };
+    // `/postgres` -> `postgres`; an empty path stays empty and is refused below.
+    authority = {
+      host: parsed.hostname,
+      port: parsed.port,
+      database: decodeURIComponent(parsed.pathname.replace(/^\//, '')),
+    };
   } catch {
     return refuse('DATABASE_URL is not a parsable URL, so the connection target cannot be verified');
   }
   const endpointRefusal = checkConnectionEndpoint(
-    { host: effective.host, port: effective.port, options: effectiveOptions }, authority,
+    {
+      host: effective.host,
+      port: effective.port,
+      options: effectiveOptions,
+      database: effective.database,
+    },
+    authority,
   );
   if (endpointRefusal) return refuse(endpointRefusal);
 

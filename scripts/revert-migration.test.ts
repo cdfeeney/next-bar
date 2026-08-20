@@ -53,6 +53,53 @@ describe('checkRevertFile', () => {
   it('does not mistake the word begin inside a comment for a transaction', () => {
     expect(checkRevertFile('-- BEGIN; here is a comment\nCOMMIT;\n')).toMatch(/opens no explicit transaction/);
   });
+
+  // Round-1 panel of the fresh cycle, Codex, HIGH. The first version of this
+  // guard looked for a line containing BEGIN and another containing COMMIT,
+  // which is not the same thing as "one transaction and nothing else".
+  it('refuses a statement AFTER the commit, which would commit on its own', () => {
+    const problem = checkRevertFile('BEGIN;\nCOMMIT;\nDELETE FROM public.schema_migrations;\n');
+    expect(problem).toMatch(/follows COMMIT/);
+  });
+
+  it('refuses more than one transaction', () => {
+    expect(checkRevertFile('BEGIN;\nCOMMIT;\nBEGIN;\nCOMMIT;\n')).toMatch(/transactions|COMMITs 2 times/);
+  });
+
+  it('refuses a statement BEFORE the transaction opens', () => {
+    expect(checkRevertFile('DELETE FROM public.schema_migrations;\nBEGIN;\nCOMMIT;\n'))
+      .toMatch(/first statement is not BEGIN/);
+  });
+
+  it('does not count BEGIN inside a dollar-quoted body as a transaction', () => {
+    // A DO block's plpgsql BEGIN/END is not a transaction control statement, and
+    // every revert file in this repository contains one.
+    const sql = 'DO $$\nBEGIN\n  RAISE NOTICE \'hi\';\nEND\n$$;\n';
+    expect(checkRevertFile(sql)).toMatch(/opens no explicit transaction/);
+  });
+
+  it('accepts a real transaction that contains a DO block with its own BEGIN', () => {
+    const sql = [
+      'BEGIN READ WRITE;',
+      "SET LOCAL lock_timeout = '10s';",
+      'DO $$',
+      'BEGIN',
+      "  IF NOT EXISTS (SELECT 1) THEN RAISE EXCEPTION 'no';",
+      '  END IF;',
+      'END',
+      '$$;',
+      'COMMIT;',
+    ].join('\n');
+    expect(checkRevertFile(sql)).toBeNull();
+  });
+
+  it('does not count BEGIN inside a string literal', () => {
+    expect(checkRevertFile("BEGIN;\nSELECT 'BEGIN; COMMIT;';\nCOMMIT;\n")).toBeNull();
+  });
+
+  it('refuses a file containing ROLLBACK, whose outcome depends on a branch', () => {
+    expect(checkRevertFile('BEGIN;\nROLLBACK;\nCOMMIT;\n')).toMatch(/ROLLBACK/);
+  });
 });
 
 /**

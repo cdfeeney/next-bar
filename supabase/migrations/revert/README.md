@@ -217,10 +217,20 @@ the connection-layer guards enforced by hand. `scripts/revert-migration.test.ts`
 pins that split, so adding a revert file forces a deliberate choice about which
 path it takes.
 
-Either way the script's own preconditions then refuse unless the ledger row for
-`0064` carries this migration's checksum AND the live `get_friend_ratings()`
-still returns a `score` column — so a wrong database is refused before any DDL,
-not after. `scripts/revert-pin.test.ts` keeps that pinned checksum honest.
+The script's own preconditions then refuse unless the ledger row for `0064`
+carries this migration's checksum AND the live `get_friend_ratings()` still
+returns a `score` column. **That is a check on the MIGRATION, not on the
+database**, and the distinction is the whole reason the runner exists: a second
+database carrying the same migration satisfies every one of those predicates.
+An earlier version of this paragraph said they refuse a wrong database, which
+contradicted the paragraph above it and offered exactly the false assurance that
+matters most on the psql path, where nothing else is checking the target.
+
+So: through the runner, the target is proved before a statement is sent. Through
+psql, the preconditions still stop you reverting the wrong MIGRATION, or
+reverting twice, or reverting under a later one — but proving you are on the
+right DATABASE is yours to do. `scripts/revert-pin.test.ts` keeps the pinned
+checksum honest either way.
 
 It restores `0007`'s tier-only `get_friend_ratings()` and deletes the `0064`
 ledger row in ONE transaction, refusing up front unless `0064` is in the ledger

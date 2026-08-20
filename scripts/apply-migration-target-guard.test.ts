@@ -107,7 +107,11 @@ describe('checkMigrationTarget', () => {
 // allowlisted, and the operator's banner showed the authority.
 describe('checkConnectionEndpoint', () => {
   const HOST = 'aws-0-us-east-1.pooler.supabase.com';
-  const at = (host: string, port: string, options = '') => ({ host, port, options });
+  // `database` defaults to the ordinary Supabase database so the existing cases
+  // keep testing exactly what they tested before the database dimension was added.
+  const at = (host: string, port: string, options = '', database = 'postgres') => (
+    { host, port, options, database }
+  );
 
   it('refuses when pg resolves a different host than the URL authority', () => {
     expect(checkConnectionEndpoint(at('somewhere-else.pooler.supabase.com', '5432'), at(HOST, '5432')))
@@ -142,6 +146,33 @@ describe('checkConnectionEndpoint', () => {
 
   it('refuses an omitted authority port when pg resolves something else', () => {
     expect(checkConnectionEndpoint(at(HOST, '6543'), at(HOST, ''))).toContain('port does not match');
+  });
+
+  // Round-1 panel of the fresh cycle, Codex, HIGH, raised against the revert
+  // runner: the ref answers "which project" and the endpoint answers "which
+  // server", but a cluster serves many databases and Supabase supports more than
+  // one per project. `?dbname=` and PGDATABASE override the URL path the same way
+  // `?host=` overrides the authority, and no in-SQL precondition can close it —
+  // a second database carrying the same migration row answers every question the
+  // SQL can ask.
+  it('refuses when pg resolves a different database than the URL path', () => {
+    expect(checkConnectionEndpoint(at(HOST, '5432', '', 'another_database'), at(HOST, '5432')))
+      .toContain('effective database does not match');
+  });
+
+  it('refuses when the URL names no database at all', () => {
+    expect(checkConnectionEndpoint(at(HOST, '5432'), at(HOST, '5432', '', '')))
+      .toContain('names no database');
+  });
+
+  it('refuses when the effective database could not be resolved', () => {
+    expect(checkConnectionEndpoint(at(HOST, '5432', '', '   '), at(HOST, '5432')))
+      .toContain('effective database could not be resolved');
+  });
+
+  it('accepts a matching non-default database name', () => {
+    expect(checkConnectionEndpoint(at(HOST, '5432', '', 'shadow'), at(HOST, '5432', '', 'shadow')))
+      .toBeNull();
   });
 
   it('accepts the connection when pg resolves the authority endpoint', () => {
@@ -204,15 +235,15 @@ describe('checkMigrationTarget with malformed configuration', () => {
 describe('checkConnectionEndpoint outside the Supabase pooler', () => {
   it('refuses an allowlisted-looking username sent to an unrelated server', () => {
     expect(checkConnectionEndpoint(
-      { host: 'production-proxy.example.com', port: '5432', options: '' },
-      { host: 'production-proxy.example.com', port: '5432' },
+      { host: 'production-proxy.example.com', port: '5432', options: '', database: 'postgres' },
+      { host: 'production-proxy.example.com', port: '5432', database: 'postgres' },
     )).toContain('not a Supabase pooler host');
   });
 
   it('refuses a host that merely contains the pooler domain', () => {
     expect(checkConnectionEndpoint(
-      { host: 'pooler.supabase.com.evil.example', port: '5432', options: '' },
-      { host: 'pooler.supabase.com.evil.example', port: '5432' },
+      { host: 'pooler.supabase.com.evil.example', port: '5432', options: '', database: 'postgres' },
+      { host: 'pooler.supabase.com.evil.example', port: '5432', database: 'postgres' },
     )).toContain('not a Supabase pooler host');
   });
 });
@@ -244,21 +275,21 @@ describe('checkConnectionEndpoint with startup options', () => {
 
   it('refuses a connection carrying a pooler tenant selector', () => {
     expect(checkConnectionEndpoint(
-      { host: HOST, port: '6543', options: 'reference=' + PROD },
-      { host: HOST, port: '6543' },
+      { host: HOST, port: '6543', options: 'reference=' + PROD, database: 'postgres' },
+      { host: HOST, port: '6543', database: 'postgres' },
     )).toContain('startup options');
   });
 
   it('refuses any startup options, not only the ones it recognises', () => {
     expect(checkConnectionEndpoint(
-      { host: HOST, port: '6543', options: '-c statement_timeout=0' },
-      { host: HOST, port: '6543' },
+      { host: HOST, port: '6543', options: '-c statement_timeout=0', database: 'postgres' },
+      { host: HOST, port: '6543', database: 'postgres' },
     )).toContain('startup options');
   });
 
   it('accepts a connection with no startup options', () => {
     expect(checkConnectionEndpoint(
-      { host: HOST, port: '6543', options: '  ' }, { host: HOST, port: '6543' },
+      { host: HOST, port: '6543', options: '  ', database: 'postgres' }, { host: HOST, port: '6543', database: 'postgres' },
     )).toBeNull();
   });
 });
