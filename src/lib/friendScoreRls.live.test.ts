@@ -225,6 +225,61 @@ describeLive('0064 get_friend_ratings — the score stops at the follow edge', (
     });
   });
 
+  it('does not let a PENDING follow request reach ratings.score off the table (criterion 4c, 5)', async () => {
+    await inRollback(async () => {
+      const [owner, requester] = await scoredOwner(1);
+      // Round-9 panel, Codex MEDIUM. The pending and reverse-edge negatives
+      // covered only the definer RPC. `authenticated` already holds SELECT on
+      // public.ratings, so a future permissive SELECT policy could hand these
+      // exact accounts the score straight off the table while every
+      // get_friend_ratings assertion stayed green.
+      await db.query('insert into public.follow_requests (requester_id, target_id) values ($1, $2)', [requester, owner]);
+
+      await db.query('SAVEPOINT probe');
+      await asRole('authenticated', requester);
+      let rows: Array<Record<string, unknown>> = [];
+      let denied: string | null = null;
+      try {
+        const result = await db.query('select score from public.ratings where user_id = $1', [owner]);
+        rows = result.rows as Array<Record<string, unknown>>;
+      } catch (error) {
+        denied = (error as { message: string }).message;
+      }
+      await db.query('ROLLBACK TO SAVEPOINT probe');
+      if (denied === null) {
+        expect(rows, 'a pending requester read the owner score off public.ratings').toHaveLength(0);
+      } else {
+        expect(denied).toMatch(/permission denied|policy/i);
+      }
+    });
+  });
+
+  it('does not let the REVERSE follow edge reach ratings.score off the table (criterion 4a, 5)', async () => {
+    await inRollback(async () => {
+      const [owner, other] = await scoredOwner(1);
+      // The owner follows `other`, not the other way round. Directional by
+      // criterion 3, and it must hold at the table as well as at the RPC.
+      await db.query('insert into public.follows (follower_id, followee_id) values ($1, $2)', [owner, other]);
+
+      await db.query('SAVEPOINT probe');
+      await asRole('authenticated', other);
+      let rows: Array<Record<string, unknown>> = [];
+      let denied: string | null = null;
+      try {
+        const result = await db.query('select score from public.ratings where user_id = $1', [owner]);
+        rows = result.rows as Array<Record<string, unknown>>;
+      } catch (error) {
+        denied = (error as { message: string }).message;
+      }
+      await db.query('ROLLBACK TO SAVEPOINT probe');
+      if (denied === null) {
+        expect(rows, 'a followee read the follower score off public.ratings').toHaveLength(0);
+      } else {
+        expect(denied).toMatch(/permission denied|policy/i);
+      }
+    });
+  });
+
   it('lets the OWNER read their own score off the table, so the test above is not vacuous', async () => {
     await inRollback(async () => {
       const [owner] = await scoredOwner(0);
