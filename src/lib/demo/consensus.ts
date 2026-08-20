@@ -64,6 +64,55 @@ export type ConsensusResult = {
   alsoConsider: ConsensusEntry[];
 };
 
+/** A person the picker can select. `ratings` may legitimately be empty. */
+export type SelectablePerson = {
+  id: string;
+  label: string;
+  ratings: ReadonlyArray<BarRating>;
+};
+
+/**
+ * Build the unanimity DENOMINATOR from the picker's selection.
+ *
+ * This lives here, beside the rule it feeds, so it can be tested as the SAME
+ * code that ships — the lesson `deriveInviteeIds` was extracted for. The
+ * defect it exists to prevent (panel, Codex MEDIUM; founder item 6) was that
+ * the page built participants from the RATING-QUALIFIED people only, so a
+ * selected circle member with zero ranked bars never entered `total`. Under
+ * the founder rule "every member scored it >= 8.0", omitting them lets a bar
+ * qualify without the score the rule demands of that person — the table's
+ * "9.0 / no score = Not YET a Group Favorite" row, silently reversed.
+ *
+ * `unratedPeople` is a separate REQUIRED parameter rather than something the
+ * caller may forget to concatenate: that omission is the whole bug.
+ */
+export function deriveConsensusParticipants({
+  selected,
+  you,
+  ratedPeople,
+  unratedPeople,
+}: {
+  /** Ids currently selected in the picker. */
+  selected: ReadonlySet<string>;
+  /** The signed-in user, or null when they have nothing to contribute. */
+  you: SelectablePerson | null;
+  /** Selectable people who have ranked at least one bar. */
+  ratedPeople: ReadonlyArray<SelectablePerson>;
+  /** Selectable people who have ranked NOTHING. They still count. */
+  unratedPeople: ReadonlyArray<SelectablePerson>;
+}): ConsensusParticipant[] {
+  const list: ConsensusParticipant[] = [];
+  if (you && selected.has(you.id)) {
+    list.push({ id: you.id, label: you.label, ratings: you.ratings });
+  }
+  for (const p of [...ratedPeople, ...unratedPeople]) {
+    if (selected.has(p.id)) {
+      list.push({ id: p.id, label: p.label, ratings: p.ratings });
+    }
+  }
+  return list;
+}
+
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
 /**

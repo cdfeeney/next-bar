@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeConsensus,
+  deriveConsensusParticipants,
   GROUP_FAVORITE_MIN_SCORE,
   type ConsensusParticipant,
 } from './consensus';
@@ -153,5 +154,70 @@ describe('computeConsensus — Group Favorites (founder rule 2026-08-19)', () =>
     const b = participant('b', [rating('x', 9.0)]);
     const { overlap } = computeConsensus([a, b]);
     expect(overlap[0].votes.map((v) => v.score)).toEqual([9.0, 8.5]);
+  });
+});
+
+describe('deriveConsensusParticipants — the unanimity denominator', () => {
+  const you = { id: 'you', label: 'You', ratings: [rating('x', 9.0)] };
+  const scored = { id: 'friend', label: 'Friend', ratings: [rating('x', 8.5)] };
+  /** Selected, invited, ranks nothing. Counts anyway. */
+  const unranked = { id: 'newbie', label: 'Newbie', ratings: [] };
+
+  const derive = (selectedIds: string[]) =>
+    deriveConsensusParticipants({
+      selected: new Set(selectedIds),
+      you,
+      ratedPeople: [scored],
+      unratedPeople: [unranked],
+    });
+
+  it('counts a selected member who has ranked nothing', () => {
+    // The defect: they used to be dropped, so `total` was 2 and a bar only
+    // the other two scored came out unanimous.
+    expect(derive(['you', 'friend', 'newbie']).map((p) => p.id)).toEqual([
+      'you',
+      'friend',
+      'newbie',
+    ]);
+  });
+
+  it('so a bar the others love is NOT a Group Favorite while they are selected', () => {
+    const withNewbie = computeConsensus(derive(['you', 'friend', 'newbie']));
+    expect(withNewbie.overlap).toHaveLength(0);
+    // Not hidden either — two favourable scores make it a near-miss.
+    expect(withNewbie.alsoConsider.map((e) => e.barId)).toEqual(['x']);
+
+    // Deselect them and the same bar qualifies. That is the denominator
+    // doing its job, not a threshold change.
+    const without = computeConsensus(derive(['you', 'friend']));
+    expect(without.overlap.map((e) => e.barId)).toEqual(['x']);
+  });
+
+  it('includes only selected people, and You only when they have ratings', () => {
+    expect(derive(['friend']).map((p) => p.id)).toEqual(['friend']);
+    expect(
+      deriveConsensusParticipants({
+        selected: new Set(['you', 'friend']),
+        you: null,
+        ratedPeople: [scored],
+        unratedPeople: [],
+      }).map((p) => p.id),
+    ).toEqual(['friend']);
+  });
+
+  it('handles mixed group membership: a bar nobody shares stays out of both lists', () => {
+    const result = computeConsensus(
+      deriveConsensusParticipants({
+        selected: new Set(['you', 'a', 'b']),
+        you,
+        ratedPeople: [
+          { id: 'a', label: 'A', ratings: [rating('only-a', 9.5)] },
+          { id: 'b', label: 'B', ratings: [rating('only-b', 9.5)] },
+        ],
+        unratedPeople: [],
+      }),
+    );
+    expect(result.overlap).toHaveLength(0);
+    expect(result.alsoConsider).toHaveLength(0);
   });
 });

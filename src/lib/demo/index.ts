@@ -16,12 +16,14 @@ export { demoIntentFor, demoTonightPickFor } from './intents';
 export type { DemoFriend } from './friends';
 export {
   computeConsensus,
+  deriveConsensusParticipants,
 } from './consensus';
 export type {
   ConsensusParticipant,
   ConsensusEntry,
   ConsensusVote,
   ConsensusResult,
+  SelectablePerson,
 } from './consensus';
 export {
   SAMPLE_NIGHT,

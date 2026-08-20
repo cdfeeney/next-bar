@@ -240,7 +240,25 @@ test.describe('UX-E — tonight\'s vibe poll', () => {
     await expect(page.getByTestId('vibe-count-chill')).toHaveCount(0);
   });
 
-  test('the winning vibe seeds Group Favorites: dance winner floats the dance bar', async ({
+  /**
+   * REWRITTEN 2026-08-19 for the founder's Group Favorites rule.
+   *
+   * These two used to assert that the winning vibe floated a matching bar to
+   * the top and gave it the share moment. They could only do that because
+   * tier-only friend rows were imputed as scores. Under the founder rule a
+   * bar needs a numeric score >= 8.0 from EVERY member, `get_friend_ratings`
+   * is tier-only by security rule 0007 / 0015, and carrying the score across
+   * the friend boundary is a separate T0 goal — so a real circle produces no
+   * qualifying scores and no card renders at all today.
+   *
+   * What is asserted now is what is actually true and actually valuable: the
+   * poll still elects a winner and chips it onto the heading, and the winner
+   * does NOT conjure a pick out of scoreless data. The ORDERING that the
+   * boost performs stays covered by `src/lib/vibeVotes.test.ts`
+   * (boostByWinningVibe); the end-to-end ordering assertion returns when
+   * scores cross the friend boundary (goal g-4e39fc25, migration 0064).
+   */
+  test('the winning vibe chips onto Group Favorites but invents no pick from scoreless data', async ({
     page,
   }) => {
     await signIn(page);
@@ -254,8 +272,8 @@ test.describe('UX-E — tonight\'s vibe poll', () => {
           created_at: '2026-07-27T01:00:00.000Z',
         },
       ],
-      // Both of you loved BOTH bars → both are Group Favorites; the vibe
-      // winner decides which leads.
+      // Tier-only rows, exactly what get_friend_ratings returns today: no
+      // numeric score crosses the friend boundary, so neither bar qualifies.
       friendRatings: [
         { user_id: FRIEND.id, bar_id: 'attaboy', tier: 'loved', rated_at: '2026-07-01T00:00:00Z' },
         { user_id: FRIEND.id, bar_id: 'mood-ring', tier: 'loved', rated_at: '2026-07-01T00:00:00Z' },
@@ -267,17 +285,22 @@ test.describe('UX-E — tonight\'s vibe poll', () => {
     });
     await page.goto('/friends/consensus');
 
-    // Winner chip on the Group Favorites heading; the dance-tagged bar
-    // (Mood Ring) leads — the top pick carries the share moment.
+    // Winner chip on the Group Favorites heading.
     await expect(page.getByTestId('winning-vibe-chip')).toHaveText(
       /Tonight: Dancing/,
     );
+    // ...and nothing is promoted: the rows are tier-only, so no member has a
+    // qualifying score and the list is legibly empty rather than seeded with
+    // a bar nobody scored.
+    await expect(page.getByTestId('group-favorites-empty')).toBeVisible();
     await expect(
-      page.getByRole('button', { name: 'Share the pick: Mood Ring' }),
-    ).toBeVisible();
+      page.getByRole('button', { name: /^Share the pick/ }),
+    ).toHaveCount(0);
   });
 
-  test('a speakeasy winner floats the speakeasy bar instead (boost is vibe-driven, not baseline order)', async ({
+  /** Same rule as above with a different winning tag — the chip tracks the
+   *  poll, and neither winner fabricates a Group Favorite. */
+  test('a speakeasy winner chips the same way and likewise invents no pick', async ({
     page,
   }) => {
     await signIn(page);
@@ -305,8 +328,9 @@ test.describe('UX-E — tonight\'s vibe poll', () => {
     await expect(page.getByTestId('winning-vibe-chip')).toHaveText(
       /Tonight: Speakeasy/,
     );
+    await expect(page.getByTestId('group-favorites-empty')).toBeVisible();
     await expect(
-      page.getByRole('button', { name: 'Share the pick: Attaboy' }),
-    ).toBeVisible();
+      page.getByRole('button', { name: /^Share the pick/ }),
+    ).toHaveCount(0);
   });
 });

@@ -336,15 +336,26 @@ test.describe('/friends/consensus — REAL group pick', () => {
     await signIn(page);
   });
 
-  test('real circle members appear as people and unanimous picks come from THEIR ratings', async ({
+  /**
+   * REWRITTEN 2026-08-19 for the founder's Group Favorites rule (every member
+   * scores the bar >= 8.0; a missing score is "not YET", never a vote).
+   *
+   * It used to assert an Attaboy card built from these same tier-only rows.
+   * That assertion only ever passed because tiers were imputed as scores,
+   * which the founder explicitly forbade. `get_friend_ratings` is tier-only
+   * by a hard security rule (0007 / 0015) and carrying the score across the
+   * friend boundary is a separate T0 goal, so a real circle contributes no
+   * qualifying scores TODAY and the list is expected to be empty. The test
+   * now asserts that truth — real people, and an empty state that explains
+   * itself instead of blaming the user for not rating enough.
+   */
+  test('real circle members appear as people; with no shared scores the list explains itself', async ({
     page,
   }) => {
     const CLAIRE = { id: 'uuid-claire', handle: 'claire_r', display_name: 'Claire R.' };
     await stubSupabase(page, {
       following: [SAM, CLAIRE],
       friendRatings: [
-        // Both rated Attaboy highly → unanimous pick. Sam alone liked
-        // Death & Co → "also consider" territory.
         { user_id: FRIEND_ID, bar_id: 'attaboy', tier: 'loved', rated_at: '2026-07-01T00:00:00.000Z' },
         { user_id: 'uuid-claire', bar_id: 'attaboy', tier: 'liked', rated_at: '2026-07-02T00:00:00.000Z' },
         { user_id: FRIEND_ID, bar_id: 'death-and-co', tier: 'liked', rated_at: '2026-07-03T00:00:00.000Z' },
@@ -356,10 +367,20 @@ test.describe('/friends/consensus — REAL group pick', () => {
     await expect(page.getByRole('button', { name: /Sam/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Claire/ })).toBeVisible();
 
-    // Group Favorites driven by their REAL (stubbed) ratings (UX-B board
-    // — the "You all agree" section header is gone).
     await expect(page.getByText(/Group Favorites/i)).toBeVisible();
-    await expect(page.getByRole('heading', { name: /Attaboy/ })).toBeVisible();
+
+    // No scores crossed the boundary, so nothing qualifies — and the copy
+    // says so rather than telling the user to rate more bars.
+    await expect(page.getByTestId('group-favorites-empty')).toContainText(
+      /scores aren't shared yet/i,
+    );
+    // No consensus card at all — <article> is the ConsensusCard element, so
+    // this is the direct negative of the assertion this test used to make.
+    await expect(page.locator('article')).toHaveCount(0);
+    // A tier-only row must never be promoted into a shareable group pick.
+    await expect(
+      page.getByRole('button', { name: /^Share the pick/ }),
+    ).toHaveCount(0);
   });
 
   test('a circle with no rated friends explains itself instead of ghost-chipping', async ({

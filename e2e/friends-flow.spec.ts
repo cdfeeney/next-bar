@@ -51,6 +51,48 @@ test.describe('Friends + consensus', () => {
     ).toBeVisible();
   });
 
+  /**
+   * Panel finding (both lanes, HIGH): `alsoConsider` was concatenated into
+   * `groupFavorites` and rendered identically, so a bar that FAILS unanimity
+   * was displayed as a Group Favorite — star, rank 1, and the share moment
+   * included.
+   *
+   * Following Sasha makes the group claire + john + sasha, and no bar is
+   * scored >= 8.0 by all three (Sasha shares only Attaboy with Claire, and
+   * John never rated it). Every entry is therefore a near-miss, which is the
+   * exact shape that used to render as a Group Favorite.
+   */
+  test('near-misses are marked, never presented as Group Favorites or as the shareable pick', async ({
+    page,
+  }) => {
+    await page.goto('/friends');
+    await page
+      .locator('.bg-surface')
+      .filter({ hasText: '@sasha' })
+      .getByRole('button', { name: /^Follow$/ })
+      .click();
+    await expect(page.getByRole('link', { name: /3\s+Following/i })).toBeVisible();
+
+    await page.goto('/friends/consensus');
+
+    // Bars still surface — nothing is hidden, that was the whole point of
+    // deleting the veto.
+    await expect(
+      page.getByRole('heading', { name: /Bemelmans Bar/i }),
+    ).toBeVisible();
+
+    // ...but every one of them is labelled as NOT a Group Favorite, and none
+    // carries the star/share moment reserved for a unanimous pick.
+    await expect(page.getByTestId('no-unanimous-pick')).toBeVisible();
+    const cards = page.locator('article');
+    const cardCount = await cards.count();
+    expect(cardCount).toBeGreaterThan(0);
+    await expect(page.getByTestId('near-miss-badge')).toHaveCount(cardCount);
+    await expect(
+      page.getByRole('button', { name: /^Share the pick/ }),
+    ).toHaveCount(0);
+  });
+
   test('consensus needs at least two people selected', async ({ page }) => {
     await page.goto('/friends/consensus');
 
