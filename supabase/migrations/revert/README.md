@@ -182,9 +182,10 @@ all along; the rollback path was a connection string pasted into a terminal.
 pairing. One implementation, not a copy that can drift: the named `--env` must
 match the loaded environment, the project ref behind `DATABASE_URL` must not be
 the production ref and must be in the staging allowlist, the host must be the
-Supabase pooler, pg's own resolved endpoint must match the URL's authority, no
-libpq startup options or host/port overrides may be present, and TLS must verify
-against the CA. It also refuses any revert file whose content does not match
+Supabase pooler, pg's own resolved endpoint must match the URL's authority, the
+DATABASE it reaches must be the expected one (`NEXT_BAR_DATABASE_NAME`,
+defaulting to `postgres`), no libpq startup options or host/port overrides may
+be present, and TLS must verify against the CA. It also refuses any revert file whose content does not match
 its reviewed pin — see below. It performs NO structural validation of the SQL:
 an earlier version parsed the file to prove it was a single explicit
 transaction and rejected psql metacommands, and those checks were deleted with
@@ -205,10 +206,23 @@ psql "<connection-string>" -v ON_ERROR_STOP=1 -f supabase/migrations/revert/reve
 section, and of the script's own header, claimed the command ran "from anywhere"
 while showing the relative path.
 
-Taking the `psql` route means the connection-layer guards above are yours to
-enforce by hand. `psql` was not installed on this machine when 0064 was reverted
-on 2026-08-20 (checked: not on PATH, no `C:\Program Files\PostgreSQL`, no
-Supabase CLI), which is what made the missing runner urgent rather than
+Taking the `psql` route means every connection-layer guard above is yours to
+enforce by hand — and one of them is easy to miss precisely because no other
+check hints at it:
+
+> **Confirm WHICH DATABASE you are on, not just which project.** One cluster
+> serves many databases and Supabase supports more than one per project, so a
+> connection string whose path says `/shadow` carries the right project ref, the
+> right pooler host and the right port while reaching the wrong database. The
+> script's own preconditions cannot see this: they identify the MIGRATION.
+> Before running anything: `psql "<connection-string>" -Atc "select
+> current_database()"` and confirm it is what you expect.
+
+The runner performs that check for you (round-4 and round-5 panels, Codex,
+HIGH both times — once for the check being absent, once for this documented
+path not mentioning it). `psql` was not installed on this machine when 0064 was
+reverted on 2026-08-20 (checked: not on PATH, no `C:\Program Files\PostgreSQL`,
+no Supabase CLI), which is what made the missing runner urgent rather than
 theoretical.
 
 **The runner executes only files it has PINNED, and `0059` is not one.** It does
