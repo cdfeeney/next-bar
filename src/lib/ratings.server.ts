@@ -22,15 +22,45 @@ type Row = {
   bar_id: string;
   tier: Rating;
   rated_at: string;
-  score: number | null;
+  /**
+   * `unknown`, not `number | null`, because that annotation was a LIE about
+   * what arrives. `ratings.score` is Postgres `numeric`, and PostgREST returns
+   * numerics as STRINGS to preserve precision no JS number can hold. The type
+   * said number, the runtime sent "9.0", and the strict `typeof === 'number'`
+   * check below silently dropped every score.
+   */
+  score: unknown;
 };
 
+/**
+ * Accepts the string PostgREST actually sends for a `numeric` column as well as
+ * the number a stub or a local row supplies.
+ *
+ * THIS WAS THE GROUP FAVORITES SEAM. Migration 0064 carries the numeric score
+ * across the friend boundary and `follows.server.ts` maps it with exactly this
+ * tolerance, so a FRIEND's score arrived intact while the signed-in user's own
+ * score - read here - was thrown away. Group Favorites requires EVERY
+ * participant to have scored a bar >= 8.0 and imputes nothing, so losing one
+ * participant's scores made the feature permanently empty in server mode. Two
+ * mappers for one column, one tolerant and one strict, and only the strict one
+ * on the path nobody had browser-tested.
+ */
+function toScore(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
 function rowToRating(row: Row): BarRating {
+  const score = toScore(row.score);
   return {
     barId: row.bar_id,
     rating: row.tier,
     ratedAt: row.rated_at,
-    ...(typeof row.score === 'number' ? { score: row.score } : {}),
+    ...(score === undefined ? {} : { score }),
   };
 }
 

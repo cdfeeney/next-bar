@@ -146,10 +146,18 @@ export default function ConsensusPage(): JSX.Element {
         label,
         initials: initialsFor(p.displayName ?? p.handle),
         seed: p.handle,
+        // `score` MUST be carried. Group Favorites is a score rule and imputes
+        // nothing, so dropping it here made every friend a participant who had
+        // scored nothing: votes.length never equalled participants.length and
+        // the list was permanently empty. It was invisible while 0007/0015 kept
+        // the friend boundary tier-only - there was no score to drop - and
+        // migration 0064, which carries the score across that boundary, is what
+        // turned a harmless omission into the feature not working.
         ratings: theirs.map((r) => ({
           barId: r.barId,
           rating: r.rating,
           ratedAt: r.ratedAt,
+          ...(typeof r.score === 'number' ? { score: r.score } : {}),
         })),
       });
     }
