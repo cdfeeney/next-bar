@@ -13,6 +13,7 @@ import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import { refuseIfUnattended } from './loop-guard.mjs';
 import { bars } from '../src/lib/bars';
+import { venueTags } from '../src/lib/venueTags';
 
 refuseIfUnattended('bars table seed');
 dotenv.config({ path: '.env.local' });
@@ -30,7 +31,10 @@ const rows = bars.map((b) => ({
   name: b.name,
   lat: b.lat,
   lng: b.lng,
-  tags: b.tags,
+  // Through venueTags, not raw: the static catalog still ships rows with six
+  // and seven tags, so a raw upsert would undo the 1..5 backfill the moment
+  // anyone re-seeds. The rule lives in one function, not in one script run.
+  tags: venueTags({ name: b.name, blurb: b.blurb, priceTier: b.priceTier, tags: b.tags }),
   neighborhood: b.neighborhood,
   price_tier: b.priceTier,
   hours: b.hours ?? null,
