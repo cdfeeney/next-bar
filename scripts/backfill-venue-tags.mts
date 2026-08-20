@@ -108,12 +108,27 @@ function refFromRestUrl(rest: string): string {
 // prefix below says. The RULE is what matters and is identical: production is
 // refused, and a target that cannot be proven to be an allowlisted staging
 // project is refused too.
+// INTEGRATION NOTE (2026-08-20). Migration 0064 gave checkMigrationTarget a
+// fourth dimension - WHICH DATABASE - because a connection string can name the
+// right project and still reach the wrong database on the same cluster. That
+// dimension does not apply HERE: this script talks to the project's PostgREST
+// endpoint over HTTPS, which exposes one database per project and offers no
+// database selector to get wrong. There is nothing to verify, so both sides are
+// passed as the same constant and the comparison is deliberately trivial.
+//
+// It is written this way rather than by making the parameter optional, because
+// an optional dimension would let a caller that DOES reach a database skip the
+// check by omission - the fail-open shape this guard exists to close. A caller
+// with no database must say so explicitly, in one visible place.
+const REST_HAS_NO_DATABASE_SELECTOR = 'postgres';
 const refusal = checkMigrationTarget({
   env: 'staging',
   ref: refFromRestUrl(url),
   productionRef: process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '',
   stagingRefs: (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean),
+  database: REST_HAS_NO_DATABASE_SELECTOR,
+  expectedDatabase: REST_HAS_NO_DATABASE_SELECTOR,
 });
 if (refusal) {
   console.error(`[target] refused (ref resolved from NEXT_PUBLIC_SUPABASE_URL): ${refusal}`);

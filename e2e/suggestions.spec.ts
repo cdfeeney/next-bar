@@ -84,7 +84,16 @@ type SuggestionRow = {
 
 type StubOptions = {
   following?: Array<{ id: string; handle: string; display_name: string | null }>;
-  friendRatings?: Array<{ user_id: string; bar_id: string; tier: string; rated_at: string }>;
+  /**
+   * `score` is REQUIRED for anything asserting a Group Favorite. The founder
+   * rule of 2026-08-19 (src/lib/demo/consensus.ts) is unanimity on the numeric
+   * score at or above 8.0, and it deliberately imputes NO tier midpoint: a
+   * rating without a score casts no vote. These fixtures predated that rule and
+   * still sent tiers only, so every Group Favorite assertion was failing - which
+   * nobody saw, because this suite's browser gate had never been run against the
+   * feature (its goal recorded 'test:e2e NOT RUN').
+   */
+  friendRatings?: Array<{ user_id: string; bar_id: string; tier: string; score?: number; rated_at: string }>;
   /** Initial suggestion rows; mutated by suggest/remove. */
   suggestionRows?: SuggestionRow[];
   /** Initial RSVP rows (pre-QA3 leftovers); mutated by unrsvp. */
@@ -93,7 +102,7 @@ type StubOptions = {
   suggestDeclines?: boolean;
   /** Signed-in "you" server ratings (ratings table rows) — enables the
    * consensus participant path. */
-  youRatings?: Array<{ bar_id: string; tier: string; rated_at: string }>;
+  youRatings?: Array<{ bar_id: string; tier: string; score?: number; rated_at: string }>;
 };
 
 /** YYYY-MM-DD; every night-scoped write must carry it (see NIGHT_GUARD). */
@@ -316,10 +325,10 @@ test.describe('/friends/consensus — tonight\'s poll board', () => {
       // Both of you rated Ace Bar loved → it's the unanimous algorithmic
       // pick (Group Favorites).
       friendRatings: [
-        { user_id: FRIEND.id, bar_id: 'ace-bar', tier: 'loved', rated_at: '2026-07-01T00:00:00Z' },
+        { user_id: FRIEND.id, bar_id: 'ace-bar', tier: 'loved', score: 9.0, rated_at: '2026-07-01T00:00:00Z' },
       ],
       youRatings: [
-        { bar_id: 'ace-bar', tier: 'loved', rated_at: '2026-07-02T00:00:00Z' },
+        { bar_id: 'ace-bar', tier: 'loved', score: 9.0, rated_at: '2026-07-02T00:00:00Z' },
       ],
       // The circle suggested Attaboy — NOT in anyone's ratings, so it
       // appears only via People's Choice (the human signal).
