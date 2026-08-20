@@ -157,46 +157,70 @@ member, suggestion, vote and event row (it ships commented out), and
 
 ## Reverting `0064` (friend-visible numeric score)
 
-One command, **run from the repository root** — the same rule as `0059`, and
-for the same reason. `revert-0064-transaction.sql` includes no other file, so it
-resolves nothing relative to itself; but `psql` still resolves `-f` against
-**your** working directory, so a relative path only works from the root:
+**Run it through `scripts/revert-migration.ts`.** That is the path of record,
+and the reason is target identity, not convenience:
+
+```
+npx tsx scripts/revert-migration.ts --env staging supabase/migrations/revert/revert-0064-transaction.sql
+npx tsx scripts/revert-migration.ts --env staging --execute supabase/migrations/revert/revert-0064-transaction.sql
+```
+
+Dry run is the default, exactly as it is for `apply-migration-set.ts`.
+
+**Why a runner at all, when the file is plain SQL any client can send.** An
+earlier version of this section said the opposite — install `psql`, and grow no
+second way to run a rollback. That was wrong, and a round-3 reviewer said why: a
+revert script's preconditions can identify a migration VERSION (its ledger row,
+its checksum, the shape of the function it undoes) but they cannot identify the
+SERVER. A second database carrying the same migration passes every check the SQL
+can make. Target identity is a property of the CONNECTION, so it can only be
+enforced where the connection is made. The apply path has had that enforcement
+all along; the rollback path was a connection string pasted into a terminal.
+
+`revert-migration.ts` closes that by calling the SAME module the applier calls
+— `authorizeMigrationTarget`, plus `resolveTarget` for the same-file URL/label
+pairing. One implementation, not a copy that can drift: the named `--env` must
+match the loaded environment, the project ref behind `DATABASE_URL` must not be
+the production ref and must be in the staging allowlist, the host must be the
+Supabase pooler, pg's own resolved endpoint must match the URL's authority, no
+libpq startup options or host/port overrides may be present, and TLS must verify
+against the CA. It also refuses any revert file that is not a single explicit
+transaction, or that carries a `\`-prefixed psql metacommand.
+
+It does NOT parse the SQL, wrap it, or touch `public.schema_migrations` itself.
+The file stays authoritative about its own preconditions, its ledger delete and
+its postconditions — and stays runnable verbatim by `psql -f`, which remains
+correct and is what you want on a machine that has `psql`:
 
 ```
 psql "<connection-string>" -v ON_ERROR_STOP=1 -f supabase/migrations/revert/revert-0064-transaction.sql
 ```
 
-From anywhere else, pass an absolute path:
+**Run that from the repository root**, or pass an absolute path: `psql` resolves
+`-f` against **your** working directory. Including no other file removes the
+`\ir` hazard `0059` has; it does not move `-f`. An earlier version of this
+section, and of the script's own header, claimed the command ran "from anywhere"
+while showing the relative path.
 
-```
-psql "<connection-string>" -v ON_ERROR_STOP=1 -f D:/harness-worktrees/mig-0064/supabase/migrations/revert/revert-0064-transaction.sql
-```
+Taking the `psql` route means the connection-layer guards above are yours to
+enforce by hand. `psql` was not installed on this machine when 0064 was reverted
+on 2026-08-20 (checked: not on PATH, no `C:\Program Files\PostgreSQL`, no
+Supabase CLI), which is what made the missing runner urgent rather than
+theoretical.
 
-An earlier version of this section, and of the script's own header, claimed the
-command ran "from anywhere" while showing the relative path. Including nothing
-removes the `\ir` hazard `0059` has; it does not move `-f`.
+**The runner does not cover `0059`, deliberately.** `revert-0059-transaction.sql`
+pulls in `REVERT-0059-staging-20260817.sql` with `\ir`, which only psql resolves,
+and that include carries the body restore — sending the file through any other
+client would run a transaction missing half its work. The runner refuses it up
+front on the metacommand check, and `0059` keeps psql as its path of record with
+the connection-layer guards enforced by hand. `scripts/revert-migration.test.ts`
+pins that split, so adding a revert file forces a deliberate choice about which
+path it takes.
 
-**`psql` was not installed on this machine** when 0064 was reverted on
-2026-08-20 (checked: not on PATH, no `C:\Program Files\PostgreSQL`, no Supabase
-CLI). Install it — that is the fix, and the commands above are the path of
-record. The repository deliberately grows no bespoke rollback runner to work
-around a missing standard client: a second way to run a rollback is a second
-thing to keep true, which is the failure this directory exists to prevent.
-
-`revert-0064-transaction.sql` carries no `\`-prefixed psql metacommand for
-exactly this reason, so it is plain SQL end to end and ANY client that can send
-a statement — `psql`, a `pg` session, a SQL console — runs it verbatim with no
-hand-editing. That is what made the 2026-08-20 revert possible without `psql`.
-
-Whatever client you use, the target guards are yours to enforce, because only
-`scripts/apply-migration-set.ts` enforces them for you: confirm the connection
-names the intended project ref, that it is NOT the production ref, that the host
-is the Supabase pooler, that no libpq startup options or host/port overrides are
-in play, and that TLS verifies against the CA. The 2026-08-20 revert checked all
-five before connecting. The script's own preconditions then refuse unless the
-ledger row for `0064` carries this migration's checksum AND the live function
+Either way the script's own preconditions then refuse unless the ledger row for
+`0064` carries this migration's checksum AND the live `get_friend_ratings()`
 still returns a `score` column — so a wrong database is refused before any DDL,
-not after.
+not after. `scripts/revert-pin.test.ts` keeps that pinned checksum honest.
 
 It restores `0007`'s tier-only `get_friend_ratings()` and deletes the `0064`
 ledger row in ONE transaction, refusing up front unless `0064` is in the ledger

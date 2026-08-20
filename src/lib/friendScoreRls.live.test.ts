@@ -191,6 +191,55 @@ describeLive('0064 get_friend_ratings — the score stops at the follow edge', (
     });
   });
 
+  it('does not let a signed-in STRANGER reach ratings.score off the table either (criterion 4a, 5)', async () => {
+    await inRollback(async () => {
+      const [owner, stranger] = await scoredOwner(1);
+      // The anon direct-table negative above cannot cover this. `authenticated`
+      // is a DIFFERENT role and already holds SELECT on public.ratings, so the
+      // only thing standing between a signed-in stranger and every score in the
+      // table is RLS - not a missing grant. A future permissive SELECT policy
+      // would hand scores to PostgREST callers while every get_friend_ratings
+      // test in this file stayed green, because none of them reads the table.
+      await db.query('SAVEPOINT probe');
+      await asRole('authenticated', stranger);
+      let rows: Array<Record<string, unknown>> = [];
+      let denied: string | null = null;
+      try {
+        const result = await db.query(
+          'select score from public.ratings where user_id = $1',
+          [owner],
+        );
+        rows = result.rows as Array<Record<string, unknown>>;
+      } catch (error) {
+        denied = (error as { message: string }).message;
+      }
+      await db.query('ROLLBACK TO SAVEPOINT probe');
+      // Either outcome is acceptable - refused outright, or allowed through to
+      // zero rows - because both mean the stranger learned nothing. What must
+      // never happen is a row carrying the owner's score.
+      if (denied === null) {
+        expect(rows, 'a signed-in stranger read the owner score straight off public.ratings').toHaveLength(0);
+      } else {
+        expect(denied).toMatch(/permission denied|policy/i);
+      }
+    });
+  });
+
+  it('lets the OWNER read their own score off the table, so the test above is not vacuous', async () => {
+    await inRollback(async () => {
+      const [owner] = await scoredOwner(0);
+      // Without this control, the stranger test above would pass just as well
+      // against a table nobody can read at all, or a fixture that never
+      // inserted the rating - proving nothing about the gate.
+      await db.query('SAVEPOINT probe');
+      await asRole('authenticated', owner);
+      const { rows } = await db.query('select score from public.ratings where user_id = $1', [owner]);
+      await db.query('ROLLBACK TO SAVEPOINT probe');
+      expect(rows, 'the owner could not read their own rating, so the stranger test proves nothing').toHaveLength(1);
+      expect(Number(rows[0].score)).toBe(8.5);
+    });
+  });
+
   it('does NOT grant a score on a PENDING follow request (criterion 4c)', async () => {
     await inRollback(async () => {
       const [owner, requester] = await scoredOwner(1);
