@@ -80,7 +80,18 @@ revoke all on function public.get_friend_ratings() from public, anon;
 grant execute on function public.get_friend_ratings() to authenticated;
 
 ------------------------------------------------------------------------------
--- Rollback (in comments, per convention):
---   drop function if exists public.get_friend_ratings();
---   then re-apply 0007's tier-only definition and its revoke/grant verbatim.
+-- Rollback: supabase/migrations/revert/revert-0064-transaction.sql. Read
+-- revert/README.md before running it; that file is the single source for the
+-- command and for what the revert costs.
+--
+-- NOT restated here as an executable recipe, breaking this repository's
+-- "rollback in comments, per convention" habit on purpose. An earlier version
+-- of this block listed a body swap alone - drop the function, re-apply 0007's
+-- definition - and omitted deleting this migration's row from
+-- public.schema_migrations. Following it produces exactly the split the revert
+-- script's own header names as the hazard: the ledger still claiming 0064
+-- while the friend read returns no score, check:migrations green over a false
+-- picture, and a re-apply refused because the file reads as already applied.
+-- The restore and the ledger delete MUST be one transaction, which a comment
+-- cannot enforce and the script does.
 ------------------------------------------------------------------------------

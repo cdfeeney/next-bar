@@ -10,9 +10,15 @@
 -- transaction. If they come apart, the ledger claims 0064 while the friend read
 -- returns no score, and every ledger-aware tool then acts on a false picture.
 
-\set ON_ERROR_STOP on
+-- No `\set ON_ERROR_STOP on` here, deliberately. It is a psql CLIENT metacommand:
+-- Postgres rejects it as a syntax error the moment this file is sent over the wire
+-- by anything other than psql, which made the pg-driver path README.md documents
+-- unrunnable as written. The documented psql command already passes
+-- `-v ON_ERROR_STOP=1`, and every statement below lives in the one transaction, so
+-- any failure aborts the whole thing regardless of client. Keeping this file pure
+-- SQL is what lets BOTH clients run it verbatim.
 
-BEGIN;
+BEGIN READ WRITE;
 
 -- PRECONDITION, checked before anything is touched: refuse unless 0064 is
 -- actually the thing being undone, and unless it is the NEWEST migration —
@@ -30,6 +36,33 @@ BEGIN
   ) THEN
     RAISE EXCEPTION
       'the ledger contains migrations AFTER 0064; reverting it now could clobber a later definition. Revert those first.';
+  END IF;
+  -- A row NAMED 0064 is not proof this is the database that ran THIS 0064. Any
+  -- database whose ledger head happens to carry that name passed the two checks
+  -- above, so a mistyped connection string could downgrade an unintended target
+  -- and delete its ledger row. The recorded checksum identifies the content, and
+  -- is the strongest target check available from inside SQL.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.schema_migrations
+     WHERE name = '0064_friend_ratings_score.sql'
+       AND checksum = 'aedad98164668b055bf7f185150cd6b28d66818bd9733f8dcc6c8cc46866b8a4'
+  ) THEN
+    RAISE EXCEPTION
+      'the ledger row for 0064 does not carry this migration''s checksum, so this is either a different database or a different 0064. Refusing.';
+  END IF;
+  -- And the ledger is a claim, not the installed state. Restoring 0007's body over
+  -- a function that is ALREADY tier-only would silently "succeed" while unrecording
+  -- a migration whose effect was never there.
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_proc p
+      CROSS JOIN LATERAL unnest(p.proargnames, p.proargmodes) AS a(name, mode)
+     WHERE p.oid = 'public.get_friend_ratings()'::regprocedure
+       AND a.mode IN ('o', 'b', 't')
+       AND a.name = 'score'
+  ) THEN
+    RAISE EXCEPTION
+      'the live get_friend_ratings() already returns no score column, so 0064 is not installed here whatever the ledger says. Refusing.';
   END IF;
 END
 $$;

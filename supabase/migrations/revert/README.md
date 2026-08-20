@@ -176,15 +176,27 @@ An earlier version of this section, and of the script's own header, claimed the
 command ran "from anywhere" while showing the relative path. Including nothing
 removes the `\ir` hazard `0059` has; it does not move `-f`.
 
-**`psql` is not installed on this machine** (checked 2026-08-20: not on PATH, no
-`C:\Program Files\PostgreSQL`, no Supabase CLI). The commands above are the path
-of record for a machine that has it. Here, the apply of record goes through
-`scripts/apply-migration-set.ts --env staging --execute <file>`, and the 0064
-revert of 2026-08-20 was executed by sending this file's SQL over `pg` to the
-same verified staging target, with the same guards the applier enforces: the
-`--env` label, refusal on the production project ref, the staging allowlist, the
-required pooler host, refusal of libpq startup options and host/port overrides,
-and CA-verified TLS. Do not discover the missing `psql` under pressure.
+**`psql` was not installed on this machine** when 0064 was reverted on
+2026-08-20 (checked: not on PATH, no `C:\Program Files\PostgreSQL`, no Supabase
+CLI). Install it — that is the fix, and the commands above are the path of
+record. The repository deliberately grows no bespoke rollback runner to work
+around a missing standard client: a second way to run a rollback is a second
+thing to keep true, which is the failure this directory exists to prevent.
+
+`revert-0064-transaction.sql` carries no `\`-prefixed psql metacommand for
+exactly this reason, so it is plain SQL end to end and ANY client that can send
+a statement — `psql`, a `pg` session, a SQL console — runs it verbatim with no
+hand-editing. That is what made the 2026-08-20 revert possible without `psql`.
+
+Whatever client you use, the target guards are yours to enforce, because only
+`scripts/apply-migration-set.ts` enforces them for you: confirm the connection
+names the intended project ref, that it is NOT the production ref, that the host
+is the Supabase pooler, that no libpq startup options or host/port overrides are
+in play, and that TLS verifies against the CA. The 2026-08-20 revert checked all
+five before connecting. The script's own preconditions then refuse unless the
+ledger row for `0064` carries this migration's checksum AND the live function
+still returns a `score` column — so a wrong database is refused before any DDL,
+not after.
 
 It restores `0007`'s tier-only `get_friend_ratings()` and deletes the `0064`
 ledger row in ONE transaction, refusing up front unless `0064` is in the ledger
