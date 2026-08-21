@@ -9,6 +9,14 @@ const config: Config = {
       // object directly and fails a token edit that breaks WCAG AA, and
       // globals.css derives its :root custom properties from it via theme(),
       // so no other file should carry these hex codes.
+      //
+      // Three ways to consume them, all the same source:
+      //   Tailwind class   bg-surface, text-muted, ... (opacity modifiers work)
+      //   raw CSS          var(--nb-surface), ... (published in globals.css)
+      //   TypeScript       import config from '@/../tailwind.config' — for the
+      //                    satori/edge surfaces (opengraph-image, icon,
+      //                    apple-icon, manifest) that render outside the
+      //                    document and can reach neither of the above.
       colors: {
         bg: '#0a0a0a',
         surface: '#141414',
