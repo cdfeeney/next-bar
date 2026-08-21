@@ -247,19 +247,7 @@ test.describe('mobile controls are reachable', () => {
       expect(bad, describeFailures(route, bad)).toEqual([]);
     });
 
-    // `/` ONLY: the sticky BarPicker search input is an opaque overlay over the
-    // document scroller, so at a deep rest position the row straddling it has
-    // its centre covered — measured 2026-08-19 on Pixel 7:
-    //   · "🍻Fifth Hammer Brewing" — covered by Search bars @ 16,14
-    // This is a REAL defect, not a spec artifact. Its reviewed fix already
-    // exists off this branch (276a258: a scroll-direction auto-hide in
-    // src/lib/searchBarAutoHide.ts, opted into per call site), and landing it
-    // requires editing src/components/WhereNextFlow.tsx — a file goal
-    // g-d54ef3f8's lane coordination assigns exclusively to the Tweak-the-vibe
-    // lane. So it is recorded and handed on rather than half-fixed here.
-    // Un-fixme this the moment that port lands; do not weaken the assertion.
-    const coverageTest = route === '/' ? test.fixme : test;
-    coverageTest(`${route} — no control is covered at its resting position`, async ({
+    test(`${route} — no control is covered at its resting position`, async ({
       page,
     }) => {
       await settle(page);
@@ -288,7 +276,12 @@ test.describe('mobile controls are reachable', () => {
           return (oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1;
         });
         for (const el of scrollables) el.scrollTop = el.scrollHeight;
-        window.scrollTo(0, document.body.scrollHeight);
+        // Assign the document scroller directly. `html { scroll-behavior:
+        // smooth }` makes window.scrollTo animate, so the old check sampled a
+        // random row mid-flight instead of the page's bottom resting position.
+        const pageScroller = (document.scrollingElement ?? document.documentElement) as HTMLElement;
+        pageScroller.style.scrollBehavior = 'auto';
+        pageScroller.scrollTop = pageScroller.scrollHeight;
       });
       await page.waitForTimeout(500);
 
