@@ -4,6 +4,11 @@ const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      // LOCKED V8 TOKENS — THE single source of these six values (plus the
+      // coral's pressed shade). src/lib/paletteContrast.test.ts reads this
+      // object directly and fails a token edit that breaks WCAG AA, and
+      // globals.css derives its :root custom properties from it via theme(),
+      // so no other file should carry these hex codes.
       colors: {
         bg: '#0a0a0a',
         surface: '#141414',

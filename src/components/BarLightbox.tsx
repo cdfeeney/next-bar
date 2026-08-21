@@ -15,11 +15,46 @@ import OpenNowBadge from '@/components/OpenNowBadge';
 import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 
 /**
+ * The complete public contract — deliberately two props.
+ *
+ * Everything the panel renders comes from `bar` or is fetched from `bar.id`,
+ * so no caller passes surface-specific configuration and the component
+ * imports nothing from a map, rankings or search module. A new caller needs
+ * only a `Bar` and somewhere to put the open/closed flag.
+ */
+export type BarLightboxProps = {
+  /**
+   * The bar to show.
+   *
+   * A lean catalog `Bar` is enough: the heavy detail fields (address, hours,
+   * reviews, photo attributions) are absent from the catalog payload and are
+   * fetched per-id on mount, so a map marker, a ranking row and a search
+   * result can each pass the object they already hold with no pre-fetching.
+   *
+   * Safe to swap while mounted — the previous bar's fetched details are
+   * dropped before the new request, so details never bind to the wrong bar.
+   * `bar.tags` is the whole truth for the venue tags (BarDetails cannot carry
+   * them), so a caller that renders tags elsewhere must pass the tagged bar.
+   */
+  bar: Bar;
+  /**
+   * Called on ✕, Escape and a backdrop tap. The caller owns the open/closed
+   * state — the lightbox never unmounts itself. Focus returns to whatever was
+   * focused when it opened, so the caller does not restore it.
+   */
+  onClose: () => void;
+};
+
+/**
  * U2-2: photo headliner. Tapping a card's photo opens this full-screen
  * overlay — big image, the bar's identity, FULL weekly hours (U2-1), the
  * review quote, and the two actions (Maps, Rank it). Single cached photo
  * today; when the ingest starts storing multiple photoRefs this becomes a
  * swipeable carousel without changing the entry point.
+ *
+ * V8-1a: this is the ONE shared bar-detail surface. Map markers, ranking rows
+ * and search results all mount this component rather than growing their own
+ * detail panel — see BarLightboxProps for the whole contract.
  *
  * Scroll lock is shared with the other overlays and restores both body
  * styles and the page position when the dialog closes.
@@ -33,10 +68,7 @@ import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 export default function BarLightbox({
   bar,
   onClose,
-}: {
-  bar: Bar;
-  onClose: () => void;
-}): JSX.Element {
+}: BarLightboxProps): JSX.Element {
   const [details, setDetails] = useState<BarDetails | undefined>(undefined);
   const [detailStatus, setDetailStatus] = useState<
     'loading' | 'ready' | 'unavailable'

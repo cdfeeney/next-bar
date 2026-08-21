@@ -32,6 +32,28 @@ const BAR: Bar = {
   googlePlaceId: 'ChIJbar54',
 };
 
+/**
+ * V8-1a: BarLightbox is the ONE shared bar-detail surface — Map, Rankings and
+ * Social all mount it. A prop gap found after those lanes start blocks three at
+ * once, so pin the contract here: two props, and a lean catalog `Bar` (no
+ * hours, no reviews, no photo fields — all optional in the type) is enough to
+ * render the whole panel. This fails if someone adds a required prop or makes
+ * the panel depend on detail a caller would have to pre-fetch.
+ */
+describe('BarLightbox shared contract', () => {
+  test('an external caller mounts it with only a lean catalog bar', () => {
+    render(<BarLightbox bar={BAR} onClose={() => {}} />);
+
+    const dialog = screen.getByRole('dialog', { name: 'Bar 54 details' });
+    expect(dialog).toBeTruthy();
+    // Identity, the venue tags and the action pair all come from `bar` alone.
+    expect(screen.getByRole('heading', { name: 'Bar 54' })).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Bar 54 tags' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'View on Maps' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy();
+  });
+});
+
 describe('BarLightbox Google media', () => {
   test('uses the live Google widget on the lightbox surface', () => {
     render(<BarLightbox bar={BAR} onClose={() => {}} />);
