@@ -1,11 +1,12 @@
 # Migration revert files
 
-**This file is the single source of truth for reverting `0059` and `0064`.**
+**This file is the single source of truth for reverting `0059`, `0061`, and `0064`.**
 Nothing else — not the migration header, not the revert SQL, not the revert-point
 doc — restates what a revert costs or when it is safe.
 
 > **Order matters.** Each revert script refuses while any migration numbered
-> above it is in the ledger. `0064` is the head, so it comes off first.
+> above it is in the ledger. `0064` is the head, so it comes off first; `0061`
+> follows before any lower migration.
 
 That rule exists because it was learned the hard way. Four review rounds on this
 change were spent almost entirely on the same claim drifting between copies of
@@ -311,3 +312,47 @@ code half too, or expect that.
 **The window is not zero.** The revert drops the function before recreating it,
 so a concurrent call in that instant errors rather than returning wrong rows.
 Prefer a quiet moment; the transaction holds the lock for milliseconds.
+---
+
+## `0061` — what is live, what is recorded, and the trap that made it so
+
+`0061_ratings_score_integrity.sql` was applied to STAGING by hand on
+2026-08-19 at `19:18:40.661073+00` using `apply-one-migration.mts`. Its ledger
+row was added separately on 2026-08-20, on operator instruction, once both
+halves had been proved live.
+
+**THE MIGRATION FILE IS FROZEN AT THE TEXT THAT RAN, and must stay that way.**
+`public.schema_migrations.checksum` certifies the normalised text that was
+executed — comments included. The file was briefly edited after the apply (a
+comment-only correction) and then restored, because a ledger row certifying
+text that never ran is a false record even when the executable SQL is
+byte-identical. Recorded checksum:
+`d0d8922460258cc7510490bdc8cf5a47f0a1f501236547f3110e190390aa2f6b`.
+
+Anything to say about this migration that is not part of what ran belongs
+HERE, not in the file.
+
+### The trap that left it unrecorded (the correction that used to live in the file)
+
+> **Nothing automatically prevents a re-run on the staging path.** Only
+> `scripts/apply-migration-set.ts` consults the ledger;
+> `apply-one-migration.mts` — the tool used for staging — neither reads nor
+> writes `public.schema_migrations` and will happily execute the file again.
+> Promote through the SET path, or check the ledger by hand first.
+
+That matters more than usual for `0061`, because re-running it is NOT
+idempotent in effect: its backfill only touches rows where `score is null`,
+and after the first apply a null score is legitimate — a tier change clears it
+(`src/lib/ratings.server.ts`). A second run would overwrite those with band
+midpoints and change live rating semantics.
+
+**Proof it was applied, taken read-only before the row was written.** `0061`
+backfills rows AND adds a constraint, so the constraint alone is not evidence:
+
+* `ratings_score_range` installed as
+  `CHECK ((score IS NULL) OR ((score >= 1.0) AND (score <= 10.0)))`
+* **zero** rows still null with a canonical tier — the backfill landed
+* zero rows outside the range
+* exactly 2 rows carry `updated_at = 2026-08-19 19:18:40.661073+00` at score
+  9.0, matching what `REVERT-0061-staging-20260819.sql` records the backfill
+  wrote
