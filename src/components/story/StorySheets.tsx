@@ -138,7 +138,15 @@ export function AudienceSheet({
   const { isFollowing } = useFollows();
   const circle = demoFriends.filter((friend) => isFollowing(friend.handle));
   const needsPeople = value !== 'friends';
-  const ready = !needsPeople || handles.length > 0;
+  // Readiness counts only recipients the sheet is actually SHOWING. Counting
+  // `handles` itself trusted a selection that may no longer be in the circle —
+  // unfollow someone in another tab and the row disappears while Done stayed
+  // enabled on a recipient nobody could see, which is the same "label with
+  // nothing behind it" this gate exists to prevent.
+  const visible = handles.filter((handle) =>
+    circle.some((friend) => friend.handle === handle),
+  );
+  const ready = !needsPeople || visible.length > 0;
   return (
     <Sheet label="Story audience" testId="story-audience-sheet" onClose={onClose}>
       <ul role="radiogroup" aria-label="Story audience">
@@ -199,12 +207,21 @@ export function AudienceSheet({
         </div>
       ) : null}
 
+      {/* aria-disabled, never `disabled`: unchecking the last person while
+          Done holds keyboard focus would drop focus to <body> behind this
+          aria-modal sheet, and `disabled` also leaves the focus trap's Tab
+          ring (src/lib/focusTrap.ts FOCUSABLE), so the control explaining why
+          the sheet will not complete becomes unreachable. Same pattern as
+          CameraStage's shutter. Rule: src/components/BarLightbox.tsx:322. */}
       <button
         type="button"
         data-testid="story-audience-done"
-        onClick={onDone}
-        disabled={!ready}
-        className="w-full min-h-[52px] mt-5 rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors disabled:opacity-40 disabled:hover:bg-accent"
+        onClick={() => {
+          if (!ready) return;
+          onDone();
+        }}
+        aria-disabled={!ready}
+        className="w-full min-h-[52px] mt-5 rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors aria-disabled:opacity-40"
       >
         Done
       </button>

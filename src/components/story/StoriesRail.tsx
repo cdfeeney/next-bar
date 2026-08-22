@@ -81,14 +81,29 @@ export default function StoriesRail({
 function Cell({
   children,
   label,
+  wide = false,
 }: {
   children: React.ReactNode;
   label: string;
+  /** Your cell once a story exists: it carries a second 44px target beside the
+      avatar, so it needs the room. The label stays centred on the AVATAR
+      rather than on the widened cell. */
+  wide?: boolean;
 }): JSX.Element {
   return (
-    <li className="shrink-0 w-16 flex flex-col items-center gap-1.5">
+    <li
+      className={`shrink-0 flex flex-col gap-1.5 ${
+        wide ? 'w-[88px] items-start' : 'w-16 items-center'
+      }`}
+    >
       {children}
-      <span className="text-[11px] text-muted truncate max-w-full">{label}</span>
+      <span
+        className={`text-[11px] text-muted truncate ${
+          wide ? 'w-14 text-center' : 'max-w-full'
+        }`}
+      >
+        {label}
+      </span>
     </li>
   );
 }
@@ -112,33 +127,47 @@ function YourCell({
 }): JSX.Element {
   const hasStory = group.items.length > 0;
   return (
-    <Cell label="You">
-      <span data-testid="story-rail-you" className="relative block w-14 h-14">
-        <button
-          type="button"
-          data-testid={hasStory ? 'story-rail-your-story' : 'add-story'}
-          onClick={hasStory ? onOpen : onAddStory}
-          className="block w-14 h-14 rounded-full touch-manipulation"
-          aria-label={hasStory ? 'Your story' : RAIL_ADD_LABEL}
-        >
-          <Ring active={hasStory}>
-            <Avatar initials={group.initials} seed={group.handle} size="md" />
-          </Ring>
-        </button>
+    <Cell label="You" wide={hasStory}>
+      {/* Two 44px targets cannot both fit on one 56px avatar. The previous
+          shape put the add button at `left-3 top-3 w-11 h-11`, i.e. over
+          (12,12)-(56,56) of the 56px cell — which contains the avatar's own
+          centre (28,28), so tapping the middle of your ringed avatar opened
+          CAPTURE and the view control was reduced to a 12px L-strip. The cell
+          is widened instead once a story exists, so the add target starts at
+          x=44, past the avatar's centre: the avatar keeps a clear 44x56 and
+          the plus keeps its own 44x44, with neither borrowing the other's. */}
+      <span
+        data-testid="story-rail-you"
+        className={`relative block h-14 ${hasStory ? 'w-[88px]' : 'w-14'}`}
+      >
+        {/* The avatar keeps its own 56px positioning box so the pin badge
+            stays anchored to the avatar's corner rather than to the widened
+            cell. */}
+        <span className="absolute left-0 top-0 block w-14 h-14">
+          <button
+            type="button"
+            data-testid={hasStory ? 'story-rail-your-story' : 'add-story'}
+            onClick={hasStory ? onOpen : onAddStory}
+            className="block w-14 h-14 rounded-full touch-manipulation"
+            aria-label={hasStory ? 'Your story' : RAIL_ADD_LABEL}
+          >
+            <Ring active={hasStory}>
+              <Avatar initials={group.initials} seed={group.handle} size="md" />
+            </Ring>
+          </button>
+          {pinned ? <PinBadge /> : null}
+        </span>
         {hasStory ? (
-          // 44x44 with the mark in its corner: the box lands exactly inside
-          // the 56px cell (12 + 44), so the target is never clipped by the
-          // rail's own horizontal scroller, and the badge stays where the
-          // no-story cell draws it. Once your story exists this is a target in
-          // its own right rather than part of the avatar's, so the 28px box it
-          // used to have WAS the whole affordance and missed the bar — the
-          // cell measurement that passed was measuring the avatar beside it.
+          // 44x44, anchored past the avatar's centre and inside the cell's own
+          // 56px height, so the rail's horizontal scroller never clips it. The
+          // 18px mark sits at the box's bottom-LEFT, which lands it on the
+          // avatar's lower-right edge exactly where the no-story cell draws it.
           <button
             type="button"
             data-testid="add-story"
             onClick={onAddStory}
             aria-label={RAIL_ADD_LABEL}
-            className="absolute left-3 top-3 w-11 h-11 flex items-end justify-end rounded-full touch-manipulation"
+            className="absolute left-11 top-3 w-11 h-11 flex items-end justify-start rounded-full touch-manipulation"
           >
             <PlusBadge />
           </button>
@@ -147,7 +176,6 @@ function YourCell({
             <PlusBadge />
           </span>
         )}
-        {pinned ? <PinBadge /> : null}
       </span>
     </Cell>
   );

@@ -368,6 +368,70 @@ test.describe('The capture pipeline — modes and permission', () => {
     expect(stored[0].audienceHandles).toEqual([]);
   });
 
+  test('a recipient who leaves your circle cannot stay on the story', async ({
+    page,
+  }) => {
+    // The narrowed audience used to be trusted as a stored list of handles.
+    // The circle it was picked from is LIVE: unfollow that person in another
+    // tab and their row vanishes from the sheet while `audienceHandles` still
+    // carried them, so Done stayed available on a recipient nobody could see
+    // and the posted story kept a hidden one. Resolve at the point of use.
+    await openAddStory(page);
+    await page.getByTestId('capture-library-input').setInputFiles({
+      name: 'night.png',
+      mimeType: 'image/png',
+      buffer: PNG_1PX,
+    });
+    await page.getByTestId('capture-approve').click();
+    await expect(page.getByTestId('story-compose')).toBeVisible();
+
+    await page.getByTestId('story-compose-audience').click();
+    await page
+      .locator('[data-testid="story-audience-option"][data-value="custom"]')
+      .click();
+    await page
+      .locator('[data-testid="story-audience-person"][data-handle="claire"]')
+      .click();
+    await expect(page.getByTestId('story-audience-done')).toBeEnabled();
+    await page.getByTestId('story-audience-done').click();
+    await expect(page.getByTestId('story-compose-audience')).toContainText(
+      'Custom',
+    );
+
+    // Another tab unfollows Claire — the exact cross-tab ping useFollows
+    // listens for.
+    await page.evaluate(() => {
+      const key = 'next-bar:follows:v1';
+      const next = JSON.parse(
+        window.localStorage.getItem(key) ?? '[]',
+      ).filter((handle: string) => handle !== 'claire');
+      window.localStorage.setItem(key, JSON.stringify(next));
+      window.dispatchEvent(
+        new StorageEvent('storage', { key, newValue: JSON.stringify(next) }),
+      );
+    });
+
+    // The sheet no longer offers her, and no longer counts her.
+    await page.getByTestId('story-compose-audience').click();
+    await expect(
+      page.locator('[data-testid="story-audience-person"][data-handle="claire"]'),
+    ).toHaveCount(0);
+    await expect(page.getByTestId('story-audience-done')).toBeDisabled();
+    await expect(page.getByTestId('story-audience-needs-people')).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    // And what is STORED carries no invisible recipient.
+    await page.getByTestId('story-compose-add').click();
+    await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
+    const stored = await page.evaluate(() =>
+      JSON.parse(window.localStorage.getItem('next-bar:stories:v1') ?? '[]'),
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0].audienceHandles).not.toContain('claire');
+    expect(stored[0].audience).toBe('friends');
+    expect(stored[0].audienceHandles).toEqual([]);
+  });
+
   test('the dual mode can fall back to one photo without leaving the flow', async ({
     page,
   }) => {

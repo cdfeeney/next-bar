@@ -95,21 +95,30 @@ export default function CaptureReview({
         ) : null}
       </div>
 
+      {/* Every composition edit and the approve action are held while a
+          rotation is decoding. `rotate` closes over the pair it started with,
+          so a swap or a second edit accepted mid-flight was overwritten when
+          the stale rotation resolved — and approving mid-flight submitted the
+          PRE-rotation pair, i.e. a composition the user had already changed.
+          aria-disabled, not `disabled`: these can hold focus (BarLightbox.tsx:322). */}
       {kind === 'dual' ? (
         <div className="grid grid-cols-2 gap-2 px-4 mt-3">
           <CompositionButton
             testId="capture-swap-main"
             label="Swap main photo"
+            busy={rotating}
             onClick={() => onChange(swapMain(pair))}
           />
           <CompositionButton
             testId="capture-keep-one"
             label="Keep only one"
+            busy={rotating}
             onClick={() => onChange(keepOnly(pair, 'main'))}
           />
           <CompositionButton
             testId="capture-rotate-main"
             label="Rotate main"
+            busy={rotating}
             onClick={() => {
               void rotate('main');
             }}
@@ -117,6 +126,7 @@ export default function CaptureReview({
           <CompositionButton
             testId="capture-rotate-inset"
             label="Rotate inset"
+            busy={rotating}
             onClick={() => {
               void rotate('inset');
             }}
@@ -136,8 +146,12 @@ export default function CaptureReview({
         <button
           type="button"
           data-testid="capture-approve"
-          onClick={onApprove}
-          className="flex-1 min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors"
+          onClick={() => {
+            if (rotating) return;
+            onApprove();
+          }}
+          aria-disabled={rotating}
+          className="flex-1 min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors aria-disabled:opacity-40"
         >
           {kind === 'dual' ? 'Use photos' : 'Use photo'}
         </button>
@@ -153,18 +167,25 @@ export default function CaptureReview({
 function CompositionButton({
   testId,
   label,
+  busy = false,
   onClick,
 }: {
   testId: string;
   label: string;
+  /** Held while a rotation is decoding — see the block comment above. */
+  busy?: boolean;
   onClick: () => void;
 }): JSX.Element {
   return (
     <button
       type="button"
       data-testid={testId}
-      onClick={onClick}
-      className="min-h-[44px] rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+      onClick={() => {
+        if (busy) return;
+        onClick();
+      }}
+      aria-disabled={busy}
+      className="min-h-[44px] rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors aria-disabled:opacity-40"
     >
       {label}
     </button>

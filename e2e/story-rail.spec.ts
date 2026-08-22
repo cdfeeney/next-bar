@@ -39,6 +39,31 @@ async function openSocial(page: Page): Promise<void> {
   await expect(page.getByTestId('social-subtabs')).toBeVisible();
 }
 
+/**
+ * Put a live story on YOUR row without walking the whole capture branch —
+ * add-story.spec.ts owns that path. `isStoryItem` only requires id, postedAt,
+ * tagged and photo, so this is the smallest shape the store will read back.
+ */
+async function seedOwnStory(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'next-bar:stories:v1',
+      JSON.stringify([
+        {
+          id: 'own-seeded-1',
+          postedAt: new Date().toISOString(),
+          barId: null,
+          caption: null,
+          tagged: [],
+          photo: { kind: 'single', main: null },
+          audience: 'friends',
+          audienceHandles: [],
+        },
+      ]),
+    );
+  });
+}
+
 async function openStory(page: Page, handle: string): Promise<void> {
   await page.locator(`[data-testid="story-rail-item"][data-handle="${handle}"]`).click();
   await expect(page.getByTestId('story-viewer')).toBeVisible();
@@ -100,6 +125,56 @@ test.describe('Social sub-tabs and the Stories rail', () => {
     await page.getByRole('tab', { name: /Feed/i }).click();
     await expect(page.getByTestId('stories-rail')).toBeVisible();
     await expect(page.getByTestId('add-story')).toBeVisible();
+  });
+
+  test('with a live story the avatar body opens it and the plus still adds', async ({
+    page,
+  }) => {
+    // Regression: the add button was a 44x44 box at left-3/top-3 of the 56px
+    // cell, i.e. over (12,12)-(56,56) — which CONTAINS the avatar's own centre.
+    // Tapping the middle of your own ringed avatar therefore opened capture,
+    // and the view control was a ~12px L-strip. Both controls are asserted by
+    // geometry AND by what the tap actually does.
+    await seedOwnStory(page);
+    await openSocial(page);
+
+    const avatar = page.getByTestId('story-rail-your-story');
+    const plus = page.getByTestId('add-story');
+    await expect(avatar).toBeVisible();
+    await expect(plus).toBeVisible();
+
+    const avatarBox = await avatar.boundingBox();
+    const plusBox = await plus.boundingBox();
+    expect(avatarBox).not.toBeNull();
+    expect(plusBox).not.toBeNull();
+    if (avatarBox === null || plusBox === null) return;
+
+    // The plus keeps its own 44x44 target…
+    expect(plusBox.width).toBeGreaterThanOrEqual(44);
+    expect(plusBox.height).toBeGreaterThanOrEqual(44);
+    // …and no longer covers the avatar's centre.
+    const centre = {
+      x: avatarBox.x + avatarBox.width / 2,
+      y: avatarBox.y + avatarBox.height / 2,
+    };
+    const centreInsidePlus =
+      centre.x >= plusBox.x &&
+      centre.x <= plusBox.x + plusBox.width &&
+      centre.y >= plusBox.y &&
+      centre.y <= plusBox.y + plusBox.height;
+    expect(centreInsidePlus).toBe(false);
+
+    // Tapping the exact centre opens the VIEWER, not capture.
+    await page.mouse.click(centre.x, centre.y);
+    await expect(page.getByTestId('story-viewer')).toBeVisible();
+    await expect(page.getByTestId('capture-modes')).toHaveCount(0);
+    await page.getByTestId('story-close').click();
+    await expect(page.getByTestId('story-viewer')).toHaveCount(0);
+
+    // …and the plus still adds rather than opening the story it sits beside.
+    await plus.click();
+    await expect(page.getByTestId('capture-modes')).toBeVisible();
+    await expect(page.getByTestId('story-viewer')).toHaveCount(0);
   });
 
   test('the ring means an unseen story and is not merged with the pin badge', async ({

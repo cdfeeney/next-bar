@@ -103,7 +103,7 @@ function MemoryCard({
       </div>
 
       <StoryFrame
-        photo={{ kind: 'single', main: null }}
+        photo={memory.photo}
         barId={memory.barId}
         className="aspect-[4/5]"
       />

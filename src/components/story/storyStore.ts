@@ -106,6 +106,23 @@ export type FeedMemory = {
   caption: string;
   tagged: TaggedPerson[];
   /**
+   * The memory's image. Carried on the MEMORY so the Feed card renders what
+   * the memory actually has: the card used to pass a literal
+   * `{kind:'single', main:null}` of its own, which made the photo slot a
+   * property of the view rather than of the data and left no way for a memory
+   * with bytes to ever show them.
+   *
+   * V8 CAPABILITY LIMIT, stated rather than hidden: every memory in the Feed
+   * today is seeded from the people graph and carries `main: null`, so the
+   * card falls back to `barVisual` — the same deterministic tag-hued field
+   * every other photoless surface uses. There is no photo-memory table (see
+   * this module's header), a friend's captured bytes never leave their own
+   * device, and the legacy re-hosted bar-photo cache is policy-OFF in V8, so
+   * there is no honest byte source for another person's memory yet. A real
+   * photo memory is V9 work; do not fill this with a stock or bar photo.
+   */
+  photo: StoryPhoto;
+  /**
    * Id for /u/[handle]/night/[shareId] — the existing night surface. Seeded
    * memories carry the demo id that surface resolves from the demo catalogue;
    * a real memory would carry the bearer token.
@@ -366,6 +383,10 @@ export function seededFeed(now: number, circle: readonly string[]): FeedEntry[] 
         tagged: people
           .filter((person) => person.handle !== friend.handle)
           .slice(0, 2),
+        // No bytes: a seeded friend has no captured photo anywhere in this
+        // build. See FeedMemory.photo for why this is a stated V8 limit and
+        // not something to fill in with a stock image.
+        photo: { kind: 'single', main: null },
         shareId: demoShareId(friend.handle),
       },
     });

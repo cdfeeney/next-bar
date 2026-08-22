@@ -73,11 +73,19 @@ export default function StoryViewer({
   /** False when the reply could not be persisted — never confirm in that case. */
   onReply: (itemId: string, text: string) => boolean;
 }): JSX.Element | null {
-  const startIndex = Math.max(
-    0,
-    groups.findIndex((group) => group.handle === startHandle),
-  );
-  const [position, setPosition] = useState({ group: startIndex, item: 0 });
+  // Keyed by HANDLE, resolved to an index at render. A numeric index is a
+  // claim about a queue that is still live underneath the viewer: expire a
+  // story or unfollow someone in another tab and the same number now names a
+  // DIFFERENT person, so the viewer either shows the wrong author's story or
+  // points past the end. Key by id, resolve at render — the same rule the rest
+  // of this surface follows.
+  const [position, setPosition] = useState(() => ({
+    handle:
+      groups.find((group) => group.handle === startHandle)?.handle ??
+      groups[0]?.handle ??
+      startHandle,
+    item: 0,
+  }));
   const [elapsed, setElapsed] = useState(0);
   const [held, setHeld] = useState(false);
   const [chromeFocused, setChromeFocused] = useState(false);
@@ -97,7 +105,8 @@ export default function StoryViewer({
     !sheetOpen && !venueOpen,
   );
 
-  const group = groups[position.group];
+  const groupIndex = groups.findIndex((entry) => entry.handle === position.handle);
+  const group = groupIndex === -1 ? undefined : groups[groupIndex];
   const item = group?.items[position.item];
 
   const paused =
@@ -111,32 +120,34 @@ export default function StoryViewer({
   const advance = useCallback(() => {
     setElapsed(0);
     setPosition((current) => {
-      const currentGroup = groups[current.group];
-      if (currentGroup && current.item + 1 < currentGroup.items.length) {
-        return { group: current.group, item: current.item + 1 };
+      const index = groups.findIndex((entry) => entry.handle === current.handle);
+      if (index === -1) return current;
+      const currentGroup = groups[index];
+      if (current.item + 1 < currentGroup.items.length) {
+        return { handle: current.handle, item: current.item + 1 };
       }
       // Person-to-person handoff: author, avatar, chips and progress all
       // change together, in rail order, with nothing in between.
-      if (current.group + 1 < groups.length) {
-        return { group: current.group + 1, item: 0 };
-      }
+      const next = groups[index + 1];
+      if (next !== undefined) return { handle: next.handle, item: 0 };
       return current;
     });
   }, [groups]);
 
   const atEnd =
     group !== undefined &&
-    position.group === groups.length - 1 &&
+    groupIndex === groups.length - 1 &&
     position.item === group.items.length - 1;
 
   const back = useCallback(() => {
     setElapsed(0);
     setPosition((current) => {
-      if (current.item > 0) return { group: current.group, item: current.item - 1 };
-      if (current.group === 0) return current;
-      const previous = groups[current.group - 1];
+      if (current.item > 0) return { handle: current.handle, item: current.item - 1 };
+      const index = groups.findIndex((entry) => entry.handle === current.handle);
+      if (index <= 0) return current;
+      const previous = groups[index - 1];
       return {
-        group: current.group - 1,
+        handle: previous.handle,
         item: Math.max(0, previous.items.length - 1),
       };
     });
@@ -145,6 +156,15 @@ export default function StoryViewer({
   // Scroll lock. Focus entry, the Tab cycle and focus restore are the shared
   // modal contract and live in useModalDialog above.
   useEffect(() => lockBodyScroll(), []);
+
+  // The person being watched can leave the live queue while the viewer is open
+  // — their last story expires, or a cross-tab unfollow drops them from the
+  // rail. Rendering null in that case leaves this component MOUNTED, so the
+  // scroll lock above never releases: the page stays locked under a dialog
+  // nobody can see. Close instead, which unmounts and runs the cleanup.
+  useEffect(() => {
+    if (group === undefined || item === undefined) onClose();
+  }, [group, item, onClose]);
 
   useEffect(() => {
     if (item === undefined) return;
@@ -157,7 +177,7 @@ export default function StoryViewer({
     if (paused) return;
     const timer = setInterval(() => setElapsed((ms) => ms + TICK_MS), TICK_MS);
     return () => clearInterval(timer);
-  }, [paused, position.group, position.item]);
+  }, [paused, position.handle, position.item]);
 
   useEffect(() => {
     if (elapsed < ITEM_DURATION_MS) return;

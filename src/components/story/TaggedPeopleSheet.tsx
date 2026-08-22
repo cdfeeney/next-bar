@@ -51,23 +51,29 @@ export default function TaggedPeopleSheet({
                 {person.isYou === true ? ' · you' : ''}
               </span>
             </span>
-            {person.isYou === true && onRemoveMe !== null ? (
-              <button
-                type="button"
-                data-testid="remove-me"
-                onClick={onRemoveMe}
-                className="shrink-0 min-h-[44px] px-3 rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
-              >
-                Remove me
-              </button>
-            ) : (
+            {/* EVERY row links to a profile — "Remove me" is an extra action
+                on your own row, not a replacement for it. Swapping the two
+                left the one person guaranteed to be in this list with no way
+                to reach a profile from it. */}
+            <span className="shrink-0 flex items-center gap-2">
               <Link
                 href={`/u/${person.handle}`}
-                className="shrink-0 min-h-[44px] px-3 flex items-center rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+                data-testid="tagged-person-profile"
+                className="min-h-[44px] px-3 flex items-center rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
               >
                 Profile
               </Link>
-            )}
+              {person.isYou === true && onRemoveMe !== null ? (
+                <button
+                  type="button"
+                  data-testid="remove-me"
+                  onClick={onRemoveMe}
+                  className="min-h-[44px] px-3 rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+                >
+                  Remove me
+                </button>
+              ) : null}
+            </span>
           </li>
         ))}
       </ul>

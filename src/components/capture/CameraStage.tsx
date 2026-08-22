@@ -16,6 +16,7 @@ export default function CameraStage({
   facing,
   stepLabel,
   onCancel,
+  onFlip = null,
   onFrame,
   onUseLibrary,
 }: {
@@ -23,6 +24,13 @@ export default function CameraStage({
   /** "1 of 2 · Outward" — absent on the single-photo path. */
   stepLabel: string | null;
   onCancel: () => void;
+  /**
+   * Present only where the mode lets the user choose a side. The dual shot
+   * does NOT pass it: each of its two steps names its own camera, and letting
+   * either half flip would make "outward, then selfie" a claim the pair could
+   * not keep.
+   */
+  onFlip?: (() => void) | null;
   onFrame: (dataUrl: string) => void;
   onUseLibrary: () => void;
 }): JSX.Element {
@@ -52,6 +60,21 @@ export default function CameraStage({
           ✕
         </button>
         <span className="flex-1" />
+        {onFlip !== null ? (
+          <button
+            type="button"
+            data-testid="camera-flip"
+            onClick={onFlip}
+            aria-label={
+              facing === 'environment'
+                ? 'Switch to the front camera'
+                : 'Switch to the rear camera'
+            }
+            className="min-h-[44px] px-4 rounded-2xl border border-border text-xs font-display uppercase tracking-widest text-muted touch-manipulation hover:border-accent hover:text-text transition-colors"
+          >
+            {facing === 'environment' ? 'Front' : 'Rear'}
+          </button>
+        ) : null}
         {stepLabel !== null ? (
           <span
             data-testid="camera-step"

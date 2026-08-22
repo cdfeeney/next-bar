@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useModalDialog } from '@/hooks/useModalDialog';
 import CaptureFlow from '@/components/capture/CaptureFlow';
 import type { Pair } from '@/components/capture/pairing';
+import { useFollows } from '@/hooks/useFollows';
 import { getBarById } from '@/lib/catalog';
 import type { Bar } from '@/types';
 import StoryFrame from './StoryFrame';
@@ -20,8 +21,25 @@ import type { StoryAudience, StoryItem, TaggedPerson } from './storyStore';
  * Everything except this file's compose dock and receipt is reused, not
  * rebuilt: the capture pipeline is `CaptureFlow` unchanged, the bar and
  * people sheets are the same ones compose opens elsewhere, and the audience
- * sheet is the action-time component. The global Share a moment → Choose
- * where to share → Shared path is untouched by this branch.
+ * sheet is the action-time component.
+ *
+ * ON THE GLOBAL "SHARE A MOMENT" PATH — stated plainly because the earlier
+ * wording here ("untouched by this branch") read as though it existed.
+ * It does NOT exist in this repository, and it did not exist at this goal's
+ * base commit either: `git grep -i "share a moment"` over `src/` and `e2e/`
+ * at the base finds nothing. So criterion 10's "the global path is unchanged"
+ * is satisfied only vacuously — nothing was changed because there is nothing
+ * there — and criterion 9's closing "then destination/audience/summary" names
+ * that absent surface's destination step, not this branch's, which criterion 8
+ * explicitly forbids ("No destination picker in this branch").
+ *
+ * It is deliberately NOT built here. A destination picker needs a second
+ * destination that something can actually store, and this build has exactly
+ * one: your story. A "Choose where to share" screen listing a single option,
+ * or listing a Night Out that nothing persists a photo to, would be a control
+ * whose behaviour does not exist. Reviewers have raised the gap twice; it is a
+ * scope decision for the operator, not something to paper over from inside
+ * this lane.
  */
 
 function newId(): string {
@@ -52,6 +70,17 @@ export default function AddStoryFlow({
   const [saveFailed, setSaveFailed] = useState(false);
   const [sheet, setSheet] = useState<'bar' | 'people' | 'audience' | null>(null);
   const [posted, setPosted] = useState<StoryItem | null>(null);
+  const { isFollowing } = useFollows();
+
+  /**
+   * The recipients that are still real at THIS moment. A narrowed audience is
+   * chosen from your circle, but the circle is live — unfollow someone (here
+   * or in another tab) between picking them and posting and the sheet stops
+   * showing them, while `audienceHandles` still carried them. Resolving at the
+   * point of use, never from the stale pick, is the same key-by-id-and-resolve
+   * -at-render rule the rest of this surface follows.
+   */
+  const liveHandles = audienceHandles.filter((handle) => isFollowing(handle));
 
   if (step === 'capture') {
     return (
@@ -83,13 +112,16 @@ export default function AddStoryFlow({
    * decision not to narrow.
    */
   const closeAudience = (): void => {
-    if (audience !== 'friends' && audienceHandles.length === 0) {
+    if (audience !== 'friends' && liveHandles.length === 0) {
       setAudience('friends');
     }
     setSheet(null);
   };
 
   const add = (): void => {
+    // A narrowing with nobody live behind it is not an audience — store it as
+    // Friends rather than as a label over an empty or invisible recipient set.
+    const narrowed = audience !== 'friends' && liveHandles.length > 0;
     const item: StoryItem = {
       id: newId(),
       postedAt: new Date().toISOString(),
@@ -97,8 +129,8 @@ export default function AddStoryFlow({
       caption: null,
       tagged: people,
       photo,
-      audience,
-      audienceHandles: audience === 'friends' ? [] : audienceHandles,
+      audience: narrowed ? audience : 'friends',
+      audienceHandles: narrowed ? liveHandles : [],
     };
     // The receipt is a claim that the story is live for 24 hours, so it is
     // shown only when the store actually took it. A blocked or full quota used

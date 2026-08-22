@@ -44,6 +44,13 @@ export default function CaptureFlow({
   const [step, setStep] = useState<CaptureStep>('modes');
   const [outward, setOutward] = useState<string | null>(null);
   const [pair, setPair] = useState<Pair | null>(null);
+  // The single-photo mode's own copy says "rear or front camera", so it has to
+  // BE switchable: it was pinned to `environment` with no control anywhere, so
+  // the chooser promised a side the pipeline could not take. The dual shot is
+  // deliberately not switchable — its two steps name their own cameras.
+  const [singleFacing, setSingleFacing] = useState<'environment' | 'user'>(
+    'environment',
+  );
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (
@@ -94,9 +101,14 @@ export default function CaptureFlow({
 
       {step === 'single' ? (
         <CameraStage
-          facing="environment"
+          facing={singleFacing}
           stepLabel={null}
           onCancel={onCancel}
+          onFlip={() =>
+            setSingleFacing((current) =>
+              current === 'environment' ? 'user' : 'environment',
+            )
+          }
           onUseLibrary={() => fileRef.current?.click()}
           onFrame={(url) => {
             setPair({ main: url, inset: null });
