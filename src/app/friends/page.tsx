@@ -10,7 +10,7 @@ import GroupsAndPeople, {
 import { usePinnedHandles } from './_components/usePinnedHandles';
 import AddStoryFlow from '@/components/story/AddStoryFlow';
 import StoriesRail from '@/components/story/StoriesRail';
-import StoryViewer, { type StoryOrigin } from '@/components/story/StoryViewer';
+import StoryViewer from '@/components/story/StoryViewer';
 import {
   saveReply,
   useStories,
@@ -55,9 +55,9 @@ export default function SocialPage(): JSX.Element {
   useNightRefresh(() => setNight(nycNightKey()));
 
   const [tab, setTab] = useState<Tab>('tonight');
-  const [viewer, setViewer] = useState<
-    { handle: string; origin: StoryOrigin } | null
-  >(null);
+  // Closing returns you to whichever sub-tab opened the viewer for free: the
+  // tab is never changed on the way in, so only EXHAUSTION has to move it.
+  const [viewer, setViewer] = useState<string | null>(null);
   const [addingStory, setAddingStory] = useState(false);
 
   const you = {
@@ -75,7 +75,7 @@ export default function SocialPage(): JSX.Element {
   );
 
   const openStories = (handle: string): void => {
-    setViewer({ handle, origin: tab === 'feed' ? 'feed' : 'tonight' });
+    setViewer(handle);
   };
 
   const rail = (
@@ -174,7 +174,7 @@ export default function SocialPage(): JSX.Element {
       {viewer !== null && queue.length > 0 ? (
         <StoryViewer
           groups={queue}
-          startHandle={viewer.handle}
+          startHandle={viewer}
           youHandle={you.handle}
           onClose={() => setViewer(null)}
           onExhausted={() => {
@@ -194,7 +194,7 @@ export default function SocialPage(): JSX.Element {
           onUndo={stories.removeItem}
           onViewStory={() => {
             setAddingStory(false);
-            setViewer({ handle: you.handle, origin: 'tonight' });
+            setViewer(you.handle);
           }}
         />
       ) : null}

@@ -16,6 +16,7 @@
  * night-scoped one):
  *   next-bar:stories:v1        your own story items
  *   next-bar:stories-seen:v1   which item ids you have already watched
+ *   next-bar:stories-untagged:v1  stories you have taken your own tag off
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -25,6 +26,7 @@ import { demoFriends } from '@/lib/demo';
 export const STORIES_STORAGE_KEY = 'next-bar:stories:v1';
 export const STORIES_SEEN_STORAGE_KEY = 'next-bar:stories-seen:v1';
 export const STORY_REPLIES_STORAGE_KEY = 'next-bar:story-replies:v1';
+export const STORIES_UNTAGGED_STORAGE_KEY = 'next-bar:stories-untagged:v1';
 
 /** The canvas's own words: "Live for 24 hours · Friends." */
 const STORY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -176,6 +178,15 @@ export function saveOwnItems(items: readonly StoryItem[]): void {
 
 export function loadSeenIds(): string[] {
   return readJson(STORIES_SEEN_STORAGE_KEY, isStringArray) ?? [];
+}
+
+/**
+ * Stories you have removed your own tag from. Persisted for the same reason
+ * replies are: "Remove me" is a consent action, and a consent action that
+ * comes back on the next reload is a control that only looked like it worked.
+ */
+export function loadUntaggedIds(): string[] {
+  return readJson(STORIES_UNTAGGED_STORAGE_KEY, isStringArray) ?? [];
 }
 
 export type StoryReply = { targetId: string; text: string; at: string };
@@ -361,6 +372,7 @@ export function useStories(you: {
   useEffect(() => {
     setOwnItems(loadOwnItems());
     setSeen(loadSeenIds());
+    setUntagged(loadUntaggedIds());
   }, []);
 
   const addItem = useCallback((item: StoryItem) => {
@@ -389,9 +401,12 @@ export function useStories(you: {
   }, []);
 
   const untagMe = useCallback((itemId: string) => {
-    setUntagged((current) =>
-      current.includes(itemId) ? current : [...current, itemId],
-    );
+    setUntagged((current) => {
+      if (current.includes(itemId)) return current;
+      const next = [...current, itemId].slice(-MAX_SEEN_IDS);
+      writeJson(STORIES_UNTAGGED_STORAGE_KEY, next);
+      return next;
+    });
   }, []);
 
   // Memoised so the identities the viewer keys its effects on only change

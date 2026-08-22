@@ -277,4 +277,25 @@ test.describe('Story viewer and queue', () => {
     await expect(sheet).toHaveCount(0);
     await expect(page.getByTestId('story-people-chip')).not.toHaveText(/\+1/);
   });
+
+  test('Remove me is a consent action, so it survives a reload', async ({ page }) => {
+    await openSocial(page);
+    await openStory(page, 'claire');
+    await pauseViewer(page);
+    await page.getByTestId('story-people-chip').click();
+    await page.getByTestId('remove-me').click();
+    await expect(page.getByTestId('tagged-people-sheet')).toHaveCount(0);
+
+    // The tag does NOT come back. Replies and watched-ids are both written
+    // down; an untag that lived only in component state was the one control
+    // here that quietly undid itself.
+    await page.reload();
+    await expect(page.getByTestId('social-subtabs')).toBeVisible();
+    await openStory(page, 'claire');
+    await pauseViewer(page);
+    await expect(page.getByTestId('story-people-chip')).not.toHaveText(/\+1/);
+    await page.getByTestId('story-people-chip').click();
+    await expect(page.getByTestId('tagged-person-row')).toHaveCount(1);
+    await expect(page.getByTestId('remove-me')).toHaveCount(0);
+  });
 });

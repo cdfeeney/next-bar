@@ -48,8 +48,6 @@ const LONG_PRESS_MS = 350;
  * of the overlay and swallows taps on the controls in the bottom strip.
  */
 
-export type StoryOrigin = 'tonight' | 'feed';
-
 export default function StoryViewer({
   groups,
   startHandle,
@@ -64,7 +62,7 @@ export default function StoryViewer({
   groups: readonly StoryGroup[];
   startHandle: string;
   youHandle: string;
-  /** ✕ or Escape — the caller returns to `origin`. */
+  /** ✕ or Escape — the caller leaves the sub-tab where it was. */
   onClose: () => void;
   /** Queue ran out — the caller lands on Social · Tonight. */
   onExhausted: () => void;

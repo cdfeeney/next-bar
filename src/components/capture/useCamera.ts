@@ -42,6 +42,26 @@ export type UseCamera = {
 /** JPEG quality for a story frame — visibly clean, well under a Mb. */
 const CAPTURE_QUALITY = 0.85;
 
+/**
+ * Longest edge a stored frame may have. Stories live in `localStorage` as
+ * data URLs, and a phone's library holds 12MP originals: one of those base64s
+ * to several Mb, blows the quota, and `writeJson` swallows the failure — so
+ * the post reads as shared and is gone on the next reload. Bounding the bytes
+ * at the point they enter the app is what keeps that from being possible.
+ */
+const MAX_STORED_EDGE = 1440;
+
+/** Scale (w,h) down so neither edge exceeds the bound. Never scales up. */
+function boundedSize(
+  width: number,
+  height: number,
+): { width: number; height: number } {
+  const longest = Math.max(width, height);
+  if (longest === 0) return { width: 0, height: 0 };
+  const scale = Math.min(1, MAX_STORED_EDGE / longest);
+  return { width: Math.round(width * scale), height: Math.round(height * scale) };
+}
+
 export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<CameraStatus>('idle');
@@ -102,8 +122,7 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
   const capture = useCallback((): string | null => {
     const video = videoRef.current;
     if (video === null) return null;
-    const width = video.videoWidth;
-    const height = video.videoHeight;
+    const { width, height } = boundedSize(video.videoWidth, video.videoHeight);
     if (width === 0 || height === 0) return null;
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -157,8 +176,29 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-/** Read a picked file as a data URL — the library row's one job. */
-export function fileToDataUrl(file: File): Promise<string | null> {
+/**
+ * Read a picked file as a bounded data URL — the library row's one job.
+ *
+ * The picker's `accept="image/*"` is a hint to the file dialog, not a
+ * guarantee about what arrives, so what was actually picked is checked here
+ * and then DECODED: a file that is not an image fails to decode and never
+ * reaches the flow. Re-encoding through the same bound the shutter uses is
+ * what keeps a library original from being the one path that can overflow the
+ * store.
+ */
+export async function fileToDataUrl(file: File): Promise<string | null> {
+  if (!file.type.startsWith('image/')) return null;
+  const raw = await readAsDataUrl(file);
+  if (raw === null) return null;
+  try {
+    return await boundedJpeg(raw);
+  } catch {
+    // Not decodable as an image, whatever it claimed to be.
+    return null;
+  }
+}
+
+function readAsDataUrl(file: File): Promise<string | null> {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () =>
@@ -166,4 +206,22 @@ export function fileToDataUrl(file: File): Promise<string | null> {
     reader.onerror = () => resolve(null);
     reader.readAsDataURL(file);
   });
+}
+
+/** Re-encode a data URL at or below MAX_STORED_EDGE. Throws if it will not decode. */
+async function boundedJpeg(url: string): Promise<string> {
+  const image = await loadImage(url);
+  const { width, height } = boundedSize(image.width, image.height);
+  if (width === 0 || height === 0) throw new Error('image has no dimensions');
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (context === null) return url;
+  context.drawImage(image, 0, 0, width, height);
+  try {
+    return canvas.toDataURL('image/jpeg', CAPTURE_QUALITY);
+  } catch {
+    return url;
+  }
 }

@@ -145,6 +145,28 @@ test.describe('Add to Story — the plus-badge entry branch', () => {
     await expect(page.getByTestId('add-story')).toBeVisible();
   });
 
+  test('a picked file that is not an image never reaches the review gate', async ({
+    page,
+  }) => {
+    await openAddStory(page);
+
+    // Driven straight at the input, the way the library success case above
+    // is: clicking the row opens a real file chooser, which is the OS, not
+    // the product.
+    // `accept="image/*"` steers the file dialog; it does not constrain what
+    // arrives. Anything that is not a decodable image is dropped at the
+    // boundary rather than becoming a draft nobody can render.
+    await page.getByTestId('capture-library-input').setInputFiles({
+      name: 'notes.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('not a photo'),
+    });
+
+    await expect(page.getByTestId('capture-review')).toHaveCount(0);
+    // …and the chooser is still there, so the flow is not stranded either.
+    await expect(page.getByTestId('capture-modes')).toBeVisible();
+  });
+
   test('Retake discards the frame and reopens the chooser', async ({ page }) => {
     await openAddStory(page);
     await page.getByTestId('capture-library-input').setInputFiles({
