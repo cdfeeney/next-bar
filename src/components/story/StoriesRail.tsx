@@ -25,15 +25,19 @@ export const RAIL_ADD_LABEL = 'Add to your story';
 
 export default function StoriesRail({
   groups,
-  pinnedHandles,
+  pinnedIds,
   onOpen,
   onAddStory,
 }: {
   /** Rail order — your group first. This is also the story-queue order. */
   groups: readonly StoryGroup[];
-  /** Handles that have pinned a spot tonight (server presence, not stories). */
-  pinnedHandles: readonly string[];
-  onOpen: (handle: string) => void;
+  /**
+   * PROFILE IDS that have pinned a spot tonight (server presence, not stories).
+   * Ids, not handles: your own cell has no public handle, and matching it once
+   * needed a placeholder constant on both sides.
+   */
+  pinnedIds: readonly string[];
+  onOpen: (authorId: string) => void;
   onAddStory: () => void;
 }): JSX.Element {
   const you = groups.find((group) => group.isYou);
@@ -60,17 +64,17 @@ export default function StoriesRail({
         {you ? (
           <YourCell
             group={you}
-            pinned={pinnedHandles.includes(you.handle)}
-            onOpen={() => onOpen(you.handle)}
+            pinned={pinnedIds.includes(you.id)}
+            onOpen={() => onOpen(you.id)}
             onAddStory={onAddStory}
           />
         ) : null}
         {friends.map((group) => (
           <FriendCell
-            key={group.handle}
+            key={group.id}
             group={group}
-            pinned={pinnedHandles.includes(group.handle)}
-            onOpen={() => onOpen(group.handle)}
+            pinned={pinnedIds.includes(group.id)}
+            onOpen={() => onOpen(group.id)}
           />
         ))}
       </ul>
@@ -158,7 +162,7 @@ function YourCell({
             aria-label={hasStory ? 'Your story' : RAIL_ADD_LABEL}
           >
             <Ring active={hasStory}>
-              <Avatar initials={group.initials} seed={group.handle} size="md" />
+              <Avatar initials={group.initials} seed={group.id} size="md" />
             </Ring>
           </button>
           {pinned ? <PinBadge /> : null}
@@ -204,7 +208,8 @@ function FriendCell({
         <button
           type="button"
           data-testid="story-rail-item"
-          data-handle={group.handle}
+          data-author={group.id}
+          data-handle={group.handle ?? ''}
           data-unseen={group.hasUnseen ? 'true' : 'false'}
           onClick={onOpen}
           className="block w-14 h-14 rounded-full touch-manipulation"
@@ -215,7 +220,7 @@ function FriendCell({
           }
         >
           <Ring active={group.hasUnseen}>
-            <Avatar initials={group.initials} seed={group.handle} size="md" />
+            <Avatar initials={group.initials} seed={group.id} size="md" />
           </Ring>
         </button>
         {pinned ? <PinBadge /> : null}

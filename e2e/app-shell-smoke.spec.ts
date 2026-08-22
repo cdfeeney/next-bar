@@ -81,8 +81,14 @@ test.describe('App-shell smoke', () => {
     // "Friends" — that heading belonged to the 2026-07-26 dashboard.
     await expect(page.getByRole('heading', { name: /^Next Bar$/ })).toBeVisible();
     await expect(page.getByTestId('social-subtabs').getByRole('tab')).toHaveCount(3);
-    // Tonight lands first and carries the rail, presence and the people graph.
-    await expect(page.getByTestId('stories-rail')).toBeVisible();
+    // Tonight lands first and carries presence and the people graph. It used to
+    // assert the STORIES RAIL here, which was only ever visible signed-out
+    // because the rail was seeded from demo friends. Stories are server-backed
+    // now and there is no anonymous story surface, so this smoke check asserts
+    // the honest signed-out state instead — the rail itself is covered, with a
+    // session, in story-rail.spec.ts.
+    await expect(page.getByTestId('stories-signed-out')).toBeVisible();
+    await expect(page.getByTestId('stories-rail')).toHaveCount(0);
     await expect(page.getByTestId('friends-tonight')).toBeVisible();
     await expect(page.getByRole('link', { name: /Followers/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /Following/i })).toBeVisible();

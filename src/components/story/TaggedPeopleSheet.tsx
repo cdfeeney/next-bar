@@ -20,12 +20,13 @@ import type { TaggedPerson } from './storyStore';
 /**
  * Where a row's Profile goes.
  *
- * Your own row does NOT go to `/u/<handle>`: `VIEWER_HANDLE` is the local
- * placeholder `'you'` (storyStore.ts), which is not a real profile — that route
- * dead-ends on "No one here" signed-out and `notFound()` signed-in. Your own
- * profile surface in this product is the Account root at `/settings`, so that
- * is where your row points. Every row still links to a profile (criterion 7);
- * one of them is yours.
+ * Your own row goes to the Account root at `/settings`, not to `/u/<handle>`.
+ * It once pointed at `/u/you` — a local placeholder handle that was not a real
+ * profile, so the link dead-ended on "No one here" signed-out and `notFound()`
+ * signed-in. That placeholder is gone entirely now; your own row simply has no
+ * public profile handle, and `/settings` is your profile surface in this
+ * product. Every row still links to a profile (criterion 7); one of them is
+ * yours.
  */
 function profileHref(person: TaggedPerson): string {
   return person.isYou === true ? '/settings' : `/u/${person.handle}`;

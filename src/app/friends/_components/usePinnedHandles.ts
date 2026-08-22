@@ -7,7 +7,6 @@ import { nycNightKey } from '@/lib/nightKey';
 import { getCacheEpoch } from '@/lib/accountCache';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { fetchCircleSuggestions } from '@/lib/suggestions.server';
-import { VIEWER_HANDLE } from '@/components/story/storyStore';
 
 /**
  * Handles that have pinned a spot tonight — the SHARED BAR PRESENCE signal
@@ -24,10 +23,10 @@ import { VIEWER_HANDLE } from '@/components/story/storyStore';
  *
  * TWO things make YOUR OWN pin visible on the rail, and neither is optional:
  *
- *  - the rows carry backend handles while the rail's own cell is the local
- *    `VIEWER_HANDLE` constant (stories are local-first and never see a profile
- *    handle), so your row is re-keyed to that constant — without it the
- *    own-avatar badge could not match and was unreachable code;
+ *  - the rows and the rail's cells are both keyed on the PROFILE ID, so your
+ *    own badge matches without any re-keying. Stories used to be local-first
+ *    with no profile handle for your own cell, which is why this once mapped
+ *    your row onto a `VIEWER_HANDLE` placeholder;
  *  - `Pin my spot` lives in TonightPresence, which refreshes only its OWN
  *    copy of these rows. This hook otherwise re-reads on auth/night alone, so
  *    the rail sat a whole night behind your own write. The write announces
@@ -63,12 +62,14 @@ export function usePinnedHandles(): string[] {
         const rows = await fetchCircleSuggestions(supabase, night);
         // An account switch mid-flight must not land another account's circle.
         if (isCancelled() || rows === null || getCacheEpoch() !== epoch) return;
+        // PROFILE IDS, not handles. The rail keys its cells on the same id, so
+        // your own pin matches by construction — the old code had to re-key
+        // your row onto a local `VIEWER_HANDLE` constant because your own cell
+        // had no handle at all, and that constant is gone.
         setHandles(
           rows
-            .map((row) =>
-              youId !== null && row.userId === youId ? VIEWER_HANDLE : row.handle,
-            )
-            .filter((handle): handle is string => handle !== null),
+            .map((row) => row.userId)
+            .filter((id): id is string => id !== null),
         );
       })();
     },

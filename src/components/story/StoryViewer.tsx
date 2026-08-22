@@ -30,9 +30,13 @@ import { ageLabel, taggedLabel, type StoryGroup } from './storyStore';
  *    Social · Tonight — there is no "all caught up" screen;
  *  - ✕ closes early and returns to the surface it was opened from.
  *
- * Automatic progression PAUSES on long-press, while a reply is being
- * composed, while the tagged-people sheet is open, and whenever keyboard or
- * assistive focus is on the chrome. It resumes only when that ends.
+ * Automatic progression PAUSES on long-press, while the tagged-people sheet is
+ * open, and whenever keyboard or assistive focus is on the chrome. It resumes
+ * only when that ends.
+ *
+ * THERE IS NO REPLY FIELD. It wrote to `localStorage` and nothing ever
+ * delivered it, so the control promised a message the product never sent. It
+ * comes back with real delivery and a surface where the author can read it.
  */
 
 /** How long one item holds the screen. */
@@ -51,52 +55,51 @@ const LONG_PRESS_MS = 350;
 
 export default function StoryViewer({
   groups,
-  startHandle,
-  youHandle,
+  startId,
+  youId,
   onClose,
   onExhausted,
   onMarkSeen,
   onUntagMe,
-  onReply,
 }: {
   /** Rail order, already filtered to groups that have at least one item. */
   groups: readonly StoryGroup[];
-  startHandle: string;
-  youHandle: string;
+  /** Profile id of the author whose queue opens first. */
+  startId: string;
+  /** The viewer's own profile id, or null when signed out. */
+  youId: string | null;
   /** ✕ or Escape — the caller leaves the sub-tab where it was. */
   onClose: () => void;
   /** Queue ran out — the caller lands on Social · Tonight. */
   onExhausted: () => void;
   onMarkSeen: (itemId: string) => void;
-  /** False when the consent action could not be persisted. */
-  onUntagMe: (itemId: string) => boolean;
-  /** False when the reply could not be persisted — never confirm in that case. */
-  onReply: (itemId: string, text: string) => boolean;
+  /**
+   * Real backend tag withdrawal. Resolves with a message when it did NOT
+   * happen — a consent control that reports success it did not achieve is
+   * worse than one that visibly refused.
+   */
+  onUntagMe: (itemId: string) => Promise<{ ok: true } | { ok: false; message: string }>;
 }): JSX.Element | null {
-  // Keyed by HANDLE, resolved to an index at render. A numeric index is a
+  // Keyed by PROFILE ID, resolved to an index at render. A numeric index is a
   // claim about a queue that is still live underneath the viewer: expire a
   // story or unfollow someone in another tab and the same number now names a
   // DIFFERENT person, so the viewer either shows the wrong author's story or
   // points past the end. Key by id, resolve at render — the same rule the rest
   // of this surface follows.
   const [position, setPosition] = useState(() => ({
-    handle:
-      groups.find((group) => group.handle === startHandle)?.handle ??
-      groups[0]?.handle ??
-      startHandle,
+    id:
+      groups.find((group) => group.id === startId)?.id ??
+      groups[0]?.id ??
+      startId,
     item: 0,
   }));
   const [elapsed, setElapsed] = useState(0);
   const [held, setHeld] = useState(false);
   const [chromeFocused, setChromeFocused] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [reply, setReply] = useState('');
-  const [replyFocused, setReplyFocused] = useState(false);
-  const [sent, setSent] = useState<string | null>(null);
   const [saveFailed, setSaveFailed] = useState<string | null>(null);
   const [venueOpen, setVenueOpen] = useState(false);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const replyRef = useRef<HTMLInputElement | null>(null);
   // Escape and the Tab cycle, off while a sheet or the venue lightbox is open
   // above this dialog — each installs its own trap, and two armed at once
   // fight over focus.
@@ -105,7 +108,7 @@ export default function StoryViewer({
     !sheetOpen && !venueOpen,
   );
 
-  const groupIndex = groups.findIndex((entry) => entry.handle === position.handle);
+  const groupIndex = groups.findIndex((entry) => entry.id === position.id);
   const group = groupIndex === -1 ? undefined : groups[groupIndex];
   const item = group?.items[position.item];
 
@@ -113,23 +116,21 @@ export default function StoryViewer({
     held ||
     sheetOpen ||
     venueOpen ||
-    replyFocused ||
-    reply.length > 0 ||
     chromeFocused;
 
   const advance = useCallback(() => {
     setElapsed(0);
     setPosition((current) => {
-      const index = groups.findIndex((entry) => entry.handle === current.handle);
+      const index = groups.findIndex((entry) => entry.id === current.id);
       if (index === -1) return current;
       const currentGroup = groups[index];
       if (current.item + 1 < currentGroup.items.length) {
-        return { handle: current.handle, item: current.item + 1 };
+        return { id: current.id, item: current.item + 1 };
       }
       // Person-to-person handoff: author, avatar, chips and progress all
       // change together, in rail order, with nothing in between.
       const next = groups[index + 1];
-      if (next !== undefined) return { handle: next.handle, item: 0 };
+      if (next !== undefined) return { id: next.id, item: 0 };
       return current;
     });
   }, [groups]);
@@ -142,12 +143,12 @@ export default function StoryViewer({
   const back = useCallback(() => {
     setElapsed(0);
     setPosition((current) => {
-      if (current.item > 0) return { handle: current.handle, item: current.item - 1 };
-      const index = groups.findIndex((entry) => entry.handle === current.handle);
+      if (current.item > 0) return { id: current.id, item: current.item - 1 };
+      const index = groups.findIndex((entry) => entry.id === current.id);
       if (index <= 0) return current;
       const previous = groups[index - 1];
       return {
-        handle: previous.handle,
+        id: previous.id,
         item: Math.max(0, previous.items.length - 1),
       };
     });
@@ -177,7 +178,7 @@ export default function StoryViewer({
     if (paused) return;
     const timer = setInterval(() => setElapsed((ms) => ms + TICK_MS), TICK_MS);
     return () => clearInterval(timer);
-  }, [paused, position.handle, position.item]);
+  }, [paused, position.id, position.item]);
 
   useEffect(() => {
     if (elapsed < ITEM_DURATION_MS) return;
@@ -191,11 +192,6 @@ export default function StoryViewer({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (sheetOpen || venueOpen) return;
-      // Arrows are QUEUE navigation, so they must not fire while the caret is
-      // in the reply field: ArrowLeft to fix a typo used to step the queue
-      // underneath a half-typed reply, which then submitted against whichever
-      // item had taken the screen.
-      if (event.target === replyRef.current) return;
       if (event.key === 'ArrowRight') {
         if (atEnd) onExhausted();
         else advance();
@@ -211,7 +207,7 @@ export default function StoryViewer({
   const bar = item.barId !== null ? getBarById(item.barId) : undefined;
   const people = taggedLabel(item.tagged);
   const youAreTagged = item.tagged.some(
-    (person) => person.isYou === true || person.handle === youHandle,
+    (person) => person.isYou === true || person.id === youId,
   );
 
   /**
@@ -247,21 +243,6 @@ export default function StoryViewer({
     onTap();
   };
 
-  const submitReply = (event: React.FormEvent): void => {
-    event.preventDefault();
-    const text = reply.trim();
-    if (text === '') return;
-    // The field is cleared and "sent" announced only when the reply actually
-    // landed. Clearing first threw the message away and said it arrived.
-    if (!onReply(item.id, text)) {
-      setSaveFailed("This device is out of room — your reply wasn't saved.");
-      return;
-    }
-    setSaveFailed(null);
-    setReply('');
-    setSent(group.name.split(/\s+/)[0]);
-  };
-
   return (
     <div
       ref={dialogRef}
@@ -282,7 +263,7 @@ export default function StoryViewer({
         <ProgressStrip count={group.items.length} index={position.item} elapsed={elapsed} />
 
         <div className="flex items-center gap-3 mt-3">
-          <Avatar initials={group.initials} seed={group.handle} size="sm" />
+          <Avatar initials={group.initials} seed={group.id} size="sm" />
           <span className="min-w-0 flex-1 text-sm truncate">
             {group.name}
             <span className="text-muted"> · {ageLabel(item.postedAt)}</span>
@@ -355,36 +336,6 @@ export default function StoryViewer({
         />
       </div>
 
-      <form
-        onSubmit={submitReply}
-        className="shrink-0 flex items-center gap-2 px-4 py-3 pb-[calc(env(safe-area-inset-bottom)+12px)]"
-        {...chromeFocus}
-      >
-        <input
-          ref={replyRef}
-          data-testid="story-reply-input"
-          value={reply}
-          onChange={(event) => setReply(event.target.value)}
-          onFocus={() => setReplyFocused(true)}
-          onBlur={() => setReplyFocused(false)}
-          aria-label={`Reply to ${group.name}`}
-          placeholder={`Reply to ${group.name.split(/\s+/)[0]}…`}
-          className="flex-1 min-h-[44px] rounded-2xl border border-border bg-surface px-4 text-sm outline-none focus:border-accent"
-        />
-        <button
-          type="submit"
-          data-testid="story-reply-send"
-          aria-label="Send reply"
-          className="w-11 h-11 shrink-0 rounded-full border border-border flex items-center justify-center touch-manipulation hover:border-accent transition-colors"
-        >
-          ↑
-        </button>
-      </form>
-      {sent !== null ? (
-        <p role="status" className="sr-only">
-          Reply sent to {sent}
-        </p>
-      ) : null}
       {saveFailed !== null ? (
         <p
           data-testid="story-viewer-save-failed"
@@ -402,18 +353,23 @@ export default function StoryViewer({
       {sheetOpen ? (
         <TaggedPeopleSheet
           people={item.tagged.map((person) =>
-            person.handle === youHandle ? { ...person, isYou: true } : person,
+            person.id === youId ? { ...person, isYou: true } : person,
           )}
           posterName={group.name}
           onRemoveMe={
             youAreTagged
               ? () => {
-                  if (!onUntagMe(item.id)) {
-                    setSaveFailed(
-                      "This device is out of room — your tag wasn't removed.",
-                    );
-                  }
-                  setSheetOpen(false);
+                  // The sheet closes only after the BACKEND confirms. Closing
+                  // first and reporting nothing is how a consent control ends
+                  // up claiming a removal that never reached the server.
+                  void onUntagMe(item.id).then((result) => {
+                    if (result.ok) {
+                      setSaveFailed(null);
+                      setSheetOpen(false);
+                      return;
+                    }
+                    setSaveFailed(result.message);
+                  });
                 }
               : null
           }

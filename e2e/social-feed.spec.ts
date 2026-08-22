@@ -1,120 +1,81 @@
 /**
- * social-feed.spec.ts
+ * social-feed.spec.ts — Social · Feed, after the V8 Stories backend.
  *
- * Social → Feed — V8-1f criterion 3 and criterion 12, against
- * `docs/design-reference/approved/next-bar-social-v2-core.png` (screen C).
+ * WHAT THIS FILE CAN STILL PROVE, AND WHAT MOVED AWAY FROM IT.
  *
- * "Feed = photo memories … NO public like counts and no follower metrics: the
- * two actions are View night and Reply. A ranking event can appear as a
- * compact secondary row, but never competes with a photo."
+ * Cycle 1's Feed was seeded: `demoFriends` produced memories with captions and
+ * ranking events, so a signed-OUT browser rendered a populated stream and this
+ * spec asserted against it. Every one of those rows was invented, which is
+ * exactly what the V8 amendment removed — Feed now renders the same real,
+ * unexpired `public.stories` rows the rail does, and there is no anonymous
+ * story surface at all.
  *
- * The negative assertions are the point of this file: a like count or a
- * follower number on this surface is the specific failure the canvas rules
- * out, and only a test that looks for it can catch it coming back.
+ * So this spec no longer asserts card contents. It asserts the things that are
+ * still true without a session: the three sub-tabs, and that a signed-out
+ * visitor is told the truth instead of being shown a demo reel.
+ *
+ * THE REAL FEED BEHAVIOUR IS PROVEN IN `src/lib/storiesRls.live.test.ts`
+ * (two identities, authorised visibility, denial, expiry, custom audience),
+ * which needs a database and two accounts and does NOT run in this gate. That
+ * is the attended staging verification the goal reports as required before V8
+ * can launch — not coverage this file quietly lost.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
-async function openFeed(page: Page): Promise<void> {
-  await page.goto('/friends');
-  await page.getByRole('tab', { name: /Feed/i }).click();
-  await expect(page.getByTestId('friends-feed')).toBeVisible();
-}
+test.describe('Social · Feed', () => {
+  test('the three sub-tabs are unchanged and Feed is reachable', async ({ page }) => {
+    await page.goto('/friends');
+    const tabs = page.getByRole('tab');
+    await expect(tabs).toHaveCount(3);
+    await expect(tabs.nth(0)).toHaveText(/Tonight/i);
+    await expect(tabs.nth(1)).toHaveText(/Plans/i);
+    await expect(tabs.nth(2)).toHaveText(/Feed/i);
 
-test.describe('Social — Feed', () => {
-  test('memories carry author, place, time, image, caption, tags and two actions', async ({
-    page,
-  }) => {
-    await openFeed(page);
-
-    const card = page.getByTestId('feed-memory').first();
-    await expect(card).toBeVisible();
-    // Photo-first: the image area is part of the card, not an afterthought.
-    await expect(card.getByTestId('story-frame')).toBeVisible();
-    // Author, place and age all read from the card head.
-    await expect(card).toContainText(/Claire R\./);
-    await expect(card).toContainText(/Tagged ·/);
-    await expect(card).toContainText(/\d+[mh]/);
-
-    // Exactly two actions, and they are these two.
-    await expect(card.getByTestId('feed-view-night')).toHaveText(/View night/i);
-    await expect(card.getByTestId('feed-reply')).toHaveText(/Reply/i);
-    await expect(card.getByTestId('feed-view-night')).toHaveAttribute(
-      'href',
-      /^\/u\/[^/]+\/night\/[^/]+$/,
-    );
+    await tabs.nth(2).click();
+    await expect(page.getByTestId('social-panel-feed')).toBeVisible();
   });
 
-  test('View night reaches the night, not a dead link', async ({ page }) => {
-    await openFeed(page);
-    // Seeded memories belong to seeded curators, who have no server row by
-    // construction — the same reason /u/[handle] falls back to the demo
-    // catalogue. Every one of these used to land on "This night isn't here."
-    await page.getByTestId('feed-memory').first().getByTestId('feed-view-night').click();
+  test('signed out, Feed shows no invented memories', async ({ page }) => {
+    await page.goto('/friends');
+    await page.getByRole('tab', { name: /Feed/i }).click();
 
-    await expect(page).toHaveURL(/\/u\/[^/]+\/night\/[^/]+$/);
-    await expect(page.getByText(/This night isn't here/i)).toHaveCount(0);
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    // No seeded cards, and no Feed section at all when there is nothing real.
+    await expect(page.getByTestId('feed-memory')).toHaveCount(0);
+    await expect(page.getByTestId('friends-feed')).toHaveCount(0);
+
+    // What IS shown says why, and offers the one action that changes it.
+    await expect(page.getByTestId('stories-signed-out')).toBeVisible();
+    await expect(page.getByTestId('stories-sign-in')).toHaveAttribute('href', '/auth');
+  });
+
+  test('the retired Feed actions are gone, not merely hidden', async ({ page }) => {
+    await page.goto('/friends');
+    await page.getByRole('tab', { name: /Feed/i }).click();
+
+    // Reply wrote to localStorage and nothing ever delivered it.
+    await expect(page.getByTestId('feed-reply')).toHaveCount(0);
+    await expect(page.getByTestId('feed-reply-input')).toHaveCount(0);
+    // "View night" pointed at a demo share id no real night ever has.
+    await expect(page.getByTestId('feed-view-night')).toHaveCount(0);
   });
 
   test('no public like counts and no follower metrics anywhere on Feed', async ({
     page,
   }) => {
-    await openFeed(page);
-    const feed = page.getByTestId('friends-feed');
-    await expect(feed.getByText(/\blikes?\b/i)).toHaveCount(0);
-    await expect(feed.getByText(/\bfollowers?\b/i)).toHaveCount(0);
-    await expect(feed.getByText(/\bfollowing\b/i)).toHaveCount(0);
-    // No heart/like control either — the absence is of the affordance, not
-    // merely of the number.
-    await expect(feed.getByRole('button', { name: /like/i })).toHaveCount(0);
-  });
-
-  test('a ranking event is a compact secondary row, never a photo card', async ({
-    page,
-  }) => {
-    await openFeed(page);
-    const row = page.getByTestId('feed-ranking-row').first();
-    await expect(row).toBeVisible();
-    await expect(row).toContainText(/ranked/i);
-    // It carries no image and none of the memory actions.
-    await expect(row.getByTestId('story-frame')).toHaveCount(0);
-    await expect(row.getByTestId('feed-view-night')).toHaveCount(0);
-
-    const rowBox = await row.boundingBox();
-    const cardBox = await page.getByTestId('feed-memory').first().boundingBox();
-    expect(rowBox?.height ?? 0).toBeLessThan((cardBox?.height ?? 0) / 2);
-  });
-
-  test('Reply opens a composer in place and does not navigate away', async ({
-    page,
-  }) => {
-    await openFeed(page);
-    const card = page.getByTestId('feed-memory').first();
-
-    await card.getByTestId('feed-reply').click();
-    await expect(card.getByTestId('feed-reply-input')).toBeVisible();
-    // Negative assertion: replying is in-place, never a route change.
-    await expect(page).toHaveURL(/\/friends$/);
-
-    await card.getByTestId('feed-reply-input').fill('that jukebox');
-    await card.getByTestId('feed-reply-send').click();
-    await expect(card.getByTestId('feed-reply-input')).toHaveCount(0);
-    await expect(page.getByTestId('friends-feed')).toBeVisible();
+    await page.goto('/friends');
+    await page.getByRole('tab', { name: /Feed/i }).click();
+    const panel = page.getByTestId('social-panel-feed');
+    await expect(panel).not.toContainText(/\blikes?\b/i);
+    await expect(panel).not.toContainText(/\bfollowers\b/i);
   });
 
   test('the existing Social data flows are still live beside Feed', async ({
     page,
   }) => {
     await page.goto('/friends');
-    // Tonight and the people graph are unchanged by the sub-tab chrome.
-    await expect(page.getByTestId('friends-tonight')).toBeVisible();
-    await expect(page.getByRole('heading', { name: /Groups & people/i })).toBeVisible();
-
+    await expect(page.getByRole('tab', { name: /Tonight/i })).toBeVisible();
     await page.getByRole('tab', { name: /Plans/i }).click();
-    await expect(page.getByRole('link', { name: /Start a Night Out/i })).toBeVisible();
-
-    await page.getByRole('tab', { name: /Feed/i }).click();
-    await expect(page.getByTestId('friends-feed')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Plans$/i })).toBeVisible();
   });
 });

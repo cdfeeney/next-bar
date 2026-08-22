@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useModalDialog } from '@/hooks/useModalDialog';
 import CaptureFlow from '@/components/capture/CaptureFlow';
 import type { Pair } from '@/components/capture/pairing';
-import { useFollows } from '@/hooks/useFollows';
 import { getBarById } from '@/lib/catalog';
 import type { Bar } from '@/types';
 import StoryFrame from './StoryFrame';
@@ -42,23 +41,51 @@ import type { StoryAudience, StoryItem, TaggedPerson } from './storyStore';
  * this lane.
  */
 
-function newId(): string {
-  const uuid = globalThis.crypto?.randomUUID?.();
-  return uuid ?? `own-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+/**
+ * The capture pipeline hands back data URLs. Publication needs BYTES, because
+ * the story lives in a private bucket rather than in this browser. `fetch` on
+ * a data: URL is the one conversion that needs no hand-rolled base64 decode.
+ */
+async function dataUrlToBlob(url: string): Promise<Blob | null> {
+  try {
+    const response = await fetch(url);
+    return await response.blob();
+  } catch {
+    return null;
+  }
 }
 
 type Step = 'capture' | 'compose' | 'shared';
 
 export default function AddStoryFlow({
+  friends,
+  friendsReady,
   onCancel,
-  onPosted,
+  onPublish,
   onUndo,
   onViewStory,
 }: {
+  /** Accepted MUTUAL friends — the only permissible recipients. */
+  friends: readonly TaggedPerson[];
+  /** False until the real circle has resolved; narrowing is held until then. */
+  friendsReady: boolean;
   onCancel: () => void;
-  /** False when the store refused it — no receipt is shown in that case. */
-  onPosted: (item: StoryItem) => boolean;
-  onUndo: (itemId: string) => void;
+  /**
+   * Publishes to the SERVER. Resolves `ok:false` with a message when the story
+   * did not land — the receipt is shown only on `ok:true`, because it claims
+   * the story is live for 24 hours.
+   */
+  onPublish: (input: {
+    main: Blob;
+    inset?: Blob | null;
+    barId?: string | null;
+    caption?: string | null;
+    audience: StoryAudience;
+    audienceIds?: string[];
+    tagIds?: string[];
+  }) => Promise<{ ok: true; storyId: string } | { ok: false; message: string }>;
+  /** Author delete, from the receipt's Undo. */
+  onUndo: (storyId: string) => Promise<{ ok: true } | { ok: false; message: string }>;
   onViewStory: () => void;
 }): JSX.Element {
   const [step, setStep] = useState<Step>('capture');
@@ -66,23 +93,22 @@ export default function AddStoryFlow({
   const [bar, setBar] = useState<Bar | null>(null);
   const [people, setPeople] = useState<TaggedPerson[]>([]);
   const [audience, setAudience] = useState<StoryAudience>('friends');
-  const [audienceHandles, setAudienceHandles] = useState<string[]>([]);
-  const [saveFailed, setSaveFailed] = useState(false);
+  const [audienceIds, setAudienceIds] = useState<string[]>([]);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [sheet, setSheet] = useState<'bar' | 'people' | 'audience' | null>(null);
-  const [posted, setPosted] = useState<StoryItem | null>(null);
+  const [postedId, setPostedId] = useState<string | null>(null);
   /** Set when a post was refused because the narrowed audience had emptied. */
   const [audienceLapsed, setAudienceLapsed] = useState(false);
-  const { isFollowing } = useFollows();
 
   /**
-   * The recipients that are still real at THIS moment. A narrowed audience is
-   * chosen from your circle, but the circle is live — unfollow someone (here
-   * or in another tab) between picking them and posting and the sheet stops
-   * showing them, while `audienceHandles` still carried them. Resolving at the
-   * point of use, never from the stale pick, is the same key-by-id-and-resolve
-   * -at-render rule the rest of this surface follows.
+   * The recipients that are still real at THIS moment, resolved against the
+   * live friends list rather than trusting the earlier pick. The server checks
+   * this again — every custom recipient must be an accepted mutual friend or
+   * `publish_story` refuses — so this is the honest UI half of a rule the
+   * database enforces, not the rule itself.
    */
-  const liveHandles = audienceHandles.filter((handle) => isFollowing(handle));
+  const liveIds = audienceIds.filter((id) => friends.some((f) => f.id === id));
 
   if (step === 'capture') {
     return (
@@ -114,55 +140,68 @@ export default function AddStoryFlow({
    * decision not to narrow.
    */
   const closeAudience = (): void => {
-    if (audience !== 'friends' && liveHandles.length === 0) {
+    if (audience !== 'friends' && liveIds.length === 0) {
       setAudience('friends');
     }
     setSheet(null);
   };
 
-  const add = (): void => {
+  const add = async (): Promise<void> => {
+    if (busy) return;
     // A narrowing whose recipients have all left your circle is NOT quietly
     // downgraded to Friends. That was a show-vs-store mismatch in the more
     // dangerous direction: the compose row still read "Custom" at the moment
-    // of the tap while the stored story went out to Friends, i.e. BROADER than
-    // the screen said. Refuse the post and reopen the audience sheet, which is
-    // the only screen that can show what actually happened.
-    if (audience !== 'friends' && liveHandles.length === 0) {
+    // of the tap while the story went out to Friends, i.e. BROADER than the
+    // screen said. Refuse the post and reopen the audience sheet.
+    if (audience !== 'friends' && liveIds.length === 0) {
       setAudienceLapsed(true);
       setSheet('audience');
       return;
     }
-    const item: StoryItem = {
-      id: newId(),
-      postedAt: new Date().toISOString(),
-      barId: bar?.id ?? null,
-      caption: null,
-      tagged: people,
-      photo,
-      audience,
-      audienceHandles: audience === 'friends' ? [] : liveHandles,
-    };
-    // The receipt is a claim that the story is live for 24 hours, so it is
-    // shown only when the store actually took it. A blocked or full quota used
-    // to reach the same screen, and the post was gone on the next reload.
-    if (!onPosted(item)) {
-      setSaveFailed(true);
+    if (pair === null) return;
+    setBusy(true);
+    setFailure(null);
+    const main = await dataUrlToBlob(pair.main);
+    const inset = pair.inset === null ? null : await dataUrlToBlob(pair.inset);
+    if (main === null || (pair.inset !== null && inset === null)) {
+      setBusy(false);
+      setFailure('That photo could not be read. Nothing was shared.');
       return;
     }
-    setSaveFailed(false);
-    setPosted(item);
+    const result = await onPublish({
+      main,
+      inset,
+      barId: bar?.id ?? null,
+      caption: null,
+      audience,
+      audienceIds: audience === 'friends' ? [] : liveIds,
+      tagIds: people.map((person) => person.id),
+    });
+    setBusy(false);
+    // The receipt claims the story is LIVE FOR 24 HOURS. It is shown only when
+    // the server actually took it — both the upload and the metadata publish.
+    if (!result.ok) {
+      setFailure(result.message);
+      return;
+    }
+    setPostedId(result.storyId);
     setStep('shared');
   };
 
-  if (step === 'shared' && posted !== null) {
+  if (step === 'shared' && postedId !== null) {
     return (
       <SharedReceipt
-        item={posted}
+        photo={photo}
+        barId={bar?.id ?? null}
         onClose={onCancel}
         onViewStory={onViewStory}
         onUndo={() => {
-          onUndo(posted.id);
-          onCancel();
+          // Undo DELETES on the server. Closing regardless would leave a story
+          // live that the user was told had been undone.
+          void onUndo(postedId).then((result) => {
+            if (result.ok) onCancel();
+            else setFailure(result.message);
+          });
         }}
       />
     );
@@ -223,19 +262,19 @@ export default function AddStoryFlow({
         <button
           type="button"
           data-testid="story-compose-add"
-          onClick={add}
+          onClick={() => { void add(); }}
+          aria-disabled={busy}
           className="w-full min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors"
         >
           Add to my story
         </button>
-        {saveFailed ? (
+        {failure !== null ? (
           <p
             data-testid="story-save-failed"
             role="alert"
             className="text-sm leading-relaxed text-center"
           >
-            This device is out of room for stories. Free some space and try
-            again — nothing was shared.
+            {failure}
           </p>
         ) : null}
       </div>
@@ -251,11 +290,12 @@ export default function AddStoryFlow({
       ) : null}
       {sheet === 'people' ? (
         <PeopleSheet
+          friends={friends}
           selected={people}
           onToggle={(person) =>
             setPeople((current) =>
-              current.some((entry) => entry.handle === person.handle)
-                ? current.filter((entry) => entry.handle !== person.handle)
+              current.some((entry) => entry.id === person.id)
+                ? current.filter((entry) => entry.id !== person.id)
                 : [...current, person],
             )
           }
@@ -265,13 +305,14 @@ export default function AddStoryFlow({
       {sheet === 'audience' ? (
         <AudienceSheet
           value={audience}
-          handles={audienceHandles}
+          friends={friendsReady ? friends : []}
+          handles={audienceIds}
           onChange={setAudience}
-          onToggleHandle={(handle) =>
-            setAudienceHandles((current) =>
-              current.includes(handle)
-                ? current.filter((entry) => entry !== handle)
-                : [...current, handle],
+          onToggleHandle={(id) =>
+            setAudienceIds((current: string[]) =>
+              current.includes(id)
+                ? current.filter((entry) => entry !== id)
+                : [...current, id],
             )
           }
           lapsed={audienceLapsed}
@@ -327,9 +368,7 @@ function peopleLabel(people: readonly TaggedPerson[]): string {
 }
 
 function audienceLabel(audience: StoryAudience): string {
-  if (audience === 'groups') return 'Selected groups';
-  if (audience === 'custom') return 'Custom';
-  return 'Friends';
+  return audience === 'custom' ? 'Custom' : 'Friends';
 }
 
 function MetaRow({
@@ -370,17 +409,19 @@ function MetaRow({
  * two distinct targets on one avatar.
  */
 function SharedReceipt({
-  item,
+  photo,
+  barId,
   onClose,
   onViewStory,
   onUndo,
 }: {
-  item: StoryItem;
+  photo: { kind: 'single' | 'dual'; main: string | null; inset: string | null };
+  barId: string | null;
   onClose: () => void;
   onViewStory: () => void;
   onUndo: () => void;
 }): JSX.Element {
-  const bar = item.barId !== null ? getBarById(item.barId) : undefined;
+  const bar = barId !== null ? getBarById(barId) : undefined;
   const ref = useModalDialog<HTMLDivElement>(onClose);
   return (
     <div
@@ -412,8 +453,8 @@ function SharedReceipt({
       </p>
 
       <StoryFrame
-        photo={item.photo}
-        barId={item.barId}
+        photo={photo}
+        barId={barId}
         className="mt-5 rounded-2xl border border-border aspect-[4/5]"
         insetClassName="w-24"
       />

@@ -11,11 +11,8 @@ import { usePinnedHandles } from './_components/usePinnedHandles';
 import AddStoryFlow from '@/components/story/AddStoryFlow';
 import StoriesRail from '@/components/story/StoriesRail';
 import StoryViewer from '@/components/story/StoryViewer';
-import {
-  saveReply,
-  useStories,
-  VIEWER_HANDLE,
-} from '@/components/story/storyStore';
+import StoriesEmptyState from '@/components/story/StoriesEmptyState';
+import { useStories } from '@/components/story/storyStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { useNightRefresh } from '@/hooks/useIntent';
@@ -60,13 +57,9 @@ export default function SocialPage(): JSX.Element {
   const [viewer, setViewer] = useState<string | null>(null);
   const [addingStory, setAddingStory] = useState(false);
 
-  const you = {
-    handle: VIEWER_HANDLE,
-    name: 'You',
-    initials: initialsFor(auth.status === 'signed-in' ? auth.user.email : null),
-  };
-  const stories = useStories(you);
-  const pinnedHandles = usePinnedHandles();
+  const stories = useStories();
+  const youId = auth.status === 'signed-in' ? auth.user.id : null;
+  const pinnedIds = usePinnedHandles();
   // The queue only ever contains people who have something to show. Memoised
   // so the viewer's navigation callbacks are not rebuilt on every render.
   const queue = useMemo(
@@ -74,17 +67,22 @@ export default function SocialPage(): JSX.Element {
     [stories.groups],
   );
 
-  const openStories = (handle: string): void => {
-    setViewer(handle);
+  const openStories = (authorId: string): void => {
+    setViewer(authorId);
   };
 
-  const rail = (
+  // The rail is only a rail when there is a real session behind it. Signed out,
+  // unreachable, or genuinely empty each get their OWN honest state — an empty
+  // feed and an unreachable backend must never look the same.
+  const rail = stories.status === 'ready' ? (
     <StoriesRail
       groups={stories.groups}
-      pinnedHandles={pinnedHandles}
+      pinnedIds={pinnedIds}
       onOpen={openStories}
       onAddStory={() => setAddingStory(true)}
     />
+  ) : (
+    <StoriesEmptyState status={stories.status} onRetry={stories.refresh} />
   );
 
   return (
@@ -166,7 +164,9 @@ export default function SocialPage(): JSX.Element {
         {tab === 'feed' ? (
           <Panel id="feed">
             {rail}
-            <FeedSection entries={stories.feed} onReply={saveReply} />
+            {stories.status === 'ready' && stories.feed.length > 0 ? (
+              <FeedSection entries={stories.feed} onOpenStory={openStories} />
+            ) : null}
           </Panel>
         ) : null}
       </div>
@@ -174,8 +174,8 @@ export default function SocialPage(): JSX.Element {
       {viewer !== null && queue.length > 0 ? (
         <StoryViewer
           groups={queue}
-          startHandle={viewer}
-          youHandle={you.handle}
+          startId={viewer}
+          youId={youId}
           onClose={() => setViewer(null)}
           onExhausted={() => {
             setViewer(null);
@@ -183,18 +183,19 @@ export default function SocialPage(): JSX.Element {
           }}
           onMarkSeen={stories.markSeen}
           onUntagMe={stories.untagMe}
-          onReply={saveReply}
         />
       ) : null}
 
       {addingStory ? (
         <AddStoryFlow
+          friends={stories.friends}
+          friendsReady={stories.friendsReady}
           onCancel={() => setAddingStory(false)}
-          onPosted={stories.addItem}
+          onPublish={stories.publish}
           onUndo={stories.removeItem}
           onViewStory={() => {
             setAddingStory(false);
-            setViewer(you.handle);
+            if (youId !== null) setViewer(youId);
           }}
         />
       ) : null}

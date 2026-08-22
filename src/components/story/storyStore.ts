@@ -1,54 +1,58 @@
 'use client';
 
 /**
- * Stories and Feed memories — the LOCAL-FIRST store, on the same rule
- * `src/lib/nightLog.ts` records: a surface ships local-first, and server
- * persistence arrives with the table that backs it.
+ * Stories and Feed — SERVER-BACKED (migration 0065).
  *
- * There is no photo-memory table, and this branch may not migrate, so a story
- * you post lives in `localStorage` for its 24 hours and the friend stories
- * around it are seeded from the people graph that already exists
- * (`src/lib/demo/friends.ts`) rather than from a second invented store.
- * Everything server-backed on Social — presence, plans, invitations, follow,
- * Group Favorites — is untouched by this module.
+ * Operator decision 2026-08-22 replaced the cycle-1 local-first store. What
+ * that store did and this one does not: keep story records in `localStorage`,
+ * hold photos as data URLs, and invent a people graph from `demoFriends`. A
+ * story is now a row in `public.stories` with its bytes in a private bucket,
+ * and who may read it is decided by RLS, not here.
  *
- * Two keys, both night-independent (a story is a 24-hour object, not a
- * night-scoped one):
- *   next-bar:stories:v1        your own story items
- *   next-bar:stories-seen:v1   which item ids you have already watched
- *   next-bar:stories-untagged:v1  stories you have taken your own tag off
+ * WHAT IS STILL LOCAL, and why that is not a contradiction: which items THIS
+ * DEVICE has already watched. That is per-device read state, not the story —
+ * it is meaningless to another account, it is registered foreign-only in
+ * `accountCache`, and losing it costs a ring, not content.
+ *
+ * REMOVED, deliberately, because each was a claim the product could not keep:
+ *   - `next-bar:stories:v1`          own stories as browser data URLs
+ *   - `next-bar:story-replies:v1`    replies nothing ever delivered
+ *   - `next-bar:stories-untagged:v1` a consent control only this device obeyed
+ *   - `demoFriends` / `demoShareId` / `VIEWER_HANDLE` on production surfaces
+ *   - the `groups` audience: no saved-groups capability exists (V9)
+ *   - seeded captions, seeded ranking events, photoless seeded memories
+ *
+ * SIGNED-OUT SHOWS NOTHING. There is no anonymous story surface: a signed-out
+ * visitor gets an honest empty state, not a demo reel dressed as friends.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getBarById } from '@/lib/catalog';
-import { demoFriends, demoShareId } from '@/lib/demo';
+import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
-
-export const STORIES_STORAGE_KEY = 'next-bar:stories:v1';
-export const STORIES_SEEN_STORAGE_KEY = 'next-bar:stories-seen:v1';
-export const STORY_REPLIES_STORAGE_KEY = 'next-bar:story-replies:v1';
-export const STORIES_UNTAGGED_STORAGE_KEY = 'next-bar:stories-untagged:v1';
-
-/** The canvas's own words: "Live for 24 hours · Friends." */
-const STORY_TTL_MS = 24 * 60 * 60 * 1000;
-
-/** Degenerate-input guard, mirroring nightLog's MAX_VISITS_PER_NIGHT. */
-const MAX_OWN_ITEMS = 30;
-
-/** Seen-id ring buffer — the list is a convenience, not an archive. */
-const MAX_SEEN_IDS = 500;
+import { supabase } from '@/lib/supabase';
+import {
+  deleteStory,
+  fetchVisibleStories,
+  publishStory,
+  removeMyStoryTag,
+  type StoryView,
+} from '@/lib/stories.server';
 
 /**
- * The viewer's own handle inside this module. Stories are local-first, so the
- * signed-in profile handle is not available to the seed; one constant keeps
- * the rail, the tag lists and "Remove me" agreeing on who "you" is.
+ * The ONE remaining story key: which item ids this device has watched.
+ * Per-device read state — never story content.
  */
-export const VIEWER_HANDLE = 'you';
+export const STORIES_SEEN_STORAGE_KEY = 'next-bar:stories-seen:v1';
 
-export type StoryAudience = 'friends' | 'groups' | 'custom';
+/** Bounded so a long-lived device cannot grow this without limit. */
+const MAX_SEEN_IDS = 500;
+
+/** Friends = accepted MUTUAL friends. Custom = named real profile ids. */
+export type StoryAudience = 'friends' | 'custom';
 
 export type TaggedPerson = {
-  /** No leading @ — matches DemoFriend.handle and the /u/[handle] route. */
+  /** Real profile id. The backend relationship is keyed on this, never a handle. */
+  id: string;
   handle: string;
   name: string;
   initials: string;
@@ -56,507 +60,401 @@ export type TaggedPerson = {
   isYou?: boolean;
 };
 
-/**
- * A photo pair. `inset` is present only for a dual shot; the viewer and the
- * compose screen render the SAME placement for both kinds — the inset never
- * moves the tags (story-tag-placement, "Rules that hold in every option").
- */
 export type StoryPhoto = {
   kind: 'single' | 'dual';
-  /** Data URL, or null for a seeded item that has no bytes behind it. */
+  /** Short-lived signed URL, or null when it could not be minted. */
   main: string | null;
   inset?: string | null;
 };
 
 export type StoryItem = {
   id: string;
+  authorId: string;
   postedAt: string;
-  /** Chosen by the poster. Never inferred from location. */
+  /** Server-set. The story is unreadable from this instant, by query. */
+  expiresAt: string;
   barId: string | null;
   caption: string | null;
   tagged: TaggedPerson[];
   photo: StoryPhoto;
   audience: StoryAudience;
-  /**
-   * Who the non-default audiences actually resolve to. Empty for `friends`,
-   * which needs no list; REQUIRED to be non-empty for `groups` and `custom`,
-   * so those two are a stored recipient set rather than a label with nothing
-   * behind it.
-   */
-  audienceHandles: string[];
 };
 
 export type StoryGroup = {
-  handle: string;
+  /**
+   * Real profile id. The rail, the queue and the presence pins all key on
+   * THIS, not on a handle: the old code carried a local `VIEWER_HANDLE = 'you'`
+   * constant precisely because your own cell had no profile handle, and then
+   * had to re-key backend rows onto that constant to make your own pin match.
+   * An id every row already has removes both hacks.
+   */
+  id: string;
+  /** Null for your own cell until a real handle is resolved for it. */
+  handle: string | null;
   name: string;
   initials: string;
   isYou: boolean;
   items: StoryItem[];
-  /** At least one item you have not watched — this is what draws the ring. */
+  /** At least one item this device has not watched — this draws the ring. */
   hasUnseen: boolean;
 };
 
-export type FeedMemory = {
-  id: string;
-  handle: string;
-  name: string;
-  initials: string;
-  barId: string | null;
-  postedAt: string;
-  caption: string;
-  tagged: TaggedPerson[];
-  /**
-   * The memory's image. Carried on the MEMORY so the Feed card renders what
-   * the memory actually has: the card used to pass a literal
-   * `{kind:'single', main:null}` of its own, which made the photo slot a
-   * property of the view rather than of the data and left no way for a memory
-   * with bytes to ever show them.
-   *
-   * V8 CAPABILITY LIMIT, stated rather than hidden: every memory in the Feed
-   * today is seeded from the people graph and carries `main: null`, so the
-   * card falls back to `barVisual` — the same deterministic tag-hued field
-   * every other photoless surface uses. There is no photo-memory table (see
-   * this module's header), a friend's captured bytes never leave their own
-   * device, and the legacy re-hosted bar-photo cache is policy-OFF in V8, so
-   * there is no honest byte source for another person's memory yet. A real
-   * photo memory is V9 work; do not fill this with a stock or bar photo.
-   */
-  photo: StoryPhoto;
-  /**
-   * Id for /u/[handle]/night/[shareId] — the existing night surface. Seeded
-   * memories carry the demo id that surface resolves from the demo catalogue;
-   * a real memory would carry the bearer token.
-   */
-  shareId: string;
+/**
+ * Feed is the SAME real, unexpired story records as a chronological
+ * photo-first stream. There is no separate memory or archive backend, and no
+ * ranking row: nothing in this build produces one from real data. Permanent
+ * Feed history is V9.
+ */
+export type FeedEntry = {
+  story: StoryItem;
+  author: {
+    id: string;
+    /** Null for your own story: your row has no public profile handle here. */
+    handle: string | null;
+    name: string;
+    initials: string;
+    isYou: boolean;
+  };
 };
 
-/** A ranking event: the compact secondary row, never a photo card. */
-export type FeedRankingEvent = {
-  id: string;
-  handle: string;
-  name: string;
-  initials: string;
-  barId: string;
-  score: number;
-  at: string;
+export type StoriesStatus =
+  /** The first read has not resolved. */
+  | 'loading'
+  /** No session: there is no anonymous story surface. */
+  | 'signed-out'
+  /** Supabase could not be reached. NEVER shown as "no stories". */
+  | 'unavailable'
+  | 'ready';
+
+export type PublishInput = {
+  main: Blob;
+  inset?: Blob | null;
+  barId?: string | null;
+  caption?: string | null;
+  audience: StoryAudience;
+  /** Real profile ids. Enforced server-side; a handle is not accepted. */
+  audienceIds?: string[];
+  tagIds?: string[];
 };
 
-export type FeedEntry =
-  | { kind: 'memory'; memory: FeedMemory }
-  | { kind: 'ranking'; event: FeedRankingEvent };
+export type PublishOutcome =
+  /** `storyId` is what the receipt's Undo deletes. */
+  | { ok: true; storyId: string }
+  | { ok: false; message: string };
+
+/** Outcomes with nothing to hand back (delete, untag). */
+export type ActionOutcome =
+  | { ok: true }
+  | { ok: false; message: string };
+
+export type UseStories = {
+  status: StoriesStatus;
+  /** Rail order: you first, then friends. Also the QUEUE order. */
+  groups: StoryGroup[];
+  feed: FeedEntry[];
+  /** Accepted mutual friends — the only people a story can be sent to. */
+  friends: TaggedPerson[];
+  /** False until the real circle has actually resolved. */
+  friendsReady: boolean;
+  publish: (input: PublishInput) => Promise<PublishOutcome>;
+  removeItem: (id: string) => Promise<ActionOutcome>;
+  markSeen: (id: string) => void;
+  untagMe: (id: string) => Promise<ActionOutcome>;
+  refresh: () => void;
+};
 
 // ---------------------------------------------------------------------------
-// storage
+// per-device read state
 // ---------------------------------------------------------------------------
 
-function isStoryItem(value: unknown): value is StoryItem {
-  if (value === null || typeof value !== 'object') return false;
-  const obj = value as Record<string, unknown>;
-  return (
-    typeof obj.id === 'string' &&
-    typeof obj.postedAt === 'string' &&
-    Array.isArray(obj.tagged) &&
-    typeof obj.photo === 'object' &&
-    obj.photo !== null
-  );
-}
-
-function readJson<T>(key: string, guard: (value: unknown) => value is T): T | null {
-  if (typeof window === 'undefined') return null;
+function readSeen(): string[] {
+  if (typeof window === 'undefined') return [];
   try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
+    const raw = window.localStorage.getItem(STORIES_SEEN_STORAGE_KEY);
+    if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    return guard(parsed) ? parsed : null;
+    return Array.isArray(parsed) && parsed.every((v) => typeof v === 'string')
+      ? (parsed as string[])
+      : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
-/** False when the value did not land: a full quota, or a blocked store. */
-function writeJson(key: string, value: unknown): boolean {
-  if (typeof window === 'undefined') return false;
+function writeSeen(ids: readonly string[]): void {
+  if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-    return true;
+    window.localStorage.setItem(
+      STORIES_SEEN_STORAGE_KEY,
+      JSON.stringify(ids.slice(-MAX_SEEN_IDS)),
+    );
   } catch {
-    // A full or blocked quota must not take the surface down with it — but it
-    // must not be reported as a successful save either.
-    return false;
+    // A full or blocked quota loses a ring, not content. Nothing to report.
   }
-}
-
-function isItemArray(value: unknown): value is StoryItem[] {
-  return Array.isArray(value) && value.every(isStoryItem);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
-}
-
-/** Your own items, expired ones dropped. Pure read — never writes back. */
-export function loadOwnItems(now = Date.now()): StoryItem[] {
-  const items = readJson(STORIES_STORAGE_KEY, isItemArray) ?? [];
-  return items
-    .filter((item) => {
-      const at = Date.parse(item.postedAt);
-      return Number.isFinite(at) && now - at < STORY_TTL_MS;
-    })
-    .slice(-MAX_OWN_ITEMS);
-}
-
-/**
- * Persist your items, newest-wins. Returns false only when the NEWEST item
- * could not be stored — that is the case the caller must not confirm.
- *
- * `MAX_OWN_ITEMS` bounds the COUNT, and a count bound is not a byte bound:
- * dual-shot frames are 1440px JPEG data URLs, so a night's worth can pass the
- * ~5MB quota well before thirty items. On a quota failure the oldest item is
- * dropped and the write retried, which is the same ring rule the count bound
- * already states, applied to the dimension that actually overflowed.
- */
-export function saveOwnItems(items: readonly StoryItem[]): boolean {
-  let candidate = items.slice(-MAX_OWN_ITEMS);
-  while (candidate.length > 1) {
-    if (writeJson(STORIES_STORAGE_KEY, candidate)) return true;
-    candidate = candidate.slice(1);
-  }
-  return writeJson(STORIES_STORAGE_KEY, candidate);
-}
-
-export function loadSeenIds(): string[] {
-  return readJson(STORIES_SEEN_STORAGE_KEY, isStringArray) ?? [];
-}
-
-/**
- * Stories you have removed your own tag from. Persisted for the same reason
- * replies are: "Remove me" is a consent action, and a consent action that
- * comes back on the next reload is a control that only looked like it worked.
- */
-export function loadUntaggedIds(): string[] {
-  return readJson(STORIES_UNTAGGED_STORAGE_KEY, isStringArray) ?? [];
-}
-
-export type StoryReply = { targetId: string; text: string; at: string };
-
-function isReplyArray(value: unknown): value is StoryReply[] {
-  return (
-    Array.isArray(value) &&
-    value.every((entry) => {
-      if (entry === null || typeof entry !== 'object') return false;
-      const reply = entry as Record<string, unknown>;
-      return typeof reply.targetId === 'string' && typeof reply.text === 'string';
-    })
-  );
-}
-
-export function loadReplies(): StoryReply[] {
-  return readJson(STORY_REPLIES_STORAGE_KEY, isReplyArray) ?? [];
-}
-
-/**
- * Replies are kept where the stories are: on this device, until a messages
- * table exists to carry them. Writing them down rather than swallowing them
- * is the difference between a local-first surface and a dead control.
- *
- * Returns false when the write did not land (full or blocked quota). The
- * boolean is the whole point: a swallowed failure cleared the field and
- * announced "Reply sent" over a message that existed nowhere.
- */
-export function saveReply(targetId: string, text: string): boolean {
-  const next = [
-    ...loadReplies(),
-    { targetId, text, at: new Date().toISOString() },
-  ].slice(-MAX_SEEN_IDS);
-  return writeJson(STORY_REPLIES_STORAGE_KEY, next);
 }
 
 // ---------------------------------------------------------------------------
-// seeded friend stories and feed
+// mapping
 // ---------------------------------------------------------------------------
 
-/** Fixed offsets, not random, so the rail order is stable across renders. */
-const SEED_MINUTES_AGO = [8, 22, 61, 140] as const;
-
-const SEED_CAPTIONS = [
-  'Back corner booth, the good jukebox night.',
-  'Last stop and nobody wanted to leave.',
-  'Two rounds in and the room finally filled up.',
-  'Walked past it twice before we found the door.',
-] as const;
-
-/** The demo profiles you actually follow, in the catalogue's stable order. */
-function followed(circle: readonly string[]): typeof demoFriends {
-  return demoFriends.filter((friend) => circle.includes(friend.handle));
+export function initialsFor(name: string | null | undefined): string {
+  const source = (name ?? '').trim();
+  if (source === '') return '··';
+  const parts = source.split(/\s+/).filter(Boolean);
+  const letters = parts.length > 1
+    ? `${parts[0][0]}${parts[parts.length - 1][0]}`
+    : source.slice(0, 2);
+  return letters.toUpperCase();
 }
 
-function seedPeople(): TaggedPerson[] {
-  return demoFriends.map((friend) => ({
-    handle: friend.handle,
-    name: friend.displayName,
-    initials: friend.initials,
-  }));
-}
+type Person = { id: string; handle: string | null; name: string; initials: string };
 
-/**
- * One seeded story tags YOU. Without it "Remove me" is a branch no test and
- * no user could ever reach, which is how a control ships broken.
- */
-function taggedFor(
-  people: readonly TaggedPerson[],
-  poster: string,
-  groupIndex: number,
-  itemIndex: number,
-): TaggedPerson[] {
-  const others = people
-    .filter((person) => person.handle !== poster)
-    .slice(0, 1 + (itemIndex % 3));
-  if (groupIndex === 0 && itemIndex === 0) {
-    return [...others, { handle: VIEWER_HANDLE, name: 'You', initials: 'YO' }];
-  }
-  return others;
-}
-
-function knownBarId(barId: string | undefined): string | null {
-  if (barId === undefined) return null;
-  return getBarById(barId) ? barId : null;
-}
-
-/**
- * Friend story groups, one to three items each, in a stable rail order.
- *
- * `circle` is the follow graph, and it is a filter, not a decoration: a story
- * is posted to Friends, so someone you do not follow has no business on your
- * rail. Seeding every demo profile regardless was the same "friends-only
- * surface that is not friends-only" the Feed carried.
- */
-export function seededGroups(
-  now: number,
-  circle: readonly string[],
-): Array<Omit<StoryGroup, 'hasUnseen'>> {
-  const people = seedPeople();
-  return followed(circle).map((friend, index) => {
-    const bars = friend.ratings.slice(0, 3).map((rating) => rating.barId);
-    // The varying count is the point of criterion 5: the progress strip has to
-    // be drawn from the data, so a fixed 4- or 5-segment chrome cannot pass.
-    const count = 1 + (index % 3);
-    const minutes = SEED_MINUTES_AGO[index % SEED_MINUTES_AGO.length];
-    const items: StoryItem[] = Array.from({ length: count }, (_unused, i) => ({
-      id: `seed-${friend.handle}-${i}`,
-      postedAt: new Date(now - (minutes + i * 3) * 60_000).toISOString(),
-      barId: knownBarId(bars[i] ?? bars[0]),
-      caption: null,
-      tagged: taggedFor(people, friend.handle, index, i),
-      photo: {
-        kind: i % 2 === 0 ? ('single' as const) : ('dual' as const),
-        main: null,
-        inset: null,
-      },
-      audience: 'friends' as const,
-      audienceHandles: [],
-    }));
-    return {
-      handle: friend.handle,
-      name: friend.displayName,
-      initials: friend.initials,
-      isYou: false,
-      items,
-    };
-  });
-}
-
-/** Feed = photo memories from your circle only, with ranking events between. */
-export function seededFeed(now: number, circle: readonly string[]): FeedEntry[] {
-  const people = seedPeople();
-  const entries: FeedEntry[] = [];
-  followed(circle).forEach((friend, index) => {
-    entries.push({
-      kind: 'memory',
-      memory: {
-        id: `memory-${friend.handle}`,
-        handle: friend.handle,
-        name: friend.displayName,
-        initials: friend.initials,
-        barId: knownBarId(friend.ratings[0]?.barId),
-        postedAt: new Date(now - (23 + index * 47) * 60_000).toISOString(),
-        caption: SEED_CAPTIONS[index % SEED_CAPTIONS.length],
-        tagged: people
-          .filter((person) => person.handle !== friend.handle)
-          .slice(0, 2),
-        // No bytes: a seeded friend has no captured photo anywhere in this
-        // build. See FeedMemory.photo for why this is a stated V8 limit and
-        // not something to fill in with a stock image.
-        photo: { kind: 'single', main: null },
-        shareId: demoShareId(friend.handle),
-      },
-    });
-    const ranked = friend.ratings[1];
-    // Every other card, so the compact row is legible as a SECONDARY beat
-    // rather than a second stream competing with the photos.
-    if (ranked !== undefined && knownBarId(ranked.barId) !== null && index % 2 === 0) {
-      entries.push({
-        kind: 'ranking',
-        event: {
-          id: `ranked-${friend.handle}`,
-          handle: friend.handle,
-          name: friend.displayName,
-          initials: friend.initials,
-          barId: ranked.barId,
-          score: ranked.score ?? 0,
-          at: new Date(now - (60 + index * 47) * 60_000).toISOString(),
-        },
-      });
-    }
-  });
-  return entries;
+function toItem(view: StoryView, tagged: TaggedPerson[]): StoryItem {
+  return {
+    id: view.id,
+    authorId: view.authorId,
+    postedAt: view.createdAt,
+    expiresAt: view.expiresAt,
+    barId: view.barId,
+    caption: view.caption,
+    tagged,
+    photo: {
+      kind: view.mediaKind,
+      main: view.mediaUrl,
+      inset: view.insetUrl,
+    },
+    audience: view.audience,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // hook
 // ---------------------------------------------------------------------------
 
-export type UseStories = {
-  /** Rail order: you first, then friends. This is also the QUEUE order. */
-  groups: StoryGroup[];
-  feed: FeedEntry[];
-  /** False when the store refused it — the caller must NOT confirm the share. */
-  addItem: (item: StoryItem) => boolean;
-  removeItem: (id: string) => void;
-  markSeen: (id: string) => void;
-  /**
-   * Drops you from a story's tag list — the sheet's "Remove me". False when
-   * the consent action could not be persisted, in which case nothing changes
-   * in memory either: a tag that silently returns on the next reload is worse
-   * than one that visibly refused to go.
-   */
-  untagMe: (itemId: string) => boolean;
-};
+export function useStories(): UseStories {
+  const auth = useAuth();
+  const { mutuals, circleReady, mode } = useFollows();
+  const signedIn = auth.status === 'signed-in';
+  const youId = signedIn ? auth.user.id : null;
 
-export function useStories(you: {
-  handle: string;
-  name: string;
-  initials: string;
-}): UseStories {
-  const { follows } = useFollows();
-  // A joined key, not the array: `follows` is rebuilt on every render in
-  // server mode (`circle.map(...)`), so memoising on its identity would
-  // rebuild the whole seed — and re-order the rail under an open viewer —
-  // on renders where the circle did not change at all.
-  const followKey = follows.join('|');
-  const [ownItems, setOwnItems] = useState<StoryItem[]>([]);
+  const [views, setViews] = useState<StoryView[] | null>(null);
+  const [status, setStatus] = useState<StoriesStatus>('loading');
   const [seen, setSeen] = useState<string[]>([]);
-  const [untagged, setUntagged] = useState<string[]>([]);
-  // Seeded ages are relative to a single mount-time clock so a re-render
-  // cannot re-order the rail underneath an open viewer.
-  const [now] = useState(() => Date.now());
+  const [tick, setTick] = useState(0);
 
-  // localStorage is read after mount, never during render: this surface is
-  // server-rendered and a first paint that differs from the server's is the
-  // hydration mismatch VibeQuiz already paid for once.
+  useEffect(() => setSeen(readSeen()), []);
+
   useEffect(() => {
-    setOwnItems(loadOwnItems());
-    setSeen(loadSeenIds());
-    setUntagged(loadUntaggedIds());
-  }, []);
+    if (!signedIn) {
+      setViews(null);
+      setStatus('signed-out');
+      return;
+    }
+    let cancelled = false;
+    setStatus((current) => (current === 'ready' ? current : 'loading'));
+    void (async () => {
+      const result = await fetchVisibleStories(supabase);
+      if (cancelled) return;
+      if (!result.ok) {
+        // An unreachable backend is NOT an empty feed. Saying "no stories"
+        // here would be the silent-local-fallback this surface must not do.
+        setViews(null);
+        setStatus('unavailable');
+        return;
+      }
+      setViews(result.value);
+      setStatus('ready');
+    })();
+    return () => { cancelled = true; };
+  }, [signedIn, youId, tick]);
 
-  // Not a state updater: the write can FAIL, and the caller has to learn that
-  // before it tells the user the story is live. Re-reading after a successful
-  // write is what keeps state equal to what actually persisted, including any
-  // older item the quota retry had to drop.
-  const addItem = useCallback(
-    (item: StoryItem): boolean => {
-      const stored = saveOwnItems([...ownItems, item].slice(-MAX_OWN_ITEMS));
-      if (stored) setOwnItems(loadOwnItems());
-      return stored;
-    },
-    [ownItems],
+  const refresh = useCallback(() => setTick((n) => n + 1), []);
+
+  /**
+   * Every author of a story you can read is either you or an accepted mutual
+   * friend — that is what RLS enforces — so the mutuals list resolves every
+   * author without a second profile read.
+   */
+  const people = useMemo<Map<string, Person>>(() => {
+    const map = new Map<string, Person>();
+    for (const profile of mutuals) {
+      const name = profile.displayName ?? profile.handle;
+      map.set(profile.id, {
+        id: profile.id,
+        handle: profile.handle,
+        name,
+        initials: initialsFor(name),
+      });
+    }
+    if (youId !== null) {
+      const email = signedIn ? auth.user.email : null;
+      map.set(youId, {
+        id: youId,
+        // No invented handle. Your own row is identified by id everywhere it
+        // matters; a placeholder like the old `VIEWER_HANDLE = 'you'` only ever
+        // produced links to a profile that does not exist.
+        handle: null,
+        name: 'You',
+        initials: initialsFor(email ? email.split('@')[0] : 'You'),
+      });
+    }
+    return map;
+  }, [mutuals, youId, signedIn, auth]);
+
+  const friends = useMemo<TaggedPerson[]>(
+    () => mutuals.map((profile) => {
+      const name = profile.displayName ?? profile.handle;
+      return {
+        id: profile.id, handle: profile.handle, name, initials: initialsFor(name),
+      };
+    }),
+    [mutuals],
   );
 
-  const removeItem = useCallback((id: string) => {
-    setOwnItems((current) => {
-      const next = current.filter((item) => item.id !== id);
-      saveOwnItems(next);
-      return next;
+  const items = useMemo<StoryItem[]>(() => {
+    if (views === null) return [];
+    return views.map((view) => toItem(view, []));
+  }, [views]);
+
+  const groups = useMemo<StoryGroup[]>(() => {
+    const yourItems = items.filter((item) => item.authorId === youId);
+    const you = youId === null ? null : people.get(youId);
+    const yourGroup: StoryGroup = {
+      id: youId ?? '',
+      handle: you?.handle ?? null,
+      name: 'You',
+      initials: you?.initials ?? '··',
+      isYou: true,
+      items: yourItems,
+      hasUnseen: false,
+    };
+    const byAuthor = new Map<string, StoryItem[]>();
+    for (const item of items) {
+      if (item.authorId === youId) continue;
+      const list = byAuthor.get(item.authorId) ?? [];
+      list.push(item);
+      byAuthor.set(item.authorId, list);
+    }
+    const friendGroups: StoryGroup[] = [];
+    for (const [authorId, list] of byAuthor) {
+      const person = people.get(authorId);
+      if (person === undefined) continue;
+      friendGroups.push({
+        id: person.id,
+        handle: person.handle,
+        name: person.name,
+        initials: person.initials,
+        isYou: false,
+        items: list,
+        hasUnseen: list.some((item) => !seen.includes(item.id)),
+      });
+    }
+    // Newest author first, so the rail order is stable and meaningful.
+    friendGroups.sort((a, b) =>
+      Date.parse(b.items[0]?.postedAt ?? '') - Date.parse(a.items[0]?.postedAt ?? ''));
+    return [yourGroup, ...friendGroups];
+  }, [items, people, seen, youId]);
+
+  const feed = useMemo<FeedEntry[]>(() => {
+    return items
+      .slice()
+      .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
+      .flatMap((story) => {
+        const person = people.get(story.authorId);
+        if (person === undefined) return [];
+        return [{
+          story,
+          author: {
+            id: person.id,
+            handle: person.handle,
+            name: person.name,
+            initials: person.initials,
+            isYou: story.authorId === youId,
+          },
+        }];
+      });
+  }, [items, people, youId]);
+
+  const publish = useCallback(async (input: PublishInput): Promise<PublishOutcome> => {
+    if (youId === null) {
+      return { ok: false, message: 'Sign in to add to your story.' };
+    }
+    const result = await publishStory(supabase, {
+      authorId: youId,
+      draftId: newDraftId(),
+      main: input.main,
+      inset: input.inset ?? null,
+      barId: input.barId ?? null,
+      caption: input.caption ?? null,
+      audience: input.audience,
+      audienceIds: input.audienceIds ?? [],
+      tagIds: input.tagIds ?? [],
     });
-  }, []);
+    if (!result.ok) return { ok: false, message: result.message };
+    refresh();
+    return { ok: true, storyId: result.value.id };
+  }, [youId, refresh]);
+
+  const removeItem = useCallback(async (id: string): Promise<ActionOutcome> => {
+    const result = await deleteStory(supabase, id);
+    if (!result.ok) return { ok: false, message: result.message };
+    refresh();
+    return { ok: true };
+  }, [refresh]);
+
+  const untagMe = useCallback(async (id: string): Promise<ActionOutcome> => {
+    const result = await removeMyStoryTag(supabase, id);
+    if (!result.ok) return { ok: false, message: result.message };
+    if (!result.value) {
+      return { ok: false, message: 'You are not tagged in that story.' };
+    }
+    refresh();
+    return { ok: true };
+  }, [refresh]);
 
   const markSeen = useCallback((id: string) => {
     setSeen((current) => {
       if (current.includes(id)) return current;
       const next = [...current, id].slice(-MAX_SEEN_IDS);
-      writeJson(STORIES_SEEN_STORAGE_KEY, next);
+      writeSeen(next);
       return next;
     });
   }, []);
 
-  // Not a state updater, for the same reason addItem is not one: the write can
-  // FAIL and the caller has to learn that before the sheet closes on a consent
-  // action that did not persist.
-  const untagMe = useCallback(
-    (itemId: string): boolean => {
-      if (untagged.includes(itemId)) return true;
-      const next = [...untagged, itemId].slice(-MAX_SEEN_IDS);
-      if (!writeJson(STORIES_UNTAGGED_STORAGE_KEY, next)) return false;
-      setUntagged(next);
-      return true;
-    },
-    [untagged],
-  );
+  return {
+    status,
+    groups,
+    feed,
+    friends,
+    // In local (signed-out) mode there is no circle to resolve and no surface
+    // to gate; server mode must wait for the real answer.
+    friendsReady: mode === 'server' ? circleReady : false,
+    publish,
+    removeItem,
+    markSeen,
+    untagMe,
+    refresh,
+  };
+}
 
-  // Memoised so the identities the viewer keys its effects on only change
-  // when the data does — the seed is otherwise rebuilt on every parent render.
-  const circle = useMemo(
-    () => (followKey === '' ? [] : followKey.split('|')),
-    [followKey],
-  );
-  const seeded = useMemo(() => seededGroups(now, circle), [now, circle]);
-  const feed = useMemo(() => seededFeed(now, circle), [now, circle]);
-
-  const groups = useMemo<StoryGroup[]>(() => {
-    const yourGroup: StoryGroup = {
-      handle: you.handle,
-      name: you.name,
-      initials: you.initials,
-      isYou: true,
-      items: ownItems,
-      hasUnseen: false,
-    };
-    const friendGroups = seeded.map((group) => ({
-      ...group,
-      items: group.items.map((item) =>
-        untagged.includes(item.id)
-          ? {
-            ...item,
-            tagged: item.tagged.filter(
-              (person) => person.handle !== VIEWER_HANDLE,
-            ),
-          }
-          : item,
-      ),
-      hasUnseen: group.items.some((item) => !seen.includes(item.id)),
-    }));
-    return [yourGroup, ...friendGroups];
-  }, [seeded, ownItems, seen, untagged, you.handle, you.name, you.initials]);
-
-  return { groups, feed, addItem, removeItem, markSeen, untagMe };
+function newDraftId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ?? `draft-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 }
 
 /** "8m" / "3h" / "2d" — the story chrome's age label. */
 export function ageLabel(iso: string, now = Date.now()): string {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return '';
-  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  const ms = Math.max(0, now - Date.parse(iso));
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return 'now';
   if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
+  const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
-  return `${Math.round(hours / 24)}d`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
-/** "With Maya +2" — collapses any tag list longer than one name. */
 export function taggedLabel(tagged: readonly TaggedPerson[]): string | null {
   if (tagged.length === 0) return null;
   const first = tagged[0].name.split(/\s+/)[0];
-  return tagged.length === 1
-    ? `With ${first}`
-    : `With ${first} +${tagged.length - 1}`;
+  return tagged.length === 1 ? first : `${first} +${tagged.length - 1}`;
 }

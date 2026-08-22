@@ -487,15 +487,20 @@ const FOREIGN_ONLY_KEYS = [
   'next-bar:night-vibe:v1',
   'next-bar:intent:v1',
   'next-bar:saved:v1',
-  // V8-1f stories. Local-only and never synced, which is exactly why they
-  // belong here rather than in ALL_KEYS: the device owner's own story must
-  // survive an ordinary sign-out, but a story is CAPTURED PHOTO plus a tag
-  // list plus typed replies, so leaving it for the next account is the
-  // strongest version of the leak this function exists to stop.
-  'next-bar:stories:v1',
+  // V8-1f stories. ONE key now: which items this device has already watched.
+  //
+  // The other three are GONE with the local-first store that owned them —
+  // `stories:v1` (own stories as data URLs), `story-replies:v1` (replies
+  // nothing ever delivered) and `stories-untagged:v1` (a consent control only
+  // this device obeyed). Stories are server-backed as of migration 0065, so
+  // the content, the consent and the audience all live where they can actually
+  // be enforced, and none of it is on this device to leak.
+  //
+  // What remains is per-device READ STATE. It stays foreign-only rather than
+  // in ALL_KEYS for the same reason as before: it must survive the owner's own
+  // sign-out, but showing the next account which stories "you" have already
+  // seen is still a signal about the previous one.
   'next-bar:stories-seen:v1',
-  'next-bar:story-replies:v1',
-  'next-bar:stories-untagged:v1',
 ] as const;
 
 /**

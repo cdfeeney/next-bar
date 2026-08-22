@@ -1,113 +1,68 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  STORIES_STORAGE_KEY,
-  STORY_REPLIES_STORAGE_KEY,
-  loadOwnItems,
-  loadReplies,
-  saveOwnItems,
-  saveReply,
-  seededFeed,
-  seededGroups,
-  type StoryItem,
-} from './storyStore';
+import { describe, expect, it } from 'vitest';
+import { STORIES_SEEN_STORAGE_KEY, ageLabel, initialsFor, taggedLabel } from './storyStore';
 
 /**
- * The two rules that cannot be read off the surface: what happens when the
- * device store REFUSES a write, and who the seed is allowed to include.
+ * The pure helpers that survived the move to a server-backed store.
+ *
+ * This file used to test the local-first store itself — own items in
+ * `localStorage`, seeded groups, seeded feed, quota refusal, the local untag
+ * record. All of that is deleted, not moved: migration 0065 made the database
+ * authoritative, so those behaviours are proven in
+ * `src/lib/stories.server.test.ts` (client contract) and
+ * `src/lib/storiesRls.live.test.ts` (authorisation, two identities, needs a
+ * database and does not run in this gate).
  */
 
-function item(id: string, bytes = 8): StoryItem {
-  return {
-    id,
-    postedAt: new Date().toISOString(),
-    barId: null,
-    caption: null,
-    tagged: [],
-    photo: { kind: 'single', main: 'x'.repeat(bytes), inset: null },
-    audience: 'friends',
-    audienceHandles: [],
-  };
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  window.localStorage.clear();
-});
-
-describe('saveOwnItems', () => {
-  it('reports success and stores the items when the quota allows it', () => {
-    expect(saveOwnItems([item('a'), item('b')])).toBe(true);
-    expect(loadOwnItems().map((entry) => entry.id)).toEqual(['a', 'b']);
-  });
-
-  it('drops the oldest item and retries when the write overflows the quota', () => {
-    const real = window.localStorage.setItem.bind(window.localStorage);
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(
-      (key: string, value: string) => {
-        // Anything holding more than one item is "too big" for this device.
-        if (key === STORIES_STORAGE_KEY && value.includes('"id":"a"')) {
-          throw new DOMException('quota', 'QuotaExceededError');
-        }
-        real(key, value);
-      },
-    );
-
-    expect(saveOwnItems([item('a'), item('b')])).toBe(true);
-    expect(loadOwnItems().map((entry) => entry.id)).toEqual(['b']);
-  });
-
-  it('reports failure when even the newest item will not fit', () => {
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(
-      (key: string) => {
-        if (key === STORIES_STORAGE_KEY) {
-          throw new DOMException('quota', 'QuotaExceededError');
-        }
-      },
-    );
-
-    // The caller confirms the share off this boolean, so a swallowed failure
-    // here is a story the user was told is live and that is gone on reload.
-    expect(saveOwnItems([item('a')])).toBe(false);
+describe('the surviving story storage key', () => {
+  it('is the per-device read state and nothing else', () => {
+    expect(STORIES_SEEN_STORAGE_KEY).toBe('next-bar:stories-seen:v1');
   });
 });
 
-describe('saveReply', () => {
-  it('stores the reply and reports success', () => {
-    expect(saveReply('item-1', 'see you there')).toBe(true);
-    expect(loadReplies().map((entry) => entry.text)).toEqual(['see you there']);
+describe('ageLabel', () => {
+  const now = Date.parse('2026-08-22T12:00:00.000Z');
+  const ago = (ms: number): string => new Date(now - ms).toISOString();
+
+  it('reads "now" under a minute', () => {
+    expect(ageLabel(ago(30_000), now)).toBe('now');
   });
 
-  it('reports failure when the device refuses the write', () => {
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key: string) => {
-      if (key === STORY_REPLIES_STORAGE_KEY) {
-        throw new DOMException('quota', 'QuotaExceededError');
-      }
-    });
+  it('counts minutes, then hours, then days', () => {
+    expect(ageLabel(ago(8 * 60_000), now)).toBe('8m');
+    expect(ageLabel(ago(3 * 3_600_000), now)).toBe('3h');
+    expect(ageLabel(ago(2 * 86_400_000), now)).toBe('2d');
+  });
 
-    // The viewer clears the field and announces "Reply sent" off this
-    // boolean. Swallowing the failure threw the message away and said it
-    // arrived.
-    expect(saveReply('item-1', 'see you there')).toBe(false);
+  it('never renders a negative age from a clock that is behind', () => {
+    expect(ageLabel(new Date(now + 60_000).toISOString(), now)).toBe('now');
   });
 });
 
-describe('the seed is friends-only', () => {
-  const now = Date.parse('2026-08-22T02:00:00.000Z');
-
-  it('includes only the handles in the circle, in catalogue order', () => {
-    const groups = seededGroups(now, ['sasha', 'claire']);
-    expect(groups.map((group) => group.handle)).toEqual(['claire', 'sasha']);
+describe('initialsFor', () => {
+  it('takes the first and last initial of a full name', () => {
+    expect(initialsFor('Claire Dunphy')).toBe('CD');
   });
 
-  it('leaves the rail and the Feed empty for an empty circle', () => {
-    expect(seededGroups(now, [])).toEqual([]);
-    expect(seededFeed(now, [])).toEqual([]);
+  it('takes two letters of a single name', () => {
+    expect(initialsFor('sasha')).toBe('SA');
   });
 
-  it('never seeds a memory from someone outside the circle', () => {
-    const handles = seededFeed(now, ['claire']).map((entry) =>
-      entry.kind === 'memory' ? entry.memory.handle : entry.event.handle,
-    );
-    expect(new Set(handles)).toEqual(new Set(['claire']));
+  it('degrades to a neutral mark rather than throwing on empty input', () => {
+    expect(initialsFor(null)).toBe('··');
+    expect(initialsFor('   ')).toBe('··');
+  });
+});
+
+describe('taggedLabel', () => {
+  const person = (name: string) => ({ id: name, handle: name, name, initials: 'XX' });
+
+  it('is null when nobody is tagged', () => {
+    expect(taggedLabel([])).toBeNull();
+  });
+
+  it('names one person, and collapses the rest into +N', () => {
+    expect(taggedLabel([person('Claire Dunphy')])).toBe('Claire');
+    expect(taggedLabel([person('Claire D'), person('Dev P'), person('Sasha R')]))
+      .toBe('Claire +2');
   });
 });

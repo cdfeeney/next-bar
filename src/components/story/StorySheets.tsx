@@ -2,8 +2,6 @@
 
 import Avatar from '@/components/Avatar';
 import BarPicker from '@/components/BarPicker';
-import { demoFriends } from '@/lib/demo';
-import { useFollows } from '@/hooks/useFollows';
 import type { Bar } from '@/types';
 import Sheet from './Sheet';
 import type { StoryAudience, TaggedPerson } from './storyStore';
@@ -38,10 +36,13 @@ export function BarSheet({
 }
 
 export function PeopleSheet({
+  friends,
   selected,
   onToggle,
   onClose,
 }: {
+  /** Accepted MUTUAL friends, from the real follow graph. */
+  friends: readonly TaggedPerson[];
   selected: readonly TaggedPerson[];
   onToggle: (person: TaggedPerson) => void;
   onClose: () => void;
@@ -51,29 +52,27 @@ export function PeopleSheet({
       <p className="text-muted text-[11px] mb-3 leading-relaxed">
         Tagging someone here does not add them to a group.
       </p>
+      {friends.length === 0 ? (
+        <p data-testid="story-people-empty" className="text-sm leading-relaxed">
+          Nobody to tag yet. Friends are people you follow who follow you back.
+        </p>
+      ) : null}
       <ul>
-        {demoFriends.map((friend) => {
-          const person: TaggedPerson = {
-            handle: friend.handle,
-            name: friend.displayName,
-            initials: friend.initials,
-          };
-          const on = selected.some((entry) => entry.handle === friend.handle);
+        {friends.map((friend) => {
+          const on = selected.some((entry) => entry.id === friend.id);
           return (
-            <li key={friend.handle}>
+            <li key={friend.id}>
               <button
                 type="button"
                 data-testid="story-people-row"
-                data-handle={friend.handle}
+                data-profile={friend.id}
                 aria-pressed={on}
-                onClick={() => onToggle(person)}
+                onClick={() => onToggle(friend)}
                 className="w-full flex items-center gap-3 min-h-[56px] border-b border-border text-left touch-manipulation"
               >
-                <Avatar initials={friend.initials} seed={friend.handle} size="sm" />
+                <Avatar initials={friend.initials} seed={friend.id} size="sm" />
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm truncate">
-                    {friend.displayName}
-                  </span>
+                  <span className="block text-sm truncate">{friend.name}</span>
                   <span className="block text-[11px] text-muted truncate">
                     @{friend.handle}
                   </span>
@@ -98,14 +97,10 @@ const AUDIENCE_ROWS: ReadonlyArray<{
     label: 'Friends',
     hint: 'All accepted friends · your Account default',
   },
-  // No invented group names here. V8 has no saved groups, and naming three
-  // that do not exist made the row read as a picker over data the app does
-  // not hold; both narrowed audiences resolve to an explicit list of people.
-  {
-    value: 'groups',
-    label: 'Selected groups',
-    hint: 'Pick the people in that group',
-  },
+  // "Selected groups" is GONE (V8 amendment, item 6). There is no saved-groups
+  // capability in this database, and a people picker labelled as a group
+  // feature is a promise the product cannot keep. It returns in V9 with real
+  // groups behind it.
   { value: 'custom', label: 'Custom', hint: 'Pick people one by one' },
 ];
 
@@ -122,6 +117,7 @@ const AUDIENCE_ROWS: ReadonlyArray<{
  */
 export function AudienceSheet({
   value,
+  friends,
   handles,
   lapsed = false,
   onChange,
@@ -130,6 +126,9 @@ export function AudienceSheet({
   onClose,
 }: {
   value: StoryAudience;
+  /** Accepted MUTUAL friends — the only permissible recipients. */
+  friends: readonly TaggedPerson[];
+  /** Selected recipients, as real PROFILE IDS. */
   handles: readonly string[];
   /**
    * True when a post was REFUSED because every recipient of this narrowing had
@@ -142,8 +141,6 @@ export function AudienceSheet({
   onDone: () => void;
   onClose: () => void;
 }): JSX.Element {
-  const { isFollowing } = useFollows();
-  const circle = demoFriends.filter((friend) => isFollowing(friend.handle));
   const needsPeople = value !== 'friends';
   // Readiness counts only recipients the sheet is actually SHOWING. Counting
   // `handles` itself trusted a selection that may no longer be in the circle —
@@ -151,7 +148,7 @@ export function AudienceSheet({
   // enabled on a recipient nobody could see, which is the same "label with
   // nothing behind it" this gate exists to prevent.
   const visible = handles.filter((handle) =>
-    circle.some((friend) => friend.handle === handle),
+    friends.some((friend) => friend.id === handle),
   );
   const ready = !needsPeople || visible.length > 0;
   return (
@@ -192,28 +189,29 @@ export function AudienceSheet({
       {needsPeople ? (
         <div data-testid="story-audience-people" className="mt-4">
           <p className="text-muted text-[11px] mb-2 leading-relaxed">
-            Who sees it. Only people you follow can be picked.
+            Who sees it. Only friends who follow you back can be picked.
           </p>
           <ul className="max-h-[40vh] overflow-y-auto">
-            {circle.map((friend) => {
-              const on = handles.includes(friend.handle);
+            {friends.map((friend) => {
+              const on = handles.includes(friend.id);
               return (
-                <li key={friend.handle}>
+                <li key={friend.id}>
                   <button
                     type="button"
                     data-testid="story-audience-person"
+                    data-profile={friend.id}
                     data-handle={friend.handle}
                     aria-pressed={on}
-                    onClick={() => onToggleHandle(friend.handle)}
+                    onClick={() => onToggleHandle(friend.id)}
                     className="w-full flex items-center gap-3 min-h-[56px] border-b border-border text-left touch-manipulation"
                   >
                     <Avatar
                       initials={friend.initials}
-                      seed={friend.handle}
+                      seed={friend.id}
                       size="sm"
                     />
                     <span className="min-w-0 flex-1 text-sm truncate">
-                      {friend.displayName}
+                      {friend.name}
                     </span>
                     <SelectionMark on={on} />
                   </button>
