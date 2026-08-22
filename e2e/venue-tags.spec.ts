@@ -130,7 +130,7 @@ test.describe('venue tags in the bar lightbox', () => {
     const hoursBox = (await hours.count()) > 0 ? await hours.boundingBox() : null;
 
     const tagsBox = await tags.boundingBox();
-    const actionBox = await dialog.getByRole('link', { name: /Want to go/i }).boundingBox();
+    const actionBox = await dialog.getByRole('button', { name: /Want to go/i }).boundingBox();
 
     expect(tagsBox).not.toBeNull();
     expect(actionBox).not.toBeNull();

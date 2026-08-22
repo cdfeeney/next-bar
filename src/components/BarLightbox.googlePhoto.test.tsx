@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, test, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Bar } from '@/types';
 
 vi.mock('@/lib/mediaPolicy', () => ({
@@ -22,6 +22,7 @@ vi.mock('@/components/GooglePlacePhotoLazy', () => ({
 
 import { fetchBarDetails } from '@/lib/barReviews';
 import { resolveMedia } from '@/lib/mediaPolicy';
+import { WANT_TO_GO_KEY, loadWantToGo } from '@/lib/wantToGo';
 import BarLightbox from './BarLightbox';
 
 const BAR: Bar = {
@@ -91,6 +92,82 @@ describe('BarLightbox shared contract', () => {
       .filter(([shown]) => (shown as Bar).address === '1 PREVIOUS BAR PLAZA');
     expect(leaked).toHaveLength(0);
     expect(screen.getByRole('heading', { name: 'Bar 99' })).toBeTruthy();
+  });
+});
+
+/**
+ * Round-1 review, BOTH families independently: the third instance of the
+ * cross-bar stale-state defect. `activePhoto` survived a `bar` swap unkeyed,
+ * and the figcaption credits photoAttributions[activePhoto] — so the panel
+ * credited the previous bar's photographer for the photo now on screen, which
+ * is a Google attribution obligation and not a cosmetic slip.
+ *
+ * Unlike the round-1 details bug, a DOM assertion is legitimate here: nothing
+ * ever reset the index, so the buggy version does not self-correct after
+ * effects flush. Mutation-checked — reverting the keying reds this test.
+ */
+describe('BarLightbox photo index across a bar swap', () => {
+  const PHOTOS = ['/a1.jpg', '/a2.jpg', '/a3.jpg'];
+  const WITH_PHOTOS: Bar = {
+    ...BAR,
+    photoAttributions: ['ALICE', 'BOB', 'CAROL'],
+  } as Bar;
+
+  test('a swap credits the new bar first photo, not the old index', () => {
+    vi.mocked(resolveMedia).mockReturnValue({ source: 'nextbar', urls: PHOTOS });
+
+    const { rerender } = render(<BarLightbox bar={WITH_PHOTOS} onClose={() => {}} />);
+
+    // Move to photo 3 the way a swipe does: the component derives the index
+    // from the track scroll position, so give the track real dimensions.
+    const track = document.querySelector('[data-carousel]') as HTMLElement;
+    Object.defineProperty(track, 'clientWidth', { value: 100, configurable: true });
+    track.scrollLeft = 200;
+    fireEvent.scroll(track);
+    expect(screen.getByText(/CAROL/)).toBeTruthy();
+
+    const OTHER: Bar = {
+      ...WITH_PHOTOS,
+      id: 'bar-99',
+      name: 'Bar 99',
+      photoAttributions: ['DAVE', 'ERIN', 'FRANK'],
+    } as Bar;
+    rerender(<BarLightbox bar={OTHER} onClose={() => {}} />);
+
+    // The new bar is showing its first photo, so it must credit DAVE. Crediting
+    // FRANK would be the old index carried across; crediting CAROL would be the
+    // old bar entirely.
+    expect(screen.getByText(/DAVE/)).toBeTruthy();
+    expect(screen.queryByText(/FRANK/)).toBeNull();
+    expect(screen.queryByText(/CAROL/)).toBeNull();
+  });
+});
+
+/**
+ * Round-1 review (Fable HIGH, Codex corroborating): the renamed "Want to go"
+ * control linked to /rankings?add=, which opens the score dialog. That is
+ * rating, not saving — and rank-vs-rate is a pinned product boundary. The
+ * control now writes to the real want-to-go list.
+ */
+describe('BarLightbox Want to go action', () => {
+  beforeEach(() => {
+    window.localStorage.removeItem(WANT_TO_GO_KEY);
+  });
+
+  test('saves the bar to the want-to-go list instead of opening the score flow', () => {
+    vi.mocked(resolveMedia).mockReturnValue({ source: 'google-live', placeId: 'ChIJbar54' });
+    render(<BarLightbox bar={BAR} onClose={() => {}} />);
+
+    const action = screen.getByRole('button', { name: /Want to go/i });
+    // The mislabel this replaces: a link into the rating flow.
+    expect(action.getAttribute('href')).toBeNull();
+    expect(loadWantToGo().map((e) => e.barId)).not.toContain('bar-54');
+
+    fireEvent.click(action);
+
+    expect(loadWantToGo().map((e) => e.barId)).toContain('bar-54');
+    // And it reports the saved state rather than inviting a duplicate.
+    expect(screen.getByRole('button', { name: /On your list/i })).toBeTruthy();
   });
 });
 
