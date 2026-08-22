@@ -55,7 +55,7 @@ export type BarLightboxProps = {
 /**
  * U2-2: photo headliner. Tapping a card's photo opens this full-screen
  * overlay — big image, the bar's identity, FULL weekly hours (U2-1), the
- * review quote, and the two actions (Maps, Rank it). Single cached photo
+ * review quote, and the two actions (Maps, Want to go). Single cached photo
  * today; when the ingest starts storing multiple photoRefs this becomes a
  * swipeable carousel without changing the entry point.
  *
@@ -435,7 +435,7 @@ export default function BarLightbox({
             href={`/rankings?add=${bar.id}`}
             className="flex-1 text-center border border-border text-text font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation hover:border-accent transition-colors"
           >
-            Rank it
+            Want to go
           </Link>
         </div>
       </div>
