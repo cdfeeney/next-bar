@@ -469,12 +469,17 @@ export default function BarLightbox({
               "Want to go" that demands a score for a bar you have not been to is
               a mislabel, not a shortcut. The product already has the real list
               (src/lib/wantToGo.ts); this writes to it. */}
+          {/* aria-disabled, not disabled — the same rule the carousel controls
+              above follow: this button is FOCUSED at the moment it flips to
+              saved, and `disabled` would drop that focus to <body> and pull it
+              out of the dialog's tab cycle. addWantToGo is idempotent, so a
+              repeat activation is a harmless no-op. */}
           <button
             type="button"
             aria-pressed={wantsToGo}
             onClick={() => addWantToGo(bar.id)}
-            disabled={wantsToGo}
-            className="flex-1 text-center border border-border text-text font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation hover:border-accent transition-colors disabled:hover:border-border"
+            aria-disabled={wantsToGo}
+            className="flex-1 text-center border border-border text-text font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation hover:border-accent transition-colors aria-disabled:opacity-40"
           >
             {wantsToGo ? 'On your list' : 'Want to go'}
           </button>

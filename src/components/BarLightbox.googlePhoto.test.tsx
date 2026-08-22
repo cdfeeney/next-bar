@@ -163,11 +163,26 @@ describe('BarLightbox Want to go action', () => {
     expect(action.getAttribute('href')).toBeNull();
     expect(loadWantToGo().map((e) => e.barId)).not.toContain('bar-54');
 
+    // Focus it first: the round-2 finding was that saving `disabled` the very
+    // button the keyboard user was standing on, dropping focus to <body> and
+    // out of the dialog's tab cycle. Clicking without focusing misses that.
+    action.focus();
+    expect(document.activeElement).toBe(action);
+
     fireEvent.click(action);
 
     expect(loadWantToGo().map((e) => e.barId)).toContain('bar-54');
     // And it reports the saved state rather than inviting a duplicate.
-    expect(screen.getByRole('button', { name: /On your list/i })).toBeTruthy();
+    const saved = screen.getByRole('button', { name: /On your list/i });
+    expect(saved).toBeTruthy();
+    // Still focused, still in the tab order, and marked unavailable the way the
+    // carousel controls in this same dialog are.
+    expect(document.activeElement).toBe(saved);
+    expect(saved.hasAttribute('disabled')).toBe(false);
+    expect(saved.getAttribute('aria-disabled')).toBe('true');
+    // Idempotent: activating again neither duplicates nor throws.
+    fireEvent.click(saved);
+    expect(loadWantToGo().filter((e) => e.barId === 'bar-54')).toHaveLength(1);
   });
 });
 
