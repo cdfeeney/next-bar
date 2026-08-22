@@ -73,11 +73,17 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/rankings');
   });
 
-  test('/friends renders the Instagram-model page (UX-A)', async ({ page }) => {
+  test('/friends renders Social — the wordmark header and its three sub-tabs', async ({
+    page,
+  }) => {
     await page.goto('/friends');
-    await expect(page.getByRole('heading', { name: /^Friends$/ })).toBeVisible();
-    // The one primary action + the two stats.
-    await expect(page.getByRole('link', { name: /Plan Night Out/i })).toBeVisible();
+    // The approved surface's header is the wordmark, not an h1 reading
+    // "Friends" — that heading belonged to the 2026-07-26 dashboard.
+    await expect(page.getByRole('heading', { name: /^Next Bar$/ })).toBeVisible();
+    await expect(page.getByTestId('social-subtabs').getByRole('tab')).toHaveCount(3);
+    // Tonight lands first and carries the rail, presence and the people graph.
+    await expect(page.getByTestId('stories-rail')).toBeVisible();
+    await expect(page.getByTestId('friends-tonight')).toBeVisible();
     await expect(page.getByRole('link', { name: /Followers/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /Following/i })).toBeVisible();
     await expectNoConsoleErrors(page, '/friends');

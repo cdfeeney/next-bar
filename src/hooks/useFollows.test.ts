@@ -113,6 +113,34 @@ describe('useFollows — local (signed-out) mode', () => {
     expect(unfollowByHandleMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * V8-1f regression. A local-mode toggle wrote from `localFollows`, which is
+   * `[]` until the auth effect hydrates it — so a Follow tap that landed while
+   * auth was still resolving persisted a ONE-ENTRY list and silently destroyed
+   * the seeded circle. Caught on iPhone 13 once /friends grew the Stories rail
+   * and Feed: the surface got heavier, the window got wider, and
+   * friends-flow.spec.ts read "1 Following" where it expects 3.
+   */
+  it('a follow tapped before auth resolves keeps the seeded circle instead of replacing it', () => {
+    useAuthMock.mockReturnValue({
+      status: 'loading',
+      user: null,
+      session: null,
+      signOut: vi.fn(),
+    } as never);
+
+    const { result } = renderHook(() => useFollows());
+    // Deliberately NOT waiting for `loading` — this is the unhydrated window.
+    expect(result.current.mode).toBe('pending');
+
+    act(() => result.current.toggleFollow('sasha'));
+
+    const stored = JSON.parse(
+      window.localStorage.getItem(KEY) ?? '[]',
+    ) as string[];
+    expect(stored).toEqual([...DEFAULT_FOLLOWS, 'sasha']);
+  });
+
   it('recovers the seeded default circle from corrupt storage', async () => {
     window.localStorage.setItem(KEY, '{"not":"an array"}');
     const { result } = renderHook(() => useFollows());

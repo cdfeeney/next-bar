@@ -1,0 +1,169 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+/**
+ * The ONE camera in the app. `next-bar-camera-modes.png` states it plainly —
+ * "there is no second camera system" — so every capture surface (Share a
+ * moment, Add to Story) mounts this hook rather than growing its own
+ * getUserMedia call.
+ *
+ * Nothing is captured on entry: the stream is a preview until the shutter is
+ * pressed, and the frame the shutter grabs is still a draft until it is
+ * approved. That gate lives in the calling component; this hook only owns the
+ * stream and the single-frame grab.
+ *
+ * Failure is a FIRST-CLASS state, not an exception: a browser with no camera,
+ * a denied permission, and a device already using the camera all resolve to a
+ * status the caller renders, because the library row is a working way out of
+ * every one of them.
+ */
+
+export type CameraStatus =
+  | 'idle'
+  | 'starting'
+  | 'live'
+  /** The user (or a policy) said no. */
+  | 'denied'
+  /** No device, no getUserMedia, or the device is busy. */
+  | 'unavailable';
+
+export type CameraFacing = 'environment' | 'user';
+
+export type UseCamera = {
+  status: CameraStatus;
+  videoRef: React.RefObject<HTMLVideoElement>;
+  /** A JPEG data URL of the current frame, or null if there is no frame. */
+  capture: () => string | null;
+  /** Re-request after a denial the user has since fixed. */
+  retry: () => void;
+};
+
+/** JPEG quality for a story frame — visibly clean, well under a Mb. */
+const CAPTURE_QUALITY = 0.85;
+
+export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [status, setStatus] = useState<CameraStatus>('idle');
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!active) {
+      setStatus('idle');
+      return;
+    }
+    let cancelled = false;
+    let stream: MediaStream | null = null;
+    setStatus('starting');
+
+    void (async () => {
+      const media = navigator.mediaDevices;
+      if (media === undefined || typeof media.getUserMedia !== 'function') {
+        if (!cancelled) setStatus('unavailable');
+        return;
+      }
+      try {
+        stream = await media.getUserMedia({
+          video: { facingMode: facing },
+          audio: false,
+        });
+      } catch (error) {
+        if (cancelled) return;
+        const name = error instanceof Error ? error.name : '';
+        setStatus(
+          name === 'NotAllowedError' || name === 'SecurityError'
+            ? 'denied'
+            : 'unavailable',
+        );
+        return;
+      }
+      if (cancelled) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const video = videoRef.current;
+      if (video !== null) {
+        video.srcObject = stream;
+        // A rejected play() is not a failure state: iOS resolves it on the
+        // first user gesture and the preview catches up on its own.
+        void video.play().catch(() => undefined);
+      }
+      setStatus('live');
+    })();
+
+    return () => {
+      cancelled = true;
+      stream?.getTracks().forEach((track) => track.stop());
+      const video = videoRef.current;
+      if (video !== null) video.srcObject = null;
+    };
+  }, [facing, active, attempt]);
+
+  const capture = useCallback((): string | null => {
+    const video = videoRef.current;
+    if (video === null) return null;
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (width === 0 || height === 0) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (context === null) return null;
+    context.drawImage(video, 0, 0, width, height);
+    try {
+      return canvas.toDataURL('image/jpeg', CAPTURE_QUALITY);
+    } catch {
+      // A tainted canvas cannot be read back; treat it as no frame rather
+      // than letting the shutter throw into the render.
+      return null;
+    }
+  }, []);
+
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+
+  return { status, videoRef, capture, retry };
+}
+
+/**
+ * Rotate a data URL a quarter turn clockwise, returning a new data URL.
+ * Baked at rotate time rather than carried as a transform, so every surface
+ * that later renders the photo — viewer, feed card, receipt — sees the
+ * orientation the poster approved.
+ */
+export async function rotateDataUrl(url: string): Promise<string> {
+  const image = await loadImage(url);
+  const canvas = document.createElement('canvas');
+  canvas.width = image.height;
+  canvas.height = image.width;
+  const context = canvas.getContext('2d');
+  if (context === null) return url;
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.rotate(Math.PI / 2);
+  context.drawImage(image, -image.width / 2, -image.height / 2);
+  try {
+    return canvas.toDataURL('image/jpeg', CAPTURE_QUALITY);
+  } catch {
+    return url;
+  }
+}
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('image decode failed'));
+    image.src = url;
+  });
+}
+
+/** Read a picked file as a data URL — the library row's one job. */
+export function fileToDataUrl(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve(typeof reader.result === 'string' ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}

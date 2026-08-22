@@ -538,9 +538,17 @@ export function useFollows(): UseFollowsReturn {
 
     // Local (demo) mode — unchanged v0.4 behavior.
     setLocalFollows((prev) => {
-      const next = prev.includes(handle)
-        ? prev.filter((h) => h !== handle)
-        : [...prev, handle];
+      // `localFollows` is `[]` until the auth effect hydrates it, and a tap
+      // CAN land inside that window — the heavier /friends surface widened it
+      // enough to be reproducible on iPhone 13. Writing from the empty
+      // placeholder persisted a one-entry list and destroyed the seeded
+      // circle, so an unhydrated write reads the durable list instead. Once
+      // hydrated, storage and `prev` agree (every local write persists
+      // synchronously below), so this changes nothing in the settled case.
+      const base = modeRef.current === 'pending' ? loadFollows() : prev;
+      const next = base.includes(handle)
+        ? base.filter((h) => h !== handle)
+        : [...base, handle];
       writeFollows(next);
       return next;
     });

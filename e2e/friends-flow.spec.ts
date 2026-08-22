@@ -34,16 +34,19 @@ test.describe('Social — the approved surface', () => {
     // The canvas header: wordmark + night line, not an h1 reading "Friends".
     await expect(page.getByRole('heading', { name: /^Next Bar$/i })).toBeVisible();
 
-    // Order is the product decision: Tonight, then Plans, then the graph.
-    const headings = page.getByRole('heading', {
-      name: /^(Out tonight|Plans|Groups & people)$/i,
-    });
-    await expect(headings).toHaveCount(3);
-    await expect(headings.nth(0)).toHaveText(/Out tonight/i);
-    await expect(headings.nth(1)).toHaveText(/^Plans$/i);
-    await expect(headings.nth(2)).toHaveText(/Groups & people/i);
+    // V8-1f: the order the Wave-1 surface stacked is now the sub-tab order —
+    // Tonight lands first, and it still leads with presence and then the
+    // people graph. Plans moved to its own sub-tab, not off Social.
+    await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
+    const tonightHeadings = page
+      .getByTestId('social-panel-tonight')
+      .getByRole('heading', { name: /^(Stories|Out tonight|Groups & people)$/i });
+    await expect(tonightHeadings.nth(0)).toHaveText(/Stories/i);
+    await expect(tonightHeadings.nth(1)).toHaveText(/Out tonight/i);
+    await expect(tonightHeadings.nth(2)).toHaveText(/Groups & people/i);
 
     // Plans' single entry point, and where it goes.
+    await page.getByRole('tab', { name: /^Plans$/i }).click();
     const start = page.getByRole('link', { name: /Start a Night Out/i });
     await expect(start).toBeVisible();
     await start.click();
@@ -66,10 +69,15 @@ test.describe('Social — the approved surface', () => {
     page,
   }) => {
     await page.goto('/friends');
-    await page.getByRole('link', { name: /Groups & people/i }).click();
+    // V8-1f: the control is a button now, because the section it targets
+    // lives on the Tonight sub-tab and has to be selected before it can be
+    // scrolled to. It still never leaves Social.
+    await page.getByRole('tab', { name: /^Feed$/i }).click();
+    await page.getByRole('button', { name: /Groups & people/i }).click();
 
     // Same route — this is a jump within Social, not a navigation away.
-    await expect(page).toHaveURL(/\/friends#groups-and-people$/);
+    await expect(page).toHaveURL(/\/friends$/);
+    await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
     await expect(page.getByTestId('follow-stats')).toBeVisible();
     await expect(page.getByPlaceholder(/Search @handle or name/i)).toBeVisible();
   });
