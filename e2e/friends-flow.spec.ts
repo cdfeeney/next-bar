@@ -15,6 +15,82 @@
 
 import { test, expect } from '@playwright/test';
 
+/**
+ * V8-1 criterion 11 + 19 — Social is the approved surface from
+ * `docs/design-reference/approved/next-bar-social-v2-core.png`, not the
+ * 2026-07-26 Friends dashboard with a renamed tab.
+ *
+ * These run signed-OUT, which is the half of the surface an unauthenticated
+ * gate can actually exercise; the signed-in half (presence rows, Pin my spot,
+ * the request badge, the 44px search rows) is in follow-requests.spec.ts
+ * against the stubbed graph.
+ */
+test.describe('Social — the approved surface', () => {
+  test('presence leads, coordination follows, people sit behind one control', async ({
+    page,
+  }) => {
+    await page.goto('/friends');
+
+    // The canvas header: wordmark + night line, not an h1 reading "Friends".
+    await expect(page.getByRole('heading', { name: /^Next Bar$/i })).toBeVisible();
+
+    // Order is the product decision: Tonight, then Plans, then the graph.
+    const headings = page.getByRole('heading', {
+      name: /^(Out tonight|Plans|Groups & people)$/i,
+    });
+    await expect(headings).toHaveCount(3);
+    await expect(headings.nth(0)).toHaveText(/Out tonight/i);
+    await expect(headings.nth(1)).toHaveText(/^Plans$/i);
+    await expect(headings.nth(2)).toHaveText(/Groups & people/i);
+
+    // Plans' single entry point, and where it goes.
+    const start = page.getByRole('link', { name: /Start a Night Out/i });
+    await expect(start).toBeVisible();
+    await start.click();
+    await expect(page).toHaveURL(/\/friends\/consensus$/);
+  });
+
+  test('the legacy dashboard’s primary action card is gone', async ({
+    page,
+  }) => {
+    await page.goto('/friends');
+    // Negative assertion: the old accent "Plan Night Out →" card was the
+    // legacy surface's one primary action. Its replacement is "Start a Night
+    // Out" under Plans. Nothing on Social may carry the old label.
+    await expect(
+      page.getByRole('link', { name: /Plan Night Out/i }),
+    ).toHaveCount(0);
+  });
+
+  test('the Groups & people control reaches the people section without leaving Social', async ({
+    page,
+  }) => {
+    await page.goto('/friends');
+    await page.getByRole('link', { name: /Groups & people/i }).click();
+
+    // Same route — this is a jump within Social, not a navigation away.
+    await expect(page).toHaveURL(/\/friends#groups-and-people$/);
+    await expect(page.getByTestId('follow-stats')).toBeVisible();
+    await expect(page.getByPlaceholder(/Search @handle or name/i)).toBeVisible();
+  });
+
+  test('signed out, Tonight says so instead of rendering an empty pinned list', async ({
+    page,
+  }) => {
+    await page.goto('/friends');
+    const tonight = page.getByTestId('friends-tonight');
+    await expect(tonight.getByText(/Sign in to see who's out/i)).toBeVisible();
+    // No accent CTA to a write the visitor cannot perform.
+    await expect(
+      tonight.getByRole('button', { name: /^Pin my spot$/ }),
+    ).toHaveCount(0);
+    // …but the local intent flow is still live and still theirs.
+    await expect(
+      tonight.getByRole('button', { name: /^Going out$/ }),
+    ).toBeVisible();
+  });
+});
+
 test.describe('Friends + consensus', () => {
   test('following a suggested curator bumps the Following stat and lands them in the list (UX-A)', async ({ page }) => {
     await page.goto('/friends');
