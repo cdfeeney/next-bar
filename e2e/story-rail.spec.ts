@@ -148,8 +148,18 @@ test.describe('Social sub-tabs and the Stories rail', () => {
     await page.getByRole('tab', { name: /Feed/i }).click();
     const feed = page.getByTestId('friends-feed');
     await expect(feed.getByTestId('feed-memory')).toHaveCount(1);
-    await expect(feed).toContainText(/Claire R\./);
-    await expect(feed).not.toContainText(/Dev P\./);
+    await expect(
+      feed.locator('[data-testid="feed-memory"][data-handle="claire"]'),
+    ).toBeVisible();
+    // AUTHORSHIP is what the circle filters. Claire's own memory still names
+    // who was there with her, and one of those people is someone you do not
+    // follow — reading that off her card is the card working, not a leak, so
+    // the assertion is over the poster and not over the section's text.
+    for (const handle of ['dev', 'sasha', 'john']) {
+      await expect(
+        feed.locator(`[data-testid="feed-memory"][data-handle="${handle}"]`),
+      ).toHaveCount(0);
+    }
   });
 });
 

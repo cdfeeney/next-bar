@@ -154,13 +154,19 @@ test.describe('Add to Story — the plus-badge entry branch', () => {
     // A full or blocked quota, the way the browser reports one. The receipt
     // claims the story is live for 24 hours, so it must not appear over a
     // write that did not land.
+    // Patch the PROTOTYPE, not the instance. `localStorage.setItem = fn` is an
+    // assignment on a Storage object, and WebKit routes that through Storage's
+    // named-property setter — it stores an entry called "setItem" and leaves
+    // the real method in place, so the stub silently did nothing on iPhone 13
+    // and the test asserted against an ordinary successful save.
     await page.addInitScript(() => {
-      const setItem = window.localStorage.setItem.bind(window.localStorage);
-      window.localStorage.setItem = (key: string, value: string): void => {
+      const proto = window.Storage.prototype;
+      const setItem = proto.setItem;
+      proto.setItem = function (key: string, value: string): void {
         if (key === 'next-bar:stories:v1') {
           throw new DOMException('quota', 'QuotaExceededError');
         }
-        setItem(key, value);
+        setItem.call(this, key, value);
       };
     });
     await openAddStory(page);

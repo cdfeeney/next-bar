@@ -77,6 +77,7 @@ function MemoryCard({
   return (
     <article
       data-testid="feed-memory"
+      data-handle={memory.handle}
       className="rounded-2xl border border-border bg-surface overflow-hidden"
     >
       <div className="flex items-center gap-3 px-4 py-3">
