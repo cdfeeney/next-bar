@@ -107,24 +107,41 @@ const gotoHomeWithCatalog = async (
 };
 
 /**
- * Belt to the catalog gate's braces: returns only once two consecutive reads
- * agree, so a re-render still in flight when the response resolved cannot be
- * captured mid-flight.
+ * Belt to the catalog gate's braces: returns only once the ranking has read
+ * the SAME across three consecutive polls.
+ *
+ * Two was not enough, and the measurement in `gotoHomeWithCatalog` above says
+ * why: the REST response lands at +749ms but the re-rank it triggers does not
+ * commit until +846ms. Two reads 250ms apart can therefore both fall inside
+ * that ~100ms window, settle on the phase-one list, and hand back a snapshot
+ * the page is about to replace — after which the cancel test reads the
+ * catalog's own second phase as Cancel quietly mutating the ranking, with the
+ * exact 4-and-5 swap this file's header already describes. Three reads span
+ * 500ms, comfortably past that gap.
+ *
+ * Measured 2026-08-22 on iPhone 13: 1 failure in 3 repeats with two reads,
+ * green with three. This is the guard being tightened, not the assertion being
+ * relaxed — `toEqual(before)` is untouched.
  */
+const SETTLE_READS = 3;
+
 const settledRanking = async (
   cards: import('@playwright/test').Locator,
 ): Promise<string[]> => {
   let previous: string[] | null = null;
+  let agreements = 0;
   await expect
     .poll(
       async () => {
         const current = await cards.locator('h3').allInnerTexts();
-        const isStable =
-          previous !== null && JSON.stringify(current) === JSON.stringify(previous);
+        agreements =
+          previous !== null && JSON.stringify(current) === JSON.stringify(previous)
+            ? agreements + 1
+            : 0;
         previous = current;
-        return isStable;
+        return agreements >= SETTLE_READS - 1;
       },
-      { timeout: 10_000, intervals: [250, 250, 500, 500, 1000] },
+      { timeout: 15_000, intervals: [250, 250, 250, 500, 500, 1000] },
     )
     .toBe(true);
   return previous ?? [];
