@@ -38,9 +38,10 @@ export type BarLightboxProps = {
    * Hours card and its open-now state simply never appear, with no request
    * that recovers them.
    *
-   * Safe to swap while mounted: fetched details are keyed by the bar they were
-   * fetched for and are ignored the moment `bar.id` changes, so no render can
-   * attribute one bar's details to another.
+   * Safe to swap while mounted: every piece of state filled in by an effect —
+   * the fetched details and the client-only weekly hours — is keyed by the bar
+   * it was computed for and ignored the moment `bar.id` changes, so no render
+   * can attribute one bar's details or schedule to another.
    */
   bar: Bar;
   /**
@@ -153,8 +154,14 @@ export default function BarLightbox({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   // Hours are time-dependent → client-only state, set after mount (same
-  // hydration rule as OpenNowBadge).
-  const [rows, setRows] = useState<ReturnType<typeof weekHoursRows>>(null);
+  // hydration rule as OpenNowBadge). Keyed by bar for the same reason `fetched`
+  // is: the effect that fills it is passive, so on a `bar` swap the first
+  // committed render would otherwise show the PREVIOUS bar's weekly schedule
+  // under the new bar's name.
+  const [hoursFor, setHoursFor] = useState<
+    { barId: string; rows: ReturnType<typeof weekHoursRows> } | undefined
+  >(undefined);
+  const rows = hoursFor?.barId === bar.id ? hoursFor.rows : null;
 
   useEffect(() => {
     const opener =
@@ -162,7 +169,7 @@ export default function BarLightbox({
         ? document.activeElement
         : null;
     closeRef.current?.focus();
-    setRows(weekHoursRows(bar.hours, new Date()));
+    setHoursFor({ barId: bar.id, rows: weekHoursRows(bar.hours, new Date()) });
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         onCloseRef.current();
