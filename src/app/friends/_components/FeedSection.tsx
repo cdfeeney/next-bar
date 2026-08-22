@@ -27,7 +27,8 @@ export default function FeedSection({
   onReply,
 }: {
   entries: readonly FeedEntry[];
-  onReply: (memoryId: string, text: string) => void;
+  /** False when the reply could not be persisted — never confirm in that case. */
+  onReply: (memoryId: string, text: string) => boolean;
 }): JSX.Element {
   return (
     <section data-testid="friends-feed" aria-labelledby="feed-heading">
@@ -59,17 +60,25 @@ function MemoryCard({
   onReply,
 }: {
   memory: FeedMemory;
-  onReply: (memoryId: string, text: string) => void;
+  /** False when the reply could not be persisted — never confirm in that case. */
+  onReply: (memoryId: string, text: string) => boolean;
 }): JSX.Element {
   const [replying, setReplying] = useState(false);
   const [text, setText] = useState('');
+  const [saveFailed, setSaveFailed] = useState(false);
   const bar = memory.barId !== null ? getBarById(memory.barId) : undefined;
 
   const submit = (event: React.FormEvent): void => {
     event.preventDefault();
     const trimmed = text.trim();
     if (trimmed === '') return;
-    onReply(memory.id, trimmed);
+    // Closing the field is the confirmation this surface gives, so it happens
+    // only once the reply is actually stored.
+    if (!onReply(memory.id, trimmed)) {
+      setSaveFailed(true);
+      return;
+    }
+    setSaveFailed(false);
     setText('');
     setReplying(false);
   };
@@ -145,6 +154,15 @@ function MemoryCard({
               ↑
             </button>
           </form>
+        ) : null}
+        {replying && saveFailed ? (
+          <p
+            data-testid="feed-reply-failed"
+            role="alert"
+            className="text-sm mt-2 leading-relaxed"
+          >
+            This device is out of room — your reply wasn&apos;t saved.
+          </p>
         ) : null}
       </div>
     </article>

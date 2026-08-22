@@ -379,6 +379,46 @@ test.describe('Story viewer and queue', () => {
     await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
   });
 
+  test('the first Shift+Tab in a freshly opened viewer stays inside it', async ({
+    page,
+  }) => {
+    await openSocial(page);
+    await openStory(page, 'sasha');
+    const viewer = page.getByTestId('story-viewer');
+
+    // The dialog opens with focus on its own tabIndex={-1} panel, which holds
+    // no position in the Tab ring. Reverse-tabbing out of that was the one
+    // direction the trap did not consume, and it landed on the backdropped
+    // page that aria-modal says is not there.
+    await page.keyboard.press('Shift+Tab');
+    await expect(viewer.locator(':focus')).toHaveCount(1);
+    await page.keyboard.press('Shift+Tab');
+    await expect(viewer.locator(':focus')).toHaveCount(1);
+  });
+
+  test('keyboard focus on a tap zone pauses the queue; tapping it does not', async ({
+    page,
+  }) => {
+    await openSocial(page);
+    await openStory(page, 'sasha');
+    const viewer = page.getByTestId('story-viewer');
+    const progress = page.getByTestId('story-progress');
+    const forward = page.getByTestId('story-forward-zone');
+
+    // The tap zones are labelled buttons, so Tab lands on them — criterion 6's
+    // "accessibility focus is on the chrome" includes the control the queue
+    // would otherwise advance underneath.
+    await forward.focus();
+    await expect(viewer).toHaveAttribute('data-paused', 'true');
+    await expect(progress).toHaveAttribute('aria-label', 'Item 1 of 3');
+
+    // A POINTER tap is not accessibility focus: it steps and hands the clock
+    // straight back, on both engines.
+    await forward.click();
+    await expect(progress).toHaveAttribute('aria-label', 'Item 2 of 3');
+    await expect(viewer).toHaveAttribute('data-paused', 'false');
+  });
+
   test('Remove me is a consent action, so it survives a reload', async ({ page }) => {
     await openSocial(page);
     await openStory(page, 'claire');

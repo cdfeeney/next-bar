@@ -73,6 +73,22 @@ export default function AddStoryFlow({
     inset: pair?.inset ?? null,
   };
 
+  /**
+   * Dismissing the audience sheet — backdrop, ✕ or Escape — is not Done.
+   * `onChange` commits the row the moment it is tapped, so leaving that way
+   * with nobody picked used to store `groups`/`custom` with an empty
+   * `audienceHandles`: the label with nothing behind it that both the sheet's
+   * Done gate and `StoryItem`'s contract exist to prevent. The narrowing is
+   * dropped rather than the dismissal blocked, because a dismissal is a
+   * decision not to narrow.
+   */
+  const closeAudience = (): void => {
+    if (audience !== 'friends' && audienceHandles.length === 0) {
+      setAudience('friends');
+    }
+    setSheet(null);
+  };
+
   const add = (): void => {
     const item: StoryItem = {
       id: newId(),
@@ -217,7 +233,7 @@ export default function AddStoryFlow({
             )
           }
           onDone={() => setSheet(null)}
-          onClose={() => setSheet(null)}
+          onClose={closeAudience}
         />
       ) : null}
     </ComposeDialog>

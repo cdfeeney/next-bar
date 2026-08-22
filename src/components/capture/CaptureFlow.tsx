@@ -154,8 +154,14 @@ export default function CaptureFlow({
 
 /**
  * "Explain first" — the dual-shot mode says what the two counted steps are
- * before the camera opens, because each half can still be retaken on its own
- * and the user has to know a second shot is coming.
+ * before the camera opens, because the user has to know a second shot is
+ * coming before the first one is taken.
+ *
+ * The third line describes exactly the three composition edits this pipeline
+ * has (swap main, keep only one, rotate either) plus the one Retake it has.
+ * It used to promise "retake either one", a per-side recapture that the
+ * locked composition set does not include and `retake()` — which discards
+ * BOTH frames by design, so nothing rejected survives — never offered.
  */
 function DualExplainer({
   onStart,
@@ -169,7 +175,7 @@ function DualExplainer({
   const steps = [
     ['Outward photo', 'The room, the bar, the drink — rear camera.'],
     ['Selfie', 'Front camera, taken right after.'],
-    ['You approve both', 'Retake either one, or keep only one.'],
+    ['You approve both', 'Swap, rotate, keep only one — or retake both.'],
   ] as const;
   const ref = useModalDialog<HTMLDivElement>(onCancel);
 

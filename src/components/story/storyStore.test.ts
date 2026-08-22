@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   STORIES_STORAGE_KEY,
+  STORY_REPLIES_STORAGE_KEY,
   loadOwnItems,
+  loadReplies,
   saveOwnItems,
+  saveReply,
   seededFeed,
   seededGroups,
   type StoryItem,
@@ -65,6 +68,26 @@ describe('saveOwnItems', () => {
     // The caller confirms the share off this boolean, so a swallowed failure
     // here is a story the user was told is live and that is gone on reload.
     expect(saveOwnItems([item('a')])).toBe(false);
+  });
+});
+
+describe('saveReply', () => {
+  it('stores the reply and reports success', () => {
+    expect(saveReply('item-1', 'see you there')).toBe(true);
+    expect(loadReplies().map((entry) => entry.text)).toEqual(['see you there']);
+  });
+
+  it('reports failure when the device refuses the write', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key: string) => {
+      if (key === STORY_REPLIES_STORAGE_KEY) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+    });
+
+    // The viewer clears the field and announces "Reply sent" off this
+    // boolean. Swallowing the failure threw the message away and said it
+    // arrived.
+    expect(saveReply('item-1', 'see you there')).toBe(false);
   });
 });
 

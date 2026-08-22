@@ -241,13 +241,17 @@ export function loadReplies(): StoryReply[] {
  * Replies are kept where the stories are: on this device, until a messages
  * table exists to carry them. Writing them down rather than swallowing them
  * is the difference between a local-first surface and a dead control.
+ *
+ * Returns false when the write did not land (full or blocked quota). The
+ * boolean is the whole point: a swallowed failure cleared the field and
+ * announced "Reply sent" over a message that existed nowhere.
  */
-export function saveReply(targetId: string, text: string): void {
+export function saveReply(targetId: string, text: string): boolean {
   const next = [
     ...loadReplies(),
     { targetId, text, at: new Date().toISOString() },
   ].slice(-MAX_SEEN_IDS);
-  writeJson(STORY_REPLIES_STORAGE_KEY, next);
+  return writeJson(STORY_REPLIES_STORAGE_KEY, next);
 }
 
 // ---------------------------------------------------------------------------
@@ -398,8 +402,13 @@ export type UseStories = {
   addItem: (item: StoryItem) => boolean;
   removeItem: (id: string) => void;
   markSeen: (id: string) => void;
-  /** Drops you from a story's tag list — the sheet's "Remove me". */
-  untagMe: (itemId: string) => void;
+  /**
+   * Drops you from a story's tag list — the sheet's "Remove me". False when
+   * the consent action could not be persisted, in which case nothing changes
+   * in memory either: a tag that silently returns on the next reload is worse
+   * than one that visibly refused to go.
+   */
+  untagMe: (itemId: string) => boolean;
 };
 
 export function useStories(you: {
@@ -459,14 +468,19 @@ export function useStories(you: {
     });
   }, []);
 
-  const untagMe = useCallback((itemId: string) => {
-    setUntagged((current) => {
-      if (current.includes(itemId)) return current;
-      const next = [...current, itemId].slice(-MAX_SEEN_IDS);
-      writeJson(STORIES_UNTAGGED_STORAGE_KEY, next);
-      return next;
-    });
-  }, []);
+  // Not a state updater, for the same reason addItem is not one: the write can
+  // FAIL and the caller has to learn that before the sheet closes on a consent
+  // action that did not persist.
+  const untagMe = useCallback(
+    (itemId: string): boolean => {
+      if (untagged.includes(itemId)) return true;
+      const next = [...untagged, itemId].slice(-MAX_SEEN_IDS);
+      if (!writeJson(STORIES_UNTAGGED_STORAGE_KEY, next)) return false;
+      setUntagged(next);
+      return true;
+    },
+    [untagged],
+  );
 
   // Memoised so the identities the viewer keys its effects on only change
   // when the data does — the seed is otherwise rebuilt on every parent render.

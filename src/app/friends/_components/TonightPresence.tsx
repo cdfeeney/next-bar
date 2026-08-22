@@ -27,6 +27,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useIntent, useNightRefresh } from '@/hooks/useIntent';
 import { getBarById } from '@/lib/catalog';
 import { nycNightKey } from '@/lib/nightKey';
+import { announcePresenceChanged } from './usePinnedHandles';
 import { useBars } from '@/lib/useBars';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getCacheEpoch } from '@/lib/accountCache';
@@ -160,6 +161,9 @@ export default function TonightPresence(): JSX.Element {
         return;
       }
       await refresh();
+      // The Stories rail reads the same rows through its own hook. Only a
+      // CONFIRMED write announces, so a refused pin never moves a badge.
+      announcePresenceChanged();
     } finally {
       setBusy(false);
     }
@@ -178,6 +182,7 @@ export default function TonightPresence(): JSX.Element {
         return;
       }
       await refresh();
+      announcePresenceChanged();
     } finally {
       setBusy(false);
     }

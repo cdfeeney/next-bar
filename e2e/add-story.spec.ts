@@ -319,6 +319,55 @@ test.describe('The capture pipeline — modes and permission', () => {
     await expect(page.getByTestId('camera-step')).toHaveText(/1 of 2 · Outward/);
   });
 
+  test('dismissing the audience sheet with nobody picked drops the narrowing', async ({
+    page,
+  }) => {
+    await openAddStory(page);
+    await page.getByTestId('capture-library-input').setInputFiles({
+      name: 'night.png',
+      mimeType: 'image/png',
+      buffer: PNG_1PX,
+    });
+    await page.getByTestId('capture-approve').click();
+    await expect(page.getByTestId('story-compose')).toBeVisible();
+
+    // Picking the row commits it immediately, and Escape/✕/backdrop are not
+    // Done — so the Done gate alone left `custom` standing with an empty
+    // recipient set, which the stored item forbids. Both dismissals are
+    // checked because all three exits share one handler and a partial fix
+    // would still ship one open door.
+    await page.getByTestId('story-compose-audience').click();
+    await page
+      .locator('[data-testid="story-audience-option"][data-value="custom"]')
+      .click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('story-audience-sheet')).toHaveCount(0);
+    await expect(page.getByTestId('story-compose-audience')).toContainText(
+      'Friends',
+    );
+
+    await page.getByTestId('story-compose-audience').click();
+    await page
+      .locator('[data-testid="story-audience-option"][data-value="groups"]')
+      .click();
+    await page
+      .getByTestId('story-audience-sheet-backdrop')
+      .click({ position: { x: 5, y: 5 } });
+    await expect(page.getByTestId('story-compose-audience')).toContainText(
+      'Friends',
+    );
+
+    // What was actually STORED is the claim that matters.
+    await page.getByTestId('story-compose-add').click();
+    await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
+    const stored = await page.evaluate(() =>
+      JSON.parse(window.localStorage.getItem('next-bar:stories:v1') ?? '[]'),
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0].audience).toBe('friends');
+    expect(stored[0].audienceHandles).toEqual([]);
+  });
+
   test('the dual mode can fall back to one photo without leaving the flow', async ({
     page,
   }) => {
@@ -331,12 +380,16 @@ test.describe('The capture pipeline — modes and permission', () => {
     await expect(page.getByTestId('camera-step')).toHaveCount(0);
   });
 
-  test('there is one camera system: the global share path is untouched', async ({
+  test('Add to Story mounts exactly one capture chooser, and leaves none behind', async ({
     page,
   }) => {
-    // The share-a-moment entry points that existed before this lane still
-    // behave exactly as their own specs assert; what this checks is that Add
-    // to Story did not grow a second chooser alongside them.
+    // Criterion 10 is REUSE, and this is its runtime half: one chooser while
+    // the flow is open, none once it is cancelled. Its source half — that a
+    // single module owns getUserMedia — is `oneCameraSystem.test.ts`, which is
+    // where a second camera would actually show up. The name this test used to
+    // carry ("the global share path is untouched") claimed more than it did:
+    // there is no global capture entry in the app to leave untouched, and a
+    // test may not borrow credit for a path it never visits.
     await openAddStory(page);
     await expect(page.getByTestId('capture-modes')).toHaveCount(1);
     await page.getByTestId('capture-cancel').click();

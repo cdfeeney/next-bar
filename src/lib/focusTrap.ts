@@ -34,9 +34,15 @@ export function cycleFocusWithin(container: HTMLElement | null, event: KeyboardE
   const last = focusables[focusables.length - 1];
   const active = document.activeElement;
 
-  if (!container.contains(active)) {
+  // The CONTAINER itself counts as outside the ring. Overlays that open by
+  // focusing their own `tabIndex={-1}` panel (every dialog on useModalDialog)
+  // left focus on an element that `contains()` reports as inside but that is
+  // in no focusable position, so neither end-of-ring branch matched, the event
+  // was not consumed, and the very first Shift+Tab walked into the backdropped
+  // page that aria-modal says does not exist.
+  if (!container.contains(active) || active === container) {
     event.preventDefault();
-    first.focus({ preventScroll: true });
+    (event.shiftKey ? last : first).focus({ preventScroll: true });
     return true;
   }
   if (!event.shiftKey && active === last) {

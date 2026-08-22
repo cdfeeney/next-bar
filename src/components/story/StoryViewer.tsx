@@ -68,8 +68,10 @@ export default function StoryViewer({
   /** Queue ran out — the caller lands on Social · Tonight. */
   onExhausted: () => void;
   onMarkSeen: (itemId: string) => void;
-  onUntagMe: (itemId: string) => void;
-  onReply: (itemId: string, text: string) => void;
+  /** False when the consent action could not be persisted. */
+  onUntagMe: (itemId: string) => boolean;
+  /** False when the reply could not be persisted — never confirm in that case. */
+  onReply: (itemId: string, text: string) => boolean;
 }): JSX.Element | null {
   const startIndex = Math.max(
     0,
@@ -83,6 +85,7 @@ export default function StoryViewer({
   const [reply, setReply] = useState('');
   const [replyFocused, setReplyFocused] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
+  const [saveFailed, setSaveFailed] = useState<string | null>(null);
   const [venueOpen, setVenueOpen] = useState(false);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const replyRef = useRef<HTMLInputElement | null>(null);
@@ -191,12 +194,32 @@ export default function StoryViewer({
     (person) => person.isYou === true || person.handle === youHandle,
   );
 
+  /**
+   * Criterion 6's "accessibility focus is on the chrome" is every control in
+   * this dialog, the two tap zones included: they are buttons with their own
+   * labels, so Tab lands on them, and the queue used to advance underneath a
+   * focused control. One pair of handlers, spread on each container, rather
+   * than three copies that can drift apart again.
+   */
+  const chromeFocus = {
+    onFocus: () => setChromeFocused(true),
+    onBlur: () => setChromeFocused(false),
+  };
+
   const startPress = (): void => {
     pressTimer.current = setTimeout(() => setHeld(true), LONG_PRESS_MS);
   };
-  const endPress = (onTap: () => void): void => {
+  const endPress = (
+    event: React.PointerEvent<HTMLButtonElement>,
+    onTap: () => void,
+  ): void => {
     if (pressTimer.current !== null) clearTimeout(pressTimer.current);
     pressTimer.current = null;
+    // A POINTER tap is not accessibility focus. Chromium focuses a button on
+    // pointer-down and WebKit does not, so without this the same tap paused
+    // the queue on one engine and not the other; blurring makes the two agree
+    // and leaves keyboard focus (which never fires these) pausing as it should.
+    event.currentTarget.blur();
     if (held) {
       setHeld(false);
       return;
@@ -208,7 +231,13 @@ export default function StoryViewer({
     event.preventDefault();
     const text = reply.trim();
     if (text === '') return;
-    onReply(item.id, text);
+    // The field is cleared and "sent" announced only when the reply actually
+    // landed. Clearing first threw the message away and said it arrived.
+    if (!onReply(item.id, text)) {
+      setSaveFailed("This device is out of room — your reply wasn't saved.");
+      return;
+    }
+    setSaveFailed(null);
     setReply('');
     setSent(group.name.split(/\s+/)[0]);
   };
@@ -228,8 +257,7 @@ export default function StoryViewer({
           it but the safe area — metadata never enters the status area. */}
       <div
         className="px-4 pt-[env(safe-area-inset-top)] shrink-0"
-        onFocus={() => setChromeFocused(true)}
-        onBlur={() => setChromeFocused(false)}
+        {...chromeFocus}
       >
         <ProgressStrip count={group.items.length} index={position.item} elapsed={elapsed} />
 
@@ -280,7 +308,7 @@ export default function StoryViewer({
       </div>
 
       {/* The photo, and the two tap zones over it. */}
-      <div className="relative flex-1 mt-3">
+      <div className="relative flex-1 mt-3" {...chromeFocus}>
         <StoryFrame
           photo={item.photo}
           barId={item.barId}
@@ -292,8 +320,8 @@ export default function StoryViewer({
           data-testid="story-back-zone"
           aria-label="Previous story item"
           onPointerDown={startPress}
-          onPointerUp={() => endPress(back)}
-          onPointerCancel={() => endPress(() => undefined)}
+          onPointerUp={(event) => endPress(event, back)}
+          onPointerCancel={(event) => endPress(event, () => undefined)}
           className="absolute left-0 top-0 bottom-0 w-1/3"
         />
         <button
@@ -301,8 +329,8 @@ export default function StoryViewer({
           data-testid="story-forward-zone"
           aria-label="Next story item"
           onPointerDown={startPress}
-          onPointerUp={() => endPress(atEnd ? onExhausted : advance)}
-          onPointerCancel={() => endPress(() => undefined)}
+          onPointerUp={(event) => endPress(event, atEnd ? onExhausted : advance)}
+          onPointerCancel={(event) => endPress(event, () => undefined)}
           className="absolute right-0 top-0 bottom-0 w-2/3"
         />
       </div>
@@ -310,8 +338,7 @@ export default function StoryViewer({
       <form
         onSubmit={submitReply}
         className="shrink-0 flex items-center gap-2 px-4 py-3 pb-[calc(env(safe-area-inset-bottom)+12px)]"
-        onFocus={() => setChromeFocused(true)}
-        onBlur={() => setChromeFocused(false)}
+        {...chromeFocus}
       >
         <input
           ref={replyRef}
@@ -338,6 +365,15 @@ export default function StoryViewer({
           Reply sent to {sent}
         </p>
       ) : null}
+      {saveFailed !== null ? (
+        <p
+          data-testid="story-viewer-save-failed"
+          role="alert"
+          className="px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] text-sm text-center leading-relaxed"
+        >
+          {saveFailed}
+        </p>
+      ) : null}
 
       {venueOpen && bar ? (
         <BarLightbox bar={bar} onClose={() => setVenueOpen(false)} />
@@ -352,7 +388,11 @@ export default function StoryViewer({
           onRemoveMe={
             youAreTagged
               ? () => {
-                  onUntagMe(item.id);
+                  if (!onUntagMe(item.id)) {
+                    setSaveFailed(
+                      "This device is out of room — your tag wasn't removed.",
+                    );
+                  }
                   setSheetOpen(false);
                 }
               : null
