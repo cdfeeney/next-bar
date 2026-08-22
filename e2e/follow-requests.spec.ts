@@ -642,7 +642,9 @@ test.describe('/friends — the approved Social surface, signed in', () => {
     });
     await page.goto('/friends');
 
-    const control = page.getByRole('link', { name: /Groups & people/i });
+    // V8-1f: the control became a button — the section it targets lives on
+    // the Tonight sub-tab and has to be selected before it can be scrolled to.
+    const control = page.getByRole('button', { name: /Groups & people/i });
     await expect(control).toBeVisible();
     await expect(control).toContainText('1');
     // Consent is never hidden behind the jump: the inbox itself is on-page.

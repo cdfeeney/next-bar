@@ -46,7 +46,16 @@ export default function StoriesRail({
       >
         Stories
       </h2>
-      <ul className="flex gap-4 overflow-x-auto pb-1 -mx-6 px-6">
+      {/* data-carousel: the rail is the deliberate sideways strip the native
+          interaction contract allows, and it must announce itself rather than
+          read as an accidental horizontal scroller (native-shell-contract).
+          The other half of that contract — operable WITHOUT swiping — is met
+          by construction here: every cell is a focusable button, so Tab walks
+          the rail and the browser scrolls each cell into view. */}
+      <ul
+        data-carousel
+        className="flex gap-4 overflow-x-auto pb-1 -mx-6 px-6"
+      >
         {you ? (
           <YourCell
             group={you}
