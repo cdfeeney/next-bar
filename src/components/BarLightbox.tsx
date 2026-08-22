@@ -26,15 +26,21 @@ export type BarLightboxProps = {
   /**
    * The bar to show.
    *
-   * A lean catalog `Bar` is enough: the heavy detail fields (address, hours,
-   * reviews, photo attributions) are absent from the catalog payload and are
+   * A lean catalog `Bar` is enough for identity, tags and the action pair: the
+   * detail fields `BarDetails` carries (address, blurb, reviews, photo
+   * attributions, place id) are absent from the catalog payload and are
    * fetched per-id on mount, so a map marker, a ranking row and a search
    * result can each pass the object they already hold with no pre-fetching.
    *
-   * Safe to swap while mounted — the previous bar's fetched details are
-   * dropped before the new request, so details never bind to the wrong bar.
-   * `bar.tags` is the whole truth for the venue tags (BarDetails cannot carry
-   * them), so a caller that renders tags elsewhere must pass the tagged bar.
+   * TWO fields the fetch cannot supply, so they must ride the passed bar:
+   * `bar.hours` and `bar.tags`. `BarDetails` has no member for either, and the
+   * panel reads both straight off `bar` — pass a bar without `hours` and the
+   * Hours card and its open-now state simply never appear, with no request
+   * that recovers them.
+   *
+   * Safe to swap while mounted: fetched details are keyed by the bar they were
+   * fetched for and are ignored the moment `bar.id` changes, so no render can
+   * attribute one bar's details to another.
    */
   bar: Bar;
   /**
@@ -69,11 +75,17 @@ export default function BarLightbox({
   bar,
   onClose,
 }: BarLightboxProps): JSX.Element {
-  const [details, setDetails] = useState<BarDetails | undefined>(undefined);
-  const [detailStatus, setDetailStatus] = useState<
-    'loading' | 'ready' | 'unavailable'
-  >('loading');
-  const displayBar = details ? { ...bar, ...details } : bar;
+  // Keyed by the bar the fetch was for. `bar` can change between renders, and
+  // clearing this in the effect below would clear it one render too LATE: the
+  // effect is passive, so the first render after a swap had already merged the
+  // previous bar's details under the new bar's name.
+  const [fetched, setFetched] = useState<
+    { barId: string; details?: BarDetails; status: 'ready' | 'unavailable' }
+    | undefined
+  >(undefined);
+  const current = fetched?.barId === bar.id ? fetched : undefined;
+  const detailStatus = current?.status ?? 'loading';
+  const displayBar = current?.details ? { ...bar, ...current.details } : bar;
   const media = resolveMedia(displayBar);
   const photoUrls =
     media.source === 'glyph' || media.source === 'google-live' ? [] : media.urls;
@@ -82,22 +94,19 @@ export default function BarLightbox({
   // Heavy detail fields are absent from the initial catalog payload and
   // load only for the bar the user opens.
   useEffect(() => {
-    // Drop the previous bar's fetched details FIRST. Today ResultCard
-    // unmounts the lightbox on close so this can't bite, but any future
-    // caller that keeps it mounted and swaps `bar` would otherwise
-    // attribute one bar's details to a different bar.
-    setDetails(undefined);
-    setDetailStatus('loading');
+    // No clearing step here: `current` above already ignores a result whose
+    // barId is not the bar being rendered, so the stale details are gone from
+    // the very first render of the new bar rather than from the next one.
     let cancelled = false;
+    const barId = bar.id;
     void (async () => {
-      const fetched = await fetchBarDetails(bar.id);
+      const result = await fetchBarDetails(barId);
       if (cancelled) return;
-      if (fetched) {
-        setDetails(fetched);
-        setDetailStatus('ready');
-      } else {
-        setDetailStatus('unavailable');
-      }
+      setFetched({
+        barId,
+        details: result ?? undefined,
+        status: result ? 'ready' : 'unavailable',
+      });
     })();
     return () => {
       cancelled = true;

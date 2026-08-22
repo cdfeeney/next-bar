@@ -3,7 +3,11 @@ import { describe, expect, test, vi } from 'vitest';
 import type { Bar } from '@/types';
 
 vi.mock('@/lib/mediaPolicy', () => ({
-  resolveMedia: () => ({ source: 'google-live', placeId: 'ChIJbar54' }),
+  // A spy, not a bare stub: BarLightbox calls this DURING render with the bar
+  // it is about to paint, which is the only place a one-frame mis-attribution
+  // is observable. `rerender` flushes effects inside act(), so a post-swap DOM
+  // assertion cannot see it (measured: such a test passes against the bug).
+  resolveMedia: vi.fn(() => ({ source: 'google-live', placeId: 'ChIJbar54' })),
 }));
 
 vi.mock('@/lib/barReviews', () => ({
@@ -16,6 +20,8 @@ vi.mock('@/components/GooglePlacePhotoLazy', () => ({
   ),
 }));
 
+import { fetchBarDetails } from '@/lib/barReviews';
+import { resolveMedia } from '@/lib/mediaPolicy';
 import BarLightbox from './BarLightbox';
 
 const BAR: Bar = {
@@ -51,6 +57,40 @@ describe('BarLightbox shared contract', () => {
     expect(screen.getByRole('list', { name: 'Bar 54 tags' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'View on Maps' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy();
+  });
+
+  /**
+   * Round-1 review (Codex, corroborated): the swap-safety promise in
+   * BarLightboxProps was broken. `displayBar` merged fetched details during
+   * RENDER while the reset ran in a passive effect, so the first render after a
+   * `bar` swap painted the previous bar's address, blurb and place id under the
+   * new bar's name — and handed them to resolveMedia, which is what decides
+   * which Google place the photo widget requests.
+   *
+   * Assert on resolveMedia's render-time argument, not on the DOM: `rerender`
+   * flushes effects inside act(), so by the time the DOM can be queried the
+   * effect has already corrected it. A DOM-only version of this test passes
+   * against the bug.
+   */
+  test('swapping bar while mounted never renders the prior bar details', async () => {
+    vi.mocked(fetchBarDetails).mockResolvedValueOnce({
+      address: '1 PREVIOUS BAR PLAZA',
+      blurb: 'The previous bar.',
+    });
+
+    const { rerender } = render(<BarLightbox bar={BAR} onClose={() => {}} />);
+    expect(await screen.findByText('1 PREVIOUS BAR PLAZA')).toBeTruthy();
+
+    const OTHER: Bar = { ...BAR, id: 'bar-99', name: 'Bar 99', address: '99 Own St' };
+    vi.mocked(resolveMedia).mockClear();
+    rerender(<BarLightbox bar={OTHER} onClose={() => {}} />);
+
+    const leaked = vi
+      .mocked(resolveMedia)
+      .mock.calls.filter(([shown]) => (shown as Bar).id === 'bar-99')
+      .filter(([shown]) => (shown as Bar).address === '1 PREVIOUS BAR PLAZA');
+    expect(leaked).toHaveLength(0);
+    expect(screen.getByRole('heading', { name: 'Bar 99' })).toBeTruthy();
   });
 });
 

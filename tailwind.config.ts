@@ -5,10 +5,16 @@ const config: Config = {
   theme: {
     extend: {
       // LOCKED V8 TOKENS — THE single source of these six values (plus the
-      // coral's pressed shade). src/lib/paletteContrast.test.ts reads this
-      // object directly and fails a token edit that breaks WCAG AA, and
-      // globals.css derives its :root custom properties from it via theme(),
-      // so no other file should carry these hex codes.
+      // coral's pressed shade). globals.css derives its :root custom
+      // properties from this object via theme(), so no other file should carry
+      // these hex codes.
+      //
+      // src/lib/paletteContrast.test.ts reads this object directly and fails a
+      // token edit that breaks WCAG AA — but only for the SIX locked values it
+      // pins and the pairings it lists. `accentDim` is deliberately outside
+      // that check and is NOT contrast-validated: it is the pressed shade of
+      // the coral, and dark-on-accentDim (`hover:bg-accentDim text-bg`) sits
+      // below AA. Do not read this comment as cover for editing it.
       //
       // Three ways to consume them, all the same source:
       //   Tailwind class   bg-surface, text-muted, ... (opacity modifiers work)
