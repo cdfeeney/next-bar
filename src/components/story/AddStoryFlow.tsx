@@ -70,6 +70,8 @@ export default function AddStoryFlow({
   const [saveFailed, setSaveFailed] = useState(false);
   const [sheet, setSheet] = useState<'bar' | 'people' | 'audience' | null>(null);
   const [posted, setPosted] = useState<StoryItem | null>(null);
+  /** Set when a post was refused because the narrowed audience had emptied. */
+  const [audienceLapsed, setAudienceLapsed] = useState(false);
   const { isFollowing } = useFollows();
 
   /**
@@ -119,9 +121,17 @@ export default function AddStoryFlow({
   };
 
   const add = (): void => {
-    // A narrowing with nobody live behind it is not an audience — store it as
-    // Friends rather than as a label over an empty or invisible recipient set.
-    const narrowed = audience !== 'friends' && liveHandles.length > 0;
+    // A narrowing whose recipients have all left your circle is NOT quietly
+    // downgraded to Friends. That was a show-vs-store mismatch in the more
+    // dangerous direction: the compose row still read "Custom" at the moment
+    // of the tap while the stored story went out to Friends, i.e. BROADER than
+    // the screen said. Refuse the post and reopen the audience sheet, which is
+    // the only screen that can show what actually happened.
+    if (audience !== 'friends' && liveHandles.length === 0) {
+      setAudienceLapsed(true);
+      setSheet('audience');
+      return;
+    }
     const item: StoryItem = {
       id: newId(),
       postedAt: new Date().toISOString(),
@@ -129,8 +139,8 @@ export default function AddStoryFlow({
       caption: null,
       tagged: people,
       photo,
-      audience: narrowed ? audience : 'friends',
-      audienceHandles: narrowed ? liveHandles : [],
+      audience,
+      audienceHandles: audience === 'friends' ? [] : liveHandles,
     };
     // The receipt is a claim that the story is live for 24 hours, so it is
     // shown only when the store actually took it. A blocked or full quota used
@@ -264,8 +274,15 @@ export default function AddStoryFlow({
                 : [...current, handle],
             )
           }
-          onDone={() => setSheet(null)}
-          onClose={closeAudience}
+          lapsed={audienceLapsed}
+          onDone={() => {
+            setAudienceLapsed(false);
+            setSheet(null);
+          }}
+          onClose={() => {
+            setAudienceLapsed(false);
+            closeAudience();
+          }}
         />
       ) : null}
     </ComposeDialog>

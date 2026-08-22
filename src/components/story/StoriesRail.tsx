@@ -93,7 +93,7 @@ function Cell({
   return (
     <li
       className={`shrink-0 flex flex-col gap-1.5 ${
-        wide ? 'w-[88px] items-start' : 'w-16 items-center'
+        wide ? 'w-[100px] items-start' : 'w-16 items-center'
       }`}
     >
       {children}
@@ -128,17 +128,23 @@ function YourCell({
   const hasStory = group.items.length > 0;
   return (
     <Cell label="You" wide={hasStory}>
-      {/* Two 44px targets cannot both fit on one 56px avatar. The previous
+      {/* Two 44px targets cannot both fit on one 56px avatar. The original
           shape put the add button at `left-3 top-3 w-11 h-11`, i.e. over
           (12,12)-(56,56) of the 56px cell — which contains the avatar's own
           centre (28,28), so tapping the middle of your ringed avatar opened
-          CAPTURE and the view control was reduced to a 12px L-strip. The cell
-          is widened instead once a story exists, so the add target starts at
-          x=44, past the avatar's centre: the avatar keeps a clear 44x56 and
-          the plus keeps its own 44x44, with neither borrowing the other's. */}
+          CAPTURE and the view control was reduced to a 12px L-strip.
+          The cell is widened instead once a story exists, and the add target
+          begins exactly at the avatar's RIGHT EDGE (x=56): the two controls do
+          not overlap at all, so every point of the avatar opens your story and
+          every point of the plus adds to it. Anything less than full
+          separation leaves a strip of the avatar that silently does the other
+          thing, which is what the first attempt at this still had. Only the
+          18px MARK is pulled back over the avatar's corner, by a negative
+          margin, so the badge keeps the position the reference draws it in
+          without extending the button's box. */}
       <span
         data-testid="story-rail-you"
-        className={`relative block h-14 ${hasStory ? 'w-[88px]' : 'w-14'}`}
+        className={`relative block h-14 ${hasStory ? 'w-[100px]' : 'w-14'}`}
       >
         {/* The avatar keeps its own 56px positioning box so the pin badge
             stays anchored to the avatar's corner rather than to the widened
@@ -158,18 +164,20 @@ function YourCell({
           {pinned ? <PinBadge /> : null}
         </span>
         {hasStory ? (
-          // 44x44, anchored past the avatar's centre and inside the cell's own
-          // 56px height, so the rail's horizontal scroller never clips it. The
-          // 18px mark sits at the box's bottom-LEFT, which lands it on the
-          // avatar's lower-right edge exactly where the no-story cell draws it.
+          // 44x44 starting at x=56 — the avatar's right edge — and inside the
+          // cell's own 56px height, so the rail's horizontal scroller never
+          // clips it. `-ml-2` pulls only the 18px mark back over the avatar's
+          // lower-right corner; the button's own box stays clear of it.
           <button
             type="button"
             data-testid="add-story"
             onClick={onAddStory}
             aria-label={RAIL_ADD_LABEL}
-            className="absolute left-11 top-3 w-11 h-11 flex items-end justify-start rounded-full touch-manipulation"
+            className="absolute left-14 top-3 w-11 h-11 flex items-end justify-start rounded-full touch-manipulation"
           >
-            <PlusBadge />
+            <span className="-ml-2 flex">
+              <PlusBadge />
+            </span>
           </button>
         ) : (
           <span className="absolute -bottom-1 -right-1 w-7 h-7 flex items-center justify-center pointer-events-none">
@@ -260,7 +268,11 @@ function PinBadge(): JSX.Element {
   return (
     <span
       data-testid="story-pin-badge"
-      className="absolute -top-0.5 -right-0.5 w-[14px] h-[14px] rounded-[3px] bg-accent border-2 border-bg"
+      // pointer-events-none, like the decorative plus wrapper above: this is a
+      // STATUS mark, not a control, and as a positioned sibling over the
+      // avatar button it was swallowing taps on its own 14px corner — a dead
+      // region on the story-open target wherever a pin renders.
+      className="pointer-events-none absolute -top-0.5 -right-0.5 w-[14px] h-[14px] rounded-[3px] bg-accent border-2 border-bg"
     >
       <span className="sr-only">Pinned a spot tonight</span>
     </span>

@@ -123,6 +123,7 @@ const AUDIENCE_ROWS: ReadonlyArray<{
 export function AudienceSheet({
   value,
   handles,
+  lapsed = false,
   onChange,
   onToggleHandle,
   onDone,
@@ -130,6 +131,12 @@ export function AudienceSheet({
 }: {
   value: StoryAudience;
   handles: readonly string[];
+  /**
+   * True when a post was REFUSED because every recipient of this narrowing had
+   * left the circle. The sheet is reopened rather than the audience silently
+   * widened, so this line is what tells the user why nothing was shared.
+   */
+  lapsed?: boolean;
   onChange: (next: StoryAudience) => void;
   onToggleHandle: (handle: string) => void;
   onDone: () => void;
@@ -149,6 +156,16 @@ export function AudienceSheet({
   const ready = !needsPeople || visible.length > 0;
   return (
     <Sheet label="Story audience" testId="story-audience-sheet" onClose={onClose}>
+      {lapsed ? (
+        <p
+          data-testid="story-audience-lapsed"
+          role="alert"
+          className="text-sm leading-relaxed mb-4 rounded-2xl border border-accent px-4 py-3"
+        >
+          Nothing was shared. Everyone you picked for this story has left your
+          circle, so pick again or switch back to Friends.
+        </p>
+      ) : null}
       <ul role="radiogroup" aria-label="Story audience">
         {AUDIENCE_ROWS.map((row) => (
           <li key={row.value}>

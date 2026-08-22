@@ -7,10 +7,18 @@
  * `next-bar-story-tag-placement.png`.
  *
  * Everything here runs signed-OUT on purpose: the rail, the queue and the
- * viewer are the half of the surface that does not depend on a session, and
- * the seeded friend stories are identical in both auth modes. The signed-in
- * half of Social (presence rows, the pin badge's source) is covered by
- * follow-requests.spec.ts and friends-real.spec.ts.
+ * viewer are the half of the surface that does not depend on a session. The
+ * signed-in half of Social (presence rows, the pin badge's source) is covered
+ * by follow-requests.spec.ts and friends-real.spec.ts.
+ *
+ * This header used to claim "the seeded friend stories are identical in both
+ * auth modes". THAT IS NOT TRUE and the claim is removed rather than left to
+ * imply coverage that does not exist. Stories are local-first with no server
+ * table, so `seededGroups`/`seededFeed` intersect who you follow with
+ * `demoFriends`; in server mode a real circle matches no demo handle, so a
+ * genuinely signed-in account sees only its own cell and an empty Feed. That
+ * is a known capability limit of this build, recorded on the goal — not
+ * something these signed-out specs measure.
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -152,19 +160,36 @@ test.describe('Social sub-tabs and the Stories rail', () => {
     // The plus keeps its own 44x44 target…
     expect(plusBox.width).toBeGreaterThanOrEqual(44);
     expect(plusBox.height).toBeGreaterThanOrEqual(44);
-    // …and no longer covers the avatar's centre.
+    // …and the avatar keeps a full one of its own.
+    expect(avatarBox.width).toBeGreaterThanOrEqual(44);
+    expect(avatarBox.height).toBeGreaterThanOrEqual(44);
+    // …and the two boxes do not INTERSECT AT ALL. Asserting only that the
+    // avatar's centre point falls outside the plus was too weak: it passed
+    // while a 12px strip of the avatar's right edge still silently opened
+    // capture, so any point of one control must not be a point of the other.
+    const overlaps =
+      plusBox.x < avatarBox.x + avatarBox.width &&
+      avatarBox.x < plusBox.x + plusBox.width &&
+      plusBox.y < avatarBox.y + avatarBox.height &&
+      avatarBox.y < plusBox.y + plusBox.height;
+    expect(overlaps).toBe(false);
+
     const centre = {
       x: avatarBox.x + avatarBox.width / 2,
       y: avatarBox.y + avatarBox.height / 2,
     };
-    const centreInsidePlus =
-      centre.x >= plusBox.x &&
-      centre.x <= plusBox.x + plusBox.width &&
-      centre.y >= plusBox.y &&
-      centre.y <= plusBox.y + plusBox.height;
-    expect(centreInsidePlus).toBe(false);
 
-    // Tapping the exact centre opens the VIEWER, not capture.
+    // Every point of the avatar opens the VIEWER, not capture — its centre and
+    // the right edge that the first version of this fix still gave away.
+    await page.mouse.click(
+      avatarBox.x + avatarBox.width - 3,
+      avatarBox.y + avatarBox.height / 2,
+    );
+    await expect(page.getByTestId('story-viewer')).toBeVisible();
+    await expect(page.getByTestId('capture-modes')).toHaveCount(0);
+    await page.getByTestId('story-close').click();
+    await expect(page.getByTestId('story-viewer')).toHaveCount(0);
+
     await page.mouse.click(centre.x, centre.y);
     await expect(page.getByTestId('story-viewer')).toBeVisible();
     await expect(page.getByTestId('capture-modes')).toHaveCount(0);

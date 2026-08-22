@@ -17,6 +17,20 @@ import type { TaggedPerson } from './storyStore';
  * The caller pauses automatic progression while this is open — the sheet does
  * not reach into the viewer's timer (see StoryViewer's pause reasons).
  */
+/**
+ * Where a row's Profile goes.
+ *
+ * Your own row does NOT go to `/u/<handle>`: `VIEWER_HANDLE` is the local
+ * placeholder `'you'` (storyStore.ts), which is not a real profile — that route
+ * dead-ends on "No one here" signed-out and `notFound()` signed-in. Your own
+ * profile surface in this product is the Account root at `/settings`, so that
+ * is where your row points. Every row still links to a profile (criterion 7);
+ * one of them is yours.
+ */
+function profileHref(person: TaggedPerson): string {
+  return person.isYou === true ? '/settings' : `/u/${person.handle}`;
+}
+
 export default function TaggedPeopleSheet({
   people,
   posterName,
@@ -57,7 +71,7 @@ export default function TaggedPeopleSheet({
                 to reach a profile from it. */}
             <span className="shrink-0 flex items-center gap-2">
               <Link
-                href={`/u/${person.handle}`}
+                href={profileHref(person)}
                 data-testid="tagged-person-profile"
                 className="min-h-[44px] px-3 flex items-center rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
               >

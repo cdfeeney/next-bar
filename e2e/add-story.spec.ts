@@ -411,16 +411,38 @@ test.describe('The capture pipeline — modes and permission', () => {
       );
     });
 
+    // Posting DIRECTLY, without reopening the sheet, must not quietly widen
+    // the story: compose still reads "Custom", so storing it as Friends would
+    // send it BROADER than the screen said. The post is refused and the
+    // audience sheet is reopened to say so.
+    await expect(page.getByTestId('story-compose-audience')).toContainText(
+      'Custom',
+    );
+    await page.getByTestId('story-compose-add').click();
+    await expect(page.getByTestId('story-audience-sheet')).toBeVisible();
+    await expect(page.getByTestId('story-audience-lapsed')).toBeVisible();
+    await expect(page.getByTestId('story-shared-receipt')).toHaveCount(0);
+    expect(
+      await page.evaluate(() =>
+        JSON.parse(window.localStorage.getItem('next-bar:stories:v1') ?? '[]'),
+      ),
+    ).toHaveLength(0);
+
     // The sheet no longer offers her, and no longer counts her.
-    await page.getByTestId('story-compose-audience').click();
     await expect(
       page.locator('[data-testid="story-audience-person"][data-handle="claire"]'),
     ).toHaveCount(0);
     await expect(page.getByTestId('story-audience-done')).toBeDisabled();
     await expect(page.getByTestId('story-audience-needs-people')).toBeVisible();
-    await page.keyboard.press('Escape');
 
-    // And what is STORED carries no invisible recipient.
+    // Choosing Friends deliberately is the way out, and only then does it post.
+    await page
+      .locator('[data-testid="story-audience-option"][data-value="friends"]')
+      .click();
+    await page.getByTestId('story-audience-done').click();
+    await expect(page.getByTestId('story-compose-audience')).toContainText(
+      'Friends',
+    );
     await page.getByTestId('story-compose-add').click();
     await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
     const stored = await page.evaluate(() =>

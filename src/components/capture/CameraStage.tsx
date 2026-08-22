@@ -37,6 +37,14 @@ export default function CameraStage({
   const camera = useCamera(facing, true);
   const live = camera.status === 'live';
   const ref = useModalDialog<HTMLDivElement>(onCancel);
+  // The device answered with a DIFFERENT lens than this step asked for. Only
+  // said when the track actually reports one — `null` means the browser will
+  // not say, which is not a mismatch. It matters most on the dual shot, whose
+  // two steps are labelled "Outward" and "Selfie": a one-camera device honours
+  // both requests with the same lens, and without this the labels would claim
+  // a pairing the photos do not have.
+  const lensMismatch =
+    live && camera.actualFacing !== null && camera.actualFacing !== facing;
 
   return (
     <div
@@ -93,6 +101,17 @@ export default function CameraStage({
           muted
           className="w-full h-full object-cover"
         />
+        {lensMismatch ? (
+          <p
+            data-testid="camera-lens-notice"
+            role="status"
+            className="absolute inset-x-3 bottom-3 rounded-2xl border border-border bg-bg/90 px-3 py-2 text-[11px] leading-relaxed text-muted"
+          >
+            {facing === 'user'
+              ? 'This device only offered its rear camera, so this shot is not a selfie.'
+              : 'This device only offered its front camera, so this shot faces you.'}
+          </p>
+        ) : null}
         {live ? null : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
             <p data-testid="camera-notice" className="text-sm leading-relaxed">

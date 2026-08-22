@@ -135,11 +135,19 @@ export default function CaptureReview({
       ) : null}
 
       <div className="flex items-center gap-3 px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+16px)]">
+        {/* Retake is held during a decode for the same reason approve is: it
+            discards and reopens the camera, and the in-flight rotation would
+            then resolve and call onChange with its closed-over OLD pair,
+            planting the rejected composition back over the replacement. */}
         <button
           type="button"
           data-testid="capture-retake"
-          onClick={onRetake}
-          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+          onClick={() => {
+            if (rotating) return;
+            onRetake();
+          }}
+          aria-disabled={rotating}
+          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation hover:border-accent transition-colors aria-disabled:opacity-40"
         >
           Retake
         </button>

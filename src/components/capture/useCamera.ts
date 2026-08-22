@@ -33,6 +33,17 @@ export type CameraFacing = 'environment' | 'user';
 export type UseCamera = {
   status: CameraStatus;
   videoRef: React.RefObject<HTMLVideoElement>;
+  /**
+   * The lens the device ACTUALLY gave, read back off the live track, or null
+   * when it will not say.
+   *
+   * `facingMode` in a constraint is a PREFERENCE, not a guarantee: a laptop or
+   * a single-camera phone honours the request by handing back the only camera
+   * it has. Without reading the track back, the dual shot labels its two steps
+   * "rear" and "front" while both may be the same lens — the UI making a claim
+   * about the hardware that the hardware never agreed to.
+   */
+  actualFacing: CameraFacing | null;
   /** A JPEG data URL of the current frame, or null if there is no frame. */
   capture: () => string | null;
   /** Re-request after a denial the user has since fixed. */
@@ -65,6 +76,7 @@ function boundedSize(
 export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<CameraStatus>('idle');
+  const [actualFacing, setActualFacing] = useState<CameraFacing | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -119,6 +131,15 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
       stream.getTracks().forEach((track) => {
         track.addEventListener('ended', onTrackEnded);
       });
+      // What the device actually handed over. `getSettings().facingMode` is
+      // absent on desktop and on some mobile browsers; absent means "will not
+      // say", which is NOT the same as a mismatch and must not be reported as
+      // one.
+      const settings = stream.getVideoTracks()[0]?.getSettings?.();
+      const served = settings?.facingMode;
+      setActualFacing(
+        served === 'environment' || served === 'user' ? served : null,
+      );
       setStatus('live');
     })();
 
@@ -155,7 +176,7 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
-  return { status, videoRef, capture, retry };
+  return { status, videoRef, actualFacing, capture, retry };
 }
 
 /**
