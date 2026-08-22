@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { useModalDialog } from '@/hooks/useModalDialog';
 import CameraStage from './CameraStage';
 import CaptureModeSheet from './CaptureModeSheet';
 import CaptureReview from './CaptureReview';
@@ -170,14 +171,17 @@ function DualExplainer({
     ['Selfie', 'Front camera, taken right after.'],
     ['You approve both', 'Retake either one, or keep only one.'],
   ] as const;
+  const ref = useModalDialog<HTMLDivElement>(onCancel);
 
   return (
     <div
+      ref={ref}
       role="dialog"
       aria-modal="true"
       aria-label="Front + back"
       data-testid="capture-dual-explainer"
-      className="fixed inset-0 z-[1100] bg-bg flex flex-col px-6 pt-[calc(env(safe-area-inset-top)+16px)]"
+      tabIndex={-1}
+      className="fixed inset-0 z-[1100] bg-bg flex flex-col px-6 pt-[calc(env(safe-area-inset-top)+16px)] outline-none"
     >
       <div className="flex items-start justify-between gap-3">
         <h2 className="font-display text-xl">Front + back</h2>

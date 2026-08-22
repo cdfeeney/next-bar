@@ -110,10 +110,29 @@ function loadFollows(): string[] {
   }
 }
 
+/**
+ * Local-mode instances of this hook, so a write in one reaches the others.
+ *
+ * A page can mount the hook more than once — /u/[handle] already does, and
+ * /friends now does too, because the Stories rail is friends-only and reads
+ * the same circle Groups & people writes. Cross-TAB propagation is the
+ * `storage` event; within one tab there is no event at all, so a follow made
+ * beside the rail left the rail showing the circle from before the tap.
+ */
+const localFollowListeners = new Set<(handles: string[]) => void>();
+
 function writeFollows(handles: string[]): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(KEY, JSON.stringify(handles));
+    // A MICROTASK, never a synchronous call: this runs inside the setState
+    // updater, and notifying from there re-enters React's update phase — the
+    // same failure the synthetic 'storage' event caused below, which dropped
+    // the toggle outright. By the time the microtask runs the updater has
+    // returned and storage is already the truth every listener re-reads.
+    queueMicrotask(() => {
+      for (const listener of localFollowListeners) listener(handles);
+    });
     // NOTE: do NOT dispatch a synthetic 'storage' event here. It was fired from inside the setFollows
     // updater, which synchronously re-entered setFollows during React's update phase and dropped the
     // toggle in the browser (caught by friends-flow e2e). Real cross-tab writes already fire 'storage'
@@ -246,11 +265,23 @@ export function useFollows(): UseFollowsReturn {
     function handleVisible(): void {
       if (document.visibilityState === 'visible') invalidateCircle();
     }
+    // Same-tab propagation between hook instances (see localFollowListeners).
+    function handleLocalWrite(handles: string[]): void {
+      if (modeRef.current === 'server') return;
+      setLocalFollows((prev) =>
+        prev.length === handles.length &&
+        prev.every((handle, index) => handle === handles[index])
+          ? prev
+          : handles,
+      );
+    }
     window.addEventListener('storage', handleStorage);
     document.addEventListener('visibilitychange', handleVisible);
+    localFollowListeners.add(handleLocalWrite);
     return () => {
       window.removeEventListener('storage', handleStorage);
       document.removeEventListener('visibilitychange', handleVisible);
+      localFollowListeners.delete(handleLocalWrite);
     };
   }, []);
 

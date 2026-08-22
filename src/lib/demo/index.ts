@@ -13,6 +13,7 @@ import type { DemoFriend } from './friends';
 
 export { demoFriends, findDemoFriend } from './friends';
 export { demoIntentFor, demoTonightPickFor } from './intents';
+export { demoShareId, demoSharedNight } from './nights';
 export type { DemoFriend } from './friends';
 export {
   computeConsensus,

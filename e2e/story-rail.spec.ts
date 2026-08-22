@@ -18,7 +18,23 @@ import { test, expect, type Page } from '@playwright/test';
 /** Seeded item counts, in rail order — see storyStore.seededGroups. */
 const SASHA_ITEMS = 3;
 
+/**
+ * The circle these tests walk. The rail and Feed are friends-only, so who has
+ * a story is a function of who you FOLLOW — a signed-out device starts on
+ * `DEFAULT_FOLLOWS` (Claire and John) and would show no Dev and no Sasha.
+ * Naming the circle here makes the queue this file steps through explicit
+ * rather than a property of the seed data.
+ */
+const CIRCLE = ['claire', 'dev', 'sasha', 'john'];
+
+async function seedCircle(page: Page, circle: string[]): Promise<void> {
+  await page.addInitScript((handles) => {
+    window.localStorage.setItem('next-bar:follows:v1', JSON.stringify(handles));
+  }, circle);
+}
+
 async function openSocial(page: Page): Promise<void> {
+  await seedCircle(page, CIRCLE);
   await page.goto('/friends');
   await expect(page.getByTestId('social-subtabs')).toBeVisible();
 }
@@ -109,6 +125,31 @@ test.describe('Social sub-tabs and the Stories rail', () => {
     // Signed out there is no shared-presence data, so no pin is drawn — the
     // ring above proves the two signals are not the same flag.
     await expect(page.getByTestId('story-pin-badge')).toHaveCount(0);
+  });
+
+  test('someone you do not follow is on neither the rail nor Feed', async ({
+    page,
+  }) => {
+    // The default circle, not the widened one the rest of the file uses.
+    await seedCircle(page, ['claire']);
+    await page.goto('/friends');
+    await expect(page.getByTestId('stories-rail')).toBeVisible();
+
+    await expect(
+      page.locator('[data-testid="story-rail-item"][data-handle="claire"]'),
+    ).toBeVisible();
+    for (const handle of ['dev', 'sasha', 'john']) {
+      await expect(
+        page.locator(`[data-testid="story-rail-item"][data-handle="${handle}"]`),
+      ).toHaveCount(0);
+    }
+
+    // Feed is friends-only memories by the same rule, not just the rail.
+    await page.getByRole('tab', { name: /Feed/i }).click();
+    const feed = page.getByTestId('friends-feed');
+    await expect(feed.getByTestId('feed-memory')).toHaveCount(1);
+    await expect(feed).toContainText(/Claire R\./);
+    await expect(feed).not.toContainText(/Dev P\./);
   });
 });
 
@@ -276,6 +317,56 @@ test.describe('Story viewer and queue', () => {
     await page.getByTestId('remove-me').click();
     await expect(sheet).toHaveCount(0);
     await expect(page.getByTestId('story-people-chip')).not.toHaveText(/\+1/);
+  });
+
+  test('arrow keys navigate the queue but not while a reply is being typed', async ({
+    page,
+  }) => {
+    await openSocial(page);
+    await openStory(page, 'sasha');
+    const progress = page.getByTestId('story-progress');
+    await pauseViewer(page);
+    await expect(progress).toHaveAttribute('aria-label', 'Item 1 of 3');
+
+    // With the caret in the reply field, arrows are TEXT EDITING. Stepping the
+    // queue underneath a half-typed reply also re-targets what Enter sends.
+    const input = page.getByTestId('story-reply-input');
+    await input.fill('good booth');
+    await input.press('ArrowLeft');
+    await input.press('ArrowRight');
+    await expect(progress).toHaveAttribute('aria-label', 'Item 1 of 3');
+    await expect(input).toHaveValue('good booth');
+
+    // Away from the field they still drive the queue.
+    await input.fill('');
+    await page.getByTestId('story-close').focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(progress).toHaveAttribute('aria-label', 'Item 2 of 3');
+  });
+
+  test('the viewer is a real modal: Tab stays inside it and Escape closes it', async ({
+    page,
+  }) => {
+    await openSocial(page);
+    await openStory(page, 'sasha');
+    const viewer = page.getByTestId('story-viewer');
+    // Park the clock first: an auto-advance mid-loop would move focus for
+    // reasons that have nothing to do with the trap under test.
+    await page.getByTestId('story-reply-input').fill('x');
+    await expect(viewer).toHaveAttribute('data-paused', 'true');
+
+    // aria-modal says the page underneath does not exist; Tab has to agree.
+    for (let i = 0; i < 8; i += 1) {
+      await page.keyboard.press('Tab');
+      await expect(
+        viewer.locator(':focus'),
+        `focus left the dialog after ${i + 1} tabs`,
+      ).toHaveCount(1);
+    }
+
+    await page.keyboard.press('Escape');
+    await expect(viewer).toHaveCount(0);
+    await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
   });
 
   test('Remove me is a consent action, so it survives a reload', async ({ page }) => {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useModalDialog } from '@/hooks/useModalDialog';
 import { keepOnly, pairKind, replaceSide, swapMain, type Pair } from './pairing';
 import { rotateDataUrl } from './useCamera';
 
@@ -30,6 +31,7 @@ export default function CaptureReview({
 }): JSX.Element {
   const [rotating, setRotating] = useState(false);
   const kind = pairKind(pair);
+  const ref = useModalDialog<HTMLDivElement>(onCancel);
 
   const rotate = async (which: 'main' | 'inset'): Promise<void> => {
     const source = which === 'main' ? pair.main : pair.inset;
@@ -44,12 +46,14 @@ export default function CaptureReview({
 
   return (
     <div
+      ref={ref}
       role="dialog"
       aria-modal="true"
       aria-label="Review your capture"
       data-testid="capture-review"
       data-pair-kind={kind}
-      className="fixed inset-0 z-[1100] bg-bg flex flex-col"
+      tabIndex={-1}
+      className="fixed inset-0 z-[1100] bg-bg flex flex-col outline-none"
     >
       <div className="flex items-center gap-2 px-4 pt-[calc(env(safe-area-inset-top)+8px)]">
         <button

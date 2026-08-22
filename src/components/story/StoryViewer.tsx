@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useModalDialog } from '@/hooks/useModalDialog';
 import Avatar from '@/components/Avatar';
 import { lockBodyScroll } from '@/lib/bodyScrollLock';
 import { getBarById } from '@/lib/catalog';
@@ -84,7 +85,14 @@ export default function StoryViewer({
   const [sent, setSent] = useState<string | null>(null);
   const [venueOpen, setVenueOpen] = useState(false);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const replyRef = useRef<HTMLInputElement | null>(null);
+  // Escape and the Tab cycle, off while a sheet or the venue lightbox is open
+  // above this dialog — each installs its own trap, and two armed at once
+  // fight over focus.
+  const dialogRef = useModalDialog<HTMLDivElement>(
+    onClose,
+    !sheetOpen && !venueOpen,
+  );
 
   const group = groups[position.group];
   const item = group?.items[position.item];
@@ -131,17 +139,9 @@ export default function StoryViewer({
     });
   }, [groups]);
 
-  // Scroll lock and focus restore, the same contract every other overlay in
-  // the app carries (BarLightbox).
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    const unlock = lockBodyScroll();
-    dialogRef.current?.focus();
-    return () => {
-      unlock();
-      opener?.focus?.();
-    };
-  }, []);
+  // Scroll lock. Focus entry, the Tab cycle and focus restore are the shared
+  // modal contract and live in useModalDialog above.
+  useEffect(() => lockBodyScroll(), []);
 
   useEffect(() => {
     if (item === undefined) return;
@@ -168,7 +168,11 @@ export default function StoryViewer({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (sheetOpen || venueOpen) return;
-      if (event.key === 'Escape') onClose();
+      // Arrows are QUEUE navigation, so they must not fire while the caret is
+      // in the reply field: ArrowLeft to fix a typo used to step the queue
+      // underneath a half-typed reply, which then submitted against whichever
+      // item had taken the screen.
+      if (event.target === replyRef.current) return;
       if (event.key === 'ArrowRight') {
         if (atEnd) onExhausted();
         else advance();
@@ -177,7 +181,7 @@ export default function StoryViewer({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [sheetOpen, venueOpen, onClose, onExhausted, advance, back, atEnd]);
+  }, [sheetOpen, venueOpen, onExhausted, advance, back, atEnd]);
 
   if (group === undefined || item === undefined) return null;
 
@@ -310,6 +314,7 @@ export default function StoryViewer({
         onBlur={() => setChromeFocused(false)}
       >
         <input
+          ref={replyRef}
           data-testid="story-reply-input"
           value={reply}
           onChange={(event) => setReply(event.target.value)}

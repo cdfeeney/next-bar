@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useModalDialog } from '@/hooks/useModalDialog';
 import CaptureFlow from '@/components/capture/CaptureFlow';
 import type { Pair } from '@/components/capture/pairing';
 import { getBarById } from '@/lib/catalog';
@@ -37,7 +38,8 @@ export default function AddStoryFlow({
   onViewStory,
 }: {
   onCancel: () => void;
-  onPosted: (item: StoryItem) => void;
+  /** False when the store refused it — no receipt is shown in that case. */
+  onPosted: (item: StoryItem) => boolean;
   onUndo: (itemId: string) => void;
   onViewStory: () => void;
 }): JSX.Element {
@@ -46,6 +48,8 @@ export default function AddStoryFlow({
   const [bar, setBar] = useState<Bar | null>(null);
   const [people, setPeople] = useState<TaggedPerson[]>([]);
   const [audience, setAudience] = useState<StoryAudience>('friends');
+  const [audienceHandles, setAudienceHandles] = useState<string[]>([]);
+  const [saveFailed, setSaveFailed] = useState(false);
   const [sheet, setSheet] = useState<'bar' | 'people' | 'audience' | null>(null);
   const [posted, setPosted] = useState<StoryItem | null>(null);
 
@@ -78,9 +82,17 @@ export default function AddStoryFlow({
       tagged: people,
       photo,
       audience,
+      audienceHandles: audience === 'friends' ? [] : audienceHandles,
     };
+    // The receipt is a claim that the story is live for 24 hours, so it is
+    // shown only when the store actually took it. A blocked or full quota used
+    // to reach the same screen, and the post was gone on the next reload.
+    if (!onPosted(item)) {
+      setSaveFailed(true);
+      return;
+    }
+    setSaveFailed(false);
     setPosted(item);
-    onPosted(item);
     setStep('shared');
   };
 
@@ -99,13 +111,7 @@ export default function AddStoryFlow({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Add to your story"
-      data-testid="story-compose"
-      className="fixed inset-0 z-[1100] bg-bg flex flex-col overflow-y-auto px-5 pt-[calc(env(safe-area-inset-top)+16px)]"
-    >
+    <ComposeDialog sheetOpen={sheet !== null} onCancel={onCancel}>
       <div className="flex items-start justify-between gap-3">
         <h2 className="font-display text-2xl">Add to your story.</h2>
         <button
@@ -164,6 +170,16 @@ export default function AddStoryFlow({
         >
           Add to my story
         </button>
+        {saveFailed ? (
+          <p
+            data-testid="story-save-failed"
+            role="alert"
+            className="text-sm leading-relaxed text-center"
+          >
+            This device is out of room for stories. Free some space and try
+            again — nothing was shared.
+          </p>
+        ) : null}
       </div>
 
       {sheet === 'bar' ? (
@@ -191,11 +207,50 @@ export default function AddStoryFlow({
       {sheet === 'audience' ? (
         <AudienceSheet
           value={audience}
+          handles={audienceHandles}
           onChange={setAudience}
+          onToggleHandle={(handle) =>
+            setAudienceHandles((current) =>
+              current.includes(handle)
+                ? current.filter((entry) => entry !== handle)
+                : [...current, handle],
+            )
+          }
           onDone={() => setSheet(null)}
           onClose={() => setSheet(null)}
         />
       ) : null}
+    </ComposeDialog>
+  );
+}
+
+/**
+ * The compose screen's dialog shell. It is its own component so the shared
+ * modal contract mounts WITH compose rather than with the flow — the flow
+ * opens on the capture step, which is a dialog of its own, and two traps armed
+ * over one document fight for focus.
+ */
+function ComposeDialog({
+  sheetOpen,
+  onCancel,
+  children,
+}: {
+  sheetOpen: boolean;
+  onCancel: () => void;
+  children: React.ReactNode;
+}): JSX.Element {
+  const ref = useModalDialog<HTMLDivElement>(onCancel, !sheetOpen);
+  return (
+    <div
+      ref={ref}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add to your story"
+      data-testid="story-compose"
+      tabIndex={-1}
+      className="fixed inset-0 z-[1100] bg-bg flex flex-col overflow-y-auto px-5 pt-[calc(env(safe-area-inset-top)+16px)] outline-none"
+    >
+      {children}
     </div>
   );
 }
@@ -261,13 +316,16 @@ function SharedReceipt({
   onUndo: () => void;
 }): JSX.Element {
   const bar = item.barId !== null ? getBarById(item.barId) : undefined;
+  const ref = useModalDialog<HTMLDivElement>(onClose);
   return (
     <div
+      ref={ref}
       role="dialog"
       aria-modal="true"
       aria-label="Added to your story"
       data-testid="story-shared-receipt"
-      className="fixed inset-0 z-[1100] bg-bg flex flex-col overflow-y-auto px-5 pt-[calc(env(safe-area-inset-top)+16px)]"
+      tabIndex={-1}
+      className="fixed inset-0 z-[1100] bg-bg flex flex-col overflow-y-auto px-5 pt-[calc(env(safe-area-inset-top)+16px)] outline-none"
     >
       <div className="flex justify-end">
         <button

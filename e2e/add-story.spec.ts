@@ -109,6 +109,15 @@ test.describe('Add to Story — the plus-badge entry branch', () => {
     await page
       .locator('[data-testid="story-audience-option"][data-value="groups"]')
       .click();
+    // A narrowed audience is a RECIPIENT SET, not a label: Done stays
+    // unavailable until at least one person is picked, so the stored story
+    // cannot claim an audience with nobody behind it.
+    await expect(page.getByTestId('story-audience-done')).toBeDisabled();
+    await expect(page.getByTestId('story-audience-needs-people')).toBeVisible();
+    await page
+      .locator('[data-testid="story-audience-person"][data-handle="claire"]')
+      .click();
+    await expect(page.getByTestId('story-audience-done')).toBeEnabled();
     await page.getByTestId('story-audience-done').click();
     await expect(page.getByTestId('story-compose-audience')).toContainText(
       'Selected groups',
@@ -126,7 +135,66 @@ test.describe('Add to Story — the plus-badge entry branch', () => {
     // behind viewing.
     await page.getByTestId('story-receipt-close').click();
     await expect(page.getByTestId('story-rail-your-story')).toBeVisible();
-    await expect(page.getByTestId('add-story')).toBeVisible();
+    const plus = page.getByTestId('add-story');
+    await expect(plus).toBeVisible();
+    // With a story on the avatar the plus is a target of its own — measuring
+    // the 56px cell beside it would pass over a 28px control.
+    const plusBox = await plus.boundingBox();
+    expect(plusBox?.width ?? 0).toBeGreaterThanOrEqual(44);
+    expect(plusBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+    // …and it still adds rather than opening the story it sits on.
+    await plus.click();
+    await expect(page.getByTestId('capture-modes')).toBeVisible();
+    await expect(page.getByTestId('story-viewer')).toHaveCount(0);
+  });
+
+  test('a story the device cannot store is never confirmed as shared', async ({
+    page,
+  }) => {
+    // A full or blocked quota, the way the browser reports one. The receipt
+    // claims the story is live for 24 hours, so it must not appear over a
+    // write that did not land.
+    await page.addInitScript(() => {
+      const setItem = window.localStorage.setItem.bind(window.localStorage);
+      window.localStorage.setItem = (key: string, value: string): void => {
+        if (key === 'next-bar:stories:v1') {
+          throw new DOMException('quota', 'QuotaExceededError');
+        }
+        setItem(key, value);
+      };
+    });
+    await openAddStory(page);
+    await page.getByTestId('capture-library-input').setInputFiles({
+      name: 'night.png',
+      mimeType: 'image/png',
+      buffer: PNG_1PX,
+    });
+    await page.getByTestId('capture-approve').click();
+    await page.getByTestId('story-compose-add').click();
+
+    await expect(page.getByTestId('story-shared-receipt')).toHaveCount(0);
+    await expect(page.getByTestId('story-save-failed')).toBeVisible();
+    // Compose is still there with the draft, so nothing was lost either.
+    await expect(page.getByTestId('story-compose')).toBeVisible();
+  });
+
+  test('the capture chooser is a real modal: Tab stays inside, Escape exits', async ({
+    page,
+  }) => {
+    await openAddStory(page);
+    const sheet = page.getByTestId('capture-modes');
+
+    for (let i = 0; i < 6; i += 1) {
+      await page.keyboard.press('Tab');
+      await expect(
+        sheet.locator(':focus'),
+        `focus left the dialog after ${i + 1} tabs`,
+      ).toHaveCount(1);
+    }
+
+    await page.keyboard.press('Escape');
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByTestId('stories-rail')).toBeVisible();
   });
 
   test('Undo takes the moment back off your story', async ({ page }) => {

@@ -74,6 +74,9 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
     }
     let cancelled = false;
     let stream: MediaStream | null = null;
+    const onTrackEnded = (): void => {
+      if (!cancelled) setStatus('unavailable');
+    };
     setStatus('starting');
 
     void (async () => {
@@ -108,12 +111,23 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
         // first user gesture and the preview catches up on its own.
         void video.play().catch(() => undefined);
       }
+      // A stream can DIE while it is live — the permission is revoked in
+      // browser settings, or another app claims the device. Without this the
+      // status stays 'live' over a frozen last frame with the shutter armed,
+      // which is the app lying about the camera; the track's own 'ended' event
+      // is the only signal, and it fires once per track.
+      stream.getTracks().forEach((track) => {
+        track.addEventListener('ended', onTrackEnded);
+      });
       setStatus('live');
     })();
 
     return () => {
       cancelled = true;
-      stream?.getTracks().forEach((track) => track.stop());
+      stream?.getTracks().forEach((track) => {
+        track.removeEventListener('ended', onTrackEnded);
+        track.stop();
+      });
       const video = videoRef.current;
       if (video !== null) video.srcObject = null;
     };

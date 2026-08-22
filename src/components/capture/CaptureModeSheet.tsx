@@ -1,5 +1,7 @@
 'use client';
 
+import { useModalDialog } from '@/hooks/useModalDialog';
+
 /**
  * The capture mode chooser — `next-bar-camera-modes.png`, "two camera modes,
  * library as the quieter third row". Add to Story reuses it unchanged and
@@ -24,13 +26,16 @@ export default function CaptureModeSheet({
   onLibrary: () => void;
   onCancel: () => void;
 }): JSX.Element {
+  const ref = useModalDialog<HTMLDivElement>(onCancel);
   return (
     <div
+      ref={ref}
       role="dialog"
       aria-modal="true"
       aria-label={title}
       data-testid="capture-modes"
-      className="fixed inset-0 z-[1100] bg-bg flex flex-col justify-end"
+      tabIndex={-1}
+      className="fixed inset-0 z-[1100] bg-bg flex flex-col justify-end outline-none"
     >
       <div className="rounded-t-3xl border-t border-border bg-surface px-5 pt-5 pb-8">
         <div className="flex items-start justify-between gap-3">

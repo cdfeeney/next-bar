@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { cycleFocusWithin } from '@/lib/focusTrap';
+import { useModalDialog } from '@/hooks/useModalDialog';
 
 /**
  * The bottom-sheet shell every story sheet shares — tagged people, Where was
@@ -30,28 +29,7 @@ export default function Sheet({
   onClose: () => void;
   children: React.ReactNode;
 }): JSX.Element {
-  const panelRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
-    return () => opener?.focus?.({ preventScroll: true });
-  }, []);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key === 'Tab' && cycleFocusWithin(panelRef.current, event)) {
-        event.preventDefault();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+  const panelRef = useModalDialog<HTMLDivElement>(onClose);
 
   return (
     <div

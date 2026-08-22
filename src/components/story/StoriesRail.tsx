@@ -15,9 +15,10 @@ import type { StoryGroup } from './storyStore';
  * They differ in shape as well as colour, and each carries its own screen-
  * reader text, so neither is conveyed by colour alone.
  *
- * Target size: the visible plus badge is 18px, but the own-avatar cell and
- * its overhanging badge resolve as one target well past 44x44 — the cell is
- * 56px and the badge hangs off its lower-right corner.
+ * Target size: the visible plus badge is 18px. With no live story the whole
+ * 56px cell IS the add target and the badge is only a mark on it; once you
+ * have a story the plus becomes its own control, and then it carries its own
+ * 44x44 hit area rather than borrowing the avatar's.
  */
 
 export const RAIL_ADD_LABEL = 'Add to your story';
@@ -125,12 +126,19 @@ function YourCell({
           </Ring>
         </button>
         {hasStory ? (
+          // 44x44 with the mark in its corner: the box lands exactly inside
+          // the 56px cell (12 + 44), so the target is never clipped by the
+          // rail's own horizontal scroller, and the badge stays where the
+          // no-story cell draws it. Once your story exists this is a target in
+          // its own right rather than part of the avatar's, so the 28px box it
+          // used to have WAS the whole affordance and missed the bar — the
+          // cell measurement that passed was measuring the avatar beside it.
           <button
             type="button"
             data-testid="add-story"
             onClick={onAddStory}
             aria-label={RAIL_ADD_LABEL}
-            className="absolute -bottom-1 -right-1 w-7 h-7 flex items-center justify-center rounded-full touch-manipulation"
+            className="absolute left-3 top-3 w-11 h-11 flex items-end justify-end rounded-full touch-manipulation"
           >
             <PlusBadge />
           </button>
@@ -202,7 +210,7 @@ function Ring({
   );
 }
 
-/** 18px visible badge; its target is the 28px button that wraps it. */
+/** The 18px visible mark. Its TARGET is the 44x44 button that wraps it. */
 function PlusBadge(): JSX.Element {
   return (
     <span

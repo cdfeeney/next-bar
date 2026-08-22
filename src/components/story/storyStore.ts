@@ -21,7 +21,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getBarById } from '@/lib/catalog';
-import { demoFriends } from '@/lib/demo';
+import { demoFriends, demoShareId } from '@/lib/demo';
+import { useFollows } from '@/hooks/useFollows';
 
 export const STORIES_STORAGE_KEY = 'next-bar:stories:v1';
 export const STORIES_SEEN_STORAGE_KEY = 'next-bar:stories-seen:v1';
@@ -76,6 +77,13 @@ export type StoryItem = {
   tagged: TaggedPerson[];
   photo: StoryPhoto;
   audience: StoryAudience;
+  /**
+   * Who the non-default audiences actually resolve to. Empty for `friends`,
+   * which needs no list; REQUIRED to be non-empty for `groups` and `custom`,
+   * so those two are a stored recipient set rather than a label with nothing
+   * behind it.
+   */
+  audienceHandles: string[];
 };
 
 export type StoryGroup = {
@@ -97,7 +105,11 @@ export type FeedMemory = {
   postedAt: string;
   caption: string;
   tagged: TaggedPerson[];
-  /** Bearer id for /u/[handle]/night/[shareId] — the existing night surface. */
+  /**
+   * Id for /u/[handle]/night/[shareId] — the existing night surface. Seeded
+   * memories carry the demo id that surface resolves from the demo catalogue;
+   * a real memory would carry the bearer token.
+   */
   shareId: string;
 };
 
@@ -144,12 +156,16 @@ function readJson<T>(key: string, guard: (value: unknown) => value is T): T | nu
   }
 }
 
-function writeJson(key: string, value: unknown): void {
-  if (typeof window === 'undefined') return;
+/** False when the value did not land: a full quota, or a blocked store. */
+function writeJson(key: string, value: unknown): boolean {
+  if (typeof window === 'undefined') return false;
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch {
-    // A full or blocked quota must not take the surface down with it.
+    // A full or blocked quota must not take the surface down with it — but it
+    // must not be reported as a successful save either.
+    return false;
   }
 }
 
@@ -172,8 +188,23 @@ export function loadOwnItems(now = Date.now()): StoryItem[] {
     .slice(-MAX_OWN_ITEMS);
 }
 
-export function saveOwnItems(items: readonly StoryItem[]): void {
-  writeJson(STORIES_STORAGE_KEY, items.slice(-MAX_OWN_ITEMS));
+/**
+ * Persist your items, newest-wins. Returns false only when the NEWEST item
+ * could not be stored — that is the case the caller must not confirm.
+ *
+ * `MAX_OWN_ITEMS` bounds the COUNT, and a count bound is not a byte bound:
+ * dual-shot frames are 1440px JPEG data URLs, so a night's worth can pass the
+ * ~5MB quota well before thirty items. On a quota failure the oldest item is
+ * dropped and the write retried, which is the same ring rule the count bound
+ * already states, applied to the dimension that actually overflowed.
+ */
+export function saveOwnItems(items: readonly StoryItem[]): boolean {
+  let candidate = items.slice(-MAX_OWN_ITEMS);
+  while (candidate.length > 1) {
+    if (writeJson(STORIES_STORAGE_KEY, candidate)) return true;
+    candidate = candidate.slice(1);
+  }
+  return writeJson(STORIES_STORAGE_KEY, candidate);
 }
 
 export function loadSeenIds(): string[] {
@@ -233,6 +264,11 @@ const SEED_CAPTIONS = [
   'Walked past it twice before we found the door.',
 ] as const;
 
+/** The demo profiles you actually follow, in the catalogue's stable order. */
+function followed(circle: readonly string[]): typeof demoFriends {
+  return demoFriends.filter((friend) => circle.includes(friend.handle));
+}
+
 function seedPeople(): TaggedPerson[] {
   return demoFriends.map((friend) => ({
     handle: friend.handle,
@@ -265,10 +301,20 @@ function knownBarId(barId: string | undefined): string | null {
   return getBarById(barId) ? barId : null;
 }
 
-/** Friend story groups, one to three items each, in a stable rail order. */
-export function seededGroups(now: number): Array<Omit<StoryGroup, 'hasUnseen'>> {
+/**
+ * Friend story groups, one to three items each, in a stable rail order.
+ *
+ * `circle` is the follow graph, and it is a filter, not a decoration: a story
+ * is posted to Friends, so someone you do not follow has no business on your
+ * rail. Seeding every demo profile regardless was the same "friends-only
+ * surface that is not friends-only" the Feed carried.
+ */
+export function seededGroups(
+  now: number,
+  circle: readonly string[],
+): Array<Omit<StoryGroup, 'hasUnseen'>> {
   const people = seedPeople();
-  return demoFriends.map((friend, index) => {
+  return followed(circle).map((friend, index) => {
     const bars = friend.ratings.slice(0, 3).map((rating) => rating.barId);
     // The varying count is the point of criterion 5: the progress strip has to
     // be drawn from the data, so a fixed 4- or 5-segment chrome cannot pass.
@@ -286,6 +332,7 @@ export function seededGroups(now: number): Array<Omit<StoryGroup, 'hasUnseen'>> 
         inset: null,
       },
       audience: 'friends' as const,
+      audienceHandles: [],
     }));
     return {
       handle: friend.handle,
@@ -297,11 +344,11 @@ export function seededGroups(now: number): Array<Omit<StoryGroup, 'hasUnseen'>> 
   });
 }
 
-/** Feed = photo memories, newest first, with ranking events interleaved. */
-export function seededFeed(now: number): FeedEntry[] {
+/** Feed = photo memories from your circle only, with ranking events between. */
+export function seededFeed(now: number, circle: readonly string[]): FeedEntry[] {
   const people = seedPeople();
   const entries: FeedEntry[] = [];
-  demoFriends.forEach((friend, index) => {
+  followed(circle).forEach((friend, index) => {
     entries.push({
       kind: 'memory',
       memory: {
@@ -315,7 +362,7 @@ export function seededFeed(now: number): FeedEntry[] {
         tagged: people
           .filter((person) => person.handle !== friend.handle)
           .slice(0, 2),
-        shareId: `demo-${friend.handle}`,
+        shareId: demoShareId(friend.handle),
       },
     });
     const ranked = friend.ratings[1];
@@ -347,7 +394,8 @@ export type UseStories = {
   /** Rail order: you first, then friends. This is also the QUEUE order. */
   groups: StoryGroup[];
   feed: FeedEntry[];
-  addItem: (item: StoryItem) => void;
+  /** False when the store refused it — the caller must NOT confirm the share. */
+  addItem: (item: StoryItem) => boolean;
   removeItem: (id: string) => void;
   markSeen: (id: string) => void;
   /** Drops you from a story's tag list — the sheet's "Remove me". */
@@ -359,6 +407,12 @@ export function useStories(you: {
   name: string;
   initials: string;
 }): UseStories {
+  const { follows } = useFollows();
+  // A joined key, not the array: `follows` is rebuilt on every render in
+  // server mode (`circle.map(...)`), so memoising on its identity would
+  // rebuild the whole seed — and re-order the rail under an open viewer —
+  // on renders where the circle did not change at all.
+  const followKey = follows.join('|');
   const [ownItems, setOwnItems] = useState<StoryItem[]>([]);
   const [seen, setSeen] = useState<string[]>([]);
   const [untagged, setUntagged] = useState<string[]>([]);
@@ -375,13 +429,18 @@ export function useStories(you: {
     setUntagged(loadUntaggedIds());
   }, []);
 
-  const addItem = useCallback((item: StoryItem) => {
-    setOwnItems((current) => {
-      const next = [...current, item].slice(-MAX_OWN_ITEMS);
-      saveOwnItems(next);
-      return next;
-    });
-  }, []);
+  // Not a state updater: the write can FAIL, and the caller has to learn that
+  // before it tells the user the story is live. Re-reading after a successful
+  // write is what keeps state equal to what actually persisted, including any
+  // older item the quota retry had to drop.
+  const addItem = useCallback(
+    (item: StoryItem): boolean => {
+      const stored = saveOwnItems([...ownItems, item].slice(-MAX_OWN_ITEMS));
+      if (stored) setOwnItems(loadOwnItems());
+      return stored;
+    },
+    [ownItems],
+  );
 
   const removeItem = useCallback((id: string) => {
     setOwnItems((current) => {
@@ -411,8 +470,12 @@ export function useStories(you: {
 
   // Memoised so the identities the viewer keys its effects on only change
   // when the data does — the seed is otherwise rebuilt on every parent render.
-  const seeded = useMemo(() => seededGroups(now), [now]);
-  const feed = useMemo(() => seededFeed(now), [now]);
+  const circle = useMemo(
+    () => (followKey === '' ? [] : followKey.split('|')),
+    [followKey],
+  );
+  const seeded = useMemo(() => seededGroups(now, circle), [now, circle]);
+  const feed = useMemo(() => seededFeed(now, circle), [now, circle]);
 
   const groups = useMemo<StoryGroup[]>(() => {
     const yourGroup: StoryGroup = {

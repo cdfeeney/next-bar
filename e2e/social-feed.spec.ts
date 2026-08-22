@@ -45,6 +45,18 @@ test.describe('Social — Feed', () => {
     );
   });
 
+  test('View night reaches the night, not a dead link', async ({ page }) => {
+    await openFeed(page);
+    // Seeded memories belong to seeded curators, who have no server row by
+    // construction — the same reason /u/[handle] falls back to the demo
+    // catalogue. Every one of these used to land on "This night isn't here."
+    await page.getByTestId('feed-memory').first().getByTestId('feed-view-night').click();
+
+    await expect(page).toHaveURL(/\/u\/[^/]+\/night\/[^/]+$/);
+    await expect(page.getByText(/This night isn't here/i)).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  });
+
   test('no public like counts and no follower metrics anywhere on Feed', async ({
     page,
   }) => {

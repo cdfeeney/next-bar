@@ -487,6 +487,15 @@ const FOREIGN_ONLY_KEYS = [
   'next-bar:night-vibe:v1',
   'next-bar:intent:v1',
   'next-bar:saved:v1',
+  // V8-1f stories. Local-only and never synced, which is exactly why they
+  // belong here rather than in ALL_KEYS: the device owner's own story must
+  // survive an ordinary sign-out, but a story is CAPTURED PHOTO plus a tag
+  // list plus typed replies, so leaving it for the next account is the
+  // strongest version of the leak this function exists to stop.
+  'next-bar:stories:v1',
+  'next-bar:stories-seen:v1',
+  'next-bar:story-replies:v1',
+  'next-bar:stories-untagged:v1',
 ] as const;
 
 /**

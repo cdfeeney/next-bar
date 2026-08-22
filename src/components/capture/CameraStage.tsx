@@ -1,5 +1,6 @@
 'use client';
 
+import { useModalDialog } from '@/hooks/useModalDialog';
 import { useCamera, type CameraFacing } from './useCamera';
 
 /**
@@ -27,15 +28,18 @@ export default function CameraStage({
 }): JSX.Element {
   const camera = useCamera(facing, true);
   const live = camera.status === 'live';
+  const ref = useModalDialog<HTMLDivElement>(onCancel);
 
   return (
     <div
+      ref={ref}
       role="dialog"
       aria-modal="true"
       aria-label="Camera"
       data-testid="camera-stage"
       data-camera-status={camera.status}
-      className="fixed inset-0 z-[1100] bg-bg flex flex-col"
+      tabIndex={-1}
+      className="fixed inset-0 z-[1100] bg-bg flex flex-col outline-none"
     >
       <div className="flex items-center gap-3 px-4 pt-[calc(env(safe-area-inset-top)+8px)]">
         <button
