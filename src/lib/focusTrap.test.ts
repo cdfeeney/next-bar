@@ -53,6 +53,30 @@ describe('cycleFocusWithin', () => {
     expect(document.activeElement).toBe(first);
   });
 
+  // The regression this pair guards: a dialog opened by focusing its own
+  // tabIndex={-1} panel. `contains()` says the panel is inside, but it holds no
+  // position in the ring, so an unconsumed Shift+Tab used to leave the dialog.
+  it('sends a Shift+Tab from the container itself to the last focusable', () => {
+    const { dialog, last } = buildDialog();
+    dialog.setAttribute('tabindex', '-1');
+    dialog.focus();
+
+    const event = tab(true);
+    expect(cycleFocusWithin(dialog, event)).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(last);
+  });
+
+  it('sends a forward Tab from the container itself to the first focusable', () => {
+    const { dialog, first } = buildDialog();
+    dialog.setAttribute('tabindex', '-1');
+    dialog.focus();
+
+    const event = tab();
+    expect(cycleFocusWithin(dialog, event)).toBe(true);
+    expect(document.activeElement).toBe(first);
+  });
+
   it('leaves interior Tab moves to the browser', () => {
     const { dialog, first } = buildDialog();
     first.focus();

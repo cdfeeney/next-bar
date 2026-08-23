@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import type { Bar } from '@/types';
 import { barVisual } from '@/lib/barVisual';
 import { fetchBarDetails, type BarDetails } from '@/lib/barReviews';
@@ -10,16 +9,62 @@ import { weekHoursRows } from '@/lib/openNow';
 import { displayHood } from '@/lib/hoodDisplay';
 import { displayTag, topVenueTags } from '@/lib/tagDisplay';
 import { lockBodyScroll } from '@/lib/bodyScrollLock';
+import { useWantToGo } from '@/hooks/useWantToGo';
 import { cycleFocusWithin } from '@/lib/focusTrap';
 import OpenNowBadge from '@/components/OpenNowBadge';
 import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 
 /**
+ * The complete public contract — deliberately two props.
+ *
+ * Everything the panel renders comes from `bar` or is fetched from `bar.id`,
+ * so no caller passes surface-specific configuration and the component
+ * imports nothing from a map, rankings or search module. A new caller needs
+ * only a `Bar` and somewhere to put the open/closed flag.
+ */
+export type BarLightboxProps = {
+  /**
+   * The bar to show.
+   *
+   * A lean catalog `Bar` is enough for identity, tags and the action pair: the
+   * detail fields `BarDetails` carries (address, blurb, reviews, photo
+   * attributions, place id) are absent from the catalog payload and are
+   * fetched per-id on mount, so a map marker, a ranking row and a search
+   * result can each pass the object they already hold with no pre-fetching.
+   *
+   * TWO fields the fetch cannot supply, so they must ride the passed bar:
+   * `bar.hours` and `bar.tags`. `BarDetails` has no member for either, and the
+   * panel reads both straight off `bar` — pass a bar without `hours` and the
+   * Hours card and its open-now state simply never appear, with no request
+   * that recovers them.
+   *
+   * Safe to swap while mounted: every piece of state filled in by an effect —
+   * the fetched details, the client-only weekly hours, and the carousel photo
+   * index — is keyed by the bar it was computed for and ignored the moment
+   * `bar.id` changes, so no render can attribute one bar's details, schedule or
+   * photo credit to another. The photo subtree and the open-now badge carry
+   * `key={bar.id}` for the part no state keying reaches: imperatively mounted
+   * children and the track's own scroll position.
+   */
+  bar: Bar;
+  /**
+   * Called on ✕, Escape and a backdrop tap. The caller owns the open/closed
+   * state — the lightbox never unmounts itself. Focus returns to whatever was
+   * focused when it opened, so the caller does not restore it.
+   */
+  onClose: () => void;
+};
+
+/**
  * U2-2: photo headliner. Tapping a card's photo opens this full-screen
  * overlay — big image, the bar's identity, FULL weekly hours (U2-1), the
- * review quote, and the two actions (Maps, Rank it). Single cached photo
+ * review quote, and the two actions (Maps, and saving to Want to go). Single cached
  * today; when the ingest starts storing multiple photoRefs this becomes a
  * swipeable carousel without changing the entry point.
+ *
+ * V8-1a: this is the ONE shared bar-detail surface. Map markers, ranking rows
+ * and search results all mount this component rather than growing their own
+ * detail panel — see BarLightboxProps for the whole contract.
  *
  * Scroll lock is shared with the other overlays and restores both body
  * styles and the page position when the dialog closes.
@@ -33,39 +78,48 @@ import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 export default function BarLightbox({
   bar,
   onClose,
-}: {
-  bar: Bar;
-  onClose: () => void;
-}): JSX.Element {
-  const [details, setDetails] = useState<BarDetails | undefined>(undefined);
-  const [detailStatus, setDetailStatus] = useState<
-    'loading' | 'ready' | 'unavailable'
-  >('loading');
-  const displayBar = details ? { ...bar, ...details } : bar;
+}: BarLightboxProps): JSX.Element {
+  // Keyed by the bar the fetch was for. `bar` can change between renders, and
+  // clearing this in the effect below would clear it one render too LATE: the
+  // effect is passive, so the first render after a swap had already merged the
+  // previous bar's details under the new bar's name.
+  const [fetched, setFetched] = useState<
+    { barId: string; details?: BarDetails; status: 'ready' | 'unavailable' }
+    | undefined
+  >(undefined);
+  const current = fetched?.barId === bar.id ? fetched : undefined;
+  const detailStatus = current?.status ?? 'loading';
+  const displayBar = current?.details ? { ...bar, ...current.details } : bar;
   const media = resolveMedia(displayBar);
   const photoUrls =
     media.source === 'glyph' || media.source === 'google-live' ? [] : media.urls;
   const fallbackVisual = barVisual(displayBar);
-  const [activePhoto, setActivePhoto] = useState(0);
+  // Third instance of the swap-safety rule (round-1 panel): the carousel index
+  // is state that outlives a `bar` swap, and the figcaption credits
+  // photoAttributions[activePhoto]. Left unkeyed it credits the previous bar's
+  // photographer for the photo now on screen. Keyed and resolved at RENDER for
+  // the same reason `fetched` and `hoursFor` are — a passive reset lands one
+  // render late, which is exactly the window the attribution is wrong in.
+  const [photoFor, setPhotoFor] = useState<{ barId: string; index: number }>(
+    { barId: bar.id, index: 0 },
+  );
+  const activePhoto = photoFor.barId === bar.id ? photoFor.index : 0;
   // Heavy detail fields are absent from the initial catalog payload and
   // load only for the bar the user opens.
   useEffect(() => {
-    // Drop the previous bar's fetched details FIRST. Today ResultCard
-    // unmounts the lightbox on close so this can't bite, but any future
-    // caller that keeps it mounted and swaps `bar` would otherwise
-    // attribute one bar's details to a different bar.
-    setDetails(undefined);
-    setDetailStatus('loading');
+    // No clearing step here: `current` above already ignores a result whose
+    // barId is not the bar being rendered, so the stale details are gone from
+    // the very first render of the new bar rather than from the next one.
     let cancelled = false;
+    const barId = bar.id;
     void (async () => {
-      const fetched = await fetchBarDetails(bar.id);
+      const result = await fetchBarDetails(barId);
       if (cancelled) return;
-      if (fetched) {
-        setDetails(fetched);
-        setDetailStatus('ready');
-      } else {
-        setDetailStatus('unavailable');
-      }
+      setFetched({
+        barId,
+        details: result ?? undefined,
+        status: result ? 'ready' : 'unavailable',
+      });
     })();
     return () => {
       cancelled = true;
@@ -78,13 +132,16 @@ export default function BarLightbox({
   useEffect(() => {
     const track = trackRef.current;
     if (!track) return;
+    const barId = bar.id;
     const onScroll = (): void => {
       const idx = Math.round(track.scrollLeft / track.clientWidth);
-      setActivePhoto((prev) => (prev === idx ? prev : idx));
+      setPhotoFor((prev) =>
+        prev.barId === barId && prev.index === idx ? prev : { barId, index: idx },
+      );
     };
     track.addEventListener('scroll', onScroll, { passive: true });
     return () => track.removeEventListener('scroll', onScroll);
-  }, [photoUrls.length]);
+  }, [photoUrls.length, bar.id]);
   // The non-swipe path: drive the same scroll-snap track the swipe uses, so
   // there is one source of truth for which photo is showing.
   const scrollToPhoto = (index: number): void => {
@@ -112,16 +169,30 @@ export default function BarLightbox({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   // Hours are time-dependent → client-only state, set after mount (same
-  // hydration rule as OpenNowBadge).
-  const [rows, setRows] = useState<ReturnType<typeof weekHoursRows>>(null);
+  // hydration rule as OpenNowBadge). Keyed by bar for the same reason `fetched`
+  // is: the effect that fills it is passive, so on a `bar` swap the first
+  // committed render would otherwise show the PREVIOUS bar's weekly schedule
+  // under the new bar's name.
+  const [hoursFor, setHoursFor] = useState<
+    { barId: string; rows: ReturnType<typeof weekHoursRows> } | undefined
+  >(undefined);
+  const rows = hoursFor?.barId === bar.id ? hoursFor.rows : null;
 
+  useEffect(() => {
+    setHoursFor({ barId: bar.id, rows: weekHoursRows(bar.hours, new Date()) });
+  }, [bar.id, bar.hours]);
+
+  // Mount-only. This used to depend on the whole `bar` object, so a parent
+  // deriving its bar inline re-ran focus-steal to the close button and the
+  // scroll unlock/relock cycle on every one of its renders — the same
+  // unstable-prop hazard `onCloseRef` above exists to fix, left half-fixed
+  // for `bar`.
   useEffect(() => {
     const opener =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
     closeRef.current?.focus();
-    setRows(weekHoursRows(bar.hours, new Date()));
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         onCloseRef.current();
@@ -142,11 +213,14 @@ export default function BarLightbox({
       // ~43px short in native-shell-contract.spec.ts).
       opener?.focus({ preventScroll: true });
     };
-  }, [bar]);
+  }, []);
 
   // V8-5: at most five tags, chosen by the one priority rule in tagDisplay.
   // BarDetails cannot carry tags, so `bar` is the whole truth here.
   const venueTags = topVenueTags(bar.tags);
+
+  const { entries: wantToGoEntries, add: addWantToGo } = useWantToGo();
+  const wantsToGo = wantToGoEntries.some((e) => e.barId === bar.id);
 
   const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
     displayBar.address
@@ -182,7 +256,11 @@ export default function BarLightbox({
         </div>
 
         {media.source === 'google-live' ? (
-          <figure className="rounded-3xl border border-border">
+          // key: GooglePlacePhoto mounts its <gmp-place-details-compact>
+          // imperatively and only tears the old one down in a passive effect,
+          // so without this the previous bar photo and its attribution survive
+          // into committed renders of the new bar.
+          <figure key={bar.id} className="rounded-3xl border border-border">
             <GooglePlacePhotoLazy
               placeId={media.placeId}
               surface="bar-lightbox"
@@ -202,7 +280,9 @@ export default function BarLightbox({
             />
           </figure>
         ) : photoUrls.length > 0 ? (
-          <figure className="rounded-3xl overflow-hidden border border-border">
+          // key: also resets the track DOM scrollLeft, which no amount of
+          // state keying reaches.
+          <figure key={bar.id} className="rounded-3xl overflow-hidden border border-border">
             {/* U2-2 carousel (photos-multi ingest): CSS scroll-snap — swipe
                 on touch, scroll on desktop, no library. */}
             <div
@@ -283,7 +363,7 @@ export default function BarLightbox({
           </h2>
           <div className="flex items-center gap-3">
             <p className="text-muted text-xs">{displayBar.address}</p>
-            <OpenNowBadge bar={bar} />
+            <OpenNowBadge key={bar.id} bar={bar} />
           </div>
         </div>
 
@@ -383,12 +463,26 @@ export default function BarLightbox({
           >
             View on Maps
           </a>
-          <Link
-            href={`/rankings?add=${bar.id}`}
-            className="flex-1 text-center border border-border text-text font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation hover:border-accent transition-colors"
+          {/* Round-1 panel, both families: this linked to /rankings?add=, which
+              opens QuickAddBar straight in its pick-score stage. That is RATING,
+              and rank-vs-rate is a pinned product boundary — a control labelled
+              "Want to go" that demands a score for a bar you have not been to is
+              a mislabel, not a shortcut. The product already has the real list
+              (src/lib/wantToGo.ts); this writes to it. */}
+          {/* aria-disabled, not disabled — the same rule the carousel controls
+              above follow: this button is FOCUSED at the moment it flips to
+              saved, and `disabled` would drop that focus to <body> and pull it
+              out of the dialog's tab cycle. addWantToGo is idempotent, so a
+              repeat activation is a harmless no-op. */}
+          <button
+            type="button"
+            aria-pressed={wantsToGo}
+            onClick={() => addWantToGo(bar.id)}
+            aria-disabled={wantsToGo}
+            className="flex-1 text-center border border-border text-text font-display text-sm py-3 rounded-full min-h-[44px] touch-manipulation hover:border-accent transition-colors aria-disabled:opacity-40"
           >
-            Rank it
-          </Link>
+            {wantsToGo ? 'On your list' : 'Want to go'}
+          </button>
         </div>
       </div>
     </div>

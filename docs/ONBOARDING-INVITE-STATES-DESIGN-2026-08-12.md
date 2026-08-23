@@ -8,11 +8,22 @@ Three new Claude Design canvases were created and rendered without changing any 
 2. [Night Out invite recipient V1](https://claude.ai/design/p/e0e31f0b-bdc1-4029-9e4c-666be9ea95cc?file=next-bar-night-out-invite-recipient-v1.dc.html)
 3. [Operational states V1](https://claude.ai/design/p/e0e31f0b-bdc1-4029-9e4c-666be9ea95cc?file=next-bar-operational-states-v1.dc.html)
 
-All three are marked `EXPLORATORY — REVIEW NEEDED`. Local screenshots are indexed in `docs/design-reference/README.md`.
+**APPROVED 2026-08-21 by the founder.** All three were previously marked
+`EXPLORATORY — REVIEW NEEDED`; that status is superseded. Their captures now live
+in `docs/design-reference/approved/` and are canonical implementation input,
+indexed in `docs/design-reference/README.md`.
+
+The approval covers the **visuals only**. It did not authorize a capability:
+Apple, Google and phone authentication remain out of scope for V8, and the
+approved onboarding visuals are built against the existing email/password path.
+The canvas's omission of mandatory gender is approved as drawn.
 
 ## Proposed onboarding
 
-1. Authenticate: Apple, Google, or phone; email/password remains the quiet implemented fallback.
+1. Authenticate. **As proposed** this step showed Apple, Google, or phone with
+   email/password as the quiet fallback. The 2026-08-21 approval did NOT
+   authorize third-party providers: for V8, build this step against
+   email/password only.
 2. Confirm 21+ with one tap. Do not collect an exact birthdate unless a later legal/compliance review requires it.
 3. Explain location value, then ask permission. Offer neighborhood selection and Anywhere as honest fallbacks.
 4. Offer a roughly 30-second taste quiz or `Skip — show me bars`.

@@ -46,6 +46,9 @@ const INVENTORY_DOC = path.join(
 const BROADCAST_EVENTS = [
   'next-bar:ratings:server-update',
   'next-bar:pairwise:local-update',
+  // A confirmed pin/unpin. Presence lives on the server; this only tells the
+  // page's other reader of those rows to re-fetch.
+  'next-bar:presence-changed',
 ] as const;
 
 /**
