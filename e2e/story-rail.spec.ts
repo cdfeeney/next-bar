@@ -25,6 +25,15 @@
  *     the rail's own geometry are all in that second category, and every one of
  *     them regressed invisibly while this file asserted only signed-out states.
  *
+ * PAUSE COVERAGE, STATED HONESTLY. A reviewer caught this block claiming
+ * "automatic-progression and pause coverage" it did not have. What is actually
+ * driven below: keyboard focus on the chrome pauses, a pointer tap does not,
+ * and an OPEN SHEET pauses. What is NOT driven: the auto-advance TIMER itself
+ * and a long-press hold — both need clock control this suite does not take, and
+ * faking a timer through the production UI would assert the fake. The
+ * progression state machine is unit-covered; this file covers what the browser
+ * does with it. Recorded as a gap rather than implied away.
+ *
  * So the second describe block below drives the real thing signed in, against a
  * stubbed Supabase (`e2e/helpers/stories.ts`, the same cookie + route-stub
  * pattern `friends-real.spec.ts` uses — no real accounts, no database rows).
@@ -299,6 +308,12 @@ test.describe('Stories — signed in', () => {
     const sheet = page.getByTestId('tagged-people-sheet');
     await expect(sheet).toBeVisible();
     await expect(page.getByTestId('tagged-person-row')).toHaveCount(1);
+
+    // An OPEN SHEET PAUSES THE QUEUE. Reading who is tagged, and deciding
+    // whether to withdraw, is not something the viewer should have to do
+    // against a running timer — the story advancing out from under this sheet
+    // would take the consent control with it.
+    await expect(page.getByTestId('story-viewer')).toHaveAttribute('data-paused', 'true');
 
     const removeMe = page.getByTestId('remove-me');
     await expect(removeMe).toBeVisible();

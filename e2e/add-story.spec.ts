@@ -22,10 +22,25 @@
  *   - upload-then-publish ordering, cleanup of a partial upload, "Shared" only
  *     after BOTH succeed, honest failure text, signed-URL lifetime →
  *     `src/lib/stories.server.test.ts` (runs in this gate).
- *   - the five screens themselves, the capture modes, the review gate, the
- *     compose dock, the audience sheet, the receipt, Undo and its failure →
- *     the signed-in block at the bottom of this file, driven through the
- *     production UI against a stubbed Supabase (`e2e/helpers/stories.ts`).
+ *   - the five screens themselves, the review gate, the compose dock, the
+ *     audience sheet, the receipt, Undo and its failure → the signed-in block
+ *     at the bottom of this file, driven through the production UI against a
+ *     stubbed Supabase (`e2e/helpers/stories.ts`).
+ *
+ * CAPTURE-MODE COVERAGE, STATED HONESTLY. This header used to claim the
+ * signed-in block covered "the capture modes". It did not, and both reviewer
+ * lanes caught the claim: every signed-in test drives the LIBRARY path only.
+ * What is actually covered end-to-end:
+ *
+ *   - library pick → review → compose → publish: yes, below.
+ *   - permission DENIED on a live capture mode: yes, below — `getUserMedia` is
+ *     stubbed to reject with NotAllowedError, which is the one camera outcome
+ *     reachable without a real device.
+ *   - live single-camera capture and front+back composition: NOT covered here.
+ *     Both need a fake media stream (`--use-fake-device-for-media-stream`) and
+ *     a Chromium-only launch flag; the pairing and one-camera state machines
+ *     are unit-covered in `src/components/capture/pairing.test.ts` and
+ *     `oneCameraSystem.test.ts`. Recorded as a gap rather than implied away.
  *
  * The signed-out assertions stay: the entry point is absent without a session,
  * and the audience surface offers no group feature that does not exist.
@@ -325,5 +340,43 @@ test.describe('Add to Story — signed in', () => {
     await expect(page.getByTestId('capture-modes')).toHaveCount(0);
     const released = await page.evaluate(() => getComputedStyle(document.body).position);
     expect(released).not.toBe('fixed');
+  });
+
+  // The one live-camera outcome reachable without a real device, and the one a
+  // user actually hits. Both reviewer lanes flagged that no e2e drove any
+  // camera mode; a denied permission is a state the capture flow RENDERS
+  // rather than throws, so it must not dead-end.
+  test('a denied camera permission is an honest state with a way forward', async ({
+    page,
+  }) => {
+    await stubStories(page, { following: [CLAIRE] });
+    // Reject exactly the way a real refusal does: the hook branches on the
+    // error NAME, so a generic Error would take the 'unavailable' path and
+    // assert nothing about denial.
+    await page.addInitScript(() => {
+      const denial = (): Promise<never> => {
+        const error = new Error('Permission denied');
+        error.name = 'NotAllowedError';
+        return Promise.reject(error);
+      };
+      const media = navigator.mediaDevices ?? ({} as MediaDevices);
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: { ...media, getUserMedia: denial },
+      });
+    });
+
+    await page.goto('/friends');
+    await page.getByTestId('add-story').click();
+    await expect(page.getByTestId('capture-modes')).toBeVisible();
+    await page.getByRole('button', { name: 'Take one photo' }).click();
+
+    // Honest about what happened, and never a dead end: the library route out
+    // is still offered, which is the whole point of rendering the state rather
+    // than throwing.
+    await expect(
+      page.getByText('Camera access is off for Next Bar.', { exact: false }),
+    ).toBeVisible();
+    await expect(page.getByText('Choose from library')).toBeVisible();
   });
 });
