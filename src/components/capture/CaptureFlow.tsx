@@ -22,6 +22,10 @@ import type { Pair } from './pairing';
  * has no path from the shutter to `onApproved` that skips review.
  */
 
+/** Shown when a picked file could not be read as a publishable photo. */
+export const LIBRARY_FAILURE =
+  'That photo could not be read. Nothing was added — try another one.';
+
 export type CaptureStep =
   | 'modes'
   | 'single'
@@ -52,6 +56,16 @@ export default function CaptureFlow({
     'environment',
   );
   const fileRef = useRef<HTMLInputElement>(null);
+  /**
+   * Which library pick is the current one. Two decodes can be in flight at
+   * once — pick a large image, reopen the picker, pick a small one — and they
+   * finish in size order, not pick order, so the older promise could resolve
+   * last and replace the newer reviewed image with the one the user had just
+   * moved on from. The counter makes a stale decode a no-op instead.
+   */
+  const pickRef = useRef(0);
+  /** Said out loud rather than swallowed: a pick that could not be read. */
+  const [pickFailed, setPickFailed] = useState(false);
 
   const handleFile = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -60,8 +74,20 @@ export default function CaptureFlow({
     // Reset first: re-picking the SAME file must still fire a change event.
     event.target.value = '';
     if (file === undefined) return;
+    const pick = ++pickRef.current;
+    setPickFailed(false);
     const url = await fileToDataUrl(file);
-    if (url === null) return;
+    // A newer pick started while this one was decoding: it owns the review
+    // screen now, and this result is discarded rather than overwriting it.
+    if (pick !== pickRef.current) return;
+    if (url === null) {
+      // fileToDataUrl returns null for a non-image AND for an image that
+      // cannot be re-encoded — the re-encode being the only thing that strips
+      // EXIF/GPS on this path, a photo that will not go through it is not
+      // published. Silently returning made that look like a dead button.
+      setPickFailed(true);
+      return;
+    }
     // A library photo takes the same review gate as a fresh capture.
     setPair({ main: url, inset: null });
     setStep('review');
@@ -92,6 +118,7 @@ export default function CaptureFlow({
         <CaptureModeSheet
           title={title}
           subtitle={subtitle}
+          failure={pickFailed ? LIBRARY_FAILURE : null}
           onSingle={() => setStep('single')}
           onDual={() => setStep('dual-explain')}
           onLibrary={() => fileRef.current?.click()}

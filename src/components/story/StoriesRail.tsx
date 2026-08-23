@@ -179,7 +179,15 @@ function YourCell({
             aria-label={RAIL_ADD_LABEL}
             className="absolute left-14 top-3 w-11 h-11 flex items-end justify-start rounded-full touch-manipulation"
           >
-            <span className="-ml-2 flex">
+            {/* pointer-events-none is what makes the negative margin safe. The
+                button's BOX starts at the avatar's right edge, but its child
+                mark is pulled 8px back over the avatar's lower-right corner —
+                and an overflowing child is still hit-testable, so those 8px
+                were painting over the avatar while invoking Add Story. The two
+                previous attempts at this finding both measured the BUTTONS and
+                so both passed while the mark kept stealing the corner. The
+                mark is decoration; the 44x44 button beside it is the target. */}
+            <span className="-ml-2 flex pointer-events-none">
               <PlusBadge />
             </span>
           </button>

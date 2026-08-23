@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { lockBodyScroll } from '@/lib/bodyScrollLock';
 import { cycleFocusWithin } from '@/lib/focusTrap';
 
 /**
@@ -19,6 +20,21 @@ import { cycleFocusWithin } from '@/lib/focusTrap';
  * the outer one fires first and pulls focus back out of the inner panel. The
  * outer dialog turns its own keys off for as long as something is open above
  * it, so exactly one trap is ever armed.
+ *
+ * THE TAB CYCLE IS NOT THE WHOLE CONTRACT, which is what this hook used to
+ * assume. `aria-modal="true"` tells assistive technology that everything
+ * outside the dialog does not exist, and a keyboard trap is only one of the
+ * ways in: a screen-reader cursor, a touch-exploration gesture or a
+ * programmatic `focus()` all reach the backdropped page regardless of what Tab
+ * does. `inert` is the attribute that makes the claim true — it removes the
+ * subtree from focus, from hit-testing and from the accessibility tree — so it
+ * is applied here, to every sibling on the path from the dialog up to
+ * `<body>`, rather than left to each caller to remember.
+ *
+ * SCROLL LOCK MOVED HERE FOR THE SAME REASON. Exactly one of the seven dialogs
+ * in the story/capture tree called `lockBodyScroll`, so wheel and touch
+ * scrolling moved the Social page underneath the capture and compose screens.
+ * A shared contract that half the callers implement is not a contract.
  */
 export function useModalDialog<T extends HTMLElement>(
   onClose: (() => void) | null,
@@ -30,6 +46,16 @@ export function useModalDialog<T extends HTMLElement>(
     const opener = document.activeElement as HTMLElement | null;
     ref.current?.focus({ preventScroll: true });
     return () => opener?.focus?.({ preventScroll: true });
+  }, []);
+
+  // The page under the dialog: inert, and not scrolling.
+  useEffect(() => {
+    const unlockScroll = lockBodyScroll();
+    const marked = markBackgroundInert(ref.current);
+    return () => {
+      for (const element of marked) element.removeAttribute('inert');
+      unlockScroll();
+    };
   }, []);
 
   useEffect(() => {
@@ -47,4 +73,33 @@ export function useModalDialog<T extends HTMLElement>(
   }, [onClose, enabled]);
 
   return ref;
+}
+
+/**
+ * Mark everything outside `dialog` inert, and return what was marked.
+ *
+ * Walks from the dialog to `<body>` marking each ancestor's OTHER children.
+ * That is what leaves exactly the dialog's own subtree live: these dialogs are
+ * `position: fixed` but they are not portalled, so they sit inside the page's
+ * own element tree and "inert every child of body except this one" would inert
+ * nothing at all — the app root contains the dialog.
+ *
+ * Anything ALREADY inert is skipped and not returned, so a nested sheet cannot
+ * un-inert what the dialog beneath it marked when the sheet closes.
+ */
+function markBackgroundInert(dialog: HTMLElement | null): HTMLElement[] {
+  if (dialog === null) return [];
+  const marked: HTMLElement[] = [];
+  let node: HTMLElement = dialog;
+  while (node.parentElement !== null && node !== document.body) {
+    for (const sibling of Array.from(node.parentElement.children)) {
+      if (sibling === node) continue;
+      if (!(sibling instanceof HTMLElement)) continue;
+      if (sibling.hasAttribute('inert')) continue;
+      sibling.setAttribute('inert', '');
+      marked.push(sibling);
+    }
+    node = node.parentElement;
+  }
+  return marked;
 }

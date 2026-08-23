@@ -17,7 +17,10 @@ export default function CaptureModeSheet({
   onDual,
   onLibrary,
   onCancel,
+  failure = null,
 }: {
+  /** A library pick that could not be read, said on the screen that offered it. */
+  failure?: string | null;
   title: string;
   subtitle: string;
   onSingle: () => void;
@@ -77,6 +80,16 @@ export default function CaptureModeSheet({
             onClick={onLibrary}
           />
         </div>
+
+        {failure !== null ? (
+          <p
+            data-testid="capture-library-failed"
+            role="alert"
+            className="text-sm text-center mt-4 leading-relaxed"
+          >
+            {failure}
+          </p>
+        ) : null}
 
         <p className="text-muted text-[11px] text-center mt-5 leading-relaxed">
           Nothing is shared until you review it and pick an audience.

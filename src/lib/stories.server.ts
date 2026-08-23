@@ -20,7 +20,31 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * the bucket policy can decide ownership from the key prefix alone before any
  * row exists. If the metadata publish then fails, the bytes are removed again;
  * if that removal ALSO fails the paths are returned so the caller can report an
- * orphan rather than pretend it did not happen.
+ * orphan rather than pretend it did not happen — and every caller in this
+ * repository now DOES report it (see {@link reportOrphans}); dropping the
+ * field was how the honest return value became a silent one.
+ *
+ * TWO OBLIGATIONS THIS LAYER DOES NOT DISCHARGE, recorded here because the
+ * only thing worse than an unmet obligation is one that is written down as met:
+ *
+ *   1. SERVER-SIDE RE-ENCODE. Nothing here decodes and re-encodes the uploaded
+ *      object, so EXIF/GPS stripping depends on the capture pipeline having
+ *      done it in the browser. That pipeline now fails closed rather than
+ *      passing raw bytes through, and migration 0065 restricts the bucket to
+ *      image MIME types, but a MODIFIED client can still upload original bytes
+ *      with their metadata intact. Closing it needs an upload path that runs on
+ *      a server (an edge function or a route handler); this build has none.
+ *
+ *   2. TTL IS CLAMPED HERE, NOT IN THE DATABASE. {@link signedUrlTtlSeconds}
+ *      caps a URL at the story's remaining life, but the mint itself is a
+ *      client call, and a client may pass any `expiresIn` it likes: Storage
+ *      checks the SELECT policy at mint time, not the requested lifetime. So an
+ *      authorised viewer can mint a long-lived URL while the story is still
+ *      live and keep the bytes after expiry. The RLS change in 0065 shrinks the
+ *      window (an expired or deleted story can no longer be signed at all, by
+ *      anyone including its author) but does not kill an already-minted URL.
+ *      Both a server-minted URL and the physical expiry sweep 0065's header
+ *      records are required to close it properly.
  */
 
 /** Bucket created by migration 0065. Private: no anonymous object URL exists. */
@@ -47,6 +71,12 @@ export type StoryRow = {
   audience: StoryAudience;
   createdAt: string;
   expiresAt: string;
+  /**
+   * Profile ids of the people tagged in this story, with withdrawn tags
+   * already removed. Empty on the publish return, which reports the row the
+   * RPC created rather than a read of it.
+   */
+  tagIds: string[];
 };
 
 /** A story with short-lived signed URLs resolved for rendering. */
@@ -74,7 +104,7 @@ type DbRow = {
   expires_at: string;
 };
 
-function toStory(row: DbRow): StoryRow {
+function toStory(row: DbRow, tagIds: string[] = []): StoryRow {
   return {
     id: row.id,
     authorId: row.author_id,
@@ -86,6 +116,7 @@ function toStory(row: DbRow): StoryRow {
     audience: row.audience,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
+    tagIds,
   };
 }
 
@@ -101,8 +132,16 @@ export function signedUrlTtlSeconds(
   now: number = Date.now(),
 ): number {
   const remainingMs = Date.parse(expiresAt) - now;
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 0;
-  return Math.max(1, Math.min(SIGNED_URL_MAX_SECONDS, Math.floor(remainingMs / 1000)));
+  if (!Number.isFinite(remainingMs)) return 0;
+  // Under a second left is NOT a second of life. The floor used to be
+  // Math.max(1, ...), which turned any remainder from 1ms to 999ms into a
+  // one-second URL that outlives expires_at — a bearer link to content the
+  // database has already stopped serving, which is the one thing this
+  // function exists to prevent. Below one second there is no grantable
+  // lifetime, so nothing is minted.
+  const remainingSeconds = Math.floor(remainingMs / 1000);
+  if (remainingSeconds < 1) return 0;
+  return Math.min(SIGNED_URL_MAX_SECONDS, remainingSeconds);
 }
 
 /** The object key convention migration 0065's bucket policies enforce. */
@@ -112,6 +151,26 @@ export function storyObjectKey(
   side: 'main' | 'inset',
 ): string {
   return `${authorId}/${storyId}/${side}`;
+}
+
+/**
+ * Object keys that could not be removed, surfaced rather than dropped.
+ *
+ * The publish and delete paths deliberately RETURN orphan paths instead of
+ * pretending cleanup succeeded, and then every caller dropped the field —
+ * which made the honest return value indistinguishable from a silent one. This
+ * is the one place that reports them, so a private object left behind by a
+ * failed cleanup is visible in a log rather than only in the bucket.
+ *
+ * It is a report, not a retry: a retry here would race the same failing
+ * remove, and the expiry sweep 0065's header records is the mechanism that
+ * eventually reclaims the bytes.
+ */
+export function reportOrphans(context: string, orphans: readonly string[] | undefined): void {
+  if (orphans === undefined || orphans.length === 0) return;
+  console.error(
+    `[stories] ${context}: ${orphans.length} object(s) left in ${STORY_BUCKET} after a failed cleanup: ${orphans.join(', ')}`,
+  );
 }
 
 function unavailable<T>(): StoryResult<T> {
@@ -239,8 +298,9 @@ export async function fetchVisibleStories(
       return { ok: false, reason: 'failed', message: 'Stories could not be loaded.' };
     }
     const rows = (data ?? []) as DbRow[];
+    const tags = await fetchTags(client, rows.map((row) => row.id));
     const views = await Promise.all(rows.map(async (row) => {
-      const story = toStory(row);
+      const story = toStory(row, tags.get(row.id) ?? []);
       const ttl = signedUrlTtlSeconds(story.expiresAt, now);
       if (ttl <= 0) return { ...story, mediaUrl: null, insetUrl: null };
       const [main, inset] = await Promise.all([
@@ -253,6 +313,44 @@ export async function fetchVisibleStories(
   } catch {
     return unavailable();
   }
+}
+
+/**
+ * Live tags for these stories, keyed by story id.
+ *
+ * A SECOND QUERY RATHER THAN AN EMBED. `story_tags` has its own RLS policy and
+ * its own `removed_at` gate, and a PostgREST embed would have made the tag
+ * list a nested shape whose failure mode is a whole-story read failing because
+ * a tag read failed. Tags are decoration on a story, never its gate: if this
+ * query fails the stories still render, with no people chip.
+ *
+ * WITHOUT THIS the tag surface is unreachable code. Publication wrote
+ * `story_tags` rows and nothing ever read them back, so the people chip, the
+ * tagged-people sheet and its "Remove me" consent control could never appear —
+ * a tagged person had no way to learn they were tagged, let alone withdraw.
+ */
+async function fetchTags(
+  client: SupabaseClient,
+  storyIds: readonly string[],
+): Promise<Map<string, string[]>> {
+  const byStory = new Map<string, string[]>();
+  if (storyIds.length === 0) return byStory;
+  try {
+    const { data, error } = await client
+      .from('story_tags')
+      .select('story_id, profile_id')
+      .in('story_id', [...storyIds])
+      .is('removed_at', null);
+    if (error) return byStory;
+    for (const row of (data ?? []) as { story_id: string; profile_id: string }[]) {
+      const list = byStory.get(row.story_id) ?? [];
+      list.push(row.profile_id);
+      byStory.set(row.story_id, list);
+    }
+  } catch {
+    // A failed tag read is a missing chip, never a missing story.
+  }
+  return byStory;
 }
 
 async function signUrl(

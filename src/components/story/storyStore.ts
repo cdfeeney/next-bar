@@ -35,6 +35,7 @@ import {
   fetchVisibleStories,
   publishStory,
   removeMyStoryTag,
+  reportOrphans,
   type StoryView,
 } from '@/lib/stories.server';
 
@@ -311,10 +312,40 @@ export function useStories(): UseStories {
     [mutuals],
   );
 
+  /**
+   * Tagged people, resolved from the ids the story actually carries.
+   *
+   * This used to be a hardcoded empty array, which made the whole tag surface
+   * unreachable: publication wrote story_tags rows, nothing read them back, and
+   * so the people chip, the tagged-people sheet and its "Remove me" consent
+   * control could never render. A tagged person could not learn they were
+   * tagged, let alone withdraw — the consent control existed only as an RPC no
+   * screen could reach.
+   *
+   * An id that resolves to nobody the viewer can see is DROPPED rather than
+   * rendered as a placeholder person: the sheet names people, and inventing a
+   * name for a profile this viewer has no right to read would be worse than
+   * showing a shorter list. Your OWN id is always resolvable — it is put in the
+   * people map above unconditionally — so "Remove me" is always reachable by
+   * the one person it belongs to.
+   */
   const items = useMemo<StoryItem[]>(() => {
     if (views === null) return [];
-    return views.map((view) => toItem(view, []));
-  }, [views]);
+    return views.map((view) => toItem(
+      view,
+      view.tagIds.flatMap((id) => {
+        const person = people.get(id);
+        if (person === undefined) return [];
+        return [{
+          id: person.id,
+          handle: person.handle ?? '',
+          name: person.name,
+          initials: person.initials,
+          isYou: id === youId,
+        }];
+      }),
+    ));
+  }, [views, people, youId]);
 
   const groups = useMemo<StoryGroup[]>(() => {
     const yourItems = items.filter((item) => item.authorId === youId);
@@ -390,14 +421,27 @@ export function useStories(): UseStories {
       audienceIds: input.audienceIds ?? [],
       tagIds: input.tagIds ?? [],
     });
-    if (!result.ok) return { ok: false, message: result.message };
+    if (!result.ok) {
+      // The publish path removes the bytes it uploaded when the metadata
+      // publish fails; when that removal ALSO fails it hands back the keys.
+      // Dropping them here was what turned an honest return value into a
+      // silent one — private objects left in the bucket with nothing said.
+      reportOrphans('publish', result.orphans);
+      return { ok: false, message: result.message };
+    }
     refresh();
     return { ok: true, storyId: result.value.id };
   }, [youId, refresh]);
 
   const removeItem = useCallback(async (id: string): Promise<ActionOutcome> => {
     const result = await deleteStory(supabase, id);
-    if (!result.ok) return { ok: false, message: result.message };
+    if (!result.ok) {
+      reportOrphans('delete', result.orphans);
+      return { ok: false, message: result.message };
+    }
+    // A soft delete that could not remove the bytes still succeeded — the read
+    // gate is closed — but the leftover objects are reported rather than lost.
+    reportOrphans('delete', result.value.orphans);
     refresh();
     return { ok: true };
   }, [refresh]);

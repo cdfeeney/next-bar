@@ -243,7 +243,19 @@ function readAsDataUrl(file: File): Promise<string | null> {
   });
 }
 
-/** Re-encode a data URL at or below MAX_STORED_EDGE. Throws if it will not decode. */
+/**
+ * Re-encode a data URL at or below MAX_STORED_EDGE. Throws if it will not
+ * decode — and throws rather than returning the ORIGINAL if the re-encode
+ * itself cannot be performed.
+ *
+ * THE FALLBACKS USED TO RETURN `url`. That is the raw FileReader result: the
+ * library photo exactly as the camera wrote it, EXIF and GPS intact. The canvas
+ * round-trip is the only thing in this build that strips that metadata — there
+ * is no server-side re-encode — so a fallback that hands back the original
+ * turns the one privacy control on this path into a best-effort suggestion, and
+ * publishes a friend-visible photo carrying the coordinates it was taken at.
+ * Failing closed loses a photo; failing open leaks a location.
+ */
 async function boundedJpeg(url: string): Promise<string> {
   const image = await loadImage(url);
   const { width, height } = boundedSize(image.width, image.height);
@@ -252,11 +264,14 @@ async function boundedJpeg(url: string): Promise<string> {
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext('2d');
-  if (context === null) return url;
+  if (context === null) throw new Error('no 2d context: cannot re-encode');
   context.drawImage(image, 0, 0, width, height);
-  try {
-    return canvas.toDataURL('image/jpeg', CAPTURE_QUALITY);
-  } catch {
-    return url;
+  const encoded = canvas.toDataURL('image/jpeg', CAPTURE_QUALITY);
+  if (!encoded.startsWith('data:image/jpeg')) {
+    // toDataURL falls back to image/png when the requested type is
+    // unsupported, and returns "data:," on a tainted or zero-size canvas.
+    // Neither is the re-encode this function promises.
+    throw new Error('re-encode did not produce a JPEG');
   }
+  return encoded;
 }

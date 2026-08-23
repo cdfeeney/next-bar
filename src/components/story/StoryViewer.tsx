@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useModalDialog } from '@/hooks/useModalDialog';
 import Avatar from '@/components/Avatar';
-import { lockBodyScroll } from '@/lib/bodyScrollLock';
 import { getBarById } from '@/lib/catalog';
 import { displayHood } from '@/lib/hoodDisplay';
 import BarLightbox from '@/components/BarLightbox';
@@ -86,11 +85,15 @@ export default function StoryViewer({
   // DIFFERENT person, so the viewer either shows the wrong author's story or
   // points past the end. Key by id, resolve at render — the same rule the rest
   // of this surface follows.
+  // The fallback used to be `groups[0]`, which silently opened SOMEBODY ELSE.
+  // The reachable case: publish, tap "View story" on the receipt, and the
+  // refreshed queue has not landed your own story yet — startId (you) is
+  // absent, so the viewer opened the first friend in the rail and stayed there
+  // once the refresh arrived. Resolving to startId itself means an absent
+  // author closes the viewer (the effect below) instead of showing the wrong
+  // one; the caller does not mount it until the author is really in the queue.
   const [position, setPosition] = useState(() => ({
-    id:
-      groups.find((group) => group.id === startId)?.id ??
-      groups[0]?.id ??
-      startId,
+    id: groups.find((group) => group.id === startId)?.id ?? startId,
     item: 0,
   }));
   const [elapsed, setElapsed] = useState(0);
@@ -154,9 +157,10 @@ export default function StoryViewer({
     });
   }, [groups]);
 
-  // Scroll lock. Focus entry, the Tab cycle and focus restore are the shared
-  // modal contract and live in useModalDialog above.
-  useEffect(() => lockBodyScroll(), []);
+  // Scroll lock, focus entry, the Tab cycle, focus restore and background
+  // inertness are all the shared modal contract and live in useModalDialog
+  // above — this component's own lockBodyScroll call was removed when the hook
+  // took the lock over, so the page is not locked twice.
 
   // The person being watched can leave the live queue while the viewer is open
   // — their last story expires, or a cross-tab unfollow drops them from the

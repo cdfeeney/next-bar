@@ -193,11 +193,18 @@ export default function AddStoryFlow({
       <SharedReceipt
         photo={photo}
         barId={bar?.id ?? null}
+        // A failed Undo used to be stored in state and rendered nowhere: the
+        // receipt had no failure slot, so the user tapped Undo, saw the screen
+        // sit there unchanged, and was left believing the story had been
+        // withdrawn while it stayed live for all their friends. The one
+        // outcome this screen must never be silent about.
+        failure={failure}
         onClose={onCancel}
         onViewStory={onViewStory}
         onUndo={() => {
           // Undo DELETES on the server. Closing regardless would leave a story
           // live that the user was told had been undone.
+          setFailure(null);
           void onUndo(postedId).then((result) => {
             if (result.ok) onCancel();
             else setFailure(result.message);
@@ -411,12 +418,15 @@ function MetaRow({
 function SharedReceipt({
   photo,
   barId,
+  failure,
   onClose,
   onViewStory,
   onUndo,
 }: {
   photo: { kind: 'single' | 'dual'; main: string | null; inset: string | null };
   barId: string | null;
+  /** Set when Undo did not reach the server. The story is STILL LIVE. */
+  failure: string | null;
   onClose: () => void;
   onViewStory: () => void;
   onUndo: () => void;
@@ -477,6 +487,15 @@ function SharedReceipt({
           Undo
         </button>
       </div>
+      {failure !== null ? (
+        <p
+          data-testid="story-undo-failed"
+          role="alert"
+          className="text-sm leading-relaxed text-center pb-[calc(env(safe-area-inset-bottom)+20px)]"
+        >
+          {failure} Your story is still live.
+        </p>
+      ) : null}
     </div>
   );
 }

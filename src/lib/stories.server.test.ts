@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   SIGNED_URL_MAX_SECONDS,
+  STORY_BUCKET,
   deleteStory,
   fetchVisibleStories,
   publishStory,
   removeMyStoryTag,
+  reportOrphans,
   signedUrlTtlSeconds,
   storyObjectKey,
 } from './stories.server';
@@ -45,7 +47,20 @@ describe('signedUrlTtlSeconds', () => {
   });
 
   it('never rounds a sub-second remainder up to a live URL', () => {
-    expect(signedUrlTtlSeconds(iso(900), NOW)).toBe(1);
+    // This assertion used to read `toBe(1)` — the exact rounding-up its own
+    // name forbids, and the defect a reviewer found by reading the code rather
+    // than the test. A 900ms remainder is not a second of life: a one-second
+    // URL for it is valid for ~100ms AFTER expires_at, which is a bearer link
+    // to content the database has already stopped serving.
+    expect(signedUrlTtlSeconds(iso(900), NOW)).toBe(0);
+    expect(signedUrlTtlSeconds(iso(1), NOW)).toBe(0);
+    expect(signedUrlTtlSeconds(iso(999), NOW)).toBe(0);
+  });
+
+  it('grants a whole second only once a whole second is left', () => {
+    expect(signedUrlTtlSeconds(iso(1000), NOW)).toBe(1);
+    // And never rounds a partial second UP either: 1.999s is one second.
+    expect(signedUrlTtlSeconds(iso(1999), NOW)).toBe(1);
   });
 });
 
@@ -214,6 +229,107 @@ describe('fetchVisibleStories', () => {
   it('reports unavailable rather than an empty feed when Supabase is absent', async () => {
     const result = await fetchVisibleStories(null, NOW);
     expect(result).toMatchObject({ ok: false, reason: 'unavailable' });
+  });
+
+  /**
+   * The tag read is what makes the whole consent surface reachable. Without
+   * it, publication wrote story_tags rows that NOTHING ever read back: the
+   * people chip, the tagged-people sheet and its "Remove me" control could
+   * never render, so a tagged person could not learn they were tagged.
+   */
+  it('carries each story its own live tags', async () => {
+    const rows = [
+      { id: 's1', author_id: 'a', bar_id: null, caption: null, media_path: 'a/1/main',
+        inset_path: null, media_kind: 'single', audience: 'friends',
+        created_at: iso(0), expires_at: iso(60_000) },
+      { id: 's2', author_id: 'a', bar_id: null, caption: null, media_path: 'a/2/main',
+        inset_path: null, media_kind: 'single', audience: 'friends',
+        created_at: iso(0), expires_at: iso(60_000) },
+    ];
+    const tagRows = [
+      { story_id: 's1', profile_id: 'p-claire' },
+      { story_id: 's1', profile_id: 'p-dev' },
+      { story_id: 's2', profile_id: 'p-you' },
+    ];
+    const removedFilter = vi.fn().mockResolvedValue({ data: tagRows, error: null });
+    const { client } = clientStub();
+    client.from = vi.fn((table: string) => {
+      if (table === 'story_tags') {
+        return { select: vi.fn(() => ({ in: vi.fn(() => ({ is: removedFilter })) })) };
+      }
+      return {
+        select: vi.fn(() => ({
+          gt: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: rows, error: null }) })),
+        })),
+      };
+    });
+
+    const result = await fetchVisibleStories(client, NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0].tagIds).toEqual(['p-claire', 'p-dev']);
+    expect(result.value[1].tagIds).toEqual(['p-you']);
+    // Withdrawn tags are excluded by the QUERY, not by the caller: removed_at
+    // null is the consent gate and it belongs next to the read.
+    expect(removedFilter).toHaveBeenCalledWith('removed_at', null);
+  });
+
+  it('still renders the stories when the tag read fails', async () => {
+    const rows = [
+      { id: 's1', author_id: 'a', bar_id: null, caption: null, media_path: 'a/1/main',
+        inset_path: null, media_kind: 'single', audience: 'friends',
+        created_at: iso(0), expires_at: iso(60_000) },
+    ];
+    const { client } = clientStub();
+    client.from = vi.fn((table: string) => {
+      if (table === 'story_tags') {
+        return {
+          select: vi.fn(() => ({
+            in: vi.fn(() => ({
+              is: vi.fn().mockResolvedValue({ data: null, error: { message: 'nope' } }),
+            })),
+          })),
+        };
+      }
+      return {
+        select: vi.fn(() => ({
+          gt: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: rows, error: null }) })),
+        })),
+      };
+    });
+
+    const result = await fetchVisibleStories(client, NOW);
+    // A missing chip, never a missing story.
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value[0].tagIds).toEqual([]);
+  });
+});
+
+/**
+ * Orphan reports were RETURNED honestly by this module and then dropped by
+ * every caller, which made the honest return value indistinguishable from a
+ * silent one: private objects left in the bucket by a failed cleanup, with
+ * nothing said anywhere.
+ */
+describe('reportOrphans', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('says which objects were left behind, and in which bucket', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reportOrphans('publish', ['a/1/main', 'a/1/inset']);
+    expect(error).toHaveBeenCalledTimes(1);
+    const line = String(error.mock.calls[0][0]);
+    expect(line).toContain(STORY_BUCKET);
+    expect(line).toContain('a/1/main');
+    expect(line).toContain('a/1/inset');
+    expect(line).toContain('publish');
+  });
+
+  it('says nothing when cleanup actually worked', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reportOrphans('delete', []);
+    reportOrphans('delete', undefined);
+    expect(error).not.toHaveBeenCalled();
   });
 });
 

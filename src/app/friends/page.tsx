@@ -164,14 +164,43 @@ export default function SocialPage(): JSX.Element {
         {tab === 'feed' ? (
           <Panel id="feed">
             {rail}
-            {stories.status === 'ready' && stories.feed.length > 0 ? (
-              <FeedSection entries={stories.feed} onOpenStory={openStories} />
+            {/* READY-AND-EMPTY IS ITS OWN STATE. Rendering nothing here made a
+                signed-in account with no friends' stories look identical to a
+                surface that had not finished loading — the exact collapse
+                StoriesEmptyState exists to prevent, reintroduced one level
+                down. The rail above already distinguishes signed-out and
+                unreachable; this is the fourth case. */}
+            {stories.status === 'ready' ? (
+              stories.feed.length > 0 ? (
+                <FeedSection entries={stories.feed} onOpenStory={openStories} />
+              ) : (
+                <section data-testid="feed-empty" aria-labelledby="feed-empty-heading">
+                  <h2
+                    id="feed-empty-heading"
+                    className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
+                  >
+                    Feed
+                  </h2>
+                  <div className="rounded-2xl border border-border bg-surface p-5">
+                    <p className="text-sm leading-relaxed">
+                      Nothing here yet. Stories from you and the friends who
+                      follow you back show up here for 24 hours.
+                    </p>
+                  </div>
+                </section>
+              )
             ) : null}
           </Panel>
         ) : null}
       </div>
 
-      {viewer !== null && queue.length > 0 ? (
+      {/* The author has to actually BE in the queue. Opening on "somebody" and
+          letting the viewer pick a fallback is how tapping "View story" on a
+          fresh receipt landed on a friend's queue instead of your own: the
+          refresh had not returned your new story yet, so your id was not in
+          the queue and the viewer silently opened whoever was first. Waiting
+          one render is correct; showing the wrong person never is. */}
+      {viewer !== null && queue.some((group) => group.id === viewer) ? (
         <StoryViewer
           groups={queue}
           startId={viewer}

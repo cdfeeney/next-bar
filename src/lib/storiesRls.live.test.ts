@@ -32,6 +32,22 @@ import { stagingDatabaseTarget } from './liveDbTarget';
  * DB-write authorization. It is recorded as SKIPPED, never as passing. Running
  * it against staging with two accounts is the attended step the goal reports as
  * required before V8 can launch.
+ *
+ * WHAT THIS SUITE STILL DOES NOT PROVE, named rather than left for a reader to
+ * discover. It seeds profile rows directly and injects `auth.uid()` through
+ * `SET LOCAL ROLE` + `request.jwt.claims`, which is exactly what PostgREST does
+ * to evaluate a policy — but it is NOT a real Supabase session. Signup, token
+ * issuance, refresh, and the mapping from a JWT to `auth.uid()` in the running
+ * API are all outside it, and could break with every assertion here still
+ * green. Closing that needs two real accounts against a running project, which
+ * is a separate attended step from running this file.
+ *
+ * WHAT IT DOES NOW COVER THAT IT DID NOT: `storage.objects`. The four bucket
+ * policies are the gate on the BYTES — the highest-risk new authorization
+ * surface in 0065, and the one place the audience predicate is written twice
+ * rather than shared — and nothing anywhere exercised them, while the coverage
+ * accounting in the spec headers read as complete. A missed `deleted_at` or
+ * expiry clause in the duplicated predicate would have shipped undetected.
  */
 
 const SUITE = 'storiesRls.live.test.ts';
@@ -117,24 +133,49 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
     return { alice, bob, carol };
   }
 
+/**
+   * Put a real `storage.objects` row under an author's prefix, as the owner.
+   *
+   * `publish_story` refuses a media_path that names no uploaded object — owning
+   * the prefix is not the same as having uploaded anything — so the fixture has
+   * to model the upload half of upload-then-publish. It is created as the table
+   * owner because the WRITE policy is not what these tests are asserting; the
+   * ones that DO assert it insert as `authenticated` on purpose.
+   */
+  async function putObject(author: string, key: string): Promise<string> {
+    await asOwner();
+    await db.query(
+      `insert into storage.objects (bucket_id, name, owner)
+       values ('story-media', $1, $2) on conflict do nothing`,
+      [key, author],
+    );
+    return key;
+  }
+
   /** Publish as `author`, through the RPC, exactly as the app does. */
   async function publishAs(
     author: string,
     args: { audience?: string; audienceIds?: string[]; tagIds?: string[] } = {},
-  ): Promise<string> {
+  ): Promise<{ id: string; mediaPath: string }> {
+    const mediaPath = await putObject(author, `${author}/${randomUUID()}/main`);
     await asRole('authenticated', author);
     const { rows } = await db.query(
       `select (public.publish_story(
          $1, 'single', null, null, null, $2, $3::uuid[], $4::uuid[]
        )).id as id`,
-      [
-        `${author}/${randomUUID()}/main`,
-        args.audience ?? 'friends',
-        args.audienceIds ?? [],
-        args.tagIds ?? [],
-      ],
+      [mediaPath, args.audience ?? 'friends', args.audienceIds ?? [], args.tagIds ?? []],
     );
-    return rows[0].id as string;
+    return { id: rows[0].id as string, mediaPath };
+  }
+
+  /** Can `viewer` read the OBJECT — the bytes, not the metadata row? */
+  async function objectVisibleTo(viewer: string, key: string): Promise<boolean> {
+    await asRole('authenticated', viewer);
+    const { rows } = await db.query(
+      "select 1 from storage.objects where bucket_id = 'story-media' and name = $1",
+      [key],
+    );
+    return rows.length > 0;
   }
 
   const visibleTo = async (viewer: string, storyId: string): Promise<boolean> => {
@@ -146,7 +187,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
   it('an accepted mutual friend can read the story', async () => {
     await inRollback(async () => {
       const { alice, bob } = await seed({ mutual: true });
-      const story = await publishAs(alice);
+      const { id: story } = await publishAs(alice);
       expect(await visibleTo(bob, story)).toBe(true);
     });
   });
@@ -155,7 +196,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
     await inRollback(async () => {
       // Alice follows Bob but Bob does not follow Alice back.
       const { alice, bob } = await seed({ mutual: false });
-      const story = await publishAs(bob);
+      const { id: story } = await publishAs(bob);
       expect(await visibleTo(alice, story)).toBe(false);
     });
   });
@@ -163,7 +204,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
   it('a stranger is denied', async () => {
     await inRollback(async () => {
       const { alice, carol } = await seed({ mutual: true });
-      const story = await publishAs(alice);
+      const { id: story } = await publishAs(alice);
       expect(await visibleTo(carol, story)).toBe(false);
     });
   });
@@ -171,7 +212,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
   it('anon reads nothing at all', async () => {
     await inRollback(async () => {
       const { alice } = await seed({ mutual: true });
-      const story = await publishAs(alice);
+      const { id: story } = await publishAs(alice);
       await asRole('anon');
       const { rows } = await db.query('select 1 from public.stories where id = $1', [story]);
       expect(rows).toHaveLength(0);
@@ -188,7 +229,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
          values ($1, $2), ($2, $1) on conflict do nothing`,
         [alice, carol],
       );
-      const story = await publishAs(alice, { audience: 'custom', audienceIds: [bob] });
+      const { id: story } = await publishAs(alice, { audience: 'custom', audienceIds: [bob] });
       expect(await visibleTo(bob, story)).toBe(true);
       expect(await visibleTo(carol, story)).toBe(false);
     });
@@ -223,7 +264,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
   it('expiry is a QUERY gate: the row stops being readable at expires_at', async () => {
     await inRollback(async () => {
       const { alice, bob } = await seed({ mutual: true });
-      const story = await publishAs(alice);
+      const { id: story } = await publishAs(alice);
       expect(await visibleTo(bob, story)).toBe(true);
       // Age the row past its own expiry. Physical cleanup has NOT run.
       await asOwner();
@@ -232,15 +273,19 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
         [story],
       );
       expect(await visibleTo(bob, story)).toBe(false);
-      // And the author cannot read it back into visibility for anyone else.
-      expect(await visibleTo(alice, story)).toBe(true);
+      // AND SO IS THE AUTHOR'S OWN READ. This used to assert `true` — the
+      // author was exempt from expiry, which contradicted 0065's own header
+      // ("a story becomes unreadable exactly when expires_at <= now()") and
+      // left an author able to read, and to sign media URLs for, content the
+      // product told them was gone after 24 hours. The boundary is uniform now.
+      expect(await visibleTo(alice, story)).toBe(false);
     });
   });
 
   it('server time sets created_at and expires_at 24 hours apart', async () => {
     await inRollback(async () => {
       const { alice } = await seed({ mutual: true });
-      const story = await publishAs(alice);
+      const { id: story } = await publishAs(alice);
       await asOwner();
       const { rows } = await db.query(
         `select extract(epoch from (expires_at - created_at)) as span,
@@ -257,7 +302,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
   it('only the author can delete, and deletion closes the read immediately', async () => {
     await inRollback(async () => {
       const { alice, bob } = await seed({ mutual: true });
-      const story = await publishAs(alice);
+      const { id: story } = await publishAs(alice);
 
       // Bob cannot delete Alice's story: the RPC matches no row for him.
       await asRole('authenticated', bob);
@@ -283,7 +328,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
          values ($1, $2), ($2, $1) on conflict do nothing`,
         [alice, carol],
       );
-      const story = await publishAs(alice, { tagIds: [bob, carol] });
+      const { id: story } = await publishAs(alice, { tagIds: [bob, carol] });
 
       // Bob withdraws his consent.
       await asRole('authenticated', bob);
@@ -306,7 +351,7 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
   it('the author cannot withdraw a tag on someone else\'s behalf', async () => {
     await inRollback(async () => {
       const { alice, bob } = await seed({ mutual: true });
-      const story = await publishAs(alice, { tagIds: [bob] });
+      const { id: story } = await publishAs(alice, { tagIds: [bob] });
       await asRole('authenticated', alice);
       const result = await db.query('select public.remove_my_story_tag($1) as ok', [story]);
       // Alice is not tagged, so nothing of hers was withdrawn — and Bob's tag stands.
@@ -330,6 +375,176 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
           [alice, `${alice}/x/main`],
         ),
       ).rejects.toThrow(/permission denied|violates row-level security/i);
+    });
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* storage.objects — the gate on the BYTES                                 */
+  /* ---------------------------------------------------------------------- */
+
+  it('an audience member can read the OBJECT a readable story points at', async () => {
+    await inRollback(async () => {
+      const { alice, bob, carol } = await seed({ mutual: true });
+      const { id: story, mediaPath } = await publishAs(alice);
+      expect(await visibleTo(bob, story)).toBe(true);
+      // The bytes follow the row: same audience, same answer.
+      expect(await objectVisibleTo(bob, mediaPath)).toBe(true);
+      // And a stranger reaches neither.
+      expect(await objectVisibleTo(carol, mediaPath)).toBe(false);
+    });
+  });
+
+  it('a custom audience gates the BYTES as well as the row', async () => {
+    await inRollback(async () => {
+      const { alice, bob, carol } = await seed({ mutual: true });
+      await asOwner();
+      await db.query(
+        `insert into public.follows (follower_id, followee_id)
+         values ($1, $2), ($2, $1) on conflict do nothing`,
+        [alice, carol],
+      );
+      const { mediaPath } = await publishAs(alice, {
+        audience: 'custom', audienceIds: [bob],
+      });
+      expect(await objectVisibleTo(bob, mediaPath)).toBe(true);
+      // Carol is a mutual friend and still cannot reach the object: the
+      // audience predicate is duplicated into the storage policy, and this is
+      // the assertion that catches it drifting from the table's copy.
+      expect(await objectVisibleTo(carol, mediaPath)).toBe(false);
+    });
+  });
+
+  it('expiry closes the BYTES too — for the audience AND for the owner', async () => {
+    await inRollback(async () => {
+      const { alice, bob } = await seed({ mutual: true });
+      const { id: story, mediaPath } = await publishAs(alice);
+      expect(await objectVisibleTo(alice, mediaPath)).toBe(true);
+      expect(await objectVisibleTo(bob, mediaPath)).toBe(true);
+
+      await asOwner();
+      await db.query(
+        "update public.stories set expires_at = now() - interval '1 second' where id = $1",
+        [story],
+      );
+
+      expect(await objectVisibleTo(bob, mediaPath)).toBe(false);
+      // The owner-prefix policy used to be prefix-only, so an author could
+      // mint a signed URL for its own expired media forever. Ownership is not
+      // a bypass of the lifetime.
+      expect(await objectVisibleTo(alice, mediaPath)).toBe(false);
+    });
+  });
+
+  it('a soft-deleted story closes the BYTES immediately', async () => {
+    await inRollback(async () => {
+      const { alice, bob } = await seed({ mutual: true });
+      const { id: story, mediaPath } = await publishAs(alice);
+      await asRole('authenticated', alice);
+      await db.query('select * from public.delete_story($1)', [story]);
+      // The read gate closes whether or not the byte cleanup succeeded — that
+      // is what makes a failed cleanup an orphan rather than readable content.
+      expect(await objectVisibleTo(bob, mediaPath)).toBe(false);
+      expect(await objectVisibleTo(alice, mediaPath)).toBe(false);
+    });
+  });
+
+  it('nobody can write an object under somebody else\'s prefix', async () => {
+    await inRollback(async () => {
+      const { alice, bob } = await seed({ mutual: true });
+      await asRole('authenticated', bob);
+      await expect(
+        db.query(
+          `insert into storage.objects (bucket_id, name) values ('story-media', $1)`,
+          [`${alice}/${randomUUID()}/main`],
+        ),
+      ).rejects.toThrow(/violates row-level security|permission denied/i);
+      // Under his OWN prefix he may.
+      await expect(
+        db.query(
+          `insert into storage.objects (bucket_id, name) values ('story-media', $1)`,
+          [`${bob}/${randomUUID()}/main`],
+        ),
+      ).resolves.toBeTruthy();
+    });
+  });
+
+  it('an unreferenced object stays readable by its owner — the upload window', async () => {
+    await inRollback(async () => {
+      const { alice } = await seed({ mutual: true });
+      // Upload-then-publish: between the two there is no story row at all, and
+      // the owner still has to be able to reach (and clean up) its own bytes.
+      const key = await putObject(alice, `${alice}/${randomUUID()}/main`);
+      expect(await objectVisibleTo(alice, key)).toBe(true);
+    });
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* the mutuality helper is not an oracle                                   */
+  /* ---------------------------------------------------------------------- */
+
+  it('is_mutual_friend refuses a caller asking about two other people', async () => {
+    await inRollback(async () => {
+      const { alice, bob, carol } = await seed({ mutual: true });
+      await asRole('authenticated', carol);
+      // SECURITY DEFINER is exactly what lets this function see both follows
+      // edges, so without a party check it is a pairwise oracle over the
+      // private graph 0007 restricts to the parties themselves.
+      await expect(
+        db.query('select public.is_mutual_friend($1, $2) as ok', [alice, bob]),
+      ).rejects.toThrow(/may only ask about itself/i);
+      // Asking about ITSELF is fine, in either argument position.
+      const own = await db.query('select public.is_mutual_friend($1, $2) as ok', [carol, alice]);
+      expect(own.rows[0].ok).toBe(false);
+    });
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* publish_story input rules                                               */
+  /* ---------------------------------------------------------------------- */
+
+  it('tagging a stranger is REFUSED, exactly like a custom audience naming one', async () => {
+    await inRollback(async () => {
+      const { alice, carol } = await seed({ mutual: true });
+      // A tag is a write onto ANOTHER person's consent surface — the tagged
+      // profile can read its own story_tags row — so an unchecked tag list let
+      // any account attach a stranger to a story that stranger cannot see.
+      const key = await putObject(alice, `${alice}/${randomUUID()}/main`);
+      await asRole('authenticated', alice);
+      await expect(
+        db.query(
+          `select public.publish_story($1, 'single', null, null, null, 'friends', '{}'::uuid[], $2::uuid[])`,
+          [key, [carol]],
+        ),
+      ).rejects.toThrow(/only tag friends who follow you back/i);
+    });
+  });
+
+  it('tagging YOURSELF is still allowed', async () => {
+    await inRollback(async () => {
+      const { alice } = await seed({ mutual: true });
+      const key = await putObject(alice, `${alice}/${randomUUID()}/main`);
+      await asRole('authenticated', alice);
+      await expect(
+        db.query(
+          `select public.publish_story($1, 'single', null, null, null, 'friends', '{}'::uuid[], $2::uuid[])`,
+          [key, [alice]],
+        ),
+      ).resolves.toBeTruthy();
+    });
+  });
+
+  it('publishing a media_path that names no uploaded object is REFUSED', async () => {
+    await inRollback(async () => {
+      const { alice } = await seed({ mutual: true });
+      await asRole('authenticated', alice);
+      // Owning the prefix is not the same as having uploaded anything. Without
+      // this check any account could publish a live, photo-less story.
+      await expect(
+        db.query(
+          `select public.publish_story($1, 'single', null, null, null, 'friends', '{}'::uuid[], '{}'::uuid[])`,
+          [`${alice}/${randomUUID()}/main`],
+        ),
+      ).rejects.toThrow(/names no uploaded object/i);
     });
   });
 

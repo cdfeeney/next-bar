@@ -165,8 +165,8 @@ export default function CaptureReview({
         </button>
       </div>
       <p className="text-muted text-[11px] text-center px-8 pb-6 leading-relaxed">
-        Retake discards this shot and reopens the camera. Nothing has left your
-        phone.
+        Retake discards this shot and reopens the capture options. Nothing has
+        left your phone.
       </p>
     </div>
   );
