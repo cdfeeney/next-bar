@@ -260,13 +260,59 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
   it('a custom audience naming a non-friend is REFUSED, not silently widened', async () => {
     await inRollback(async () => {
       const { alice, carol } = await seed({ mutual: true });
+      // The object must EXIST for this assertion to mean anything. publish_story
+      // checks "media_path names no uploaded object" BEFORE it checks the
+      // audience, so passing an un-uploaded key made this test pass on the wrong
+      // error entirely — it proved the object guard, never the mutuality rule it
+      // is named for.
+      const key = await putObject(alice, `${alice}/${randomUUID()}/main`);
       await asRole('authenticated', alice);
       await expect(
         db.query(
           `select public.publish_story($1, 'single', null, null, null, 'custom', $2::uuid[], '{}'::uuid[])`,
-          [`${alice}/${randomUUID()}/main`, [carol]],
+          [key, [carol]],
         ),
       ).rejects.toThrow(/mutual friend/i);
+    });
+  });
+
+  // The rule this candidate added: a tagged person who cannot READ the story
+  // could never reach "Remove me", which is their only consent withdrawal.
+  // Both reviewers noted it shipped with no test anywhere.
+  it('a CUSTOM story may not tag someone its audience excludes', async () => {
+    await inRollback(async () => {
+      const { alice, bob, carol } = await seed({ mutual: true });
+      await asOwner();
+      // Carol is mutual with Alice too, so the tag passes the mutuality rule and
+      // can only be refused by the audience-consistency rule.
+      await db.query(
+        'insert into public.follows (follower_id, followee_id) values ($1, $2), ($2, $1) on conflict do nothing',
+        [alice, carol],
+      );
+      const key = await putObject(alice, `${alice}/${randomUUID()}/main`);
+      await asRole('authenticated', alice);
+      await expect(
+        db.query(
+          `select public.publish_story($1, 'single', null, null, null, 'custom', $2::uuid[], $3::uuid[])`,
+          [key, [bob], [carol]],
+        ),
+      ).rejects.toThrow(/must be in a custom story/i);
+    });
+  });
+
+  it('a CUSTOM story may still tag YOURSELF without naming yourself in the audience', async () => {
+    await inRollback(async () => {
+      const { alice, bob } = await seed({ mutual: true });
+      const key = await putObject(alice, `${alice}/${randomUUID()}/main`);
+      await asRole('authenticated', alice);
+      // The author always reads their own story, so the self-tag exception is
+      // not a hole — and refusing it would make tagging yourself impossible on
+      // exactly the audience where you are most likely to do it.
+      const { rows } = await db.query(
+        `select public.publish_story($1, 'single', null, null, null, 'custom', $2::uuid[], $3::uuid[]) as story`,
+        [key, [bob], [alice]],
+      );
+      expect(rows).toHaveLength(1);
     });
   });
 
@@ -291,7 +337,14 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
       // Age the row past its own expiry. Physical cleanup has NOT run.
       await asOwner();
       await db.query(
-        "update public.stories set expires_at = now() - interval '1 second' where id = $1",
+        // created_at moves too: 0065 carries
+        // `check (expires_at > created_at)`, and a row inserted a moment ago has
+        // created_at = now(), so pushing ONLY expires_at into the past violates
+        // the constraint and the fixture dies before the assertion runs.
+        `update public.stories
+            set created_at = now() - interval '2 days',
+                expires_at = now() - interval '1 second'
+          where id = $1`,
         [story],
       );
       expect(await visibleTo(bob, story)).toBe(false);
@@ -445,7 +498,14 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
 
       await asOwner();
       await db.query(
-        "update public.stories set expires_at = now() - interval '1 second' where id = $1",
+        // created_at moves too: 0065 carries
+        // `check (expires_at > created_at)`, and a row inserted a moment ago has
+        // created_at = now(), so pushing ONLY expires_at into the past violates
+        // the constraint and the fixture dies before the assertion runs.
+        `update public.stories
+            set created_at = now() - interval '2 days',
+                expires_at = now() - interval '1 second'
+          where id = $1`,
         [story],
       );
 

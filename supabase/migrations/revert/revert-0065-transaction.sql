@@ -54,9 +54,16 @@ DROP TABLE IF EXISTS public.story_tags;
 DROP TABLE IF EXISTS public.story_audience;
 DROP TABLE IF EXISTS public.stories;
 
--- is_mutual_friend was introduced by 0065 and nothing before it used the name.
--- Dropped last, after every policy and function that referenced it.
+-- Functions introduced by 0065, dropped last — after every policy and table
+-- that referenced them. All four are SECURITY DEFINER and all four are granted
+-- to `authenticated`, so leaving any of them installed after the tables are
+-- gone would leave a privileged function referencing a relation that no longer
+-- exists, still callable by every signed-in user, with the ledger row deleted
+-- and therefore nothing recording that it is there.
 DROP FUNCTION IF EXISTS public.is_mutual_friend(uuid, uuid);
+DROP FUNCTION IF EXISTS public.story_media_is_dead(text);
+DROP FUNCTION IF EXISTS public.is_story_recipient(uuid, uuid);
+DROP FUNCTION IF EXISTS public.is_story_author(uuid, uuid);
 
 -- Unrecord the migration IN THE SAME TRANSACTION as the drops above.
 DELETE FROM public.schema_migrations WHERE name = '0065_stories.sql';

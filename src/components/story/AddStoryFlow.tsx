@@ -8,7 +8,7 @@ import { getBarById } from '@/lib/catalog';
 import type { Bar } from '@/types';
 import StoryFrame from './StoryFrame';
 import { AudienceSheet, BarSheet, PeopleSheet } from './StorySheets';
-import type { StoryAudience, StoryItem, TaggedPerson } from './storyStore';
+import type { StoryAudience, StoryItem, StoryPhoto, TaggedPerson } from './storyStore';
 
 /**
  * Add to Story — the plus-badge entry branch, per
@@ -128,6 +128,10 @@ export default function AddStoryFlow({
     kind: pair?.inset != null ? ('dual' as const) : ('single' as const),
     main: pair?.main ?? null,
     inset: pair?.inset ?? null,
+    // Compose shows the capture the author just took, held in memory as a data
+    // URL. There is no signing step in this direction, so there is no signing
+    // failure to report — a null here is simply "nothing captured yet".
+    state: 'ok' as const,
   };
 
   /**
@@ -423,7 +427,7 @@ function SharedReceipt({
   onViewStory,
   onUndo,
 }: {
-  photo: { kind: 'single' | 'dual'; main: string | null; inset: string | null };
+  photo: StoryPhoto;
   barId: string | null;
   /** Set when Undo did not reach the server. The story is STILL LIVE. */
   failure: string | null;

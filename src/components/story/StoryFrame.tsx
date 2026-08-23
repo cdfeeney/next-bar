@@ -32,7 +32,7 @@ export default function StoryFrame({
       data-photo-kind={photo.kind}
       className={`relative overflow-hidden bg-surface ${className}`}
     >
-      <Surface url={photo.main} barId={barId} />
+      <Surface url={photo.main} barId={barId} state={photo.state} />
       {photo.kind === 'dual' ? (
         <div
           data-testid="story-frame-inset"
@@ -48,10 +48,27 @@ export default function StoryFrame({
 function Surface({
   url,
   barId,
+  state = 'ok',
 }: {
   url: string | null;
   barId: string | null;
+  state?: 'ok' | 'expired' | 'unsigned';
 }): JSX.Element {
+  // AN OUTAGE IS NOT AN ABSENT PHOTO. A failed signing used to fall through to
+  // the decorative bar glyph below, which is the same thing a story with no
+  // image shows — so the user saw a story that looked fine and simply had no
+  // picture, rather than being told the photo could not be loaded. The glyph
+  // stays the fallback for 'ok' and 'expired'; only a real failure says so.
+  if (url === null && state === 'unsigned') {
+    return (
+      <span
+        data-testid="story-media-unavailable"
+        className="w-full h-full flex items-center justify-center select-none bg-surface text-muted text-xs text-center px-4"
+      >
+        This photo could not be loaded.
+      </span>
+    );
+  }
   if (url !== null) {
     // Plain <img>: the source is a capture-time data URL, which next/image
     // cannot optimise and would only re-encode.

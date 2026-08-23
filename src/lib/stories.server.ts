@@ -95,6 +95,14 @@ export type StoryView = StoryRow & {
    * 'unsigned'  — signing FAILED. Show an unavailable state, not a blank frame.
    */
   mediaState: 'ok' | 'expired' | 'unsigned';
+  /**
+   * False when the story_tags read FAILED, so `tagIds` is not known to be the
+   * whole list. An empty tag list then means "we could not find out", not
+   * "nobody is tagged" — and the difference matters to exactly the person it
+   * hurts: a tagged user whose tag row failed to load loses the people chip and
+   * the Remove-me consent control behind it, with nothing saying why.
+   */
+  tagsComplete: boolean;
 };
 
 export type StoryResult<T> =
@@ -232,14 +240,15 @@ export async function publishStory(
   const insetPath = input.inset ? storyObjectKey(input.authorId, input.draftId, 'inset') : null;
   const uploaded: string[] = [];
 
+  // Set the instant the RPC is issued. After that point a thrown error means
+  // the OUTCOME IS UNKNOWN, not that publication failed — see the catch below.
+  let rpcIssued = false;
+
+  // Same bounded retry as the delete path: a transient failure here used to
+  // become a permanent orphan on the first attempt.
   const cleanup = async (): Promise<string[]> => {
     if (uploaded.length === 0) return [];
-    try {
-      const { error } = await client.storage.from(STORY_BUCKET).remove(uploaded);
-      return error ? [...uploaded] : [];
-    } catch {
-      return [...uploaded];
-    }
+    return removeBytes(client, uploaded);
   };
 
   try {
@@ -265,6 +274,7 @@ export async function publishStory(
       uploaded.push(insetPath);
     }
 
+    rpcIssued = true;
     const { data, error } = await client.rpc('publish_story', {
       p_media_path: mainPath,
       p_media_kind: insetPath === null ? 'single' : 'dual',
@@ -293,6 +303,23 @@ export async function publishStory(
     const row = (Array.isArray(data) ? data[0] : data) as DbRow;
     return { ok: true, value: toStory(row) };
   } catch {
+    // AN AMBIGUOUS FAILURE IS NOT A FAILED PUBLICATION. Once the RPC has been
+    // issued, a thrown error can mean the response was lost after the story
+    // COMMITTED. Deleting the bytes here then left a live, audience-visible
+    // story whose photo had been destroyed, while telling the author "Nothing
+    // was shared" — the worst of both, and unrecoverable.
+    //
+    // Before the RPC is issued nothing can have been published, so cleanup is
+    // safe and correct. After it, the bytes are left alone and the outcome is
+    // reported as unknown; the story either exists (and still has its photo) or
+    // it does not, and the author is told to look rather than misled.
+    if (rpcIssued) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        message: 'We lost contact while sharing. Check your story before trying again — it may have posted.',
+      };
+    }
     const orphans = await cleanup();
     return { ok: false, reason: 'unavailable', orphans, message: 'Stories are unavailable right now. Nothing was shared.' };
   }
@@ -330,10 +357,13 @@ export async function fetchVisibleStories(
     const rows = (data ?? []) as DbRow[];
     const tags = await fetchTags(client, rows.map((row) => row.id));
     const views = await Promise.all(rows.map(async (row) => {
-      const story = toStory(row, tags.get(row.id) ?? []);
+      const story = toStory(row, tags.byStory.get(row.id) ?? []);
       const ttl = signedUrlTtlSeconds(story.expiresAt, now);
       if (ttl <= 0) {
-        return { ...story, mediaUrl: null, insetUrl: null, mediaState: 'expired' as const };
+        return {
+          ...story, mediaUrl: null, insetUrl: null,
+          mediaState: 'expired' as const, tagsComplete: tags.ok,
+        };
       }
       const [main, inset] = await Promise.all([
         signUrl(client, story.mediaPath, ttl),
@@ -344,7 +374,7 @@ export async function fetchVisibleStories(
       // when there was an inset path to sign in the first place.
       const insetFailed = story.insetPath !== null && inset === null;
       const mediaState = main === null || insetFailed ? ('unsigned' as const) : ('ok' as const);
-      return { ...story, mediaUrl: main, insetUrl: inset, mediaState };
+      return { ...story, mediaUrl: main, insetUrl: inset, mediaState, tagsComplete: tags.ok };
     }));
     return { ok: true, value: views };
   } catch {
@@ -369,25 +399,30 @@ export async function fetchVisibleStories(
 async function fetchTags(
   client: SupabaseClient,
   storyIds: readonly string[],
-): Promise<Map<string, string[]>> {
+): Promise<{ byStory: Map<string, string[]>; ok: boolean }> {
   const byStory = new Map<string, string[]>();
-  if (storyIds.length === 0) return byStory;
+  if (storyIds.length === 0) return { byStory, ok: true };
   try {
     const { data, error } = await client
       .from('story_tags')
       .select('story_id, profile_id')
       .in('story_id', [...storyIds])
       .is('removed_at', null);
-    if (error) return byStory;
+    if (error) return { byStory, ok: false };
     for (const row of (data ?? []) as { story_id: string; profile_id: string }[]) {
       const list = byStory.get(row.story_id) ?? [];
       list.push(row.profile_id);
       byStory.set(row.story_id, list);
     }
   } catch {
-    // A failed tag read is a missing chip, never a missing story.
+    // A failed tag read is a missing chip, never a missing story — but it must
+    // not be silent. A tagged person whose tag row failed to load loses the
+    // people chip AND the Remove-me control behind it, which is their only
+    // consent withdrawal; showing that as "nobody is tagged" is the dishonest
+    // state this flag exists to let the UI avoid.
+    return { byStory, ok: false };
   }
-  return byStory;
+  return { byStory, ok: true };
 }
 
 async function signUrl(
@@ -416,17 +451,55 @@ export async function deleteStory(
 ): Promise<StoryResult<{ orphans: string[] }>> {
   if (client === null) return unavailable();
   try {
+    // BYTES FIRST, THEN THE SOFT DELETE — the order is load-bearing.
+    //
+    // `story_media_is_dead` makes the owner-read storage policy refuse an object
+    // the moment its story is deleted, and Supabase Storage's remove() needs the
+    // object to pass SELECT as well as DELETE. Removing after the RPC therefore
+    // matched zero rows, silently: storage-js reports no error for a name it
+    // cannot see, so the cleanup reported success, the orphan report never
+    // fired, and every deleted story's bytes stayed in the private bucket with
+    // no sweep to reclaim them. The policy repair that closed the expiry hole
+    // had quietly broken deletion.
+    //
+    // Read the paths while the story is still live (the author-reads-own policy
+    // allows it) and remove the bytes then. If the RPC afterwards fails, the
+    // author is told honestly and can retry — a retryable broken story is a far
+    // better failure than permanent private orphans nothing reclaims.
+    const { data: pre } = await client
+      .from('stories')
+      .select('media_path, inset_path')
+      .eq('id', storyId)
+      .limit(1);
+    const prePaths = ((pre ?? []) as { media_path: string; inset_path: string | null }[])
+      .flatMap((r) => [r.media_path, r.inset_path])
+      .filter((p): p is string => p !== null);
+    const preOrphans = prePaths.length > 0 ? await removeBytes(client, prePaths) : [];
+
     const { data, error } = await client.rpc('delete_story', { p_story_id: storyId });
     if (error) {
-      return { ok: false, reason: 'failed', message: 'The story could not be removed.' };
+      return {
+        ok: false,
+        reason: 'failed',
+        message: prePaths.length > 0 && preOrphans.length === 0
+          ? 'The photo was removed but the story could not be deleted. Try again.'
+          : 'The story could not be removed.',
+      };
     }
     const rows = (Array.isArray(data) ? data : [data]).filter(Boolean) as
       { media_path: string; inset_path: string | null }[];
     if (rows.length === 0) {
-      // No row matched: not the author, already deleted, or never existed.
+      // No row matched: not the author, already deleted, or never existed. The
+      // storage policy is prefix-scoped, so a non-author's removeBytes above
+      // could not have touched anyone else's object.
       return { ok: false, reason: 'denied', message: 'That story is not yours to remove.' };
     }
-    const paths = rows.flatMap((r) => [r.media_path, r.inset_path]).filter((p): p is string => p !== null);
+    // Whatever the RPC names that the pre-read did not cover (it normally names
+    // the same objects, already gone).
+    const paths = rows
+      .flatMap((r) => [r.media_path, r.inset_path])
+      .filter((p): p is string => p !== null)
+      .filter((p) => !prePaths.includes(p) || preOrphans.includes(p));
     // THE SOFT-DELETE HAS ALREADY SUCCEEDED. Everything below is byte cleanup,
     // and it must never turn a completed deletion into a reported failure: the
     // read gate closed the moment `delete_story` returned, so the story IS gone
@@ -435,7 +508,11 @@ export async function deleteStory(
     // "Stories are unavailable right now. Nothing was shared.", telling the
     // author their delete failed while the row was already soft-deleted. The
     // honest outcome is success plus a reported orphan.
-    const orphans = paths.length > 0 ? await removeBytes(client, paths) : [];
+    // Anything still outstanding after the pre-delete pass. These are now dead
+    // objects (the story is soft-deleted), so the owner policy refuses them and
+    // this attempt is expected to fail — it is reported, not retried into a loop.
+    const late = paths.length > 0 ? await removeBytes(client, paths) : [];
+    const orphans = [...new Set([...preOrphans, ...late])];
     return { ok: true, value: { orphans } };
   } catch {
     return unavailable();

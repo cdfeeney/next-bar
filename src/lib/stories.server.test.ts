@@ -393,35 +393,75 @@ describe('reportOrphans', () => {
 });
 
 describe('deleteStory', () => {
-  it('removes the bytes the RPC hands back', async () => {
-    const { client, storage } = clientStub({
-      rpc: { data: [{ media_path: 'a/1/main', inset_path: 'a/1/inset' }], error: null },
-    });
+  /**
+   * The pre-read deleteStory now performs BEFORE the RPC: it reads the object
+   * keys while the story is still live, because story_media_is_dead closes the
+   * owner-read storage policy the instant the row is soft-deleted, and Storage
+   * remove() needs SELECT as well as DELETE. Without this stub the pre-read
+   * throws and every case falls to `unavailable`.
+   */
+  const withPreRead = (
+    rows: { media_path: string; inset_path: string | null }[],
+    overrides: Parameters<typeof clientStub>[0] = {},
+  ) => {
+    const stub = clientStub(overrides);
+    stub.client.from = vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({ limit: vi.fn().mockResolvedValue({ data: rows, error: null }) })),
+      })),
+    }));
+    return stub;
+  };
+
+  it('removes the bytes while the story is still live, BEFORE the soft delete', async () => {
+    const { client, storage, rpc } = withPreRead(
+      [{ media_path: 'a/1/main', inset_path: 'a/1/inset' }],
+      { rpc: { data: [{ media_path: 'a/1/main', inset_path: 'a/1/inset' }], error: null } },
+    );
     const result = await deleteStory(client, 's1');
     expect(result.ok).toBe(true);
     expect(storage.remove).toHaveBeenCalledWith(['a/1/main', 'a/1/inset']);
+    // Ordering is the whole point: removal must precede delete_story.
+    expect(storage.remove.mock.invocationCallOrder[0])
+      .toBeLessThan(rpc.mock.invocationCallOrder[0]);
+  });
+
+  it('tells the author honestly when the bytes went but the delete did not', async () => {
+    const { client } = withPreRead(
+      [{ media_path: 'a/1/main', inset_path: null }],
+      { rpc: { data: null, error: { message: 'boom' } } },
+    );
+    const result = await deleteStory(client, 's1');
+    expect(result).toMatchObject({ ok: false, reason: 'failed' });
+    if (!result.ok) expect(result.message).toContain('photo was removed');
   });
 
   it('is a denial, not a success, when no row was the caller\'s to delete', async () => {
-    const { client, storage } = clientStub({ rpc: { data: [], error: null } });
+    const { client, storage } = withPreRead([], { rpc: { data: [], error: null } });
     const result = await deleteStory(client, 's1');
     expect(result).toMatchObject({ ok: false, reason: 'denied' });
+    // Nothing to remove: the pre-read found no row this caller may see, so no
+    // byte removal was attempted against someone else's prefix.
     expect(storage.remove).not.toHaveBeenCalled();
   });
 
   it('still succeeds but reports orphans when the byte removal fails', async () => {
-    const { client } = clientStub({
-      rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null },
-      remove: { error: { message: 'nope' } },
-    });
+    const { client } = withPreRead(
+      [{ media_path: 'a/1/main', inset_path: null }],
+      {
+        rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null },
+        remove: { error: { message: 'nope' } },
+      },
+    );
     const result = await deleteStory(client, 's1');
     expect(result).toMatchObject({ ok: true, value: { orphans: ['a/1/main'] } });
   });
 
   it('retries a failed removal once before reporting an orphan', async () => {
-    const { client, storage } = clientStub({
-      rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null },
-    });
+    const { client, storage } = withPreRead(
+      [{ media_path: 'a/1/main', inset_path: null }],
+      { rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null } },
+    );
     storage.remove
       .mockResolvedValueOnce({ error: { message: 'transient' } })
       .mockResolvedValueOnce({ error: null });
@@ -436,9 +476,10 @@ describe('deleteStory', () => {
   // and surface as "unavailable", telling the author their delete failed while
   // the row was already gone for every reader.
   it('reports success, not failure, when byte removal THROWS after the row is deleted', async () => {
-    const { client, storage } = clientStub({
-      rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null },
-    });
+    const { client, storage } = withPreRead(
+      [{ media_path: 'a/1/main', inset_path: null }],
+      { rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null } },
+    );
     storage.remove.mockRejectedValue(new Error('network died'));
     const result = await deleteStory(client, 's1');
     expect(result.ok).toBe(true);

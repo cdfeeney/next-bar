@@ -54,16 +54,37 @@ export default function TaggedPeopleSheet({
       <ul>
         {people.map((person) => (
           <li
-            key={person.handle}
+            key={person.id}
             data-testid="tagged-person-row"
+            data-resolved={person.resolved === false ? 'false' : 'true'}
             className="flex items-center gap-3 min-h-[56px] border-b border-border last:border-b-0"
           >
-            <Avatar initials={person.initials} seed={person.handle} size="sm" />
+            {/* A person this viewer may not read is counted, never named. The
+                store keeps the row so the sheet reports how many people a story
+                tags; naming them would leak a profile the viewer has no right
+                to see, and DROPPING them under-reported the tag list. Rendering
+                the empty strings verbatim — which is what shipped a moment ago —
+                gave a blank row keyed by an empty handle, linking to a bare
+                `/u/`. Both dishonesties are avoided by saying plainly that
+                someone is there and that we cannot say who. */}
+            <Avatar
+              initials={person.resolved === false ? '?' : person.initials}
+              seed={person.resolved === false ? person.id : person.handle}
+              size="sm"
+            />
             <span className="min-w-0 flex-1">
-              <span className="block text-sm truncate">{person.name}</span>
+              <span className="block text-sm truncate">
+                {person.resolved === false ? 'Someone you cannot see' : person.name}
+              </span>
               <span className="block text-[11px] text-muted truncate">
-                @{person.handle}
-                {person.isYou === true ? ' · you' : ''}
+                {person.resolved === false ? (
+                  'Tagged in this story'
+                ) : (
+                  <>
+                    @{person.handle}
+                    {person.isYou === true ? ' · you' : ''}
+                  </>
+                )}
               </span>
             </span>
             {/* EVERY row links to a profile — "Remove me" is an extra action
@@ -71,13 +92,17 @@ export default function TaggedPeopleSheet({
                 left the one person guaranteed to be in this list with no way
                 to reach a profile from it. */}
             <span className="shrink-0 flex items-center gap-2">
-              <Link
-                href={profileHref(person)}
-                data-testid="tagged-person-profile"
-                className="min-h-[44px] px-3 flex items-center rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
-              >
-                Profile
-              </Link>
+              {/* No profile link for an unresolved row: `/u/` with no handle is
+                  a dead link, and there is no profile this viewer may open. */}
+              {person.resolved === false ? null : (
+                <Link
+                  href={profileHref(person)}
+                  data-testid="tagged-person-profile"
+                  className="min-h-[44px] px-3 flex items-center rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+                >
+                  Profile
+                </Link>
+              )}
               {person.isYou === true && onRemoveMe !== null ? (
                 <button
                   type="button"

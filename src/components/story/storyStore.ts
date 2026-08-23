@@ -76,6 +76,14 @@ export type StoryPhoto = {
   /** Short-lived signed URL, or null when it could not be minted. */
   main: string | null;
   inset?: string | null;
+  /**
+   * WHY `main` is null, carried from the server so the UI can tell an OUTAGE
+   * from an absent photo. Without it every null rendered as the decorative bar
+   * glyph, so a signing failure looked exactly like a story that simply has no
+   * image — the dishonesty the server-side state was added to end, left unfixed
+   * because nothing consumed it.
+   */
+  state: 'ok' | 'expired' | 'unsigned';
 };
 
 export type StoryItem = {
@@ -233,6 +241,7 @@ function toItem(view: StoryView, tagged: TaggedPerson[]): StoryItem {
       kind: view.mediaKind,
       main: view.mediaUrl,
       inset: view.insetUrl,
+      state: view.mediaState,
     },
     audience: view.audience,
   };
@@ -413,7 +422,26 @@ export function useStories(): UseStories {
     const friendGroups: StoryGroup[] = [];
     for (const [authorId, list] of byAuthor) {
       const person = people.get(authorId);
-      if (person === undefined) continue;
+      // AN UNRESOLVED AUTHOR IS NOT AN ABSENT STORY. This used to `continue`,
+      // which silently dropped the whole group — so when the follow-graph read
+      // failed and `mutuals` came back empty, every friend story disappeared and
+      // the rail reported `ready` with nothing in it. A failed read rendered as
+      // an honest empty feed, which is the exact silent-fallback this surface
+      // must never do. The DATABASE already authorised these rows: RLS returned
+      // them, so the viewer is entitled to see them whatever the local circle
+      // cache knows. Show the story; name the author only when we actually can.
+      if (person === undefined) {
+        friendGroups.push({
+          id: authorId,
+          handle: null,
+          name: 'Someone you follow',
+          initials: '··',
+          isYou: false,
+          items: list,
+          hasUnseen: list.some((item) => !seen.includes(item.id)),
+        });
+        continue;
+      }
       friendGroups.push({
         id: person.id,
         handle: person.handle,

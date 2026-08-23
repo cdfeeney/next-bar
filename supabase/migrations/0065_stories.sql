@@ -130,6 +130,82 @@ comment on function public.is_mutual_friend(uuid, uuid) is
 revoke all on function public.is_mutual_friend(uuid, uuid) from public, anon;
 grant execute on function public.is_mutual_friend(uuid, uuid) to authenticated;
 
+-- BREAKING THE POLICY RECURSION. `stories`'s SELECT policy must ask whether the
+-- caller is a named recipient, which lives in `story_audience`; and
+-- `story_audience`'s own SELECT policy must ask whether the caller authored the
+-- parent story, which lives in `stories`. Written as plain subqueries those two
+-- policies reference each other, and PostgreSQL expands policies at plan time —
+-- so reading either table raises "infinite recursion detected in policy for
+-- relation", and NO story is readable by anyone. Nothing local catches it:
+-- typecheck, vitest and the browser gate never execute SQL.
+--
+-- Both directions go through SECURITY DEFINER helpers instead. The definer is
+-- the table owner, which is exempt from RLS (these tables enable RLS but do not
+-- FORCE it), so the inner read expands no policy and the cycle is cut. Same
+-- pattern, and same reasoning, as is_mutual_friend above.
+--
+-- Both FAIL CLOSED and refuse to be oracles: each answers only when the profile
+-- being asked about is the caller's own. A direct call cannot enumerate someone
+-- else's audience membership or authorship.
+create or replace function public.is_story_recipient(p_story_id uuid, p_profile_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_story_id is null
+     or p_profile_id is null
+     or auth.uid() is null
+     or p_profile_id <> auth.uid() then
+    return false;
+  end if;
+  return exists (
+    select 1 from public.story_audience sa
+     where sa.story_id = p_story_id and sa.profile_id = p_profile_id
+  );
+end;
+$$;
+
+revoke all on function public.is_story_recipient(uuid, uuid) from public, anon;
+grant execute on function public.is_story_recipient(uuid, uuid) to authenticated;
+
+comment on function public.is_story_recipient(uuid, uuid) is
+  'Is this profile a named recipient of this custom story? SECURITY DEFINER so '
+  'the stories SELECT policy can read story_audience without expanding that '
+  'table''s own policy, which would reference stories and recurse. Answers only '
+  'for the caller''s own id and fails closed.';
+
+create or replace function public.is_story_author(p_story_id uuid, p_profile_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_story_id is null
+     or p_profile_id is null
+     or auth.uid() is null
+     or p_profile_id <> auth.uid() then
+    return false;
+  end if;
+  return exists (
+    select 1 from public.stories s
+     where s.id = p_story_id and s.author_id = p_profile_id
+  );
+end;
+$$;
+
+revoke all on function public.is_story_author(uuid, uuid) from public, anon;
+grant execute on function public.is_story_author(uuid, uuid) to authenticated;
+
+comment on function public.is_story_author(uuid, uuid) is
+  'Did this profile author this story? SECURITY DEFINER so the story_audience '
+  'and story_tags policies can ask without expanding the stories policy, which '
+  'references story_audience and would recurse. Own-id only; fails closed.';
+
 ------------------------------------------------------------------------------
 -- 2. Tables
 ------------------------------------------------------------------------------
@@ -227,13 +303,12 @@ create policy "stories: audience reads unexpired"
     and public.is_mutual_friend(auth.uid(), author_id)
     and (
       audience = 'friends'
+      -- Through the definer helper, NOT a bare subquery: story_audience's own
+      -- policy asks whether the caller authored this story, which reads
+      -- public.stories, which expands this policy again. See the helper header.
       or (
         audience = 'custom'
-        and exists (
-          select 1 from public.story_audience sa
-           where sa.story_id = public.stories.id
-             and sa.profile_id = auth.uid()
-        )
+        and public.is_story_recipient(public.stories.id, auth.uid())
       )
     )
   );
@@ -251,10 +326,10 @@ create policy "story_audience: parties read"
   on public.story_audience for select
   using (
     auth.uid() = profile_id
-    or exists (
-      select 1 from public.stories s
-       where s.id = story_id and s.author_id = auth.uid()
-    )
+    -- Definer helper rather than a bare subquery on public.stories: that table's
+    -- SELECT policy reads story_audience, so a plain subquery here closes the
+    -- cycle and PostgreSQL refuses BOTH tables with an infinite-recursion error.
+    or public.is_story_author(story_id, auth.uid())
   );
 
 -- Tags are readable by anyone who can read the story, plus the tagged person.
@@ -351,11 +426,23 @@ begin
      or (storage.foldername(p_name))[1] is distinct from auth.uid()::text then
     return true;
   end if;
+  -- "Dead" means NO LIVE STORY REFERENCES IT — not merely "some dead story
+  -- does". Nothing enforces one story per object (publish_story checks that the
+  -- object exists, not that it is unused), so two live stories can name the same
+  -- key; deleting one would then have refused the other's still-live media. The
+  -- predicate now matches its intent, and an object no story references at all
+  -- stays readable, which is the upload-before-publish window cleanup depends on.
   return exists (
-    select 1 from public.stories s
-     where (s.media_path = p_name or s.inset_path = p_name)
-       and (s.deleted_at is not null or s.expires_at <= now())
-  );
+           select 1 from public.stories s
+            where (s.media_path = p_name or s.inset_path = p_name)
+              and (s.deleted_at is not null or s.expires_at <= now())
+         )
+     and not exists (
+           select 1 from public.stories s
+            where (s.media_path = p_name or s.inset_path = p_name)
+              and s.deleted_at is null
+              and s.expires_at > now()
+         );
 end;
 $$;
 
