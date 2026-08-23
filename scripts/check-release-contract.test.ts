@@ -115,17 +115,50 @@ describe('checkContract', () => {
   });
 
   // ------------------------------------------------- unresolved vs approved
-  it('rejects a row that depends on a pending decision but reads as approved', () => {
+  it('rejects a row that depends on an open decision but reads as approved', () => {
     expect(codes(run(cleanLedger([goodRow({ blocked_on: 'D-P-03', status: 'approved' })])))).toContain('UNRESOLVED_MARKED_APPROVED');
   });
 
-  it('rejects a row that cites a pending decision as its authority but reads as approved', () => {
+  it('rejects a row that cites an open decision as its authority but reads as approved', () => {
     expect(codes(run(cleanLedger([goodRow({ decision_ref: 'D-P-03', status: 'approved' })])))).toContain('UNRESOLVED_MARKED_APPROVED');
   });
 
   it('accepts the same row once it is marked blocked', () => {
     expect(run(cleanLedger([
       goodRow({ blocked_on: 'D-P-03', status: 'blocked' }),
+      goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] }),
+    ]))).toEqual([]);
+  });
+
+  // "Open" comes from the ledger's own open_decisions list, never from the shape of an id. A
+  // resolved question keeps its historical D-P- id, and citing it must NOT re-open anything.
+  it('treats a resolved decision id as resolved even though it keeps its D-P- prefix', () => {
+    const l = cleanLedger([goodRow({ decision_ref: 'D-P-03', status: 'approved' }), goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] })]);
+    l.open_decisions = [];
+    expect(run(l)).toEqual([]);
+  });
+
+  // The failure that actually bit us: an approved security requirement whose implementation is
+  // merely absent was recorded as `blocked`, which reads as "the product question is unsettled"
+  // when the truth is "approved, and nobody has built it". Unbuilt work is coverage, not status.
+  it('rejects a blocked row that names a capability gap instead of an open decision', () => {
+    const findings = run(cleanLedger([goodRow({ status: 'blocked', blocked_on: 'capability: server-side URL minting' })]));
+    expect(codes(findings)).toContain('BLOCKED_WITHOUT_OPEN_DECISION');
+  });
+
+  it('rejects a blocked row that names no blocker at all', () => {
+    expect(codes(run(cleanLedger([goodRow({ status: 'blocked', blocked_on: null })])))).toContain('BLOCKED_WITHOUT_OPEN_DECISION');
+  });
+
+  it('rejects a blocked row citing a decision that is no longer open', () => {
+    const l = cleanLedger([goodRow({ status: 'blocked', blocked_on: 'D-P-03' }), goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] })]);
+    l.open_decisions = [];
+    expect(codes(run(l))).toContain('BLOCKED_WITHOUT_OPEN_DECISION');
+  });
+
+  it('accepts an approved requirement whose implementation is simply missing', () => {
+    expect(run(cleanLedger([
+      goodRow({ status: 'approved', blocked_on: null, coverage: 'missing' }),
       goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] }),
     ]))).toEqual([]);
   });

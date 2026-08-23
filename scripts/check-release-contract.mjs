@@ -67,8 +67,6 @@ const REQUIRED_PRESENT = [
 const REQ_ID = /V8-R-[A-Z]+-\d{3}/g;
 /** Confirmed (D-C-nn), pending founder approval (D-P-nn), or a revision-1 open id (D-O-nn). */
 const DECISION_ID = /\bD-[CPO]-\d{2}\b/g;
-/** A dependency on an UNRESOLVED decision. A row carrying one may never read as approved. */
-const UNRESOLVED_DECISION = /^D-[PO]-\d{2}$/;
 
 const TEXT_FILE = /\.(md|json|txt|ts|tsx|js|mjs|cjs|sql|ya?ml)$/i;
 
@@ -155,7 +153,9 @@ export function checkContract(ledger, decisionMd, readFile, listDir = () => null
   }
 
   // Every open decision the ledger lists must exist in the decision record.
+  const openDecisions = new Set();
   for (const open of ledger.open_decisions ?? []) {
+    openDecisions.add(open.id);
     if (!knownDecisions.has(open.id)) {
       fail('UNKNOWN_DECISION', `ledger.open_decisions.${open.id}`, `${open.id} is not in the decision record`);
     }
@@ -255,14 +255,29 @@ export function checkContract(ledger, decisionMd, readFile, listDir = () => null
       fail('BAD_COVERAGE', id, `coverage "${r.coverage}" is not complete|partial|missing|contradicted|duplicated|stale`);
     }
 
-    // The admission failure this exists for: a requirement that hangs on an
-    // unresolved owner decision must never read as approved.
-    if (typeof r.blocked_on === 'string' && UNRESOLVED_DECISION.test(r.blocked_on) && r.status !== 'blocked') {
-      fail('UNRESOLVED_MARKED_APPROVED', id, `depends on unresolved decision ${r.blocked_on} but status is "${r.status}"`);
+    // "Open" is read from the ledger's own open_decisions list, never inferred from an id's
+    // shape. A resolved question keeps its historical id, so a `D-P-` prefix proves nothing.
+    //
+    // Two doors into the same admission failure: a requirement that hangs on a still-open
+    // owner decision must never read as approved.
+    if (typeof r.blocked_on === 'string' && openDecisions.has(r.blocked_on) && r.status !== 'blocked') {
+      fail('UNRESOLVED_MARKED_APPROVED', id, `depends on open decision ${r.blocked_on} but status is "${r.status}"`);
     }
-    // Same failure by the other door: citing a pending decision as the authority.
-    if (typeof r.decision_ref === 'string' && UNRESOLVED_DECISION.test(r.decision_ref) && r.status !== 'blocked') {
-      fail('UNRESOLVED_MARKED_APPROVED', id, `cites unresolved decision ${r.decision_ref} as its authority but status is "${r.status}"`);
+    if (typeof r.decision_ref === 'string' && openDecisions.has(r.decision_ref) && r.status !== 'blocked') {
+      fail('UNRESOLVED_MARKED_APPROVED', id, `cites open decision ${r.decision_ref} as its authority but status is "${r.status}"`);
+    }
+
+    // And the converse, which is the failure that actually bit us: a requirement whose
+    // implementation is merely MISSING was being recorded as `blocked`, which reads as "the
+    // product question is unsettled" when the truth is "approved, and nobody has built it".
+    // Blocking is reserved for a genuinely open product decision, so a blocked row must name
+    // one that is currently open. Unbuilt work belongs in `coverage`, never in `status`.
+    if (r.status === 'blocked') {
+      if (typeof r.blocked_on !== 'string' || r.blocked_on === '') {
+        fail('BLOCKED_WITHOUT_OPEN_DECISION', id, 'is blocked but names no blocking decision — missing implementation alone is coverage, not status');
+      } else if (!openDecisions.has(r.blocked_on)) {
+        fail('BLOCKED_WITHOUT_OPEN_DECISION', id, `is blocked on "${r.blocked_on}", which is not a currently open product decision — missing implementation alone must not block an approved requirement`);
+      }
     }
 
     // Every deferral and supersession needs an owner citation.

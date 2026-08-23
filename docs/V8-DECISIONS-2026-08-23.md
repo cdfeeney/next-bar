@@ -2,134 +2,143 @@
 
 Date: 2026-08-23
 Release: `V8`
-Revision: 2 (supersedes revision 1 of the same date)
-Status: **DRAFT — not approved.** Nothing here authorizes implementation until the founder
-approves this file together with `docs/V8-PRD-DELTA-2026-08-23.md` and
-`docs/V8-TRACEABILITY-LEDGER.json`.
+Revision: 3 (supersedes revisions 1 and 2 of the same date)
+Status: **DRAFT** pending final founder approval of the exact digests emitted by the validator.
 
-Compiled by the attended Claude Code session from direct inspection of all 16 approved canvases
-under `docs/design-reference/approved/`, the frozen PRD `docs/V8-PRD-2026-08-13.md` as amended
-2026-08-21, and the founder's decisions of 2026-08-23.
+**There are no unresolved product decisions.** Every question this record has ever carried is
+answered. Nothing here authorizes implementation until the founder approves the digests.
 
-Three things are kept apart and never mixed: **confirmed product decisions**, **decisions still
-awaiting founder approval**, and **operational authorizations**. Operational authorization is not
-a product requirement and never appears in a requirement row.
+Three things are kept apart and never mixed: **confirmed product decisions**, **deferrals**, and
+**operational authorizations**. Operational authorization is not a product requirement and never
+appears in a requirement row.
 
-Requirement rows, with every field the traceability contract demands, live in
-`docs/V8-TRACEABILITY-LEDGER.json`. Requirement counts are **not** restated in prose anywhere:
-they are computed from the ledger by `scripts/check-release-contract.mjs`, so they cannot drift.
+Requirement rows live in `docs/V8-TRACEABILITY-LEDGER.json`. Counts are **not** restated in prose
+anywhere — they are computed from the ledger by `scripts/check-release-contract.mjs`, so they
+cannot drift.
 
 ---
 
 ## 1. Confirmed decisions
 
-`Scope` says whether the approval covers visuals, capability, or both.
-
-### 1.1 Carried forward from revision 1
+### 1.1 Carried forward
 
 | ID | Decision | Scope |
 |---|---|---|
-| `D-C-01` | All 16 canvases in `docs/design-reference/approved/` are founder-approved as of 2026-08-21. `exploratory/` no longer exists; there is no review-pending tier. | visual |
+| `D-C-01` | All 16 canvases in `docs/design-reference/approved/` are founder-approved as of 2026-08-21. There is no review-pending tier. | visual |
 | `D-C-02` | Onboarding and Night Out Invite Recipient are approved visual implementation inputs. | visual |
-| `D-C-03` | Apple, Google and phone authentication are **not authorized for V8**. Email/password remains the V8 auth path. Reaffirmed 2026-08-23 (founder decision 17). | capability exclusion |
-| `D-C-04` | The Onboarding canvas's omission of a mandatory gender field is approved as drawn. Do not add one. | both |
+| `D-C-03` | Apple, Google and phone authentication are **not authorized for V8**. Email/password remains the V8 auth path. | capability exclusion |
+| `D-C-04` | The Onboarding canvas's omission of a mandatory gender field is approved as drawn. | both |
 | `D-C-05` | Stories and Feed are in **build one**. | both |
-| `D-C-09` | Map filters **commit live**. The `next-bar-map-v1` draft-until-`Show N bars` Apply gate is superseded. Reaffirmed 2026-08-23 (founder decision 14). | both |
-| `D-C-10` | Rankings suppression **Option B**: a score below 5.0 is negative evidence only and does not suppress a bar. | capability |
-| `D-C-11` | Map markers carry exactly two meanings — ranked ring, other dot — plus the user dot. No Loved/Liked/Pass, no suggested tier. | both |
+| `D-C-09` | Map filters **commit live**. The `next-bar-map-v1` draft-until-`Show N bars` Apply gate is superseded. | both |
+| `D-C-10` | Rankings suppression **Option B**: a score below 5.0 is negative evidence only. | capability |
+| `D-C-11` | Map markers carry exactly two meanings — ranked ring, other dot — plus the user dot. | both |
+| `D-C-12` | Feed is **both** a Social view **and** an explicit global-composer destination. | both |
+| `D-C-13` | The composer destinations are **Feed, Story, Night Out, and Group**. | both |
+| `D-C-14` | Story alone does **not** publish to Feed. Feed **and** Story publish **the same media object** to both, **without duplicating the media**. | capability |
+| `D-C-15` | Feed posts remain until **their author deletes them**, and support **visible comments**. | capability |
+| `D-C-16` | Stories expire after **24 hours** and have **no public comment thread**. | capability |
+| `D-C-17` | Story audiences are **mutual friends**, a **named mutual-friend group**, or a **custom mutual-friend subset**. Never public. | capability |
+| `D-C-18` | Night Out media has a **24-hour window measured from the scheduled Night Out start**. A **signed-in participant** may **privately archive** it to **Saved Nights Out**. | capability |
+| `D-C-20` | **Group** means a **persistent named group chat** — text and photos, reusable to invite the same people to future Night Outs. Its full policy is `D-C-31`. | capability |
+| `D-C-21` | Presence choices are **Going out**, **Maybe later**, **Not going out**. Superseded on the pin relationship by `D-C-36`. | capability |
+| `D-C-22` | Night Out RSVP choices are **Going**, **Maybe**, **Can't make it**. | capability |
+| `D-C-23` | A **token-scoped recipient without the app** may **view the Night Out and submit an RSVP without signing up**. They may **not** vote, suggest bars, or browse private application data until authenticated. | capability |
+| `D-C-24` | Account includes **Saved Nights Out** and the **vibe quiz** in V8. **Badges and Persona are deferred to V9.** | both |
+| `D-C-25` | Map markers use the **approved numeric score** rather than legacy tiers. **Preserve the approved live filters.** | both |
+| `D-C-26` | Rankings are **server-owned**, with **last server-committed write** as the conflict rule. | capability |
+| `D-C-27` | The stale "exploratory / pending approval" labels inside four canvases are **superseded by the written approval record**. **Image recapture is not required.** | visual |
+| `D-C-28` | Third-party onboarding authentication remains **outside V8**. | capability exclusion |
 
-### 1.2 Founder decisions of 2026-08-23
+### 1.2 Revised
 
-Recorded exactly as given. The numbers in brackets are the founder's own numbering.
+| ID | Revision |
+|---|---|
+| `D-C-19` | **Revised 2026-08-23.** Previously "deferred to V9 **if it would materially expand V8**". The conditional is removed: exporting or saving a photo from Next Bar into the phone's **native Photos library is entirely deferred to V9**. **There is no native Photos-library export in V8.** Saved Nights Out remains in V8 as a private **in-app** archive and is **not** the phone's Photos library. |
 
-| ID | Decision | Scope |
+### 1.3 Founder decisions of 2026-08-23 resolving the eight pending questions
+
+| ID | Decision | Replaces |
 |---|---|---|
-| `D-C-12` | **[1]** Feed is **both** a Social view **and** an explicit global-composer destination. | both |
-| `D-C-13` | **[2]** The composer destinations are **Feed, Story, Night Out, and Group** — four. | both |
-| `D-C-14` | **[3]** Selecting Story alone does **not** automatically publish to Feed. Selecting Feed **and** Story publishes **the same media object** to both destinations **without duplicating the media**. | capability |
-| `D-C-15` | **[4]** Feed posts remain until **their author deletes them**, and support **visible comments**. | capability |
-| `D-C-16` | **[5]** Stories expire after **24 hours** and have **no public comment thread**. | capability |
-| `D-C-17` | **[6]** Story audiences are **mutual friends**, a **named mutual-friend group**, or a **custom mutual-friend subset**. Stories are **never public**. | capability |
-| `D-C-18` | **[7]** Night Out media has a **24-hour window measured from the scheduled Night Out start**. A **signed-in participant** may **privately archive** it to **Saved Nights Out**. | capability |
-| `D-C-19` | **[8]** Saving media to the phone's **local photo library is deferred to V9** if it would materially expand V8. | deferral (conditional) |
-| `D-C-20` | **[9]** **Group** means a **persistent named group chat**: people can exchange **text and photos**, and the group is **reusable to invite the same people to future Night Outs**. | capability |
-| `D-C-21` | **[10]** Presence choices are **Going out**, **Maybe later**, and **Not going out**. A **manual Pin / Heading-to selection overrides automatic presence until 4:00 AM**. | capability |
-| `D-C-22` | **[11]** Night Out RSVP choices are **Going**, **Maybe**, and **Can't make it**. | capability |
-| `D-C-23` | **[12]** A **token-scoped recipient without the app** may **view the associated Night Out and submit an RSVP without signing up**. They may **not** vote, suggest bars, or browse private application data until authenticated. | capability |
-| `D-C-24` | **[13]** Account includes **Saved Nights Out** and the **vibe quiz** in V8. **Badges and Persona are deferred to V9.** | both |
-| `D-C-25` | **[14]** Map markers use the **approved numeric score** rather than legacy tiers. **Preserve the approved live filters.** | both |
-| `D-C-26` | **[15]** Rankings are **server-owned**, with **last server-committed write** as the conflict rule. | capability |
-| `D-C-27` | **[16]** The stale "exploratory / pending approval" labels inside four canvases are **superseded by the written approval record**. **Image recapture is not required.** | visual |
-| `D-C-28` | **[17]** Third-party onboarding authentication remains **outside V8**. | capability exclusion |
+| `D-C-29` | **Feed visibility.** Feed is **never public**. Its audience is one of: **all mutual friends**; a **named mutual-friend group**; a **custom mutual-friend subset**. | `D-P-01` |
+| `D-C-30` | **Feed comments and moderation.** Anyone authorized to view a Feed post may comment. A commenter may delete their own comment. The post author may remove comments from their post. Blocking prevents visibility and interaction between the affected users. Reporting immediately hides the reported content for the reporter and creates a **server-owned** report for operator review. **No new moderation dashboard is required in V8** — existing administrative tooling is sufficient. Report records remain until operator removal or account deletion. **Deleting the Feed post removes its visible comments.** | `D-P-02` |
+| `D-C-31` | **Persistent group chat.** The creator is the **initial administrator**. Administrators may **rename** the group and **add or remove mutual friends**. **Any member may leave.** Members may send **text and photos**. **Any member** may reuse the current group membership to invite the group to a Night Out. **Senders may delete their own messages for everyone**; **administrators may remove messages** from the group. Messages **persist until removed or the group is deleted**. Blocking prevents new direct interaction, invitations, or addition to new shared groups. Reporting hides the reported content for the reporter and creates a server-owned operator-review record. **V8 provides in-app unread state and Night Out invitation notifications. V8 does not send a push notification for every ordinary Group message** — this is the previously omitted notification-volume prerequisite. | `D-P-03` |
+| `D-C-32` | **Captions.** The **global composer** provides an optional caption with a **maximum of 140 characters**. The **quick Add-to-Story path remains caption-free** so that it stays fast. A Story created **through the global composer** may carry its optional caption. | `D-P-04` |
+| `D-C-33` | **Multi-destination deletion.** One media object may have multiple destination references. **"Remove from this destination"** removes only that destination. **"Delete everywhere"** removes every destination. Removing one destination **does not destroy** the remaining destinations. **Physical media bytes are deleted only when no destination and no Saved Nights Out archive references them.** Removing the Feed destination also removes that Feed post's visible comments. | `D-P-05` |
+| `D-C-34` | **Success receipts.** Feed only: **"Posted to Feed"**, with **View post** and **Undo**. Story only: **"Added to your story"**, with **View story** and **Undo**. Multiple destinations: **"Shared to N places"**, with destination indicators, **Done** and **Undo**. | `D-P-06` |
+| `D-C-35` | **Ranking events.** Ranking actions **do not automatically generate Feed entries in V8**. Automatic ranking-event Feed rows are **deferred to V9**. | `D-P-07` |
+| `D-C-36` | **Presence and pin.** There is **no automatic GPS/location tracking**. Presence is **manually controlled**. The choices are **Going out**, **Maybe later**, **Not going out**. Selecting **Pin/Heading-to is an explicit user action that sets Going out and the selected bar until 4:00 AM**. Selecting **Maybe later or Not going out clears the active pin**. **Presence and the active pin expire at 4:00 AM.** **Night Out RSVP does not silently control global presence.** This **replaces the ambiguous phrase "overrides automatic presence."** | `D-P-08` |
 
-### 1.3 What these decisions supersede in the frozen PRD
+---
 
-Each is carried as a `superseded` row in the ledger and named in the delta.
+## 2. History — the eight pending decisions, and how they were resolved
+
+Preserved so the record of what was once open is not lost. **None of these remains open**, and no
+ledger row may cite a `D-P-` id as its authority.
+
+| Pending ID | Question as it stood | Resolved by | On |
+|---|---|---|---|
+| `D-P-01` | Feed visibility: mutual friends / named groups / custom only, and no public Feed audience | `D-C-29` | 2026-08-23 |
+| `D-P-02` | Feed comment permissions, comment deletion, blocking and reporting | `D-C-30` | 2026-08-23 |
+| `D-P-03` | Group administration, member add/remove, leaving, blocking/reporting, message retention and message deletion | `D-C-31` | 2026-08-23 |
+| `D-P-04` | Optional captions: global composer versus quick Add to Story | `D-C-32` | 2026-08-23 |
+| `D-P-05` | Multi-destination deletion: removing one destination versus Delete everywhere | `D-C-33` | 2026-08-23 |
+| `D-P-06` | Success-receipt wording for Feed-only, Story-only and multi-destination publishing | `D-C-34` | 2026-08-23 |
+| `D-P-07` | Whether ranking events ever generate Feed entries in V8 | `D-C-35` | 2026-08-23 |
+| `D-P-08` | What "automatic presence" is, given the pin canvas promises no automatic tracking | `D-C-36` | 2026-08-23 |
+
+The revision-1 open decisions `D-O-01` … `D-O-12` were resolved earlier the same day; that table
+is preserved in revision 2 of this file in git history.
+
+---
+
+## 3. What these decisions supersede in the frozen PRD
+
+Each is carried as a `superseded` row in the ledger, named in the delta, and marked by an
+amendment section in the PRD itself.
 
 | Frozen PRD text | Superseded by |
 |---|---|
-| "Group chat is excluded from V8; moderation, blocking, retention, abuse, and notification-volume policy must exist before chat is considered." | `D-C-20`. **The precondition is not waived** — it is exactly what `D-P-03` still asks the founder to settle. |
-| "`Not tonight` is the user-facing declined action rather than a second duplicate database state." | `D-C-22`. The phrase leaves the invitation surface entirely; presence keeps **Not going out** (`D-C-21`). |
-| "Pre-signup RSVP remains an exploratory proposal and is not authorized by this PRD." | `D-C-23`, **for RSVP only**. Joining, voting and suggesting still require authentication. |
-| "Joining, accepting, declining, suggesting, and voting require authentication." | `D-C-23`, **narrowed**: accepting/declining (RSVP) no longer require authentication; joining, suggesting and voting still do. |
-| Ratings ownership left to "one server owner and conflict rule" without naming the rule. | `D-C-26` names it: last server-committed write. |
+| "Group chat is excluded from V8; moderation, blocking, retention, abuse, and notification-volume policy must exist before chat is considered." | `D-C-20` for the exclusion, and `D-C-31` **supplies the required policy set** — including the notification-volume rule. The precondition is met, not waived. |
+| "`Not tonight` is the user-facing declined action rather than a second duplicate database state." | `D-C-22`. Presence keeps **Not going out** (`D-C-36`); RSVP uses **Can't make it**. |
+| "Pre-signup RSVP remains an exploratory proposal and is not authorized by this PRD." | `D-C-23`, for RSVP only. |
+| "Joining, accepting, declining, suggesting, and voting require authentication." | `D-C-23`, narrowed: RSVP no longer requires authentication; joining, suggesting and voting still do. |
+| Ratings ownership left as "one server owner and conflict rule" without naming the rule. | `D-C-26`: last server-committed write. |
 | Rankings canvas footer "Your scores · stored on this device". | `D-C-26`. |
-| `next-bar-map-v1` Apply-gated `Show N bars` filter commit. | `D-C-09`, reaffirmed by `D-C-25`. |
+| `next-bar-map-v1` Apply-gated `Show N bars` filter commit, and the six-axis Tweak-the-vibe Map surface. | `D-C-09`, reaffirmed by `D-C-25`. Recorded as `V8-R-MAP-007`. |
 | In-canvas "EXPLORATORY — REVIEW NEEDED" / "ASSUMPTION — PENDING APPROVAL" banners on four canvases. | `D-C-27`. |
 
-### 1.4 A reading that this compilation did not make
+---
 
-`D-C-21` says a manual Pin / Heading-to selection "overrides **automatic presence**". No approved
-canvas defines an automatic presence signal — `next-bar-option-b-manual-pin` states the opposite
-of automation for the **pin** ("You choose the bar. Next Bar never tracks you automatically",
-"Manual · bar-level only · expires at 4 AM").
+## 4. Deferrals to V9
 
-This compilation has **not** resolved what "automatic presence" refers to. It is carried as
-`D-P-08` below rather than guessed at, and `V8-R-PRE-004` stays blocked.
+Every deferral carries an approving person and a date, as the traceability contract requires.
+
+| Deferred | Decision | Approver / date |
+|---|---|---|
+| Badges | `D-C-24` | founder, 2026-08-23 |
+| Persona card | `D-C-24` | founder, 2026-08-23 |
+| Native Photos-library export or save (**unconditional**) | `D-C-19` | founder, 2026-08-23 |
+| Automatic ranking-event Feed rows | `D-C-35` | founder, 2026-08-23 |
 
 ---
 
-## 2. FOUNDER APPROVAL REQUIRED — unresolved behavior
+## 5. Approved requirements with missing implementation
 
-**These are not decided. Nothing in this table may be implemented.** Every ledger row citing one
-of these IDs carries `status: "blocked"`, and the validator rejects any such row that reads as
-approved.
+These are **not** blocked and **not** deferred. They are approved security requirements whose
+implementation does not yet exist, and they read `status: approved`, `coverage: missing`.
 
-| ID | Question | What is already fixed | What is open |
-|---|---|---|---|
-| `D-P-01` | **Feed visibility.** | `D-C-13` makes Feed a destination; `D-C-17` fixes Story audiences as mutual-friend-only and never public. No approved canvas contains a `Public` audience anywhere. | Confirm the Feed audience is **mutual friends / named mutual-friend group / custom mutual-friend subset only**, and that there is **no public Feed audience**. Until confirmed, Feed audience is undefined — it does **not** inherit the Story rule by default. |
-| `D-P-02` | **Feed comments.** | `D-C-15` makes Feed comments visible and Feed posts author-deletable. `D-C-16` gives Stories no public comment thread. | Who may comment (audience members only, or a narrower set); whether an author may delete another person's comment; whether a commenter may delete their own; blocking; reporting. |
-| `D-P-03` | **Group administration.** | `D-C-20` makes Group a persistent named group chat carrying text and photos, reusable for Night Out invitations. | Administration model; who may add and remove members; leaving; blocking and reporting; message retention; message deletion. The frozen PRD required exactly this policy set to exist before chat is considered, so `D-C-20` cannot be built until this is answered. |
-| `D-P-04` | **Optional captions.** | `next-bar-camera-modes` draws an optional caption (`25/140`) on the global review step. `next-bar-add-story-flow` draws **no** caption field on the quick Add-to-Story path. | Whether the quick Add-to-Story path gains a caption, or the difference between the two entry points is deliberate. |
-| `D-P-05` | **Multi-destination deletion.** | `D-C-14` makes Feed + Story one media object with two destinations. `D-C-15` makes a Feed post author-deletable. | Whether deleting removes **one destination** while the others survive, or is **Delete everywhere**; and what the control says. This governs whether `D-C-14`'s single media object may be unreferenced by one destination and still live under another. |
-| `D-P-06` | **Success-receipt wording.** | `next-bar-share-destinations-v2` draws "Shared to 3 places" with per-destination indicators; `next-bar-add-story-flow` draws "Added to your story". | The exact receipt wording for **Feed-only**, **Story-only**, and **multi-destination** publishing, now that Feed is a fourth destination and the drawn receipts predate it. |
-| `D-P-07` | **Ranking events in Feed.** | `next-bar-social-v2-core` draws a ranking event as a compact secondary row inside the Feed. | Whether a ranking event ever generates a Feed entry **in V8**, or the drawn row is deferred. |
-| `D-P-08` | **"Automatic presence".** *(Surfaced by this compilation; not in the founder's list — strike it if it is already settled.)* | `D-C-21` fixes the three presence choices and the 4:00 AM override boundary. | What "automatic presence" is, given that the approved pin canvas promises no automatic tracking. Either it names automatic derivation of the three-state status from some signal, or the word is loose and presence is wholly manual. |
-
----
-
-## 3. Resolution of the revision-1 open decisions
-
-Kept so the history is legible. None of these remains open.
-
-| Revision-1 ID | Outcome |
+| ID | Work |
 |---|---|
-| `D-O-01` Feed retention/deletion | **RESOLVED** by `D-C-15`: Feed posts persist until the author deletes them. Deletion semantics across destinations remain open as `D-P-05`. |
-| `D-O-02` Public audience | **RESOLVED for Story** by `D-C-17` (never public). **Open for Feed** as `D-P-01`. |
-| `D-O-03` Composer destination set | **RESOLVED** by `D-C-13`: Feed, Story, Night Out, Group. The revision-1 canvas-vs-canvas conflict is settled in favour of a four-destination model that neither canvas draws in full. |
-| `D-O-04` Named Group | **RESOLVED in kind** by `D-C-20` (persistent named group chat). Administration, membership, blocking, reporting and retention remain open as `D-P-03`. |
-| `D-O-05` Status vs pin | **RESOLVED** by `D-C-21`. |
-| `D-O-06` `Not tonight` collision | **RESOLVED** by `D-C-21` + `D-C-22`: presence keeps **Not going out**; RSVP uses **Can't make it**. The phrase `Not tonight` is used by neither. |
-| `D-O-07` Archive / Badges / Persona | **RESOLVED** by `D-C-24`: Saved Nights Out and the vibe quiz are in V8; Badges and Persona are deferred to V9. |
-| `D-O-08` Pre-signup RSVP | **RESOLVED** by `D-C-23`: view and RSVP without signup; no voting, no suggesting, no private data. |
-| `D-O-09` Map marker derivation | **RESOLVED** by `D-C-25`: numeric score, live filters preserved. |
-| `D-O-10` Stale in-canvas banners | **RESOLVED** by `D-C-27`: the written approval record supersedes them; no recapture. |
-| `D-O-11` Rankings ownership | **RESOLVED** by `D-C-26`: server-owned, last server-committed write wins. |
-| `D-O-12` Package absent from the integration base | **RESOLVED by construction.** The amended PRD, the 16-canvas package, the README approval record, this decision record, the delta, the ledger and the validator now all exist on the same branch, and the validator passes with **no external artifact root**. |
+| `V8-R-STO-014` | Server-side media re-encode so EXIF/GPS metadata cannot survive, with content type verified by inspection. Mandatory. |
+| `V8-R-STO-015` | Server-enforced signed-URL lifetime, so a minted URL cannot outlive the media's window or survive deletion. Mandatory. |
+
+Missing implementation alone must **never** make an approved requirement `blocked`. The validator
+enforces this: a `blocked` row must cite a **currently open** product-decision id, and there are
+none.
 
 ---
 
-## 4. Operational authorizations — **not product requirements**
+## 6. Operational authorizations — **not product requirements**
 
 | ID | Authorization |
 |---|---|
@@ -141,7 +150,7 @@ Kept so the history is legible. None of these remains open.
 
 ---
 
-## 5. Freezing
+## 7. Freezing
 
 The ledger binds the PRD, this decision record, the delta, the design-reference README and all 16
 approved canvases by SHA-256. The ledger's own digest is emitted by the validator on every run;

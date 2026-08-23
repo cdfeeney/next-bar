@@ -1,5 +1,5 @@
 {
-  "ledger_version": "2.0.0-draft",
+  "ledger_version": "3.0.0-draft",
   "ledger_status": "draft",
   "generated_at": "2026-08-23",
   "last_owner_approval": null,
@@ -9,18 +9,18 @@
   "contract": {
     "prd": {
       "path": "docs/V8-PRD-2026-08-13.md",
-      "version": "2026-08-13 as amended 2026-08-21",
-      "sha256": "44f4cca73ab056e9b5511e2904b3032e77db1dfcdcbd09aceae4fef4c22667a7"
+      "version": "2026-08-13 as amended 2026-08-21 and 2026-08-23",
+      "sha256": "734ca30b9efc6da71fde65449d4e0f3d97c5ff38304a901be9e98e897147dba9"
     },
     "delta": {
       "path": "docs/V8-PRD-DELTA-2026-08-23.md",
-      "version": "v8.2",
-      "sha256": "46e8825b4da7e8540d3e8c437cc9e5a62cb180d84060f00657100d8760a9d871"
+      "version": "v8.3",
+      "sha256": "530b0317c3393f108abe184b5624087a91d90c07d3187b1ca1aa88f27bdb2035"
     },
     "decision_record": {
       "path": "docs/V8-DECISIONS-2026-08-23.md",
-      "version": "revision 2",
-      "sha256": "6e3eba01e13119ff82064131217d0df64841246cb69db1290de558f1f8486acd"
+      "version": "revision 3",
+      "sha256": "45671960eb7f6026e09f407a0c0d9fe2208458d356fe7a7770df3e86a61a423a"
     },
     "design_reference_readme": {
       "path": "docs/design-reference/README.md",
@@ -233,40 +233,7 @@
       "commit": "c91b2df13c2f9e884693c0b77335e8b96ee3e2ef"
     }
   },
-  "open_decisions": [
-    {
-      "id": "D-P-01",
-      "subject": "Feed visibility: mutual friends / named groups / custom only, and no public Feed audience"
-    },
-    {
-      "id": "D-P-02",
-      "subject": "Feed comment permissions, comment deletion, blocking and reporting"
-    },
-    {
-      "id": "D-P-03",
-      "subject": "Group administration, member add/remove, leaving, blocking/reporting, message retention and message deletion"
-    },
-    {
-      "id": "D-P-04",
-      "subject": "Optional captions: global composer versus quick Add to Story"
-    },
-    {
-      "id": "D-P-05",
-      "subject": "Multi-destination deletion: removing one destination versus Delete everywhere"
-    },
-    {
-      "id": "D-P-06",
-      "subject": "Success-receipt wording for Feed-only, Story-only and multi-destination publishing"
-    },
-    {
-      "id": "D-P-07",
-      "subject": "Whether ranking events ever generate Feed entries in V8"
-    },
-    {
-      "id": "D-P-08",
-      "subject": "What \"automatic presence\" is, given the pin canvas promises no automatic tracking (surfaced by compilation)"
-    }
-  ],
+  "open_decisions": [],
   "requirements": [
     {
       "requirement_id": "V8-R-NAV-001",
@@ -389,9 +356,9 @@
       "exclusions": [
         "Settings never invites to a group"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [
         "g-6b79c43c-a986-45d4-9414-5239e1f9096c"
       ],
@@ -806,8 +773,7 @@
       "decision_ref": "D-C-25",
       "blocked_on": null,
       "goal_ids": [
-        "g-17984023-b73c-4a59-a9b2-030d9909a21c",
-        "g-12d33864"
+        "g-17984023-b73c-4a59-a9b2-030d9909a21c"
       ],
       "acceptance_refs": [
         "g-17984023: suggested markers"
@@ -828,13 +794,13 @@
     {
       "requirement_id": "V8-R-MAP-003",
       "kind": "action",
-      "title": "Type in the map search field",
+      "title": "Search the map — one unified query over neighborhoods, acronyms, vibes and bars",
       "sources": [
         "design:next-bar-map-v1"
       ],
       "actor": "any user",
       "entry_point": "Map, the single search field overlay",
-      "behavior": "One search field floating over the map, re-querying on every keystroke. Results open the same shared lightbox.",
+      "behavior": "ONE unified search field floating over the map, matching neighborhoods, neighborhood ACRONYMS, vibes, and individual bars in the same query, and re-querying on every keystroke. Results open the same shared BarLightbox.",
       "states": [
         "empty",
         "searching",
@@ -847,14 +813,18 @@
       "retention": null,
       "failure_recovery": "no search results keeps the field focused and the typed term visible, and offers Clear search; no manual retry is needed",
       "accessibility": "search state is described in words",
-      "exclusions": [],
+      "exclusions": [
+        "no separate search surface per entity type"
+      ],
       "status": "approved",
-      "decision_ref": "D-C-01",
+      "decision_ref": "D-C-25",
       "blocked_on": null,
       "goal_ids": [
         "g-17984023-b73c-4a59-a9b2-030d9909a21c"
       ],
-      "acceptance_refs": [],
+      "acceptance_refs": [
+        "g-17984023: unified search"
+      ],
       "implementation_paths": [
         "src/app/map/mapSearch.ts",
         "src/app/map/mapSearch.test.ts"
@@ -863,7 +833,7 @@
         {
           "candidate": "aa22a660dfdfe10e634a043450326109c4dd45e5",
           "kind": "static",
-          "detail": "Map lane complete/finalized r17"
+          "detail": "Map lane g-17984023 complete/finalized r17 at aa22a660 — the current candidate"
         }
       ],
       "coverage": "complete"
@@ -871,38 +841,39 @@
     {
       "requirement_id": "V8-R-MAP-004",
       "kind": "action",
-      "title": "Open Filters and change a filter — filters commit live",
+      "title": "Filter the map — a compact sheet whose every tap applies live, with removable chips",
       "sources": [
         "design:next-bar-map-v1",
-        "decision:D-C-09"
+        "decision:D-C-25"
       ],
       "actor": "any user",
       "entry_point": "Map, the Filters overlay control",
-      "behavior": "Filters opens a compact sheet that keeps the map visible. There is ONE filter state: every tap in the sheet moves the markers behind it immediately. The canvas's draft-until-\"Show N bars\" Apply gate is superseded and must not be restored.",
+      "behavior": "APPROVED CURRENT BEHAVIOR. Filters opens a COMPACT SHEET that keeps the map visible, offering NEIGHBOURHOOD, DISTANCE and VIBE options. There is ONE filter state: every tap in the sheet moves the markers behind it IMMEDIATELY. Applied filters render as REMOVABLE CHIPS, and removing a chip re-applies live. Markers and results open the shared BarLightbox.",
       "states": [
         "sheet closed",
         "sheet open",
-        "filters applied"
+        "filters applied",
+        "chip removed"
       ],
       "audience": "the viewer",
       "trust_boundary": null,
       "data_owner": null,
       "retention": "filter state survives opening and closing the lightbox",
       "failure_recovery": null,
-      "accessibility": "the sheet keeps the map visible so the effect of each tap is observable",
+      "accessibility": "the sheet keeps the map visible so the effect of each tap is observable; each chip carries its own remove target",
       "exclusions": [
-        "no Apply / Show N bars commit step",
-        "no six-axis filter surface — the approved surface is one search field plus two floating controls and a compact sheet"
+        "NO nested Apply",
+        "NO \"Show N bars\" commit step",
+        "no draft filter state"
       ],
-      "status": "superseded",
-      "decision_ref": "D-C-09",
+      "status": "approved",
+      "decision_ref": "D-C-25",
       "blocked_on": null,
       "goal_ids": [
-        "g-17984023-b73c-4a59-a9b2-030d9909a21c",
-        "g-12d33864"
+        "g-17984023-b73c-4a59-a9b2-030d9909a21c"
       ],
       "acceptance_refs": [
-        "g-17984023: live filters"
+        "g-17984023: live filters, unified search, suggested markers, shared lightbox"
       ],
       "implementation_paths": [
         "src/app/map/MapFilterSheet.tsx"
@@ -911,10 +882,53 @@
         {
           "candidate": "aa22a660dfdfe10e634a043450326109c4dd45e5",
           "kind": "static",
-          "detail": "Map lane complete/finalized r17; the divergence from the canvas is AUTHORISED and recorded in the goal body. g-12d33864 is blocked and needs rewriting, not unblocking — its six-axis surface is not what map-v1 shows."
+          "detail": "Map lane g-17984023 complete/finalized r17 at aa22a660 — this IS the current candidate and this behavior is what it ships. The divergence from the canvas is AUTHORISED (D-C-09, reaffirmed by D-C-25) and recorded in the goal body."
         }
       ],
       "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-MAP-007",
+      "kind": "action",
+      "title": "SUPERSEDED — draft filter state, the Apply / Show N bars gate, and the six-axis Tweak-the-vibe Map surface",
+      "sources": [
+        "design:next-bar-map-v1"
+      ],
+      "actor": "any user",
+      "entry_point": "Map (obsolete)",
+      "behavior": "OBSOLETE, RECORDED SO IT IS NOT REBUILT. The next-bar-map-v1 canvas drew filter choices held as a DRAFT until a \"Show N bars\" Apply gate committed them, and an earlier proposal carried a SIX-AXIS \"Tweak the vibe\" Map surface. Both are superseded by D-C-09 and reaffirmed superseded by D-C-25. The live-filter behavior that replaces them is V8-R-MAP-004.",
+      "states": [
+        "obsolete"
+      ],
+      "audience": "n/a",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": null,
+      "exclusions": [
+        "do not restore the draft filter state",
+        "do not restore the Apply / Show N bars step",
+        "do not rebuild the six-axis Tweak-the-vibe Map surface"
+      ],
+      "status": "superseded",
+      "decision_ref": "D-C-25",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-12d33864-35a6-4472-9f13-04d352a64869"
+      ],
+      "acceptance_refs": [
+        "g-12d33864-35a6-4472-9f13-04d352a64869 is HISTORICAL and STALE — not to be unblocked, modified, merged, or treated as current product authority"
+      ],
+      "implementation_paths": [],
+      "evidence": [
+        {
+          "candidate": "aa22a660dfdfe10e634a043450326109c4dd45e5",
+          "kind": "static",
+          "detail": "recorded against the current Map candidate aa22a660 so a future reader who opens next-bar-map-v1 and sees the Apply gate does not \"correct\" working, approved behavior back to it"
+        }
+      ],
+      "coverage": "stale"
     },
     {
       "requirement_id": "V8-R-MAP-005",
@@ -1837,7 +1851,7 @@
         "empty",
         "error"
       ],
-      "audience": "per D-P-01",
+      "audience": "per D-C-29",
       "trust_boundary": "server-authorized read; a viewer outside the post audience must not read it",
       "data_owner": "each author owns their own post",
       "retention": "a Feed post remains until its author deletes it (D-C-15)",
@@ -1847,9 +1861,9 @@
         "no public like counts",
         "no follower metrics"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-12",
-      "blocked_on": "D-P-01",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -1883,7 +1897,7 @@
         "live",
         "deleted"
       ],
-      "audience": "per D-P-01",
+      "audience": "per D-C-29",
       "trust_boundary": "server-enforced; deletion is authorized to the author",
       "data_owner": "the post author",
       "retention": "indefinite until author deletion, or account deletion",
@@ -1892,9 +1906,9 @@
       "exclusions": [
         "no automatic expiry"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-15",
-      "blocked_on": "D-P-05",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -1911,30 +1925,133 @@
       "title": "Leave a visible comment on a Feed post",
       "sources": [
         "design:next-bar-social-v2-core",
-        "decision:D-C-15"
+        "decision:D-C-30"
       ],
-      "actor": "per D-P-02",
+      "actor": "anyone authorized to view the post",
       "entry_point": "a Feed card",
-      "behavior": "Feed posts support VISIBLE comments — the first comment surface in V8. Who may comment, who may delete a comment, and the blocking and reporting model are NOT decided.",
+      "behavior": "ANYONE AUTHORIZED TO VIEW a Feed post may comment on it. Comments are visible to that same audience — the first comment surface in V8.",
       "states": [
         "no comments",
         "comments present"
       ],
-      "audience": "per D-P-01 and D-P-02",
-      "trust_boundary": "UNDECIDED — see D-P-02",
+      "audience": "the post audience (V8-R-FEED-006)",
+      "trust_boundary": "server-enforced: the right to comment is exactly the right to view, and nothing wider",
       "data_owner": "the commenter owns their comment",
-      "retention": "UNDECIDED — see D-P-02",
-      "failure_recovery": "undecided",
-      "accessibility": "undecided",
+      "retention": "a comment lives as long as its post; deleting the post removes its visible comments (V8-R-FEED-008)",
+      "failure_recovery": "a failed comment write must not report success",
+      "accessibility": "the comment control is a 44px target on the card",
       "exclusions": [
-        "a Story has no public comment thread (D-C-16)"
+        "a Story has no public comment thread (D-C-16)",
+        "no public like counts"
       ],
-      "status": "blocked",
-      "decision_ref": "D-C-15",
-      "blocked_on": "D-P-02",
+      "status": "approved",
+      "decision_ref": "D-C-30",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-FEED-008",
+      "kind": "action",
+      "title": "Delete a comment — the commenter, the post author, or by deleting the post",
+      "sources": [
+        "decision:D-C-30",
+        "decision:D-C-33"
+      ],
+      "actor": "the commenter, or the post author",
+      "entry_point": "a comment on a Feed post",
+      "behavior": "A COMMENTER MAY DELETE THEIR OWN comment. THE POST AUTHOR MAY REMOVE comments from their post. Deleting the Feed post removes its visible comments, and so does removing the Feed destination from a multi-destination media object.",
+      "states": [
+        "present",
+        "deleted by commenter",
+        "removed by post author",
+        "removed with the post"
+      ],
+      "audience": "the post audience",
+      "trust_boundary": "server-enforced: only the commenter and the post author may delete, and nobody else",
+      "data_owner": "the commenter owns their comment; the post author owns their post's comment surface",
+      "retention": "none after deletion",
+      "failure_recovery": "a failed deletion must not report success",
+      "accessibility": "the delete affordance renders only where the viewer is authorized to use it",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-30",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-FEED-009",
+      "kind": "action",
+      "title": "Block a user — visibility and interaction stop both ways",
+      "sources": [
+        "decision:D-C-30",
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Settings · Connections · Blocked & muted, and the blocking affordance on content",
+      "behavior": "Blocking PREVENTS VISIBILITY AND INTERACTION BETWEEN THE AFFECTED USERS. In the Group context it additionally prevents new direct interaction, invitations, or addition to new shared groups.",
+      "states": [
+        "not blocked",
+        "blocked"
+      ],
+      "audience": "the two affected users",
+      "trust_boundary": "SERVER-ENFORCED IN BOTH DIRECTIONS — a client-side hide is not a block",
+      "data_owner": "the blocking user owns the block record",
+      "retention": "until the block is lifted, or account deletion",
+      "failure_recovery": "a failed block must not report success; fail closed",
+      "accessibility": "the blocked state is stated, not implied by absence",
+      "exclusions": [
+        "blocking does not retroactively dissolve existing shared groups; it prevents NEW shared groups"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-30",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-FEED-010",
+      "kind": "action",
+      "title": "Report content — hidden immediately for the reporter, server-owned record for operator review",
+      "sources": [
+        "decision:D-C-30"
+      ],
+      "actor": "any authorized viewer",
+      "entry_point": "a Feed post, a comment, or a Group message",
+      "behavior": "Reporting IMMEDIATELY HIDES the reported content FOR THE REPORTER and creates a SERVER-OWNED REPORT for operator review. NO NEW MODERATION DASHBOARD is required in V8 — existing administrative tooling is sufficient.",
+      "states": [
+        "not reported",
+        "reported and hidden for the reporter"
+      ],
+      "audience": "the reporter sees the hide; the report record is visible only to operators",
+      "trust_boundary": "SERVER-OWNED report record; the reporter cannot edit or withdraw it into invisibility",
+      "data_owner": "the operator owns the report record",
+      "retention": "report records REMAIN UNTIL OPERATOR REMOVAL OR ACCOUNT DELETION",
+      "failure_recovery": "if the report write fails, the content is NOT hidden and the failure is stated — a silent hide would misrepresent that a report exists",
+      "accessibility": "the hide is immediate and visible to the reporter",
+      "exclusions": [
+        "no new moderation dashboard in V8"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-30",
+      "blocked_on": null,
+      "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
       "evidence": [],
@@ -1953,7 +2070,7 @@
       "states": [
         "idle"
       ],
-      "audience": "per D-P-01",
+      "audience": "per D-C-29",
       "trust_boundary": "server-authorized; the night must be one the viewer may see",
       "data_owner": "the night's participants",
       "retention": null,
@@ -1962,9 +2079,9 @@
       "exclusions": [
         "no like control"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-12",
-      "blocked_on": "D-P-01",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -1984,13 +2101,14 @@
       ],
       "actor": "signed-in user",
       "entry_point": "a Feed card",
-      "behavior": "The second of exactly two card actions. Its relationship to the visible comment thread of D-C-15 is part of D-P-02.",
+      "behavior": "The second of exactly two card actions. Reply opens the post's visible comment thread, which anyone authorized to view the post may join (D-C-30).",
       "states": [
-        "idle"
+        "idle",
+        "thread open"
       ],
-      "audience": "per D-P-02",
-      "trust_boundary": "UNDECIDED — see D-P-02",
-      "data_owner": "the replier",
+      "audience": "the post audience (V8-R-FEED-006)",
+      "trust_boundary": "server-enforced: the right to reply is exactly the right to view",
+      "data_owner": "the replier owns their comment",
       "retention": null,
       "failure_recovery": null,
       "accessibility": null,
@@ -1998,9 +2116,9 @@
         "no like counts",
         "no follower metrics"
       ],
-      "status": "blocked",
-      "decision_ref": "D-C-15",
-      "blocked_on": "D-P-02",
+      "status": "approved",
+      "decision_ref": "D-C-30",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -2014,28 +2132,31 @@
     {
       "requirement_id": "V8-R-FEED-006",
       "kind": "policy",
-      "title": "Feed audience",
+      "title": "Feed is never public; its audience is mutual-friend scoped",
       "sources": [
-        "decision:D-P-01"
+        "decision:D-C-29"
       ],
       "actor": "the post author",
       "entry_point": "the global composer, Feed destination",
-      "behavior": "NOT DECIDED. Every audience control on every approved canvas offers exactly Friends / named group(s) / Custom, and no canvas contains a Public audience anywhere. Stories are fixed as mutual-friend-only and never public (D-C-17). Feed does NOT inherit that rule by default.",
+      "behavior": "FEED IS NEVER PUBLIC. Its audience is exactly one of: ALL MUTUAL FRIENDS, a NAMED MUTUAL-FRIEND GROUP, or a CUSTOM MUTUAL-FRIEND SUBSET. This is the same three-way shape as the Story audience (D-C-17), now settled for Feed on its own authority rather than inherited.",
       "states": [
-        "undecided"
+        "all mutual friends",
+        "named mutual-friend group",
+        "custom mutual-friend subset"
       ],
-      "audience": "UNDECIDED — see D-P-01",
-      "trust_boundary": "UNDECIDED",
+      "audience": "mutual-friend scoped, never public",
+      "trust_boundary": "server-enforced; a viewer outside the audience must not read the post or its comments",
       "data_owner": "the post author",
-      "retention": "per D-C-15",
-      "failure_recovery": null,
-      "accessibility": null,
+      "retention": "per D-C-15 — until the author deletes it",
+      "failure_recovery": "a failed audience write must fail the publish, never silently widen the audience",
+      "accessibility": "the resolved audience is restated in words before publishing",
       "exclusions": [
-        "no public Feed audience may be implemented before D-P-01 is answered"
+        "NO public Feed audience",
+        "no follower-style open distribution"
       ],
-      "status": "blocked",
-      "decision_ref": "D-P-01",
-      "blocked_on": "D-P-01",
+      "status": "approved",
+      "decision_ref": "D-C-29",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -2047,31 +2168,35 @@
     {
       "requirement_id": "V8-R-FEED-007",
       "kind": "policy",
-      "title": "Whether a ranking event generates a Feed entry",
+      "title": "Ranking actions do not generate Feed entries in V8 — deferred to V9",
       "sources": [
         "design:next-bar-social-v2-core",
-        "decision:D-P-07"
+        "decision:D-C-35"
       ],
       "actor": "signed-in user",
       "entry_point": "Social · Feed",
-      "behavior": "NOT DECIDED. The canvas draws a ranking event as a compact secondary row that never competes with a photo. Whether V8 generates such an entry at all is open.",
+      "behavior": "RANKING ACTIONS DO NOT AUTOMATICALLY GENERATE FEED ENTRIES IN V8. The canvas draws a ranking event as a compact secondary row that never competes with a photo; that automatic row is DEFERRED TO V9.",
       "states": [
-        "undecided"
+        "n/a — deferred"
       ],
-      "audience": "per D-P-01",
+      "audience": "n/a",
       "trust_boundary": null,
       "data_owner": "the ranking's author",
       "retention": null,
       "failure_recovery": null,
-      "accessibility": "the row is subordinate in weight, not only in colour",
-      "exclusions": [],
-      "status": "blocked",
-      "decision_ref": "D-P-07",
-      "blocked_on": "D-P-07",
+      "accessibility": null,
+      "exclusions": [
+        "no automatic ranking-event Feed row in V8"
+      ],
+      "status": "deferred",
+      "decision_ref": "D-C-35",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
-      "acceptance_refs": [],
+      "acceptance_refs": [
+        "deferred to V9 by the founder, 2026-08-23"
+      ],
       "implementation_paths": [
         "src/app/friends/_components/FeedSection.tsx"
       ],
@@ -2088,7 +2213,7 @@
       ],
       "actor": "signed-in user",
       "entry_point": "the compact pin row directly under the Stories rail on Social · Tonight",
-      "behavior": "The user searches and chooses the bar. Next Bar never tracks location automatically. A manual Pin or Heading-to selection overrides automatic presence until 4:00 AM, when the pin expires on its own.",
+      "behavior": "THERE IS NO AUTOMATIC GPS OR LOCATION TRACKING. Presence is manually controlled throughout. The user searches and chooses the bar; selecting Pin or Heading-to is an EXPLICIT USER ACTION that sets presence to Going out and records the selected bar until 4:00 AM, when both presence and the active pin expire.",
       "states": [
         "unpinned (Pin your bar)",
         "pinned now",
@@ -2147,9 +2272,9 @@
       "exclusions": [
         "groups are never created or invited to from this flow — that stays in Social"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [
         "g-6b79c43c-a986-45d4-9414-5239e1f9096c"
       ],
@@ -2199,34 +2324,37 @@
     {
       "requirement_id": "V8-R-PRE-004",
       "kind": "policy",
-      "title": "Presence choices and what \"automatic presence\" is",
+      "title": "Presence is manual: Going out, Maybe later, Not going out — and a pin sets Going out",
       "sources": [
         "decision:D-C-21",
-        "decision:D-P-08",
+        "decision:D-C-36",
         "design:next-bar-option-b-manual-pin"
       ],
       "actor": "signed-in user",
       "entry_point": "Social · Tonight",
-      "behavior": "The three presence choices are FIXED as Going out, Maybe later, and Not going out (D-C-21). What is NOT decided is the \"automatic presence\" that a manual Pin or Heading-to selection overrides: no approved canvas defines an automatic presence signal, and the pin canvas promises the opposite for pins.",
+      "behavior": "THERE IS NO AUTOMATIC GPS OR LOCATION TRACKING and presence is MANUALLY CONTROLLED. The choices are GOING OUT, MAYBE LATER and NOT GOING OUT. Selecting Pin or Heading-to is an EXPLICIT USER ACTION that SETS presence to Going out together with the selected bar, until 4:00 AM. Selecting Maybe later or Not going out CLEARS the active pin. Presence and the active pin both expire at 4:00 AM. A Night Out RSVP DOES NOT SILENTLY CONTROL global presence. This replaces the earlier ambiguous phrase \"overrides automatic presence\", which named a signal no approved canvas defines.",
       "states": [
         "going out",
         "maybe later",
         "not going out",
-        "pinned (overrides until 4:00 AM)",
-        "heading to (overrides until 4:00 AM)"
+        "pinned at a bar (Going out, until 4:00 AM)",
+        "heading to a bar (Going out, until 4:00 AM)",
+        "expired at 4:00 AM"
       ],
       "audience": "the viewer, subject to each pin's own audience",
-      "trust_boundary": "server-enforced per pin",
+      "trust_boundary": "server-enforced per pin; presence is never derived from device location",
       "data_owner": "the user",
-      "retention": "the manual override lasts until 4:00 AM",
-      "failure_recovery": null,
+      "retention": "presence and the active pin expire at 4:00 AM",
+      "failure_recovery": "a failed presence write leaves the prior state visible and says so",
       "accessibility": "each state is named in words",
       "exclusions": [
+        "NO automatic GPS or location tracking",
+        "a Night Out RSVP never silently sets or clears presence",
         "the phrase \"Not tonight\" is used by neither presence nor RSVP (D-C-21, D-C-22)"
       ],
-      "status": "blocked",
-      "decision_ref": "D-C-21",
-      "blocked_on": "D-P-08",
+      "status": "approved",
+      "decision_ref": "D-C-36",
+      "blocked_on": null,
       "goal_ids": [
         "g-6b79c43c-a986-45d4-9414-5239e1f9096c"
       ],
@@ -2280,28 +2408,30 @@
       "kind": "policy",
       "title": "Group is a persistent named group chat",
       "sources": [
-        "decision:D-C-20",
+        "decision:D-C-31",
         "design:next-bar-night-out-start-flow",
         "design:next-bar-account-a-settings"
       ],
       "actor": "signed-in user",
       "entry_point": "Social, Groups & People",
-      "behavior": "A Group is a PERSISTENT NAMED GROUP CHAT: members exchange text and photos, and the same group is reusable to invite the same people to future Night Outs. It supersedes the base PRD's exclusion of group chat — but not that exclusion's precondition, which is D-P-03.",
+      "behavior": "A Group is a PERSISTENT NAMED GROUP CHAT. Members send text and photos; the group persists between nights; and the current membership is reusable to invite the same people to a Night Out. It supersedes the base PRD exclusion of group chat, and D-C-31 supplies the moderation, blocking, retention and notification-volume policy that exclusion required first.",
       "states": [
-        "undecided pending D-P-03"
+        "active",
+        "left by a member",
+        "deleted"
       ],
       "audience": "the group's members",
-      "trust_boundary": "server-enforced membership",
-      "data_owner": "per D-P-03",
-      "retention": "message retention is UNDECIDED — see D-P-03",
-      "failure_recovery": "undecided",
-      "accessibility": "undecided",
+      "trust_boundary": "server-enforced membership; a non-member must not read the thread or its media",
+      "data_owner": "the creator is the initial administrator; each member owns their own messages",
+      "retention": "messages persist until removed or the group is deleted",
+      "failure_recovery": "a failed send is stated and retryable; it never silently drops",
+      "accessibility": "the group name and member count are stated on the thread",
       "exclusions": [
         "no Group invites row in Settings — relationship actions live in Social"
       ],
-      "status": "blocked",
-      "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [
@@ -2313,26 +2443,28 @@
     {
       "requirement_id": "V8-R-GRP-002",
       "kind": "action",
-      "title": "Exchange text and photos inside a group",
+      "title": "Send text and photos in a group",
       "sources": [
-        "decision:D-C-20"
+        "decision:D-C-31"
       ],
       "actor": "group member",
       "entry_point": "a group thread",
-      "behavior": "Members exchange text and photos in a persistent thread. Retention, deletion, blocking and reporting are undecided.",
+      "behavior": "Any member may send TEXT and PHOTOS into the persistent thread.",
       "states": [
-        "undecided pending D-P-03"
+        "sending",
+        "sent",
+        "send failed"
       ],
       "audience": "the group's members only",
-      "trust_boundary": "server-enforced membership; a non-member must not read the thread",
+      "trust_boundary": "server-enforced membership",
       "data_owner": "each member owns their own messages",
-      "retention": "UNDECIDED — see D-P-03",
-      "failure_recovery": "undecided",
-      "accessibility": null,
+      "retention": "until removed by the sender or an administrator, or the group is deleted",
+      "failure_recovery": "a failed send is stated and retryable and never silently dropped",
+      "accessibility": "send state is stated in words",
       "exclusions": [],
-      "status": "blocked",
-      "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -2342,28 +2474,31 @@
     {
       "requirement_id": "V8-R-GRP-003",
       "kind": "action",
-      "title": "Reuse a group to invite the same people to a future Night Out",
+      "title": "Reuse the current group membership to invite the group to a Night Out",
       "sources": [
         "design:next-bar-night-out-start-flow",
-        "decision:D-C-20"
+        "decision:D-C-31"
       ],
-      "actor": "plan owner",
-      "entry_point": "the People-or-group picker",
-      "behavior": "Selecting a named group invites its members to the Night Out. The group keeps its own fixed membership and is untouched by the invitation.",
+      "actor": "ANY group member",
+      "entry_point": "the People-or-group picker, or the group thread",
+      "behavior": "ANY MEMBER — not only an administrator — may reuse the CURRENT group membership to invite the group to a Night Out. The group keeps its own membership and is untouched by the invitation.",
       "states": [
         "not selected",
-        "selected"
+        "selected",
+        "invited"
       ],
-      "audience": "the group's members",
-      "trust_boundary": "server-enforced membership",
-      "data_owner": "the group",
+      "audience": "the group's current members",
+      "trust_boundary": "server-enforced membership at the moment of invitation",
+      "data_owner": "the group owns its membership; the plan owner owns the plan",
       "retention": null,
       "failure_recovery": "a failed invite shows a per-person Resend invite; other successful invites are unaffected",
       "accessibility": "44px rows with labelled selection state",
-      "exclusions": [],
-      "status": "blocked",
-      "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "exclusions": [
+        "inviting never alters the group's own membership"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
       "goal_ids": [
         "g-6c492e4a-d09a-4c2a-afa4-0e076deacc1f"
       ],
@@ -2375,28 +2510,29 @@
     {
       "requirement_id": "V8-R-GRP-004",
       "kind": "action",
-      "title": "Tap \"Create a group\" from the People-or-group picker",
+      "title": "Create a group — the creator is the initial administrator",
       "sources": [
-        "design:next-bar-night-out-start-flow"
+        "design:next-bar-night-out-start-flow",
+        "decision:D-C-31"
       ],
       "actor": "signed-in user",
-      "entry_point": "the People-or-group sheet",
-      "behavior": "Creates a named group from the picker. Creation and editing live in Social; audience pickers elsewhere never create or invite to a group.",
+      "entry_point": "Social · Groups & People, and the People-or-group sheet",
+      "behavior": "Creating a named group makes THE CREATOR THE INITIAL ADMINISTRATOR. Creation and editing live in Social; audience pickers elsewhere never create or invite to a group.",
       "states": [
-        "undecided pending D-P-03"
+        "created"
       ],
       "audience": "the group's members",
       "trust_boundary": "server-enforced",
-      "data_owner": "per D-P-03",
-      "retention": null,
-      "failure_recovery": null,
-      "accessibility": null,
+      "data_owner": "the creator, as initial administrator",
+      "retention": "the group persists until deleted",
+      "failure_recovery": "a failed creation keeps the typed name",
+      "accessibility": "44px controls",
       "exclusions": [
         "pin and story audience pickers never create a group"
       ],
-      "status": "blocked",
-      "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -2405,28 +2541,32 @@
     },
     {
       "requirement_id": "V8-R-GRP-005",
-      "kind": "policy",
-      "title": "Group administration, membership, blocking, reporting, retention and message deletion",
+      "kind": "action",
+      "title": "Administer a group — rename, and add or remove mutual friends",
       "sources": [
-        "decision:D-P-03",
-        "prd:P1 real Night Out invitations"
+        "decision:D-C-31"
       ],
-      "actor": "group member and group administrator",
-      "entry_point": "Social group management; Settings · Connections · Blocked & muted",
-      "behavior": "NOT DECIDED. The frozen PRD required moderation, blocking, retention, abuse and notification-volume policy to exist BEFORE group chat is considered. D-C-20 makes group chat a V8 requirement; it does not waive that precondition.",
+      "actor": "group administrator",
+      "entry_point": "the group thread, administration controls",
+      "behavior": "ADMINISTRATORS MAY RENAME the group and ADD OR REMOVE MUTUAL FRIENDS. Only mutual friends may be added.",
       "states": [
-        "undecided"
+        "renamed",
+        "member added",
+        "member removed"
       ],
-      "audience": "undecided",
-      "trust_boundary": "undecided",
-      "data_owner": "undecided",
-      "retention": "UNDECIDED",
-      "failure_recovery": "undecided",
-      "accessibility": null,
-      "exclusions": [],
-      "status": "blocked",
-      "decision_ref": "D-P-03",
-      "blocked_on": "D-P-03",
+      "audience": "the group's members",
+      "trust_boundary": "SERVER-ENFORCED: administrator only, and the add path is restricted to mutual friends of the administrator",
+      "data_owner": "the administrator",
+      "retention": "a removed member loses access to the thread from removal onward",
+      "failure_recovery": "a failed administrative write must not report success",
+      "accessibility": "administrative controls render only for an administrator",
+      "exclusions": [
+        "a non-mutual-friend cannot be added",
+        "a blocked user cannot be added to a new shared group (V8-R-FEED-009)"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -2435,27 +2575,140 @@
     },
     {
       "requirement_id": "V8-R-GRP-006",
+      "kind": "action",
+      "title": "Leave a group",
+      "sources": [
+        "decision:D-C-31"
+      ],
+      "actor": "ANY group member",
+      "entry_point": "the group thread",
+      "behavior": "ANY MEMBER MAY LEAVE, including an administrator.",
+      "states": [
+        "member",
+        "left"
+      ],
+      "audience": "the group's members",
+      "trust_boundary": "server-enforced; leaving is authorized to the member themselves",
+      "data_owner": "the leaving member",
+      "retention": "leaving does not delete the member's prior messages; those follow V8-R-GRP-007",
+      "failure_recovery": "a failed leave must not report success",
+      "accessibility": "the action states its consequence before it is taken",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-GRP-007",
+      "kind": "action",
+      "title": "Delete group messages — the sender for everyone, or an administrator",
+      "sources": [
+        "decision:D-C-31"
+      ],
+      "actor": "the message sender, or a group administrator",
+      "entry_point": "a message in the group thread",
+      "behavior": "SENDERS MAY DELETE THEIR OWN MESSAGES FOR EVERYONE. ADMINISTRATORS MAY REMOVE messages from the group. MESSAGES PERSIST UNTIL REMOVED OR THE GROUP IS DELETED.",
+      "states": [
+        "present",
+        "deleted by sender for everyone",
+        "removed by administrator",
+        "removed with the group"
+      ],
+      "audience": "the group's members",
+      "trust_boundary": "server-enforced: only the sender and an administrator may delete",
+      "data_owner": "the sender owns their message; the administrator owns the group's thread",
+      "retention": "messages persist until removed or the group is deleted; there is no automatic expiry",
+      "failure_recovery": "a failed deletion must not report success",
+      "accessibility": "the delete affordance renders only where the viewer is authorized to use it",
+      "exclusions": [
+        "no automatic message expiry"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-GRP-008",
+      "kind": "policy",
+      "title": "Group notification volume — in-app unread state, not a push per message",
+      "sources": [
+        "decision:D-C-31",
+        "design:next-bar-account-a-settings",
+        "prd:P1 native invitation notifications"
+      ],
+      "actor": "group member",
+      "entry_point": "the group thread, and the OS notification surface",
+      "behavior": "V8 PROVIDES IN-APP UNREAD STATE and NIGHT OUT INVITATION NOTIFICATIONS. V8 DOES NOT SEND A PUSH NOTIFICATION FOR EVERY ORDINARY GROUP MESSAGE. This is the notification-volume prerequisite the base PRD required before group chat could be considered, and it is now supplied.",
+      "states": [
+        "unread",
+        "read",
+        "invitation notification sent"
+      ],
+      "audience": "the group's members",
+      "trust_boundary": "the server-side sender honours this policy; APNs credentials never enter the client bundle",
+      "data_owner": "the account owner owns their notification preferences",
+      "retention": "unread state is per member and clears on read",
+      "failure_recovery": "invalid device tokens are removed or disabled by the sender",
+      "accessibility": "unread state is carried in-app, not only by an OS badge",
+      "exclusions": [
+        "NO push notification per ordinary group message",
+        "the Group activity category defaults to Mentions only"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-6df5a7de-2443-4449-9ad5-8b5f3887817c",
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/app/settings/preferences/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "the APNs goal g-6df5a7de is blocked/blocked r73; no group object exists on any candidate, so this policy is unimplemented"
+        }
+      ],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-GRP-009",
       "kind": "policy",
       "title": "Group memberships are destroyed by account deletion",
       "sources": [
-        "design:next-bar-account-a-settings"
+        "design:next-bar-account-a-settings",
+        "decision:D-C-31"
       ],
       "actor": "the account owner",
       "entry_point": "Settings · Security & account · Delete account",
       "behavior": "The delete-account confirmation enumerates group memberships among the data permanently destroyed.",
       "states": [
-        "undecided pending D-P-03"
+        "member",
+        "destroyed with the account"
       ],
       "audience": "n/a",
       "trust_boundary": "server-side cascade, not a client action",
       "data_owner": "the account owner",
       "retention": "none after deletion",
       "failure_recovery": "a partial cascade must fail the deletion rather than leave orphaned memberships",
-      "accessibility": null,
+      "accessibility": "enumerated in words on the confirmation",
       "exclusions": [],
-      "status": "blocked",
-      "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "status": "approved",
+      "decision_ref": "D-C-31",
+      "blocked_on": null,
       "goal_ids": [
         "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
       ],
@@ -2835,9 +3088,9 @@
       "exclusions": [
         "no Public option — Stories are never public (D-C-17)"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-17",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -2927,9 +3180,9 @@
         "no Back to Social button",
         "no reassurance copy"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-14",
-      "blocked_on": "D-P-06",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -3056,9 +3309,9 @@
       "failure_recovery": "a failed re-encode rejects the upload; it never falls back to storing the original",
       "accessibility": null,
       "exclusions": [],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-05",
-      "blocked_on": "capability: server-side media ingestion boundary (sharp is already a dependency)",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -3101,9 +3354,9 @@
       "failure_recovery": "a signing failure renders the honest media state, never a decorative placeholder",
       "accessibility": null,
       "exclusions": [],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-17",
-      "blocked_on": "capability: server-side URL minting",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -3129,11 +3382,11 @@
       "sources": [
         "design:next-bar-account-a-settings",
         "design:next-bar-add-story-flow",
-        "decision:D-P-05"
+        "decision:D-C-33"
       ],
       "actor": "the author",
       "entry_point": "deletion, Undo, or expiry",
-      "behavior": "Deletion removes the stored bytes and makes audience and tag metadata unqueryable. Media still referenced by another LIVE destination is never destroyed — which is exactly why D-P-05 must settle whether removing one destination leaves the others alive.",
+      "behavior": "Deletion removes the stored bytes and makes audience and tag metadata unqueryable. Media still referenced by another LIVE destination is never destroyed — which is exactly why D-C-33 must settle whether removing one destination leaves the others alive.",
       "states": [
         "live",
         "soft-deleted",
@@ -3147,9 +3400,9 @@
       "failure_recovery": "when the pre-read returns no row, the RPC-returned paths are reported as orphans rather than reporting success over zero rows",
       "accessibility": null,
       "exclusions": [],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-14",
-      "blocked_on": "D-P-05",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -3632,7 +3885,7 @@
       "audience": "per destination",
       "trust_boundary": "each destination enforces its own audience independently",
       "data_owner": "the author",
-      "retention": "per destination: Feed until author deletion, Story 24h, Night Out 24h from the scheduled start, Group per D-P-03",
+      "retention": "per destination: Feed until author deletion, Story 24h, Night Out 24h from the scheduled start, Group per D-C-31",
       "failure_recovery": "a partial publish must not leave the post live on one destination and silently absent from another",
       "accessibility": "each destination is a labelled row with its own indicator",
       "exclusions": [
@@ -3668,7 +3921,7 @@
       "trust_boundary": "each destination enforces its own audience over the one shared object",
       "data_owner": "the author",
       "retention": "the shared object outlives the shortest destination window: the Story copy expires at 24h while the Feed post persists until the author deletes it",
-      "failure_recovery": "per D-P-05 — whether removing one destination leaves the object live under another is not yet decided",
+      "failure_recovery": "per D-C-33 — whether removing one destination leaves the object live under another is not yet decided",
       "accessibility": "destination indicators are labelled, not colour-only",
       "exclusions": [
         "no duplicated media",
@@ -3698,16 +3951,16 @@
         "off",
         "on"
       ],
-      "audience": "per D-P-01",
-      "trust_boundary": "per D-P-01",
+      "audience": "per D-C-29",
+      "trust_boundary": "per D-C-29",
       "data_owner": "the author",
       "retention": "until the author deletes it (D-C-15)",
       "failure_recovery": null,
       "accessibility": "44px row with a labelled indicator",
       "exclusions": [],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-12",
-      "blocked_on": "D-P-01",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -3739,9 +3992,9 @@
       "exclusions": [
         "the Story audience never governs the Group or Night Out destinations"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-17",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -3799,15 +4052,15 @@
       "audience": "the selected groups' fixed members",
       "trust_boundary": "server-enforced membership; an explicitly selected Group keeps that group's own fixed members and is untouched by the Story audience",
       "data_owner": "the group",
-      "retention": "per D-P-03",
+      "retention": "per D-C-31",
       "failure_recovery": null,
       "accessibility": "expands in place; the selection is restated on the row",
       "exclusions": [
         "nothing is created, invited to, or edited here"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -3837,9 +4090,9 @@
       "failure_recovery": "an offline publish is queued and labelled queued, never labelled Shared",
       "accessibility": "the CTA names its effect",
       "exclusions": [],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-13",
-      "blocked_on": "D-P-06",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -3880,28 +4133,32 @@
     {
       "requirement_id": "V8-R-CMP-010",
       "kind": "action",
-      "title": "Enter an optional caption",
+      "title": "Enter an optional caption in the global composer (max 140 characters)",
       "sources": [
         "design:next-bar-camera-modes",
-        "decision:D-P-04"
+        "decision:D-C-32"
       ],
       "actor": "signed-in user",
-      "entry_point": "the review-and-tag step of the global composer",
-      "behavior": "An optional caption, length-labelled (25/140). The global composer draws it; the quick Add-to-Story path draws NO caption field. Whether that difference is deliberate is NOT decided.",
+      "entry_point": "the review-and-tag step of the GLOBAL COMPOSER only",
+      "behavior": "THE GLOBAL COMPOSER PROVIDES AN OPTIONAL CAPTION WITH A MAXIMUM OF 140 CHARACTERS, length-labelled as it is typed. A Story created THROUGH THE GLOBAL COMPOSER may carry that optional caption. THE QUICK ADD-TO-STORY PATH REMAINS CAPTION-FREE so that it stays fast — the difference between the two entry points is deliberate.",
       "states": [
         "empty",
-        "typed"
+        "typed",
+        "at the 140-character limit"
       ],
       "audience": "per destination",
       "trust_boundary": null,
       "data_owner": "the author",
-      "retention": null,
+      "retention": "the caption lives as long as the destination it was published to",
       "failure_recovery": null,
-      "accessibility": "the length is labelled",
-      "exclusions": [],
-      "status": "blocked",
-      "decision_ref": "D-P-04",
-      "blocked_on": "D-P-04",
+      "accessibility": "the remaining length is labelled as it is typed",
+      "exclusions": [
+        "NO caption field on the quick Add-to-Story path",
+        "no caption longer than 140 characters"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-32",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -3913,26 +4170,31 @@
       "kind": "policy",
       "title": "Success-receipt wording for Feed-only, Story-only and multi-destination publishing",
       "sources": [
-        "decision:D-P-06",
+        "decision:D-C-34",
         "design:next-bar-share-destinations-v2",
         "design:next-bar-add-story-flow"
       ],
       "actor": "the author",
       "entry_point": "immediately after publishing",
-      "behavior": "NOT DECIDED. The approved receipts predate Feed being a destination: share-destinations-v2 draws \"Shared to 3 places\" with per-destination indicators, add-story-flow draws \"Added to your story\". The exact wording for Feed-only, Story-only and multi-destination is open.",
+      "behavior": "Exactly three receipts. FEED ONLY: \"Posted to Feed\", with View post and Undo. STORY ONLY: \"Added to your story\", with View story and Undo. MULTIPLE DESTINATIONS: \"Shared to N places\", with per-destination indicators, Done and Undo.",
       "states": [
-        "undecided"
+        "feed only",
+        "story only",
+        "multiple destinations"
       ],
       "audience": "the author",
-      "trust_boundary": null,
+      "trust_boundary": "Undo is authorized to the author only",
       "data_owner": "the author",
-      "retention": null,
-      "failure_recovery": null,
-      "accessibility": null,
-      "exclusions": [],
-      "status": "blocked",
-      "decision_ref": "D-P-06",
-      "blocked_on": "D-P-06",
+      "retention": "Undo removes what was just published, per V8-R-CMP-012",
+      "failure_recovery": "a failed Undo must not report success",
+      "accessibility": "each receipt names its destinations in words and carries exactly two actions",
+      "exclusions": [
+        "no Back to Social button",
+        "no reassurance copy"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-34",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -3942,27 +4204,33 @@
     {
       "requirement_id": "V8-R-CMP-012",
       "kind": "policy",
-      "title": "Multi-destination deletion",
+      "title": "One media object, several destination references, two deletion verbs",
       "sources": [
-        "decision:D-P-05",
+        "decision:D-C-33",
         "design:next-bar-share-destinations-v2"
       ],
       "actor": "the author",
       "entry_point": "a published post carrying several destination indicators",
-      "behavior": "NOT DECIDED. Whether removing one destination leaves the same media object live under the others, or deletion is Delete-everywhere, is open — and it governs whether D-C-14's single shared media object may survive with one destination removed.",
+      "behavior": "ONE MEDIA OBJECT MAY HAVE MULTIPLE DESTINATION REFERENCES. \"REMOVE FROM THIS DESTINATION\" removes only that destination. \"DELETE EVERYWHERE\" removes every destination. Removing one destination DOES NOT DESTROY the remaining destinations. PHYSICAL MEDIA BYTES ARE DELETED ONLY WHEN NO DESTINATION AND NO SAVED NIGHTS OUT ARCHIVE REFERENCES THEM. Removing the Feed destination ALSO removes that Feed post's visible comments.",
       "states": [
-        "undecided"
+        "all destinations live",
+        "one destination removed",
+        "deleted everywhere",
+        "bytes reclaimed"
       ],
       "audience": "per destination",
-      "trust_boundary": "deletion is authorized to the author",
+      "trust_boundary": "server-enforced; deletion is authorized to the author only",
       "data_owner": "the author",
-      "retention": "UNDECIDED — see D-P-05",
-      "failure_recovery": "media still referenced by another live destination must never be destroyed",
-      "accessibility": null,
-      "exclusions": [],
-      "status": "blocked",
-      "decision_ref": "D-P-05",
-      "blocked_on": "D-P-05",
+      "retention": "bytes survive exactly as long as the LAST reference — any destination, or a Saved Nights Out archive",
+      "failure_recovery": "media still referenced by another live destination or by a Saved Nights Out archive must NEVER be destroyed; a reference count that cannot be read fails the delete rather than guessing",
+      "accessibility": "the two verbs are distinct and name their scope",
+      "exclusions": [
+        "removing one destination never destroys another",
+        "bytes are never reclaimed while any reference remains"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-33",
+      "blocked_on": null,
       "goal_ids": [
         "g-f1e128da-c550-4250-a9ef-925bf322f810"
       ],
@@ -3970,6 +4238,81 @@
       "implementation_paths": [
         "src/lib/stories.server.ts"
       ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel HIGH on the current candidate: deleting one story can destroy media still referenced by another live story — the remove-before-delete ordering removes by path without checking for other live references. D-C-33 makes reference counting mandatory."
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-CMP-015",
+      "kind": "action",
+      "title": "Tap \"Remove from this destination\"",
+      "sources": [
+        "decision:D-C-33",
+        "design:next-bar-share-destinations-v2"
+      ],
+      "actor": "the author",
+      "entry_point": "a published post carrying several destination indicators",
+      "behavior": "Removes ONLY the named destination. The media object and its other destinations stay live. Removing the Feed destination also removes that Feed post's visible comments.",
+      "states": [
+        "destination live",
+        "destination removed"
+      ],
+      "audience": "that destination's audience",
+      "trust_boundary": "server-enforced; author only",
+      "data_owner": "the author",
+      "retention": "the remaining destinations are untouched; bytes are retained while any reference remains",
+      "failure_recovery": "a failed removal must not report success and must not orphan the bytes",
+      "accessibility": "the control names which destination it removes",
+      "exclusions": [
+        "never destroys another destination"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-33",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-CMP-016",
+      "kind": "action",
+      "title": "Tap \"Delete everywhere\"",
+      "sources": [
+        "decision:D-C-33",
+        "design:next-bar-share-destinations-v2"
+      ],
+      "actor": "the author",
+      "entry_point": "a published post carrying several destination indicators",
+      "behavior": "Removes EVERY destination. Bytes are then reclaimed only if no Saved Nights Out archive still references them.",
+      "states": [
+        "live",
+        "deleted everywhere",
+        "bytes retained by an archive reference"
+      ],
+      "audience": "nobody after deletion",
+      "trust_boundary": "server-enforced; author only",
+      "data_owner": "the author",
+      "retention": "no destination remains; bytes go only when the last reference including Saved Nights Out is gone",
+      "failure_recovery": "a partial delete must be reported, never reported as complete",
+      "accessibility": "the destructive verb states its full scope",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-33",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [],
       "evidence": [],
       "coverage": "missing"
     },
@@ -4027,9 +4370,9 @@
       "exclusions": [
         "no public like counts"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-13",
-      "blocked_on": "D-P-06",
+      "blocked_on": null,
       "goal_ids": [],
       "acceptance_refs": [],
       "implementation_paths": [],
@@ -4173,9 +4516,9 @@
       "exclusions": [
         "no second invite model"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [
         "g-6c492e4a-d09a-4c2a-afa4-0e076deacc1f",
         "g-0e836120-93a6-4e2a-aa2f-64363eff8d02"
@@ -4370,13 +4713,13 @@
     {
       "requirement_id": "V8-R-NO-010",
       "kind": "policy",
-      "title": "Saving media to the phone's local photo library is deferred to V9",
+      "title": "No native Photos-library export in V8 — entirely deferred to V9",
       "sources": [
         "decision:D-C-19"
       ],
       "actor": "signed-in user",
       "entry_point": "media surfaces",
-      "behavior": "Saving media to the device photo library is DEFERRED TO V9 where it would materially expand V8. Saved Nights Out (D-C-18) is the in-app private archive and is not a substitute for it.",
+      "behavior": "EXPORTING OR SAVING A PHOTO FROM NEXT BAR INTO THE PHONE'S NATIVE PHOTOS LIBRARY IS ENTIRELY DEFERRED TO V9. There is NO native Photos-library export in V8 — unconditionally, with no \"if it would materially expand V8\" qualifier. Saved Nights Out (D-C-18) remains in V8 as a PRIVATE IN-APP ARCHIVE and is NOT the phone's Photos library.",
       "states": [
         "n/a — deferred"
       ],
@@ -4387,13 +4730,17 @@
       "failure_recovery": null,
       "accessibility": null,
       "exclusions": [
-        "no local photo-library save in V8 where it would materially expand the release"
+        "NO native Photos-library export in V8",
+        "no share-to-Photos affordance",
+        "Saved Nights Out is not a Photos-library substitute"
       ],
       "status": "deferred",
       "decision_ref": "D-C-19",
       "blocked_on": null,
       "goal_ids": [],
-      "acceptance_refs": [],
+      "acceptance_refs": [
+        "deferred to V9 by the founder, 2026-08-23, unconditionally"
+      ],
       "implementation_paths": [],
       "evidence": [],
       "coverage": "missing"
@@ -4966,9 +5313,9 @@
       "exclusions": [
         "the audience picker does not live in Settings — it reappears at the moment of sharing"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-17",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [
         "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
       ],
@@ -5050,9 +5397,9 @@
       "failure_recovery": null,
       "accessibility": "both rows show their counts on the list",
       "exclusions": [],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [
         "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
       ],
@@ -5088,9 +5435,9 @@
       "exclusions": [
         "V8 notifications are limited to: invited, accepted, bar suggested, plan changed"
       ],
-      "status": "blocked",
+      "status": "approved",
       "decision_ref": "D-C-20",
-      "blocked_on": "D-P-03",
+      "blocked_on": null,
       "goal_ids": [
         "g-6df5a7de-2443-4449-9ad5-8b5f3887817c",
         "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
