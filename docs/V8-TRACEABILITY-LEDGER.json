@@ -1,8 +1,56 @@
 {
-  "ledger_version": "3.0.0-draft",
-  "ledger_status": "draft",
+  "ledger_version": "3.0.0",
+  "ledger_status": "founder-approved",
   "generated_at": "2026-08-23",
-  "last_owner_approval": null,
+  "last_owner_approval": {
+    "approver": "founder",
+    "approved_on": "2026-08-23",
+    "statement": "These look good to me.",
+    "scope": "Approves the V8 product contract: all nine final decisions of 2026-08-23 (D-C-29 through D-C-36, plus the revision of D-C-19) and the three explicit V9 deferrals carried as deferred requirement rows.",
+    "decisions_approved": [
+      "D-C-19 (revised)",
+      "D-C-29",
+      "D-C-30",
+      "D-C-31",
+      "D-C-32",
+      "D-C-33",
+      "D-C-34",
+      "D-C-35",
+      "D-C-36"
+    ],
+    "v9_deferrals_approved": [
+      {
+        "requirement_id": "V8-R-ACC-003",
+        "subject": "Badges and the Persona card",
+        "decision": "D-C-24"
+      },
+      {
+        "requirement_id": "V8-R-FEED-007",
+        "subject": "Automatic ranking-event Feed rows",
+        "decision": "D-C-35"
+      },
+      {
+        "requirement_id": "V8-R-NO-010",
+        "subject": "Native Photos-library export or save, unconditional",
+        "decision": "D-C-19"
+      }
+    ],
+    "approved_contract_identity": {
+      "branch": "docs/v8-prd-delta-20260823",
+      "commit": "47f9f5aee42079f34c4c21fa8ffed1d737a9cb50",
+      "prd_sha256": "734ca30b9efc6da71fde65449d4e0f3d97c5ff38304a901be9e98e897147dba9",
+      "delta_sha256": "530b0317c3393f108abe184b5624087a91d90c07d3187b1ca1aa88f27bdb2035",
+      "decision_record_sha256_pre_stamp": "45671960eb7f6026e09f407a0c0d9fe2208458d356fe7a7770df3e86a61a423a",
+      "ledger_sha256_pre_stamp": "ee71627d7193b574020d3421856ac8f3f6483996c476e888aa571d3e5f1781d0",
+      "design_reference_readme_sha256": "7698b0bb9e2e99f5df039a5524f1e521af5fa23c8c4a2cddf73a7db66970fd34",
+      "validator_sha256": "614fee4f2c0f74e45f9083bf4784b44d7d6ed94e3037ff052782cbae5ae30405",
+      "validator_test_sha256": "4983d1a54ec97f82f887c994c2ebab2c826685a97acc24ea695c4c7b0d791f4e",
+      "approved_canvas_count": 16,
+      "approved_canvas_digests_unchanged": true
+    },
+    "authorization_note": "Approval freezes the product contract. It does NOT authorize goal mutation, implementation planning, product code, migrations, integration, staging, push, PR, deployment, publication, TestFlight, or reviews.",
+    "ledger_self_digest_note": "The ledger cannot contain its own digest. The post-stamp ledger digest is emitted by the validator and recorded with the approval commit."
+  },
   "release_id": "V8",
   "self_contained": true,
   "self_contained_note": "Every path below resolves inside this repository. The validator must pass with NO --artifact-root override; a run that needs one is not integration-ready.",
@@ -19,8 +67,8 @@
     },
     "decision_record": {
       "path": "docs/V8-DECISIONS-2026-08-23.md",
-      "version": "revision 3",
-      "sha256": "45671960eb7f6026e09f407a0c0d9fe2208458d356fe7a7770df3e86a61a423a"
+      "version": "revision 3, founder-approved 2026-08-23",
+      "sha256": "c6115a96e6c3f3dd6701221e0cfa0a484e3eedf5b7e32a284a02000f0e7f38bf"
     },
     "design_reference_readme": {
       "path": "docs/design-reference/README.md",

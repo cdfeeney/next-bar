@@ -3,10 +3,15 @@
 Date: 2026-08-23
 Release: `V8`
 Revision: 3 (supersedes revisions 1 and 2 of the same date)
-Status: **DRAFT** pending final founder approval of the exact digests emitted by the validator.
+Status: **FOUNDER-APPROVED — 2026-08-23.** Approved by the founder against the contract identity
+recorded in §8 below and in `last_owner_approval` in the ledger.
 
 **There are no unresolved product decisions.** Every question this record has ever carried is
-answered. Nothing here authorizes implementation until the founder approves the digests.
+answered.
+
+Approval freezes the product contract. It is **not** authorization to implement: it does not
+authorize goal mutation, implementation planning, product code, migrations, integration, staging,
+push, PR, deployment, publication, TestFlight, or reviews.
 
 Three things are kept apart and never mixed: **confirmed product decisions**, **deferrals**, and
 **operational authorizations**. Operational authorization is not a product requirement and never
@@ -153,9 +158,41 @@ none.
 ## 7. Freezing
 
 The ledger binds the PRD, this decision record, the delta, the design-reference README and all 16
-approved canvases by SHA-256. The ledger's own digest is emitted by the validator on every run;
-record that value with the approval so the whole contract is frozen by digest.
+approved canvases by SHA-256. The ledger's own digest is emitted by the validator on every run and
+is deliberately **not** stored inside the ledger.
 
 ```
 node scripts/check-release-contract.mjs docs/V8-TRACEABILITY-LEDGER.json
+CI=1 npx vitest run scripts/check-release-contract.test.ts
 ```
+
+---
+
+## 8. Founder approval — 2026-08-23
+
+The founder reviewed the plain-English V8 contract and approved it.
+
+**What was approved:** all **nine** final decisions of 2026-08-23 — `D-C-29` … `D-C-36` and the
+revision of `D-C-19` — together with the **three** explicit V9 deferrals carried as deferred
+requirement rows: `V8-R-ACC-003` (Badges and the Persona card), `V8-R-FEED-007` (automatic
+ranking-event Feed rows) and `V8-R-NO-010` (native Photos-library export or save, unconditional).
+
+**Approved contract identity**, as it stood immediately before this approval was stamped —
+commit `47f9f5aee42079f34c4c21fa8ffed1d737a9cb50` on `docs/v8-prd-delta-20260823`:
+
+| Artifact | SHA-256 |
+|---|---|
+| `docs/V8-PRD-2026-08-13.md` | `734ca30b9efc6da71fde65449d4e0f3d97c5ff38304a901be9e98e897147dba9` |
+| `docs/V8-PRD-DELTA-2026-08-23.md` | `530b0317c3393f108abe184b5624087a91d90c07d3187b1ca1aa88f27bdb2035` |
+| `docs/V8-DECISIONS-2026-08-23.md` (pre-stamp) | `45671960eb7f6026e09f407a0c0d9fe2208458d356fe7a7770df3e86a61a423a` |
+| `docs/V8-TRACEABILITY-LEDGER.json` (pre-stamp) | `ee71627d7193b574020d3421856ac8f3f6483996c476e888aa571d3e5f1781d0` |
+| `docs/design-reference/README.md` | `7698b0bb9e2e99f5df039a5524f1e521af5fa23c8c4a2cddf73a7db66970fd34` |
+| `scripts/check-release-contract.mjs` | `614fee4f2c0f74e45f9083bf4784b44d7d6ed94e3037ff052782cbae5ae30405` |
+| `scripts/check-release-contract.test.ts` | `4983d1a54ec97f82f887c994c2ebab2c826685a97acc24ea695c4c7b0d791f4e` |
+
+All **16** approved canvas digests are unchanged by this approval and remain as recorded in
+`approved_artifacts`. No requirement, decision meaning, status, coverage, goal mapping,
+implementation path or evidence was altered by the stamping step.
+
+This file and the ledger necessarily carry new digests **after** stamping, because the stamp is
+written into them. The post-stamp digests are reported with the approval commit.
