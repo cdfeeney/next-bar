@@ -198,7 +198,7 @@ describe('fetchVisibleStories', () => {
     const { client, storage } = clientStub();
     client.from = vi.fn(() => ({
       select: vi.fn(() => ({
-        gt: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: rows, error: null }) })),
+        order: vi.fn().mockResolvedValue({ data: rows, error: null }),
       })),
     }));
     const result = await fetchVisibleStories(client, NOW);
@@ -217,7 +217,7 @@ describe('fetchVisibleStories', () => {
     const { client, storage } = clientStub();
     client.from = vi.fn(() => ({
       select: vi.fn(() => ({
-        gt: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: rows, error: null }) })),
+        order: vi.fn().mockResolvedValue({ data: rows, error: null }),
       })),
     }));
     const result = await fetchVisibleStories(client, NOW);
@@ -259,7 +259,7 @@ describe('fetchVisibleStories', () => {
       }
       return {
         select: vi.fn(() => ({
-          gt: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: rows, error: null }) })),
+          order: vi.fn().mockResolvedValue({ data: rows, error: null }),
         })),
       };
     });
@@ -293,7 +293,7 @@ describe('fetchVisibleStories', () => {
       }
       return {
         select: vi.fn(() => ({
-          gt: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: rows, error: null }) })),
+          order: vi.fn().mockResolvedValue({ data: rows, error: null }),
         })),
       };
     });
@@ -311,6 +311,65 @@ describe('fetchVisibleStories', () => {
  * silent one: private objects left in the bucket by a failed cleanup, with
  * nothing said anywhere.
  */
+describe('fetchVisibleStories — media honesty and clock authority', () => {
+  const liveRow = () => ({
+    id: 's1', author_id: 'a', bar_id: null, caption: null,
+    media_path: 'a/1/main', inset_path: null, media_kind: 'single',
+    audience: 'friends', created_at: iso(0), expires_at: iso(10_000),
+  });
+
+  // Server time is authoritative. The read gate is 0065's RLS, evaluated against
+  // the DATABASE's now(); this process's clock must not act as a second gate, or
+  // a fast clock hides stories the database is still serving.
+  it('applies no client-clock expiry filter — it trusts the rows the gate returned', async () => {
+    const order = vi.fn().mockResolvedValue({ data: [liveRow()], error: null });
+    const gt = vi.fn();
+    const { client } = clientStub();
+    client.from = vi.fn(() => ({ select: vi.fn(() => ({ order, gt })) }));
+    const result = await fetchVisibleStories(client, NOW);
+    expect(result.ok).toBe(true);
+    expect(order).toHaveBeenCalled();
+    expect(gt).not.toHaveBeenCalled();
+  });
+
+  it('marks a story unsigned — not photo-less — when signing fails', async () => {
+    const { client } = clientStub({
+      createSignedUrl: { data: null, error: { message: 'signer down' } },
+    });
+    client.from = vi.fn(() => ({
+      select: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: [liveRow()], error: null }) })),
+    }));
+    const result = await fetchVisibleStories(client, NOW);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value[0].mediaUrl).toBeNull();
+      // The distinction the viewer needs: an outage, not a story without a photo.
+      expect(result.value[0].mediaState).toBe('unsigned');
+    }
+  });
+
+  it('marks an expired story expired, which is not the same as an outage', async () => {
+    const { client } = clientStub();
+    const expired = { ...liveRow(), expires_at: iso(-1) };
+    client.from = vi.fn(() => ({
+      select: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: [expired], error: null }) })),
+    }));
+    const result = await fetchVisibleStories(client, NOW);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value[0].mediaState).toBe('expired');
+  });
+
+  it('marks a fully signed story ok', async () => {
+    const { client } = clientStub();
+    client.from = vi.fn(() => ({
+      select: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: [liveRow()], error: null }) })),
+    }));
+    const result = await fetchVisibleStories(client, NOW);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value[0].mediaState).toBe('ok');
+  });
+});
+
 describe('reportOrphans', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -357,6 +416,33 @@ describe('deleteStory', () => {
     });
     const result = await deleteStory(client, 's1');
     expect(result).toMatchObject({ ok: true, value: { orphans: ['a/1/main'] } });
+  });
+
+  it('retries a failed removal once before reporting an orphan', async () => {
+    const { client, storage } = clientStub({
+      rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null },
+    });
+    storage.remove
+      .mockResolvedValueOnce({ error: { message: 'transient' } })
+      .mockResolvedValueOnce({ error: null });
+    const result = await deleteStory(client, 's1');
+    expect(storage.remove).toHaveBeenCalledTimes(2);
+    // The retry succeeded, so there is nothing to report.
+    expect(result).toMatchObject({ ok: true, value: { orphans: [] } });
+  });
+
+  // The soft-delete has already committed by the time the bytes are touched. A
+  // THROW from storage (not a returned error) used to escape to the outer catch
+  // and surface as "unavailable", telling the author their delete failed while
+  // the row was already gone for every reader.
+  it('reports success, not failure, when byte removal THROWS after the row is deleted', async () => {
+    const { client, storage } = clientStub({
+      rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null },
+    });
+    storage.remove.mockRejectedValue(new Error('network died'));
+    const result = await deleteStory(client, 's1');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.orphans).toEqual(['a/1/main']);
   });
 });
 

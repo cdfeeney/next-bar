@@ -42,19 +42,31 @@ export function useModalDialog<T extends HTMLElement>(
 ): React.RefObject<T> {
   const ref = useRef<T>(null);
 
+  /**
+   * Focus in, background inert — and on close, UN-INERT BEFORE RESTORING FOCUS.
+   *
+   * These were two separate effects, and React runs cleanups in the order the
+   * effects were declared: the focus-restore cleanup fired first, while the
+   * opener was still inside the inert subtree. `inert` removes a subtree from
+   * focus, so `opener.focus()` was a silent no-op and focus was lost to the
+   * body — exactly the dead-end the dialog contract exists to prevent, and
+   * invisible in any test that only asserts the dialog closed.
+   *
+   * They are ONE effect now so the ordering is explicit rather than an
+   * emergent property of declaration order that the next edit can quietly
+   * reverse. Scroll unlock goes with them; it has no ordering constraint.
+   */
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
-    ref.current?.focus({ preventScroll: true });
-    return () => opener?.focus?.({ preventScroll: true });
-  }, []);
-
-  // The page under the dialog: inert, and not scrolling.
-  useEffect(() => {
     const unlockScroll = lockBodyScroll();
     const marked = markBackgroundInert(ref.current);
+    ref.current?.focus({ preventScroll: true });
     return () => {
+      // 1. Make the opener focusable again...
       for (const element of marked) element.removeAttribute('inert');
       unlockScroll();
+      // 2. ...only then hand focus back to it.
+      opener?.focus?.({ preventScroll: true });
     };
   }, []);
 

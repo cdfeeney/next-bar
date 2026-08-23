@@ -83,6 +83,18 @@ export type StoryRow = {
 export type StoryView = StoryRow & {
   mediaUrl: string | null;
   insetUrl: string | null;
+  /**
+   * WHY a null URL is not self-describing. `mediaUrl: null` used to mean three
+   * different things — the story has expired, signing failed, or there is no
+   * inset — and the viewer rendered all three as an empty frame. A signing
+   * failure is an OUTAGE and the user is owed an honest "couldn't load this"
+   * rather than a story that silently looks like it has no photo.
+   *
+   * 'ok'        — URLs are present (or the inset legitimately does not exist).
+   * 'expired'   — no grantable lifetime remains; nothing was minted, by design.
+   * 'unsigned'  — signing FAILED. Show an unavailable state, not a blank frame.
+   */
+  mediaState: 'ok' | 'expired' | 'unsigned';
 };
 
 export type StoryResult<T> =
@@ -121,8 +133,16 @@ function toStory(row: DbRow, tagIds: string[] = []): StoryRow {
 }
 
 /**
- * How long a signed URL for this story may live: whatever is LEFT of the
- * story, capped, and never less than one second.
+ * How long a signed URL for this story may live: whatever is LEFT of the story,
+ * capped at {@link SIGNED_URL_MAX_SECONDS}, and ZERO once less than one whole
+ * second remains.
+ *
+ * This is a CAP on a bearer token, not the authorization gate. The gate is the
+ * database: 0065's RLS refuses expired and deleted rows to everyone, authors
+ * included. A URL already minted stays valid for its remaining TTL even if the
+ * story is deleted a moment later — that residual window is bounded by
+ * min(time left, {@link SIGNED_URL_MAX_SECONDS}) and is stated here rather than
+ * described as enforcement it does not perform.
  *
  * Exported because it is the rule item 3 of the V8 amendment states, and a rule
  * that only exists inline cannot be tested.
@@ -162,9 +182,11 @@ export function storyObjectKey(
  * is the one place that reports them, so a private object left behind by a
  * failed cleanup is visible in a log rather than only in the bucket.
  *
- * It is a report, not a retry: a retry here would race the same failing
- * remove, and the expiry sweep 0065's header records is the mechanism that
- * eventually reclaims the bytes.
+ * Reporting is the LAST step, not the only one: {@link removeBytes} now makes
+ * one bounded retry before anything reaches here, so what this logs is an
+ * object that survived two attempts. Durable reclamation remains the expiry
+ * sweep 0065's header records — the retry narrows the window, it does not
+ * replace the sweep, and neither is a substitute for the other.
  */
 export function reportOrphans(context: string, orphans: readonly string[] | undefined): void {
   if (orphans === undefined || orphans.length === 0) return;
@@ -289,10 +311,18 @@ export async function fetchVisibleStories(
 ): Promise<StoryResult<StoryView[]>> {
   if (client === null) return unavailable();
   try {
+    // NO CLIENT-CLOCK EXPIRY FILTER. This used to carry
+    // `.gt('expires_at', new Date(now).toISOString())`, which made whichever
+    // clock this process runs on a second expiry gate alongside the database's.
+    // Server time is authoritative: 0065's read policy is "unexpired, not
+    // deleted, by these authors", and it is evaluated against the DATABASE's
+    // now(). A process clock running fast then hid stories the database was
+    // still serving, and one running slow contributed nothing the policy had
+    // not already refused. `now` below is used only to CAP a signed-URL TTL,
+    // never to decide what is visible.
     const { data, error } = await client
       .from('stories')
       .select('id, author_id, bar_id, caption, media_path, inset_path, media_kind, audience, created_at, expires_at')
-      .gt('expires_at', new Date(now).toISOString())
       .order('created_at', { ascending: false });
     if (error) {
       return { ok: false, reason: 'failed', message: 'Stories could not be loaded.' };
@@ -302,12 +332,19 @@ export async function fetchVisibleStories(
     const views = await Promise.all(rows.map(async (row) => {
       const story = toStory(row, tags.get(row.id) ?? []);
       const ttl = signedUrlTtlSeconds(story.expiresAt, now);
-      if (ttl <= 0) return { ...story, mediaUrl: null, insetUrl: null };
+      if (ttl <= 0) {
+        return { ...story, mediaUrl: null, insetUrl: null, mediaState: 'expired' as const };
+      }
       const [main, inset] = await Promise.all([
         signUrl(client, story.mediaPath, ttl),
         story.insetPath === null ? Promise.resolve(null) : signUrl(client, story.insetPath, ttl),
       ]);
-      return { ...story, mediaUrl: main, insetUrl: inset };
+      // A failed SIGNING is an outage, not an absent photo. `main === null`
+      // here means the signer refused or threw; the inset is only a failure
+      // when there was an inset path to sign in the first place.
+      const insetFailed = story.insetPath !== null && inset === null;
+      const mediaState = main === null || insetFailed ? ('unsigned' as const) : ('ok' as const);
+      return { ...story, mediaUrl: main, insetUrl: inset, mediaState };
     }));
     return { ok: true, value: views };
   } catch {
@@ -390,15 +427,45 @@ export async function deleteStory(
       return { ok: false, reason: 'denied', message: 'That story is not yours to remove.' };
     }
     const paths = rows.flatMap((r) => [r.media_path, r.inset_path]).filter((p): p is string => p !== null);
-    let orphans: string[] = [];
-    if (paths.length > 0) {
-      const { error: removeError } = await client.storage.from(STORY_BUCKET).remove(paths);
-      if (removeError) orphans = paths;
-    }
+    // THE SOFT-DELETE HAS ALREADY SUCCEEDED. Everything below is byte cleanup,
+    // and it must never turn a completed deletion into a reported failure: the
+    // read gate closed the moment `delete_story` returned, so the story IS gone
+    // for every reader. Previously a THROW from storage.remove() (not an
+    // returned error — a throw) escaped to the outer catch and surfaced as
+    // "Stories are unavailable right now. Nothing was shared.", telling the
+    // author their delete failed while the row was already soft-deleted. The
+    // honest outcome is success plus a reported orphan.
+    const orphans = paths.length > 0 ? await removeBytes(client, paths) : [];
     return { ok: true, value: { orphans } };
   } catch {
     return unavailable();
   }
+}
+
+/**
+ * Remove object bytes, returning whatever could not be removed.
+ *
+ * ONE bounded retry, then report. A single retry covers the common transient
+ * failure (a dropped connection, a momentary 5xx) that the previous
+ * report-only path turned into a permanent orphan; retrying further would just
+ * race the same failing remove. Durable reclamation is still the expiry sweep
+ * 0065's header records — this narrows the window, it does not replace it.
+ *
+ * Never throws: a throw here would be indistinguishable from a failed delete.
+ */
+async function removeBytes(
+  client: SupabaseClient,
+  paths: readonly string[],
+): Promise<string[]> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const { error } = await client.storage.from(STORY_BUCKET).remove([...paths]);
+      if (!error) return [];
+    } catch {
+      // fall through to the retry, then to the orphan report
+    }
+  }
+  return [...paths];
 }
 
 /** Consent withdrawal by the TAGGED person. Never the author's call. */

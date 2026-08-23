@@ -99,7 +99,7 @@ language plpgsql
 stable
 security definer
 set search_path = public
-as $
+as $$
 declare
   v_caller uuid := auth.uid();
 begin
@@ -119,7 +119,7 @@ begin
         where f.follower_id = b and f.followee_id = a
      );
 end;
-$;
+$$;
 
 comment on function public.is_mutual_friend(uuid, uuid) is
   'Accepted mutual friendship: follows edges in BOTH directions. A one-way '
@@ -321,6 +321,52 @@ create policy "story-media: owner writes own prefix"
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
+-- Is this object referenced by a story that is deleted or expired?
+--
+-- SECURITY DEFINER ON PURPOSE, and it is the whole point of this function. The
+-- owner-read policy below used to inline this as a plain `not exists (select
+-- ... from public.stories ...)`. That subquery runs under the CALLER's RLS, and
+-- the author SELECT policy above deliberately hides expired and deleted rows
+-- from the author too — so for the one caller that matters the subquery matched
+-- NOTHING, `not exists` was therefore TRUE, and the author could still sign
+-- their own expired media. The check inverted itself precisely when it was
+-- needed. Reading the stories table with the definer's rights is the only way
+-- for the policy to see the row that disqualifies the object.
+--
+-- FAILS CLOSED, and refuses to be an oracle: it answers only for objects under
+-- the CALLER's own prefix. For anything else it returns true ("treat as dead"),
+-- so a direct call cannot be used to probe whether someone else's object exists
+-- or is still live. The owner policy already requires that same ownership, so
+-- the restriction costs the legitimate caller nothing.
+create or replace function public.story_media_is_dead(p_name text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_name is null
+     or auth.uid() is null
+     or (storage.foldername(p_name))[1] is distinct from auth.uid()::text then
+    return true;
+  end if;
+  return exists (
+    select 1 from public.stories s
+     where (s.media_path = p_name or s.inset_path = p_name)
+       and (s.deleted_at is not null or s.expires_at <= now())
+  );
+end;
+$$;
+
+revoke all on function public.story_media_is_dead(text) from public, anon;
+grant execute on function public.story_media_is_dead(text) to authenticated;
+
+comment on function public.story_media_is_dead(text) is
+  'True when a story-media object is referenced by a deleted or expired story. '
+  'SECURITY DEFINER because the owner storage policy must see rows the author''s '
+  'own RLS hides. Answers only for the caller''s own prefix and fails closed.';
+
 -- The owner reads its own bytes — but not once the story that referenced them
 -- has expired or been deleted. Prefix ownership alone would have left the
 -- author able to mint a signed URL for its own expired media indefinitely,
@@ -334,12 +380,7 @@ create policy "story-media: owner reads own prefix"
   using (
     bucket_id = 'story-media'
     and (storage.foldername(name))[1] = auth.uid()::text
-    and not exists (
-      select 1 from public.stories s
-       where (s.media_path = storage.objects.name
-              or s.inset_path = storage.objects.name)
-         and (s.deleted_at is not null or s.expires_at <= now())
-    )
+    and not public.story_media_is_dead(storage.objects.name)
   );
 
 -- A viewer reads an object only while some story it can actually read points at
@@ -481,6 +522,29 @@ begin
        and not public.is_mutual_friend(v_author, candidate.id)
   ) then
     raise exception 'publish_story: you can only tag friends who follow you back'
+      using errcode = '42501';
+  end if;
+
+  -- A TAGGED PERSON MUST BE ABLE TO REACH THEIR OWN TAG. Mutuality alone is not
+  -- enough on a CUSTOM story: the audience is exactly `p_audience_ids`, so a
+  -- mutual friend who is tagged but NOT named in that audience cannot read the
+  -- story, cannot see the tagged-people sheet, and therefore cannot reach the
+  -- "Remove me" control that is their only consent withdrawal. The tag would be
+  -- a write onto their consent surface that they can neither see nor undo —
+  -- which is the same harassment shape the mutuality rule above exists to stop,
+  -- reached by a different route.
+  --
+  -- Refused rather than auto-widened: silently adding the tagged person to the
+  -- audience would publish to someone the author deliberately excluded, and
+  -- widening an audience the author narrowed is the more dangerous repair.
+  -- Tagging YOURSELF stays allowed — the author always reads their own story.
+  if p_audience = 'custom' and p_tag_ids is not null and exists (
+    select 1 from unnest(p_tag_ids) as candidate(id)
+     where candidate.id <> v_author
+       and not (candidate.id = any (coalesce(p_audience_ids, '{}'::uuid[])))
+  ) then
+    raise exception
+      'publish_story: everyone you tag must be in a custom story''s audience'
       using errcode = '42501';
   end if;
 

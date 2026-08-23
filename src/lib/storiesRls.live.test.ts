@@ -113,9 +113,31 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
     const carol = randomUUID();
     await asOwner();
     for (const [id, handle] of [[alice, 'alice'], [bob, 'bob'], [carol, 'carol']] as const) {
+      // `public.profiles.id` REFERENCES `auth.users(id)` (0001, line 20), so a bare
+      // profile insert with a random UUID violates the FK on the very first seed and
+      // the whole suite dies before asserting anything. Create the identity first.
+      //
+      // Minimal shape on purpose: every other auth.users column is nullable or
+      // defaulted, and inventing values for columns this suite never reads would be
+      // asserting things about GoTrue's schema that nobody verified.
+      await db.query(
+        `insert into auth.users (instance_id, id, aud, role, email, created_at, updated_at)
+         values ('00000000-0000-0000-0000-000000000000', $1, 'authenticated', 'authenticated', $2, now(), now())
+         on conflict (id) do nothing`,
+        [id, `${handle}_${id.slice(0, 8)}@stories-rls.test`],
+      );
+      // 0001's `on_auth_user_created` trigger has ALREADY inserted this profile row
+      // — id only, so `handle`/`display_name` are null and `is_private` took its
+      // table default of TRUE. `do nothing` would therefore leave every fixture
+      // private and handle-less, and the audience tests would fail for a reason that
+      // has nothing to do with the policies under test. Upsert the fields we assert.
       await db.query(
         `insert into public.profiles (id, handle, display_name, is_private)
-         values ($1, $2, $2, false) on conflict (id) do nothing`,
+         values ($1, $2, $2, false)
+         on conflict (id) do update
+           set handle = excluded.handle,
+               display_name = excluded.display_name,
+               is_private = excluded.is_private`,
         [id, `${handle}_${id.slice(0, 8)}`],
       );
     }

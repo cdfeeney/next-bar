@@ -31,6 +31,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { supabase } from '@/lib/supabase';
 import {
+  SIGNED_URL_MAX_SECONDS,
   deleteStory,
   fetchVisibleStories,
   publishStory,
@@ -59,6 +60,15 @@ export type TaggedPerson = {
   initials: string;
   /** True for the viewer's own row, which is what "Remove me" acts on. */
   isYou?: boolean;
+  /**
+   * False when this viewer may not read the tagged profile.
+   *
+   * The row still appears — the COUNT of tagged people is a fact about the
+   * story, not about the viewer — but it carries no name, handle or initials
+   * to leak. Dropping these rows instead made the sheet under-report how many
+   * people a story tags, which is its own dishonesty.
+   */
+  resolved?: boolean;
 };
 
 export type StoryPhoto = {
@@ -272,6 +282,25 @@ export function useStories(): UseStories {
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   /**
+   * Signed media URLs are minted ONCE per fetch and live at most
+   * {@link SIGNED_URL_MAX_SECONDS}. A rail or viewer left open past that
+   * rendered broken images for stories that are still perfectly live — the
+   * URLs had expired, not the stories. Re-fetch a little before they lapse so
+   * a fresh set is always in hand.
+   *
+   * The margin is deliberate: renewing exactly at expiry races the very
+   * boundary it exists to avoid. Only while signed in, and cleared on unmount
+   * so a backgrounded tab is not left polling.
+   */
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    const RENEW_MARGIN_SECONDS = 30;
+    const everyMs = Math.max(RENEW_MARGIN_SECONDS, SIGNED_URL_MAX_SECONDS - RENEW_MARGIN_SECONDS) * 1000;
+    const id = setInterval(() => setTick((n) => n + 1), everyMs);
+    return () => clearInterval(id);
+  }, [signedIn]);
+
+  /**
    * Every author of a story you can read is either you or an accepted mutual
    * friend — that is what RLS enforces — so the mutuals list resolves every
    * author without a second profile read.
@@ -322,27 +351,42 @@ export function useStories(): UseStories {
    * tagged, let alone withdraw — the consent control existed only as an RPC no
    * screen could reach.
    *
-   * An id that resolves to nobody the viewer can see is DROPPED rather than
-   * rendered as a placeholder person: the sheet names people, and inventing a
-   * name for a profile this viewer has no right to read would be worse than
-   * showing a shorter list. Your OWN id is always resolvable — it is put in the
-   * people map above unconditionally — so "Remove me" is always reachable by
-   * the one person it belongs to.
+   * An id that resolves to nobody the viewer can see is kept as an UNRESOLVED
+   * row rather than dropped. Two dishonesties were available and this picks
+   * neither: inventing a name for a profile the viewer has no right to read
+   * would leak identity, and dropping the row entirely under-reported how many
+   * people the story tags — the previous behaviour, and the reason the sheet
+   * could not show the full tag list. The row therefore carries the real id
+   * (the backend relationship is keyed on it) and no name, handle or initials.
+   *
+   * Your OWN id is always resolvable — it is put in the people map above
+   * unconditionally — so "Remove me" is always reachable by the one person it
+   * belongs to, regardless of who else on the list this viewer can see.
    */
   const items = useMemo<StoryItem[]>(() => {
     if (views === null) return [];
     return views.map((view) => toItem(
       view,
-      view.tagIds.flatMap((id) => {
+      view.tagIds.map((id) => {
         const person = people.get(id);
-        if (person === undefined) return [];
-        return [{
+        if (person === undefined) {
+          return {
+            id,
+            handle: '',
+            name: '',
+            initials: '',
+            isYou: id === youId,
+            resolved: false,
+          };
+        }
+        return {
           id: person.id,
           handle: person.handle ?? '',
           name: person.name,
           initials: person.initials,
           isYou: id === youId,
-        }];
+          resolved: true,
+        };
       }),
     ));
   }, [views, people, youId]);
