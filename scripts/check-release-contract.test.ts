@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error - plain .mjs guard, deliberately not TypeScript
 import { checkContract, digestOf } from './check-release-contract.mjs';
@@ -7,11 +9,14 @@ import { checkContract, digestOf } from './check-release-contract.mjs';
 // agree with while a field is empty or a digest has moved. A guard nobody proves can fail is
 // not a gate, so each case below re-breaks exactly one rule and asserts the specific code.
 
-const decisionMd = 'D-C-01 approved. D-O-04 open. D-C-11 approved.';
+const decisionMd = 'D-C-01 approved. D-C-27 approved. D-P-03 pending. D-O-04 was open.';
+
+const shaOf = (s: string) => createHash('sha256').update(Buffer.from(s)).digest('hex');
 
 /** A row that passes every check, so each case can break exactly one thing. */
 const goodRow = (over: Record<string, unknown> = {}) => ({
   requirement_id: 'V8-R-STO-001',
+  kind: 'action',
   title: 'a requirement',
   sources: ['design:canvas-a'],
   actor: 'user',
@@ -36,127 +41,217 @@ const goodRow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const goodLedger = (rows = [goodRow()]) => ({
-  ledger_version: '1.0.0',
+const FILES: Record<string, string> = {
+  'docs/PRD.md': 'prd',
+  'docs/DELTA.md': 'delta',
+  'docs/DECISIONS.md': 'decisions',
+  'docs/design-reference/README.md': 'readme',
+  'scripts/check-release-contract.mjs': 'validator',
+  'docs/design-reference/approved/a.png': 'png-a',
+  'docs/design-reference/approved/b.png': 'png-b',
+};
+
+const readFile = (rel: string) => (rel in FILES ? Buffer.from(FILES[rel]) : null);
+const listDir = (rel: string) =>
+  rel === 'docs/design-reference/approved' ? ['a.png', 'b.png'] : null;
+
+const cleanLedger = (rows = [goodRow(), goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] })]) => ({
+  ledger_version: '2.0.0',
+  ledger_status: 'draft',
   release_id: 'V8',
-  prd_path: 'docs/PRD.md',
-  prd_version: 'v1',
-  prd_sha256: 'aa',
-  decision_record_path: 'docs/DECISIONS.md',
+  contract: {
+    prd: { path: 'docs/PRD.md', version: 'v1', sha256: shaOf('prd') },
+    delta: { path: 'docs/DELTA.md', version: 'v8.2', sha256: shaOf('delta') },
+    decision_record: { path: 'docs/DECISIONS.md', version: 'r2', sha256: shaOf('decisions') },
+    design_reference_readme: { path: 'docs/design-reference/README.md', sha256: shaOf('readme') },
+    validator: { path: 'scripts/check-release-contract.mjs' },
+  },
+  approved_artifact_manifest: { directory: 'docs/design-reference/approved', expected_count: 2 },
   approved_artifacts: [
-    { id: 'canvas-a', path: 'docs/a.png', sha256: 'bb', approval_scope: 'both', approver: 'founder', approved_on: '2026-08-21' },
+    { id: 'canvas-a', path: 'docs/design-reference/approved/a.png', sha256: shaOf('png-a'), approval_scope: 'both', approver: 'founder', approved_on: '2026-08-12', stale_in_canvas_banner: null, banner_superseded_by: null },
+    { id: 'canvas-b', path: 'docs/design-reference/approved/b.png', sha256: shaOf('png-b'), approval_scope: 'both', approver: 'founder', approved_on: '2026-08-21', stale_in_canvas_banner: 'EXPLORATORY', banner_superseded_by: 'D-C-27' },
   ],
+  open_decisions: [{ id: 'D-P-03', subject: 'group administration' }],
   requirements: rows,
 });
 
-/** Digests match, everything present — so digest checks never mask another case. */
-const readFile = (rel: string) =>
-  rel === 'docs/PRD.md' ? Buffer.from('prd') : rel === 'docs/a.png' ? Buffer.from('png') : null;
-
-/** The same reader, with the two digests the ledger must record for a clean run. */
-const shaOf = (s: string) => require('node:crypto').createHash('sha256').update(Buffer.from(s)).digest('hex');
-
-const cleanLedger = (rows = [goodRow()]) => {
-  const l = goodLedger(rows);
-  l.prd_sha256 = shaOf('prd');
-  l.approved_artifacts[0].sha256 = shaOf('png');
-  return l;
-};
-
 const codes = (findings: { code: string }[]) => findings.map((f) => f.code);
+const run = (ledger: unknown, md = decisionMd) => checkContract(ledger, md, readFile, listDir);
 
 describe('checkContract', () => {
   it('passes a ledger that satisfies every admission rule', () => {
-    expect(checkContract(cleanLedger(), decisionMd, readFile)).toEqual([]);
+    expect(run(cleanLedger())).toEqual([]);
   });
 
+  // ---------------------------------------------------------------- row shape
   it('rejects a requirement whose required field is empty', () => {
-    const findings = checkContract(cleanLedger([goodRow({ actor: '' })]), decisionMd, readFile);
-    expect(codes(findings)).toContain('MISSING_FIELD');
+    expect(codes(run(cleanLedger([goodRow({ actor: '' })])))).toContain('MISSING_FIELD');
   });
 
   it('rejects a requirement whose when-applicable key is absent rather than null', () => {
     const row = goodRow();
     delete (row as Record<string, unknown>).retention;
-    const findings = checkContract(cleanLedger([row]), decisionMd, readFile);
-    expect(findings.some((f) => f.code === 'MISSING_FIELD' && f.where.endsWith('.retention'))).toBe(true);
+    expect(run(cleanLedger([row])).some((f) => f.code === 'MISSING_FIELD' && f.where.endsWith('.retention'))).toBe(true);
   });
 
-  it('rejects two rows sharing one requirement_id', () => {
-    const findings = checkContract(cleanLedger([goodRow(), goodRow({ title: 'another' })]), decisionMd, readFile);
-    expect(codes(findings)).toContain('DUPLICATE_ID');
-  });
-
-  it('rejects duplicate requirement ownership — two ids, one identity', () => {
-    const findings = checkContract(
-      cleanLedger([goodRow(), goodRow({ requirement_id: 'V8-R-STO-002' })]),
-      decisionMd, readFile,
-    );
-    expect(codes(findings)).toContain('DUPLICATE_OWNERSHIP');
-  });
-
-  it('rejects a requirement that depends on an open decision but reads as approved', () => {
-    const findings = checkContract(
-      cleanLedger([goodRow({ blocked_on: 'D-O-04', status: 'approved' })]),
-      decisionMd, readFile,
-    );
-    expect(codes(findings)).toContain('UNRESOLVED_MARKED_APPROVED');
-  });
-
-  it('accepts the same row once it is marked blocked', () => {
-    const findings = checkContract(
-      cleanLedger([goodRow({ blocked_on: 'D-O-04', status: 'blocked' })]),
-      decisionMd, readFile,
-    );
-    expect(findings).toEqual([]);
-  });
-
-  it('rejects a decision id that the decision record does not define', () => {
-    const findings = checkContract(cleanLedger([goodRow({ decision_ref: 'D-C-99' })]), decisionMd, readFile);
-    expect(codes(findings)).toContain('UNKNOWN_DECISION');
-  });
-
-  it('rejects a reference to a requirement id no row defines', () => {
-    const findings = checkContract(
-      cleanLedger([goodRow({ behavior: 'see V8-R-FEED-003 for the rest' })]),
-      decisionMd, readFile,
-    );
-    expect(codes(findings)).toContain('UNKNOWN_REQUIREMENT_ID');
-  });
-
-  it('rejects an approved artifact that no requirement row cites', () => {
-    const findings = checkContract(
-      cleanLedger([goodRow({ sources: ['design:some-other-canvas'] })]),
-      decisionMd, readFile,
-    );
-    expect(codes(findings)).toContain('ARTIFACT_WITHOUT_REQUIREMENT');
-  });
-
-  it('rejects digest drift on a declared artifact', () => {
-    const l = cleanLedger();
-    l.approved_artifacts[0].sha256 = 'deadbeef';
-    expect(codes(checkContract(l, decisionMd, readFile))).toContain('DIGEST_DRIFT');
-  });
-
-  it('rejects a declared artifact that is absent under the artifact root', () => {
-    const findings = checkContract(cleanLedger(), decisionMd, () => null);
-    expect(codes(findings)).toContain('ABSENT');
+  it('rejects a kind outside action|policy', () => {
+    expect(codes(run(cleanLedger([goodRow({ kind: 'vibes' })])))).toContain('BAD_KIND');
   });
 
   it('rejects a status outside the contract enum', () => {
-    const findings = checkContract(cleanLedger([goodRow({ status: 'probably-fine' })]), decisionMd, readFile);
-    expect(codes(findings)).toContain('BAD_STATUS');
+    expect(codes(run(cleanLedger([goodRow({ status: 'probably-fine' })])))).toContain('BAD_STATUS');
   });
 
   it('rejects a coverage value outside the contract enum', () => {
-    const findings = checkContract(cleanLedger([goodRow({ coverage: 'mostly' })]), decisionMd, readFile);
-    expect(codes(findings)).toContain('BAD_COVERAGE');
+    expect(codes(run(cleanLedger([goodRow({ coverage: 'mostly' })])))).toContain('BAD_COVERAGE');
+  });
+
+  it('rejects two rows sharing one requirement_id', () => {
+    expect(codes(run(cleanLedger([goodRow(), goodRow({ title: 'another' })])))).toContain('DUPLICATE_ID');
+  });
+
+  it('rejects duplicate requirement ownership — two ids, one identity', () => {
+    expect(codes(run(cleanLedger([goodRow(), goodRow({ requirement_id: 'V8-R-STO-002' })])))).toContain('DUPLICATE_OWNERSHIP');
+  });
+
+  // ------------------------------------------------- unresolved vs approved
+  it('rejects a row that depends on a pending decision but reads as approved', () => {
+    expect(codes(run(cleanLedger([goodRow({ blocked_on: 'D-P-03', status: 'approved' })])))).toContain('UNRESOLVED_MARKED_APPROVED');
+  });
+
+  it('rejects a row that cites a pending decision as its authority but reads as approved', () => {
+    expect(codes(run(cleanLedger([goodRow({ decision_ref: 'D-P-03', status: 'approved' })])))).toContain('UNRESOLVED_MARKED_APPROVED');
+  });
+
+  it('accepts the same row once it is marked blocked', () => {
+    expect(run(cleanLedger([
+      goodRow({ blocked_on: 'D-P-03', status: 'blocked' }),
+      goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] }),
+    ]))).toEqual([]);
+  });
+
+  it('rejects a deferral with no owner citation', () => {
+    expect(codes(run(cleanLedger([goodRow({ status: 'deferred', decision_ref: '' })])))).toContain('MISSING_FIELD');
+  });
+
+  // ---------------------------------------------------------- id resolution
+  it('rejects a decision id the decision record does not define', () => {
+    expect(codes(run(cleanLedger([goodRow({ decision_ref: 'D-C-99' })])))).toContain('UNKNOWN_DECISION');
+  });
+
+  it('rejects an open decision the decision record does not define', () => {
+    const l = cleanLedger();
+    l.open_decisions = [{ id: 'D-P-42', subject: 'invented' }];
+    expect(codes(run(l))).toContain('UNKNOWN_DECISION');
+  });
+
+  it('rejects a reference to a requirement id no row defines', () => {
+    expect(codes(run(cleanLedger([goodRow({ behavior: 'see V8-R-FEED-003 for the rest' })])))).toContain('UNKNOWN_REQUIREMENT_ID');
+  });
+
+  it('rejects a decision record that names a requirement id no row defines', () => {
+    expect(codes(run(cleanLedger(), `${decisionMd} see V8-R-GRP-009`))).toContain('UNKNOWN_REQUIREMENT_ID');
+  });
+
+  // ------------------------------------------------------- contract binding
+  it.each(['prd', 'delta', 'decision_record', 'design_reference_readme'])(
+    'rejects digest drift on the bound contract part %s',
+    (part) => {
+      const l = cleanLedger();
+      (l.contract as Record<string, { sha256: string }>)[part].sha256 = 'deadbeef';
+      expect(codes(run(l))).toContain('DIGEST_DRIFT');
+    },
+  );
+
+  it('rejects a contract part that is not bound by digest at all', () => {
+    const l = cleanLedger();
+    delete (l.contract as Record<string, unknown>).delta;
+    expect(codes(run(l))).toContain('MISSING_FIELD');
+  });
+
+  it('rejects a missing validator', () => {
+    const l = cleanLedger();
+    l.contract.validator.path = 'scripts/nope.mjs';
+    expect(codes(run(l))).toContain('ABSENT');
+  });
+
+  // ------------------------------------------------------- artifact manifest
+  it('rejects a manifest whose count does not match its declared expectation', () => {
+    const l = cleanLedger();
+    l.approved_artifact_manifest.expected_count = 16;
+    expect(codes(run(l))).toContain('MANIFEST_COUNT');
+  });
+
+  it('rejects a declared artifact that is absent under the artifact root', () => {
+    const l = cleanLedger();
+    l.approved_artifacts[0].path = 'docs/design-reference/approved/gone.png';
+    expect(codes(run(l))).toContain('ABSENT');
+  });
+
+  it('rejects an extra file sitting in the approved directory but absent from the manifest', () => {
+    const l = cleanLedger();
+    l.approved_artifact_manifest.expected_count = 1;
+    l.approved_artifacts = [l.approved_artifacts[0]];
+    expect(codes(run(l))).toContain('EXTRA_ARTIFACT');
+  });
+
+  it('rejects a duplicate artifact id', () => {
+    const l = cleanLedger();
+    l.approved_artifacts[1].id = 'canvas-a';
+    expect(codes(run(l))).toContain('DUPLICATE_ARTIFACT_ID');
+  });
+
+  it('rejects a duplicate artifact path', () => {
+    const l = cleanLedger();
+    l.approved_artifacts[1].path = l.approved_artifacts[0].path;
+    expect(codes(run(l))).toContain('DUPLICATE_ARTIFACT_PATH');
+  });
+
+  it('rejects two manifest entries that are byte-identical', () => {
+    const l = cleanLedger();
+    l.approved_artifacts[1].sha256 = l.approved_artifacts[0].sha256;
+    expect(codes(run(l))).toContain('DUPLICATE_ARTIFACT_DIGEST');
+  });
+
+  it('rejects digest drift on an approved canvas', () => {
+    const l = cleanLedger();
+    l.approved_artifacts[0].sha256 = 'deadbeef';
+    expect(codes(run(l))).toContain('DIGEST_DRIFT');
+  });
+
+  it('rejects a stale in-canvas banner with no superseding decision', () => {
+    const l = cleanLedger();
+    l.approved_artifacts[1].banner_superseded_by = null;
+    expect(codes(run(l))).toContain('UNCITED_BANNER');
+  });
+
+  it('rejects an approved artifact that no requirement row cites', () => {
+    expect(codes(run(cleanLedger([goodRow({ sources: ['design:canvas-a'] })])))).toContain('ARTIFACT_WITHOUT_REQUIREMENT');
+  });
+
+  // Every canvas action needs an action-level row, so a canvas covered only by policy fails.
+  it('rejects an approved artifact covered only by policy rows', () => {
+    const l = cleanLedger([
+      goodRow(),
+      goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', kind: 'policy', sources: ['design:canvas-b'] }),
+    ]);
+    expect(codes(run(l))).toContain('ARTIFACT_WITHOUT_ACTION_ROW');
+  });
+
+  it('rejects a design source naming an artifact the manifest does not carry', () => {
+    const l = cleanLedger([
+      goodRow(),
+      goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] }),
+      goodRow({ requirement_id: 'V8-R-STO-003', title: 'third', sources: ['design:canvas-ghost'] }),
+    ]);
+    expect(codes(run(l))).toContain('UNKNOWN_ARTIFACT_SOURCE');
   });
 
   it('refuses to green when the decision record carries no decision ids', () => {
-    expect(codes(checkContract(cleanLedger(), 'no ids here', readFile))).toContain('NO_DECISIONS');
+    expect(codes(run(cleanLedger(), 'no ids here'))).toContain('NO_DECISIONS');
   });
 
+  // ------------------------------------------------------------ digest rule
   // The CRLF trap: on a core.autocrlf Windows checkout a committed .md arrives with CRLF
   // while its git blob holds LF. Without folding, every multi-line text file reports drift
   // on every run and the guard becomes noise. Binaries must NOT be folded.
@@ -168,13 +263,5 @@ describe('checkContract', () => {
   it('hashes binary files byte-for-byte, CR LF pairs included', () => {
     expect(digestOf('docs/a.png', Buffer.from('one\r\ntwo\r\n')))
       .not.toBe(digestOf('docs/a.png', Buffer.from('one\ntwo\n')));
-  });
-
-  it('still reports real drift on a text file once line endings are excluded as a cause', () => {
-    const l = cleanLedger();
-    l.prd_sha256 = shaOf('a different prd');
-    const findings = checkContract(l, decisionMd, (rel: string) =>
-      rel === 'docs/PRD.md' ? Buffer.from('prd') : rel === 'docs/a.png' ? Buffer.from('png') : null);
-    expect(codes(findings)).toContain('DIGEST_DRIFT');
   });
 });
