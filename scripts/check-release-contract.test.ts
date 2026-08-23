@@ -41,17 +41,26 @@ const goodRow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+const APPROVED_STATUS = 'Status: **FOUNDER-APPROVED AND FROZEN — 2026-08-23.**\nbody\n';
+const DRAFT_STATUS = 'Status: **DRAFT** pending final founder approval.\nbody\n';
+
 const FILES: Record<string, string> = {
   'docs/PRD.md': 'prd',
-  'docs/DELTA.md': 'delta',
-  'docs/DECISIONS.md': 'decisions',
+  'docs/DELTA.md': APPROVED_STATUS,
+  'docs/DECISIONS.md': APPROVED_STATUS,
   'docs/design-reference/README.md': 'readme',
   'scripts/check-release-contract.mjs': 'validator',
+  'scripts/check-release-contract.test.ts': 'validator-test',
   'docs/design-reference/approved/a.png': 'png-a',
   'docs/design-reference/approved/b.png': 'png-b',
 };
 
-const readFile = (rel: string) => (rel in FILES ? Buffer.from(FILES[rel]) : null);
+/** Override a file's content for one case, so a single rule can be broken at a time. */
+const readerWith = (overrides: Record<string, string> = {}) => (rel: string) => {
+  const src = { ...FILES, ...overrides };
+  return rel in src ? Buffer.from(src[rel]) : null;
+};
+const readFile = readerWith();
 const listDir = (rel: string) =>
   rel === 'docs/design-reference/approved' ? ['a.png', 'b.png'] : null;
 
@@ -61,10 +70,11 @@ const cleanLedger = (rows = [goodRow(), goodRow({ requirement_id: 'V8-R-STO-002'
   release_id: 'V8',
   contract: {
     prd: { path: 'docs/PRD.md', version: 'v1', sha256: shaOf('prd') },
-    delta: { path: 'docs/DELTA.md', version: 'v8.2', sha256: shaOf('delta') },
-    decision_record: { path: 'docs/DECISIONS.md', version: 'r2', sha256: shaOf('decisions') },
+    delta: { path: 'docs/DELTA.md', version: 'v8.3', sha256: shaOf(APPROVED_STATUS) },
+    decision_record: { path: 'docs/DECISIONS.md', version: 'r3', sha256: shaOf(APPROVED_STATUS) },
     design_reference_readme: { path: 'docs/design-reference/README.md', sha256: shaOf('readme') },
-    validator: { path: 'scripts/check-release-contract.mjs' },
+    validator: { path: 'scripts/check-release-contract.mjs', sha256: shaOf('validator') },
+    validator_test: { path: 'scripts/check-release-contract.test.ts', sha256: shaOf('validator-test') },
   },
   approved_artifact_manifest: { directory: 'docs/design-reference/approved', expected_count: 2 },
   approved_artifacts: [
@@ -206,6 +216,77 @@ describe('checkContract', () => {
     const l = cleanLedger();
     l.contract.validator.path = 'scripts/nope.mjs';
     expect(codes(run(l))).toContain('ABSENT');
+  });
+
+  it('rejects drift on the validator and on its own test', () => {
+    for (const part of ['validator', 'validator_test']) {
+      const l = cleanLedger();
+      (l.contract as Record<string, { sha256: string }>)[part].sha256 = 'deadbeef';
+      expect(codes(run(l))).toContain('DIGEST_DRIFT');
+    }
+  });
+
+  // ------------------------------------------- approved ledger vs draft docs
+  //
+  // The exact defect: the ledger read `founder-approved` while the PRD delta it binds still
+  // declared `Status: **DRAFT**`. Every digest matched, so the contract passed, and the release's
+  // approval state depended on which file a reader opened.
+  describe('DRAFT_BOUND_ARTIFACT', () => {
+    const approvedLedger = (over: Record<string, unknown> = {}) => ({
+      ...cleanLedger(),
+      ledger_status: 'founder-approved',
+      last_owner_approval: { approver: 'founder', approved_on: '2026-08-23' },
+      ...over,
+    });
+
+    it('fails a founder-approved ledger whose bound delta still says DRAFT', () => {
+      const l = approvedLedger();
+      l.contract.delta.sha256 = shaOf(DRAFT_STATUS);
+      const findings = checkContract(l, decisionMd, readerWith({ 'docs/DELTA.md': DRAFT_STATUS }), listDir);
+      expect(codes(findings)).toContain('DRAFT_BOUND_ARTIFACT');
+      expect(findings.find((f) => f.code === 'DRAFT_BOUND_ARTIFACT')?.where).toBe('docs/DELTA.md');
+    });
+
+    it('fails a founder-approved ledger whose bound decision record still says DRAFT', () => {
+      const l = approvedLedger();
+      l.contract.decision_record.sha256 = shaOf(DRAFT_STATUS);
+      const findings = checkContract(l, DRAFT_STATUS + decisionMd, readerWith({ 'docs/DECISIONS.md': DRAFT_STATUS }), listDir);
+      expect(codes(findings)).toContain('DRAFT_BOUND_ARTIFACT');
+      expect(findings.find((f) => f.code === 'DRAFT_BOUND_ARTIFACT')?.where).toBe('docs/DECISIONS.md');
+    });
+
+    it('fails a founder-approved ledger with no last_owner_approval', () => {
+      const findings = run(approvedLedger({ last_owner_approval: null }));
+      expect(codes(findings)).toContain('DRAFT_BOUND_ARTIFACT');
+    });
+
+    it('fails a bound document that declares no Status line at all', () => {
+      const l = approvedLedger();
+      l.contract.delta.sha256 = shaOf('no status here');
+      const findings = checkContract(l, decisionMd, readerWith({ 'docs/DELTA.md': 'no status here' }), listDir);
+      expect(codes(findings)).toContain('DRAFT_BOUND_ARTIFACT');
+    });
+
+    it('passes the properly founder-approved and frozen package', () => {
+      expect(run(approvedLedger())).toEqual([]);
+    });
+
+    // "draft" is legitimate PRODUCT vocabulary in these documents — the superseded Map
+    // draft-filter state. Only the Status: line may be read, or the contract would be rejected
+    // for describing a feature.
+    it('does not fire on the word draft appearing in product prose', () => {
+      const withProse = `${APPROVED_STATUS}\nThe superseded Map behavior held filters as a DRAFT until Apply.\n`;
+      const l = approvedLedger();
+      l.contract.delta.sha256 = shaOf(withProse);
+      expect(checkContract(l, decisionMd, readerWith({ 'docs/DELTA.md': withProse }), listDir)).toEqual([]);
+    });
+
+    it('stays silent while the ledger is still a draft', () => {
+      const l = cleanLedger();
+      l.contract.delta.sha256 = shaOf(DRAFT_STATUS);
+      const findings = checkContract(l, decisionMd, readerWith({ 'docs/DELTA.md': DRAFT_STATUS }), listDir);
+      expect(codes(findings)).not.toContain('DRAFT_BOUND_ARTIFACT');
+    });
   });
 
   // ------------------------------------------------------- artifact manifest

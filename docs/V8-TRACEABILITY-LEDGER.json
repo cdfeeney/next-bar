@@ -62,8 +62,8 @@
     },
     "delta": {
       "path": "docs/V8-PRD-DELTA-2026-08-23.md",
-      "version": "v8.3",
-      "sha256": "530b0317c3393f108abe184b5624087a91d90c07d3187b1ca1aa88f27bdb2035"
+      "version": "v8.3, founder-approved and frozen 2026-08-23",
+      "sha256": "d9cade9bf33c5b371539543d964150cefa60d242af582510780a86b35c28f1bd"
     },
     "decision_record": {
       "path": "docs/V8-DECISIONS-2026-08-23.md",
@@ -75,9 +75,14 @@
       "sha256": "7698b0bb9e2e99f5df039a5524f1e521af5fa23c8c4a2cddf73a7db66970fd34"
     },
     "validator": {
-      "path": "scripts/check-release-contract.mjs"
+      "path": "scripts/check-release-contract.mjs",
+      "sha256": "21d38f7e2bb0f0e8b3937d0c11348b0690d6d8630b3f553e46bd28ca00664f07"
     },
-    "ledger_self_digest_note": "A file cannot contain its own digest. The validator emits this ledger's SHA-256 on every run; record that value with the founder approval to freeze the whole contract."
+    "ledger_self_digest_note": "A file cannot contain its own digest. The validator emits this ledger's SHA-256 on every run; record that value with the founder approval to freeze the whole contract.",
+    "validator_test": {
+      "path": "scripts/check-release-contract.test.ts",
+      "sha256": "f4c6805be90a29fd93f5e39e6c816b94981e488c0c4142fb59df3587ad9c9c38"
+    }
   },
   "approved_artifact_manifest": {
     "directory": "docs/design-reference/approved",
@@ -6142,5 +6147,22 @@
       ],
       "coverage": "complete"
     }
-  ]
+  ],
+  "post_approval_finalization": {
+    "date": "2026-08-23",
+    "authorized_by": "founder",
+    "kind": "contract metadata and validator consistency correction",
+    "product_meaning_changed": false,
+    "statement": "Metadata-only. No requirement, decision meaning, status, coverage, goal mapping, implementation path, evidence, design artifact, PRD semantics or deferral was changed by this finalization.",
+    "changes": [
+      "docs/V8-PRD-DELTA-2026-08-23.md: Status line changed from \"DRAFT pending final founder approval\" to \"FOUNDER-APPROVED AND FROZEN - 2026-08-23\". No other content changed.",
+      "scripts/check-release-contract.mjs: added the DRAFT_BOUND_ARTIFACT admission failure, so a founder-approved or frozen ledger cannot pass while a bound authoritative document still declares itself DRAFT, or while last_owner_approval is null. The validator and its test are now bound by digest as contract parts.",
+      "scripts/check-release-contract.test.ts: added focused regression tests for the former defect (approved ledger + DRAFT delta), for a DRAFT decision record, for a null last_owner_approval, for a missing Status line, for the properly approved package passing, and for the word \"draft\" in product prose not firing the rule.",
+      "docs/V8-TRACEABILITY-LEDGER.json: re-bound the delta, validator and validator-test digests and recorded this finalization."
+    ],
+    "defect_closed": "The ledger read founder-approved while the PRD delta it binds still declared Status: DRAFT. Every digest matched, so the contract passed and the release approval state depended on which file a reader opened.",
+    "delta_sha256_before": "530b0317c3393f108abe184b5624087a91d90c07d3187b1ca1aa88f27bdb2035",
+    "delta_sha256_after": "d9cade9bf33c5b371539543d964150cefa60d242af582510780a86b35c28f1bd",
+    "approval_unchanged": "The founder approval of 2026-08-23 recorded in last_owner_approval stands. Its approved_contract_identity deliberately keeps the pre-stamp digests it was given, as the historical record of what was reviewed."
+  }
 }

@@ -123,7 +123,7 @@ export function checkContract(ledger, decisionMd, readFile, listDir = () => null
 
   // --- the frozen contract, bound by digest --------------------------------
   const contract = ledger.contract ?? {};
-  const CONTRACT_PARTS = ['prd', 'delta', 'decision_record', 'design_reference_readme'];
+  const CONTRACT_PARTS = ['prd', 'delta', 'decision_record', 'design_reference_readme', 'validator', 'validator_test'];
   for (const part of CONTRACT_PARTS) {
     const entry = contract[part];
     if (!entry || isEmpty(entry.path) || isEmpty(entry.sha256)) {
@@ -140,10 +140,37 @@ export function checkContract(ledger, decisionMd, readFile, listDir = () => null
       fail('DIGEST_DRIFT', entry.path, `contract part "${part}" recorded ${entry.sha256}, actual ${actual}`);
     }
   }
-  if (isEmpty(contract.validator?.path)) {
-    fail('MISSING_FIELD', 'ledger.contract.validator.path', 'the contract must name its own validator');
-  } else if (readFile(contract.validator.path) === null) {
-    fail('ABSENT', contract.validator.path, 'the declared validator is not present under the artifact root');
+  // --- an approved ledger may not bind a document that still says DRAFT ------
+  //
+  // The defect this closes: the ledger read `founder-approved` while the PRD delta it binds
+  // still declared `Status: **DRAFT** pending final founder approval`. Every digest matched, so
+  // the contract passed — and the approval status of the release depended on which of the two
+  // files a reader happened to open.
+  //
+  // Deliberately NOT a prose parser. It reads exactly one line per document — the first line
+  // beginning `Status:` — because "draft" appears legitimately elsewhere in these documents as
+  // PRODUCT content (the superseded Map draft-filter state). Grepping the whole file would
+  // reject the contract for describing a feature.
+  const APPROVED_LEDGER_STATUS = new Set(['founder-approved', 'frozen']);
+  if (APPROVED_LEDGER_STATUS.has(ledger.ledger_status)) {
+    if (ledger.last_owner_approval == null) {
+      fail('DRAFT_BOUND_ARTIFACT', 'ledger.last_owner_approval', `ledger_status is "${ledger.ledger_status}" but last_owner_approval is null — an approved ledger must record who approved it and when`);
+    }
+    // The authoritative narrative documents. The README is an approval record for the design
+    // package rather than a status-bearing contract document, so it is not required to declare one.
+    for (const part of ['decision_record', 'delta']) {
+      const path = contract[part]?.path;
+      const buf = path ? readFile(path) : null;
+      if (buf === null) continue; // already reported as MISSING_FIELD or ABSENT above
+      const status = buf.toString('utf8').split(/\r?\n/).find((line) => line.startsWith('Status:'));
+      if (status === undefined) {
+        fail('DRAFT_BOUND_ARTIFACT', path, `bound ${part} declares no "Status:" line, so its approval state cannot be read while the ledger claims "${ledger.ledger_status}"`);
+      } else if (/\bDRAFT\b/i.test(status)) {
+        fail('DRAFT_BOUND_ARTIFACT', path, `bound ${part} still declares itself DRAFT while the ledger claims "${ledger.ledger_status}" — ${status.trim()}`);
+      } else if (!/FOUNDER-APPROVED/i.test(status)) {
+        fail('DRAFT_BOUND_ARTIFACT', path, `bound ${part} does not declare founder approval while the ledger claims "${ledger.ledger_status}" — ${status.trim()}`);
+      }
+    }
   }
 
   // --- decision ids that actually exist in the decision record --------------
