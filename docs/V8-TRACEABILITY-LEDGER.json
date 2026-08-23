@@ -5,8 +5,9 @@
   "last_owner_approval": {
     "approver": "founder",
     "approved_on": "2026-08-23",
-    "statement": "These look good to me.",
-    "scope": "Approves the V8 product contract: all nine final decisions of 2026-08-23 (D-C-29 through D-C-36, plus the revision of D-C-19) and the three explicit V9 deferrals carried as deferred requirement rows.",
+    "contract_version": "3.1.0",
+    "statement": "I approve and acknowledge V8 contract 3.1.0 at pre-stamp commit 0855948374d0d1483cf304e1363d2c5fd0d8d8d0, including CC-01, CC-02, D-C-37, D-C-38 and D-C-39.",
+    "scope": "Approves V8 contract version 3.1.0 in full: the nine decisions of the 3.0.0 approval, the two correction-only repairs CC-01 and CC-02, and the three newly approved bindings D-C-37, D-C-38 and D-C-39.",
     "decisions_approved": [
       "D-C-19 (revised)",
       "D-C-29",
@@ -16,7 +17,41 @@
       "D-C-33",
       "D-C-34",
       "D-C-35",
-      "D-C-36"
+      "D-C-36",
+      "D-C-37",
+      "D-C-38",
+      "D-C-39"
+    ],
+    "corrections_approved": [
+      {
+        "id": "CC-01",
+        "requirement_id": "V8-R-STO-016",
+        "field": "behavior",
+        "note": "clerical: restated the already-settled D-C-33 deletion rule; no settled meaning changed"
+      },
+      {
+        "id": "CC-02",
+        "requirement_id": "V8-R-CMP-003",
+        "field": "failure_recovery",
+        "note": "clerical: restated the already-settled D-C-33 deletion rule; no settled meaning changed"
+      }
+    ],
+    "bindings_approved": [
+      {
+        "id": "PB-01",
+        "decision_id": "D-C-37",
+        "summary": "Story, Feed and pin named-group audiences resolve to the selected group intersected with the poster's or pinner's mutual friends; the persistent Group-chat destination retains its fixed Group membership."
+      },
+      {
+        "id": "PB-02",
+        "decision_id": "D-C-38",
+        "summary": "One Group administrator; on leave or account deletion administration transfers to the longest-standing remaining member, tie-broken by lowest member profile id; an empty Group is deleted."
+      },
+      {
+        "id": "PB-03",
+        "decision_id": "D-C-39",
+        "summary": "The 4:00 AM boundary uses America/New_York and the existing DST-aware night-key convention."
+      }
     ],
     "v9_deferrals_approved": [
       {
@@ -36,19 +71,21 @@
       }
     ],
     "approved_contract_identity": {
-      "branch": "docs/v8-prd-delta-20260823",
-      "commit": "47f9f5aee42079f34c4c21fa8ffed1d737a9cb50",
+      "contract_version": "3.1.0",
+      "branch": "docs/v8-contract-3.1.0-20260823",
+      "pre_stamp_commit": "0855948374d0d1483cf304e1363d2c5fd0d8d8d0",
       "prd_sha256": "734ca30b9efc6da71fde65449d4e0f3d97c5ff38304a901be9e98e897147dba9",
-      "delta_sha256": "530b0317c3393f108abe184b5624087a91d90c07d3187b1ca1aa88f27bdb2035",
-      "decision_record_sha256_pre_stamp": "45671960eb7f6026e09f407a0c0d9fe2208458d356fe7a7770df3e86a61a423a",
-      "ledger_sha256_pre_stamp": "ee71627d7193b574020d3421856ac8f3f6483996c476e888aa571d3e5f1781d0",
+      "delta_sha256": "ce10538451c2c4880fe1297e88e8b402bcc898d88a405c6e42ac88372c5b58b3",
+      "decision_record_sha256": "8b6f30eea1974d63bb7dccc2271ef9799a7c6e6ff90f072f8285c5c188dac64e",
       "design_reference_readme_sha256": "7698b0bb9e2e99f5df039a5524f1e521af5fa23c8c4a2cddf73a7db66970fd34",
-      "validator_sha256": "614fee4f2c0f74e45f9083bf4784b44d7d6ed94e3037ff052782cbae5ae30405",
-      "validator_test_sha256": "4983d1a54ec97f82f887c994c2ebab2c826685a97acc24ea695c4c7b0d791f4e",
+      "ledger_sha256_pre_stamp": "8ad1131719e857a45d8bad39cb4798b97d661653bdd5e28dde22a67e2733b45d",
+      "validator_sha256_at_acknowledgment": "c84a47959e0363a8032dfa3303eeac309f730ca1a6e98e04c1e259612745030c",
+      "validator_test_sha256_at_acknowledgment": "aab851b2d5260659863e6f5b018ee7cc97422d5cb6917f9f3770d47b94556ab8",
+      "validator_repair_note": "This approval explicitly authorizes a validator consistency repair, so scripts/check-release-contract.mjs and its test necessarily digest differently after stamping. The values above are what was acknowledged; contract.validator and contract.validator_test carry the current values. The validator therefore binds the four narrative contract parts by identity and deliberately excludes itself and its test from that equality.",
       "approved_canvas_count": 16,
       "approved_canvas_digests_unchanged": true
     },
-    "authorization_note": "Approval freezes the product contract. It does NOT authorize goal mutation, implementation planning, product code, migrations, integration, staging, push, PR, deployment, publication, TestFlight, or reviews.",
+    "authorization_note": "Approval stamping and validator consistency repair only. It does NOT authorize goals, implementation, migrations, staging, integration, workers, reviews, push, PR, deployment, publication, or TestFlight.",
     "ledger_self_digest_note": "The ledger cannot contain its own digest. The post-stamp ledger digest is emitted by the validator and recorded with the approval commit."
   },
   "release_id": "V8",
@@ -76,12 +113,12 @@
     },
     "validator": {
       "path": "scripts/check-release-contract.mjs",
-      "sha256": "c84a47959e0363a8032dfa3303eeac309f730ca1a6e98e04c1e259612745030c"
+      "sha256": "4a06253092e243a3015fd210e42c442e37dead03a30a741a14276dd0b1f1730b"
     },
     "ledger_self_digest_note": "A file cannot contain its own digest. The validator emits this ledger's SHA-256 on every run; record that value with the founder approval to freeze the whole contract.",
     "validator_test": {
       "path": "scripts/check-release-contract.test.ts",
-      "sha256": "aab851b2d5260659863e6f5b018ee7cc97422d5cb6917f9f3770d47b94556ab8"
+      "sha256": "fc1ef0ecc18ad697c3e94aa404c981ff25c620128cdfa9ed7cd0108bf8e0d0e8"
     }
   },
   "approved_artifact_manifest": {
@@ -6206,6 +6243,12 @@
           "f4c6805be90a29fd93f5e39e6c816b94981e488c0c4142fb59df3587ad9c9c38",
           "aab851b2d5260659863e6f5b018ee7cc97422d5cb6917f9f3770d47b94556ab8"
         ]
+      },
+      "approval_stamped": {
+        "date": "2026-08-23",
+        "pre_stamp_commit": "0855948374d0d1483cf304e1363d2c5fd0d8d8d0",
+        "ledger_sha256_pre_stamp": "8ad1131719e857a45d8bad39cb4798b97d661653bdd5e28dde22a67e2733b45d",
+        "note": "Approval stamping and validator consistency repair only. No requirement meaning, status, coverage, evidence, implementation path, goal mapping, decision meaning, PRD content, design artifact or canvas digest changed."
       }
     }
   },
@@ -6248,6 +6291,60 @@
         "V8-R-PRE-004",
         "V8-R-PRE-005"
       ]
+    }
+  ],
+  "approval_history": [
+    {
+      "approver": "founder",
+      "approved_on": "2026-08-23",
+      "statement": "These look good to me.",
+      "scope": "Approves the V8 product contract: all nine final decisions of 2026-08-23 (D-C-29 through D-C-36, plus the revision of D-C-19) and the three explicit V9 deferrals carried as deferred requirement rows.",
+      "decisions_approved": [
+        "D-C-19 (revised)",
+        "D-C-29",
+        "D-C-30",
+        "D-C-31",
+        "D-C-32",
+        "D-C-33",
+        "D-C-34",
+        "D-C-35",
+        "D-C-36"
+      ],
+      "v9_deferrals_approved": [
+        {
+          "requirement_id": "V8-R-ACC-003",
+          "subject": "Badges and the Persona card",
+          "decision": "D-C-24"
+        },
+        {
+          "requirement_id": "V8-R-FEED-007",
+          "subject": "Automatic ranking-event Feed rows",
+          "decision": "D-C-35"
+        },
+        {
+          "requirement_id": "V8-R-NO-010",
+          "subject": "Native Photos-library export or save, unconditional",
+          "decision": "D-C-19"
+        }
+      ],
+      "approved_contract_identity": {
+        "branch": "docs/v8-prd-delta-20260823",
+        "commit": "47f9f5aee42079f34c4c21fa8ffed1d737a9cb50",
+        "prd_sha256": "734ca30b9efc6da71fde65449d4e0f3d97c5ff38304a901be9e98e897147dba9",
+        "delta_sha256": "530b0317c3393f108abe184b5624087a91d90c07d3187b1ca1aa88f27bdb2035",
+        "decision_record_sha256_pre_stamp": "45671960eb7f6026e09f407a0c0d9fe2208458d356fe7a7770df3e86a61a423a",
+        "ledger_sha256_pre_stamp": "ee71627d7193b574020d3421856ac8f3f6483996c476e888aa571d3e5f1781d0",
+        "design_reference_readme_sha256": "7698b0bb9e2e99f5df039a5524f1e521af5fa23c8c4a2cddf73a7db66970fd34",
+        "validator_sha256": "614fee4f2c0f74e45f9083bf4784b44d7d6ed94e3037ff052782cbae5ae30405",
+        "validator_test_sha256": "4983d1a54ec97f82f887c994c2ebab2c826685a97acc24ea695c4c7b0d791f4e",
+        "approved_canvas_count": 16,
+        "approved_canvas_digests_unchanged": true
+      },
+      "authorization_note": "Approval freezes the product contract. It does NOT authorize goal mutation, implementation planning, product code, migrations, integration, staging, push, PR, deployment, publication, TestFlight, or reviews.",
+      "ledger_self_digest_note": "The ledger cannot contain its own digest. The post-stamp ledger digest is emitted by the validator and recorded with the approval commit.",
+      "contract_version": "3.0.0",
+      "superseded_by": "the 3.1.0 approval of 2026-08-23 recorded in last_owner_approval",
+      "provenance_note": "Verbatim as stamped for contract 3.0.0. Retained unchanged so the record of what was approved then survives the 3.1.0 approval."
     }
   ]
 }

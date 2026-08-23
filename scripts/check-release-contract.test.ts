@@ -235,10 +235,26 @@ describe('checkContract', () => {
     const approvedLedger = (rowsOrOver?: unknown, over: Record<string, unknown> = {}) => {
       const rows = Array.isArray(rowsOrOver) ? rowsOrOver : undefined;
       const overrides = Array.isArray(rowsOrOver) ? over : ((rowsOrOver as Record<string, unknown>) ?? {});
+      const base = rows ? cleanLedger(rows) : cleanLedger();
       return {
-        ...(rows ? cleanLedger(rows) : cleanLedger()),
+        ...base,
         ledger_status: 'founder-approved',
-        last_owner_approval: { approver: 'founder', approved_on: '2026-08-23' },
+        // A complete approval: it names the contract version it covers and binds the four
+        // narrative contract parts by digest. The STALE_APPROVAL_SCOPE cases below each break
+        // exactly one part of this.
+        last_owner_approval: {
+          approver: 'founder',
+          approved_on: '2026-08-23',
+          contract_version: base.ledger_version,
+          decisions_approved: ['D-C-01', 'D-C-27'],
+          approved_contract_identity: {
+            contract_version: base.ledger_version,
+            prd_sha256: base.contract.prd.sha256,
+            delta_sha256: base.contract.delta.sha256,
+            decision_record_sha256: base.contract.decision_record.sha256,
+            design_reference_readme_sha256: base.contract.design_reference_readme.sha256,
+          },
+        },
         ...overrides,
       };
     };
@@ -282,6 +298,9 @@ describe('checkContract', () => {
       const withProse = `${APPROVED_STATUS}\nThe superseded Map behavior held filters as a DRAFT until Apply.\n`;
       const l = approvedLedger();
       l.contract.delta.sha256 = shaOf(withProse);
+      // The approval identity binds the delta, so it moves with it — otherwise this fixture
+      // would trip STALE_APPROVAL_SCOPE instead of testing the DRAFT rule.
+      l.last_owner_approval.approved_contract_identity.delta_sha256 = shaOf(withProse);
       expect(checkContract(l, decisionMd, readerWith({ 'docs/DELTA.md': withProse }), listDir)).toEqual([]);
     });
 
@@ -337,6 +356,80 @@ describe('checkContract', () => {
       const l = approvedLedger();
       l.product_bindings = [{ id: 'PB-01', status: 'resolved', decision_id: 'D-C-01', affects: ['V8-R-STO-001'] }];
       expect(run(l)).toEqual([]);
+    });
+
+    // The 3.1.0 stale-approval defect: the contract gained D-C-37/38/39 while last_owner_approval
+    // still listed only the 3.0.0 decisions, named no contract version, and bound the 3.0.0-era
+    // commit and ledger. Every digest matched and no binding was pending, so it passed.
+    describe('STALE_APPROVAL_SCOPE', () => {
+      const stamped = (over: Record<string, unknown> = {}) => {
+        const l = approvedLedger();
+        l.ledger_version = '3.1.0';
+        l.product_bindings = [{ id: 'PB-01', status: 'resolved', decision_id: 'D-C-01', affects: ['V8-R-STO-001'] }];
+        l.last_owner_approval = {
+          approver: 'founder', approved_on: '2026-08-23', contract_version: '3.1.0',
+          decisions_approved: ['D-C-01'],
+          approved_contract_identity: {
+            contract_version: '3.1.0',
+            prd_sha256: shaOf('prd'), delta_sha256: shaOf(APPROVED_STATUS),
+            decision_record_sha256: shaOf(APPROVED_STATUS), design_reference_readme_sha256: shaOf('readme'),
+          },
+          ...over,
+        };
+        return l;
+      };
+
+      it('passes a correctly stamped contract', () => {
+        expect(run(stamped())).toEqual([]);
+      });
+
+      it('rejects a resolved binding whose decision is absent from the approval scope', () => {
+        const l = stamped({ decisions_approved: ['D-C-27'] });
+        expect(codes(run(l))).toContain('STALE_APPROVAL_SCOPE');
+      });
+
+      it('rejects an approval that names no contract version', () => {
+        const l = stamped();
+        delete (l.last_owner_approval as Record<string, unknown>).contract_version;
+        delete (l.last_owner_approval as { approved_contract_identity: Record<string, unknown> }).approved_contract_identity.contract_version;
+        expect(codes(run(l))).toContain('STALE_APPROVAL_SCOPE');
+      });
+
+      it('rejects an approval that names an OLDER contract version', () => {
+        const l = stamped({ contract_version: '3.0.0' });
+        (l.last_owner_approval as { approved_contract_identity: Record<string, unknown> }).approved_contract_identity.contract_version = '3.0.0';
+        expect(codes(run(l))).toContain('STALE_APPROVAL_SCOPE');
+      });
+
+      it.each(['prd_sha256', 'delta_sha256', 'decision_record_sha256', 'design_reference_readme_sha256'])(
+        'rejects an approval identity whose %s does not bind the current contract part',
+        (key) => {
+          const l = stamped();
+          (l.last_owner_approval as { approved_contract_identity: Record<string, string> }).approved_contract_identity[key] = 'deadbeef';
+          expect(codes(run(l))).toContain('STALE_APPROVAL_SCOPE');
+        },
+      );
+
+      it('rejects an approval identity that omits a bound contract part', () => {
+        const l = stamped();
+        delete (l.last_owner_approval as { approved_contract_identity: Record<string, unknown> }).approved_contract_identity.delta_sha256;
+        expect(codes(run(l))).toContain('STALE_APPROVAL_SCOPE');
+      });
+
+      // The validator and its own test are excluded from the identity equality on purpose: an
+      // approval that authorizes a validator repair changes their digests after stamping.
+      it('does not require the validator digest to match the acknowledged value', () => {
+        const l = stamped();
+        (l.last_owner_approval as { approved_contract_identity: Record<string, string> }).approved_contract_identity.validator_sha256_at_acknowledgment = 'something-older';
+        expect(codes(run(l))).not.toContain('STALE_APPROVAL_SCOPE');
+      });
+
+      it('stays silent while the ledger is still a draft', () => {
+        const l = stamped();
+        l.ledger_status = 'draft';
+        l.last_owner_approval.decisions_approved = [];
+        expect(codes(run(l))).not.toContain('STALE_APPROVAL_SCOPE');
+      });
     });
 
     it('stays silent while the ledger is still a draft', () => {

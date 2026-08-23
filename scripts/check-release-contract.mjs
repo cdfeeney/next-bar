@@ -272,6 +272,54 @@ export function checkContract(ledger, decisionMd, readFile, listDir = () => null
     }
   }
 
+  // --- the approval must actually cover the contract it is stamped on -------
+  //
+  // The defect this closes: contract 3.1.0 added D-C-37, D-C-38 and D-C-39, but
+  // last_owner_approval still listed only D-C-19 and D-C-29..36, named no contract version, and
+  // bound the 3.0.0-era commit and ledger. Every digest matched, no binding was pending, and the
+  // contract passed — so a founder-approved contract carried three decisions nobody had approved.
+  //
+  // The validator and its own test are deliberately EXCLUDED from the identity equality below.
+  // An approval that authorizes a validator repair necessarily changes their digests after it is
+  // stamped; the identity records what was acknowledged, and `contract.validator*` carries the
+  // current value. That carve-out is written down here rather than left implicit.
+  if (APPROVED_LEDGER_STATUS.has(ledger.ledger_status) && ledger.last_owner_approval != null) {
+    const appr = ledger.last_owner_approval;
+    const scope = new Set(appr.decisions_approved ?? []);
+    const scopeIds = new Set([...scope].map((s) => String(s).match(/D-[CPO]-\d{2}/)?.[0]).filter(Boolean));
+
+    for (const b of ledger.product_bindings ?? []) {
+      if (b.status !== 'resolved' || !b.decision_id) continue;
+      if (!scopeIds.has(b.decision_id)) {
+        fail('STALE_APPROVAL_SCOPE', `ledger.product_bindings.${b.id}`, `resolves to ${b.decision_id}, which is absent from last_owner_approval.decisions_approved — the approval does not cover this binding`);
+      }
+    }
+
+    const approvedVersion = appr.contract_version ?? appr.approved_contract_identity?.contract_version;
+    if (!approvedVersion) {
+      fail('STALE_APPROVAL_SCOPE', 'ledger.last_owner_approval.contract_version', `names no contract version while the ledger is "${ledger.ledger_version}"`);
+    } else if (approvedVersion !== ledger.ledger_version) {
+      fail('STALE_APPROVAL_SCOPE', 'ledger.last_owner_approval.contract_version', `approves contract version "${approvedVersion}" but the ledger is "${ledger.ledger_version}" — an older approval cannot cover a newer contract`);
+    }
+
+    const identity = appr.approved_contract_identity ?? {};
+    const BOUND = [
+      ['prd_sha256', 'prd'],
+      ['delta_sha256', 'delta'],
+      ['decision_record_sha256', 'decision_record'],
+      ['design_reference_readme_sha256', 'design_reference_readme'],
+    ];
+    for (const [identityKey, contractKey] of BOUND) {
+      const declared = identity[identityKey];
+      const current = contract[contractKey]?.sha256;
+      if (!declared) {
+        fail('STALE_APPROVAL_SCOPE', `ledger.last_owner_approval.approved_contract_identity.${identityKey}`, `does not bind the ${contractKey}, so the approval identity is incomplete`);
+      } else if (current && declared !== current) {
+        fail('STALE_APPROVAL_SCOPE', `ledger.last_owner_approval.approved_contract_identity.${identityKey}`, `binds ${declared} but the contract's ${contractKey} is ${current} — the approval identity does not match the contract it is stamped on`);
+      }
+    }
+  }
+
   // --- every product binding must be resolved before approval ---------------
   //
   // The companion defect: three product bindings sat "PENDING FOUNDER CONFIRMATION" in the plan
