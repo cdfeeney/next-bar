@@ -15,6 +15,7 @@
     "test:e2e:release": "node scripts/run-e2e-release.mjs",
     "db:migrate": "tsx scripts/apply-migrations.ts",
     "check:migrations": "tsx scripts/check-migration-ledger.ts",
+    "check:contract": "node scripts/check-release-contract.mjs docs/V8-TRACEABILITY-LEDGER.json",
     "check:catalog-bundle": "node scripts/check-client-catalog-bundle.mjs"
   },
   "dependencies": {

@@ -1,0 +1,3350 @@
+{
+  "ledger_version": "1.0.0-draft",
+  "ledger_status": "draft",
+  "generated_at": "2026-08-23",
+  "last_owner_approval": null,
+  "release_id": "V8",
+  "prd_path": "docs/V8-PRD-2026-08-13.md",
+  "prd_version": "2026-08-13 as amended 2026-08-21",
+  "prd_sha256": "44f4cca73ab056e9b5511e2904b3032e77db1dfcdcbd09aceae4fef4c22667a7",
+  "prd_delta_path": "docs/V8-PRD-DELTA-2026-08-23.md",
+  "prd_delta_version": "v8.1",
+  "decision_record_path": "docs/V8-DECISIONS-2026-08-23.md",
+  "integration_base": {
+    "branch": "release/v8",
+    "commit": "df099f7da5e8c05693a536d8656ebd4c89d46f88",
+    "prd_sha256_on_base": "6041b5e90c6287e4a0573bb9ebf9b3b8b2511578e119bdb327f71015ecefcbab",
+    "approved_canvas_count_on_base": 13,
+    "note": "The integration base carries the UNAMENDED PRD and only 13 of the 16 approved canvases. See D-O-12. Digests below are the approved artifacts as they exist on the 08-21 branches, byte-identical across all three."
+  },
+  "artifact_source": {
+    "branch": "harness/v8-1-parallel-20260821/social",
+    "commit": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+    "path": "docs/design-reference/approved/",
+    "identical_on": [
+      "harness/v8-1-parallel-20260821/account",
+      "harness/v8-visual-recovery-20260821"
+    ]
+  },
+  "approved_artifacts": [
+    {
+      "id": "next-bar-social-v2-core",
+      "path": "docs/design-reference/approved/next-bar-social-v2-core.png",
+      "sha256": "4b330571abf9d14abc6c3b6c78b74f525733908cb1ae5e40ea9f5e28de38e69d",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-add-story-flow",
+      "path": "docs/design-reference/approved/next-bar-add-story-flow.png",
+      "sha256": "65c17c0ec0468528e7db60f28ea59cf1651e17e78d32e4b2115a8bdf6cc8d8cd",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-story-tag-placement",
+      "path": "docs/design-reference/approved/next-bar-story-tag-placement.png",
+      "sha256": "62abd4f166c8021b2cc97dc002356ddcb2af04c678243b7e2138fc297438b714",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-share-destinations-v2",
+      "path": "docs/design-reference/approved/next-bar-share-destinations-v2.png",
+      "sha256": "503159f893887dbe21d66b5d654fe1661907e073b256bee4d09295f4c3d407e8",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-camera-modes",
+      "path": "docs/design-reference/approved/next-bar-camera-modes.png",
+      "sha256": "c00baf56dd8501e0e1f8f8cb69b601a336d6fcdad0c4cb60dd37fc5dfc7c4f7b",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-option-b-manual-pin",
+      "path": "docs/design-reference/approved/next-bar-option-b-manual-pin.png",
+      "sha256": "3cf437dfe4261be110ef2ff01521d322b0a05f3f64c6e8a0f0ba8c59a7515ce1",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-night-out-start-flow",
+      "path": "docs/design-reference/approved/next-bar-night-out-start-flow.png",
+      "sha256": "3a66888cb896e91cf9bb5fd3d1ec3bafd71b6c143407e39f804782e8fb03499d",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-account-a-tabs",
+      "path": "docs/design-reference/approved/next-bar-account-a-tabs.png",
+      "sha256": "9df270b50da1bccaeb7a495f17a5c99e06f1e59e2bdc4b19dcc1857ff3880738",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-account-a-settings",
+      "path": "docs/design-reference/approved/next-bar-account-a-settings.png",
+      "sha256": "c88d22d448fd1cc7e3377fc1fb8d380a2bbf5ba8a6f32f470c010753914ceeb9",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-map-v1",
+      "path": "docs/design-reference/approved/next-bar-map-v1.png",
+      "sha256": "7cb09cbb83368d05002a25fd369b03ea180dc43d99128214ac1bca0a73a098ac",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-lightbox-refinement",
+      "path": "docs/design-reference/approved/next-bar-lightbox-refinement.png",
+      "sha256": "f9e608b8d31e54ea216ce65f61b0eb89bdc1b84d787e6830b161374d8a6170d0",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-five-bars-typography-refinement",
+      "path": "docs/design-reference/approved/next-bar-five-bars-typography-refinement.png",
+      "sha256": "6af02126f0954081efae6ed2c13000109a98dee6462b853c7e66f9ebc5854886",
+      "approval_scope": "both",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": null
+    },
+    {
+      "id": "next-bar-rankings-numeric-lists",
+      "path": "docs/design-reference/approved/next-bar-rankings-numeric-lists.png",
+      "sha256": "fb0da7ac132e3ff45b614c8d3fac1d158aba96180df36bd55df2e5cbfacc0cfc",
+      "approval_scope": "visual",
+      "approver": "founder",
+      "approved_on": "2026-08-12",
+      "in_canvas_status_banner": "ASSUMPTION - PENDING APPROVAL: one global score per bar 1.0-10.0. Unresolved: D-O-10, D-O-11."
+    },
+    {
+      "id": "next-bar-onboarding-v1",
+      "path": "docs/design-reference/approved/next-bar-onboarding-v1.png",
+      "sha256": "2e3235c0ea895bbe8b6aa82dd4a14f21f00d7650062a51b70d0237b867d59d15",
+      "approval_scope": "visual",
+      "approver": "founder",
+      "approved_on": "2026-08-21",
+      "in_canvas_status_banner": "EXPLORATORY, REVIEW NEEDED - stale, superseded by the 2026-08-21 approval. Unresolved: D-O-10."
+    },
+    {
+      "id": "next-bar-night-out-invite-recipient-v1",
+      "path": "docs/design-reference/approved/next-bar-night-out-invite-recipient-v1.png",
+      "sha256": "9c3ad689accee5a3a717a176a8f5981ba79209e0cf392e3e2c4649863020cb28",
+      "approval_scope": "visual",
+      "approver": "founder",
+      "approved_on": "2026-08-21",
+      "in_canvas_status_banner": "EXPLORATORY, REVIEW NEEDED - stale, superseded by the 2026-08-21 approval. Unresolved: D-O-10."
+    },
+    {
+      "id": "next-bar-operational-states-v1",
+      "path": "docs/design-reference/approved/next-bar-operational-states-v1.png",
+      "sha256": "41cc3073bea9e3e933f949229ffe688ee7a076228b48802faf462f8dca73892c",
+      "approval_scope": "visual",
+      "approver": "founder",
+      "approved_on": "2026-08-21",
+      "in_canvas_status_banner": "EXPLORATORY, REVIEW NEEDED - stale, superseded by the 2026-08-21 approval. Unresolved: D-O-10."
+    }
+  ],
+  "candidates": {
+    "social": {
+      "branch": "harness/v8-1-parallel-20260821/social",
+      "commit": "e0d25ec185744ef87aba9f7bce855863d29f8776"
+    },
+    "account": {
+      "branch": "harness/v8-1-parallel-20260821/account",
+      "commit": "0e20db2992a7db04f354019b85946bda447bf2e0"
+    },
+    "map": {
+      "branch": "harness/v8-1-parallel-20260821/map",
+      "commit": "aa22a660dfdfe10e634a043450326109c4dd45e5"
+    },
+    "rankings": {
+      "branch": "harness/v8-1-parallel-20260821/rankings",
+      "commit": "91e3d35e3afb49b38108e377cff7d6e50bac3727"
+    },
+    "onboarding": {
+      "branch": "harness/v8-1-parallel-20260821/onboarding",
+      "commit": "5e332dbb91faf71b56082e8b55bcfdac178f48c7"
+    },
+    "invite": {
+      "branch": "harness/v8-1-parallel-20260821/invite",
+      "commit": "cec83d4e0b051465017e97c3b3d03d0cec78c5e3"
+    },
+    "foundation": {
+      "branch": "harness/v8-visual-recovery-20260821",
+      "commit": "c91b2df13c2f9e884693c0b77335e8b96ee3e2ef"
+    }
+  },
+  "requirements": [
+    {
+      "requirement_id": "V8-R-NAV-001",
+      "title": "Five-tab bottom navigation, no sixth tab",
+      "sources": [
+        "design:next-bar-social-v2-core",
+        "design:next-bar-map-v1",
+        "design:next-bar-account-a-tabs",
+        "prd:P0 native interaction and design lock"
+      ],
+      "actor": "any user",
+      "entry_point": "app shell, every route",
+      "behavior": "The bottom navigation is exactly Map / Rankings / Next Bar? / Social / Account. Each tab owns one job and no job lives in two places.",
+      "states": [
+        "tab selected",
+        "tab unselected"
+      ],
+      "audience": "all users",
+      "trust_boundary": "client shell only",
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "44px minimum targets; nav respects the safe area and does not move with page content",
+      "exclusions": [
+        "no sixth tab",
+        "no new Social sub-tab beyond the three in V8-R-NAV-002"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-538774a3-9a7e-4dc8-8931-b681d351479b",
+        "g-fa074716-58e1-4a7c-8503-2b12c00b4997"
+      ],
+      "acceptance_refs": [
+        "g-538774a3: locked visual system + native interaction contract"
+      ],
+      "implementation_paths": [
+        "src/components/BottomNav.tsx",
+        "src/app/layout.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "c91b2df13c2f9e884693c0b77335e8b96ee3e2ef",
+          "kind": "static",
+          "detail": "V8-1a foundation lane complete; native-shell-contract.spec.ts covers safe-area and nav attachment"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-NAV-002",
+      "title": "Social has exactly three sub-tabs: Tonight, Plans, Feed",
+      "sources": [
+        "design:next-bar-social-v2-core"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Social tab",
+      "behavior": "Tonight is current awareness, Plans is coordination, Feed is photo memories. The Stories rail sits at the top of Tonight and Feed. Tonight is the documented landing surface.",
+      "states": [
+        "tonight",
+        "plans",
+        "feed"
+      ],
+      "audience": "signed-in user",
+      "trust_boundary": "authenticated read of the viewer's own circle",
+      "data_owner": "server",
+      "retention": null,
+      "failure_recovery": "a failed circle read must not render as an honest-looking empty ready state",
+      "accessibility": "sub-tabs are 44px targets; selection is not carried by color alone",
+      "exclusions": [
+        "no fourth sub-tab",
+        "no separate Home tab"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-6b79c43c-a986-45d4-9414-5239e1f9096c",
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: Social sub-tabs, Stories rail, story viewer/queue, Feed"
+      ],
+      "implementation_paths": [
+        "src/app/friends/page.tsx",
+        "src/app/friends/_components/FeedSection.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "gate 606 executed / 604 passed / 0 failed on e0d25ec1; e2e/social-feed.spec.ts, e2e/story-rail.spec.ts"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-NAV-003",
+      "title": "Account root is a profile; the gear is the only entry to a separate Settings stack",
+      "sources": [
+        "design:next-bar-account-a-tabs",
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Account tab, gear top-right",
+      "behavior": "The Account root has no X and no settings rows. Tapping the gear pushes a hierarchical Settings stack with a top-left back arrow and no bottom nav. Back returns to Account with the five-tab nav intact.",
+      "states": [
+        "account root",
+        "settings home",
+        "settings detail"
+      ],
+      "audience": "the account owner only",
+      "trust_boundary": "authenticated; own account only",
+      "data_owner": "server",
+      "retention": null,
+      "failure_recovery": "unsaved profile edits raise a Discard changes / Keep editing confirm, with Keep editing as the default",
+      "accessibility": "back arrow is a 44px target; no modal over the profile",
+      "exclusions": [
+        "no settings rows on the profile",
+        "no bottom nav inside Settings"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: approved profile root + settings behind the gear route"
+      ],
+      "implementation_paths": [
+        "src/app/settings/page.tsx",
+        "src/app/settings/profile/page.tsx",
+        "src/app/settings/preferences/page.tsx",
+        "src/app/settings/security/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "Account lane complete/finalized r26, attested"
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-STO-001",
+      "title": "Add to Story entry is the plus badge on the viewer's own avatar",
+      "sources": [
+        "design:next-bar-add-story-flow",
+        "design:next-bar-option-b-manual-pin"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Stories rail, own avatar, lower-right plus badge",
+      "behavior": "The avatar body opens the viewer's own story if one exists; the plus badge opens Add to Story. The badge does not disappear once a story exists.",
+      "states": [
+        "no story yet",
+        "live story",
+        "adding"
+      ],
+      "audience": "the author",
+      "trust_boundary": "authenticated; own avatar only",
+      "data_owner": "author",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "visible badge is 18px but avatar and badge resolve as a single target of at least 44x44, the plus owning the lower-right quadrant",
+      "exclusions": [
+        "the plus is never a bar-pin control; pinning and story-posting never share a control"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: Stories rail"
+      ],
+      "implementation_paths": [
+        "src/components/story/StoriesRail.tsx",
+        "src/components/story/AddStoryFlow.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "e2e/story-rail.spec.ts"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-STO-002",
+      "title": "Three capture modes: one photo, front+back, library",
+      "sources": [
+        "design:next-bar-add-story-flow",
+        "design:next-bar-camera-modes"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Add to your story sheet",
+      "behavior": "Two camera modes of equal weight (Take one photo, Front + back) plus the library as a quieter third row. Front + back is a counted dual-shot: outward 1 of 2, selfie 2 of 2, each half independently retakable.",
+      "states": [
+        "chooser",
+        "live preview",
+        "paired composition"
+      ],
+      "audience": "the author",
+      "trust_boundary": "device camera permission",
+      "data_owner": "author",
+      "retention": "nothing is captured on entry; nothing is shared until review",
+      "failure_recovery": "camera permission denied offers the library fallback; capture failed returns to the shutter and never opens the review screen",
+      "accessibility": "counted steps are labelled in words, not by position alone",
+      "exclusions": [
+        "no second camera system",
+        "no crop or aspect-ratio selection step"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: the capture pipeline"
+      ],
+      "implementation_paths": [
+        "src/components/story/AddStoryFlow.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "e2e/add-story.spec.ts; spec headers state live single-camera and front+back capture remain UNCOVERED"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-STO-003",
+      "title": "Review-or-retake is a hard gate before anything is shared",
+      "sources": [
+        "design:next-bar-add-story-flow",
+        "design:next-bar-camera-modes"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "after capture",
+      "behavior": "The captured pair or single is a draft until accepted. Retake discards that shot and reopens the camera. Nothing has left the phone.",
+      "states": [
+        "draft - not shared",
+        "accepted"
+      ],
+      "audience": "the author",
+      "trust_boundary": "nothing leaves the device before acceptance",
+      "data_owner": "author",
+      "retention": "a discarded retake is not persisted",
+      "failure_recovery": "the review-or-retake gate is unaffected by upload state",
+      "accessibility": "the draft state is stated in words (Draft - not shared)",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: the capture pipeline"
+      ],
+      "implementation_paths": [
+        "src/components/story/AddStoryFlow.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "e2e/add-story.spec.ts"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-STO-004",
+      "title": "Story compose carries exactly two metadata rows: Bar and People",
+      "sources": [
+        "design:next-bar-add-story-flow",
+        "design:next-bar-share-destinations-v2",
+        "design:next-bar-camera-modes"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "story compose screen",
+      "behavior": "Bar opens a search sheet over Compose (one bar at a time, current and recent) and returns. People opens a tag sheet over Compose (accepted friends only, multi-select) and returns. The venue is a decision, never a detection: an empty venue is a finished state and the post carries no bar tag.",
+      "states": [
+        "no bar",
+        "bar chosen",
+        "no tags",
+        "tags chosen"
+      ],
+      "audience": "the author while composing",
+      "trust_boundary": "tagging requires an accepted friendship with the AUTHOR",
+      "data_owner": "author",
+      "retention": null,
+      "failure_recovery": "if the tag read fails, the tag list must not render as nobody tagged",
+      "accessibility": "sheets are 44px rows; caption is optional and length-labelled",
+      "exclusions": [
+        "venue is never inferred from location",
+        "tagging never changes group membership",
+        "no caption form or settings stack in Compose"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: story compose"
+      ],
+      "implementation_paths": [
+        "src/components/story/AddStoryFlow.tsx",
+        "src/components/story/StorySheets.tsx",
+        "src/components/story/storyStore.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel HIGH: tagsComplete is produced by the server layer and dropped by toItem, so a failed tag read renders as nobody tagged"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-STO-005",
+      "title": "Story audience is chosen at action time from exactly three options",
+      "sources": [
+        "design:next-bar-add-story-flow",
+        "design:next-bar-camera-modes",
+        "design:next-bar-share-destinations-v2",
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Story audience subrow, directly above the publishing button",
+      "behavior": "The audience is pre-filled from the Account default and offers Friends (all accepted friends), Selected groups, and Custom (pick people and groups). Changing it is a single-post override that never rewrites the Account default.",
+      "states": [
+        "friends",
+        "selected groups",
+        "custom"
+      ],
+      "audience": "author-selected; never public",
+      "trust_boundary": "server-enforced; a recipient outside the audience must not be able to read the story",
+      "data_owner": "author",
+      "retention": "the audience selection lives as long as the story",
+      "failure_recovery": "a failed audience write must fail the publish, not silently narrow or widen the audience",
+      "accessibility": "the resolved audience is restated in words before publishing",
+      "exclusions": [
+        "no Public option exists in any approved canvas"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-C-07",
+      "blocked_on": "D-O-04",
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: story audience"
+      ],
+      "implementation_paths": [
+        "src/components/story/StorySheets.tsx",
+        "src/lib/stories.server.ts",
+        "supabase/migrations/0065_stories.sql"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "Selected groups option depends on named groups, which do not exist; RLS never executed against staging"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-STO-006",
+      "title": "A story is visible for 24 hours",
+      "sources": [
+        "design:next-bar-camera-modes",
+        "design:next-bar-share-destinations-v2",
+        "design:next-bar-add-story-flow"
+      ],
+      "actor": "audience member",
+      "entry_point": "Stories rail",
+      "behavior": "A story disappears 24 hours after capture. The publish summary states the exact expiry before publishing.",
+      "states": [
+        "live",
+        "expired"
+      ],
+      "audience": "the story's audience",
+      "trust_boundary": "server-enforced expiry, not client-clamped",
+      "data_owner": "author",
+      "retention": "24 hours, unless also saved to the author's Night Out recap",
+      "failure_recovery": "a skewed device clock must not hide media the database still serves",
+      "accessibility": "expiry is stated in words, not implied by a fading affordance",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: story lifetime"
+      ],
+      "implementation_paths": [
+        "src/lib/stories.server.ts",
+        "supabase/migrations/0065_stories.sql"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel HIGH: a fast device clock gates media - ttl <= 0 yields mediaState expired and no URL"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-STO-007",
+      "title": "Stories are not public; viewing another person's story requires mutual friendship",
+      "sources": [
+        "decision:D-C-06",
+        "decision:D-C-08",
+        "design:next-bar-camera-modes"
+      ],
+      "actor": "any signed-in user",
+      "entry_point": "Stories rail, story viewer",
+      "behavior": "A story is readable only by its author and by the members of its audience, and only where a mutual friendship exists.",
+      "states": [
+        "readable",
+        "not readable"
+      ],
+      "audience": "mutual friends within the selected audience",
+      "trust_boundary": "row-level security in the database, not a client filter",
+      "data_owner": "author",
+      "retention": null,
+      "failure_recovery": "fail closed - an unresolvable friendship check denies the read",
+      "accessibility": null,
+      "exclusions": [
+        "no public story",
+        "no anonymous or bearer-link story access"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-06",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: story authorization"
+      ],
+      "implementation_paths": [
+        "supabase/migrations/0065_stories.sql",
+        "src/lib/stories.server.ts",
+        "src/lib/storiesRls.live.test.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "skip",
+          "detail": "storiesRls.live.test.ts has NEVER EXECUTED - never passed, never failed, never forced green. The authorization claim is asserted, not proven. OA-01/OA-02 now permit staging evidence."
+        }
+      ],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-STO-008",
+      "title": "Story viewer chrome is the approved top metadata strip (Option A)",
+      "sources": [
+        "design:next-bar-story-tag-placement"
+      ],
+      "actor": "audience member",
+      "entry_point": "tapping a story in the rail",
+      "behavior": "Top chrome carries only progress, author, timestamp and close. Directly beneath the author row sit a venue chip and a people chip. Metadata never enters the system status area and never crosses a face.",
+      "states": [
+        "playing",
+        "paused"
+      ],
+      "audience": "the story's audience",
+      "trust_boundary": "client presentation of server-authorized data",
+      "data_owner": "author",
+      "retention": null,
+      "failure_recovery": "an inset-only signing failure must render the honest message, not a decorative glyph",
+      "accessibility": "every tappable target is 44px or larger; content stays inside the safe areas",
+      "exclusions": [
+        "Option B in-photo stickers and Option C bottom panel are not approved"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: story viewer"
+      ],
+      "implementation_paths": [
+        "src/components/story/StoryViewer.tsx",
+        "src/components/story/StoryFrame.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel HIGH at StoryFrame.tsx:41 - the inset Surface is not passed photo.state"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-STO-009",
+      "title": "The people chip collapses to 'With <name> +N' and opens the tagged-people sheet",
+      "sources": [
+        "design:next-bar-story-tag-placement"
+      ],
+      "actor": "audience member or a tagged person",
+      "entry_point": "people chip, in-photo sticker, or bottom panel row",
+      "behavior": "Any tag list longer than one name collapses to 'With Maya +2'. The sheet lists the full tag list, links each person to their profile, and offers Remove me to the viewer when the viewer is tagged. Automatic progression pauses while the sheet is open.",
+      "states": [
+        "one tag",
+        "collapsed multiple tags",
+        "sheet open"
+      ],
+      "audience": "the story's audience",
+      "trust_boundary": "removal is authorized to the tagged person only",
+      "data_owner": "the tagged person owns their own tag",
+      "retention": "a removed tag is gone from that story",
+      "failure_recovery": "an unresolved first tag must not render a blank people chip",
+      "accessibility": "every row is a 56px target",
+      "exclusions": [
+        "no like counts appear on a story anywhere"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: story tags"
+      ],
+      "implementation_paths": [
+        "src/components/story/TaggedPeopleSheet.tsx",
+        "src/components/story/StoryViewer.tsx",
+        "src/components/story/storyStore.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel HIGH: taggedLabel ignores resolved:false, so an unresolved first tag renders a blank chip - routinely reachable because tags require mutuality with the AUTHOR, not the viewer"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-STO-010",
+      "title": "The story queue advances automatically and returns to a documented surface",
+      "sources": [
+        "design:next-bar-story-tag-placement"
+      ],
+      "actor": "audience member",
+      "entry_point": "story viewer",
+      "behavior": "Progress segments equal the current person's item count. Items advance automatically; left and right tap zones move by hand. After the final item the viewer opens the next person who has an available story, in rail order, with no interstitial and no confirmation; author, avatar, venue chip, people chip and progress all change together. When the queue is exhausted the viewer closes and returns to Social - Tonight. X closes early and returns to the surface the viewer was opened from.",
+      "states": [
+        "playing",
+        "handoff",
+        "exhausted",
+        "closed early"
+      ],
+      "audience": "the viewer",
+      "trust_boundary": "client navigation over server-authorized items",
+      "data_owner": "each author owns their own items",
+      "retention": null,
+      "failure_recovery": "an unavailable person is skipped, not rendered blank",
+      "accessibility": "a segment count is never shown without its meaning; there is no fixed 4- or 5-segment chrome",
+      "exclusions": [
+        "no 'all caught up' screen exists"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: story viewer/queue"
+      ],
+      "implementation_paths": [
+        "src/components/story/StoryViewer.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "e2e/story-rail.spec.ts"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-STO-011",
+      "title": "Automatic progression pauses for long-press, replies and accessibility focus",
+      "sources": [
+        "design:next-bar-story-tag-placement"
+      ],
+      "actor": "audience member",
+      "entry_point": "story viewer",
+      "behavior": "Progression pauses on long-press, while a reply is being composed, and whenever accessibility focus is on the chrome. It resumes only when that interaction ends.",
+      "states": [
+        "playing",
+        "paused by long-press",
+        "paused by reply",
+        "paused by a11y focus"
+      ],
+      "audience": "the viewer",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "REQUIRED - a keyboard or screen-reader user must not lose a story to an auto-advance while reading its chrome",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: story viewer/queue"
+      ],
+      "implementation_paths": [
+        "src/components/story/StoryViewer.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "skip",
+          "detail": "round-2 panel MEDIUM: timer/long-press pause remains uncovered; the spec header now says so honestly rather than claiming coverage"
+        }
+      ],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-STO-012",
+      "title": "A story ring means unseen; a pin badge means shared bar presence; they never merge",
+      "sources": [
+        "design:next-bar-story-tag-placement",
+        "design:next-bar-option-b-manual-pin",
+        "design:next-bar-social-v2-core"
+      ],
+      "actor": "any signed-in user",
+      "entry_point": "Stories rail and Tonight presence rows",
+      "behavior": "A ring around an avatar means an unseen story. A squared map-pin badge means shared bar presence. They are separate signals and are never merged into one affordance.",
+      "states": [
+        "unseen story",
+        "seen story",
+        "pinned",
+        "not pinned"
+      ],
+      "audience": "the viewer",
+      "trust_boundary": null,
+      "data_owner": "each user owns their own story and pin state",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "shape carries the meaning, not color alone",
+      "exclusions": [
+        "the owner's ring must not represent story existence instead of unseen state"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: Stories rail"
+      ],
+      "implementation_paths": [
+        "src/components/story/StoriesRail.tsx",
+        "src/app/friends/_components/TonightPresence.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel MEDIUM: the owner's ring represents story existence rather than unseen state"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-STO-013",
+      "title": "The shared receipt restates the destination and audience and offers Undo",
+      "sources": [
+        "design:next-bar-add-story-flow",
+        "design:next-bar-share-destinations-v2"
+      ],
+      "actor": "the author",
+      "entry_point": "after publishing",
+      "behavior": "A concise confirmation with two actions and an X exit. It restates each destination with an indicator, the audience and the lifetime, and offers View story and Undo. The avatar keeps its plus so adding another moment stays available.",
+      "states": [
+        "shared",
+        "undone"
+      ],
+      "audience": "the author",
+      "trust_boundary": "Undo is authorized to the author only",
+      "data_owner": "author",
+      "retention": "Undo removes the post and its bytes",
+      "failure_recovery": "after the publish RPC is issued, a later throw must not delete bytes and report that nothing was shared",
+      "accessibility": "two actions only; the X is the exit on every full-screen state",
+      "exclusions": [
+        "no Back to Social button",
+        "no reassurance copy"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: publish"
+      ],
+      "implementation_paths": [
+        "src/components/story/AddStoryFlow.tsx",
+        "src/lib/stories.server.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "publish ambiguity closed and verified by the round-2 panel: rpcIssued is placed correctly"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-STO-014",
+      "title": "Story media is venue-tagged and never geotagged; location metadata is stripped server-side",
+      "sources": [
+        "design:next-bar-story-tag-placement",
+        "design:next-bar-camera-modes",
+        "prd:P1 venue presentation"
+      ],
+      "actor": "the author, and any attacker running a modified client",
+      "entry_point": "media upload",
+      "behavior": "Uploaded image bytes are re-encoded server-side so EXIF and GPS metadata cannot survive, and the content type is verified by inspection rather than by an allowlist of client-declared MIME strings.",
+      "states": [
+        "upload accepted",
+        "upload rejected"
+      ],
+      "audience": "everyone who can read the story",
+      "trust_boundary": "SERVER. A client-side strip is bypassable by definition and cannot satisfy this requirement.",
+      "data_owner": "author",
+      "retention": "the original, unstripped bytes are never persisted",
+      "failure_recovery": "a failed re-encode rejects the upload; it never falls back to storing the original",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-C-05",
+      "blocked_on": "capability: server-side media ingestion boundary (sharp is already a dependency)",
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: media privacy"
+      ],
+      "implementation_paths": [
+        "src/lib/stories.server.ts",
+        "supabase/migrations/0065_stories.sql"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "CRITICAL, confirmed by both reviewer families: uploads go client -> Storage directly (stories.server.ts:254-266, 0065_stories.sql:51-61). Held rather than attested."
+        }
+      ],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-STO-015",
+      "title": "Signed media URL lifetime is enforced by the server",
+      "sources": [
+        "design:next-bar-camera-modes",
+        "decision:D-C-08"
+      ],
+      "actor": "the author, and any attacker running a modified client",
+      "entry_point": "media read",
+      "behavior": "The expiry of a signed media URL is decided and enforced server-side. A minted URL must not outlive the story's expiry or survive its deletion.",
+      "states": [
+        "valid URL",
+        "expired URL",
+        "revoked URL"
+      ],
+      "audience": "the story's audience only",
+      "trust_boundary": "SERVER. A client-side clamp on expiresIn is not enforcement.",
+      "data_owner": "author",
+      "retention": "a URL's validity never exceeds the story's remaining lifetime",
+      "failure_recovery": "a signing failure renders the honest media state, never a decorative placeholder",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-C-08",
+      "blocked_on": "capability: server-side URL minting",
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: media authorization"
+      ],
+      "implementation_paths": [
+        "src/lib/stories.server.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "CRITICAL, confirmed by both families: signedUrlTtlSeconds is a client-side clamp (stories.server.ts:38-47, 158-173, 433-441); createSignedUrl accepts any expiresIn from an authorized modified client"
+        }
+      ],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-STO-016",
+      "title": "Deleting a story removes its bytes and its audience and tag metadata",
+      "sources": [
+        "design:next-bar-account-a-settings",
+        "design:next-bar-add-story-flow"
+      ],
+      "actor": "the author",
+      "entry_point": "story deletion, Undo, or expiry",
+      "behavior": "Deletion removes the stored bytes and makes audience and tag metadata unqueryable. Media still referenced by another live story is never destroyed.",
+      "states": [
+        "live",
+        "soft-deleted",
+        "bytes removed",
+        "orphaned"
+      ],
+      "audience": "nobody after deletion",
+      "trust_boundary": "prefix-scoped removal cannot touch another user's bytes",
+      "data_owner": "author",
+      "retention": "no residual bytes and no residual metadata",
+      "failure_recovery": "when the pre-read returns no row, the RPC-returned paths are reported as orphans rather than reporting success over zero rows",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: deletion lifecycle"
+      ],
+      "implementation_paths": [
+        "src/lib/stories.server.ts",
+        "supabase/migrations/0065_stories.sql"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel: deletion unbroken and verified, but three HIGHs remain open - cross-story media destruction (introduced by the same fix), the expiry-race silent orphan, and audience/tag metadata still queryable after expiry (0065 'parties read')"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-FEED-001",
+      "title": "Social - Feed is photo memories with exactly two actions",
+      "sources": [
+        "design:next-bar-social-v2-core"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Social - Feed sub-tab",
+      "behavior": "A familiar photo-post hierarchy: author, place, time, image, caption, tags. The two actions are View night and Reply.",
+      "states": [
+        "loading",
+        "ready",
+        "empty",
+        "error"
+      ],
+      "audience": "viewers whose audience membership includes them",
+      "trust_boundary": "server-authorized read of the viewer's circle",
+      "data_owner": "each author owns their own post",
+      "retention": null,
+      "failure_recovery": "a failed circle read must render an honest error, never an empty ready state",
+      "accessibility": "photos keep their shape; there is no crop or aspect-ratio decision",
+      "exclusions": [
+        "no public like counts",
+        "no follower metrics"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: Feed"
+      ],
+      "implementation_paths": [
+        "src/app/friends/_components/FeedSection.tsx",
+        "src/components/story/storyStore.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel HIGH at storyStore.ts:461-479 - the Feed still drops unresolved authors (:467 returns []) while the rail was fixed, so a failed circle read renders as an honest-looking empty ready state"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-FEED-002",
+      "title": "A ranking event may appear in the Feed as a compact secondary row",
+      "sources": [
+        "design:next-bar-social-v2-core"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Social - Feed",
+      "behavior": "A ranking event renders as a compact secondary row that never competes with a photo.",
+      "states": [
+        "present",
+        "absent"
+      ],
+      "audience": "the viewer's circle",
+      "trust_boundary": "server-authorized",
+      "data_owner": "the ranking's author",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "the row is subordinate in weight, not only in color",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-05",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-f1e128da: Feed"
+      ],
+      "implementation_paths": [
+        "src/app/friends/_components/FeedSection.tsx"
+      ],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-FEED-003",
+      "title": "Feed retention and deletion lifecycle",
+      "sources": [
+        "decision:D-O-01"
+      ],
+      "actor": "post author and viewer",
+      "entry_point": "Social - Feed",
+      "behavior": "UNDECIDED. No approved canvas states a Feed retention rule. The two adjacent lifetimes that are stated are the 24-hour story and the Night Out recap described as a private archive.",
+      "states": [
+        "undecided"
+      ],
+      "audience": "undecided",
+      "trust_boundary": "undecided",
+      "data_owner": "undecided",
+      "retention": "UNDECIDED - see D-O-01",
+      "failure_recovery": "undecided",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-O-01",
+      "blocked_on": "D-O-01",
+      "goal_ids": [
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/app/friends/_components/FeedSection.tsx",
+        "supabase/migrations/0065_stories.sql"
+      ],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-FEED-004",
+      "title": "No Public audience exists on any V8 destination",
+      "sources": [
+        "decision:D-O-02",
+        "design:next-bar-camera-modes",
+        "design:next-bar-share-destinations-v2",
+        "design:next-bar-add-story-flow",
+        "design:next-bar-option-b-manual-pin"
+      ],
+      "actor": "any author",
+      "entry_point": "every audience control",
+      "behavior": "PROPOSED as an explicit exclusion. Direct inspection of all 16 canvases found no Public audience anywhere; every audience control offers Friends, named group(s), and Custom/Selected people.",
+      "states": [
+        "n/a"
+      ],
+      "audience": "n/a",
+      "trust_boundary": "n/a",
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": null,
+      "exclusions": [
+        "Public audience on Story",
+        "Public audience on Feed",
+        "Public audience on any composer destination"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-O-02",
+      "blocked_on": "D-O-02",
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-CMP-001",
+      "title": "The global composer is exactly three steps: Compose, Destinations, Shared",
+      "sources": [
+        "design:next-bar-share-destinations-v2"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Share a moment",
+      "behavior": "Compose carries only two metadata rows, Bar and People, each opening an optional picker that returns straight to Compose. The destination screen resolves audience and groups inline. There is no separate review page.",
+      "states": [
+        "compose",
+        "destinations",
+        "shared"
+      ],
+      "audience": "author while composing",
+      "trust_boundary": "nothing is published before the destination CTA",
+      "data_owner": "author",
+      "retention": null,
+      "failure_recovery": "an upload failure saves the draft in Compose and is never silently dropped",
+      "accessibility": "pickers are sheets over Compose, not mandatory sequential pages",
+      "exclusions": [
+        "no confirm or review page between choosing and posting"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-CMP-002",
+      "title": "One post carries several destination indicators and never duplicates in the Feed",
+      "sources": [
+        "design:next-bar-share-destinations-v2"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "destination screen",
+      "behavior": "A cross-posted photo is one post with destination indicators, not duplicate entries. The same photo does not appear three times in the feed.",
+      "states": [
+        "one destination",
+        "several destinations"
+      ],
+      "audience": "per-destination",
+      "trust_boundary": "each destination enforces its own audience independently",
+      "data_owner": "author",
+      "retention": "per-destination; the story copy expires while a recap copy does not",
+      "failure_recovery": "a partial publish must not leave the post visible on one destination and absent from another without saying so",
+      "accessibility": "indicators are labelled, not color-only",
+      "exclusions": [
+        "no duplicate feed posts"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-O-03",
+      "blocked_on": "D-O-03",
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-CMP-003",
+      "title": "The approved composer destination set",
+      "sources": [
+        "decision:D-O-03",
+        "design:next-bar-share-destinations-v2",
+        "design:next-bar-camera-modes"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "destination screen",
+      "behavior": "CONTRADICTED between two approved artifacts. share-destinations-v2 draws three destinations (Night Out, Story, Group). camera-modes draws two (24-hour story, Save to my Night Out recap) and places the named group in the audience instead. Neither draws a Feed destination; neither draws Group Chat.",
+      "states": [
+        "undecided"
+      ],
+      "audience": "per D-O-02",
+      "trust_boundary": "undecided",
+      "data_owner": "author",
+      "retention": "per D-O-01",
+      "failure_recovery": "undecided",
+      "accessibility": null,
+      "exclusions": [
+        "Group chat / messaging remains excluded by the base PRD under every option"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-O-03",
+      "blocked_on": "D-O-03",
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-CMP-004",
+      "title": "X is the exit on every full-screen composer state and never publishes",
+      "sources": [
+        "design:next-bar-share-destinations-v2",
+        "design:next-bar-add-story-flow"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "any full-screen composer state",
+      "behavior": "Every full-screen state carries an X in the top-right. Before Share it leaves without publishing; after Share it returns to Social.",
+      "states": [
+        "before publish",
+        "after publish"
+      ],
+      "audience": "author",
+      "trust_boundary": "an exit before publish must leave no server-visible artifact",
+      "data_owner": "author",
+      "retention": "an abandoned compose persists nothing",
+      "failure_recovery": null,
+      "accessibility": "the X is a 44px target in a fixed position",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-CMP-005",
+      "title": "The destination CTA is the publishing action",
+      "sources": [
+        "design:next-bar-share-destinations-v2"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "destination screen CTA",
+      "behavior": "Selection is device state until the CTA fires. The CTA posts to every selected destination.",
+      "states": [
+        "nothing selected",
+        "selected",
+        "published"
+      ],
+      "audience": "per destination",
+      "trust_boundary": "the publish is the only server write in the flow",
+      "data_owner": "author",
+      "retention": "per destination",
+      "failure_recovery": "an offline publish is queued and labelled queued, never labelled Shared",
+      "accessibility": "the CTA names its effect, e.g. Share to 3 places",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-PRE-001",
+      "title": "A presence pin is manual, bar-level, has no GPS, and expires at 4 AM",
+      "sources": [
+        "design:next-bar-option-b-manual-pin",
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "compact pin row directly under the Stories rail on Social - Tonight",
+      "behavior": "The user searches and chooses the bar. Next Bar never tracks location automatically. Pins expire on their own at 4 AM. Tapping the row again re-enters the same sequence to change or clear the pin.",
+      "states": [
+        "unpinned (Pin your bar)",
+        "pinned now",
+        "expired"
+      ],
+      "audience": "chosen per pin - see V8-R-PRE-002",
+      "trust_boundary": "server-enforced audience; a non-audience member must not read the pin",
+      "data_owner": "the pinning user",
+      "retention": "until 4 AM local, then automatic expiry",
+      "failure_recovery": "a failed pin write leaves the prior state visible and says so",
+      "accessibility": "the row is 44px tall; the trust line 'You choose the bar. Next Bar never tracks you automatically' stays in place throughout",
+      "exclusions": [
+        "no automatic location",
+        "no live GPS",
+        "no map or location permission ask in this flow"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-6b79c43c-a986-45d4-9414-5239e1f9096c"
+      ],
+      "acceptance_refs": [
+        "g-6b79c43c: approved Social surface"
+      ],
+      "implementation_paths": [
+        "src/app/friends/_components/usePinnedHandles.ts",
+        "src/app/friends/_components/TonightPresence.tsx"
+      ],
+      "evidence": [],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-PRE-002",
+      "title": "Pin audience is chosen at action time from three top-level choices",
+      "sources": [
+        "design:next-bar-option-b-manual-pin",
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Who can see my pin tonight?",
+      "behavior": "Friends (all accepted friends), Group (single-select from your named groups, expanding as an inline dropdown), or Other people (a person selector). The choice applies to this pin only and does not rewrite the Account default pin audience.",
+      "states": [
+        "friends",
+        "one named group",
+        "specific people"
+      ],
+      "audience": "author-selected",
+      "trust_boundary": "server-enforced",
+      "data_owner": "the pinning user",
+      "retention": "as long as the pin",
+      "failure_recovery": null,
+      "accessibility": "single-select is a labelled radio group, not color-only",
+      "exclusions": [
+        "groups are never created or invited to from this flow - that stays in Social"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-C-01",
+      "blocked_on": "D-O-04",
+      "goal_ids": [
+        "g-6b79c43c-a986-45d4-9414-5239e1f9096c"
+      ],
+      "acceptance_refs": [
+        "g-6b79c43c: approved Social surface"
+      ],
+      "implementation_paths": [
+        "src/app/friends/_components/GroupsAndPeople.tsx"
+      ],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-PRE-003",
+      "title": "A Tonight row shows a pin when there is one and the friend's own status when there is not",
+      "sources": [
+        "design:next-bar-option-b-manual-pin",
+        "design:next-bar-social-v2-core"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Social - Tonight, Out tonight list",
+      "behavior": "Presence rows lead with the bar name and carry Pinned or Heading to with a timestamp beneath. A friend with no pin shows their own Going Out status instead of an invented venue. Every status is manual and attributed to a person, never to a device.",
+      "states": [
+        "pinned at a bar",
+        "heading to a bar",
+        "going out",
+        "maybe later"
+      ],
+      "audience": "the viewer, subject to each pin's own audience",
+      "trust_boundary": "server-enforced per pin",
+      "data_owner": "each friend owns their own row",
+      "retention": "pins to 4 AM; status per D-O-06",
+      "failure_recovery": "no venue is ever invented for a friend without a pin",
+      "accessibility": "state is carried in words alongside the timestamp",
+      "exclusions": [
+        "no device-derived presence"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-C-01",
+      "blocked_on": "D-O-05",
+      "goal_ids": [
+        "g-6b79c43c-a986-45d4-9414-5239e1f9096c"
+      ],
+      "acceptance_refs": [
+        "g-6b79c43c: Tonight presence"
+      ],
+      "implementation_paths": [
+        "src/app/friends/_components/TonightPresence.tsx"
+      ],
+      "evidence": [],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-PRE-004",
+      "title": "The relationship between global going-out status and the bar-level pin",
+      "sources": [
+        "decision:D-O-05",
+        "decision:D-O-06"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Social - Tonight",
+      "behavior": "UNDECIDED. The approved rows imply one composed model with the pin overriding the status, but the exact status set and its interaction with the invitation decline are not settled.",
+      "states": [
+        "undecided"
+      ],
+      "audience": "undecided",
+      "trust_boundary": "undecided",
+      "data_owner": "the user",
+      "retention": "undecided",
+      "failure_recovery": "undecided",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-O-05",
+      "blocked_on": "D-O-05",
+      "goal_ids": [
+        "g-6b79c43c-a986-45d4-9414-5239e1f9096c"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/app/friends/_components/TonightPresence.tsx"
+      ],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-PRE-005",
+      "title": "The 'Not tonight' phrase belongs to exactly one concept",
+      "sources": [
+        "decision:D-O-06",
+        "prd:P1 real Night Out invitations",
+        "design:next-bar-night-out-invite-recipient-v1"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "presence status control and invitation card",
+      "behavior": "UNDECIDED. The base PRD assigns the phrase to the invitation decline; no approved canvas uses it, and the drawn decline labels are Can't make it and Decline.",
+      "states": [
+        "undecided"
+      ],
+      "audience": "undecided",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-O-06",
+      "blocked_on": "D-O-06",
+      "goal_ids": [
+        "g-31acf1bf-4f04-4cbd-b98d-2cdc97ef8edb"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/app/night-out/[token]/InvitePreview.tsx"
+      ],
+      "evidence": [],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-GRP-001",
+      "title": "Named groups are created and edited in Social, never in Settings",
+      "sources": [
+        "design:next-bar-night-out-start-flow",
+        "design:next-bar-account-a-settings",
+        "design:next-bar-option-b-manual-pin"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Social; the People-or-group picker carries Create a group",
+      "behavior": "A named group has a name and a fixed member list. Adding or inviting people happens while creating or editing a group, in Social. Settings never invites to a group.",
+      "states": [
+        "undecided pending D-O-04"
+      ],
+      "audience": "the group's members",
+      "trust_boundary": "server-enforced membership",
+      "data_owner": "the group creator",
+      "retention": "deleted with the account (account deletion destroys group memberships)",
+      "failure_recovery": "undecided",
+      "accessibility": "picker rows are 44px",
+      "exclusions": [
+        "no Group invites row in Settings",
+        "audience pickers never create or invite to a group"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-O-04",
+      "blocked_on": "D-O-04",
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/app/friends/_components/GroupsAndPeople.tsx"
+      ],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-GRP-002",
+      "title": "A named group is consumed by four approved surfaces",
+      "sources": [
+        "design:next-bar-night-out-start-flow",
+        "design:next-bar-option-b-manual-pin",
+        "design:next-bar-camera-modes",
+        "design:next-bar-share-destinations-v2",
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Night Out invite picker, pin audience, story/post audience, composer Group destination",
+      "behavior": "The same named group appears as a Night Out invite target, a pin audience, a story audience, and a composer destination, and carries its own notification category (Group activity, defaulting to Mentions only).",
+      "states": [
+        "undecided pending D-O-04"
+      ],
+      "audience": "the group's fixed members",
+      "trust_boundary": "server-enforced; an explicitly selected Group destination keeps that group's own fixed members and is untouched by the story audience",
+      "data_owner": "the group creator",
+      "retention": "per D-O-04",
+      "failure_recovery": "undecided",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-O-04",
+      "blocked_on": "D-O-04",
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/app/friends/_components/GroupsAndPeople.tsx"
+      ],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-GRP-003",
+      "title": "Group memberships are destroyed by account deletion",
+      "sources": [
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Settings - Security & account - Delete account",
+      "behavior": "The delete-account confirmation enumerates group memberships among the data permanently destroyed.",
+      "states": [
+        "undecided pending D-O-04"
+      ],
+      "audience": "n/a",
+      "trust_boundary": "server-side cascade, not a client action",
+      "data_owner": "the account owner",
+      "retention": "none after deletion",
+      "failure_recovery": "a partial cascade must fail the deletion rather than leave orphaned memberships",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-O-04",
+      "blocked_on": "D-O-04",
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: settings behind the gear route"
+      ],
+      "implementation_paths": [
+        "src/app/api/account/delete/route.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "src/app/api/account/delete/route.test.ts exists; group memberships cannot be covered because no group object exists"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-GRP-004",
+      "title": "Group moderation, blocking and retention policy",
+      "sources": [
+        "decision:D-O-04",
+        "prd:P1 real Night Out invitations"
+      ],
+      "actor": "group member and group creator",
+      "entry_point": "Social group management; Settings - Connections - Blocked & muted",
+      "behavior": "UNDECIDED. The base PRD requires that moderation, blocking, retention, abuse and notification-volume policy exist before group chat is considered; a named group is not chat, but the blocking surface is drawn and must be reconciled.",
+      "states": [
+        "undecided"
+      ],
+      "audience": "undecided",
+      "trust_boundary": "undecided",
+      "data_owner": "undecided",
+      "retention": "UNDECIDED",
+      "failure_recovery": "undecided",
+      "accessibility": null,
+      "exclusions": [
+        "group chat / messaging remains excluded"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-O-04",
+      "blocked_on": "D-O-04",
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-NO-001",
+      "title": "Start a Night Out is one compose screen, not a wizard",
+      "sources": [
+        "design:next-bar-night-out-start-flow"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Social - Plans, the compact Start a Night Out row above whatever is already open",
+      "behavior": "One planning form between the entry and the open plan. When defaults to Tonight 9:00 PM; Area reuses the area already known from Tonight; Invite is optional and opens the combined People-or-group picker. After the primary action the plan opens and invitations go out.",
+      "states": [
+        "entry",
+        "compose",
+        "plan open"
+      ],
+      "audience": "invited people and groups",
+      "trust_boundary": "authenticated; the creator owns the plan",
+      "data_owner": "the plan owner",
+      "retention": null,
+      "failure_recovery": "a failed invite shows a per-person Resend invite; other successful invites are unaffected and already sent",
+      "accessibility": "optional selectors are sheets, never mandatory sequential pages",
+      "exclusions": [
+        "no wizard",
+        "no review screen after the picker",
+        "no Plan created success page",
+        "no required group creation",
+        "no required Area"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-C-01",
+      "blocked_on": "D-O-04",
+      "goal_ids": [
+        "g-0e836120-93a6-4e2a-aa2f-64363eff8d02",
+        "g-6c492e4a-d09a-4c2a-afa4-0e076deacc1f"
+      ],
+      "acceptance_refs": [
+        "g-0e836120: consensus selection through to inviteToNightOut"
+      ],
+      "implementation_paths": [
+        "src/components/BarPicker.tsx",
+        "supabase/migrations/0044_night_outs.sql"
+      ],
+      "evidence": [],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-NO-002",
+      "title": "Only the owner sets the voting deadline, and only while voting is open",
+      "sources": [
+        "design:next-bar-night-out-start-flow",
+        "design:next-bar-social-v2-core"
+      ],
+      "actor": "plan owner and participants",
+      "entry_point": "the open plan",
+      "behavior": "The creator owns the plan. Only the owner sets, edits or clears the voting deadline, and only while voting is open; participants see it and cannot change it. Lock the plan closes voting immediately, takes the top bar and tells everyone. At expiry, voting closes itself and counts go read-only.",
+      "states": [
+        "draft",
+        "open",
+        "decided",
+        "cancelled",
+        "no deadline"
+      ],
+      "audience": "plan members",
+      "trust_boundary": "server-enforced owner check; a participant must not be able to set or clear the deadline",
+      "data_owner": "the plan owner",
+      "retention": null,
+      "failure_recovery": "the owner may still lock early",
+      "accessibility": "the deadline is expressed in time and remaining minutes in words, never by color alone",
+      "exclusions": [
+        "no second scheduling feature"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-67c6041c-4434-47f0-81f1-c4e4ef5ba560",
+        "g-0e836120-93a6-4e2a-aa2f-64363eff8d02"
+      ],
+      "acceptance_refs": [
+        "g-67c6041c: night rollover, real invite derivation, apply-tool guards"
+      ],
+      "implementation_paths": [
+        "supabase/migrations/0044_night_outs.sql"
+      ],
+      "evidence": [],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-NO-003",
+      "title": "A solo plan is valid and voting is unavailable until someone else is in it",
+      "sources": [
+        "design:next-bar-night-out-start-flow"
+      ],
+      "actor": "plan owner",
+      "entry_point": "Start a Night Out with no invitees",
+      "behavior": "A solo plan opens normally. The voting section reads 'Nothing to vote on yet - invite someone and suggest a bar'. Voting closes appears once at least one person or group is selected and defaults to No deadline.",
+      "states": [
+        "solo",
+        "shared"
+      ],
+      "audience": "the owner",
+      "trust_boundary": null,
+      "data_owner": "the plan owner",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "the empty state states what is true and offers one action",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-0e836120-93a6-4e2a-aa2f-64363eff8d02"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-NO-004",
+      "title": "Add people reuses the same People-or-group picker as creation",
+      "sources": [
+        "design:next-bar-night-out-start-flow"
+      ],
+      "actor": "plan owner",
+      "entry_point": "Add people on the open plan",
+      "behavior": "Creating a plan and adding to one later use the identical component, so nobody learns two invite models. Members already in the plan are shown as such and the owner is shown as owner.",
+      "states": [
+        "in this plan",
+        "your groups",
+        "friends"
+      ],
+      "audience": "the people being invited",
+      "trust_boundary": "server-enforced membership write",
+      "data_owner": "the plan owner",
+      "retention": null,
+      "failure_recovery": "duplicate invites are idempotent",
+      "accessibility": "rows are 44px with labelled selection state",
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-C-01",
+      "blocked_on": "D-O-04",
+      "goal_ids": [
+        "g-6c492e4a-d09a-4c2a-afa4-0e076deacc1f"
+      ],
+      "acceptance_refs": [
+        "g-6c492e4a: search-to-add in the plan flow"
+      ],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-NO-005",
+      "title": "Invitation card states, including the four the base PRD omits",
+      "sources": [
+        "design:next-bar-night-out-invite-recipient-v1",
+        "prd:P1 real Night Out invitations"
+      ],
+      "actor": "invited user",
+      "entry_point": "in-app invitation card",
+      "behavior": "Pending offers Accept and Decline. Accepted shows a confirmation and View plan. A plan change shows an Updated notice naming what changed. Beyond the base PRD's three states the approved canvas requires: expired ('This invite has expired'), revoked ('Dev removed this invite'), offline-queued ('Your response will send once you're back online - nothing has been sent yet'), and already-responded ('You already accepted this invite').",
+      "states": [
+        "pending",
+        "accepted",
+        "declined",
+        "expired",
+        "revoked",
+        "offline queued",
+        "already responded",
+        "plan updated"
+      ],
+      "audience": "the invited user",
+      "trust_boundary": "authenticated; membership-scoped",
+      "data_owner": "the plan owner owns the invitation; the recipient owns their response",
+      "retention": null,
+      "failure_recovery": "an offline response is queued and explicitly labelled as not yet sent; duplicate delivery is idempotent",
+      "accessibility": "each state names what is true and offers at most one primary action",
+      "exclusions": [
+        "'Not tonight' is not a second duplicate database state"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-C-02",
+      "blocked_on": "D-O-06",
+      "goal_ids": [
+        "g-31acf1bf-4f04-4cbd-b98d-2cdc97ef8edb"
+      ],
+      "acceptance_refs": [
+        "g-31acf1bf: deep-link track (Part A only)"
+      ],
+      "implementation_paths": [
+        "src/app/night-out/[token]/InvitePreview.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "cec83d4e0b051465017e97c3b3d03d0cec78c5e3",
+          "kind": "static",
+          "detail": "invite lane; Part A only - the in-app card states (panel B) are outside that goal's scope"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-NO-006",
+      "title": "A bearer link previews only the explicitly shared plan",
+      "sources": [
+        "design:next-bar-night-out-invite-recipient-v1",
+        "prd:P1 real Night Out invitations"
+      ],
+      "actor": "anonymous deep-link recipient",
+      "entry_point": "invite link",
+      "behavior": "Before joining, the recipient can see the plan, who is going and the shortlist. They cannot see saved bars, ratings or full profiles until they create an account.",
+      "states": [
+        "anonymous preview",
+        "authenticated member"
+      ],
+      "audience": "anyone holding the link",
+      "trust_boundary": "THE critical boundary. Private ratings, scores, account identifiers and notification tokens never appear in the URL or the Open Graph payload.",
+      "data_owner": "the plan owner",
+      "retention": null,
+      "failure_recovery": "an expired or revoked link states so and offers Dismiss",
+      "accessibility": "the pre-join limitation is stated in words on the screen",
+      "exclusions": [
+        "no private data in the bearer surface"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-02",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-31acf1bf-4f04-4cbd-b98d-2cdc97ef8edb"
+      ],
+      "acceptance_refs": [
+        "g-31acf1bf: deep-link track (Part A only)"
+      ],
+      "implementation_paths": [
+        "src/app/night-out/[token]/InvitePreview.tsx",
+        "src/app/join/page.tsx",
+        "src/app/join/opengraph-image.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "cec83d4e0b051465017e97c3b3d03d0cec78c5e3",
+          "kind": "static",
+          "detail": "invite lane complete"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-NO-007",
+      "title": "Whether an anonymous recipient may RSVP before signing up",
+      "sources": [
+        "decision:D-O-08",
+        "design:next-bar-night-out-invite-recipient-v1",
+        "prd:P1 real Night Out invitations"
+      ],
+      "actor": "anonymous deep-link recipient",
+      "entry_point": "invite link",
+      "behavior": "CONTRADICTED. The approved canvas draws I'm in / Can't make it before any signup gate, followed by an explicitly optional signup upsell. The base PRD says pre-signup RSVP is not authorized and that accepting and declining require authentication.",
+      "states": [
+        "undecided"
+      ],
+      "audience": "anyone holding the link",
+      "trust_boundary": "UNDECIDED - option A requires an anonymous write path that does not exist today",
+      "data_owner": "undecided",
+      "retention": "undecided",
+      "failure_recovery": "undecided",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-O-08",
+      "blocked_on": "D-O-08",
+      "goal_ids": [
+        "g-31acf1bf-4f04-4cbd-b98d-2cdc97ef8edb"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/app/night-out/[token]/InvitePreview.tsx",
+        "src/app/auth/page.inviteCallback.test.tsx"
+      ],
+      "evidence": [],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-NO-008",
+      "title": "Invitation decline labels",
+      "sources": [
+        "decision:D-O-06",
+        "design:next-bar-night-out-invite-recipient-v1",
+        "prd:P1 real Night Out invitations"
+      ],
+      "actor": "invited user",
+      "entry_point": "invitation card or deep link",
+      "behavior": "CONTRADICTED. The approved canvas labels the pre-signup decline 'Can't make it' and the in-app decline 'Decline'. The base PRD says the user-facing declined action is 'Not tonight'.",
+      "states": [
+        "undecided"
+      ],
+      "audience": "the invited user",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-O-06",
+      "blocked_on": "D-O-06",
+      "goal_ids": [
+        "g-31acf1bf-4f04-4cbd-b98d-2cdc97ef8edb",
+        "g-0e836120-93a6-4e2a-aa2f-64363eff8d02"
+      ],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/app/night-out/[token]/InvitePreview.tsx"
+      ],
+      "evidence": [],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-ONB-001",
+      "title": "Onboarding sequence: auth, 21+, location, optional quiz, completion",
+      "sources": [
+        "design:next-bar-onboarding-v1"
+      ],
+      "actor": "new user",
+      "entry_point": "first launch",
+      "behavior": "Five steps ending on the approved Next Bar? home pattern. Each step has one clear primary action.",
+      "states": [
+        "auth",
+        "age",
+        "location",
+        "quiz",
+        "completion",
+        "loading"
+      ],
+      "audience": "the new user",
+      "trust_boundary": "unauthenticated until auth completes",
+      "data_owner": "the new user",
+      "retention": null,
+      "failure_recovery": "each branch state offers one primary recovery and never presents a fallback as a success",
+      "accessibility": "44px targets; the completion screen reuses the approved home",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-02",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-dabfc0c8-5079-4e2d-aa3b-e37aac662fc8"
+      ],
+      "acceptance_refs": [
+        "g-dabfc0c8: auth, 21+, location, optional quiz, completion"
+      ],
+      "implementation_paths": [
+        "src/app/onboarding/page.tsx",
+        "src/app/onboarding/age/page.tsx",
+        "src/app/onboarding/location/page.tsx",
+        "src/app/onboarding/quiz/page.completion.test.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "5e332dbb91faf71b56082e8b55bcfdac178f48c7",
+          "kind": "static",
+          "detail": "onboarding lane complete"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ONB-002",
+      "title": "21+ is a self-attestation with no birthdate, and the under-21 exit stores nothing",
+      "sources": [
+        "design:next-bar-onboarding-v1"
+      ],
+      "actor": "new user",
+      "entry_point": "age confirmation step",
+      "behavior": "The user confirms 'I'm 21 or older' or takes the 'I'm under 21' exit. The exit says an account cannot be created and states that no information entered is stored.",
+      "states": [
+        "confirmed 21+",
+        "under-21 exit"
+      ],
+      "audience": "the new user",
+      "trust_boundary": "self-attestation, not verification",
+      "data_owner": "the new user",
+      "retention": "NOTHING is persisted on the under-21 exit - this is a stated promise on screen",
+      "failure_recovery": "the exit offers Close only",
+      "accessibility": "no birthdate entry required",
+      "exclusions": [
+        "no birthdate",
+        "no age verification service"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-02",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-dabfc0c8-5079-4e2d-aa3b-e37aac662fc8"
+      ],
+      "acceptance_refs": [
+        "g-dabfc0c8: 21+"
+      ],
+      "implementation_paths": [
+        "src/app/onboarding/age/page.tsx",
+        "src/app/onboarding/age/page.exit.test.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "5e332dbb91faf71b56082e8b55bcfdac178f48c7",
+          "kind": "static",
+          "detail": "page.exit.test.tsx covers the under-21 exit"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ONB-003",
+      "title": "Location is optional and a denial is never faked",
+      "sources": [
+        "design:next-bar-onboarding-v1",
+        "design:next-bar-operational-states-v1"
+      ],
+      "actor": "new user",
+      "entry_point": "location step",
+      "behavior": "Use my location, Choose a neighborhood, or Not now. On denial the app says location access was denied, states 'We never fake your location', and offers Choose a neighborhood with Show anywhere as the secondary.",
+      "states": [
+        "granted",
+        "neighborhood chosen",
+        "not now",
+        "denied"
+      ],
+      "audience": "the new user",
+      "trust_boundary": "OS location permission",
+      "data_owner": "the new user",
+      "retention": "changeable at any time in Settings",
+      "failure_recovery": "the manual neighborhood picker; the OS permission is re-prompted only if the user opens Settings",
+      "accessibility": "the blue dot never renders on a fake center",
+      "exclusions": [
+        "never fake a location fix",
+        "no repeat OS prompt loop"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-02",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-dabfc0c8-5079-4e2d-aa3b-e37aac662fc8"
+      ],
+      "acceptance_refs": [
+        "g-dabfc0c8: location"
+      ],
+      "implementation_paths": [
+        "src/app/onboarding/location/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "5e332dbb91faf71b56082e8b55bcfdac178f48c7",
+          "kind": "static",
+          "detail": "onboarding lane complete"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ONB-004",
+      "title": "The vibe quiz is optional and skippable",
+      "sources": [
+        "design:next-bar-onboarding-v1"
+      ],
+      "actor": "new user",
+      "entry_point": "quiz step",
+      "behavior": "Roughly 30 seconds, explicitly optional, with 'Skip - show me bars' always available. Skipping still lands on recommendations.",
+      "states": [
+        "taken",
+        "skipped"
+      ],
+      "audience": "the new user",
+      "trust_boundary": "authenticated",
+      "data_owner": "the new user",
+      "retention": "retakeable any time through Settings",
+      "failure_recovery": "a failed quiz save does not block completion",
+      "accessibility": "skip is a first-class control, not a hidden link",
+      "exclusions": [
+        "quiz tags are a cold-start prior only and never gate candidate admission"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-02",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-dabfc0c8-5079-4e2d-aa3b-e37aac662fc8"
+      ],
+      "acceptance_refs": [
+        "g-dabfc0c8: optional quiz"
+      ],
+      "implementation_paths": [
+        "src/app/onboarding/quiz/page.completion.test.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "5e332dbb91faf71b56082e8b55bcfdac178f48c7",
+          "kind": "static",
+          "detail": "onboarding lane complete"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ONB-005",
+      "title": "No gender field in onboarding",
+      "sources": [
+        "design:next-bar-onboarding-v1",
+        "decision:D-C-04"
+      ],
+      "actor": "new user",
+      "entry_point": "onboarding",
+      "behavior": "Onboarding collects no gender. The omission is approved as drawn.",
+      "states": [
+        "n/a"
+      ],
+      "audience": "n/a",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": null,
+      "exclusions": [
+        "do not add a gender field back"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-04",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-dabfc0c8-5079-4e2d-aa3b-e37aac662fc8"
+      ],
+      "acceptance_refs": [
+        "g-dabfc0c8: onboarding"
+      ],
+      "implementation_paths": [
+        "src/app/onboarding/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "5e332dbb91faf71b56082e8b55bcfdac178f48c7",
+          "kind": "static",
+          "detail": "onboarding lane complete"
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-ONB-006",
+      "title": "Third-party authentication is excluded from V8; email/password is the auth path",
+      "sources": [
+        "decision:D-C-03",
+        "design:next-bar-onboarding-v1",
+        "design:next-bar-operational-states-v1",
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "new and returning user",
+      "entry_point": "auth screen",
+      "behavior": "V8 implements email/password only. The approved onboarding canvas leads with Continue with Apple / Google / phone, so V8's auth screen is a DELIBERATE, RECORDED partial visual conformance rather than a visual defect. Settings - Security & account shows Email & password - Verified.",
+      "states": [
+        "email/password sign-in",
+        "email/password sign-up"
+      ],
+      "audience": "the user",
+      "trust_boundary": "Supabase auth",
+      "data_owner": "the user",
+      "retention": null,
+      "failure_recovery": "standard email/password error paths",
+      "accessibility": null,
+      "exclusions": [
+        "Apple sign-in",
+        "Google sign-in",
+        "phone / SMS OTP sign-in",
+        "the operational-state cards 'Sign-in provider unavailable' and 'Verification pending', which depend on the excluded providers"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-03",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-dabfc0c8-5079-4e2d-aa3b-e37aac662fc8"
+      ],
+      "acceptance_refs": [
+        "g-dabfc0c8: auth"
+      ],
+      "implementation_paths": [
+        "src/app/onboarding/page.tsx",
+        "src/app/settings/security/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "5e332dbb91faf71b56082e8b55bcfdac178f48c7",
+          "kind": "static",
+          "detail": "onboarding lane complete; the canvas itself carries an in-canvas 'Implementation dependency' note stating email/password is the only method currently implemented"
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-ACC-001",
+      "title": "The Account profile header is identity only",
+      "sources": [
+        "design:next-bar-account-a-tabs",
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Account tab",
+      "behavior": "Photo, display name, @username, a one-line vibe sentence, connection counts (Friends / Following / Requests) and the gear. The header never changes across the two tabs; only the content below the segmented control swaps.",
+      "states": [
+        "nights out tab",
+        "badges tab"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "authenticated; own account",
+      "data_owner": "the account owner",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "the Account root is a tab, not a stack, so it has no X and nothing to close",
+      "exclusions": [
+        "no settings rows on the profile"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: approved profile root"
+      ],
+      "implementation_paths": [
+        "src/app/settings/_useOwnProfile.ts",
+        "src/app/settings/profile/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "Account lane complete/finalized r26, attested"
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-ACC-002",
+      "title": "Nights Out is a multi-night private recap archive",
+      "sources": [
+        "design:next-bar-account-a-tabs",
+        "design:next-bar-camera-modes"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Account - Nights Out tab",
+      "behavior": "Each past night is a card leading with photos and one quiet metadata line (name, date, bar count, photo count). Tapping opens that night's archived recap exactly as it was saved. This archive is the destination named by the composer's 'Save to my Night Out recap' toggle.",
+      "states": [
+        "archive list",
+        "one night open",
+        "empty"
+      ],
+      "audience": "the account owner ONLY - the canvas calls it a private archive",
+      "trust_boundary": "server-enforced; own account only",
+      "data_owner": "the account owner",
+      "retention": "PROPOSED indefinite until account or post deletion - depends on D-O-01 and D-O-07",
+      "failure_recovery": "a night that cannot be read states so rather than rendering an empty archive",
+      "accessibility": "cards lead with photos; metadata is one line",
+      "exclusions": [
+        "not a public feed",
+        "does not duplicate Rankings bar-level taste history"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-O-07",
+      "blocked_on": "D-O-07",
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: approved profile root"
+      ],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-ACC-003",
+      "title": "Badges and Persona share a tab but are never merged into one number",
+      "sources": [
+        "design:next-bar-account-a-tabs"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Account - Badges tab",
+      "behavior": "The Persona card names the user's taste in words (e.g. 'The Low-Key Local'), built from the vibe quiz and ranked places, and carries no score, level or progress. Badges below are earned or not earned, each with one line saying why; a locked badge states its progress in words.",
+      "states": [
+        "persona present",
+        "badge earned",
+        "badge locked"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "authenticated; own account",
+      "data_owner": "the account owner",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "locked state is stated in words, not by dimming alone",
+      "exclusions": [
+        "persona carries no score, level or progress",
+        "badges and persona are never merged into a single number"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-O-07",
+      "blocked_on": "D-O-07",
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: approved profile root"
+      ],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-ACC-004",
+      "title": "Settings is a grouped list with five sections",
+      "sources": [
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "the account owner",
+      "entry_point": "gear on the Account root",
+      "behavior": "Profile (Edit profile, Vibe profile), Connections (Friends & requests, Blocked & muted), Privacy & sharing (Story audience, Tonight pin audience, Tags & mentions), Notifications (Plans, Tags & stories, Group activity), Security & account (Email & password, Sign out). One line of current state per row. Help, Privacy policy and Terms sit below the fold, deliberately last.",
+      "states": [
+        "settings home",
+        "detail page"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "authenticated; own account",
+      "data_owner": "the account owner",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "each row shows current state so 'what is this set to?' needs no tap",
+      "exclusions": [
+        "no Group invites row - inviting is not a privacy setting"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: settings behind the gear route"
+      ],
+      "implementation_paths": [
+        "src/app/settings/page.tsx",
+        "src/app/settings/preferences/page.tsx",
+        "src/app/settings/security/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "Account lane complete/finalized r26, attested; src/app/settings/page.test.tsx"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ACC-005",
+      "title": "Two independent sharing defaults that are never coupled",
+      "sources": [
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Settings - Privacy & sharing",
+      "behavior": "Default story audience and Default pin audience are separate settings with separate values. Changing one never changes the other. Both show their current value on the Settings home list. Either is overridden at the moment of sharing for a single post or pin, and the default stays exactly where it was.",
+      "states": [
+        "story default",
+        "pin default"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "server-stored preference; the enforcement happens at publish time",
+      "data_owner": "the account owner",
+      "retention": null,
+      "failure_recovery": "a failed default write leaves the prior value and says so",
+      "accessibility": "each row carries its own icon, current value and chevron so neither reads as a sub-setting of the other",
+      "exclusions": [
+        "the audience picker does not live in Settings; it reappears at the moment of sharing"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-C-01",
+      "blocked_on": "D-O-04",
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: settings behind the gear route"
+      ],
+      "implementation_paths": [
+        "src/app/settings/preferences/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "Account lane complete; the Selected-groups value depends on named groups, which do not exist"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ACC-006",
+      "title": "Tags and mentions: consent switches plus an unconditional self-removal right",
+      "sources": [
+        "design:next-bar-account-a-settings",
+        "design:next-bar-story-tag-placement"
+      ],
+      "actor": "the account owner and anyone tagged",
+      "entry_point": "Settings - Privacy & sharing - Tags & mentions; the tagged-people sheet",
+      "behavior": "Allow tags from Friends and Review tags before profile are genuinely binary switches. Independently of both, tagged people can ALWAYS remove themselves, from the tagged-people sheet on the story itself.",
+      "states": [
+        "tags allowed",
+        "tags blocked",
+        "review required",
+        "removed by the tagged person"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "server-enforced; the removal is authorized to the tagged person, not the author",
+      "data_owner": "the tagged person owns their own tag",
+      "retention": "a removed tag does not survive",
+      "failure_recovery": "a failed removal must not report success",
+      "accessibility": "switches are used only because these are genuinely binary; an audience is not",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0",
+        "g-f1e128da-c550-4250-a9ef-925bf322f810"
+      ],
+      "acceptance_refs": [
+        "g-56595877: settings",
+        "g-f1e128da: story tags"
+      ],
+      "implementation_paths": [
+        "src/app/settings/preferences/page.tsx",
+        "src/components/story/TaggedPeopleSheet.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "e0d25ec185744ef87aba9f7bce855863d29f8776",
+          "kind": "static",
+          "detail": "round-2 panel HIGH: tagsComplete is dropped by toItem, so the Remove-me consent control is silently unreachable when the tag read fails"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-ACC-007",
+      "title": "Blocked & muted is a Connections row, not a privacy setting",
+      "sources": [
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Settings - Connections - Blocked & muted",
+      "behavior": "The blocked and muted list lives under Connections and shows its count. It is reachable from Privacy & sharing as well, but it is a relationship surface, not a sharing default.",
+      "states": [
+        "list",
+        "empty"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "server-enforced; a blocked account must not read the blocker's content",
+      "data_owner": "the account owner",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": null,
+      "exclusions": [],
+      "status": "blocked",
+      "decision_ref": "D-C-01",
+      "blocked_on": "D-O-04",
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: settings behind the gear route"
+      ],
+      "implementation_paths": [
+        "src/app/settings/page.tsx"
+      ],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-ACC-008",
+      "title": "Three notification categories",
+      "sources": [
+        "design:next-bar-account-a-settings",
+        "prd:P1 native invitation notifications"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Settings - Notifications",
+      "behavior": "Plans, Tags & stories, and Group activity, each with its own current value; Group activity defaults to Mentions only.",
+      "states": [
+        "on",
+        "off",
+        "mentions only"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "server-side sender honours the preference; APNs credentials never enter the client bundle",
+      "data_owner": "the account owner",
+      "retention": "device tokens are revoked on sign-out and account deletion",
+      "failure_recovery": "invalid tokens are removed or disabled by the sender",
+      "accessibility": "an in-app preference is shown first; the iOS permission is requested only after the user sends or accepts an invitation, never on first launch",
+      "exclusions": [
+        "V8 notifications are limited to: invited, accepted, bar suggested, plan changed"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-C-01",
+      "blocked_on": "D-O-04",
+      "goal_ids": [
+        "g-6df5a7de-2443-4449-9ad5-8b5f3887817c",
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-6df5a7de: staging-only native iOS invitation notifications (APNs)"
+      ],
+      "implementation_paths": [
+        "src/app/settings/preferences/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "the APNs goal g-6df5a7de is blocked/blocked r73; the Group activity category depends on named groups, which do not exist"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ACC-009",
+      "title": "Account deletion is typed-confirmation and enumerates exactly what it destroys",
+      "sources": [
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Settings - Security & account - Danger zone",
+      "behavior": "Delete account sits two levels below the profile, in an outlined danger zone. The confirmation enumerates what is destroyed: profile, photo and @username; posts, stories and night recaps; friendships, followers and group memberships; ratings, saved bars and account data. It requires typing DELETE in full and states that it cannot be undone. Cancel is the larger, more prominent of the two buttons.",
+      "states": [
+        "confirm open",
+        "deleted",
+        "cancelled"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "server-side cascade; authenticated as the owner",
+      "data_owner": "the account owner",
+      "retention": "NONE - the enumerated data is permanently destroyed",
+      "failure_recovery": "a partial cascade must fail rather than leave orphaned data",
+      "accessibility": "the destructive action is outlined, not filled; Save-style filled accent is reserved for the safe action",
+      "exclusions": [
+        "Sign out is an ordinary secondary action and is not grouped with deletion"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: settings behind the gear route"
+      ],
+      "implementation_paths": [
+        "src/app/api/account/delete/route.ts",
+        "src/app/api/account/delete/route.test.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "Account lane complete/finalized r26, attested; route.test.ts exists. Stories, night recaps and group memberships cannot be covered because those objects do not exist on this candidate."
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ACC-010",
+      "title": "Active sessions and sign-out",
+      "sources": [
+        "design:next-bar-account-a-settings",
+        "prd:P1 native invitation notifications"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Settings - Security & account",
+      "behavior": "Active sessions shows the device count. Sign out is available from Settings home and from Security & account. Sign-out revokes the current installation's notification token.",
+      "states": [
+        "signed in",
+        "signed out"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "authenticated",
+      "data_owner": "the account owner",
+      "retention": "the device token for that installation is revoked",
+      "failure_recovery": null,
+      "accessibility": null,
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0",
+        "g-6df5a7de-2443-4449-9ad5-8b5f3887817c"
+      ],
+      "acceptance_refs": [
+        "g-56595877: settings behind the gear route"
+      ],
+      "implementation_paths": [
+        "src/app/settings/security/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "Account lane complete; token revocation is owned by the blocked APNs goal"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-ACC-011",
+      "title": "Edit profile hand-edits exactly three fields",
+      "sources": [
+        "design:next-bar-account-a-settings"
+      ],
+      "actor": "the account owner",
+      "entry_point": "Settings - Profile - Edit profile",
+      "behavior": "Only photo, display name and @username are hand-editable. Username availability is checked and stated inline. The persona wording is quiz-derived and is viewed or retaken, never rewritten by hand. Save changes is fixed above the home indicator so it never scrolls out of reach.",
+      "states": [
+        "editing",
+        "username available",
+        "username taken",
+        "unsaved changes"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "server-side uniqueness check on @username",
+      "data_owner": "the account owner",
+      "retention": null,
+      "failure_recovery": "leaving with unsaved edits raises Discard changes? with Keep editing as the default",
+      "accessibility": "the save action never scrolls out of reach",
+      "exclusions": [
+        "the persona is not hand-editable"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-56595877-1392-4f2c-a9e1-4c7a6345eeb0"
+      ],
+      "acceptance_refs": [
+        "g-56595877: settings behind the gear route"
+      ],
+      "implementation_paths": [
+        "src/app/settings/profile/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "0e20db2992a7db04f354019b85946bda447bf2e0",
+          "kind": "static",
+          "detail": "Account lane complete/finalized r26, attested"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-MAP-001",
+      "title": "The map is the page",
+      "sources": [
+        "design:next-bar-map-v1"
+      ],
+      "actor": "any user",
+      "entry_point": "Map tab",
+      "behavior": "Edge to edge from the status bar to behind the fixed nav. No heading, no quiz prompt, no stacked blocks, no page scroll before it.",
+      "states": [
+        "at rest",
+        "search results",
+        "filter sheet",
+        "lightbox open"
+      ],
+      "audience": "all users",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": "map failed to load offers Reload map centered on the blank canvas; filters and search state are held in memory and unchanged",
+      "accessibility": "one vertical scroll owner; no accidental horizontal rail",
+      "exclusions": [
+        "Map does not recommend - Next Bar? owns the guided decision"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-17984023-b73c-4a59-a9b2-030d9909a21c"
+      ],
+      "acceptance_refs": [
+        "g-17984023: unified search, suggested markers, shared lightbox"
+      ],
+      "implementation_paths": [
+        "src/app/map/page.tsx",
+        "src/components/BarMap.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "aa22a660dfdfe10e634a043450326109c4dd45e5",
+          "kind": "static",
+          "detail": "Map lane complete/finalized r17"
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-MAP-002",
+      "title": "Exactly two marker meanings, plus the user dot",
+      "sources": [
+        "design:next-bar-map-v1",
+        "decision:D-C-11",
+        "prd:P1 Next Bar? ranking contract"
+      ],
+      "actor": "any user",
+      "entry_point": "Map tab",
+      "behavior": "Ranked bars carry a quiet coral ring; everything else is a smaller muted dot; the user is a blue dot. Ranked-ness is the presence of a numeric personal score.",
+      "states": [
+        "ranked",
+        "other",
+        "user"
+      ],
+      "audience": "the viewer",
+      "trust_boundary": null,
+      "data_owner": "the viewer's own ratings",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "the legend names both meanings in words (Ranked / Other bars); shape carries the meaning, not color alone",
+      "exclusions": [
+        "no Loved / Liked / Pass",
+        "no suggested tier"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-C-11",
+      "blocked_on": "D-O-09",
+      "goal_ids": [
+        "g-17984023-b73c-4a59-a9b2-030d9909a21c",
+        "g-12d33864"
+      ],
+      "acceptance_refs": [
+        "g-17984023: suggested markers"
+      ],
+      "implementation_paths": [
+        "src/components/BarMap.tsx",
+        "src/app/map/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "aa22a660dfdfe10e634a043450326109c4dd45e5",
+          "kind": "static",
+          "detail": "CONTRADICTED - the shipped marker set is derived from the legacy Loved/Liked/Pass tiers rather than from the presence of a numeric score, on a lane already marked complete. Smallest fix: derive rankedIds from a numeric score and delete the tier read."
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-MAP-003",
+      "title": "Search, Filters and Locate are overlays, and filters commit live",
+      "sources": [
+        "design:next-bar-map-v1",
+        "decision:D-C-09"
+      ],
+      "actor": "any user",
+      "entry_point": "Map overlays",
+      "behavior": "One search field plus Filters and Locate floating over the map. Filters opens a compact sheet that keeps the map visible. SUPERSEDED BY FOUNDER: there is ONE filter state and every tap in the sheet moves the markers behind it. The canvas's draft-until-'Show N bars' Apply gate is superseded and must not be restored. Locate drops the blue dot and recenters.",
+      "states": [
+        "sheet closed",
+        "sheet open",
+        "searching",
+        "locating"
+      ],
+      "audience": "the viewer",
+      "trust_boundary": "OS location permission for Locate",
+      "data_owner": null,
+      "retention": "filter and search state survive opening and closing the lightbox",
+      "failure_recovery": "location permission denied shows a muted/disabled Locate control and centers on the last-used neighborhood; the blue dot never renders on a fake center",
+      "accessibility": "search re-queries on every keystroke with no manual retry needed",
+      "exclusions": [
+        "no Apply / Show N bars commit step",
+        "no six-axis filter surface - the approved surface is one search field plus two floating controls and a compact sheet"
+      ],
+      "status": "superseded",
+      "decision_ref": "D-C-09",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-17984023-b73c-4a59-a9b2-030d9909a21c",
+        "g-12d33864"
+      ],
+      "acceptance_refs": [
+        "g-17984023: live filters, unified search"
+      ],
+      "implementation_paths": [
+        "src/app/map/MapFilterSheet.tsx",
+        "src/app/map/mapSearch.ts",
+        "src/app/map/mapSearch.test.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "aa22a660dfdfe10e634a043450326109c4dd45e5",
+          "kind": "static",
+          "detail": "Map lane complete/finalized r17; the divergence from the canvas is AUTHORISED and recorded in the goal body's 'Superseded Map behavior' section. g-12d33864 is blocked and needs rewriting, not unblocking - its six-axis surface is not what map-v1 shows."
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-MAP-004",
+      "title": "Markers and search results open the one shared bar lightbox",
+      "sources": [
+        "design:next-bar-map-v1",
+        "design:next-bar-lightbox-refinement"
+      ],
+      "actor": "any user",
+      "entry_point": "a marker or a search result",
+      "behavior": "Both open the same approved lightbox. There is no map-specific card or preview. Closing returns to the same center, filters and search text.",
+      "states": [
+        "closed",
+        "open"
+      ],
+      "audience": "all users",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "closing restores the prior scroll position and focus",
+      "exclusions": [
+        "no map-specific bar card"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-17984023-b73c-4a59-a9b2-030d9909a21c",
+        "g-fa074716-58e1-4a7c-8503-2b12c00b4997"
+      ],
+      "acceptance_refs": [
+        "g-17984023: shared lightbox",
+        "g-fa074716: shared BarLightbox contract"
+      ],
+      "implementation_paths": [
+        "src/app/map/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "aa22a660dfdfe10e634a043450326109c4dd45e5",
+          "kind": "static",
+          "detail": "Map lane complete/finalized r17"
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-RNK-001",
+      "title": "One numeric score per bar, 1.0-10.0, one decimal, global across every list",
+      "sources": [
+        "design:next-bar-rankings-numeric-lists",
+        "prd:P0 account and release continuity",
+        "decision:D-O-11"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Rankings",
+      "behavior": "A bar carries the same number everywhere; editing it from any list updates it everywhere. CONTRADICTED on ownership: the canvas footer says 'Your scores - stored on this device' while the base PRD requires one server owner and a conflict rule. The canvas itself brands this rule an untested assumption.",
+      "states": [
+        "rated",
+        "not rated"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "UNDECIDED - device-local vs server-owned",
+      "data_owner": "UNDECIDED - see D-O-11",
+      "retention": "survives install-over per the base PRD continuity requirement",
+      "failure_recovery": "a failed save reverts the row to its prior value until retried; the edit sheet stays open so nothing is lost",
+      "accessibility": "the score is stated as a number out of 10, not as a bar or a color",
+      "exclusions": [
+        "Loved / Liked / Pass are legacy implementation concepts, not the V8 product model",
+        "no rating-based suppression (D-C-10)"
+      ],
+      "status": "blocked",
+      "decision_ref": "D-O-11",
+      "blocked_on": "D-O-11",
+      "goal_ids": [
+        "g-955ee460-c0af-43b6-b302-eecdadda5a38",
+        "g-575e68bb-386f-4f91-8b08-b4aba2a5041e"
+      ],
+      "acceptance_refs": [
+        "g-955ee460: the locked numeric-list surface"
+      ],
+      "implementation_paths": [
+        "src/app/rankings/page.tsx",
+        "src/app/rankings/RankSheet.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "91e3d35e3afb49b38108e377cff7d6e50bac3727",
+          "kind": "static",
+          "detail": "Rankings lane complete; RankSheet.focus.test.tsx"
+        }
+      ],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-RNK-002",
+      "title": "Best Bars is the only aggregate view",
+      "sources": [
+        "design:next-bar-rankings-numeric-lists"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "Rankings list switcher",
+      "behavior": "Best Bars shows every rated bar, highest score first. Every other view shows only its own members, so switching lists filters the rows in place. A bar may sit in several lists but appears in one at a time because it belongs to it.",
+      "states": [
+        "best bars",
+        "custom list",
+        "want to go",
+        "empty list"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "per D-O-11",
+      "data_owner": "per D-O-11",
+      "retention": null,
+      "failure_recovery": "an empty list keeps the list switcher visible and offers Browse Next Bar?; it is not an error state",
+      "accessibility": null,
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-955ee460-c0af-43b6-b302-eecdadda5a38"
+      ],
+      "acceptance_refs": [
+        "g-955ee460: the locked numeric-list surface"
+      ],
+      "implementation_paths": [
+        "src/app/rankings/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "91e3d35e3afb49b38108e377cff7d6e50bac3727",
+          "kind": "static",
+          "detail": "Rankings lane complete/finalized"
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-RNK-003",
+      "title": "Edit and Rank open the score sheet, never the lightbox",
+      "sources": [
+        "design:next-bar-rankings-numeric-lists"
+      ],
+      "actor": "signed-in user",
+      "entry_point": "a Rankings row",
+      "behavior": "Tapping the row opens the shared bar-detail lightbox and closing returns to the same list at the same scroll position. Edit (rated) or Rank (unrated) opens the numeric score plus list-membership sheet instead. Ticking a list adds or removes the bar from that view immediately. Custom lists are created inline in that sheet; Want to Go also holds unrated saves, which read Not rated and sort below rated members.",
+      "states": [
+        "row tapped",
+        "edit sheet open",
+        "creating a list"
+      ],
+      "audience": "the account owner",
+      "trust_boundary": "per D-O-11",
+      "data_owner": "per D-O-11",
+      "retention": null,
+      "failure_recovery": "a failed score save reverts the row and keeps the sheet open",
+      "accessibility": "Edit and Rank are distinct 44px targets separate from the row body",
+      "exclusions": [
+        "Edit never opens the lightbox"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-955ee460-c0af-43b6-b302-eecdadda5a38"
+      ],
+      "acceptance_refs": [
+        "g-955ee460: the locked numeric-list surface"
+      ],
+      "implementation_paths": [
+        "src/app/rankings/RankSheet.tsx",
+        "src/app/rankings/RankSheet.focus.test.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "91e3d35e3afb49b38108e377cff7d6e50bac3727",
+          "kind": "static",
+          "detail": "Rankings lane complete/finalized"
+        }
+      ],
+      "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-LBX-001",
+      "title": "The bar lightbox is one shared full-screen overlay with a fixed content order",
+      "sources": [
+        "design:next-bar-lightbox-refinement",
+        "design:next-bar-five-bars-typography-refinement",
+        "design:next-bar-map-v1"
+      ],
+      "actor": "any user",
+      "entry_point": "a bar row, card, marker or search result anywhere in the app",
+      "behavior": "Close, photo carousel, identity, blurb, full weekly hours, attribution, two actions - in that order. One overlay over the app, no new screen, tabs, nav, social content or extra sections. View on Maps is the filled primary; Want to go is the quieter outline.",
+      "states": [
+        "closed",
+        "open",
+        "carousel position"
+      ],
+      "audience": "all users",
+      "trust_boundary": null,
+      "data_owner": "catalog (server)",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "backdrop tap and Escape close it; focus moves to Close on open, Tab cycles inside, focus returns to the opener on close; the action area keeps safe-area padding clear of the home indicator",
+      "exclusions": [
+        "no map-specific or list-specific variant"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-fa074716-58e1-4a7c-8503-2b12c00b4997"
+      ],
+      "acceptance_refs": [
+        "g-fa074716: shared BarLightbox contract"
+      ],
+      "implementation_paths": [
+        "src/components/BarLightbox.tsx",
+        "e2e/native-shell-contract.spec.ts"
+      ],
+      "evidence": [
+        {
+          "candidate": "c91b2df13c2f9e884693c0b77335e8b96ee3e2ef",
+          "kind": "static",
+          "detail": "foundation lane complete; native-shell-contract.spec.ts:617 covers lightbox focus restore"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-LBX-002",
+      "title": "Lightbox state is never carried by color alone",
+      "sources": [
+        "design:next-bar-lightbox-refinement"
+      ],
+      "actor": "any user",
+      "entry_point": "the open lightbox",
+      "behavior": "The carousel dots are joined by a quiet '1 of 3' count in the caption row. The current hours row is labelled Today in words with a restrained accent rule and tint. Address, open-until and walk time sit in the existing fact line.",
+      "states": [
+        "carousel position",
+        "today's hours row"
+      ],
+      "audience": "all users",
+      "trust_boundary": null,
+      "data_owner": "catalog (server)",
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": "REQUIRED - state in words, not color alone; photo attribution stays legible but subordinate",
+      "exclusions": [],
+      "status": "approved",
+      "decision_ref": "D-C-01",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-fa074716-58e1-4a7c-8503-2b12c00b4997"
+      ],
+      "acceptance_refs": [
+        "g-fa074716: shared BarLightbox contract"
+      ],
+      "implementation_paths": [
+        "src/components/BarLightbox.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "c91b2df13c2f9e884693c0b77335e8b96ee3e2ef",
+          "kind": "static",
+          "detail": "foundation lane complete"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-NXT-001",
+      "title": "Next Bar? shows five ranked bars and collects nothing",
+      "sources": [
+        "design:next-bar-five-bars-typography-refinement",
+        "prd:P1 Next Bar? ranking contract"
+      ],
+      "actor": "any user",
+      "entry_point": "Next Bar? tab",
+      "behavior": "One title, 'Your next 5 bars', with nothing under it. Cards carry the bar name, area, price, walk time, vibe match and open state. Tapping a card opens the shared lightbox; Want to go and Maps on a card do not open it. The top control is 'Tweak my vibe' with the distance rail (Walkable / Worth a cab / Anywhere) directly beneath.",
+      "states": [
+        "loading",
+        "five bars",
+        "no bars match",
+        "location denied",
+        "offline"
+      ],
+      "audience": "all users",
+      "trust_boundary": null,
+      "data_owner": "catalog (server) plus the viewer's own taste",
+      "retention": null,
+      "failure_recovery": "no bars match offers Widen distance; location denied offers Choose a neighborhood; offline shows the last five bars with their timestamp and a Retry, and never blanks the list",
+      "accessibility": "display weight is reserved for the title and bar names; no over-tracked uppercase metadata",
+      "exclusions": [
+        "no rating, score, pass or hide control on this surface",
+        "no Hide or 'never show me this again'"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-10",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-538774a3-9a7e-4dc8-8931-b681d351479b"
+      ],
+      "acceptance_refs": [
+        "g-538774a3: locked visual system"
+      ],
+      "implementation_paths": [
+        "src/app/page.tsx"
+      ],
+      "evidence": [
+        {
+          "candidate": "c91b2df13c2f9e884693c0b77335e8b96ee3e2ef",
+          "kind": "static",
+          "detail": "visual-recovery lane in_progress; e2e/app-store-pack.spec.ts"
+        }
+      ],
+      "coverage": "partial"
+    },
+    {
+      "requirement_id": "V8-R-OPS-001",
+      "title": "Every operational state names what is true and offers at most one recovery",
+      "sources": [
+        "design:next-bar-operational-states-v1"
+      ],
+      "actor": "any user",
+      "entry_point": "any surface in a degraded state",
+      "behavior": "Each state retains its surrounding context rather than blanking the screen, states plainly what is true, offers at most one primary recovery action, and never presents a fallback as a success. Each state declares its focus target, its retry policy, and its async behavior.",
+      "states": [
+        "loading",
+        "empty",
+        "denied",
+        "failed",
+        "offline",
+        "queued",
+        "stale"
+      ],
+      "audience": "all users",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": "saved data stays visible with a small stale-data label rather than being blanked",
+      "failure_recovery": "THE requirement - manual retry capped at 3 silent auto-retries first; never a vague 'error occurred'",
+      "accessibility": "focus stays on the recovery action; content is not auto-scrolled",
+      "exclusions": [
+        "no repeat OS permission prompt loop",
+        "never fake a location fix"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-02",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-OPS-002",
+      "title": "The approved per-surface state matrix",
+      "sources": [
+        "design:next-bar-operational-states-v1"
+      ],
+      "actor": "any user",
+      "entry_point": "Next Bar?, Map, Rankings, Social, Camera, General",
+      "behavior": "The canvas specifies named states per surface: Next Bar? (finding five bars, no bars match, location denied, offline); Map (location permission denied, no search results, map failed to load); Rankings (empty list, score save failed); Social (no friends yet, no plans yet, invite didn't send); Camera (permission denied, capture failed, upload queued, upload failed); General (showing saved data, something specific went wrong).",
+      "states": [
+        "see behavior"
+      ],
+      "audience": "all users",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": "a failed upload is saved as a draft in Compose and never silently dropped",
+      "failure_recovery": "per state, as drawn; a queued upload is labelled queued, never labelled Shared",
+      "accessibility": "each state carries one action at 44px",
+      "exclusions": [
+        "the two Auth cards (Sign-in provider unavailable, Verification pending) are excluded with V8-R-ONB-006"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-02",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [],
+      "evidence": [],
+      "coverage": "missing"
+    },
+    {
+      "requirement_id": "V8-R-OPS-003",
+      "title": "The two Auth operational-state cards are excluded from V8",
+      "sources": [
+        "design:next-bar-operational-states-v1",
+        "decision:D-C-03"
+      ],
+      "actor": "new or returning user",
+      "entry_point": "auth",
+      "behavior": "'Sign-in provider unavailable' (Google) and 'Verification pending' (SMS code) both depend on providers excluded by D-C-03 and are therefore not built in V8.",
+      "states": [
+        "n/a"
+      ],
+      "audience": "n/a",
+      "trust_boundary": null,
+      "data_owner": null,
+      "retention": null,
+      "failure_recovery": null,
+      "accessibility": null,
+      "exclusions": [
+        "Sign-in provider unavailable",
+        "Verification pending"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-03",
+      "blocked_on": null,
+      "goal_ids": [
+        "g-dabfc0c8-5079-4e2d-aa3b-e37aac662fc8"
+      ],
+      "acceptance_refs": [
+        "g-dabfc0c8: auth"
+      ],
+      "implementation_paths": [],
+      "evidence": [
+        {
+          "candidate": "5e332dbb91faf71b56082e8b55bcfdac178f48c7",
+          "kind": "static",
+          "detail": "excluded by decision, not missing by omission"
+        }
+      ],
+      "coverage": "complete"
+    }
+  ]
+}
