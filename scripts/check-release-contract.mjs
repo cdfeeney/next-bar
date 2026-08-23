@@ -247,6 +247,55 @@ export function checkContract(ledger, decisionMd, readFile, listDir = () => null
     }
   }
 
+  // --- an approved ledger may not describe a settled decision as still open --
+  //
+  // The defect this closes: V8-R-STO-016 said "D-C-33 must settle" deletion and V8-R-CMP-003
+  // said it was "not yet decided", while D-C-33 had already settled both. Every digest matched,
+  // open_decisions was empty, and the contract still passed — so an implementer reading either
+  // row would have believed the semantics were open.
+  //
+  // Deliberately narrow. It matches DECISION-STATUS phrases only. "is open" is excluded on
+  // purpose: it is product vocabulary here (a sheet is open, voting is open), and banning it
+  // would reject the contract for describing a feature — the same lesson as the DRAFT rule.
+  const STALE_DECISION = /\b(?:must settle|not yet decided|undecided|to be decided|still open for decision)\b/i;
+  const NARRATIVE_FIELDS = ['behavior', 'failure_recovery', 'retention', 'trust_boundary', 'audience', 'data_owner', 'accessibility'];
+  if (APPROVED_LEDGER_STATUS.has(ledger.ledger_status)) {
+    for (const r of requirements) {
+      for (const field of NARRATIVE_FIELDS) {
+        const v = r[field];
+        if (typeof v !== 'string') continue;
+        const hit = v.match(STALE_DECISION);
+        if (hit) {
+          fail('STALE_DECISION_LANGUAGE', `${r.requirement_id}.${field}`, `describes a decision as unsettled ("${hit[0]}") in a "${ledger.ledger_status}" ledger with ${openDecisions.size} open decision(s)`);
+        }
+      }
+    }
+  }
+
+  // --- every product binding must be resolved before approval ---------------
+  //
+  // The companion defect: three product bindings sat "PENDING FOUNDER CONFIRMATION" in the plan
+  // while the contract read approved. A binding is either resolved and carried by a decision id,
+  // or the contract is not approved.
+  for (const b of ledger.product_bindings ?? []) {
+    if (isEmpty(b.id) || isEmpty(b.status)) {
+      fail('UNRESOLVED_BINDING', `ledger.product_bindings.${b.id ?? '(unnamed)'}`, 'a product binding must carry an id and a status');
+      continue;
+    }
+    if (APPROVED_LEDGER_STATUS.has(ledger.ledger_status) && b.status !== 'resolved') {
+      fail('UNRESOLVED_BINDING', b.id, `is "${b.status}" while the ledger claims "${ledger.ledger_status}" — an approved contract carries no pending binding`);
+    }
+    if (b.status === 'resolved') {
+      if (isEmpty(b.decision_id)) fail('UNRESOLVED_BINDING', b.id, 'is resolved but names no decision id');
+      else if (!knownDecisions.has(b.decision_id)) fail('UNKNOWN_DECISION', `ledger.product_bindings.${b.id}`, `${b.decision_id} is not in the decision record`);
+      for (const id of b.affects ?? []) {
+        if (!requirements.some((r) => r.requirement_id === id)) {
+          fail('UNKNOWN_REQUIREMENT_ID', `ledger.product_bindings.${b.id}`, `affects ${id}, which no row defines`);
+        }
+      }
+    }
+  }
+
   // --- requirement identity -------------------------------------------------
   const byId = new Map();
   const byTitle = new Map();

@@ -232,12 +232,16 @@ describe('checkContract', () => {
   // declared `Status: **DRAFT**`. Every digest matched, so the contract passed, and the release's
   // approval state depended on which file a reader opened.
   describe('DRAFT_BOUND_ARTIFACT', () => {
-    const approvedLedger = (over: Record<string, unknown> = {}) => ({
-      ...cleanLedger(),
-      ledger_status: 'founder-approved',
-      last_owner_approval: { approver: 'founder', approved_on: '2026-08-23' },
-      ...over,
-    });
+    const approvedLedger = (rowsOrOver?: unknown, over: Record<string, unknown> = {}) => {
+      const rows = Array.isArray(rowsOrOver) ? rowsOrOver : undefined;
+      const overrides = Array.isArray(rowsOrOver) ? over : ((rowsOrOver as Record<string, unknown>) ?? {});
+      return {
+        ...(rows ? cleanLedger(rows) : cleanLedger()),
+        ledger_status: 'founder-approved',
+        last_owner_approval: { approver: 'founder', approved_on: '2026-08-23' },
+        ...overrides,
+      };
+    };
 
     it('fails a founder-approved ledger whose bound delta still says DRAFT', () => {
       const l = approvedLedger();
@@ -279,6 +283,60 @@ describe('checkContract', () => {
       const l = approvedLedger();
       l.contract.delta.sha256 = shaOf(withProse);
       expect(checkContract(l, decisionMd, readerWith({ 'docs/DELTA.md': withProse }), listDir)).toEqual([]);
+    });
+
+    // The revision-3.1.0 defect: two rows described the already-settled D-C-33 deletion rule as
+    // open, while open_decisions was empty and every digest matched.
+    it('fails an approved ledger whose row says a decision "must settle"', () => {
+      const l = approvedLedger([goodRow({ behavior: 'bytes are kept — which is exactly why D-C-01 must settle it' }), goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] })]);
+      expect(codes(run(l))).toContain('STALE_DECISION_LANGUAGE');
+    });
+
+    it('fails an approved ledger whose row says a rule is "not yet decided"', () => {
+      const l = approvedLedger([goodRow({ failure_recovery: 'per D-C-01 — not yet decided' }), goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] })]);
+      expect(codes(run(l))).toContain('STALE_DECISION_LANGUAGE');
+    });
+
+    // "is open" is product vocabulary here — a sheet is open, voting is open. Banning it would
+    // reject the contract for describing a feature.
+    it('does not fire on "is open" used as product vocabulary', () => {
+      const l = approvedLedger([goodRow({ behavior: 'the dropdown stays on the row whether it is open or closed' }), goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] })]);
+      expect(codes(run(l))).not.toContain('STALE_DECISION_LANGUAGE');
+    });
+
+    it('stays silent about stale decision language while the ledger is still a draft', () => {
+      const l = cleanLedger([goodRow({ behavior: 'D-C-01 must settle this' }), goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] })]);
+      expect(codes(run(l))).not.toContain('STALE_DECISION_LANGUAGE');
+    });
+
+    it('fails an approved ledger carrying a pending product binding', () => {
+      const l = approvedLedger();
+      l.product_bindings = [{ id: 'PB-01', status: 'pending', affects: [] }];
+      expect(codes(run(l))).toContain('UNRESOLVED_BINDING');
+    });
+
+    it('fails a resolved binding that names no decision id', () => {
+      const l = approvedLedger();
+      l.product_bindings = [{ id: 'PB-01', status: 'resolved', affects: [] }];
+      expect(codes(run(l))).toContain('UNRESOLVED_BINDING');
+    });
+
+    it('fails a resolved binding whose decision the record does not define', () => {
+      const l = approvedLedger();
+      l.product_bindings = [{ id: 'PB-01', status: 'resolved', decision_id: 'D-C-77', affects: [] }];
+      expect(codes(run(l))).toContain('UNKNOWN_DECISION');
+    });
+
+    it('fails a resolved binding that affects a requirement no row defines', () => {
+      const l = approvedLedger();
+      l.product_bindings = [{ id: 'PB-01', status: 'resolved', decision_id: 'D-C-01', affects: ['V8-R-GHOST-001'] }];
+      expect(codes(run(l))).toContain('UNKNOWN_REQUIREMENT_ID');
+    });
+
+    it('passes an approved ledger whose bindings are all resolved', () => {
+      const l = approvedLedger();
+      l.product_bindings = [{ id: 'PB-01', status: 'resolved', decision_id: 'D-C-01', affects: ['V8-R-STO-001'] }];
+      expect(run(l)).toEqual([]);
     });
 
     it('stays silent while the ledger is still a draft', () => {

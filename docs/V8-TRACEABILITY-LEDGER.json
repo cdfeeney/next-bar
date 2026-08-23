@@ -1,5 +1,5 @@
 {
-  "ledger_version": "3.0.0",
+  "ledger_version": "3.1.0",
   "ledger_status": "founder-approved",
   "generated_at": "2026-08-23",
   "last_owner_approval": {
@@ -62,13 +62,13 @@
     },
     "delta": {
       "path": "docs/V8-PRD-DELTA-2026-08-23.md",
-      "version": "v8.3, founder-approved and frozen 2026-08-23",
-      "sha256": "d9cade9bf33c5b371539543d964150cefa60d242af582510780a86b35c28f1bd"
+      "version": "v8.4, founder-approved and frozen 2026-08-23",
+      "sha256": "ce10538451c2c4880fe1297e88e8b402bcc898d88a405c6e42ac88372c5b58b3"
     },
     "decision_record": {
       "path": "docs/V8-DECISIONS-2026-08-23.md",
-      "version": "revision 3, founder-approved 2026-08-23",
-      "sha256": "c6115a96e6c3f3dd6701221e0cfa0a484e3eedf5b7e32a284a02000f0e7f38bf"
+      "version": "revision 4, founder-approved 2026-08-23",
+      "sha256": "8b6f30eea1974d63bb7dccc2271ef9799a7c6e6ff90f072f8285c5c188dac64e"
     },
     "design_reference_readme": {
       "path": "docs/design-reference/README.md",
@@ -76,12 +76,12 @@
     },
     "validator": {
       "path": "scripts/check-release-contract.mjs",
-      "sha256": "21d38f7e2bb0f0e8b3937d0c11348b0690d6d8630b3f553e46bd28ca00664f07"
+      "sha256": "c84a47959e0363a8032dfa3303eeac309f730ca1a6e98e04c1e259612745030c"
     },
     "ledger_self_digest_note": "A file cannot contain its own digest. The validator emits this ledger's SHA-256 on every run; record that value with the founder approval to freeze the whole contract.",
     "validator_test": {
       "path": "scripts/check-release-contract.test.ts",
-      "sha256": "f4c6805be90a29fd93f5e39e6c816b94981e488c0c4142fb59df3587ad9c9c38"
+      "sha256": "aab851b2d5260659863e6f5b018ee7cc97422d5cb6917f9f3770d47b94556ab8"
     }
   },
   "approved_artifact_manifest": {
@@ -2187,21 +2187,22 @@
       "kind": "policy",
       "title": "Feed is never public; its audience is mutual-friend scoped",
       "sources": [
-        "decision:D-C-29"
+        "decision:D-C-29",
+        "decision:D-C-37"
       ],
       "actor": "the post author",
       "entry_point": "the global composer, Feed destination",
-      "behavior": "FEED IS NEVER PUBLIC. Its audience is exactly one of: ALL MUTUAL FRIENDS, a NAMED MUTUAL-FRIEND GROUP, or a CUSTOM MUTUAL-FRIEND SUBSET. This is the same three-way shape as the Story audience (D-C-17), now settled for Feed on its own authority rather than inherited.",
+      "behavior": "FEED IS NEVER PUBLIC. Its audience is exactly one of: ALL MUTUAL FRIENDS, a NAMED MUTUAL-FRIEND GROUP, or a CUSTOM MUTUAL-FRIEND SUBSET. This is the same three-way shape as the Story audience (D-C-17), now settled for Feed on its own authority rather than inherited. Recipients equal the SELECTED GROUP INTERSECTED WITH the poster's own mutual friends (D-C-37). A group member who is not a mutual friend of the poster is NOT a recipient.",
       "states": [
         "all mutual friends",
         "named mutual-friend group",
         "custom mutual-friend subset"
       ],
-      "audience": "mutual-friend scoped, never public",
-      "trust_boundary": "server-enforced; a viewer outside the audience must not read the post or its comments",
+      "audience": "mutual-friend scoped, never public; a named-group selection resolves to that group INTERSECTED WITH the poster's mutual friends",
+      "trust_boundary": "server-enforced; a viewer outside the audience must not read the post or its comments — the intersection is computed and enforced SERVER-SIDE; a client may not widen a named-group audience beyond the poster's mutual friends",
       "data_owner": "the post author",
       "retention": "per D-C-15 — until the author deletes it",
-      "failure_recovery": "a failed audience write must fail the publish, never silently widen the audience",
+      "failure_recovery": "a failed audience write must fail the publish, never silently widen the audience — if the mutual-friend set cannot be resolved the action FAILS CLOSED rather than delivering to the unintersected group",
       "accessibility": "the resolved audience is restated in words before publishing",
       "exclusions": [
         "NO public Feed audience",
@@ -2262,11 +2263,12 @@
       "title": "A presence pin is manual, bar-level, has no GPS, and expires at 4:00 AM",
       "sources": [
         "design:next-bar-option-b-manual-pin",
-        "design:next-bar-account-a-settings"
+        "design:next-bar-account-a-settings",
+        "decision:D-C-39"
       ],
       "actor": "signed-in user",
       "entry_point": "the compact pin row directly under the Stories rail on Social · Tonight",
-      "behavior": "THERE IS NO AUTOMATIC GPS OR LOCATION TRACKING. Presence is manually controlled throughout. The user searches and chooses the bar; selecting Pin or Heading-to is an EXPLICIT USER ACTION that sets presence to Going out and records the selected bar until 4:00 AM, when both presence and the active pin expire.",
+      "behavior": "THERE IS NO AUTOMATIC GPS OR LOCATION TRACKING. Presence is manually controlled throughout. The user searches and chooses the bar; selecting Pin or Heading-to is an EXPLICIT USER ACTION that sets presence to Going out and records the selected bar until 4:00 AM, when both presence and the active pin expire. The 4:00 AM boundary is evaluated in AMERICA/NEW_YORK using the existing DST-aware night-key convention, never in UTC (D-C-39).",
       "states": [
         "unpinned (Pin your bar)",
         "pinned now",
@@ -2276,8 +2278,8 @@
       "audience": "chosen per pin — see V8-R-PRE-002",
       "trust_boundary": "server-enforced audience; a non-audience member must not read the pin",
       "data_owner": "the pinning user",
-      "retention": "until 4:00 AM, then automatic expiry",
-      "failure_recovery": "a failed pin write leaves the prior state visible and says so",
+      "retention": "until 4:00 AM, then automatic expiry — evaluated in America/New_York under the DST-aware night-key convention",
+      "failure_recovery": "a failed pin write leaves the prior state visible and says so — a UTC comparison is a defect: the boundary must resolve through the night key",
       "accessibility": "the row is 44px tall; the trust line \"You choose the bar. Next Bar never tracks you automatically\" stays in place throughout",
       "exclusions": [
         "no automatic location",
@@ -2306,21 +2308,22 @@
       "title": "Choose who sees this pin",
       "sources": [
         "design:next-bar-option-b-manual-pin",
-        "design:next-bar-account-a-settings"
+        "design:next-bar-account-a-settings",
+        "decision:D-C-37"
       ],
       "actor": "signed-in user",
       "entry_point": "the \"Who can see my pin tonight?\" step",
-      "behavior": "Three top-level choices: Friends (all accepted friends), Group (single-select, expanding as an inline dropdown over your named groups), or Other people (a person selector). The choice applies to THIS pin only and never rewrites the Account default pin audience.",
+      "behavior": "Three top-level choices: Friends (all accepted friends), Group (single-select, expanding as an inline dropdown over your named groups), or Other people (a person selector). The choice applies to THIS pin only and never rewrites the Account default pin audience. Recipients equal the SELECTED GROUP INTERSECTED WITH the pinner's own mutual friends (D-C-37). A group member who is not a mutual friend of the pinner is NOT a recipient.",
       "states": [
         "friends",
         "one named group",
         "specific people"
       ],
-      "audience": "author-selected",
-      "trust_boundary": "server-enforced",
+      "audience": "author-selected; a named-group selection resolves to that group INTERSECTED WITH the pinner's mutual friends",
+      "trust_boundary": "server-enforced — the intersection is computed and enforced SERVER-SIDE; a client may not widen a named-group audience beyond the pinner's mutual friends",
       "data_owner": "the pinning user",
       "retention": "as long as the pin",
-      "failure_recovery": "a failed audience write fails the pin rather than silently widening it",
+      "failure_recovery": "a failed audience write fails the pin rather than silently widening it — if the mutual-friend set cannot be resolved the action FAILS CLOSED rather than delivering to the unintersected group",
       "accessibility": "single-select is a labelled radio group, not colour alone",
       "exclusions": [
         "groups are never created or invited to from this flow — that stays in Social"
@@ -2381,11 +2384,12 @@
       "sources": [
         "decision:D-C-21",
         "decision:D-C-36",
-        "design:next-bar-option-b-manual-pin"
+        "design:next-bar-option-b-manual-pin",
+        "decision:D-C-39"
       ],
       "actor": "signed-in user",
       "entry_point": "Social · Tonight",
-      "behavior": "THERE IS NO AUTOMATIC GPS OR LOCATION TRACKING and presence is MANUALLY CONTROLLED. The choices are GOING OUT, MAYBE LATER and NOT GOING OUT. Selecting Pin or Heading-to is an EXPLICIT USER ACTION that SETS presence to Going out together with the selected bar, until 4:00 AM. Selecting Maybe later or Not going out CLEARS the active pin. Presence and the active pin both expire at 4:00 AM. A Night Out RSVP DOES NOT SILENTLY CONTROL global presence. This replaces the earlier ambiguous phrase \"overrides automatic presence\", which named a signal no approved canvas defines.",
+      "behavior": "THERE IS NO AUTOMATIC GPS OR LOCATION TRACKING and presence is MANUALLY CONTROLLED. The choices are GOING OUT, MAYBE LATER and NOT GOING OUT. Selecting Pin or Heading-to is an EXPLICIT USER ACTION that SETS presence to Going out together with the selected bar, until 4:00 AM. Selecting Maybe later or Not going out CLEARS the active pin. Presence and the active pin both expire at 4:00 AM. A Night Out RSVP DOES NOT SILENTLY CONTROL global presence. This replaces the earlier ambiguous phrase \"overrides automatic presence\", which named a signal no approved canvas defines. The 4:00 AM boundary is evaluated in AMERICA/NEW_YORK using the existing DST-aware night-key convention, never in UTC (D-C-39).",
       "states": [
         "going out",
         "maybe later",
@@ -2397,8 +2401,8 @@
       "audience": "the viewer, subject to each pin's own audience",
       "trust_boundary": "server-enforced per pin; presence is never derived from device location",
       "data_owner": "the user",
-      "retention": "presence and the active pin expire at 4:00 AM",
-      "failure_recovery": "a failed presence write leaves the prior state visible and says so",
+      "retention": "presence and the active pin expire at 4:00 AM — evaluated in America/New_York under the DST-aware night-key convention",
+      "failure_recovery": "a failed presence write leaves the prior state visible and says so — a UTC comparison is a defect: the boundary must resolve through the night key",
       "accessibility": "each state is named in words",
       "exclusions": [
         "NO automatic GPS or location tracking",
@@ -2423,11 +2427,12 @@
       "kind": "action",
       "title": "Confirm the pin, then tap the pinned row again to change or clear it",
       "sources": [
-        "design:next-bar-option-b-manual-pin"
+        "design:next-bar-option-b-manual-pin",
+        "decision:D-C-39"
       ],
       "actor": "signed-in user",
       "entry_point": "the pin confirmation CTA, then the pinned row",
-      "behavior": "Confirming returns to the same approved Tonight screen with an accent state, the pinned bar, and a small \"Pinned now\" stamp. Tapping the row again re-enters the same sequence to change or clear the pin.",
+      "behavior": "Confirming returns to the same approved Tonight screen with an accent state, the pinned bar, and a small \"Pinned now\" stamp. Tapping the row again re-enters the same sequence to change or clear the pin. The 4:00 AM boundary is evaluated in AMERICA/NEW_YORK using the existing DST-aware night-key convention, never in UTC (D-C-39).",
       "states": [
         "unpinned",
         "pinned now",
@@ -2437,8 +2442,8 @@
       "audience": "the pin's audience",
       "trust_boundary": "server-enforced",
       "data_owner": "the pinning user",
-      "retention": "until 4:00 AM",
-      "failure_recovery": "a failed change leaves the previous pin in place and says so",
+      "retention": "until 4:00 AM — evaluated in America/New_York under the DST-aware night-key convention",
+      "failure_recovery": "a failed change leaves the previous pin in place and says so — a UTC comparison is a defect: the boundary must resolve through the night key",
       "accessibility": "same size, same position, same tap target as the unpinned row — no second screen",
       "exclusions": [
         "the plus badge on your own avatar is a different door entirely: it opens Add to Story, never a pin"
@@ -2463,19 +2468,22 @@
       "sources": [
         "decision:D-C-31",
         "design:next-bar-night-out-start-flow",
-        "design:next-bar-account-a-settings"
+        "design:next-bar-account-a-settings",
+        "decision:D-C-38"
       ],
       "actor": "signed-in user",
       "entry_point": "Social, Groups & People",
-      "behavior": "A Group is a PERSISTENT NAMED GROUP CHAT. Members send text and photos; the group persists between nights; and the current membership is reusable to invite the same people to a Night Out. It supersedes the base PRD exclusion of group chat, and D-C-31 supplies the moderation, blocking, retention and notification-volume policy that exclusion required first.",
+      "behavior": "A Group is a PERSISTENT NAMED GROUP CHAT. Members send text and photos; the group persists between nights; and the current membership is reusable to invite the same people to a Night Out. It supersedes the base PRD exclusion of group chat, and D-C-31 supplies the moderation, blocking, retention and notification-volume policy that exclusion required first. V8 has exactly ONE Group administrator. If that administrator leaves or deletes their account, administration transfers to the LONGEST-STANDING REMAINING MEMBER; where membership timestamps tie, the deterministic stable tie-break is the lowest member profile id. If no member remains, the Group is DELETED (D-C-38).",
       "states": [
         "active",
         "left by a member",
-        "deleted"
+        "deleted",
+        "administrator succeeded",
+        "deleted because no member remained"
       ],
       "audience": "the group's members",
       "trust_boundary": "server-enforced membership; a non-member must not read the thread or its media",
-      "data_owner": "the creator is the initial administrator; each member owns their own messages",
+      "data_owner": "the single Group administrator — initially the creator, thereafter per the D-C-38 succession rule; each member owns their own messages",
       "retention": "messages persist until removed or the group is deleted",
       "failure_recovery": "a failed send is stated and retryable; it never silently drops",
       "accessibility": "the group name and member count are stated on the thread",
@@ -2597,18 +2605,19 @@
       "kind": "action",
       "title": "Administer a group — rename, and add or remove mutual friends",
       "sources": [
-        "decision:D-C-31"
+        "decision:D-C-31",
+        "decision:D-C-38"
       ],
-      "actor": "group administrator",
+      "actor": "the single Group administrator",
       "entry_point": "the group thread, administration controls",
-      "behavior": "ADMINISTRATORS MAY RENAME the group and ADD OR REMOVE MUTUAL FRIENDS. Only mutual friends may be added.",
+      "behavior": "ADMINISTRATORS MAY RENAME the group and ADD OR REMOVE MUTUAL FRIENDS. Only mutual friends may be added. There is exactly ONE administrator at any time (D-C-38).",
       "states": [
         "renamed",
         "member added",
         "member removed"
       ],
       "audience": "the group's members",
-      "trust_boundary": "SERVER-ENFORCED: administrator only, and the add path is restricted to mutual friends of the administrator",
+      "trust_boundary": "SERVER-ENFORCED: the single administrator only, and the add path is restricted to mutual friends of that administrator",
       "data_owner": "the administrator",
       "retention": "a removed member loses access to the thread from removal onward",
       "failure_recovery": "a failed administrative write must not report success",
@@ -2631,20 +2640,23 @@
       "kind": "action",
       "title": "Leave a group",
       "sources": [
-        "decision:D-C-31"
+        "decision:D-C-31",
+        "decision:D-C-38"
       ],
       "actor": "ANY group member",
       "entry_point": "the group thread",
-      "behavior": "ANY MEMBER MAY LEAVE, including an administrator.",
+      "behavior": "ANY MEMBER MAY LEAVE, including an administrator. V8 has exactly ONE Group administrator. If that administrator leaves or deletes their account, administration transfers to the LONGEST-STANDING REMAINING MEMBER; where membership timestamps tie, the deterministic stable tie-break is the lowest member profile id. If no member remains, the Group is DELETED (D-C-38).",
       "states": [
         "member",
-        "left"
+        "left",
+        "administrator left and succession applied",
+        "last member left and the group was deleted"
       ],
       "audience": "the group's members",
       "trust_boundary": "server-enforced; leaving is authorized to the member themselves",
       "data_owner": "the leaving member",
       "retention": "leaving does not delete the member's prior messages; those follow V8-R-GRP-007",
-      "failure_recovery": "a failed leave must not report success",
+      "failure_recovery": "a failed leave must not report success; if succession cannot be computed the leave FAILS CLOSED rather than leaving the group administrator-less",
       "accessibility": "the action states its consequence before it is taken",
       "exclusions": [],
       "status": "approved",
@@ -2743,11 +2755,12 @@
       "title": "Group memberships are destroyed by account deletion",
       "sources": [
         "design:next-bar-account-a-settings",
-        "decision:D-C-31"
+        "decision:D-C-31",
+        "decision:D-C-38"
       ],
       "actor": "the account owner",
       "entry_point": "Settings · Security & account · Delete account",
-      "behavior": "The delete-account confirmation enumerates group memberships among the data permanently destroyed.",
+      "behavior": "The delete-account confirmation enumerates group memberships among the data permanently destroyed. If the deleted account was the Group administrator, v8 has exactly ONE Group administrator. If that administrator leaves or deletes their account, administration transfers to the LONGEST-STANDING REMAINING MEMBER; where membership timestamps tie, the deterministic stable tie-break is the lowest member profile id. If no member remains, the Group is DELETED (D-C-38).",
       "states": [
         "member",
         "destroyed with the account"
@@ -2756,7 +2769,7 @@
       "trust_boundary": "server-side cascade, not a client action",
       "data_owner": "the account owner",
       "retention": "none after deletion",
-      "failure_recovery": "a partial cascade must fail the deletion rather than leave orphaned memberships",
+      "failure_recovery": "a partial cascade must fail the deletion rather than leave orphaned memberships or an administrator-less group",
       "accessibility": "enumerated in words on the confirmation",
       "exclusions": [],
       "status": "approved",
@@ -3122,21 +3135,22 @@
         "design:next-bar-add-story-flow",
         "design:next-bar-camera-modes",
         "design:next-bar-share-destinations-v2",
-        "design:next-bar-account-a-settings"
+        "design:next-bar-account-a-settings",
+        "decision:D-C-37"
       ],
       "actor": "signed-in user",
       "entry_point": "the Story audience subrow, directly above the publishing button",
-      "behavior": "Pre-filled from the Account default. Three options: all mutual friends, a named mutual-friend group, or a custom mutual-friend subset. Changing it is a SINGLE-POST override that never rewrites the Account default.",
+      "behavior": "Pre-filled from the Account default. Three options: all mutual friends, a named mutual-friend group, or a custom mutual-friend subset. Changing it is a SINGLE-POST override that never rewrites the Account default. Recipients equal the SELECTED GROUP INTERSECTED WITH the poster's own mutual friends (D-C-37). A group member who is not a mutual friend of the poster is NOT a recipient.",
       "states": [
         "mutual friends",
         "named mutual-friend group",
         "custom mutual-friend subset"
       ],
-      "audience": "author-selected, mutual-friend scoped, never public",
-      "trust_boundary": "server-enforced; a recipient outside the audience must not be able to read the story",
+      "audience": "author-selected, mutual-friend scoped, never public; a named-group selection resolves to that group INTERSECTED WITH the poster's mutual friends",
+      "trust_boundary": "server-enforced; a recipient outside the audience must not be able to read the story — the intersection is computed and enforced SERVER-SIDE; a client may not widen a named-group audience beyond the poster's mutual friends",
       "data_owner": "the author",
       "retention": "the audience selection lives as long as the story",
-      "failure_recovery": "a failed audience write must fail the publish, never silently narrow or widen the audience",
+      "failure_recovery": "a failed audience write must fail the publish, never silently narrow or widen the audience — if the mutual-friend set cannot be resolved the action FAILS CLOSED rather than delivering to the unintersected group",
       "accessibility": "the resolved audience is restated in words before publishing",
       "exclusions": [
         "no Public option — Stories are never public (D-C-17)"
@@ -3439,7 +3453,7 @@
       ],
       "actor": "the author",
       "entry_point": "deletion, Undo, or expiry",
-      "behavior": "Deletion removes the stored bytes and makes audience and tag metadata unqueryable. Media still referenced by another LIVE destination is never destroyed — which is exactly why D-C-33 must settle whether removing one destination leaves the others alive.",
+      "behavior": "Deletion removes the stored bytes and makes audience and tag metadata unqueryable. Media still referenced by another LIVE destination is never destroyed. D-C-33 settles this: removing one destination does not destroy the remaining destinations, and physical bytes are deleted only when no destination and no Saved Nights Out archive references them.",
       "states": [
         "live",
         "soft-deleted",
@@ -3974,7 +3988,7 @@
       "trust_boundary": "each destination enforces its own audience over the one shared object",
       "data_owner": "the author",
       "retention": "the shared object outlives the shortest destination window: the Story copy expires at 24h while the Feed post persists until the author deletes it",
-      "failure_recovery": "per D-C-33 — whether removing one destination leaves the object live under another is not yet decided",
+      "failure_recovery": "per D-C-33 — removing one destination leaves the object live under its remaining destinations; bytes are reclaimed only when no destination and no Saved Nights Out archive references them.",
       "accessibility": "destination indicators are labelled, not colour-only",
       "exclusions": [
         "no duplicated media",
@@ -4026,21 +4040,22 @@
       "title": "Toggle the Story destination and set its audience subrow",
       "sources": [
         "design:next-bar-share-destinations-v2",
-        "design:next-bar-add-story-flow"
+        "design:next-bar-add-story-flow",
+        "decision:D-C-37"
       ],
       "actor": "signed-in user",
       "entry_point": "the Destinations screen, Story row",
-      "behavior": "A one-tap destination row reading \"Visible for 24 hours\", with a Story-audience subrow joined to it. The subrow governs the STORY ONLY, is pre-filled from the Account default, and opens as a sheet over the destination screen rather than as a fourth frame.",
+      "behavior": "A one-tap destination row reading \"Visible for 24 hours\", with a Story-audience subrow joined to it. The subrow governs the STORY ONLY, is pre-filled from the Account default, and opens as a sheet over the destination screen rather than as a fourth frame. Recipients equal the SELECTED GROUP INTERSECTED WITH the poster's own mutual friends (D-C-37). A group member who is not a mutual friend of the poster is NOT a recipient.",
       "states": [
         "off",
         "on",
         "audience sheet open"
       ],
-      "audience": "mutual friends / named mutual-friend group / custom mutual-friend subset",
-      "trust_boundary": "server-enforced, mutual-friend scoped, never public",
+      "audience": "mutual friends / named mutual-friend group / custom mutual-friend subset; a named-group selection resolves to that group INTERSECTED WITH the poster's mutual friends",
+      "trust_boundary": "server-enforced, mutual-friend scoped, never public — the intersection is computed and enforced SERVER-SIDE; a client may not widen a named-group audience beyond the poster's mutual friends",
       "data_owner": "the author",
       "retention": "24 hours",
-      "failure_recovery": null,
+      "failure_recovery": "a failed audience write fails the publish — if the mutual-friend set cannot be resolved the action FAILS CLOSED rather than delivering to the unintersected group",
       "accessibility": "the subrow is joined to the row it governs so its scope is unambiguous",
       "exclusions": [
         "the Story audience never governs the Group or Night Out destinations"
@@ -4091,18 +4106,19 @@
       "kind": "action",
       "title": "Toggle the Group destination and pick groups inline",
       "sources": [
-        "design:next-bar-share-destinations-v2"
+        "design:next-bar-share-destinations-v2",
+        "decision:D-C-37"
       ],
       "actor": "signed-in user",
       "entry_point": "the Destinations screen, Group row",
-      "behavior": "The row expands IN PLACE: the dropdown is joined to the row it came from, so it never reads as a new screen, and the selected summary stays on the row itself whether it is open or closed. Multi-select over your named groups. Nothing is created, invited to, or edited here.",
+      "behavior": "The row expands IN PLACE: the dropdown is joined to the row it came from, so it never reads as a new screen, and the selected summary stays on the row itself whether it is open or closed. Multi-select over your named groups. Nothing is created, invited to, or edited here. The Group-chat DESTINATION is the deliberate exception to D-C-37: it retains its FIXED Group membership and is NOT intersected with the poster's mutual friends, because the post is delivered into the group thread itself rather than to a derived audience.",
       "states": [
         "off",
         "on",
         "dropdown open",
         "groups selected"
       ],
-      "audience": "the selected groups' fixed members",
+      "audience": "the selected groups' FIXED members — not intersected (D-C-37 exception)",
       "trust_boundary": "server-enforced membership; an explicitly selected Group keeps that group's own fixed members and is untouched by the Story audience",
       "data_owner": "the group",
       "retention": "per D-C-31",
@@ -6163,6 +6179,75 @@
     "defect_closed": "The ledger read founder-approved while the PRD delta it binds still declared Status: DRAFT. Every digest matched, so the contract passed and the release approval state depended on which file a reader opened.",
     "delta_sha256_before": "530b0317c3393f108abe184b5624087a91d90c07d3187b1ca1aa88f27bdb2035",
     "delta_sha256_after": "d9cade9bf33c5b371539543d964150cefa60d242af582510780a86b35c28f1bd",
-    "approval_unchanged": "The founder approval of 2026-08-23 recorded in last_owner_approval stands. Its approved_contract_identity deliberately keeps the pre-stamp digests it was given, as the historical record of what was reviewed."
-  }
+    "approval_unchanged": "The founder approval of 2026-08-23 recorded in last_owner_approval stands. Its approved_contract_identity deliberately keeps the pre-stamp digests it was given, as the historical record of what was reviewed.",
+    "revision_3_1_0": {
+      "date": "2026-08-23",
+      "authorized_by": "founder",
+      "kind": "contract revision — two clerical corrections plus three newly approved product bindings",
+      "product_meaning_changed": true,
+      "product_meaning_changed_note": "PB-01..03 add authoritative meaning and are recorded as D-C-37, D-C-38 and D-C-39. CC-01 and CC-02 change no settled meaning; they repair language that described an already-settled D-C-33 rule as open.",
+      "ledger_version_before": "3.0.0",
+      "ledger_version_after": "3.1.0",
+      "ledger_sha256_before": "109d8292ecb654d81a018be0f4750d605506641386e07361bd59b3ae40fae8b3",
+      "rebound_digests": {
+        "delta": [
+          "d9cade9bf33c5b371539543d964150cefa60d242af582510780a86b35c28f1bd",
+          "ce10538451c2c4880fe1297e88e8b402bcc898d88a405c6e42ac88372c5b58b3"
+        ],
+        "decision_record": [
+          "c6115a96e6c3f3dd6701221e0cfa0a484e3eedf5b7e32a284a02000f0e7f38bf",
+          "8b6f30eea1974d63bb7dccc2271ef9799a7c6e6ff90f072f8285c5c188dac64e"
+        ],
+        "validator": [
+          "21d38f7e2bb0f0e8b3937d0c11348b0690d6d8630b3f553e46bd28ca00664f07",
+          "c84a47959e0363a8032dfa3303eeac309f730ca1a6e98e04c1e259612745030c"
+        ],
+        "validator_test": [
+          "f4c6805be90a29fd93f5e39e6c816b94981e488c0c4142fb59df3587ad9c9c38",
+          "aab851b2d5260659863e6f5b018ee7cc97422d5cb6917f9f3770d47b94556ab8"
+        ]
+      }
+    }
+  },
+  "product_bindings": [
+    {
+      "id": "PB-01",
+      "decision_id": "D-C-37",
+      "status": "resolved",
+      "approved_on": "2026-08-23",
+      "summary": "Story, Feed and pin named-group audiences resolve to the selected group intersected with the poster's or pinner's mutual friends. The persistent Group-chat destination retains its fixed Group membership.",
+      "affects": [
+        "V8-R-STO-009",
+        "V8-R-FEED-006",
+        "V8-R-CMP-005",
+        "V8-R-CMP-007",
+        "V8-R-PRE-002"
+      ]
+    },
+    {
+      "id": "PB-02",
+      "decision_id": "D-C-38",
+      "status": "resolved",
+      "approved_on": "2026-08-23",
+      "summary": "One Group administrator. On leave or account deletion, administration transfers to the longest-standing remaining member, tie-broken deterministically by lowest member profile id; with no member remaining the Group is deleted.",
+      "affects": [
+        "V8-R-GRP-001",
+        "V8-R-GRP-005",
+        "V8-R-GRP-006",
+        "V8-R-GRP-009"
+      ]
+    },
+    {
+      "id": "PB-03",
+      "decision_id": "D-C-39",
+      "status": "resolved",
+      "approved_on": "2026-08-23",
+      "summary": "The 4:00 AM boundary uses America/New_York and the existing DST-aware night-key convention.",
+      "affects": [
+        "V8-R-PRE-001",
+        "V8-R-PRE-004",
+        "V8-R-PRE-005"
+      ]
+    }
+  ]
 }

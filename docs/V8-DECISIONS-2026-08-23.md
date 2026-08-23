@@ -2,9 +2,11 @@
 
 Date: 2026-08-23
 Release: `V8`
-Revision: 3 (supersedes revisions 1 and 2 of the same date)
+Revision: 4 (supersedes revisions 1, 2 and 3 of the same date) — contract version 3.1.0
 Status: **FOUNDER-APPROVED — 2026-08-23.** Approved by the founder against the contract identity
-recorded in §8 below and in `last_owner_approval` in the ledger.
+recorded in §8 below and in `last_owner_approval` in the ledger. Revision 4 adds the three
+bindings approved on 2026-08-23 as `D-C-37`, `D-C-38` and `D-C-39`, and applies two
+correction-only repairs (`CC-01`, `CC-02`).
 
 **There are no unresolved product decisions.** Every question this record has ever carried is
 answered.
@@ -72,6 +74,27 @@ cannot drift.
 | `D-C-34` | **Success receipts.** Feed only: **"Posted to Feed"**, with **View post** and **Undo**. Story only: **"Added to your story"**, with **View story** and **Undo**. Multiple destinations: **"Shared to N places"**, with destination indicators, **Done** and **Undo**. | `D-P-06` |
 | `D-C-35` | **Ranking events.** Ranking actions **do not automatically generate Feed entries in V8**. Automatic ranking-event Feed rows are **deferred to V9**. | `D-P-07` |
 | `D-C-36` | **Presence and pin.** There is **no automatic GPS/location tracking**. Presence is **manually controlled**. The choices are **Going out**, **Maybe later**, **Not going out**. Selecting **Pin/Heading-to is an explicit user action that sets Going out and the selected bar until 4:00 AM**. Selecting **Maybe later or Not going out clears the active pin**. **Presence and the active pin expire at 4:00 AM.** **Night Out RSVP does not silently control global presence.** This **replaces the ambiguous phrase "overrides automatic presence."** | `D-P-08` |
+
+### 1.4 Bindings approved 2026-08-23 (contract revision 3.1.0)
+
+These add authoritative meaning, which is why this is a minor revision rather than a
+correction-only `3.0.1`.
+
+| ID | Binding | Was | Scope |
+|---|---|---|---|
+| `D-C-37` | **Named-group audience is intersected.** For **Story**, **Feed** and **pin** audiences, recipients equal the **selected group INTERSECTED WITH the poster's (or pinner's) own mutual friends**. A group member who is not a mutual friend of the actor is **not** a recipient. The intersection is computed and enforced **server-side**, and a failure to resolve the mutual-friend set **fails closed** rather than delivering to the unintersected group. **Exception:** the persistent **Group-chat destination retains its FIXED Group membership** and is not intersected, because the post is delivered into the group thread itself rather than to a derived audience. | `PB-01` | capability |
+| `D-C-38` | **One Group administrator.** V8 has exactly **one** administrator at a time — initially the creator. If that administrator **leaves or deletes their account**, administration transfers to the **longest-standing remaining member**; where membership timestamps tie, the deterministic stable tie-break is the **lowest member profile id**. If **no member remains, the Group is deleted**. | `PB-02` | capability |
+| `D-C-39` | **The 4:00 AM boundary uses America/New_York** and the existing **DST-aware night-key convention**, never a UTC comparison. | `PB-03` | capability |
+
+### 1.5 Correction-only repairs (contract revision 3.1.0)
+
+Neither changes a settled meaning. Both repair language that described an **already-settled**
+`D-C-33` rule as still open.
+
+| ID | Row · field | Before | After |
+|---|---|---|---|
+| `CC-01` | `V8-R-STO-016` · `behavior` | "…which is exactly why **D-C-33 must settle** whether removing one destination leaves the others alive." | "…**D-C-33 settles this:** removing one destination does not destroy the remaining destinations, and physical bytes are deleted only when no destination and no Saved Nights Out archive references them." |
+| `CC-02` | `V8-R-CMP-003` · `failure_recovery` | "per D-C-33 — whether removing one destination leaves the object live under another **is not yet decided**" | "per D-C-33 — **removing one destination leaves the object live under its remaining destinations**; bytes are reclaimed only when no destination and no Saved Nights Out archive references them." |
 
 ---
 
