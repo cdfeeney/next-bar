@@ -1,0 +1,1300 @@
+------------------------------------------------------------------------------
+-- 0069_feed_and_comments.sql — WP5: the Feed destination, its mutual-friend
+-- audience, and the first visible comment surface in V8.
+--
+-- Requirements discharged here (V8 contract 3.1.0):
+--   V8-R-FEED-001  Feed is a photo-memory view AND a composer destination. A
+--                  card carries author, place, time, image, caption and tags,
+--                  with exactly two actions: View night and Reply.
+--   V8-R-FEED-002  a Feed post has NO expiry; it lives until its author deletes
+--                  it. (Contrast a Story: 24 hours, migration 0065.)
+--   V8-R-FEED-003  anyone authorized to VIEW a post may COMMENT on it, and the
+--                  comments are visible to that same audience.
+--   V8-R-FEED-004  "View night" opens the night the photo belongs to, and only
+--                  for a viewer who may see that night.
+--   V8-R-FEED-005  "Reply" opens that same visible thread. The right to reply is
+--                  exactly the right to view.
+--   V8-R-FEED-006  Feed is NEVER public. The audience is all mutual friends, a
+--                  named mutual-friend group, or a custom mutual-friend subset,
+--                  and a named group is INTERSECTED with the poster's own mutual
+--                  friends server-side (D-C-37).
+--   V8-R-FEED-008  a comment is deletable by its commenter or by the post
+--                  author; deleting the post — or removing the Feed destination
+--                  from a multi-destination media object — removes its visible
+--                  comments.
+--   V8-R-FEED-010  (EXTENSION, cross-lane) reporting resolves 'feed_post' and
+--                  'comment'. 0066 owns the foundation and the 'story' case;
+--                  WP6's 0067 owns 'group_message'. See section 9.
+--
+-- Idempotent throughout: create ... if not exists, drop policy if exists,
+-- create or replace function, and guarded DO blocks for the two extensions.
+-- This file is WRITTEN ONLY. Applying it is a separate attended step against a
+-- ledger-aware runner; a migration file in the repository is not applied
+-- anywhere until the target project's ledger says so.
+--
+-- THE RULE THIS FILE FOLLOWS WHEREVER IT TOUCHES ANOTHER LANE'S FUNCTION:
+-- EXTEND, NEVER RESTATE. 0069 applies after 0066 and after WP6's 0067, and it
+-- cannot see 0067's body. Rewriting a shared function from what 0066 says would
+-- silently delete whatever 0067 added. So both shared functions this file
+-- widens — `report_content` and `media_read_window` — are RENAMED to a
+-- `_before_0069` name and then DELEGATED to for every case this lane does not
+-- own. Whatever the previous migration decided keeps deciding; this file only
+-- adds the cases it can actually resolve.
+------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+-- 1. Recursion-breaking, caller-scoped helpers
+------------------------------------------------------------------------------
+
+-- Same trap 0065 records for stories, and it is not hypothetical: `feed_posts`'
+-- SELECT policy has to ask whether the caller is a named recipient, which lives
+-- in `feed_post_audience`; that table's own policy has to ask whether the caller
+-- authored the parent post, which lives in `feed_posts`. Written as plain
+-- subqueries the two policies reference each other, PostgreSQL expands policies
+-- at plan time, and reading EITHER table raises "infinite recursion detected in
+-- policy for relation" — no post readable by anyone. Nothing local catches it:
+-- typecheck, vitest and the browser gate never execute SQL.
+--
+-- Both directions go through SECURITY DEFINER helpers. The definer is the table
+-- owner, exempt from RLS (these tables enable RLS but do not FORCE it), so the
+-- inner read expands no policy and the cycle is cut.
+--
+-- Every one of them FAILS CLOSED and refuses to be an oracle: each answers only
+-- about `auth.uid()`, so a direct PostgREST call cannot enumerate somebody
+-- else's audience membership, authorship or reporting activity.
+
+create or replace function public.is_feed_post_author(
+  p_post_id uuid,
+  p_profile_id uuid
+)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_post_id is null
+     or p_profile_id is null
+     or auth.uid() is null
+     or p_profile_id <> auth.uid() then
+    return false;
+  end if;
+  return exists (
+    select 1 from public.feed_posts p
+     where p.id = p_post_id and p.author_id = p_profile_id
+  );
+end;
+$$;
+
+comment on function public.is_feed_post_author(uuid, uuid) is
+  'Did this profile author this Feed post? SECURITY DEFINER so the audience and tag policies can ask without expanding the feed_posts policy, which reads feed_post_audience and would recurse. Own-id only; fails closed.';
+
+revoke all on function public.is_feed_post_author(uuid, uuid) from public, anon;
+grant execute on function public.is_feed_post_author(uuid, uuid) to authenticated;
+
+create or replace function public.is_feed_post_recipient(
+  p_post_id uuid,
+  p_profile_id uuid
+)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_post_id is null
+     or p_profile_id is null
+     or auth.uid() is null
+     or p_profile_id <> auth.uid() then
+    return false;
+  end if;
+  return exists (
+    select 1 from public.feed_post_audience fa
+     where fa.post_id = p_post_id and fa.profile_id = p_profile_id
+  );
+end;
+$$;
+
+comment on function public.is_feed_post_recipient(uuid, uuid) is
+  'Is this profile a materialised recipient of this Feed post? SECURITY DEFINER so the feed_posts SELECT policy can read feed_post_audience without expanding that table''s own policy. Answers only for the caller''s own id and fails closed.';
+
+revoke all on function public.is_feed_post_recipient(uuid, uuid) from public, anon;
+grant execute on function public.is_feed_post_recipient(uuid, uuid) to authenticated;
+
+-- THE FEED DESTINATION IS PART OF THE READ GATE (V8-R-CMP-015 / V8-R-FEED-008).
+--
+-- "Remove from this destination" is `remove_media_destination` in 0066, and it
+-- is a SOFT retirement: it stamps `removed_at`, it does not delete the row. So
+-- the cascade 0066's comment on `media_destinations.id` anticipates ("a Feed
+-- comments table added later references THIS id with on delete cascade") would
+-- never fire for the operation it was meant to cover. A cascade that cannot run
+-- is not a mechanism, so the rule lives in the READ GATE instead, where a soft
+-- retirement actually reaches it: a post whose Feed destination is retired stops
+-- being readable, and its comments go with it because they are gated on the post.
+--
+-- Positive form ("a LIVE feed destination exists"), not "no retired one exists".
+-- A post whose spine row has been hard-deleted — `media_objects` cascade — has
+-- lost its photo, and a photo-memory card with no photo is not a post that
+-- should still be shown. Publication always writes exactly one spine row, so the
+-- two forms differ only in that case, and hiding is the honest answer there.
+create or replace function public.feed_post_destination_is_live(p_post_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+      from public.media_destinations d
+     where d.kind = 'feed'
+       and d.ref_id = p_post_id::text
+       and d.removed_at is null
+  );
+$$;
+
+comment on function public.feed_post_destination_is_live(uuid) is
+  'V8-R-CMP-015. Does this Feed post still hold its media destination? remove_media_destination retires the spine row rather than deleting it, so this READ-GATE term is what makes "removing the Feed destination removes that post and its comments" real; the anticipated on-delete cascade could never fire against a soft retirement.';
+
+revoke all on function public.feed_post_destination_is_live(uuid) from public, anon;
+grant execute on function public.feed_post_destination_is_live(uuid) to authenticated;
+
+-- THE HIDE, ASKED THROUGH DEFINER PREDICATES — 0066's rule, applied to this
+-- lane's two new subject kinds.
+--
+-- `content_reports` is operator-only: 0066 leaves it with no SELECT policy and
+-- no grant to `authenticated`. A policy USING expression runs with the CALLER's
+-- privileges, so a bare `select 1 from public.content_reports` in the policies
+-- below would either raise permission denied or contribute nothing and make
+-- `not exists (...)` unconditionally true — silently un-hiding every reported
+-- post. 0066 records that exact failure for stories; these are the same shape.
+--
+-- Not oracles: each answers only about the CALLER's own reports.
+--
+-- Compared against `p_id::text`, which PostgreSQL renders lowercase, matching
+-- the normalised `subject_ref` `record_content_report` stores.
+create or replace function public.feed_post_reported_by_caller(p_post_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+      from public.content_reports cr
+     where auth.uid() is not null
+       and cr.reporter_id = auth.uid()
+       and cr.subject_kind = 'feed_post'
+       and cr.subject_ref = p_post_id::text
+  );
+$$;
+
+comment on function public.feed_post_reported_by_caller(uuid) is
+  'V8-R-FEED-010. Whether the CALLER reported this Feed post. The feed_posts SELECT policy asks through this definer predicate because content_reports carries no reporter grant; a bare subquery there would fail open and un-hide reported content.';
+
+revoke all on function public.feed_post_reported_by_caller(uuid) from public, anon;
+grant execute on function public.feed_post_reported_by_caller(uuid) to authenticated;
+
+create or replace function public.feed_comment_reported_by_caller(p_comment_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+      from public.content_reports cr
+     where auth.uid() is not null
+       and cr.reporter_id = auth.uid()
+       and cr.subject_kind = 'comment'
+       and cr.subject_ref = p_comment_id::text
+  );
+$$;
+
+comment on function public.feed_comment_reported_by_caller(uuid) is
+  'V8-R-FEED-010. Whether the CALLER reported this comment. Same definer-predicate reason as feed_post_reported_by_caller.';
+
+revoke all on function public.feed_comment_reported_by_caller(uuid) from public, anon;
+grant execute on function public.feed_comment_reported_by_caller(uuid) to authenticated;
+
+------------------------------------------------------------------------------
+-- 2. Tables
+------------------------------------------------------------------------------
+
+-- V8-R-FEED-001 / V8-R-FEED-002. NO `expires_at` COLUMN AT ALL, and the absence
+-- is the requirement rather than an oversight: "Feed posts have no expiry. They
+-- persist until the author deletes them." A nullable expiry column would be a
+-- place for a later change to reintroduce one by default.
+create table if not exists public.feed_posts (
+  id uuid primary key default gen_random_uuid(),
+  author_id uuid not null references public.profiles(id) on delete cascade,
+  -- THE PHOTO IS NOT OPTIONAL. Feed is "a photo-memory view"; a card with no
+  -- image is a different product. The reference is to the 0066 REGISTRY, never
+  -- to a raw storage path, so the post inherits the whole media trust boundary:
+  -- what the server decoded, the reference count, and the claim.
+  media_id uuid not null references public.media_objects(id) on delete cascade,
+  -- Catalog id chosen by the poster. Venue-tagged, never geotagged — same rule
+  -- and same shape bound as a night out's decided bar (0044).
+  bar_id text,
+  caption text,
+  -- V8-R-FEED-004's target. No foreign key ON PURPOSE would be the wrong call
+  -- here — `night_outs` is a real table in this schema (0044), so the reference
+  -- is declared and a deleted night leaves the card without its action rather
+  -- than pointing at nothing.
+  night_out_id uuid references public.night_outs(id) on delete set null,
+  -- V8-R-FEED-006's three-way shape, and there is deliberately no 'public'.
+  audience text not null default 'friends'
+    check (audience in ('friends', 'group', 'custom')),
+  -- PROVENANCE ONLY, and never the gate. Group membership lives on WP6's
+  -- surface, which this schema cannot resolve at 0069; what makes a named-group
+  -- audience safe is not this column but the INTERSECTION the publish verb
+  -- performs — see `publish_feed_post`. Recorded without a foreign key for the
+  -- same reason `media_destinations.ref_id` carries none: the referent belongs
+  -- to another lane's migration.
+  audience_group_id uuid,
+  -- SERVER time. No client writes it: there is no INSERT grant on this table and
+  -- publish_feed_post() is the only way in.
+  created_at timestamptz not null default now(),
+  -- Author deletion. Soft, like a story, so the read gate closes instantly while
+  -- the caller still holds the media identity it needs to reclaim the bytes.
+  deleted_at timestamptz,
+  constraint feed_posts_caption_length check (
+    caption is null or char_length(caption) between 1 and 1000
+  ),
+  constraint feed_posts_bar_shape check (
+    bar_id is null or bar_id ~ '^[a-z0-9-]{1,60}$'
+  ),
+  -- A group audience names its group; a non-group audience must not carry one.
+  constraint feed_posts_group_id_matches_audience check (
+    (audience = 'group' and audience_group_id is not null)
+    or (audience <> 'group' and audience_group_id is null)
+  )
+);
+
+-- The read path is always "not deleted, by these authors, newest first".
+create index if not exists feed_posts_live_idx
+  on public.feed_posts (author_id, created_at desc)
+  where deleted_at is null;
+create index if not exists feed_posts_media_idx
+  on public.feed_posts (media_id);
+
+comment on table public.feed_posts is
+  'V8-R-FEED-001 / V8-R-FEED-002. A Feed post: one media object, an author, a place, a caption and an optional night. No expiry — it lives until its author deletes it.';
+
+-- THE MATERIALISED AUDIENCE (V8-R-FEED-006). For 'group' and 'custom' the rows
+-- here ARE the audience, already intersected with the poster's mutual friends by
+-- `publish_feed_post`. Materialising is what makes D-C-37 enforceable at read
+-- time without re-resolving a group this schema cannot see: the intersection is
+-- computed once, server-side, at publication.
+create table if not exists public.feed_post_audience (
+  post_id uuid not null references public.feed_posts(id) on delete cascade,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  primary key (post_id, profile_id)
+);
+create index if not exists feed_post_audience_profile_idx
+  on public.feed_post_audience (profile_id);
+
+comment on table public.feed_post_audience is
+  'V8-R-FEED-006 / D-C-37. The resolved recipients of a group or custom Feed post: the selected set INTERSECTED with the poster''s mutual friends, computed server-side at publication.';
+
+-- Tagged people, mirroring `story_tags` including the consent withdrawal.
+-- `removed_at` is the TAGGED person's own, never the author's.
+create table if not exists public.feed_post_tags (
+  post_id uuid not null references public.feed_posts(id) on delete cascade,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  removed_at timestamptz,
+  primary key (post_id, profile_id)
+);
+create index if not exists feed_post_tags_profile_idx
+  on public.feed_post_tags (profile_id) where removed_at is null;
+
+-- V8-R-FEED-003. The first comment surface in V8.
+create table if not exists public.feed_comments (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid not null references public.feed_posts(id) on delete cascade,
+  author_id uuid not null references public.profiles(id) on delete cascade,
+  body text not null,
+  created_at timestamptz not null default now(),
+  deleted_at timestamptz,
+  -- WHO removed it, because V8-R-FEED-008 gives two different people the right
+  -- and they are not the same event: a commenter deleting their own words is not
+  -- a post author removing them from their post.
+  deleted_by uuid references public.profiles(id) on delete set null,
+  constraint feed_comments_body_length check (
+    char_length(btrim(body)) between 1 and 2000
+  )
+);
+
+create index if not exists feed_comments_thread_idx
+  on public.feed_comments (post_id, created_at)
+  where deleted_at is null;
+create index if not exists feed_comments_author_idx
+  on public.feed_comments (author_id, created_at desc);
+
+comment on table public.feed_comments is
+  'V8-R-FEED-003. Comments on a Feed post, visible to exactly the post''s audience. Soft-deleted so "a failed deletion must not report success" is decidable, and so the read gate closes in the same statement.';
+
+------------------------------------------------------------------------------
+-- 3. The one definition of "may this caller see this post"
+------------------------------------------------------------------------------
+
+-- ONE PREDICATE, used by the RLS policy AND by every SECURITY DEFINER verb in
+-- this file. 0066 records what happens when a visibility rule is written twice:
+-- "the rule was written twice and the two disagreed". The definer verbs
+-- (`add_feed_comment`, the reporting extension) bypass RLS by construction, so
+-- without a shared predicate they would each carry their own copy of the
+-- audience gate, and the copies would drift.
+--
+-- IT DELIBERATELY DOES NOT CARRY THE REPORTER HIDE. "May I see this?" and "have
+-- I hidden this?" are different questions and collapsing them breaks reporting:
+-- re-reporting is idempotent by design ("a repeat report changes NOTHING about
+-- the stored row"), and a caller who reported a post must still pass the
+-- visibility check on the second attempt or the idempotent path raises instead
+-- of returning the existing id. 0066's `report_content` reads `public.stories`
+-- without the hide term for exactly this reason. The hide is applied ON TOP, by
+-- the policy and by `add_feed_comment`.
+--
+-- Not an oracle: it answers only about `auth.uid()`, which is precisely what the
+-- caller is entitled to know. The block is inherited from `is_mutual_friend`
+-- (0066 moved it there so every call site gets it) rather than restated.
+create or replace function public.can_view_feed_post(p_post_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+begin
+  -- A null caller is NOT trusted infrastructure here. This predicate answers a
+  -- per-viewer question; with no viewer there is no audience to be inside, and
+  -- returning true would hand the anonymous role a public Feed — the one thing
+  -- V8-R-FEED-006 forbids outright.
+  if v_caller is null or p_post_id is null then
+    return false;
+  end if;
+
+  return exists (
+    select 1
+      from public.feed_posts p
+     where p.id = p_post_id
+       and p.deleted_at is null
+       and public.feed_post_destination_is_live(p.id)
+       and (
+         p.author_id = v_caller
+         or (
+           public.is_mutual_friend(v_caller, p.author_id)
+           and (
+             p.audience = 'friends'
+             or public.is_feed_post_recipient(p.id, v_caller)
+           )
+         )
+       )
+  );
+end;
+$$;
+
+comment on function public.can_view_feed_post(uuid) is
+  'V8-R-FEED-006. The single definition of the Feed audience gate: live post, live media destination, and the caller is the author or a mutual friend inside the audience. Excludes the reporter hide on purpose — see the header — which the RLS policy and add_feed_comment apply on top.';
+
+revoke all on function public.can_view_feed_post(uuid) from public, anon;
+grant execute on function public.can_view_feed_post(uuid) to authenticated;
+
+-- The same question for a comment: a comment is visible exactly while its post
+-- is, and while the comment itself is live. Reporting asks through this.
+create or replace function public.can_view_feed_comment(p_comment_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+      from public.feed_comments c
+     where c.id = p_comment_id
+       and c.deleted_at is null
+       and public.can_view_feed_post(c.post_id)
+  );
+$$;
+
+comment on function public.can_view_feed_comment(uuid) is
+  'V8-R-FEED-003. A comment is visible exactly while it is live and its post is visible to this caller. Like can_view_feed_post it omits the reporter hide, so a repeat report stays idempotent.';
+
+revoke all on function public.can_view_feed_comment(uuid) from public, anon;
+grant execute on function public.can_view_feed_comment(uuid) to authenticated;
+
+------------------------------------------------------------------------------
+-- 4. Row level security
+------------------------------------------------------------------------------
+
+alter table public.feed_posts         enable row level security;
+alter table public.feed_post_audience enable row level security;
+alter table public.feed_post_tags     enable row level security;
+alter table public.feed_comments      enable row level security;
+
+-- ONE SELECT POLICY, not the author/audience pair `stories` carries. The pair
+-- exists in 0065 because the two branches genuinely differ there (an author's
+-- own expiry rule). Feed has no expiry, so the branches collapse, and one policy
+-- over one predicate is one place for the rule to live.
+drop policy if exists "feed_posts: audience reads" on public.feed_posts;
+create policy "feed_posts: audience reads"
+  on public.feed_posts for select
+  to authenticated
+  using (
+    public.can_view_feed_post(public.feed_posts.id)
+    and not public.feed_post_reported_by_caller(public.feed_posts.id)
+  );
+
+-- No INSERT / UPDATE / DELETE policy anywhere in this section: publication and
+-- both deletions go through the SECURITY DEFINER verbs in sections 6-8, so
+-- server time, the mutuality intersection and the destination retirement cannot
+-- be bypassed by writing the table directly.
+
+drop policy if exists "feed_post_audience: parties read" on public.feed_post_audience;
+create policy "feed_post_audience: parties read"
+  on public.feed_post_audience for select
+  to authenticated
+  using (
+    auth.uid() = profile_id
+    -- Definer helper rather than a bare subquery on public.feed_posts: that
+    -- table's SELECT policy reads feed_post_audience, so a plain subquery here
+    -- closes the cycle and PostgreSQL refuses BOTH tables.
+    or public.is_feed_post_author(post_id, auth.uid())
+  );
+
+drop policy if exists "feed_post_tags: readable with post" on public.feed_post_tags;
+create policy "feed_post_tags: readable with post"
+  on public.feed_post_tags for select
+  to authenticated
+  using (
+    auth.uid() = profile_id
+    or public.can_view_feed_post(post_id)
+  );
+
+-- A tagged person withdraws THEIR OWN tag. Never the author's call, and never
+-- anyone else's. Mirrors `story_tags: subject removes own` (0065).
+drop policy if exists "feed_post_tags: subject removes own" on public.feed_post_tags;
+create policy "feed_post_tags: subject removes own"
+  on public.feed_post_tags for update
+  to authenticated
+  using (auth.uid() = profile_id)
+  with check (auth.uid() = profile_id);
+
+-- V8-R-FEED-003: "the right to comment is exactly the right to view, and nothing
+-- wider" — so the comment gate is the post gate, asked through the same
+-- predicate, plus this caller's own two hides.
+drop policy if exists "feed_comments: post audience reads" on public.feed_comments;
+create policy "feed_comments: post audience reads"
+  on public.feed_comments for select
+  to authenticated
+  using (
+    deleted_at is null
+    and public.can_view_feed_post(post_id)
+    and not public.feed_post_reported_by_caller(post_id)
+    and not public.feed_comment_reported_by_caller(public.feed_comments.id)
+  );
+
+------------------------------------------------------------------------------
+-- 5. Grants
+------------------------------------------------------------------------------
+
+revoke all on public.feed_posts         from public, anon;
+revoke all on public.feed_post_audience from public, anon;
+revoke all on public.feed_post_tags     from public, anon;
+revoke all on public.feed_comments      from public, anon;
+
+grant select on public.feed_posts         to authenticated;
+grant select on public.feed_post_audience to authenticated;
+grant select on public.feed_post_tags     to authenticated;
+grant select on public.feed_comments      to authenticated;
+
+-- The ONLY column-level write grant in this file, and it is the tagged person's
+-- consent withdrawal. Everything else is a definer verb.
+grant update (removed_at) on public.feed_post_tags to authenticated;
+
+------------------------------------------------------------------------------
+-- 6. Publication (V8-R-FEED-001, V8-R-FEED-006)
+------------------------------------------------------------------------------
+
+-- THE COMPOSER'S FEED DESTINATION. Modelled on 0066's `publish_story` — the same
+-- path lock, the same claim refusal, the same spine row — because a Feed post is
+-- a media destination in exactly the sense V8-R-CMP-012 defines, and a second
+-- publication verb that took the locks differently would reopen the
+-- publish-versus-reclaim race on a new surface.
+--
+-- THE AUDIENCE RULE, and the difference between the two non-'friends' modes is
+-- deliberate:
+--
+--   * 'custom' is "a CUSTOM MUTUAL-FRIEND SUBSET". The poster names people
+--     directly, so naming somebody who is not a mutual friend is an ERROR and is
+--     refused — exactly as `publish_story` refuses a custom story recipient.
+--
+--   * 'group' is "a NAMED MUTUAL-FRIEND GROUP", and D-C-37 settles it in the
+--     other direction: "Recipients equal the SELECTED GROUP INTERSECTED WITH the
+--     poster's own mutual friends. A group member who is not a mutual friend of
+--     the poster is NOT a recipient." A non-mutual member is therefore DROPPED,
+--     not an error — the group legitimately contains people the poster is not
+--     mutual friends with, and refusing the whole publish would make the mode
+--     unusable.
+--
+-- WHY THE MEMBER IDS COME FROM THE CALLER, stated plainly rather than left to be
+-- discovered. Group membership lives on WP6's surface; this schema has no group
+-- table to resolve at 0069, and inventing one would collide with the lane that
+-- owns it. What V8-R-FEED-006 actually makes server-side is the NARROWING: "the
+-- intersection is computed and enforced SERVER-SIDE; a client may not widen a
+-- named-group audience beyond the poster's mutual friends." That property holds
+-- here in full, and it is not weakened by trusting the caller's list, because a
+-- caller who lied about membership would still reach only their own mutual
+-- friends — a set they could equally have named as a 'custom' audience. There is
+-- no privilege to escalate: the poster is choosing their own audience either way.
+--
+-- FAILS CLOSED. "If the mutual-friend set cannot be resolved the action FAILS
+-- CLOSED rather than delivering to the unintersected group" — so an intersection
+-- that comes back empty raises, and nothing is published. Publishing a post whose
+-- audience table is empty would be a post nobody can read, which reads to the
+-- author as delivery.
+create or replace function public.publish_feed_post(
+  p_media_id uuid,
+  p_bar_id text default null,
+  p_caption text default null,
+  p_night_out_id uuid default null,
+  p_audience text default 'friends',
+  p_audience_ids uuid[] default '{}',
+  p_group_id uuid default null,
+  p_tag_ids uuid[] default '{}'
+)
+returns public.feed_posts
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_author uuid := auth.uid();
+  v_post public.feed_posts;
+  v_id uuid;
+  v_bucket text;
+  v_path text;
+  v_removed timestamptz;
+  v_recipients integer;
+begin
+  if v_author is null then
+    raise exception 'publish_feed_post: not authenticated' using errcode = '28000';
+  end if;
+  if p_media_id is null then
+    raise exception 'publish_feed_post: media_id is required' using errcode = '22023';
+  end if;
+  if p_audience not in ('friends', 'group', 'custom') then
+    raise exception 'publish_feed_post: unknown audience %', p_audience
+      using errcode = '22023';
+  end if;
+  if p_audience = 'group' and p_group_id is null then
+    raise exception 'publish_feed_post: a group audience needs a group'
+      using errcode = '22023';
+  end if;
+  if p_audience <> 'group' and p_group_id is not null then
+    raise exception 'publish_feed_post: only a group audience names a group'
+      using errcode = '22023';
+  end if;
+  if p_audience <> 'friends'
+     and (p_audience_ids is null or array_length(p_audience_ids, 1) is null) then
+    raise exception 'publish_feed_post: that audience needs at least one recipient'
+      using errcode = '22023';
+  end if;
+  -- BOUNDS BELONG HERE, not only in the TypeScript caller. This function is
+  -- granted to `authenticated`, so it is reachable directly over PostgREST and a
+  -- cap that exists only in the app bounds the app's own UI and nothing else.
+  -- The table constraint is the backstop; this is the honest error message.
+  if p_caption is not null and char_length(p_caption) > 1000 then
+    raise exception 'publish_feed_post: that caption is too long'
+      using errcode = '22001';
+  end if;
+
+  -- THE MEDIA MUST BE THE CALLER'S, AND STILL THERE. Taken in the same order
+  -- 0066's publish_story takes it: the PATH lock first (it is the only lock that
+  -- exists for an object with no registry row), then the row lock, then the
+  -- claim check — so the check is a fact about the present rather than about the
+  -- past, and a reclamation sweep cannot commit between the two.
+  select m.bucket_id, m.storage_path
+    into v_bucket, v_path
+    from public.media_objects m
+   where m.id = p_media_id
+     and m.owner_id = v_author;
+
+  if v_path is null then
+    raise exception 'publish_feed_post: that media is not yours to post'
+      using errcode = '42501';
+  end if;
+
+  perform pg_advisory_xact_lock(public.media_path_lock_key(v_bucket, v_path));
+
+  select m.bytes_removed_at into v_removed
+    from public.media_objects m
+   where m.id = p_media_id
+   for update;
+
+  if v_removed is not null then
+    raise exception 'publish_feed_post: those bytes have already been reclaimed'
+      using errcode = '22023';
+  end if;
+
+  -- V8-R-FEED-004: the night has to be one the POSTER belongs to. This is the
+  -- same rule `night_outs_select_member` (0044) states, restated because a
+  -- SECURITY DEFINER function does not evaluate that policy. Whether the VIEWER
+  -- may see the night is a separate decision, made by that policy at read time.
+  if p_night_out_id is not null and not exists (
+    select 1
+      from public.night_outs n
+     where n.id = p_night_out_id
+       and (
+         n.owner_id = v_author
+         or exists (
+           select 1
+             from public.night_out_members nm
+            where nm.night_out_id = n.id
+              and nm.user_id = v_author
+         )
+       )
+  ) then
+    raise exception 'publish_feed_post: that night is not one of yours'
+      using errcode = '42501';
+  end if;
+
+  -- 'custom' — every named person must be a mutual friend, or nothing is posted.
+  if p_audience = 'custom' and exists (
+    select 1 from unnest(p_audience_ids) as candidate(id)
+     where not public.is_mutual_friend(v_author, candidate.id)
+  ) then
+    raise exception 'publish_feed_post: every custom recipient must be a mutual friend'
+      using errcode = '42501';
+  end if;
+
+  -- Tags follow the story rules: friends who follow you back, and inside the
+  -- audience when the audience is not everyone. A tag is a write onto somebody
+  -- else's consent surface, so it can never reach further than the post does.
+  if p_tag_ids is not null and exists (
+    select 1 from unnest(p_tag_ids) as candidate(id)
+     where candidate.id <> v_author
+       and not public.is_mutual_friend(v_author, candidate.id)
+  ) then
+    raise exception 'publish_feed_post: you can only tag friends who follow you back'
+      using errcode = '42501';
+  end if;
+
+  insert into public.feed_posts (
+    author_id, media_id, bar_id, caption, night_out_id, audience, audience_group_id
+  )
+  values (
+    v_author, p_media_id, p_bar_id, p_caption, p_night_out_id, p_audience, p_group_id
+  )
+  returning id into v_id;
+
+  -- THE DESTINATION SPINE ROW (V8-R-CMP-012). This is what makes the post a
+  -- destination rather than a private copy of a rule: the reference count sees
+  -- it, "delete everywhere" clears it, and `remove_media_destination` retires it.
+  insert into public.media_destinations (media_id, kind, ref_id)
+  values (p_media_id, 'feed', v_id::text)
+  on conflict do nothing;
+
+  -- THE INTERSECTION, computed once and stored. Both non-'friends' modes go
+  -- through the same statement: 'custom' has already been proved to be entirely
+  -- mutual friends above, so the filter is a no-op there and the single code
+  -- path cannot drift between the two modes.
+  if p_audience <> 'friends' then
+    insert into public.feed_post_audience (post_id, profile_id)
+      select v_id, ids.distinct_id
+        from (select distinct unnest(p_audience_ids) as distinct_id) ids
+       where ids.distinct_id <> v_author
+         and public.is_mutual_friend(v_author, ids.distinct_id)
+      on conflict do nothing;
+
+    select count(*)::int into v_recipients
+      from public.feed_post_audience fa
+     where fa.post_id = v_id;
+
+    if v_recipients = 0 then
+      -- FAIL CLOSED. Rolls the whole publication back rather than leaving a post
+      -- whose audience is nobody, which the author would read as delivered.
+      raise exception
+        'publish_feed_post: nobody in that audience is a mutual friend, so nothing was posted'
+        using errcode = '42501';
+    end if;
+  end if;
+
+  if p_tag_ids is not null and array_length(p_tag_ids, 1) is not null then
+    -- A tag outside the resolved audience is DROPPED rather than refused, for
+    -- the same reason a non-mutual group member is: the poster picked a group,
+    -- not a list, and the narrowing is the server's job. Tagging yourself is
+    -- always allowed and never needs an audience row.
+    insert into public.feed_post_tags (post_id, profile_id)
+      select v_id, ids.distinct_id
+        from (select distinct unnest(p_tag_ids) as distinct_id) ids
+       where ids.distinct_id = v_author
+          or p_audience = 'friends'
+          or exists (
+            select 1
+              from public.feed_post_audience fa
+             where fa.post_id = v_id
+               and fa.profile_id = ids.distinct_id
+          )
+      on conflict do nothing;
+  end if;
+
+  select * into v_post from public.feed_posts where id = v_id;
+  return v_post;
+end;
+$$;
+
+comment on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) is
+  'V8-R-FEED-001 / V8-R-FEED-006. Publishes one Feed destination for a registered media object: takes the same path and row locks reclamation takes, writes the destination spine row, and materialises the audience as the selected set INTERSECTED with the poster''s mutual friends (D-C-37). An empty intersection raises rather than publishing to nobody.';
+
+revoke all on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) from public, anon;
+grant execute on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) to authenticated;
+
+------------------------------------------------------------------------------
+-- 7. Author deletion (V8-R-FEED-002, V8-R-FEED-008)
+------------------------------------------------------------------------------
+
+-- Author-only soft delete, plus the destination retirement — the same pairing
+-- 0066 added to `delete_story`, and for the same reason: retiring the spine row
+-- in a DIFFERENT transaction leaves a window in which the post is dead and its
+-- reference is live, and every byte removal attempted in that window is refused
+-- and orphaned.
+--
+-- Its comments go with it and no statement here touches `feed_comments`: they
+-- are gated on the post, so the read closes for every reader in the same commit.
+-- Deleting them as rows would be a second source of truth for one fact.
+--
+-- Zero rows means the deletion did NOT happen — not the author, already deleted,
+-- or never existed. "A failed deletion must not report success."
+create or replace function public.delete_feed_post(p_post_id uuid)
+returns table (media_id uuid, bucket_id text, storage_path text, reclaimable boolean)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_media uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'delete_feed_post: not authenticated' using errcode = '28000';
+  end if;
+
+  update public.feed_posts p
+     set deleted_at = now()
+   where p.id = p_post_id
+     and p.author_id = auth.uid()
+     and p.deleted_at is null;
+
+  if not found then
+    return;
+  end if;
+
+  -- Read the media identity in a SEPARATE, fully qualified statement rather than
+  -- through `returning media_id`. This function's OUT parameters are named
+  -- `media_id`, `bucket_id` and `storage_path`, and 0066 records what an
+  -- unqualified column reference costs when it collides with one of them:
+  -- "column reference is ambiguous — every time, for every caller", invisible to
+  -- six rounds of reading SQL and raised by the first execution.
+  select p.media_id into v_media
+    from public.feed_posts p
+   where p.id = p_post_id;
+
+  update public.media_destinations d
+     set removed_at = now()
+   where d.kind = 'feed'
+     and d.ref_id = p_post_id::text
+     and d.removed_at is null;
+
+  return query
+    select m.id,
+           m.bucket_id,
+           m.storage_path,
+           public.media_live_reference_count(m.id) = 0
+      from public.media_objects m
+     where m.id = v_media;
+end;
+$$;
+
+comment on function public.delete_feed_post(uuid) is
+  'V8-R-FEED-002 / V8-R-FEED-008. Author-only soft delete of a Feed post, retiring its media destination in the SAME transaction so the reference count can fall to zero. Its comments close with it through the read gate. Zero rows = nothing was deleted.';
+
+revoke all on function public.delete_feed_post(uuid) from public, anon;
+grant execute on function public.delete_feed_post(uuid) to authenticated;
+
+------------------------------------------------------------------------------
+-- 8. Comments (V8-R-FEED-003, V8-R-FEED-005, V8-R-FEED-008)
+------------------------------------------------------------------------------
+
+-- "ANYONE AUTHORIZED TO VIEW a Feed post may comment on it" — so the write gate
+-- is the read gate, asked through the same predicate, plus this caller's own
+-- hide. A caller who reported the post has told the product they do not want to
+-- see it; letting them keep replying to it would be a surface the hide does not
+-- cover.
+create or replace function public.add_feed_comment(
+  p_post_id uuid,
+  p_body text
+)
+returns public.feed_comments
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_author uuid := auth.uid();
+  v_body text := btrim(coalesce(p_body, ''));
+  v_comment public.feed_comments;
+begin
+  if v_author is null then
+    raise exception 'add_feed_comment: not authenticated' using errcode = '28000';
+  end if;
+  if char_length(v_body) = 0 then
+    raise exception 'add_feed_comment: a comment needs some words'
+      using errcode = '22023';
+  end if;
+  if char_length(v_body) > 2000 then
+    raise exception 'add_feed_comment: that comment is too long'
+      using errcode = '22001';
+  end if;
+
+  if not public.can_view_feed_post(p_post_id)
+     or public.feed_post_reported_by_caller(p_post_id) then
+    raise exception 'add_feed_comment: that post is not yours to reply to'
+      using errcode = '42501';
+  end if;
+
+  -- A CEILING ON THE THREAD, and it is the same shape as 0066's report cap
+  -- because it bounds the same kind of abuse: a surface every mutual friend can
+  -- write to, reachable directly over PostgREST, with no queue in front of it.
+  -- SERIALIZED PER AUTHOR, because the ceiling is a read-then-insert and two
+  -- concurrent comments would each read the count before either committed.
+  -- Deliberately generous: a real person writing two hundred comments in a day
+  -- is already extraordinary, so it never reaches ordinary use.
+  perform pg_advisory_xact_lock(
+    hashtextextended('feed_comment_cap:' || v_author::text, 0)
+  );
+
+  if (
+    select count(*)
+      from public.feed_comments c
+     where c.author_id = v_author
+       and c.created_at > now() - interval '24 hours'
+  ) >= 200 then
+    raise exception 'add_feed_comment: too many comments from this account today'
+      using errcode = '54000';
+  end if;
+
+  insert into public.feed_comments (post_id, author_id, body)
+  values (p_post_id, v_author, v_body)
+  returning * into v_comment;
+
+  return v_comment;
+end;
+$$;
+
+comment on function public.add_feed_comment(uuid, text) is
+  'V8-R-FEED-003 / V8-R-FEED-005. The right to comment is exactly the right to view: the write gate is can_view_feed_post plus the caller''s own report hide, and nothing wider.';
+
+revoke all on function public.add_feed_comment(uuid, text) from public, anon;
+grant execute on function public.add_feed_comment(uuid, text) to authenticated;
+
+-- V8-R-FEED-008: "A COMMENTER MAY DELETE THEIR OWN comment. THE POST AUTHOR MAY
+-- REMOVE comments from their post." Two rights, one verb, and `deleted_by`
+-- records which one was exercised.
+--
+-- Returns false rather than raising when nothing was deleted, so the caller can
+-- state an honest failure; "a failed deletion must not report success".
+create or replace function public.delete_feed_comment(p_comment_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+begin
+  if v_caller is null then
+    raise exception 'delete_feed_comment: not authenticated' using errcode = '28000';
+  end if;
+
+  update public.feed_comments c
+     set deleted_at = now(),
+         deleted_by = v_caller
+   where c.id = p_comment_id
+     and c.deleted_at is null
+     and (
+       c.author_id = v_caller
+       or exists (
+         select 1
+           from public.feed_posts p
+          where p.id = c.post_id
+            and p.author_id = v_caller
+       )
+     );
+
+  return found;
+end;
+$$;
+
+comment on function public.delete_feed_comment(uuid) is
+  'V8-R-FEED-008. The commenter or the post author, and nobody else. False when nothing was deleted, so a refused deletion is never reported as one that happened.';
+
+revoke all on function public.delete_feed_comment(uuid) from public, anon;
+grant execute on function public.delete_feed_comment(uuid) to authenticated;
+
+------------------------------------------------------------------------------
+-- 9. EC-03 — extending V8-R-FEED-010 to 'feed_post' and 'comment'
+------------------------------------------------------------------------------
+
+-- THE INVARIANT, restated from 0066 because this is the migration that has to
+-- honour it: the CHECK constraint and `report_content` widen TOGETHER, always. A
+-- constraint that admits a kind the function refuses, or a function that accepts
+-- a kind the constraint rejects, is the exact defect EC-03 exists to prevent.
+--
+-- 0066 owns the foundation and the 'story' case; WP6's 0067 owns 'group_message';
+-- this file owns 'feed_post' and 'comment'. 0069 applies AFTER both, and it
+-- CANNOT SEE 0067. So neither half below is written from what 0066 says — both
+-- are derived from whatever is actually installed when this file runs.
+
+-- 9a. THE CONSTRAINT, WIDENED FROM WHAT IS THERE rather than restated.
+--
+-- Restating it as `in ('story','feed_post','comment','group_message')` would be
+-- a guess in both directions: it admits 'group_message' even if 0067 never ran
+-- (a vocabulary nothing can satisfy — the defect), and it silently drops any
+-- kind a later migration added that this file has never heard of. Reading the
+-- installed definition and OR-ing this lane's two kinds onto it is exact in every
+-- ordering, including the one where 0067 has not been applied at all.
+do $ec03_constraint$
+declare
+  r record;
+  v_defs text := null;
+begin
+  -- Already widened by a previous run of this file: nothing to do, and a second
+  -- pass would nest the expression inside itself.
+  if exists (
+    select 1
+      from pg_constraint c
+     where c.conrelid = 'public.content_reports'::regclass
+       and c.conname = 'content_reports_subject_kind_0069'
+  ) then
+    return;
+  end if;
+
+  for r in
+    select c.conname as conname, pg_get_constraintdef(c.oid) as condef
+      from pg_constraint c
+     where c.conrelid = 'public.content_reports'::regclass
+       and c.contype = 'c'
+       and pg_get_constraintdef(c.oid) like '%subject_kind%'
+  loop
+    -- `pg_get_constraintdef` renders `CHECK (<expr>)`; keep the expression.
+    v_defs := case
+                when v_defs is null then substring(r.condef from 7)
+                else v_defs || ' and ' || substring(r.condef from 7)
+              end;
+    execute format('alter table public.content_reports drop constraint %I', r.conname);
+  end loop;
+
+  execute format(
+    'alter table public.content_reports add constraint content_reports_subject_kind_0069 check (%s)',
+    case
+      when v_defs is null
+        then 'subject_kind in (''feed_post'', ''comment'')'
+      else '(' || v_defs || ') or subject_kind in (''feed_post'', ''comment'')'
+    end
+  );
+end
+$ec03_constraint$;
+
+comment on table public.content_reports is
+  'V8-R-FEED-010. Server-owned; no UPDATE or DELETE is granted to any application role. The subject vocabulary is widened by each lane that can RESOLVE a kind: 0066 story, 0067 group_message, 0069 feed_post and comment — constraint and function always together.';
+
+-- 9b. THE RECORD-KEEPING HALF, factored out so this lane's branch cannot drift
+-- from 0066's on bounds, normalisation, the anti-flood index or the daily cap.
+--
+-- NOT GRANTED TO ANY APPLICATION ROLE. It performs no visibility check at all —
+-- that is the caller's job and the whole point of splitting them — so a client
+-- able to call it directly could file a report about content it has never been
+-- shown, which is precisely what `report_content`'s visibility branch prevents.
+create or replace function public.record_content_report(
+  p_subject_kind text,
+  p_subject_ref text,
+  p_reason text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'report_content: not authenticated' using errcode = '28000';
+  end if;
+
+  -- AND A CEILING ON THE QUEUE, 0066's, verbatim in effect. It applies to NEW
+  -- subjects only: re-reporting writes nothing and must keep returning the
+  -- existing id, because the caller hides the content on a returned id and only
+  -- on a returned id — a rate limit that made the hide fail would punish the
+  -- reporter. SERIALIZED PER REPORTER, because the ceiling is a read-then-insert.
+  perform pg_advisory_xact_lock(
+    hashtextextended('report_cap:' || auth.uid()::text, 0)
+  );
+
+  if not exists (
+    select 1
+      from public.content_reports cr
+     where cr.reporter_id = auth.uid()
+       and cr.subject_kind = p_subject_kind
+       and cr.subject_ref = lower(btrim(p_subject_ref))
+  ) and (
+    select count(*)
+      from public.content_reports cr
+     where cr.reporter_id = auth.uid()
+       and cr.created_at > now() - interval '24 hours'
+  ) >= 50 then
+    raise exception 'report_content: too many reports from this account today'
+      using errcode = '54000';
+  end if;
+
+  -- THE FIRST REPORT IS THE REPORT: a repeat changes nothing about the stored
+  -- row, not even a reason left null the first time. `do update set reason =
+  -- <itself>` rather than `do nothing` because DO NOTHING returns no row, the id
+  -- would come back null, and the caller treats a null id as a FAILED report and
+  -- refuses to hide the content.
+  --
+  -- NORMALISED, because the shape check upstream is case-insensitive while every
+  -- hide site compares against `id::text`, which PostgreSQL renders lowercase.
+  insert into public.content_reports (reporter_id, subject_kind, subject_ref, reason)
+  values (auth.uid(), p_subject_kind, lower(btrim(p_subject_ref)), p_reason)
+  on conflict (reporter_id, subject_kind, subject_ref) do update
+     set reason = public.content_reports.reason
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+comment on function public.record_content_report(text, text, text) is
+  'V8-R-FEED-010. The record-keeping half of reporting — daily cap, normalisation, idempotent insert — with NO visibility check. Internal to report_content; granted to no application role, because a caller reaching it directly could report content it was never shown.';
+
+revoke all on function public.record_content_report(text, text, text)
+  from public, anon, authenticated;
+
+-- 9c. THE FUNCTION, EXTENDED BY DELEGATION.
+--
+-- The previous implementation is RENAMED, not replaced, and every kind this lane
+-- does not own is handed to it unchanged. That is what makes this safe to apply
+-- after WP6's 0067 without having seen it: 0067's 'group_message' branch keeps
+-- deciding 'group_message', and 0066's 'story' branch keeps deciding 'story',
+-- including their bounds, their refusals and their cap. Rewriting the body from
+-- 0066's text would silently un-implement whatever 0067 added — the precise
+-- failure EC-03 names.
+--
+-- The signature is the one thing that has to be stable, and it is: 0066 pins
+-- `report_content(text, text, text)` and grants exactly that signature.
+do $ec03_rename$
+begin
+  if to_regprocedure('public.report_content_before_0069(text,text,text)') is null
+     and to_regprocedure('public.report_content(text,text,text)') is not null then
+    alter function public.report_content(text, text, text)
+      rename to report_content_before_0069;
+  end if;
+end
+$ec03_rename$;
+
+-- The renamed function keeps the grant it was created with. Withdraw it: it is
+-- now an internal step of the function below, and leaving it callable would
+-- leave a second reporting entry point that does not know about this lane's two
+-- kinds. The new `report_content` is SECURITY DEFINER, so it still reaches this
+-- as the function owner.
+do $ec03_revoke$
+begin
+  if to_regprocedure('public.report_content_before_0069(text,text,text)') is not null then
+    execute 'revoke all on function public.report_content_before_0069(text, text, text)'
+         || ' from public, anon, authenticated';
+  end if;
+end
+$ec03_revoke$;
+
+create or replace function public.report_content(
+  p_subject_kind text,
+  p_subject_ref text,
+  p_reason text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_ref text := lower(btrim(coalesce(p_subject_ref, '')));
+begin
+  -- NOT THIS LANE'S KIND: hand it back to whichever migration last taught this
+  -- function about it, with the arguments exactly as received. Every check that
+  -- kind needs lives there.
+  if p_subject_kind is distinct from 'feed_post'
+     and p_subject_kind is distinct from 'comment' then
+    if to_regprocedure('public.report_content_before_0069(text,text,text)') is null then
+      raise exception 'report_content: % has no reportable subject in this schema yet',
+        p_subject_kind
+        using errcode = '22023';
+    end if;
+    return public.report_content_before_0069(p_subject_kind, p_subject_ref, p_reason);
+  end if;
+
+  if auth.uid() is null then
+    raise exception 'report_content: not authenticated' using errcode = '28000';
+  end if;
+
+  -- BOUNDS, restated rather than borrowed: this branch never reaches the
+  -- delegate, so it cannot inherit the delegate's checks.
+  if char_length(v_ref) = 0 then
+    raise exception 'report_content: subject_ref is required' using errcode = '22023';
+  end if;
+  if char_length(p_subject_ref) > 200 then
+    raise exception 'report_content: subject_ref is too long' using errcode = '22001';
+  end if;
+  if p_reason is not null and char_length(p_reason) > 1000 then
+    raise exception 'report_content: reason is too long' using errcode = '22001';
+  end if;
+
+  -- A SUBJECT REF IS AN ID, NOT A STRING. Accepting arbitrary text would let one
+  -- account mint an unlimited number of distinct "subjects" and walk straight
+  -- past the one-report-per-subject index, which is the anti-flood measure.
+  if v_ref !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    raise exception 'report_content: subject_ref is not an id' using errcode = '22023';
+  end if;
+
+  -- YOU MAY ONLY REPORT WHAT YOU CAN SEE, evaluated server-side and honouring
+  -- blocks (they are inside `is_mutual_friend`). Reporting is an accusation
+  -- against a named account attached to a durable, non-withdrawable operator
+  -- record, so a caller who cannot reach the content has no business filing one.
+  if p_subject_kind = 'feed_post' then
+    if not public.can_view_feed_post(v_ref::uuid) then
+      raise exception 'report_content: that post is not yours to report'
+        using errcode = '42501';
+    end if;
+  else
+    if not public.can_view_feed_comment(v_ref::uuid) then
+      raise exception 'report_content: that comment is not yours to report'
+        using errcode = '42501';
+    end if;
+  end if;
+
+  return public.record_content_report(p_subject_kind, v_ref, p_reason);
+end;
+$$;
+
+comment on function public.report_content(text, text, text) is
+  'V8-R-FEED-010, extended by 0069 to feed_post and comment. Every other subject kind is delegated UNCHANGED to the implementation this file renamed, so 0066''s story branch and 0067''s group_message branch keep deciding their own kinds. The caller hides the content ONLY on a returned id.';
+
+revoke all on function public.report_content(text, text, text) from public, anon;
+grant execute on function public.report_content(text, text, text) to authenticated;
+
+------------------------------------------------------------------------------
+-- 10. The Feed photo has to be signable by its audience
+------------------------------------------------------------------------------
+
+-- WITHOUT THIS THE FEED HAS NO PHOTOS FOR ANYONE BUT ITS AUTHOR, and the
+-- requirement would be discharged by a card with an empty frame.
+--
+-- `media_read_window` (0066) is the single authorization the media URL route
+-- asks before it mints with service role, and every branch it carries is about
+-- STORIES: the owner's own prefix, or a live story whose audience the caller is
+-- in. A Feed post is a different destination for the same bytes, so an audience
+-- member reading a Feed card is refused — correctly, by a function that has
+-- simply never been told Feed exists.
+--
+-- EXTENDED BY DELEGATION, exactly as section 9c extends reporting, and for the
+-- same reason: 0067 may have widened this too, and this file cannot see it. The
+-- previous implementation decides first and its answer is final when it says
+-- YES; only a refusal falls through to the Feed branch.
+--
+-- NULL EXPIRY IS CORRECT HERE, not a missing value. V8-R-FEED-002 gives a Feed
+-- post no expiry, and `serverTtlSeconds` already reads null as "no expiry of its
+-- own, so only the ceiling applies" — the same shape 0066's owner branch returns
+-- for an object no story references yet.
+do $feed_window_rename$
+begin
+  if to_regprocedure('public.media_read_window_before_0069(text)') is null
+     and to_regprocedure('public.media_read_window(text)') is not null then
+    alter function public.media_read_window(text)
+      rename to media_read_window_before_0069;
+  end if;
+end
+$feed_window_rename$;
+
+do $feed_window_revoke$
+begin
+  if to_regprocedure('public.media_read_window_before_0069(text)') is not null then
+    execute 'revoke all on function public.media_read_window_before_0069(text)'
+         || ' from public, anon, authenticated';
+  end if;
+end
+$feed_window_revoke$;
+
+create or replace function public.media_read_window(p_name text)
+returns table (readable boolean, expires_at timestamptz)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+  v_prior record;
+begin
+  if v_caller is null or p_name is null then
+    return query select false, null::timestamptz;
+    return;
+  end if;
+
+  if to_regprocedure('public.media_read_window_before_0069(text)') is not null then
+    select w.readable, w.expires_at
+      into v_prior
+      from public.media_read_window_before_0069(p_name) w
+     limit 1;
+
+    -- A yes is FINAL. A no (or no row at all) falls through, which is the only
+    -- thing this file is entitled to change about the previous decision.
+    if v_prior.readable then
+      return query select v_prior.readable, v_prior.expires_at;
+      return;
+    end if;
+  end if;
+
+  -- THE FEED BRANCH. A live, visible, unreported Feed post whose media object
+  -- names these bytes. `can_view_feed_post` is the same predicate the RLS policy
+  -- uses, so a viewer cannot be shown a photo for a card they cannot read, and
+  -- the reporter hide reaches the BYTES as well as the row — 0066 records why
+  -- that matters: "hiding the caption while the image still loads" does not
+  -- satisfy "reporting IMMEDIATELY HIDES the reported content".
+  if exists (
+    select 1
+      from public.feed_posts p
+      join public.media_objects m on m.id = p.media_id
+     where m.storage_path = p_name
+       and m.bytes_removed_at is null
+       and public.can_view_feed_post(p.id)
+       and not public.feed_post_reported_by_caller(p.id)
+  ) then
+    return query select true, null::timestamptz;
+    return;
+  end if;
+
+  return query select false, null::timestamptz;
+end;
+$$;
+
+comment on function public.media_read_window(text) is
+  'V8-R-STO-015 / V8-R-FEED-001. 0066''s read decision, extended by 0069 with the Feed destination. The previous implementation is asked FIRST and its yes is final; only its refusal falls through, so no story, block or expiry rule it carries is restated or lost. A Feed post has no expiry, so its window is null — the signed-URL ceiling alone.';
+
+revoke all on function public.media_read_window(text) from public, anon;
+grant execute on function public.media_read_window(text) to authenticated;
