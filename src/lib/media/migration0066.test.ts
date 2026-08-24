@@ -284,9 +284,23 @@ describe('0066 — round-5 fixes', () => {
   it('treats a self-reported story as dead for its own author', () => {
     const body = FLAT.slice(FLAT.indexOf('create or replace function public.story_media_is_dead'));
     const fn = body.slice(0, body.indexOf('$$;'));
-    expect(fn).toContain('join public.content_reports cr');
-    expect(fn).toContain('cr.reporter_id = auth.uid()');
-    expect(fn).toContain("cr.subject_kind = 'story'");
+    // SCOPED TO THE REPORTED STORY. The old term joined content_reports against ANY
+    // story naming the path with no liveness condition, so one self-report on a
+    // long-expired story permanently hid the bytes of a different, live, unreported
+    // story reusing the same object. Both review families reported it.
+    expect(fn).toContain('public.media_path_unreported_live_expiry(p_name, auth.uid()) is null');
+    expect(fn).not.toContain('join public.content_reports cr');
+    // The hide is still keyed to a report by THIS caller — the matching just lives in
+    // the shared helper now, so media_read_window and story_media_is_dead cannot
+    // disagree about what "reported" means the way they did.
+    const helper = FLAT.slice(
+      FLAT.indexOf('create or replace function public.media_path_unreported_live_expiry'),
+    );
+    const helperBody = helper.slice(0, helper.indexOf('$$;'));
+    expect(helperBody).toContain('cr.reporter_id = p_viewer');
+    expect(helperBody).toContain("cr.subject_kind = 'story'");
+    // ...and it only ever considers stories that are actually live.
+    expect(helperBody).toContain('s.deleted_at is null and s.expires_at > now()');
   });
 
   // The comment described the ordering that WAS the defect.
@@ -675,9 +689,15 @@ describe('0066 — reclamation is a claim, not a check-then-delete', () => {
   it('recounts UNDER the row lock and stamps in the same transaction', () => {
     expect(FLAT).toContain('for update of m skip locked');
     expect(FLAT).toContain('if public.media_live_reference_count(r.id) = 0 then');
+    // THE STAMP GOES THROUGH THE ONE GUARD. The check and the write used to be
+    // inlined here and inlined AGAIN, differently, in claim_orphan_paths — which is
+    // how the orphan sweep ended up with no re-check under its lock at all. Both
+    // claimers now call take_media_claim, so the rule has a single definition.
+    expect(FLAT).toContain('if public.take_media_claim(r.id) then');
     expect(FLAT).toContain(
       'update public.media_objects m set bytes_removed_at = now()'
-      + ' where m.id = r.id and m.bytes_removed_at is null;',
+      + ' where m.id = p_media_id'
+      + ' and not public.media_claim_is_live(m.bytes_removed_at);',
     );
   });
 
@@ -732,7 +752,14 @@ describe('0066 — zero-reference bytes have a reclamation PATH, not just eligib
       'not exists ( select 1 from public.media_objects m'
       + " where m.bucket_id = 'story-media' and m.storage_path = o.name"
       + ' and ( m.bytes_removed_at is null'
-      + " or m.bytes_removed_at > now() - interval '1 hour' ) )",
+      + ' or public.media_claim_is_live(m.bytes_removed_at) ) )',
+    );
+    // ...and the one-hour rule itself lives in exactly one function.
+    expect(FLAT).toContain(
+      'create or replace function public.media_claim_is_live(p_stamp timestamptz)',
+    );
+    expect(FLAT).toContain(
+      "select p_stamp is not null and p_stamp > now() - interval '1 hour';",
     );
   });
 
@@ -743,11 +770,17 @@ describe('0066 — zero-reference bytes have a reclamation PATH, not just eligib
   // original check-then-delete race surviving in the one population that has no
   // row. Adopting the object is what gives publish_story something to lock.
   it('ADOPTS an unregistered object into the registry before claiming it', () => {
+    // ON CONFLICT BY CONSTRAINT NAME. A column-inference list here resolves against
+    // this function's OUT parameters (media_id, bucket_id, storage_path) and raises
+    // `column reference "bucket_id" is ambiguous` on EVERY call — the function could
+    // never run. Six review rounds read past it; the first execution against
+    // PostgreSQL raised it immediately.
     expect(FLAT).toContain(
       'insert into public.media_objects (owner_id, bucket_id, storage_path)'
       + " values (v_owner, 'story-media', r.name)"
-      + ' on conflict (bucket_id, storage_path) do nothing',
+      + ' on conflict on constraint media_objects_path_unique do nothing',
     );
+    expect(FLAT).not.toContain('on conflict (bucket_id, storage_path)');
     expect(FLAT).toContain(
       "where m.bucket_id = 'story-media' and m.storage_path = r.name"
       + ' for update skip locked',
@@ -758,13 +791,15 @@ describe('0066 — zero-reference bytes have a reclamation PATH, not just eligib
   // selected this object ran in an earlier snapshot, and a story can have been
   // published against it since.
   it('recounts under the adopted row lock before stamping', () => {
+    // RE-CHECKED UNDER THE LOCK, which is what was missing entirely. The scan filter
+    // ran against a snapshot taken before the lock existed, and nothing between the
+    // lock and the stamp looked at bytes_removed_at again — so a row another tick had
+    // claimed and COMMITTED in between got its stamp refreshed and was handed out a
+    // second time. Reproduced against PostgreSQL 18.4: two concurrent
+    // claim_orphan_paths calls both returned the same storage path.
     expect(FLAT).toContain(
       'if public.media_live_reference_count(v_id) = 0 then'
-      + ' update public.media_objects m'
-      // REFRESHED, not coalesced. Preserving the original stamp left a stale row
-      // stale through re-adoption, so the one-hour in-flight guard never applied to
-      // the very case it exists for. Both review families reported it independently.
-      + ' set bytes_removed_at = now()',
+      + ' if public.take_media_claim(v_id) then',
     );
   });
 

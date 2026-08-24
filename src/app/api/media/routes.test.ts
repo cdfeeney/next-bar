@@ -115,6 +115,26 @@ function db(tables: Record<string, unknown>, storage?: Record<string, unknown>):
   };
 }
 
+/**
+ * A storage double whose removal silently skips the object AND whose presence probe
+ * succeeds, returning the name.
+ *
+ * Both halves are required. `removeClaims` releases a claim only on positive proof
+ * the bytes survived, and that proof is a successful `list` that returns the name. A
+ * double with `remove` but no `list` makes the probe throw, which is now recorded as
+ * UNKNOWN and correctly releases nothing — so a test asserting a release has to
+ * supply the listing that earns it.
+ */
+function skippingStorage() {
+  return {
+    remove: vi.fn(async () => ({ data: [], error: null })),
+    list: vi.fn(async (_folder: string, opts: { search?: string }) => ({
+      data: [{ name: opts?.search ?? '' }],
+      error: null,
+    })),
+  };
+}
+
 function signedIn(userId = 'owner-1') {
   readMediaEnv.mockReturnValue(ENV);
   bearerToken.mockReturnValue('token');
@@ -312,7 +332,7 @@ describe('DELETE /api/media/:mediaId', () => {
   // bytes still in the bucket, which every future sweep would then skip.
   it('reports an orphan and releases the claim when Storage silently skips', async () => {
     signedIn();
-    const admin = db({}, { remove: vi.fn(async () => ({ data: [], error: null })) });
+    const admin = db({}, skippingStorage());
     adminClient.mockReturnValue(admin.client);
     const caller = deleteCaller(removal('m1', 'owner-1/m1'));
     callerClient.mockReturnValue(caller);
@@ -598,7 +618,7 @@ describe('POST /api/media/reclaim', () => {
   it('is honest about an orphan instead of counting it as reclaimed', async () => {
     signedIn();
     adminClient.mockReturnValue(
-      db({}, { remove: vi.fn(async () => ({ data: [], error: null })) }).client,
+      db({}, skippingStorage()).client,
     );
     callerClient.mockReturnValue(sweepCaller(
       [{ media_id: 'm1', bucket_id: 'story-media', storage_path: 'owner-1/m1' }],

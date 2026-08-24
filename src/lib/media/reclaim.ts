@@ -99,19 +99,35 @@ export async function claimAndRemove(
  * flight — so the sweep, which runs as the service role, is the only thing that
  * gives a claim back.
  */
+/** What a presence probe established. A listing that failed establishes NOTHING. */
+type PresenceProbe = {
+  /** Listed successfully AND the name came back: positive proof the bytes survived. */
+  present: Set<string>;
+  /** The listing failed or threw, so presence is UNKNOWN and nothing may be inferred. */
+  unknown: Set<string>;
+};
+
 /**
  * Which of these paths are STILL in the bucket.
  *
  * Storage reports a skipped removal and a nonexistent object identically - by leaving
  * the name out of the removed list - so the only way to tell "refused" from "already
- * gone" is to look. Failure to list is treated as "still present", which keeps the
- * claim released and the object in front of the next sweep: the safe direction.
+ * gone" is to look.
+ *
+ * A FAILED LISTING IS NOT PRESENCE. The previous version pushed a failed or thrown
+ * `list()` into the present set and called that "the safe direction" - but present is
+ * precisely the branch that RELEASES the claim, so a transient listing fault cleared
+ * the stamp on bytes nobody had proven survived. That is the same defect this module's
+ * invariant was written to forbid, arriving through the error path. Unknown is now its
+ * own outcome: the stamp stays, and `claim_orphan_paths` re-adopts the row once the
+ * claim goes stale, which is the mechanism that already exists for exactly this case.
  */
 async function presentPaths(
   admin: SupabaseClient,
   paths: readonly string[],
-): Promise<string[]> {
-  const present: string[] = [];
+): Promise<PresenceProbe> {
+  const present = new Set<string>();
+  const unknown = new Set<string>();
   for (const path of paths) {
     const slash = path.lastIndexOf('/');
     const folder = slash === -1 ? '' : path.slice(0, slash);
@@ -120,16 +136,16 @@ async function presentPaths(
       const { data, error } = await admin.storage
         .from(MEDIA_BUCKET)
         .list(folder, { search: name, limit: 1 });
-      if (error) { present.push(path); continue; }
+      if (error) { unknown.add(path); continue; }
       const found = (data ?? []).some(
         (entry) => String((entry as { name?: unknown })?.name ?? '') === name,
       );
-      if (found) present.push(path);
+      if (found) present.add(path);
     } catch {
-      present.push(path);
+      unknown.add(path);
     }
   }
-  return present;
+  return { present, unknown };
 }
 
 async function removeClaims(
@@ -163,15 +179,26 @@ async function removeClaims(
   //
   // Inconclusive attempt (both remove calls failed client-side) => prove nothing,
   // release nothing. A timed-out DELETE may still land.
-  const stillPresent = attempt.conclusive
-    ? new Set(await presentPaths(admin, [...failed]))
-    : new Set<string>();
+  const probe = attempt.conclusive
+    ? await presentPaths(admin, [...failed])
+    : { present: new Set<string>(), unknown: new Set<string>() };
+  const stillPresent = probe.present;
 
   for (const claim of claims) {
     if (!failed.has(claim.storagePath)) continue;
     if (!attempt.conclusive) {
       console.error(
         '[media/reclaim] INCONCLUSIVE — removal outcome unknown, stamp kept:',
+        claim.storagePath,
+      );
+      continue;
+    }
+    if (probe.unknown.has(claim.storagePath)) {
+      // The listing itself failed, so nothing was established. Releasing here would
+      // clear a stamp on bytes we never proved survived — the exact laundering of an
+      // inconclusive read into a conclusive one that the invariant above forbids.
+      console.error(
+        '[media/reclaim] UNKNOWN — presence could not be established, stamp kept:',
         claim.storagePath,
       );
       continue;
@@ -191,13 +218,16 @@ async function removeClaims(
   }
 
   return {
-    // Removed by us, or already absent - both mean the bytes are gone, which is the
-    // only thing the caller reports on.
     // Reclaimed = removed by us, or conclusively already absent. An inconclusive
-    // attempt reclaims NOTHING, because nothing is known.
+    // attempt reclaims NOTHING, because nothing is known — and neither does a path
+    // whose presence probe failed, for the same reason.
     reclaimed: attempt.conclusive
-      ? claims.map((claim) => claim.storagePath).filter((path) => !stillPresent.has(path))
+      ? claims
+        .map((claim) => claim.storagePath)
+        .filter((path) => !stillPresent.has(path) && !probe.unknown.has(path))
       : [],
+    // Orphaned means PROVEN to have survived. A path we could not probe is not
+    // reported as an orphan either; its stamp stands and the sweep revisits it.
     orphaned: attempt.conclusive
       ? [...failed].filter((path) => stillPresent.has(path))
       : [...failed],

@@ -154,9 +154,16 @@ describe('deleteEverywhere — V8-R-CMP-016', () => {
 describe('reclaimBytes — orphans are returned, never swallowed', () => {
   type RemoveResult = { data?: unknown; error: unknown };
 
-  function storage(results: ReadonlyArray<RemoveResult>) {
+  function storage(results: ReadonlyArray<RemoveResult | Error>) {
     let call = 0;
-    const remove = vi.fn(async () => results[Math.min(call++, results.length - 1)]);
+    const remove = vi.fn(async () => {
+      const result = results[Math.min(call++, results.length - 1)];
+      // An Error in the script means the CALL ITSELF failed — a throw, not a
+      // response. The two are different evidence: a response is Storage deciding,
+      // a throw leaves the request unaccounted for.
+      if (result instanceof Error) throw result;
+      return result;
+    });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return { admin: { storage: { from: () => ({ remove }) } } as any, remove };
   }
@@ -208,6 +215,17 @@ describe('reclaimBytes — orphans are returned, never swallowed', () => {
     await expect(reclaimBytes(admin, 'story-media', ['u1/m1']))
       .resolves.toEqual({ conclusive: false, notRemoved: ['u1/m1'] });
     expect(remove).toHaveBeenCalledTimes(2);
+  });
+
+  it('will not call a NOT-REMOVED path conclusive when an earlier attempt is unaccounted for', async () => {
+    // The first request threw, so it may have been ACCEPTED and applied late. The
+    // retry completes and reports the path as not removed. Those two facts together
+    // are not proof the bytes survived — the first DELETE may still be on its way.
+    // Reporting this as conclusive is what let the caller release the claim and
+    // publish_story attach a live story to bytes about to be destroyed.
+    const { admin } = storage([new Error('timeout'), deleted()]);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/m1']))
+      .resolves.toEqual({ conclusive: false, notRemoved: ['u1/m1'] });
   });
 
   it('succeeds on the retry without reporting an orphan', async () => {

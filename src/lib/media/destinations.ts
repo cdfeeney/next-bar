@@ -322,13 +322,25 @@ export async function reclaimBytes(
   if (paths.length === 0) return { conclusive: true, notRemoved: [] };
   const wanted = [...paths];
 
+  // AMBIGUITY IS NOT ERASED BY A LATER SUCCESS, and this is the whole reason the
+  // flag exists. A first attempt that times out or errors may still have been
+  // ACCEPTED and applied by the server moments later. If a retry then completes and
+  // reports a path as not-removed, the honest state is still "unknown": the delayed
+  // first DELETE may be in flight against those exact bytes. Reporting the retry as
+  // conclusive let the caller release the claim, publish_story attach a live story,
+  // and the late DELETE destroy that story's photo.
+  //
+  // So conclusiveness is the AND of "this call completed" and "no earlier attempt
+  // left a request unaccounted for" — never the property of the last attempt alone.
+  let ambiguous = false;
+
   // ONE bounded retry, and only for a thrown/errored call. A single retry
   // covers the common transient failure; retrying further just races the same
   // failing remove.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const { data, error } = await admin.storage.from(bucket).remove(wanted);
-      if (error) continue;
+      if (error) { ambiguous = true; continue; }
 
       const removed = new Set(
         (Array.isArray(data) ? data : [])
@@ -336,11 +348,19 @@ export async function reclaimBytes(
           .filter(Boolean),
       );
       // The call COMPLETED, so an omission is a decision Storage made rather than an
-      // unknown. That distinction is the whole point: it is what lets the caller
-      // decide whether a claim may be released.
-      return { conclusive: true, notRemoved: wanted.filter((path) => !removed.has(path)) };
+      // unknown — but only for paths no EARLIER attempt left unaccounted for.
+      //
+      // The distinction is narrow and it matters. A path this attempt confirms as
+      // REMOVED is settled: the bytes are gone however many requests it took, and the
+      // earlier ambiguity is moot. A path this attempt reports as NOT removed while a
+      // previous request may still be in flight against it is the dangerous one —
+      // that is the report the caller would turn into a release. So an unresolved
+      // earlier attempt poisons the result only when something is left not-removed.
+      const notRemoved = wanted.filter((path) => !removed.has(path));
+      return { conclusive: !ambiguous || notRemoved.length === 0, notRemoved };
     } catch {
-      // fall through to the retry, then to the INCONCLUSIVE report
+      // A thrown call says nothing about what the server did with the request.
+      ambiguous = true;
     }
   }
   // BOTH ATTEMPTS FAILED CLIENT-SIDE, which says nothing about what the server did.

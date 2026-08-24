@@ -40,15 +40,32 @@ function callerWith(responses: Record<string, RpcResponse>) {
  * A service-role double: a storage bucket whose `remove` reports back only the
  * names it names, plus the `rpc` surface the release goes through.
  */
-function adminWith(removedNames: (paths: string[]) => string[]) {
+function adminWith(
+  removedNames: (paths: string[]) => string[],
+  options: { listFails?: boolean; absent?: string[] } = {},
+) {
   const remove = vi.fn(async (paths: string[]) => ({
     data: removedNames(paths).map((name) => ({ name })),
     error: null,
   }));
+  // THE DOUBLE MUST BE ABLE TO LIST, and that is not a detail of the fake.
+  // `removeClaims` releases a claim only on POSITIVE PROOF the bytes survived, and
+  // that proof is a successful listing that returns the name. An earlier version of
+  // this double supplied no `list` at all, so every probe threw and was counted as
+  // presence — which meant every release assertion below was passing through the
+  // error path rather than through proof, and the suite could not have caught a
+  // regression in the release rule. `listFails` exercises the unknown branch
+  // explicitly instead of by accident.
+  const list = vi.fn(async (folder: string, opts: { search?: string }) => {
+    if (options.listFails) return { data: null, error: { message: 'list unavailable' } };
+    const name = opts?.search ?? '';
+    const full = folder ? `${folder}/${name}` : name;
+    return { data: (options.absent ?? []).includes(full) ? [] : [{ name }], error: null };
+  });
   const rpc = vi.fn(async () => ({ data: true, error: null }));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const admin = { storage: { from: () => ({ remove }) }, rpc } as any;
-  return { admin, remove, rpc };
+  const admin = { storage: { from: () => ({ remove, list }) }, rpc } as any;
+  return { admin, remove, rpc, list };
 }
 
 const claimed = (rows: Array<[string, string]>): RpcResponse => ({
@@ -221,5 +238,41 @@ describe('sweepReclaimable — the tick that actually runs', () => {
     expect(swept.reclaimed).toContain('o/m1');
     // The claim must NOT be handed back: the stamp is correct, the bytes are gone.
     expect(rpc).not.toHaveBeenCalledWith('release_media_claim', expect.anything());
+  });
+});
+
+describe('a claim is released ONLY on positive proof the bytes survived', () => {
+  it('keeps the stamp when the presence probe itself fails', async () => {
+    // Storage skipped the object, so we must find out whether the bytes survived.
+    // The listing that would establish that FAILS. Nothing is proven, so nothing is
+    // released — releasing here would clear the stamp on bytes that may be mid-delete
+    // and let publish_story attach a live story to them.
+    const caller = callerWith({ claim_media_for_removal: claimed([['m1', 'u1/a.jpg']]) });
+    const { admin, rpc } = adminWith(() => [], { listFails: true });
+
+    const result = await claimAndRemove(caller, admin, 'm1');
+
+    expect(released(rpc)).toEqual([]);
+    expect(result.reclaimed).toEqual([]);
+    expect(result.orphaned).toEqual([]);
+  });
+
+  it('releases when the listing succeeds and the object is really still there', async () => {
+    const caller = callerWith({ claim_media_for_removal: claimed([['m1', 'u1/a.jpg']]) });
+    const { admin, rpc } = adminWith(() => []);
+
+    await claimAndRemove(caller, admin, 'm1');
+
+    expect(released(rpc)).toEqual(['m1']);
+  });
+
+  it('does not release when the listing succeeds and the bytes are genuinely gone', async () => {
+    const caller = callerWith({ claim_media_for_removal: claimed([['m1', 'u1/a.jpg']]) });
+    const { admin, rpc } = adminWith(() => [], { absent: ['u1/a.jpg'] });
+
+    const result = await claimAndRemove(caller, admin, 'm1');
+
+    expect(released(rpc)).toEqual([]);
+    expect(result.reclaimed).toEqual(['u1/a.jpg']);
   });
 });

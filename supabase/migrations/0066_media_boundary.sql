@@ -215,13 +215,38 @@ grant execute on function public.media_live_reference_count(uuid) to authenticat
 -- DELETE policy below requires `(storage.foldername(name))[1] = auth.uid()`,
 -- and the route's pre-removal re-check runs on media the deletion RPC has
 -- already confirmed the caller owns. The guard costs neither of them anything.
+-- VOLATILE, AND THE DECLARATION IS THE FIX.
+--
+-- This was `stable`, and that is a strategy error rather than a typo. A STABLE
+-- function is promised the snapshot of the statement that CALLED it - a snapshot
+-- taken before this function existed on the stack, and therefore before it took the
+-- path lock below. So the lock worked exactly as designed and the answer was still
+-- wrong: the publisher committed and released the lock, this function then acquired
+-- it successfully, and read pre-publication data anyway. Mutual exclusion was
+-- achieved; VISIBILITY was not, and it is visibility that this predicate is for.
+--
+-- THE RULE, stated once so the next reader inherits it rather than rediscovering it:
+--
+--   A lock acquired AFTER a snapshot cannot make that snapshot fresh. Any predicate
+--   that authorises destruction must take the path lock and THEN read its evidence
+--   under a snapshot taken after that acquisition - which in PostgreSQL means the
+--   function must be VOLATILE (a new snapshot per statement under READ COMMITTED),
+--   never STABLE.
+--
+-- The corollary applies to the other two writers and they already satisfy it:
+-- claim_orphan_paths and claim_media_for_removal are plpgsql volatile and re-read
+-- under `for update`, so their post-lock reads are fresh.
+--
+-- Reproduced against PostgreSQL 18.4 while this was STABLE: a story published and
+-- committed after the deleting statement's snapshot was invisible here, and the
+-- guard returned false - authorising the delete of a live story's bytes.
 create or replace function public.media_path_has_live_reference(
   p_bucket text,
   p_name text
 )
 returns boolean
 language plpgsql
-stable
+volatile
 security definer
 set search_path = public
 as $$
@@ -506,6 +531,61 @@ create policy "story-media: owner deletes own prefix"
 --
 -- `skip locked`: a row another transaction is already working on is somebody
 -- else's claim, and waiting for it only to find it stamped is wasted work.
+-- THE CLAIM STALENESS RULE, AND IT LIVES IN EXACTLY ONE PLACE.
+--
+-- "Is this row already spoken for?" was written twice - once as
+-- `bytes_removed_at is null` in claim_media_for_removal, and once as a
+-- `> now() - interval '1 hour'` term in claim_orphan_paths' scan filter - and the
+-- two drifted. claim_orphan_paths checked it before taking the path lock and never
+-- again, so a tick whose scan predated another tick's commit re-selected a row that
+-- had been claimed in between, refreshed the stamp, and was handed the same claim.
+-- Two workers then each believed they exclusively owned the same removal.
+--
+-- Reproduced against PostgreSQL 18.4 before this fix: two concurrent
+-- claim_orphan_paths calls both returned the same storage path.
+create or replace function public.media_claim_is_live(p_stamp timestamptz)
+returns boolean
+language sql
+stable
+as $$
+  select p_stamp is not null and p_stamp > now() - interval '1 hour';
+$$;
+
+comment on function public.media_claim_is_live(timestamptz) is
+  'V8-R-CMP-012. The single definition of "this claim is still in flight": stamped, and stamped within the last hour. Every claimer filters and guards on THIS, so the staleness rule cannot drift between them again.';
+
+-- THE ONLY PLACE A CLAIM IS TAKEN.
+--
+-- Both claimers route their stamp through here, so the guard cannot be forgotten by
+-- the next function that learns to claim. The check and the write are one statement:
+-- under READ COMMITTED an UPDATE that blocks on a concurrently-updated row
+-- re-evaluates this WHERE against the new row version, so a claim that went live
+-- while we waited makes the update match nothing and `found` is false.
+create or replace function public.take_media_claim(p_media_id uuid)
+returns boolean
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+begin
+  update public.media_objects m
+     set bytes_removed_at = now()
+   where m.id = p_media_id
+     and not public.media_claim_is_live(m.bytes_removed_at);
+
+  return found;
+end;
+$$;
+
+comment on function public.take_media_claim(uuid) is
+  'V8-R-CMP-012. Takes a removal claim on one media object, or returns false because another worker already holds a live one. The single stamp-taking path: claim_media_for_removal and claim_orphan_paths both go through it.';
+
+-- Taking a claim is the sweep''s right, exactly as releasing one is. An owner who
+-- could call this directly would stamp their own live object and watch the next
+-- sweep delete a published story''s bytes.
+revoke all on function public.take_media_claim(uuid) from public, anon, authenticated;
+
 create or replace function public.claim_media_for_removal(
   p_media_id uuid default null,
   p_limit integer default 25
@@ -565,12 +645,8 @@ begin
     -- taken under a lock that has since been released; this one is taken under
     -- the lock that also blocks publication, which is what makes it binding.
     if public.media_live_reference_count(r.id) = 0 then
-      update public.media_objects m
-         set bytes_removed_at = now()
-       where m.id = r.id
-         and m.bytes_removed_at is null;
-
-      if found then
+      -- THROUGH THE SHARED GUARD. Same rule as the orphan sweep, one definition.
+      if public.take_media_claim(r.id) then
         media_id := r.id;
         bucket_id := r.bucket_id;
         storage_path := r.storage_path;
@@ -739,7 +815,7 @@ begin
               -- reclaim.ts relies on it, which is why this looks at storage rather
               -- than trusting the stamp - it just has to wait until the stamp is
               -- stale rather than racing a live one.
-              or m.bytes_removed_at > now() - interval '1 hour'
+              or public.media_claim_is_live(m.bytes_removed_at)
             )
        )
        and not exists (
@@ -785,9 +861,16 @@ begin
       continue;  -- published while we were getting here; the bytes stay
     end if;
 
+    -- BY CONSTRAINT NAME, not by inferring the columns. This function's OUT
+    -- parameters are named `media_id`, `bucket_id` and `storage_path`, so a
+    -- column-inference list resolves them as PL/pgSQL variables and the whole
+    -- call fails with `column reference "bucket_id" is ambiguous` - every time,
+    -- for every caller. Six review rounds read past it because reading SQL
+    -- cannot surface it; the first execution against PostgreSQL raised it
+    -- immediately. Naming the constraint removes the ambiguity at the source.
     insert into public.media_objects (owner_id, bucket_id, storage_path)
     values (v_owner, 'story-media', r.name)
-    on conflict (bucket_id, storage_path) do nothing;
+    on conflict on constraint media_objects_path_unique do nothing;
 
     select m.id into v_id
       from public.media_objects m
@@ -801,22 +884,25 @@ begin
 
     -- RECOUNTED UNDER THE LOCK, exactly as claim_media_for_removal does: a story
     -- can have been published against these bytes since the scan above.
+    --
+    -- AND THE CLAIM IS RE-CHECKED HERE TOO, which is what was missing. The scan
+    -- filter above ran against a snapshot taken before this lock existed, so a row
+    -- it saw as free can have been claimed and COMMITTED by another tick in
+    -- between. `take_media_claim` re-tests staleness at the moment of stamping;
+    -- without it this loop refreshed a seconds-old stamp and handed out a second
+    -- live claim on bytes another worker was already deleting.
     if public.media_live_reference_count(v_id) = 0 then
-      -- REFRESHED, not preserved. `coalesce(m.bytes_removed_at, now())` kept the
-      -- ORIGINAL timestamp, so a row whose stamp was already stale stayed stale
-      -- through re-adoption: tick A re-adopted and began deleting, tick B arrived
-      -- seconds later, was still not excluded by the one-hour in-flight guard, and
-      -- was handed the same claim. The guard protected a fresh claim and did nothing
-      -- for the case it was written for. Both review families reported this
-      -- independently.
-      update public.media_objects m
-         set bytes_removed_at = now()
-       where m.id = v_id;
-
-      media_id := v_id;
-      bucket_id := 'story-media';
-      storage_path := r.name;
-      return next;
+      -- REFRESHED, not preserved, and REFUSED when another tick already holds a
+      -- live claim. `coalesce(m.bytes_removed_at, now())` once kept the ORIGINAL
+      -- timestamp so a stale row stayed stale through re-adoption; refreshing fixed
+      -- that but still stamped unconditionally. Both halves now live in
+      -- take_media_claim, which refreshes a stale claim and declines a live one.
+      if public.take_media_claim(v_id) then
+        media_id := v_id;
+        bucket_id := 'story-media';
+        storage_path := r.name;
+        return next;
+      end if;
     end if;
   end loop;
 end;
@@ -941,6 +1027,48 @@ drop function if exists public.unreferenced_orphan_paths(integer);
 -- window derived from spine rows alone reports "no live destination" and the
 -- route 404s every real story photo in the product. Stories carry their own
 -- expiry, and they are where the dropped 0065 SELECT policies read it from.
+-- WHAT THIS VIEWER MAY STILL SEE ON THIS PATH, IN ONE PLACE.
+--
+-- Returns the latest expiry among LIVE stories on the path that this viewer has NOT
+-- reported, or null when there is no such story. Null therefore means one of two
+-- things and the caller must distinguish them: no live story names these bytes at
+-- all (the upload-before-publish window), or every live story that names them is one
+-- this viewer reported (hidden by V8-R-FEED-010).
+--
+-- Extracted because the rule was written twice and the two disagreed.
+-- `story_media_is_dead` asked "has this viewer reported ANY story on this path",
+-- with no liveness condition at all, so a report on a long-expired story hid bytes
+-- a DIFFERENT live and unreported story was legitimately showing - and because
+-- media_read_window consults story_media_is_dead first, its own correct per-story
+-- exclusion below could never be reached. Both review families reported the
+-- path-vs-story half independently.
+create or replace function public.media_path_unreported_live_expiry(
+  p_name text,
+  p_viewer uuid
+)
+returns timestamptz
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select max(s.expires_at)
+    from public.stories s
+   where (s.media_path = p_name or s.inset_path = p_name)
+     and s.deleted_at is null
+     and s.expires_at > now()
+     and not exists (
+       select 1
+         from public.content_reports cr
+        where cr.reporter_id = p_viewer
+          and cr.subject_kind = 'story'
+          and cr.subject_ref = s.id::text
+     );
+$$;
+
+comment on function public.media_path_unreported_live_expiry(text, uuid) is
+  'V8-R-FEED-010. Latest expiry among live stories on this path that the viewer has not reported; null when none. The single definition of "a report hides the REPORTED STORY, not every story that happens to reuse the same object".';
+
 create or replace function public.media_read_window(p_name text)
 returns table (readable boolean, expires_at timestamptz)
 language plpgsql
@@ -972,18 +1100,7 @@ begin
     -- the content FOR THE REPORTER — with no exception for the reporter also
     -- being the author. Without this term the self-report succeeded while the
     -- photo went on signing for the person who reported it.
-    select max(s.expires_at) into v_expiry
-      from public.stories s
-     where (s.media_path = p_name or s.inset_path = p_name)
-       and s.deleted_at is null
-       and s.expires_at > now()
-       and not exists (
-         select 1
-           from public.content_reports cr
-          where cr.reporter_id = v_caller
-            and cr.subject_kind = 'story'
-            and cr.subject_ref = s.id::text
-       );
+    v_expiry := public.media_path_unreported_live_expiry(p_name, v_caller);
 
     -- A null expiry means one of two different things here, and they must not
     -- collapse: no story names these bytes at all (the upload-before-publish
@@ -1685,15 +1802,23 @@ begin
   -- V8-R-FEED-010: "reporting IMMEDIATELY HIDES the reported content FOR THE
   -- REPORTER". The caller here is always the prefix owner, so this is the
   -- self-report case, and dead-for-them is exactly right.
+  --
+  -- SCOPED TO THE REPORTED STORY, NOT THE PATH. The previous term asked only
+  -- "has this caller reported ANY story naming this path", with no liveness
+  -- condition on that story. One object can carry many destinations by design, so
+  -- reporting story S1 and letting it expire permanently hid the bytes of an
+  -- unrelated, live, unreported S2 that reused the same object - a permanent
+  -- wrong denial of the owner's own photo. Dead now means what it says: there IS
+  -- a live story on this path, and every one of them is one this caller reported.
   if exists (
        select 1
          from public.stories s
-         join public.content_reports cr
-           on cr.subject_kind = 'story'
-          and cr.subject_ref = s.id::text
         where (s.media_path = p_name or s.inset_path = p_name)
-          and cr.reporter_id = auth.uid()
-     ) then
+          and s.deleted_at is null
+          and s.expires_at > now()
+     )
+     and public.media_path_unreported_live_expiry(p_name, auth.uid()) is null
+  then
     return true;
   end if;
 
