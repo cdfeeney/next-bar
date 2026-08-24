@@ -24,7 +24,19 @@ import { mediaFailure, mediaUnavailable, type MediaResult } from '@/lib/media/ty
  * sufficient."
  */
 
-/** Matches 0066's `content_reports.subject_kind` check constraint. */
+/**
+ * The EVENTUAL vocabulary, which is wider than what any single migration resolves.
+ *
+ * It does NOT match 0066's check constraint, and saying it did was wrong: EC-03
+ * narrowed that constraint to ('story'), because feed_posts and comments arrive in
+ * WP5's 0069 and group_messages in WP6's 0067, and a migration cannot check existence
+ * or visibility against a table that does not exist yet. Those migrations widen the
+ * constraint AND teach report_content the matching branch, together.
+ *
+ * The DATABASE is the authority on what is currently reportable. A kind listed here
+ * but not yet admitted by the constraint is refused server-side with a clear message,
+ * which is the correct failure for a surface that is coming rather than gone.
+ */
 export type ReportSubjectKind = 'story' | 'feed_post' | 'comment' | 'group_message';
 
 export const REPORT_SUBJECT_KINDS: readonly ReportSubjectKind[] = [

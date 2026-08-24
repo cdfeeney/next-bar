@@ -761,7 +761,10 @@ describe('0066 — zero-reference bytes have a reclamation PATH, not just eligib
     expect(FLAT).toContain(
       'if public.media_live_reference_count(v_id) = 0 then'
       + ' update public.media_objects m'
-      + ' set bytes_removed_at = coalesce(m.bytes_removed_at, now())',
+      // REFRESHED, not coalesced. Preserving the original stamp left a stale row
+      // stale through re-adoption, so the one-hour in-flight guard never applied to
+      // the very case it exists for. Both review families reported it independently.
+      + ' set bytes_removed_at = now()',
     );
   });
 

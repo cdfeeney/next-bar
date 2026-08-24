@@ -262,6 +262,14 @@ export async function deleteEverywhere(
   }
 }
 
+/** What one removal attempt actually established. See `reclaimBytes`. */
+export type ReclaimAttempt = {
+  /** The remove call completed, so an omitted path is Storage's decision. */
+  conclusive: boolean;
+  /** Paths Storage did not report as removed. */
+  notRemoved: string[];
+};
+
 /**
  * Remove the physical bytes, but ONLY when the caller was told they are
  * reclaimable.
@@ -301,15 +309,17 @@ export async function deleteEverywhere(
  * over-reported orphan — no stamp, bytes kept, a line in the log. That is the
  * safe direction to be wrong in.
  *
- * Returns the paths that could NOT be removed, so an orphan is reported rather
- * than swallowed — the same contract as `reportOrphans` in stories.server.ts.
+ * Returns whether the attempt was CONCLUSIVE, and which paths were not removed.
+ * Conclusive means the remove call completed and Storage decided; inconclusive means
+ * both attempts failed client-side and NOTHING may be inferred about the server. A
+ * caller may clear a claim only on a conclusive result — see removeClaims.
  */
 export async function reclaimBytes(
   admin: SupabaseClient,
   bucket: string,
   paths: readonly string[],
-): Promise<string[]> {
-  if (paths.length === 0) return [];
+): Promise<ReclaimAttempt> {
+  if (paths.length === 0) return { conclusive: true, notRemoved: [] };
   const wanted = [...paths];
 
   // ONE bounded retry, and only for a thrown/errored call. A single retry
@@ -325,10 +335,17 @@ export async function reclaimBytes(
           .map((object) => String((object as { name?: unknown })?.name ?? ''))
           .filter(Boolean),
       );
-      return wanted.filter((path) => !removed.has(path));
+      // The call COMPLETED, so an omission is a decision Storage made rather than an
+      // unknown. That distinction is the whole point: it is what lets the caller
+      // decide whether a claim may be released.
+      return { conclusive: true, notRemoved: wanted.filter((path) => !removed.has(path)) };
     } catch {
-      // fall through to the retry, then to the orphan report
+      // fall through to the retry, then to the INCONCLUSIVE report
     }
   }
-  return wanted;
+  // BOTH ATTEMPTS FAILED CLIENT-SIDE, which says nothing about what the server did.
+  // A timed-out DELETE can still be applied moments later, so treating this as "not
+  // removed" and releasing the claim would clear the stamp on bytes that are about to
+  // disappear — and publish_story would then publish straight onto them.
+  return { conclusive: false, notRemoved: [...wanted] };
 }

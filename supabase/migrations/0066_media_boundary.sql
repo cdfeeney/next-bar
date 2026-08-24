@@ -228,6 +228,25 @@ as $$
 declare
   v_caller uuid := auth.uid();
 begin
+  -- SERIALIZED WITH publish_story, because this predicate is the ONLY thing standing
+  -- between a direct authenticated Storage DELETE and a live story's bytes.
+  --
+  -- The path advisory lock was added for publish_story versus the orphan sweep, which
+  -- left the third writer — a client deleting its own prefix straight through the
+  -- retained DELETE policy — outside it entirely. Two of three writers serialized is
+  -- not serialization: the client's reference check and publish_story's insert could
+  -- interleave with neither seeing the other.
+  --
+  -- TRY, and FAIL CLOSED. A policy predicate is evaluated per row and a multi-row
+  -- delete would otherwise take several locks in arbitrary order; a blocking acquire
+  -- there can deadlock against another delete. If the lock cannot be taken, something
+  -- else is operating on this exact path right now, so the honest answer is "assume a
+  -- live reference" — which REFUSES the delete. Refusing is recoverable; deleting a
+  -- live story's photo is not.
+  if not pg_try_advisory_xact_lock(public.media_path_lock_key(p_bucket, p_name)) then
+    return true;
+  end if;
+
   if v_caller is not null
      and (storage.foldername(p_name))[1] is distinct from v_caller::text then
     return true;
@@ -529,6 +548,15 @@ begin
             where d.media_id = m.id
          )
        )
+       -- PRE-FILTERED, because `limit` is applied BEFORE the loop body runs and the
+       -- authoritative recount lives inside it. A batch of 25 live objects therefore
+       -- reclaimed nothing at all while genuinely reclaimable bytes sat behind them,
+       -- and every subsequent tick made the same choice — starvation, not slowness.
+       --
+       -- This does NOT replace the recount under the row lock below: that one is the
+       -- correctness check and has to happen after `for update`. This one only stops
+       -- live rows consuming the budget.
+       and public.media_live_reference_count(m.id) = 0
      order by m.created_at
      limit v_limit
      for update of m skip locked
@@ -774,8 +802,15 @@ begin
     -- RECOUNTED UNDER THE LOCK, exactly as claim_media_for_removal does: a story
     -- can have been published against these bytes since the scan above.
     if public.media_live_reference_count(v_id) = 0 then
+      -- REFRESHED, not preserved. `coalesce(m.bytes_removed_at, now())` kept the
+      -- ORIGINAL timestamp, so a row whose stamp was already stale stayed stale
+      -- through re-adoption: tick A re-adopted and began deleting, tick B arrived
+      -- seconds later, was still not excluded by the one-hour in-flight guard, and
+      -- was handed the same claim. The guard protected a fresh claim and did nothing
+      -- for the case it was written for. Both review families reported this
+      -- independently.
       update public.media_objects m
-         set bytes_removed_at = coalesce(m.bytes_removed_at, now())
+         set bytes_removed_at = now()
        where m.id = v_id;
 
       media_id := v_id;

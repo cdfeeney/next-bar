@@ -169,7 +169,7 @@ describe('reclaimBytes — orphans are returned, never swallowed', () => {
 
   it('returns nothing when the removal succeeds', async () => {
     const { admin, remove } = storage([deleted('u1/m1')]);
-    await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual([]);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual({ conclusive: true, notRemoved: [] });
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
@@ -179,8 +179,7 @@ describe('reclaimBytes — orphans are returned, never swallowed', () => {
   // bytes_removed_at on bytes that are still in the bucket.
   it('reports a path Storage silently skipped, even though no error came back', async () => {
     const { admin } = storage([{ data: [], error: null }]);
-    await expect(reclaimBytes(admin, 'story-media', ['u1/m1']))
-      .resolves.toEqual(['u1/m1']);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual({ conclusive: true, notRemoved: ['u1/m1'] });
   });
 
   it('does not retry a silent skip, because a refusal is a decision', async () => {
@@ -191,30 +190,34 @@ describe('reclaimBytes — orphans are returned, never swallowed', () => {
 
   it('reports only the paths that were skipped, not the whole batch', async () => {
     const { admin } = storage([deleted('u1/a')]);
-    await expect(reclaimBytes(admin, 'story-media', ['u1/a', 'u1/b']))
-      .resolves.toEqual(['u1/b']);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/a', 'u1/b'])).resolves.toEqual({ conclusive: true, notRemoved: ['u1/b'] });
   });
 
   it('treats a missing removed list as nothing removed', async () => {
     const { admin } = storage([{ error: null }]);
-    await expect(reclaimBytes(admin, 'story-media', ['u1/m1']))
-      .resolves.toEqual(['u1/m1']);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual({ conclusive: true, notRemoved: ['u1/m1'] });
   });
 
-  it('retries once, then reports the surviving path', async () => {
+  // INCONCLUSIVE, not "orphan". Both attempts failed CLIENT-SIDE, which says nothing
+  // about what the server did — a timed-out DELETE can still be applied moments
+  // later. Reporting this as a definite non-removal is what let the caller release
+  // the claim and clear the stamp on bytes that were about to disappear, so
+  // publish_story could publish straight onto them (round-5 HIGH).
+  it('retries once, then reports the outcome as UNKNOWN', async () => {
     const { admin, remove } = storage([{ error: { message: 'transient' } }]);
-    await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual(['u1/m1']);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/m1']))
+      .resolves.toEqual({ conclusive: false, notRemoved: ['u1/m1'] });
     expect(remove).toHaveBeenCalledTimes(2);
   });
 
   it('succeeds on the retry without reporting an orphan', async () => {
     const { admin } = storage([{ error: { message: 'transient' } }, deleted('u1/m1')]);
-    await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual([]);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual({ conclusive: true, notRemoved: [] });
   });
 
   it('does nothing at all for an empty path list', async () => {
     const { admin, remove } = storage([deleted()]);
-    await expect(reclaimBytes(admin, 'story-media', [])).resolves.toEqual([]);
+    await expect(reclaimBytes(admin, 'story-media', [])).resolves.toEqual({ conclusive: true, notRemoved: [] });
     expect(remove).not.toHaveBeenCalled();
   });
 });

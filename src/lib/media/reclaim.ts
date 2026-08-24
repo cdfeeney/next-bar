@@ -138,13 +138,12 @@ async function removeClaims(
 ): Promise<SweepResult> {
   if (claims.length === 0) return EMPTY;
 
-  const failed = new Set(
-    await reclaimBytes(
-      admin,
-      MEDIA_BUCKET,
-      claims.map((claim) => claim.storagePath),
-    ),
+  const attempt = await reclaimBytes(
+    admin,
+    MEDIA_BUCKET,
+    claims.map((claim) => claim.storagePath),
   );
+  const failed = new Set(attempt.notRemoved);
 
   // AN OBJECT THAT WAS ALREADY GONE IS NOT A FAILED REMOVAL.
   //
@@ -155,10 +154,28 @@ async function removeClaims(
   // released again, forever, and `bytes_removed_at` was never recorded for bytes that
   // no longer exist. Re-checking existence is what separates the two, and it is one
   // request per orphan on a path that is already the slow one.
-  const stillPresent = new Set(await presentPaths(admin, [...failed]));
+  // A STAMP IS CLEARED ONLY ON POSITIVE PROOF THE BYTES SURVIVED.
+  //
+  // Three consecutive review rounds found a hole here because each fix narrowed the
+  // condition for releasing while leaving RELEASE as the default. It is now the
+  // exception. Keeping a stamp costs one object one sweep interval; clearing one
+  // wrongly lets publish_story publish onto bytes that are being deleted.
+  //
+  // Inconclusive attempt (both remove calls failed client-side) => prove nothing,
+  // release nothing. A timed-out DELETE may still land.
+  const stillPresent = attempt.conclusive
+    ? new Set(await presentPaths(admin, [...failed]))
+    : new Set<string>();
 
   for (const claim of claims) {
     if (!failed.has(claim.storagePath)) continue;
+    if (!attempt.conclusive) {
+      console.error(
+        '[media/reclaim] INCONCLUSIVE — removal outcome unknown, stamp kept:',
+        claim.storagePath,
+      );
+      continue;
+    }
     if (!stillPresent.has(claim.storagePath)) {
       // Gone. The stamp already says so; leave it standing.
       continue;
@@ -176,10 +193,14 @@ async function removeClaims(
   return {
     // Removed by us, or already absent - both mean the bytes are gone, which is the
     // only thing the caller reports on.
-    reclaimed: claims
-      .map((claim) => claim.storagePath)
-      .filter((path) => !stillPresent.has(path)),
-    orphaned: [...failed].filter((path) => stillPresent.has(path)),
+    // Reclaimed = removed by us, or conclusively already absent. An inconclusive
+    // attempt reclaims NOTHING, because nothing is known.
+    reclaimed: attempt.conclusive
+      ? claims.map((claim) => claim.storagePath).filter((path) => !stillPresent.has(path))
+      : [],
+    orphaned: attempt.conclusive
+      ? [...failed].filter((path) => stillPresent.has(path))
+      : [...failed],
   };
 }
 
