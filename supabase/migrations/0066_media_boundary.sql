@@ -694,7 +694,25 @@ begin
            from public.media_objects m
           where m.bucket_id = 'story-media'
             and m.storage_path = o.name
-            and m.bytes_removed_at is null
+            and (
+              -- An UNCLAIMED row: someone else's live object, not ours to take.
+              m.bytes_removed_at is null
+              -- ...OR a claim that is still plausibly IN FLIGHT. This is the half
+              -- that was missing, and the advisory lock cannot supply it: the
+              -- claiming transaction COMMITS - releasing the lock - and only then
+              -- does the caller issue the Storage delete. So a second tick could
+              -- re-select the stamped row (the old filter excluded only NULL
+              -- stamps), get handed the same claim back through `coalesce`, and if
+              -- either worker then released after a skipped removal, publish_story
+              -- would observe a cleared stamp while a service-role deletion was
+              -- still on its way to the same bytes.
+              --
+              -- Re-adoption after a FAILED removal is deliberate and still works -
+              -- reclaim.ts relies on it, which is why this looks at storage rather
+              -- than trusting the stamp - it just has to wait until the stamp is
+              -- stale rather than racing a live one.
+              or m.bytes_removed_at > now() - interval '1 hour'
+            )
        )
        and not exists (
          select 1
@@ -1596,10 +1614,70 @@ end;
 $$;
 
 comment on function public.get_follower_count(uuid) is
-  'V8-R-FEED-009 (0066) over 0010. Follower count, with the block gate 0010 lacked. Returns the same null a private or unknown profile returns, so the block itself is not observable, and returns it before spending the search cap.';
+  'V8-R-FEED-009 (0066) over 0010. Follower count, with the block gate 0010 lacked. Returns the same null a private or unknown profile returns, AFTER spending the search cap exactly as those paths do - so the block is unobservable by return value and by cap consumption alike. Gating before the spend made the blocked path the only one that did not consume the counter shared with search_handles, which was itself an oracle.';
 
 revoke all on function public.get_follower_count(uuid) from public, anon;
 grant execute on function public.get_follower_count(uuid) to authenticated;
+
+-- THE HIDE HAS TO REACH THE BYTES, NOT ONLY THE ROW.
+--
+-- report_content deliberately permits an author to report their own story, and the
+-- stories policies plus media_read_window then hide it from them. But 0065's
+-- `story_media_is_dead` - which is what the RETAINED owner Storage policy consults -
+-- knows only about deleted_at and expires_at. It never looks at content_reports. So a
+-- self-reporting author kept minting fresh signed URLs for the cached path through
+-- the legacy owner-read policy: hidden in the product, still readable at the bytes.
+--
+-- That policy is retained on purpose under EC-01 (it is WP2's 0071 that withdraws it),
+-- so the gap is live until then and closing it here is not optional.
+--
+-- Redefined rather than edited in 0065, which belongs to another lane. The body is
+-- 0065's, unchanged, plus one term.
+create or replace function public.story_media_is_dead(p_name text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_name is null
+     or auth.uid() is null
+     or (storage.foldername(p_name))[1] is distinct from auth.uid()::text then
+    return true;
+  end if;
+
+  -- V8-R-FEED-010: "reporting IMMEDIATELY HIDES the reported content FOR THE
+  -- REPORTER". The caller here is always the prefix owner, so this is the
+  -- self-report case, and dead-for-them is exactly right.
+  if exists (
+       select 1
+         from public.stories s
+         join public.content_reports cr
+           on cr.subject_kind = 'story'
+          and cr.subject_ref = s.id::text
+        where (s.media_path = p_name or s.inset_path = p_name)
+          and cr.reporter_id = auth.uid()
+     ) then
+    return true;
+  end if;
+
+  return exists (
+           select 1 from public.stories s
+            where (s.media_path = p_name or s.inset_path = p_name)
+              and (s.deleted_at is not null or s.expires_at <= now())
+         )
+     and not exists (
+           select 1 from public.stories s
+            where (s.media_path = p_name or s.inset_path = p_name)
+              and s.deleted_at is null
+              and s.expires_at > now()
+         );
+end;
+$$;
+
+comment on function public.story_media_is_dead(text) is
+  'V8-R-STO-016 / V8-R-FEED-010 (0066 over 0065). Whether these bytes are dead FOR THE CALLING OWNER. Adds the self-report term 0065 lacked: an author who reports their own story kept minting signed URLs through the retained owner Storage policy, so the hide held at the row and leaked at the bytes.';
 
 -- RETIRED, NOT GATED: the obsolete tier-bearing public list (EC-04).
 --

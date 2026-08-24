@@ -275,6 +275,27 @@ describe('0066 — EC-01/EC-02/EC-03 round-3 fixes', () => {
   });
 });
 
+describe('0066 — round-5 fixes', () => {
+  // The hide must reach the BYTES. report_content lets an author report their own
+  // story; the row and the url route then hide it, but 0065's story_media_is_dead
+  // consults only deleted_at/expires_at, so the retained owner Storage policy kept
+  // minting signed URLs for the cached path. That policy stands until WP2's 0071, so
+  // the gap is live until then.
+  it('treats a self-reported story as dead for its own author', () => {
+    const body = FLAT.slice(FLAT.indexOf('create or replace function public.story_media_is_dead'));
+    const fn = body.slice(0, body.indexOf('$$;'));
+    expect(fn).toContain('join public.content_reports cr');
+    expect(fn).toContain('cr.reporter_id = auth.uid()');
+    expect(fn).toContain("cr.subject_kind = 'story'");
+  });
+
+  // The comment described the ordering that WAS the defect.
+  it('does not claim the block gate precedes the cap spend', () => {
+    expect(FLAT).not.toContain('and returns it before spending the search cap');
+    expect(FLAT).toContain('AFTER spending the search cap');
+  });
+});
+
 describe('0066 — this lane PROVIDES the boundary and must stay additive', () => {
   // EC-01 (2026-08-24) restored V8-R-STO-014/015/016 to WP2 (goal g-f1e128da),
   // matching the founder-approved 3.1.0 ledger. Withdrawing the legacy grants
@@ -700,10 +721,18 @@ describe('0066 — zero-reference bytes have a reclamation PATH, not just eligib
     expect(FLAT).toMatch(
       /create or replace function public\.claim_orphan_paths\(p_limit integer default 25\)/i,
     );
+    // Unclaimed rows are skipped, AND so are claims still plausibly in flight. The
+    // second half was missing: the claiming transaction commits (releasing the
+    // advisory lock) before the caller issues the Storage delete, so a second tick
+    // re-selected the stamped row, `coalesce` handed back the same claim, and a
+    // release after a skipped removal let publish_story see a cleared stamp while a
+    // deletion was still in flight. Re-adoption after a FAILED removal still works;
+    // it just waits for the stamp to go stale.
     expect(FLAT).toContain(
       'not exists ( select 1 from public.media_objects m'
       + " where m.bucket_id = 'story-media' and m.storage_path = o.name"
-      + ' and m.bytes_removed_at is null )',
+      + ' and ( m.bytes_removed_at is null'
+      + " or m.bytes_removed_at > now() - interval '1 hour' ) )",
     );
   });
 

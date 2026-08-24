@@ -99,6 +99,39 @@ export async function claimAndRemove(
  * flight — so the sweep, which runs as the service role, is the only thing that
  * gives a claim back.
  */
+/**
+ * Which of these paths are STILL in the bucket.
+ *
+ * Storage reports a skipped removal and a nonexistent object identically - by leaving
+ * the name out of the removed list - so the only way to tell "refused" from "already
+ * gone" is to look. Failure to list is treated as "still present", which keeps the
+ * claim released and the object in front of the next sweep: the safe direction.
+ */
+async function presentPaths(
+  admin: SupabaseClient,
+  paths: readonly string[],
+): Promise<string[]> {
+  const present: string[] = [];
+  for (const path of paths) {
+    const slash = path.lastIndexOf('/');
+    const folder = slash === -1 ? '' : path.slice(0, slash);
+    const name = path.slice(slash + 1);
+    try {
+      const { data, error } = await admin.storage
+        .from(MEDIA_BUCKET)
+        .list(folder, { search: name, limit: 1 });
+      if (error) { present.push(path); continue; }
+      const found = (data ?? []).some(
+        (entry) => String((entry as { name?: unknown })?.name ?? '') === name,
+      );
+      if (found) present.push(path);
+    } catch {
+      present.push(path);
+    }
+  }
+  return present;
+}
+
 async function removeClaims(
   admin: SupabaseClient,
   claims: MediaClaim[],
@@ -113,8 +146,23 @@ async function removeClaims(
     ),
   );
 
+  // AN OBJECT THAT WAS ALREADY GONE IS NOT A FAILED REMOVAL.
+  //
+  // `reclaimBytes` reports "not removed" by ABSENCE from the returned list, and
+  // Storage omits an object it refused AND an object that was never there. Treating
+  // both as failures meant a claim whose bytes are genuinely gone got its stamp
+  // RELEASED - so the next sweep re-claimed the same row, got the same empty result,
+  // released again, forever, and `bytes_removed_at` was never recorded for bytes that
+  // no longer exist. Re-checking existence is what separates the two, and it is one
+  // request per orphan on a path that is already the slow one.
+  const stillPresent = new Set(await presentPaths(admin, [...failed]));
+
   for (const claim of claims) {
     if (!failed.has(claim.storagePath)) continue;
+    if (!stillPresent.has(claim.storagePath)) {
+      // Gone. The stamp already says so; leave it standing.
+      continue;
+    }
     console.error('[media/reclaim] ORPHAN — bytes survived removal:', claim.storagePath);
     if (!(await releaseMediaClaim(admin, claim.mediaId))) {
       // The stamp is still in place and the bytes are still there, so the
@@ -126,10 +174,12 @@ async function removeClaims(
   }
 
   return {
+    // Removed by us, or already absent - both mean the bytes are gone, which is the
+    // only thing the caller reports on.
     reclaimed: claims
       .map((claim) => claim.storagePath)
-      .filter((path) => !failed.has(path)),
-    orphaned: [...failed],
+      .filter((path) => !stillPresent.has(path)),
+    orphaned: [...failed].filter((path) => stillPresent.has(path)),
   };
 }
 

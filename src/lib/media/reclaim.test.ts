@@ -197,4 +197,29 @@ describe('sweepReclaimable — the tick that actually runs', () => {
     });
     expect(remove).not.toHaveBeenCalled();
   });
+
+  // An object that was ALREADY GONE is not a failed removal. Storage omits a refused
+  // object and a nonexistent one identically, so treating both as failures released
+  // the stamp on bytes that are genuinely gone — and the next sweep re-claimed the
+  // same row, got the same empty result, and released again, forever.
+  it('keeps the stamp when the bytes were already absent', async () => {
+    const remove = vi.fn(async () => ({ data: [], error: null }));
+    const list = vi.fn(async () => ({ data: [], error: null })); // not there
+    const rpc = vi.fn(async () => ({ data: null, error: null }));
+    const admin: any = { storage: { from: () => ({ remove, list }) }, rpc };
+    const caller: any = {
+      rpc: vi.fn(async (name: string) => (
+        name === 'claim_media_for_removal'
+          ? { data: [{ media_id: 'm1', bucket_id: 'story-media', storage_path: 'o/m1' }], error: null }
+          : { data: [], error: null }
+      )),
+    };
+
+    const swept = await sweepReclaimable(caller, admin, 5);
+
+    expect(swept.orphaned).toEqual([]);
+    expect(swept.reclaimed).toContain('o/m1');
+    // The claim must NOT be handed back: the stamp is correct, the bytes are gone.
+    expect(rpc).not.toHaveBeenCalledWith('release_media_claim', expect.anything());
+  });
 });
