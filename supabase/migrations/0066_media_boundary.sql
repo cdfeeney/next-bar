@@ -725,6 +725,70 @@ comment on function public.is_blocked_between(uuid, uuid) is
 revoke all on function public.is_blocked_between(uuid, uuid) from public, anon;
 grant execute on function public.is_blocked_between(uuid, uuid) to authenticated;
 
+-- ...AND AT THE TABLES THEMSELVES, because not every interaction path asks a
+-- predicate. `is_mutual_friend` covers everything that reads or publishes a
+-- story, but `follow_user` (0008) never consults it: it checks the rate cap and
+-- the target's privacy flag and then inserts. So after A blocks B, B could
+-- still follow A, or raise a follow request against them, and the resulting row
+-- was readable to both parties — "interaction stops between the two users" with
+-- the most direct interaction of all left open.
+--
+-- A BEFORE INSERT trigger on the two tables that carry those edges catches
+-- every writer at once, including `accept_follow_request` and anything added
+-- later, which a fix inside `follow_user` alone would not. `follow_user`
+-- already wraps both of its inserts in `exception when others then return
+-- 'rejected'`, so a raise here surfaces to the client as an ordinary rejection
+-- rather than an error — the product behaviour a block should have.
+--
+-- The lookup is INLINE rather than a call to is_blocked_between: that function
+-- refuses a caller who is not one of the two parties, and a trigger can fire
+-- under a writer that is neither (a migration, a server-side job). The
+-- invariant belongs to the table, so it must not depend on who is asking.
+create or replace function public.forbid_blocked_edge()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_a uuid;
+  v_b uuid;
+begin
+  if tg_table_name = 'follows' then
+    v_a := new.follower_id;
+    v_b := new.followee_id;
+  else
+    v_a := new.requester_id;
+    v_b := new.target_id;
+  end if;
+
+  if exists (
+    select 1
+      from public.profile_blocks pb
+     where (pb.blocker_id = v_a and pb.blocked_id = v_b)
+        or (pb.blocker_id = v_b and pb.blocked_id = v_a)
+  ) then
+    raise exception 'blocked: no new connection between these accounts'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.forbid_blocked_edge() is
+  'V8-R-FEED-009. Table-level guard: no follow edge and no follow request may be created between two accounts while either has blocked the other.';
+
+drop trigger if exists follows_blocked_guard on public.follows;
+create trigger follows_blocked_guard
+  before insert on public.follows
+  for each row execute function public.forbid_blocked_edge();
+
+drop trigger if exists follow_requests_blocked_guard on public.follow_requests;
+create trigger follow_requests_blocked_guard
+  before insert on public.follow_requests
+  for each row execute function public.forbid_blocked_edge();
+
 -- ENFORCEMENT GOES IN THE SHARED PREDICATE, NOT AT EACH CALL SITE.
 --
 -- V8-R-FEED-009 is "visibility and interaction stop BETWEEN the two users",
@@ -876,6 +940,53 @@ comment on function public.report_content(text, text, text) is
 
 revoke all on function public.report_content(text, text, text) from public, anon;
 grant execute on function public.report_content(text, text, text) to authenticated;
+
+-- THE HIDE IS A READ RULE, NOT A UI RULE.
+--
+-- V8-R-FEED-010 says reporting IMMEDIATELY HIDES the content FOR THE REPORTER.
+-- `reportContent` returned `hideForReporter: true` and `listReportedSubjects`
+-- offered the hide set, but nothing in a read path consulted either: the story
+-- policies did not look at content_reports, so a reported story stayed visible
+-- and the requirement was discharged by a boolean nobody read. A client-side
+-- filter would not have fixed it either — the same class of defect as an EXIF
+-- strip that lives in the browser.
+--
+-- So the hide moves into the audience gate. This is 0065's policy verbatim plus
+-- one term; every other clause, and the comment explaining why the custom
+-- branch goes through a definer helper, is unchanged. It must be created here,
+-- AFTER content_reports exists, because a policy's USING expression is resolved
+-- when the policy is created.
+--
+-- Scoped to the CALLER's own reports by `cr.reporter_id = auth.uid()`: a report
+-- hides the content for the person who reported it, and for nobody else. It is
+-- not a moderation action and must not behave like one.
+drop policy if exists "stories: audience reads unexpired" on public.stories;
+create policy "stories: audience reads unexpired"
+  on public.stories for select
+  using (
+    deleted_at is null
+    and expires_at > now()
+    and auth.uid() <> author_id
+    and public.is_mutual_friend(auth.uid(), author_id)
+    and not exists (
+      select 1
+        from public.content_reports cr
+       where cr.reporter_id = auth.uid()
+         and cr.subject_kind = 'story'
+         and cr.subject_ref = public.stories.id::text
+    )
+    and (
+      audience = 'friends'
+      -- Through the definer helper, NOT a bare subquery: story_audience's own
+      -- policy asks whether the caller authored this story, which reads
+      -- public.stories, which expands this policy again. See 0065's helper
+      -- header.
+      or (
+        audience = 'custom'
+        and public.is_story_recipient(public.stories.id, auth.uid())
+      )
+    )
+  );
 
 ------------------------------------------------------------------------------
 -- 10. Row level security

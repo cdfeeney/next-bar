@@ -275,6 +275,36 @@ describe('0066 — V8-R-FEED-009 blocking is enforced both ways', () => {
     );
     expect(FLAT).toContain('if v_caller is not null and v_caller <> a and v_caller <> b then');
   });
+
+  // is_mutual_friend covers everything that reads or publishes a story, but
+  // follow_user (0008) never asks it — it checks the rate cap and the privacy
+  // flag and inserts. A blocked user could still follow, or raise a follow
+  // request against, the person who blocked them.
+  it('guards the edge tables themselves, not only the story predicates', () => {
+    expect(FLAT).toMatch(
+      /create or replace function public\.forbid_blocked_edge\(\) returns trigger/i,
+    );
+    expect(FLAT).toContain(
+      'create trigger follows_blocked_guard before insert on public.follows',
+    );
+    expect(FLAT).toContain(
+      'create trigger follow_requests_blocked_guard before insert on public.follow_requests',
+    );
+    expect(FLAT).toContain(
+      "raise exception 'blocked: no new connection between these accounts'",
+    );
+  });
+
+  // The trigger can fire under a writer that is neither party (a migration, a
+  // server-side job), and is_blocked_between refuses exactly that caller. A
+  // table invariant must not depend on who is asking.
+  it('inlines the block lookup in the trigger rather than calling the guarded helper', () => {
+    expect(FLAT).toContain(
+      'if exists ( select 1 from public.profile_blocks pb'
+      + ' where (pb.blocker_id = v_a and pb.blocked_id = v_b)'
+      + ' or (pb.blocker_id = v_b and pb.blocked_id = v_a) ) then',
+    );
+  });
 });
 
 describe('0066 — V8-R-FEED-010 the report record is server-owned', () => {
@@ -307,6 +337,28 @@ describe('0066 — V8-R-FEED-010 the report record is server-owned', () => {
     // reads a null id as a failed report and refuses to hide the content.
     expect(FLAT).toContain('set reason = public.content_reports.reason');
     expect(FLAT).not.toContain('set reason = coalesce(');
+  });
+
+  // "Reporting IMMEDIATELY HIDES the content FOR THE REPORTER" needs a READ
+  // path that honours it. reportContent returned hideForReporter:true and
+  // listReportedSubjects offered the hide set, but no policy and no production
+  // caller consulted either, so the reported story stayed visible and the
+  // requirement was discharged by a boolean nobody read.
+  it('hides a reported story in the audience gate, not just in a return value', () => {
+    expect(FLAT).toContain(
+      'and not exists ( select 1 from public.content_reports cr'
+      + " where cr.reporter_id = auth.uid() and cr.subject_kind = 'story'"
+      + ' and cr.subject_ref = public.stories.id::text )',
+    );
+    expect(FLAT).toContain(
+      'drop policy if exists "stories: audience reads unexpired" on public.stories',
+    );
+  });
+
+  // A report hides content for the person who reported it and for nobody else.
+  // It is not a moderation action and must not behave like one.
+  it('scopes the hide to the reporter own rows', () => {
+    expect(FLAT).not.toMatch(/from public\.content_reports cr where cr\.subject_kind/i);
   });
 
   // report_content is granted to `authenticated` and is therefore callable

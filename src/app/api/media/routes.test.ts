@@ -159,24 +159,42 @@ describe('DELETE /api/media/:mediaId', () => {
   // segment; the destination the RPC actually removed need not belong to it. If
   // the handler stamps the path's id, a service-role write marks somebody else's
   // live media byte-removed — a 404 for bytes that are still there.
+  /**
+   * A caller client for the delete path.
+   *
+   * The route makes TWO RPCs on it: the deletion verb, then
+   * media_path_has_live_reference as the last-moment re-check. They are
+   * dispatched by name so a test can answer each one independently — which is
+   * the whole point, since the re-check is what decides whether the bytes go.
+   */
+  function deleteCaller(removal: unknown, stillReferenced = false) {
+    const caller = db({}).client;
+    caller.rpc = vi.fn(async (name: string) => (
+      name === 'media_path_has_live_reference'
+        ? { data: stillReferenced, error: null }
+        : { data: removal, error: null }
+    ));
+    return caller;
+  }
+
+  const REMOVED = (path: string) => ({
+    data: [{ name: path }],
+    error: null,
+  });
+
   it('stamps the media the RPC removed, never the id in the URL', async () => {
     signedIn();
-    const adminRemove = vi.fn(async () => ({ error: null }));
-    const admin = db({ media_objects: { data: null, error: null } }, { remove: adminRemove });
+    const admin = db(
+      { media_objects: { data: null, error: null } },
+      { remove: vi.fn(async () => REMOVED('owner-1/really-mine')) },
+    );
     adminClient.mockReturnValue(admin.client);
-
-    const callerRemove = vi.fn(async () => ({ error: null }));
-    const caller = db({}, { remove: callerRemove }).client;
-    caller.rpc = vi.fn(async () => ({
-      data: [{
-        media_id: 'really-mine',
-        bucket_id: 'story-media',
-        storage_path: 'owner-1/really-mine',
-        reclaimable: true,
-      }],
-      error: null,
-    }));
-    callerClient.mockReturnValue(caller);
+    callerClient.mockReturnValue(deleteCaller([{
+      media_id: 'really-mine',
+      bucket_id: 'story-media',
+      storage_path: 'owner-1/really-mine',
+      reclaimable: true,
+    }]));
 
     const response = await DELETE(
       new Request('https://app.test/api/media/someone-elses?destination=d1', {
@@ -191,59 +209,73 @@ describe('DELETE /api/media/:mediaId', () => {
       .not.toHaveBeenCalledWith('id', 'someone-elses');
   });
 
-  // The RPC's row lock is released when it commits, so a reference created
-  // before the bytes actually go would otherwise be destroyed by a decision
-  // taken before it existed. 0066's storage DELETE policy re-checks the count
-  // at removal time — and service role bypasses RLS, so an admin remove turns
-  // that documented backstop into a comment.
-  it('removes the bytes with the caller client, so the RLS re-check still runs', async () => {
+  // 0066 revokes every story-media SELECT policy and Storage must SEE an object
+  // to delete it, so a caller-scoped remove matches nothing — and reports that
+  // by returning an empty list with NO error. The removal therefore runs with
+  // service role, and the race is caught by the explicit re-check instead.
+  it('removes the bytes with the service-role client', async () => {
     signedIn();
-    const adminRemove = vi.fn(async () => ({ error: null }));
+    const adminRemove = vi.fn(async () => REMOVED('owner-1/m1'));
     const admin = db({ media_objects: { data: null, error: null } }, { remove: adminRemove });
     adminClient.mockReturnValue(admin.client);
-
-    const callerRemove = vi.fn(async () => ({ error: null }));
-    const caller = db({}, { remove: callerRemove }).client;
-    caller.rpc = vi.fn(async () => ({
-      data: [{
-        media_id: 'm1',
-        bucket_id: 'story-media',
-        storage_path: 'owner-1/m1',
-        reclaimable: true,
-      }],
-      error: null,
-    }));
-    callerClient.mockReturnValue(caller);
+    callerClient.mockReturnValue(deleteCaller([{
+      media_id: 'm1',
+      bucket_id: 'story-media',
+      storage_path: 'owner-1/m1',
+      reclaimable: true,
+    }]));
 
     await DELETE(
       new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
       { params: { mediaId: 'm1' } },
     );
 
-    expect(callerRemove).toHaveBeenCalledWith(['owner-1/m1']);
-    expect(adminRemove).not.toHaveBeenCalled();
+    expect(adminRemove).toHaveBeenCalledWith(['owner-1/m1']);
   });
 
-  // A refused delete is the policy catching that race. It must surface as an
-  // orphan report, never as a silent success.
-  it('reports an orphan and does not stamp when the policy refuses the removal', async () => {
+  // THE RACE. The RPC answered "reclaimable" under a row lock it has since
+  // released. If a reference reappeared in that window the bytes must stay, and
+  // nothing may be stamped as removed.
+  it('keeps the bytes when a reference reappears before the removal', async () => {
     signedIn();
-    const admin = db({ media_objects: { data: null, error: null } });
+    const adminRemove = vi.fn(async () => REMOVED('owner-1/m1'));
+    const admin = db({ media_objects: { data: null, error: null } }, { remove: adminRemove });
     adminClient.mockReturnValue(admin.client);
+    callerClient.mockReturnValue(deleteCaller([{
+      media_id: 'm1',
+      bucket_id: 'story-media',
+      storage_path: 'owner-1/m1',
+      reclaimable: true,
+    }], true));
 
-    const caller = db({}, {
-      remove: vi.fn(async () => ({ error: { message: 'denied by policy' } })),
-    }).client;
-    caller.rpc = vi.fn(async () => ({
-      data: [{
-        media_id: 'm1',
-        bucket_id: 'story-media',
-        storage_path: 'owner-1/m1',
-        reclaimable: true,
-      }],
-      error: null,
-    }));
-    callerClient.mockReturnValue(caller);
+    const response = await DELETE(
+      new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
+      { params: { mediaId: 'm1' } },
+    );
+
+    const body = await response.json();
+    expect(adminRemove).not.toHaveBeenCalled();
+    expect(body.bytesReclaimed).toBe(false);
+    expect(body.orphanedPaths).toEqual(['owner-1/m1']);
+    expect(admin.builders.media_objects.update).not.toHaveBeenCalled();
+  });
+
+  // Storage reports a skipped object by leaving it out of the removed list,
+  // with error null. Reading that as success would stamp bytes_removed_at on
+  // bytes still in the bucket.
+  it('reports an orphan and does not stamp when Storage silently skips the object', async () => {
+    signedIn();
+    const admin = db(
+      { media_objects: { data: null, error: null } },
+      { remove: vi.fn(async () => ({ data: [], error: null })) },
+    );
+    adminClient.mockReturnValue(admin.client);
+    callerClient.mockReturnValue(deleteCaller([{
+      media_id: 'm1',
+      bucket_id: 'story-media',
+      storage_path: 'owner-1/m1',
+      reclaimable: true,
+    }]));
 
     const response = await DELETE(
       new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),

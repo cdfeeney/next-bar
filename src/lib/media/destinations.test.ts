@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { deleteEverywhere, reclaimBytes, removeDestination } from './destinations';
+import {
+  deleteEverywhere,
+  pathHasLiveReference,
+  reclaimBytes,
+  removeDestination,
+} from './destinations';
 
 /**
  * V8-R-CMP-012 / V8-R-CMP-015 / V8-R-CMP-016.
@@ -144,17 +149,53 @@ describe('deleteEverywhere — V8-R-CMP-016', () => {
 });
 
 describe('reclaimBytes — orphans are returned, never swallowed', () => {
-  function storage(results: ReadonlyArray<{ error: unknown }>) {
+  type RemoveResult = { data?: unknown; error: unknown };
+
+  function storage(results: ReadonlyArray<RemoveResult>) {
     let call = 0;
     const remove = vi.fn(async () => results[Math.min(call++, results.length - 1)]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return { admin: { storage: { from: () => ({ remove }) } } as any, remove };
   }
 
+  /** What Storage returns for a path it actually deleted. */
+  const deleted = (...names: string[]) => ({
+    data: names.map((name) => ({ name })),
+    error: null,
+  });
+
   it('returns nothing when the removal succeeds', async () => {
-    const { admin, remove } = storage([{ error: null }]);
+    const { admin, remove } = storage([deleted('u1/m1')]);
     await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual([]);
     expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  // THE SILENT SKIP. Storage reports a refusal by leaving the object out of the
+  // removed list, with error null — so a function that inspects only `error`
+  // reads a refused delete as a complete success and the caller stamps
+  // bytes_removed_at on bytes that are still in the bucket.
+  it('reports a path Storage silently skipped, even though no error came back', async () => {
+    const { admin } = storage([{ data: [], error: null }]);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/m1']))
+      .resolves.toEqual(['u1/m1']);
+  });
+
+  it('does not retry a silent skip, because a refusal is a decision', async () => {
+    const { admin, remove } = storage([{ data: [], error: null }]);
+    await reclaimBytes(admin, 'story-media', ['u1/m1']);
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports only the paths that were skipped, not the whole batch', async () => {
+    const { admin } = storage([deleted('u1/a')]);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/a', 'u1/b']))
+      .resolves.toEqual(['u1/b']);
+  });
+
+  it('treats a missing removed list as nothing removed', async () => {
+    const { admin } = storage([{ error: null }]);
+    await expect(reclaimBytes(admin, 'story-media', ['u1/m1']))
+      .resolves.toEqual(['u1/m1']);
   });
 
   it('retries once, then reports the surviving path', async () => {
@@ -164,13 +205,46 @@ describe('reclaimBytes — orphans are returned, never swallowed', () => {
   });
 
   it('succeeds on the retry without reporting an orphan', async () => {
-    const { admin } = storage([{ error: { message: 'transient' } }, { error: null }]);
+    const { admin } = storage([{ error: { message: 'transient' } }, deleted('u1/m1')]);
     await expect(reclaimBytes(admin, 'story-media', ['u1/m1'])).resolves.toEqual([]);
   });
 
   it('does nothing at all for an empty path list', async () => {
-    const { admin, remove } = storage([{ error: null }]);
+    const { admin, remove } = storage([deleted()]);
     await expect(reclaimBytes(admin, 'story-media', [])).resolves.toEqual([]);
     expect(remove).not.toHaveBeenCalled();
+  });
+});
+
+describe('pathHasLiveReference — the last-moment re-check', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const client = (response: { data: unknown; error: unknown }): any => ({
+    rpc: vi.fn(async () => response),
+  });
+
+  it('is false only on an explicit negative answer', async () => {
+    await expect(pathHasLiveReference(client({ data: false, error: null }), 'b', 'p'))
+      .resolves.toBe(false);
+  });
+
+  it('is true when a reference reappeared', async () => {
+    await expect(pathHasLiveReference(client({ data: true, error: null }), 'b', 'p'))
+      .resolves.toBe(true);
+  });
+
+  // Deleting because a lookup broke is the one outcome that cannot be undone.
+  it('FAILS CLOSED when the check errors', async () => {
+    await expect(
+      pathHasLiveReference(client({ data: null, error: { message: 'down' } }), 'b', 'p'),
+    ).resolves.toBe(true);
+  });
+
+  it('FAILS CLOSED on an unexpected answer shape', async () => {
+    await expect(pathHasLiveReference(client({ data: null, error: null }), 'b', 'p'))
+      .resolves.toBe(true);
+  });
+
+  it('FAILS CLOSED with no client at all', async () => {
+    await expect(pathHasLiveReference(null, 'b', 'p')).resolves.toBe(true);
   });
 });
