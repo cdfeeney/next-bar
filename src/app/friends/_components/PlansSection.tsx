@@ -36,6 +36,7 @@ export default function PlansSection(): JSX.Element {
 
       <Link
         href="/friends/consensus"
+        data-testid="start-night-out"
         className="flex items-center gap-4 bg-surface border border-border rounded-3xl px-4 py-4 touch-manipulation min-h-[44px] hover:border-accent transition-colors"
       >
         <span

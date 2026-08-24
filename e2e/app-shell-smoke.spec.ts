@@ -89,7 +89,11 @@ test.describe('App-shell smoke', () => {
     // session, in story-rail.spec.ts.
     await expect(page.getByTestId('stories-signed-out')).toBeVisible();
     await expect(page.getByTestId('stories-rail')).toHaveCount(0);
-    await expect(page.getByTestId('friends-tonight')).toBeVisible();
+    // `social-tonight`, not `friends-tonight`: the WP1 merge (7c6b085) settled
+    // that WP7's TonightPresence IS Social → Tonight, and the older component
+    // that carried the `friends-tonight` id went with the suggestions-backed
+    // presence source it read. One region, one name.
+    await expect(page.getByTestId('social-tonight')).toBeVisible();
     await expect(page.getByRole('link', { name: /Followers/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /Following/i })).toBeVisible();
     await expectNoConsoleErrors(page, '/friends');

@@ -527,12 +527,13 @@ test.describe('/friends — the approved Social surface, signed in', () => {
     display_name: 'Sam J.',
   };
 
-  async function stubCircleSuggestions(
+  async function stubRpc(
     page: Page,
+    fn: string,
     rows: ReadonlyArray<Record<string, unknown>>,
   ): Promise<void> {
     // Registered AFTER stubSupabase so it wins the catch-all.
-    await page.route('**/rest/v1/rpc/get_circle_suggestions', (route) =>
+    await page.route(`**/rest/v1/rpc/${fn}`, (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -541,36 +542,50 @@ test.describe('/friends — the approved Social surface, signed in', () => {
     );
   }
 
-  test('Out tonight is person-first: who, which bar, and the state spelled out', async ({
+  test('Out tonight leads with the bar, names who, and spells the state out', async ({
     page,
   }) => {
     await stubSupabase(page, { following: [SAM] });
-    await stubCircleSuggestions(page, [
+    // `get_circle_presence`, not `get_circle_suggestions`: the WP1 merge
+    // (7c6b085) settled that Social → Tonight reads presence. Suggestions kept
+    // its own source, and the test below still uses it on the board that reads
+    // it.
+    await stubRpc(page, 'get_circle_presence', [
       {
         user_id: REQUESTER_ID,
         handle: 'sam_j',
         display_name: 'Sam J.',
+        status: 'going',
         bar_id: 'attaboy',
+        updated_at: '2026-08-24T02:00:00Z',
       },
     ]);
     await page.goto('/friends');
 
-    const tonight = page.getByTestId('friends-tonight');
+    const tonight = page.getByTestId('social-tonight');
     const row = tonight.getByRole('listitem').filter({ hasText: 'Sam J.' });
     await expect(row).toHaveCount(1);
-    await expect(row.getByText(/▲ Attaboy/)).toBeVisible();
+    // Bar first, then the person — presence describes a place someone backed,
+    // never a person tagged with a venue they did not claim.
+    await expect(row.getByText('Attaboy')).toBeVisible();
     // Never state by color alone — the pinned state is also a word.
-    await expect(row.getByText(/^Pinned$/i)).toBeVisible();
+    await expect(row.getByText(/Pinned/i)).toBeVisible();
   });
 
-  test('Pin my spot opens the suggest dialog, Escape closes it, focus comes back', async ({
+  test('the bar picker opens, Escape closes it, focus comes back', async ({
     page,
   }) => {
     await stubSupabase(page, { following: [SAM] });
-    await stubCircleSuggestions(page, []);
-    await page.goto('/friends');
+    await stubRpc(page, 'get_circle_suggestions', []);
+    // The dialog's opener moved with its owner. `Pin my spot` was the accent
+    // CTA on the suggestions-backed Tonight strip the WP1 merge retired;
+    // SuggestBarDialog itself survived, and its one remaining opener is
+    // `+ Find a bar` on the People's Choice board. Kept rather than deleted
+    // because this is the only test that covers the overlay focus contract —
+    // focus enters the dialog and comes back on close.
+    await page.goto('/friends/consensus');
 
-    const pin = page.getByRole('button', { name: /^Pin my spot$/ });
+    const pin = page.getByRole('button', { name: /^\+ Find a bar$/ });
     // KEYBOARD, not a tap. WebKit does not focus a button on touch, so a
     // tap-opened dialog has nothing to restore focus TO — measured here on
     // iPhone 13, and already the settled position for the sibling overlays
@@ -604,7 +619,7 @@ test.describe('/friends — the approved Social surface, signed in', () => {
 
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
-    await expect.poll(activeLabel).toBe('Pin my spot');
+    await expect.poll(activeLabel).toBe('+ Find a bar');
   });
 
   test('signed-in search rows clear the 44px target floor', async ({ page }) => {

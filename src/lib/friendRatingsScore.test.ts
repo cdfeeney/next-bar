@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { MIGRATIONS_DIR, definingMigration, sqlView } from './effectiveMigration';
+import { definingMigration, migrationView } from './effectiveMigration';
 
 /**
  * 0064's security SHAPE, read from the committed SQL.
@@ -20,12 +20,12 @@ import { MIGRATIONS_DIR, definingMigration, sqlView } from './effectiveMigration
 const FRIEND_FN = 'get_friend_ratings';
 
 function migrationCode(file: string): string {
-  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')).code;
+  return migrationView(file).code;
 }
 
 /** Comments AND string literals blanked — for "this word appears nowhere executable". */
 function migrationSkeleton(file: string): string {
-  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')).skeleton;
+  return migrationView(file).skeleton;
 }
 
 describe('0064 — the numeric score across the friend boundary', () => {

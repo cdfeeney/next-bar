@@ -556,7 +556,14 @@ test.describe('Social sub-tabs (V8-R-NAV-002)', () => {
   test('lands on Tonight with all three sub-tabs present', async ({ page }) => {
     await page.goto('/friends');
 
-    await expect(page.getByRole('heading', { name: 'Social' })).toBeVisible();
+    // The surface names itself through the TABLIST, not a heading. This asked
+    // for `heading "Social"` until the WP1 merge (7c6b085) settled which
+    // /friends shell ships: the approved Social canvas heads the page with the
+    // product name and labels the segmented control "Social". The requirement
+    // (V8-R-NAV-002) is that this screen IS Social and carries three sub-tabs,
+    // which the accessible name proves exactly as well — and unlike a heading,
+    // it is the name assistive tech reads out for the control itself.
+    await expect(page.getByRole('tablist', { name: 'Social' })).toBeVisible();
     const tabs = page.getByRole('tab');
     await expect(tabs).toHaveCount(3);
     await expect(page.getByRole('tab', { name: 'Tonight' })).toHaveAttribute(
@@ -583,8 +590,15 @@ test.describe('Social sub-tabs (V8-R-NAV-002)', () => {
     );
 
     await page.getByRole('tab', { name: 'Feed' }).click();
-    await expect(page.getByTestId('feed-empty')).toBeVisible();
+    // `social-panel-feed`, not `feed-empty`. Signed out there is no story read
+    // to be empty OF: the merged Feed renders `feed-empty` only once the story
+    // status is `ready`, and offers the signed-out state until then. This test
+    // is about the SWAP — the panel changed and the previous one is gone — so
+    // it asserts the panel, and the empty-feed state is covered with a session
+    // in story-rail.spec.ts.
+    await expect(page.getByTestId('social-panel-feed')).toBeVisible();
     await expect(page.getByTestId('start-night-out')).toHaveCount(0);
+    await expect(page.getByTestId('social-tonight')).toHaveCount(0);
 
     await page.getByRole('tab', { name: 'Tonight' }).click();
     await expect(page.getByTestId('social-tonight')).toBeVisible();
@@ -594,33 +608,51 @@ test.describe('Social sub-tabs (V8-R-NAV-002)', () => {
     expect(page.url()).toBe(urlBefore);
   });
 
-  test('Tonight with no circle says nobody is out and offers a way forward, never an error', async ({
+  test('Tonight signed out asks for a session, never claims nobody is out', async ({
     page,
   }) => {
     await page.goto('/friends');
 
-    // V8-R-OPS-005: "no friends yet offers Invite friends", and the story rail
-    // hides rather than showing an empty ring.
-    await expect(page.getByTestId('presence-empty')).toBeVisible();
-    await expect(
-      page.getByRole('link', { name: /invite friends/i }),
-    ).toBeVisible();
+    // This asserted `presence-empty` — "No friends out yet tonight" — at a
+    // VISITOR, which is a claim about friends we never asked about. The hook's
+    // own header already said so ("there is simply no circle to ask about")
+    // while handing back the empty-circle value anyway; the surface now has a
+    // fourth state and this is it. The genuinely-empty circle moved to
+    // friends-real.spec.ts, where a stubbed session makes it a real read.
+    const signedOut = page.getByTestId('presence-signed-out');
+    await expect(signedOut).toBeVisible();
+    // Scoped: the stories rail offers its OWN "Sign in" on this same panel, and
+    // an unscoped role query matches both.
+    await expect(signedOut.getByRole('link', { name: /^Sign in$/ })).toBeVisible();
 
-    // The distinction this surface must never blur: an empty circle is NOT a
-    // failed read, so the failure state must be absent here.
+    // The distinctions this surface must never blur: no session is not a failed
+    // read, and it is not an empty circle either.
     await expect(page.getByTestId('presence-error')).toHaveCount(0);
+    await expect(page.getByTestId('presence-empty')).toHaveCount(0);
     await expect(page.getByTestId('presence-list')).toHaveCount(0);
   });
 
   test('the legacy Friends dashboard is gone from Social', async ({ page }) => {
     await page.goto('/friends');
 
-    // The three legacy affordances, asserted absent so the dashboard cannot
-    // quietly return: the old primary card, and the two follower statistics.
+    // The affordances that MADE it the old dashboard, asserted absent so it
+    // cannot quietly return: the old primary card and the "Friends" page
+    // heading.
     await expect(
       page.getByRole('link', { name: /^Plan Night Out/i }),
     ).toHaveCount(0);
-    await expect(page.getByTestId('follow-stats')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: /^Friends$/ })).toHaveCount(0);
+
+    // NOT follow-stats, and the change is a DECISION, not a relaxation. This
+    // used to assert the two follower statistics absent as well, because on the
+    // pre-merge /friends they were part of the dashboard being replaced. The
+    // WP1 merge (7c6b085) re-homed them deliberately: they are now a section of
+    // Groups & people INSIDE Tonight, reached by the header control, and
+    // friends-flow.spec.ts asserts they are visible there. Keeping the old
+    // negative would have made this suite and that one contradict each other on
+    // the same branch. What the guard now protects is the dashboard's IDENTITY,
+    // not every element that survived it.
+    await page.getByRole('button', { name: /Groups & people/i }).click();
+    await expect(page.getByTestId('follow-stats')).toBeVisible();
   });
 });

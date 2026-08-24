@@ -86,7 +86,12 @@ test.describe('Social — the approved surface', () => {
     page,
   }) => {
     await page.goto('/friends');
-    const tonight = page.getByTestId('friends-tonight');
+    // `social-tonight` since the WP1 merge (7c6b085): Social → Tonight is
+    // WP7's TonightPresence, and the older `friends-tonight` component went
+    // with the suggestions-backed source it read. The assertion itself SURVIVED
+    // that merge on purpose — it is the one that caught Tonight telling a
+    // visitor "No friends out yet tonight" about friends it never asked about.
+    const tonight = page.getByTestId('social-tonight');
     await expect(tonight.getByText(/Sign in to see who's out/i)).toBeVisible();
     // No accent CTA to a write the visitor cannot perform.
     await expect(
@@ -204,31 +209,44 @@ test.describe('Friends + consensus', () => {
     ).toHaveCount(0);
   });
 
-  test('tonight intent pills toggle, persist, and clear (UX-A compact row)', async ({ page }) => {
+  test('a status pill never lights for a write that did not land', async ({ page }) => {
+    // WAS "tonight intent pills toggle, persist, and clear (UX-A compact row)",
+    // over `useIntent` — a LOCAL, device-only status that toggled and persisted
+    // signed out. The WP1 merge (7c6b085) settled that Social → Tonight is
+    // WP7's TonightPresence, and its pills are a SERVER write
+    // (`set_night_presence`) whose whole point is that the night is resolved
+    // server-side and the audience is enforced rather than displayed. No UI
+    // consumer of the local intent status survives; `useIntent` is down to
+    // `useNightRefresh`. The pills also renamed: Maybe → "Maybe later",
+    // Not tonight → "Not going out".
+    //
+    // What replaces it is the stronger property the component's own header
+    // promises: "Optimistically flipping the pill would tell the user their
+    // friends can see a pin that was never written." Signed out the write
+    // cannot land, so the pill must NOT light — and the surface must say so
+    // rather than going quiet.
     await page.clock.setFixedTime(new Date('2026-07-24T22:00:00'));
     await page.goto('/friends');
 
-    // One tap sets; it sticks across reload; tapping the lit pill clears.
-    const goingBtn = page.getByRole('button', { name: /^Going out$/ });
-    await goingBtn.click();
-    await expect(goingBtn).toHaveAttribute('aria-pressed', 'true');
-    await page.reload();
-    const goingAfter = page.getByRole('button', { name: /^Going out$/ });
-    await expect(goingAfter).toHaveAttribute('aria-pressed', 'true');
-    await goingAfter.click();
-    await expect(goingAfter).toHaveAttribute('aria-pressed', 'false');
+    const going = page.getByRole('button', { name: /^Going out$/ });
+    await expect(going).toHaveAttribute('aria-pressed', 'false');
+    await going.click();
 
-    // QA4: third pill "Not tonight" — same toggle semantics, persists.
-    const notTonight = page.getByRole('button', { name: /^Not tonight$/ });
-    await notTonight.click();
-    await expect(notTonight).toHaveAttribute('aria-pressed', 'true');
-    // Statuses are exclusive — setting it never lights the others.
-    await expect(goingAfter).toHaveAttribute('aria-pressed', 'false');
+    // Not lit — not now, and not after a reload, because nothing was stored.
+    await expect(going).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByText(/didn't save/i)).toBeVisible();
     await page.reload();
-    const notTonightAfter = page.getByRole('button', { name: /^Not tonight$/ });
-    await expect(notTonightAfter).toHaveAttribute('aria-pressed', 'true');
-    await notTonightAfter.click();
-    await expect(notTonightAfter).toHaveAttribute('aria-pressed', 'false');
+    await expect(
+      page.getByRole('button', { name: /^Going out$/ }),
+    ).toHaveAttribute('aria-pressed', 'false');
+
+    // The other two pills are the V8 set, and none of them is lit either.
+    for (const label of [/^Maybe later$/, /^Not going out$/]) {
+      await expect(page.getByRole('button', { name: label })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
+    }
   });
 
   // The multi-step Put-it-to-a-vote flow is DELETED (UX-B): Group

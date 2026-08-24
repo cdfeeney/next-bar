@@ -239,28 +239,57 @@ export default function TonightPresence(): JSX.Element {
         <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
           Out tonight
         </h2>
-        <CircleList loading={loading} rows={rows} />
+        <CircleList
+          loading={loading}
+          rows={rows}
+          signedOut={auth.status !== 'loading' && auth.status !== 'signed-in'}
+        />
       </section>
     </div>
   );
 }
 
 /**
- * The three states, kept in one place so no caller can accidentally render the
- * empty state for a failed read.
+ * The four states, kept in one place so no caller can accidentally render the
+ * empty state for a failed read — or for a visitor who has no circle to read.
  */
 function CircleList({
   loading,
   rows,
+  signedOut,
 }: {
   loading: boolean;
   rows: ReturnType<typeof usePinnedHandles>['rows'];
+  signedOut: boolean;
 }): JSX.Element {
   if (loading) {
     return (
       <p className="text-muted text-sm" role="status">
         Checking who&apos;s out…
       </p>
+    );
+  }
+
+  // SIGNED OUT IS ITS OWN STATE. usePinnedHandles hands back `[]` here, and its
+  // own header says why that is not an empty circle: "there is simply no circle
+  // to ask about". Rendering "No friends out yet tonight" at a visitor is the
+  // same category of lie as rendering it on a failed read — a claim about
+  // friends we never asked about, made to someone who has not told us who they
+  // are (V8-R-OPS-005). The forward path differs too: a visitor cannot invite
+  // anyone until they sign in.
+  if (signedOut) {
+    return (
+      <div data-testid="presence-signed-out">
+        <p className="text-muted text-sm mb-3">
+          Sign in to see who&apos;s out and pin your own spot.
+        </p>
+        <Link
+          href="/auth"
+          className="inline-flex items-center min-h-[44px] px-5 rounded-full border border-border font-display text-sm touch-manipulation hover:border-accent hover:text-accent transition-colors"
+        >
+          Sign in
+        </Link>
+      </div>
     );
   }
 

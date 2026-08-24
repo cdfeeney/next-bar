@@ -9,6 +9,7 @@ import {
   definingMigration,
   definitionIndex,
   looksLikeUnreadableDefinition,
+  migrationView,
   normalisedSql,
   sqlView,
   type GuardedFunction,
@@ -301,7 +302,7 @@ function effectiveView(name: GuardedFunction): { code: string; skeleton: string 
   // definitions are LOCATED, because a definition header quoted inside a string
   // is not one (round-7 review, Codex, medium). The two are the same length by
   // construction, so an index from one slices the other.
-  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8'));
+  return migrationView(file as string);
 }
 
 /**
@@ -670,9 +671,11 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
    * Codex, medium). The describe block's title still names 0048 because the
    * exactly-once assertions above genuinely are about that file's text.
    */
-  // 15s: effectiveView re-reads and re-parses the whole migration chain for
-  // each caller, so this grows with the ledger and passed the 5s default when
-  // 0060 landed.
+  // 15s, kept as headroom for whichever `it` pays for the FIRST full scan of
+  // the migration directory. effectiveMigration.migrationView memoises the
+  // per-file view now, so the cost no longer multiplies by the number of
+  // callers — which is what actually reddened this file when 0065/0066 landed.
+  // Do not answer a future timeout here by raising this number again.
   it('every caller asks the helpers rather than restating the rule', () => {
     for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token'] as const) {
       const body = functionBody(effectiveView(fn), fn);
