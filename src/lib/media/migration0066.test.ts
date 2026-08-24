@@ -73,6 +73,29 @@ describe('0066 — V8-R-CMP-012 bytes outlive nothing but their last reference',
     expect(FLAT).toContain('for update of m');
   });
 
+  // SECURITY DEFINER is what lets these see references the caller cannot, so
+  // granted to `authenticated` without a guard they are liveness ORACLES:
+  // anyone holding a media id or a storage path could poll whether somebody
+  // else's photo is still referenced and watch it flip on expiry or deletion —
+  // and keep polling after being blocked. 0065 refuses exactly that shape.
+  it('guards the reference-count helpers so they are not liveness oracles', () => {
+    expect(FLAT).toContain(
+      'if v_caller is not null and not exists ( select 1 from public.media_objects m'
+      + ' where m.id = p_media_id and m.owner_id = v_caller ) then return 1',
+    );
+    expect(FLAT).toContain(
+      'if v_caller is not null and (storage.foldername(p_name))[1]'
+      + ' is distinct from v_caller::text then return true',
+    );
+  });
+
+  // Both guards fail CLOSED — 1 reference and "still referenced" — because
+  // "zero" and "false" are the answers that authorise destroying bytes.
+  it('makes the guarded answer the one that keeps the bytes', () => {
+    expect(FLAT).not.toContain('is distinct from v_caller::text then return false');
+    expect(FLAT).not.toMatch(/and m\.owner_id = v_caller \) then return 0/i);
+  });
+
   it('leaves archive holds standing when deleting everywhere', () => {
     // V8-R-CMP-016: bytes are reclaimed only if no Saved Nights Out archive
     // still references them.
@@ -298,6 +321,29 @@ describe('0066 — V8-R-FEED-009 blocking is enforced both ways', () => {
   // The trigger can fire under a writer that is neither party (a migration, a
   // server-side job), and is_blocked_between refuses exactly that caller. A
   // table invariant must not depend on who is asking.
+  // Refusing NEW edges changes nothing for the case that matters: people block
+  // someone they are already connected to. An existing follow edge or pending
+  // request survived, and get_following / get_friend_ratings /
+  // get_follow_requests / get_outgoing_requests all keep answering because none
+  // of them consults profile_blocks. Removing the edge removes the answer from
+  // every reader at once, including ones not written yet.
+  it('severs the connections that already exist when a block is created', () => {
+    expect(FLAT).toMatch(
+      /create or replace function public\.sever_blocked_connections\(\) returns trigger/i,
+    );
+    expect(FLAT).toContain(
+      'delete from public.follows f where (f.follower_id = new.blocker_id'
+      + ' and f.followee_id = new.blocked_id)',
+    );
+    expect(FLAT).toContain(
+      'delete from public.follow_requests r where (r.requester_id = new.blocker_id'
+      + ' and r.target_id = new.blocked_id)',
+    );
+    expect(FLAT).toContain(
+      'create trigger profile_blocks_sever_connections after insert on public.profile_blocks',
+    );
+  });
+
   it('inlines the block lookup in the trigger rather than calling the guarded helper', () => {
     expect(FLAT).toContain(
       'if exists ( select 1 from public.profile_blocks pb'
@@ -352,6 +398,19 @@ describe('0066 — V8-R-FEED-010 the report record is server-owned', () => {
     );
     expect(FLAT).toContain(
       'drop policy if exists "stories: audience reads unexpired" on public.stories',
+    );
+  });
+
+  // The policy hides the ROW. media_read_window is SECURITY DEFINER and reads
+  // public.stories directly, so the policy does not run there — without the same
+  // term a reporter loses the story but can still mint a fresh signed URL for
+  // its photo using a media id they had already seen. Hiding the caption while
+  // the image still loads is not hiding the content.
+  it('hides the reported story bytes too, not only the story row', () => {
+    expect(FLAT).toContain(
+      'and not exists ( select 1 from public.content_reports cr'
+      + " where cr.reporter_id = v_caller and cr.subject_kind = 'story'"
+      + ' and cr.subject_ref = s.id::text )',
     );
   });
 

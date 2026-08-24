@@ -8,6 +8,7 @@ import {
   verifiedUserId,
 } from '@/lib/media/serverClients';
 import { isDestinationKind, MEDIA_BUCKET } from '@/lib/media/types';
+import { readUploadForm } from '@/lib/media/uploadBody';
 
 /**
  * POST /api/media/upload — the ONLY way bytes reach the media bucket
@@ -38,6 +39,53 @@ type UploadError =
 
 function fail(error: UploadError, status: number): NextResponse {
   return NextResponse.json({ ok: false, error }, { status });
+}
+
+/**
+ * The only two things this route needs from the uploaded part.
+ *
+ * Deliberately NOT `instanceof File`. Class identity does not survive a realm
+ * boundary, and this handler now parses the body itself, so the `File` the
+ * multipart parser constructs and the `File` this module's global refers to can
+ * be two different classes that behave identically — `instanceof` then rejects
+ * a perfectly good upload, and it does so as a 400 that looks like a malformed
+ * request. Checking for the shape actually used is both realm-proof and honest
+ * about the dependency.
+ */
+type UploadedFile = { size: number; arrayBuffer: () => Promise<ArrayBuffer> };
+
+function isUploadedFile(value: unknown): value is UploadedFile {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as UploadedFile).size === 'number'
+    && typeof (value as UploadedFile).arrayBuffer === 'function';
+}
+
+/**
+ * Undo a partially completed upload: the registry row first, then the bytes.
+ *
+ * Registry first on purpose. While the row exists the object is referenced by
+ * something the reference count can see, so a failure between the two leaves an
+ * object with no row rather than a row pointing at nothing — the direction the
+ * orphan report below can actually describe.
+ */
+async function unwindUpload(
+  admin: ReturnType<typeof adminClient>,
+  mediaId: string,
+  storagePath: string,
+): Promise<void> {
+  const { error: rowError } = await admin
+    .from('media_objects')
+    .delete()
+    .eq('id', mediaId);
+  if (rowError) {
+    console.error('[media/upload] could not remove registry row:', mediaId, rowError.message);
+  }
+
+  const { error: byteError } = await admin.storage.from(MEDIA_BUCKET).remove([storagePath]);
+  if (byteError) {
+    console.error('[media/upload] ORPHAN — cleanup failed:', storagePath, byteError.message);
+  }
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -77,13 +125,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     return fail('too_large', 413);
   }
 
-  let file: File;
+  let file: UploadedFile;
   let destinationKind: string | null;
   let destinationRef: string | null;
   try {
-    const form = await request.formData();
+    // THE BODY IS BOUNDED AS IT ARRIVES, not merely believed. The declared
+    // length above is a claim and is only a cheap early refusal for callers
+    // honest about it; `readUploadForm` applies the cap to the bytes themselves.
+    const form = await readUploadForm(request, MAX_UPLOAD_BYTES);
+    if (form === 'too_large') return fail('too_large', 413);
+    if (form === 'bad_request') return fail('bad_request', 400);
+
     const candidate = form.get('file');
-    if (!(candidate instanceof File)) return fail('bad_request', 400);
+    if (!isUploadedFile(candidate)) return fail('bad_request', 400);
     file = candidate;
     const kind = form.get('destinationKind');
     const ref = form.get('destinationRef');
@@ -228,9 +282,15 @@ export async function POST(request: Request): Promise<NextResponse> {
       });
       if (destError) {
         console.error('[media/upload] destination insert failed:', destError.message);
-        // The media exists and is registered; the caller can attach a
-        // destination separately. Reported as a failure rather than a success
-        // with a missing reference.
+        // THE WHOLE UPLOAD IS UNWOUND, because a half-done one is unreachable.
+        // There is no client write grant on media_destinations and no
+        // attachment endpoint, and this response does not carry the generated
+        // id, so a caller cannot finish the job later. Leaving the row and the
+        // bytes behind would create a permanent orphan the reference count
+        // reports as zero-referenced and nothing ever collects. Same contract
+        // as the registry-insert failure above: report what could not be
+        // cleaned rather than swallow it.
+        await unwindUpload(admin, mediaId, storagePath);
         return fail('server_error', 500);
       }
     }

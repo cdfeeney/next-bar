@@ -128,13 +128,37 @@ comment on column public.media_destinations.id is
 --     live stories are still showing, and zero is the licence to destroy the
 --     bytes. The second term counts those stories directly, skipping any that the
 --     first term already counted through a spine row.
+--
+-- PARTY GUARD, same reason as everywhere else in this file. SECURITY DEFINER is
+-- what lets this see references the caller cannot, so granted to `authenticated`
+-- with no caller check it is an ORACLE: anyone holding a media id could poll
+-- whether somebody else's photo is still referenced by a live story, watch it
+-- flip on expiry or deletion, and keep doing so after being blocked. 0065
+-- refuses exactly that shape in `story_media_is_dead`.
+--
+-- It fails CLOSED at 1 rather than 0: every caller of this function acts on
+-- "zero means the bytes may go", so a refusal must never be the answer that
+-- authorises destroying data. A NULL caller is trusted infrastructure.
 create or replace function public.media_live_reference_count(p_media_id uuid)
 returns integer
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
+declare
+  v_caller uuid := auth.uid();
+begin
+  if v_caller is not null and not exists (
+    select 1
+      from public.media_objects m
+     where m.id = p_media_id
+       and m.owner_id = v_caller
+  ) then
+    return 1;
+  end if;
+
+  return (
   select
     (select count(*)::int
        from public.media_destinations d
@@ -165,7 +189,8 @@ as $$
              and d2.kind = 'story'
              and d2.ref_id = s.id::text
              and d2.removed_at is null
-        ));
+        )));
+end;
 $$;
 
 revoke all on function public.media_live_reference_count(uuid) from public, anon;
@@ -179,17 +204,36 @@ grant execute on function public.media_live_reference_count(uuid) to authenticat
 -- object uploaded before this registry existed has NO `media_objects` row, so a
 -- registry-only lookup answers "no references" for a photo a live story is
 -- showing right now.
+-- OWN-PREFIX GUARD, and it fails CLOSED at true for the same reason the count
+-- above fails closed at 1: "no live reference" is the answer that authorises
+-- destroying bytes, so a caller who may not ask must never receive it. Without
+-- the guard this is a liveness oracle over any path a caller has ever seen —
+-- true while somebody else's story is live, false the moment it expires or is
+-- deleted, and still answering after a block.
+--
+-- Both in-repo callers already act on the caller's own prefix: the storage
+-- DELETE policy below requires `(storage.foldername(name))[1] = auth.uid()`,
+-- and the route's pre-removal re-check runs on media the deletion RPC has
+-- already confirmed the caller owns. The guard costs neither of them anything.
 create or replace function public.media_path_has_live_reference(
   p_bucket text,
   p_name text
 )
 returns boolean
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
-  select exists (
+declare
+  v_caller uuid := auth.uid();
+begin
+  if v_caller is not null
+     and (storage.foldername(p_name))[1] is distinct from v_caller::text then
+    return true;
+  end if;
+
+  return exists (
     select 1
       from public.media_objects m
      where m.bucket_id = p_bucket
@@ -206,6 +250,7 @@ as $$
          and s.expires_at > now()
     )
   );
+end;
 $$;
 
 revoke all on function public.media_path_has_live_reference(text, text) from public, anon;
@@ -519,6 +564,20 @@ begin
      and s.deleted_at is null
      and s.expires_at > now()
      and public.is_mutual_friend(v_caller, s.author_id)
+     -- THE REPORTER'S HIDE APPLIES TO THE BYTES TOO. The stories SELECT policy
+     -- excludes a story the caller reported, but this function is SECURITY
+     -- DEFINER and reads public.stories directly, so the policy does not run
+     -- here: without this clause a viewer could report a story, lose the row,
+     -- and still mint a fresh signed URL for its photo with a media id they had
+     -- already seen. "Reporting IMMEDIATELY HIDES the reported content" is not
+     -- satisfied by hiding the caption while the image still loads.
+     and not exists (
+       select 1
+         from public.content_reports cr
+        where cr.reporter_id = v_caller
+          and cr.subject_kind = 'story'
+          and cr.subject_ref = s.id::text
+     )
      and (
        s.audience = 'friends'
        or public.is_story_recipient(s.id, v_caller)
@@ -546,20 +605,54 @@ grant execute on function public.media_read_window(text) to authenticated;
 -- story_audience policy closes the cycle and PostgreSQL refuses BOTH tables
 -- with an infinite-recursion error. 0065 records that trap; this stays clear of
 -- it the same way, with a definer helper.
+-- The policies that use this always pair it with a caller-scoped term, so
+-- inside a policy it is not an oracle. Reached DIRECTLY over PostgREST it would
+-- be one: any caller holding a story uuid could poll whether that story is
+-- still live and watch the answer flip on expiry or deletion — metadata
+-- V8-R-STO-016 makes unqueryable.
+--
+-- The guard is PARTY-BASED rather than a revoke. RLS policy expressions are
+-- evaluated as the querying user, so withdrawing EXECUTE from `authenticated`
+-- risks breaking the two policies below, and no local gate here executes SQL to
+-- prove otherwise. Restricting the ANSWER is safe in a way that restricting the
+-- grant is not.
+--
+-- Author or mutual friend of the author, which is exactly the set both policies
+-- can already reach this function with: a story_audience recipient and a tagged
+-- profile are mutual friends by 0065's own rules, and so is any viewer of a
+-- 'friends' story. A stranger now gets false instead of the truth. Since
+-- is_mutual_friend carries the block, a blocked account also stops getting an
+-- answer.
 create or replace function public.is_story_live(p_story_id uuid)
 returns boolean
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
-  select exists (
+declare
+  v_caller uuid := auth.uid();
+begin
+  if v_caller is not null and not exists (
+    select 1
+      from public.stories s
+     where s.id = p_story_id
+       and (
+         s.author_id = v_caller
+         or public.is_mutual_friend(v_caller, s.author_id)
+       )
+  ) then
+    return false;
+  end if;
+
+  return exists (
     select 1
       from public.stories s
      where s.id = p_story_id
        and s.deleted_at is null
        and s.expires_at > now()
   );
+end;
 $$;
 
 revoke all on function public.is_story_live(uuid) from public, anon;
@@ -788,6 +881,52 @@ drop trigger if exists follow_requests_blocked_guard on public.follow_requests;
 create trigger follow_requests_blocked_guard
   before insert on public.follow_requests
   for each row execute function public.forbid_blocked_edge();
+
+-- ...AND THE EDGES THAT ALREADY EXIST, because refusing new ones changes
+-- nothing for the case that actually matters. People block someone they are
+-- already connected to. The guard above stops a NEW follow, but an existing
+-- follow edge or pending request survived the block, and 0007/0008 read those
+-- rows through their own policies: `get_following`, `get_friend_ratings`,
+-- `get_follow_requests` and `get_outgoing_requests` all keep returning data
+-- across a block because none of them consults profile_blocks.
+--
+-- Redefining those four functions would be four copies of somebody else's code
+-- and a fifth reader forgotten later. Removing the EDGE removes the answer from
+-- every reader at once, including ones not written yet — there is nothing left
+-- to return.
+--
+-- AN EXPLICIT READING, written down so it can be overruled: the contract says a
+-- block "does not retroactively dissolve existing shared GROUPS", and names only
+-- groups. A follow edge is the direct connection the requirement says must
+-- stop, so severing it is the reading taken here. Unblocking does not restore
+-- the edge — the follow has to be made again, which is the honest consequence
+-- of having severed it rather than hidden it.
+create or replace function public.sever_blocked_connections()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  delete from public.follows f
+   where (f.follower_id = new.blocker_id and f.followee_id = new.blocked_id)
+      or (f.follower_id = new.blocked_id and f.followee_id = new.blocker_id);
+
+  delete from public.follow_requests r
+   where (r.requester_id = new.blocker_id and r.target_id = new.blocked_id)
+      or (r.requester_id = new.blocked_id and r.target_id = new.blocker_id);
+
+  return new;
+end;
+$$;
+
+comment on function public.sever_blocked_connections() is
+  'V8-R-FEED-009. Blocking removes the follow edges and pending requests in BOTH directions, so every existing reader of those tables stops returning the pair without each one having to learn about blocks.';
+
+drop trigger if exists profile_blocks_sever_connections on public.profile_blocks;
+create trigger profile_blocks_sever_connections
+  after insert on public.profile_blocks
+  for each row execute function public.sever_blocked_connections();
 
 -- ENFORCEMENT GOES IN THE SHARED PREDICATE, NOT AT EACH CALL SITE.
 --

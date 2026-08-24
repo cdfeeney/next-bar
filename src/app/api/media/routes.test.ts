@@ -28,6 +28,7 @@ const adminClient = vi.fn();
 const callerClient = vi.fn();
 const verifiedUserId = vi.fn();
 const reEncodeImage = vi.fn();
+const readUploadForm = vi.fn();
 
 vi.mock('@/lib/media/serverClients', () => ({
   readMediaEnv: () => readMediaEnv(),
@@ -40,6 +41,26 @@ vi.mock('@/lib/media/serverClients', () => ({
 vi.mock('@/lib/media/reEncode', () => ({
   MAX_UPLOAD_BYTES,
   reEncodeImage: (bytes: Uint8Array) => reEncodeImage(bytes),
+}));
+
+/**
+ * The multipart parse is mocked because it CANNOT run here, and the reason is
+ * worth recording rather than rediscovering.
+ *
+ * undici's `formData()` builds each part with the GLOBAL `File` constructor and
+ * then validates it with its own `webidl.is.File`. Under vitest's jsdom
+ * environment the global `File` is jsdom's, so undici rejects the very object it
+ * just created — every multipart body fails to parse, whatever it contains.
+ * Verified by probe: "assert(typeof value === 'string' && webidl.is.USVString
+ * (value) || webidl.is.File(value))".
+ *
+ * So the seam is a real module boundary, not a test-only hook:
+ * `src/lib/media/uploadBody.ts` owns the bounded read AND the parse, its
+ * bounding logic is unit-tested against real streams in uploadBody.test.ts, and
+ * these route tests supply an already-parsed form.
+ */
+vi.mock('@/lib/media/uploadBody', () => ({
+  readUploadForm: (request: Request, limit: number) => readUploadForm(request, limit),
 }));
 
 const { DELETE } = await import('./[mediaId]/route');
@@ -60,7 +81,7 @@ const ENV = { url: 'https://example.test', anonKey: 'anon', serviceKey: 'service
 function builder(result: unknown): any {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {};
-  for (const method of ['select', 'eq', 'is', 'in', 'order', 'update', 'insert']) {
+  for (const method of ['select', 'eq', 'is', 'in', 'order', 'update', 'insert', 'delete']) {
     chain[method] = vi.fn(() => chain);
   }
   chain.maybeSingle = vi.fn(async () => result);
@@ -569,14 +590,10 @@ describe('GET /api/media/:mediaId/url', () => {
 
 describe('POST /api/media/upload', () => {
   /**
-   * A request stub rather than a real `Request` with a FormData body.
+   * A request stub plus the form the (mocked) parser will hand back.
    *
-   * `Request.formData()` decodes the multipart body with undici's `File`, while
-   * the route — and this test — resolve `File` from the jsdom global. The two
-   * are different classes, so `candidate instanceof File` was false and EVERY
-   * upload returned 400: four assertions here passed for the wrong reason
-   * before the one that expects 200 exposed it. Handing the route the same
-   * FormData object keeps both sides in one realm.
+   * `readUploadForm` is armed here rather than in each test so the default is a
+   * well-formed upload; tests about refusal override the mock or the headers.
    */
   function uploadRequest(
     fields: Record<string, string> = {},
@@ -587,10 +604,17 @@ describe('POST /api/media/upload', () => {
     const form = new FormData();
     form.set('file', new File([new Uint8Array([1, 2, 3])], 'p.jpg', { type: 'image/jpeg' }));
     for (const [key, value] of Object.entries(fields)) form.set(key, value);
+    readUploadForm.mockResolvedValue(form);
+
     return {
-      headers: new Headers(headers),
-      formData: async () => form,
-    } as unknown as Request;
+      request: {
+        headers: new Headers({
+          'content-type': 'multipart/form-data; boundary=testboundary',
+          ...Object.fromEntries(new Headers(headers).entries()),
+        }),
+      } as unknown as Request,
+      form,
+    };
   }
 
   function uploadAdmin(story: unknown) {
@@ -610,26 +634,57 @@ describe('POST /api/media/upload', () => {
     readMediaEnv.mockReturnValue(ENV);
     bearerToken.mockReturnValue(null);
 
-    const response = await POST(uploadRequest());
+    const response = await POST(uploadRequest().request);
 
     expect(response.status).toBe(401);
     expect(reEncodeImage).not.toHaveBeenCalled();
   });
 
-  // The size bound has to bite BEFORE formData() buffers the body, or an
-  // oversized upload is refused only after the process has already held all of
-  // it in memory.
+  // The declared length is a cheap early refusal: an honest oversized upload is
+  // turned away without the body ever being read.
   it('refuses an oversized body on its declared length, before reading it', async () => {
     signedIn();
     adminClient.mockReturnValue(uploadAdmin(null).client);
 
-    const request = uploadRequest({}, { 'content-length': String(MAX_UPLOAD_BYTES + 1) });
-    const formData = vi.spyOn(request, 'formData');
+    const { request } = uploadRequest(
+      {},
+      { 'content-length': String(MAX_UPLOAD_BYTES + 1) },
+    );
 
     const response = await POST(request);
 
     expect(response.status).toBe(413);
-    expect(formData).not.toHaveBeenCalled();
+    expect(readUploadForm).not.toHaveBeenCalled();
+  });
+
+  // AND THE DECLARED LENGTH IS NOT TRUSTED. A request may say 1 KiB and send a
+  // gigabyte, so the cap is also applied to the bytes as they arrive — that is
+  // readUploadForm's 'too_large', and the route has to honour it rather than
+  // treating a non-FormData answer as a parse failure.
+  it('refuses a body that outruns its own declared length', async () => {
+    signedIn();
+    adminClient.mockReturnValue(uploadAdmin(null).client);
+
+    const { request } = uploadRequest({}, { 'content-length': '32' });
+    readUploadForm.mockResolvedValue('too_large');
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    expect(reEncodeImage).not.toHaveBeenCalled();
+  });
+
+  it('refuses a body it could not parse', async () => {
+    signedIn();
+    adminClient.mockReturnValue(uploadAdmin(null).client);
+
+    const { request } = uploadRequest();
+    readUploadForm.mockResolvedValue('bad_request');
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    expect(reEncodeImage).not.toHaveBeenCalled();
   });
 
   // Without this the pre-check was defeated by simply not declaring a length:
@@ -639,26 +694,24 @@ describe('POST /api/media/upload', () => {
     signedIn();
     adminClient.mockReturnValue(uploadAdmin(null).client);
 
-    const request = uploadRequest({}, {});
-    const formData = vi.spyOn(request, 'formData');
+    const { request } = uploadRequest({}, {});
 
     const response = await POST(request);
 
     expect(response.status).toBe(411);
-    expect(formData).not.toHaveBeenCalled();
+    expect(readUploadForm).not.toHaveBeenCalled();
   });
 
   it('refuses an unparseable declared length rather than reading past it', async () => {
     signedIn();
     adminClient.mockReturnValue(uploadAdmin(null).client);
 
-    const request = uploadRequest({}, { 'content-length': 'not-a-number' });
-    const formData = vi.spyOn(request, 'formData');
+    const { request } = uploadRequest({}, { 'content-length': 'not-a-number' });
 
     const response = await POST(request);
 
     expect(response.status).toBe(411);
-    expect(formData).not.toHaveBeenCalled();
+    expect(readUploadForm).not.toHaveBeenCalled();
   });
 
   // `archive` is a retention hold that delete_media_everywhere deliberately
@@ -673,7 +726,7 @@ describe('POST /api/media/upload', () => {
     });
 
     const response = await POST(
-      uploadRequest({ destinationKind: 'archive', destinationRef: 'night-1' }),
+      uploadRequest({ destinationKind: 'archive', destinationRef: 'night-1' }).request,
     );
 
     expect(response.status).toBe(400);
@@ -692,7 +745,7 @@ describe('POST /api/media/upload', () => {
     });
 
     const response = await POST(
-      uploadRequest({ destinationKind: 'story', destinationRef: 'victims-story' }),
+      uploadRequest({ destinationKind: 'story', destinationRef: 'victims-story' }).request,
     );
 
     expect(response.status).toBe(400);
@@ -712,7 +765,7 @@ describe('POST /api/media/upload', () => {
     });
 
     const response = await POST(
-      uploadRequest({ destinationKind: 'story', destinationRef: 's1' }),
+      uploadRequest({ destinationKind: 'story', destinationRef: 's1' }).request,
     );
 
     expect(response.status).toBe(200);
@@ -730,9 +783,40 @@ describe('POST /api/media/upload', () => {
     adminClient.mockReturnValue(admin.client);
     reEncodeImage.mockResolvedValue({ ok: false, reason: 'rejected', message: 'no' });
 
-    const response = await POST(uploadRequest());
+    const response = await POST(uploadRequest().request);
 
     expect(response.status).toBe(400);
     expect(upload).not.toHaveBeenCalled();
+  });
+
+  // A half-done upload is unreachable: there is no client write grant on
+  // media_destinations, no attachment endpoint, and the 500 does not carry the
+  // generated id. Leaving the row and the bytes behind creates an orphan the
+  // reference count reports as unreferenced and nothing ever collects.
+  it('unwinds the registry row and the bytes when the destination insert fails', async () => {
+    signedIn('owner-1');
+    const admin = db({
+      stories: { data: { id: 's1' }, error: null },
+      media_objects: { data: { id: 'new-media' }, error: null },
+      media_destinations: { error: { message: 'constraint' } },
+    });
+    const remove = vi.fn(async () => ({ data: [], error: null }));
+    admin.client.storage.from = vi.fn(() => ({
+      upload: vi.fn(async () => ({ error: null })),
+      remove,
+    }));
+    adminClient.mockReturnValue(admin.client);
+    reEncodeImage.mockResolvedValue({
+      ok: true,
+      value: { bytes: new Uint8Array([9]), contentType: 'image/jpeg', width: 10, height: 10 },
+    });
+
+    const response = await POST(
+      uploadRequest({ destinationKind: 'story', destinationRef: 's1' }).request,
+    );
+
+    expect(response.status).toBe(500);
+    expect(admin.builders.media_objects.delete).toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 });
