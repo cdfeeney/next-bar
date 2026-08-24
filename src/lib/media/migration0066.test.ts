@@ -171,6 +171,74 @@ describe('0066 — V8-R-CMP-012 bytes outlive nothing but their last reference',
   });
 });
 
+describe('0066 — EC-01/EC-02/EC-03 round-3 fixes', () => {
+  // FIX A. Both review lanes reported the unregistered-object race. publish_story's
+  // `for update` locks nothing when no registry row exists — which is exactly the
+  // orphan sweep's population — so the lock has to be on the PATH, which exists
+  // whether or not the registry knows about it.
+  it('locks the storage path, not just the registry row', () => {
+    expect(FLAT).toMatch(
+      /create or replace function public\.media_path_lock_key\(p_bucket text, p_name text\)/i,
+    );
+    // The publisher WAITS: it must not proceed onto bytes a sweep is claiming.
+    expect(FLAT).toContain(
+      "perform pg_advisory_xact_lock(public.media_path_lock_key('story-media', v_path))",
+    );
+    // The sweep never waits, because it still holds locks from earlier iterations
+    // and a blocking acquire there could deadlock against a waiting publisher.
+    expect(FLAT).toContain(
+      "if not pg_try_advisory_xact_lock(public.media_path_lock_key('story-media', r.name)) then",
+    );
+  });
+
+  // Sorted, so two publishers sharing a main/inset pair cannot take the two path
+  // locks in opposite orders and deadlock against each other.
+  it('takes the publisher path locks in a deterministic order', () => {
+    expect(FLAT).toContain(
+      'select p from unnest(array[p_media_path, p_inset_path]) as p where p is not null group by p order by p',
+    );
+  });
+
+  // A lock that only narrows the window is not a fix: the candidate list was built
+  // before the lock existed, so eligibility has to be re-established under it.
+  it('re-verifies eligibility under the sweep lock before adopting', () => {
+    expect(FLAT).toContain(
+      'select 1 from public.stories s where (s.media_path = r.name or s.inset_path = r.name)'
+      + ' and s.deleted_at is null and s.expires_at > now()',
+    );
+  });
+
+  // FIX D / EC-03. The CHECK constraint and the function must agree at every
+  // migration. Promising four kinds while resolving one is the contradiction that
+  // produced the finding; 0067 adds group_message and 0069 adds feed_post/comment,
+  // each widening BOTH halves together.
+  it('constrains subject_kind to what 0066 can actually resolve', () => {
+    expect(FLAT).toContain("check (subject_kind in ('story'))");
+    expect(FLAT).not.toMatch(
+      /check \(subject_kind in \('story', 'feed_post', 'comment', 'group_message'\)\)/i,
+    );
+  });
+
+  // FIX 4b. Gating discovery closes how a blocked account FINDS someone; it does
+  // not close what they can still READ once they hold the id, and an id survives a
+  // block.
+  it('gates the follower count on blocks, before spending the search cap', () => {
+    expect(FLAT).toMatch(
+      /create or replace function public\.get_follower_count\(profile_id uuid\)/i,
+    );
+    const body = FLAT.slice(FLAT.indexOf('create or replace function public.get_follower_count'));
+    const gate = body.indexOf('if public.is_blocked_between(uid, profile_id) then return null');
+    const spend = body.indexOf('insert into public.handle_search_attempts');
+    expect(gate).toBeGreaterThan(-1);
+    // Before the cap spend: probing must cost the prober nothing to learn nothing.
+    expect(gate).toBeLessThan(spend);
+  });
+
+  it('excludes blocked pairs from the opted-in public ratings list', () => {
+    expect(FLAT).toContain('and not public.is_blocked_between(auth.uid(), p.id)');
+  });
+});
+
 describe('0066 — this lane PROVIDES the boundary and must stay additive', () => {
   // EC-01 (2026-08-24) restored V8-R-STO-014/015/016 to WP2 (goal g-f1e128da),
   // matching the founder-approved 3.1.0 ledger. Withdrawing the legacy grants
@@ -389,12 +457,33 @@ describe('0066 — V8-R-FEED-009 blocking is enforced both ways', () => {
 });
 
 describe('0066 — V8-R-FEED-010 the report record is server-owned', () => {
-  it('grants the reporter SELECT and nothing else on content_reports', () => {
-    expect(FLAT).toContain('grant select on public.content_reports to authenticated');
-    // No UPDATE and no DELETE anywhere: that absence IS the requirement that a
-    // reporter cannot edit or withdraw a report into invisibility.
+  // OPERATOR-ONLY, which is stricter than the SELECT grant this used to assert.
+  // V8-R-FEED-010's audience clause is "the report record is visible only to
+  // operators"; a read-own grant handed the reporter `reason` and `resolved_at`,
+  // i.e. operator resolution state. Both review lanes reported it.
+  it('grants the reporter NOTHING on content_reports', () => {
+    expect(FLAT).not.toMatch(/grant[^;]*on public\.content_reports to/i);
+    expect(FLAT).toContain('revoke all on public.content_reports from public, anon');
+    // No UPDATE and no DELETE anywhere either: that absence IS the requirement
+    // that a reporter cannot edit or withdraw a report into invisibility.
     expect(FLAT).not.toMatch(/grant[^;]*update[^;]*on public\.content_reports/i);
     expect(FLAT).not.toMatch(/grant[^;]*delete[^;]*on public\.content_reports/i);
+  });
+
+  it('has no reporter SELECT policy on content_reports', () => {
+    expect(FLAT).not.toMatch(/create policy[^;]*on public\.content_reports for select/i);
+  });
+
+  // Removing the grant without this would silently UNHIDE everything the user
+  // reported, so the replacement read is part of the same requirement.
+  it('serves the hide set through a definer function that exposes only identifiers', () => {
+    expect(FLAT).toMatch(
+      /create or replace function public\.my_reported_subjects\(\).*?security definer/i,
+    );
+    expect(FLAT).toContain('returns table (subject_kind text, subject_ref text)');
+    expect(FLAT).toContain('grant execute on function public.my_reported_subjects() to authenticated');
+    // It must not hand back the operator-facing columns.
+    expect(FLAT).not.toMatch(/my_reported_subjects[\s\S]{0,400}resolved_at/i);
   });
 
   it('has no UPDATE or DELETE policy on content_reports', () => {
@@ -402,8 +491,19 @@ describe('0066 — V8-R-FEED-010 the report record is server-owned', () => {
     expect(FLAT).not.toMatch(/create policy[^;]*on public\.content_reports for delete/i);
   });
 
-  it('writes the report through a definer function that stamps the reporter', () => {
+  // NORMALIZED, not verbatim. The shape check is case-insensitive (`!~*`), so an
+  // uppercase uuid is a valid subject_ref; stored verbatim it never matched the
+  // hide sites, which compare against id::text (always lowercase). The report was
+  // filed and the content was never hidden, and each casing variant took its own
+  // row in the one-per-subject index, defeating the anti-flood measure.
+  it('writes the report through a definer function that stamps and NORMALIZES', () => {
     expect(FLAT).toContain(
+      'values (auth.uid(), p_subject_kind, lower(btrim(p_subject_ref)), p_reason)',
+    );
+    // The dedup probe must normalize identically, or a repeat report in different
+    // casing reads as a new subject and spends the daily cap.
+    expect(FLAT).toContain('and cr.subject_ref = lower(btrim(p_subject_ref))');
+    expect(FLAT).not.toContain(
       'values (auth.uid(), p_subject_kind, btrim(p_subject_ref), p_reason)',
     );
   });
@@ -425,8 +525,20 @@ describe('0066 — V8-R-FEED-010 the report record is server-owned', () => {
   // listReportedSubjects offered the hide set, but no policy and no production
   // caller consulted either, so the reported story stayed visible and the
   // requirement was discharged by a boolean nobody read.
-  it('hides a reported story in the audience gate, not just in a return value', () => {
-    expect(FLAT).toContain(
+  // THROUGH THE DEFINER PREDICATE, not a bare subquery. content_reports now
+  // carries no reporter grant, and a policy USING expression runs with the
+  // CALLER's privileges — so the bare subquery this used to assert would either
+  // raise permission denied or contribute nothing, making `not exists (...)`
+  // unconditionally true and un-hiding every reported story. It would have failed
+  // OPEN, via the change meant to tighten the record.
+  it('hides a reported story in the audience gate through the definer predicate', () => {
+    expect(FLAT).toMatch(
+      /create or replace function public\.story_reported_by_caller\(p_story uuid\).*?security definer/i,
+    );
+    // Both story SELECT policies ask it, and neither reads the table directly.
+    const asks = FLAT.match(/and not public\.story_reported_by_caller\(public\.stories\.id\)/g) ?? [];
+    expect(asks.length).toBe(2);
+    expect(FLAT).not.toContain(
       'and not exists ( select 1 from public.content_reports cr'
       + " where cr.reporter_id = auth.uid() and cr.subject_kind = 'story'"
       + ' and cr.subject_ref = public.stories.id::text )',

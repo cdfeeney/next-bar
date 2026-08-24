@@ -1,13 +1,54 @@
 import { NextResponse } from 'next/server';
 
 import { reEncodeImage, MAX_UPLOAD_BYTES } from '@/lib/media/reEncode';
+import { sweepReclaimable } from '@/lib/media/reclaim';
 import {
   adminClient,
   bearerToken,
+  callerClient,
   readMediaEnv,
   verifiedUserId,
 } from '@/lib/media/serverClients';
-import { isDestinationKind, MEDIA_BUCKET } from '@/lib/media/types';
+import { MEDIA_BUCKET } from '@/lib/media/types';
+
+/**
+ * How many objects one upload may reclaim. Small on purpose: this runs inside a
+ * user-facing upload, so it buys eventual cleanup without making a photo wait on
+ * someone else's garbage. Several uploads drain a backlog across several ticks.
+ */
+const EVENT_SWEEP_LIMIT = 5;
+
+/**
+ * Reclamation has eligibility, a claim, and a route — and, until now, no caller
+ * for the ABANDONED-UPLOAD population. DELETE already sweeps, so an account that
+ * deletes something eventually cleans up after itself; an account that only ever
+ * uploads and abandons never triggered a tick, and its bytes sat forever.
+ *
+ * Event-driven rather than scheduled, deliberately: this repository has no cron,
+ * no vercel.json and no pg_cron, and inventing platform infrastructure to satisfy
+ * a review finding would be a larger and less reversible decision than the finding
+ * warrants. The approved contract states no wall-clock cleanup SLA, so "bounded
+ * and eventual" is the honest guarantee and this is what delivers it.
+ *
+ * BEST EFFORT, ALWAYS. A sweep failure must never fail an upload that already
+ * succeeded: the bytes are stored and registered, and the caller is entitled to
+ * that answer regardless of what the sweep did.
+ */
+async function sweepAfterUpload(
+  caller: ReturnType<typeof callerClient>,
+  admin: ReturnType<typeof adminClient>,
+): Promise<number> {
+  try {
+    const swept = await sweepReclaimable(caller, admin, EVENT_SWEEP_LIMIT);
+    return swept.reclaimed.length;
+  } catch (error) {
+    console.error(
+      '[media/upload] post-upload sweep failed:',
+      error instanceof Error ? error.message : 'unknown',
+    );
+    return 0;
+  }
+}
 import { readUploadForm } from '@/lib/media/uploadBody';
 
 /**
@@ -61,32 +102,6 @@ function isUploadedFile(value: unknown): value is UploadedFile {
     && typeof (value as UploadedFile).arrayBuffer === 'function';
 }
 
-/**
- * Undo a partially completed upload: the registry row first, then the bytes.
- *
- * Registry first on purpose. While the row exists the object is referenced by
- * something the reference count can see, so a failure between the two leaves an
- * object with no row rather than a row pointing at nothing — the direction the
- * orphan report below can actually describe.
- */
-async function unwindUpload(
-  admin: ReturnType<typeof adminClient>,
-  mediaId: string,
-  storagePath: string,
-): Promise<void> {
-  const { error: rowError } = await admin
-    .from('media_objects')
-    .delete()
-    .eq('id', mediaId);
-  if (rowError) {
-    console.error('[media/upload] could not remove registry row:', mediaId, rowError.message);
-  }
-
-  const { error: byteError } = await admin.storage.from(MEDIA_BUCKET).remove([storagePath]);
-  if (byteError) {
-    console.error('[media/upload] ORPHAN — cleanup failed:', storagePath, byteError.message);
-  }
-}
 
 export async function POST(request: Request): Promise<NextResponse> {
   const env = readMediaEnv();
@@ -150,57 +165,27 @@ export async function POST(request: Request): Promise<NextResponse> {
   // The authority on size: the decoded body, not the header above.
   if (file.size > MAX_UPLOAD_BYTES) return fail('too_large', 413);
 
-  // A destination may be named at upload time, but only a WELL-FORMED one. An
-  // unrecognised kind is a request error rather than something to drop
-  // silently: dropping it would register media with no reference at all, which
-  // is an orphan the reference count would happily reclaim.
-  if (destinationKind !== null && !isDestinationKind(destinationKind)) {
+  // NO DESTINATION IS ATTACHABLE AT UPLOAD TIME, and 'story' least of all.
+  //
+  // The storage path is minted below as `${userId}/${mediaId}`. A story that
+  // already exists — and it must, to pass any ownership check — cannot name a path
+  // that did not exist when it was written. So a story destination created here is
+  // a live spine reference to an object the story does not reference, BY
+  // CONSTRUCTION, and it holds the bytes off reclamation until that story expires.
+  // Both review lanes reported this independently on candidate ccf33438.
+  //
+  // The kind was previously validated and ownership-checked, which made the row
+  // look earned. It never was: the check proved the caller owns the story, never
+  // that the story references the object — and it cannot, because the object does
+  // not exist yet. Validating a value that has no correct setting is worse than
+  // refusing it, because it reads as a boundary.
+  //
+  // Attaching a destination is publish_story's job, once the object exists. Nothing
+  // in production ever passed this parameter. Reference counting is unaffected:
+  // 0066 counts a live story that references an object with NO spine row, exactly
+  // because publish_story does not write the spine.
+  if (destinationKind !== null || destinationRef !== null) {
     return fail('bad_request', 400);
-  }
-  if (destinationKind !== null && (destinationRef ?? '').trim().length === 0) {
-    return fail('bad_request', 400);
-  }
-
-  // WHAT A CLIENT MAY NAME, and why it is only this.
-  //
-  // The insert below runs with SERVICE ROLE, so `media_destinations` gets no RLS
-  // opinion on it and `ref_id` has no foreign key. Whatever the request says is
-  // simply believed — which made two things possible that the spine's own rules
-  // forbid:
-  //
-  //   * `archive` — a Saved Nights Out RETENTION HOLD, the one kind
-  //     `delete_media_everywhere` deliberately never clears. A client could mint
-  //     itself an undeletable hold on its own bytes. Archive rows are written by
-  //     the archive surface, never by an uploader, so the kind is refused here.
-  //
-  //   * another user's ref — `destinationKind=story` with a victim's story id
-  //     attached the caller's media to that story for every consumer that reads
-  //     the spine by (kind, ref_id).
-  //
-  // `story` is therefore the only kind accepted, and only after the story is
-  // confirmed to exist and to be authored by the VERIFIED caller. `feed` and
-  // `group` have no table to check ownership against yet; accepting them would
-  // be accepting an unverifiable claim, so they wait for the surface that owns
-  // them.
-  if (destinationKind !== null && destinationKind !== 'story') {
-    return fail('bad_request', 400);
-  }
-  if (destinationKind === 'story') {
-    const { data: story, error: storyError } = await admin
-      .from('stories')
-      .select('id')
-      .eq('id', destinationRef)
-      .eq('author_id', userId)
-      .is('deleted_at', null)
-      .maybeSingle();
-
-    if (storyError) {
-      console.error('[media/upload] destination check failed:', storyError.message);
-      return fail('server_error', 500);
-    }
-    // Not yours, or not there. Refused rather than attached: a destination the
-    // caller does not own is not a reference this spine should hold.
-    if (!story) return fail('bad_request', 400);
   }
 
   let original: Uint8Array;
@@ -274,27 +259,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       return fail('server_error', 500);
     }
 
-    if (destinationKind !== null && destinationRef !== null) {
-      const { error: destError } = await admin.from('media_destinations').insert({
-        media_id: mediaId,
-        kind: destinationKind,
-        ref_id: destinationRef,
-      });
-      if (destError) {
-        console.error('[media/upload] destination insert failed:', destError.message);
-        // THE WHOLE UPLOAD IS UNWOUND, because a half-done one is unreachable.
-        // There is no client write grant on media_destinations and no
-        // attachment endpoint, and this response does not carry the generated
-        // id, so a caller cannot finish the job later. Leaving the row and the
-        // bytes behind would create a permanent orphan the reference count
-        // reports as zero-referenced and nothing ever collects. Same contract
-        // as the registry-insert failure above: report what could not be
-        // cleaned rather than swallow it.
-        await unwindUpload(admin, mediaId, storagePath);
-        return fail('server_error', 500);
-      }
-    }
-
     return NextResponse.json({
       ok: true,
       mediaId,
@@ -302,6 +266,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       contentType: reEncoded.value.contentType,
       width: reEncoded.value.width,
       height: reEncoded.value.height,
+      // Reported for observability, exactly as the DELETE route reports its own
+      // sweep. A zero here is ordinary, not an error.
+      alsoReclaimed: await sweepAfterUpload(callerClient(env, token), admin),
     });
   } catch (error) {
     console.error(

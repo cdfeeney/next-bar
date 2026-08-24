@@ -155,25 +155,38 @@ describe('reportContent — V8-R-FEED-010', () => {
 
 describe('listReportedSubjects — the hide set is derived from the reports', () => {
   it('returns one key per reported subject', async () => {
-    const select = vi.fn(async () => ({
+    const rpc = vi.fn(async () => ({
       data: [
         { subject_kind: 'story', subject_ref: 's1' },
         { subject_kind: 'feed_post', subject_ref: 'p9' },
       ],
       error: null,
     }));
-    const from = vi.fn(() => ({ select }));
-    const result = await listReportedSubjects(client({ from }));
+    const result = await listReportedSubjects(client({ rpc }));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.has(reportKey('story', 's1'))).toBe(true);
     expect(result.value.has(reportKey('feed_post', 'p9'))).toBe(true);
   });
 
+  // THROUGH THE RPC, NEVER THE TABLE. content_reports is operator-only in 0066 —
+  // no reporter SELECT policy and no grant — because V8-R-FEED-010 says the record
+  // is visible only to operators. A direct table read would now fail, and reading
+  // it would expose `reason` and `resolved_at` besides.
+  it('never reads the content_reports table directly', async () => {
+    const rpc = vi.fn(async () => ({ data: [], error: null }));
+    const from = vi.fn(() => {
+      throw new Error('listReportedSubjects must not touch the table');
+    });
+    const result = await listReportedSubjects(client({ rpc, from }));
+    expect(result.ok).toBe(true);
+    expect(from).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith('my_reported_subjects');
+  });
+
   it('reports a failure rather than an empty set that would UNHIDE everything', async () => {
-    const select = vi.fn(async () => ({ data: null, error: { message: 'down' } }));
-    const from = vi.fn(() => ({ select }));
-    const result = await listReportedSubjects(client({ from }));
+    const rpc = vi.fn(async () => ({ data: null, error: { message: 'down' } }));
+    const result = await listReportedSubjects(client({ rpc }));
     expect(result.ok).toBe(false);
   });
 });

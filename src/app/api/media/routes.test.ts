@@ -967,12 +967,30 @@ describe('POST /api/media/upload', () => {
     expect(response.status).toBe(400);
   });
 
-  // media_destinations.ref_id has no foreign key and the insert runs with
-  // service role, so an unchecked ref attaches the caller's media to another
-  // user's story for everything that reads the spine by (kind, ref_id).
-  it('refuses a story destination the caller does not author', async () => {
+  // A story that already exists cannot name a path minted after it, so a story
+  // destination created at upload is a live spine reference to an object the story
+  // does not reference — by construction, for ANY caller. The old test proved the
+  // lookup was ownership-scoped, which was true and beside the point.
+  it('refuses a story destination even from the story author', async () => {
+    signedIn('owner-1');
+    const admin = uploadAdmin({ id: 's1' }); // the story really is theirs
+    adminClient.mockReturnValue(admin.client);
+    reEncodeImage.mockResolvedValue({
+      ok: true,
+      value: { bytes: new Uint8Array([9]), contentType: 'image/jpeg', width: 10, height: 10 },
+    });
+
+    const response = await POST(
+      uploadRequest({ destinationKind: 'story', destinationRef: 's1' }).request,
+    );
+
+    expect(response.status).toBe(400);
+    expect(admin.builders.media_destinations.insert).not.toHaveBeenCalled();
+  });
+
+  it('refuses a story destination naming another account\'s story', async () => {
     signedIn('attacker');
-    const admin = uploadAdmin(null); // the ownership-scoped lookup finds nothing
+    const admin = uploadAdmin(null);
     adminClient.mockReturnValue(admin.client);
     reEncodeImage.mockResolvedValue({
       ok: true,
@@ -984,13 +1002,70 @@ describe('POST /api/media/upload', () => {
     );
 
     expect(response.status).toBe(400);
-    // The lookup really ran and really was ownership-scoped — otherwise this
-    // 400 could be any earlier refusal and would prove nothing.
-    expect(admin.builders.stories.eq).toHaveBeenCalledWith('author_id', 'attacker');
     expect(admin.builders.media_destinations.insert).not.toHaveBeenCalled();
   });
 
-  it('scopes the ownership lookup to the VERIFIED caller, not a request field', async () => {
+  // The property that replaces the ownership check: a successful upload writes the
+  // object and NOTHING on the spine. publish_story owns attachment.
+  // FIX 5. Reclamation had eligibility, a claim and a route, but no caller for the
+  // ABANDONED-UPLOAD population: DELETE already swept, so an account that deletes
+  // eventually cleans up after itself, while an account that only ever uploads and
+  // abandons never triggered a tick. Event-driven rather than scheduled — this
+  // repository has no cron, no vercel.json and no pg_cron, and the approved
+  // contract states no wall-clock cleanup SLA.
+  it('sweeps reclaimable media after a successful upload', async () => {
+    signedIn('owner-1');
+    const admin = uploadAdmin({ id: 's1' });
+    adminClient.mockReturnValue(admin.client);
+    // Inline rather than the DELETE block's helper, which is scoped to it.
+    const caller = db({}).client;
+    caller.rpc = vi.fn(async (name: string) => (
+      name === 'claim_media_for_removal' || name === 'claim_orphan_paths'
+        ? { data: [], error: null }
+        : { data: null, error: null }
+    ));
+    callerClient.mockReturnValue(caller);
+    reEncodeImage.mockResolvedValue({
+      ok: true,
+      value: { bytes: new Uint8Array([9]), contentType: 'image/jpeg', width: 10, height: 10 },
+    });
+
+    const response = await POST(uploadRequest().request);
+
+    expect(response.status).toBe(200);
+    // The sweep really ran on the caller's behalf, rather than the field being a
+    // constant the route reports without doing anything.
+    expect(caller.rpc).toHaveBeenCalledWith(
+      'claim_media_for_removal',
+      expect.objectContaining({ p_media_id: null }),
+    );
+  });
+
+  // A sweep failure must NEVER fail an upload that already succeeded: the bytes are
+  // stored and registered, and the caller is entitled to that answer.
+  it('still returns 200 when the post-upload sweep throws', async () => {
+    signedIn('owner-1');
+    const admin = uploadAdmin({ id: 's1' });
+    adminClient.mockReturnValue(admin.client);
+    const caller = db({}).client;
+    caller.rpc = vi.fn(async () => {
+      throw new Error('sweep exploded');
+    });
+    callerClient.mockReturnValue(caller);
+    reEncodeImage.mockResolvedValue({
+      ok: true,
+      value: { bytes: new Uint8Array([9]), contentType: 'image/jpeg', width: 10, height: 10 },
+    });
+
+    const response = await POST(uploadRequest().request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.alsoReclaimed).toBe(0);
+  });
+
+  it('writes no spine row on a successful upload', async () => {
     signedIn('owner-1');
     const admin = uploadAdmin({ id: 's1' });
     adminClient.mockReturnValue(admin.client);
@@ -999,15 +1074,10 @@ describe('POST /api/media/upload', () => {
       value: { bytes: new Uint8Array([9]), contentType: 'image/jpeg', width: 10, height: 10 },
     });
 
-    const response = await POST(
-      uploadRequest({ destinationKind: 'story', destinationRef: 's1' }).request,
-    );
+    const response = await POST(uploadRequest().request);
 
     expect(response.status).toBe(200);
-    expect(admin.builders.stories.eq).toHaveBeenCalledWith('author_id', 'owner-1');
-    expect(admin.builders.media_destinations.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'story', ref_id: 's1' }),
-    );
+    expect(admin.builders.media_destinations.insert).not.toHaveBeenCalled();
   });
 
   it('never stores the original bytes when the re-encode refuses them', async () => {
@@ -1024,16 +1094,13 @@ describe('POST /api/media/upload', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
-  // A half-done upload is unreachable: there is no client write grant on
-  // media_destinations, no attachment endpoint, and the 500 does not carry the
-  // generated id. Leaving the row and the bytes behind creates an orphan the
-  // reference count reports as unreferenced and nothing ever collects.
-  it('unwinds the registry row and the bytes when the destination insert fails', async () => {
+  // The destination-insert failure this once covered is unreachable now: no spine
+  // row is written at upload at all, so there is no half-done attach to unwind.
+  // The registry-insert failure path keeps its own cleanup and its own test above.
+  it('removes the stored bytes when the registry insert fails', async () => {
     signedIn('owner-1');
     const admin = db({
-      stories: { data: { id: 's1' }, error: null },
-      media_objects: { data: { id: 'new-media' }, error: null },
-      media_destinations: { error: { message: 'constraint' } },
+      media_objects: { data: null, error: { message: 'constraint' } },
     });
     const remove = vi.fn(async () => ({ data: [], error: null }));
     admin.client.storage.from = vi.fn(() => ({
@@ -1046,12 +1113,9 @@ describe('POST /api/media/upload', () => {
       value: { bytes: new Uint8Array([9]), contentType: 'image/jpeg', width: 10, height: 10 },
     });
 
-    const response = await POST(
-      uploadRequest({ destinationKind: 'story', destinationRef: 's1' }).request,
-    );
+    const response = await POST(uploadRequest().request);
 
     expect(response.status).toBe(500);
-    expect(admin.builders.media_objects.delete).toHaveBeenCalled();
     expect(remove).toHaveBeenCalledTimes(1);
   });
 });

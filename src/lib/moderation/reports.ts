@@ -112,9 +112,13 @@ export async function listReportedSubjects(
   if (client === null) return mediaUnavailable();
 
   try {
-    const { data, error } = await client
-      .from('content_reports')
-      .select('subject_kind, subject_ref');
+    // THROUGH THE RPC, NOT THE TABLE. `content_reports` is operator-only: 0066
+    // carries no reporter SELECT policy and no grant to `authenticated`, because
+    // V8-R-FEED-010 says the record is visible only to operators — a read-own
+    // policy handed the reporter `reason` and `resolved_at`, i.e. operator
+    // resolution state. `my_reported_subjects()` is the minimum this client is
+    // entitled to: the two identifier columns needed to hide, and nothing else.
+    const { data, error } = await client.rpc('my_reported_subjects');
 
     if (error) {
       return mediaFailure('failed', 'Your hidden content could not be loaded.');

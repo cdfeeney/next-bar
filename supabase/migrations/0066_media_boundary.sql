@@ -643,6 +643,30 @@ revoke all on function public.release_media_claim(uuid) from public, anon, authe
 -- A row already stamped but still present (a crashed removal) is claimed by
 -- `coalesce`, which preserves the original claim time and still returns the row,
 -- so the retry the bucket evidence calls for actually happens.
+-- ONE KEY, TAKEN BY BOTH SIDES OF THE UNREGISTERED-OBJECT RACE.
+--
+-- `publish_story` locks the registry row before deciding the bytes are usable, but
+-- `for update` locks NOTHING when the row does not exist yet — and the whole point
+-- of the orphan sweep is objects with no registry row. The sweep then ADOPTS the
+-- path (insert ... on conflict do nothing) inside its own transaction, which under
+-- READ COMMITTED is invisible to a concurrent publisher until it commits. So the
+-- publisher's existence check, the sweep's recount, and the sweep's stamp can all
+-- interleave with neither side able to see the other, both commit, and the service
+-- role removal then destroys a live story's photo.
+--
+-- A row lock cannot fix this because there is no row to lock. The lock therefore
+-- has to be on the PATH, which exists whether or not the registry knows about it.
+create or replace function public.media_path_lock_key(p_bucket text, p_name text)
+returns bigint
+language sql
+immutable
+as $$
+  select hashtextextended('media:' || coalesce(p_bucket, '') || '|' || coalesce(p_name, ''), 0);
+$$;
+
+comment on function public.media_path_lock_key(text, text) is
+  'V8-R-CMP-012 / V8-R-STO-016. Advisory-lock key for one storage path. publish_story takes it blocking and in sorted order; claim_orphan_paths takes it with try-lock and skips, so the sweep never waits while holding a lock it took earlier.';
+
 create or replace function public.claim_orphan_paths(p_limit integer default 25)
 returns table (media_id uuid, bucket_id text, storage_path text)
 language plpgsql
@@ -693,6 +717,28 @@ begin
     end if;
 
     -- ADOPT. From here `publish_story` has a row to lock and a stamp to see.
+    -- TRY, NEVER WAIT. Locks taken in earlier iterations are still held (advisory
+    -- xact locks live to commit), so a blocking acquire here could wait on a
+    -- publisher that is itself waiting on a path this loop already holds. Skipping
+    -- costs one object one tick; the next sweep picks it up.
+    if not pg_try_advisory_xact_lock(public.media_path_lock_key('story-media', r.name)) then
+      continue;  -- a publisher owns this path right now
+    end if;
+
+    -- RE-VERIFIED UNDER THE LOCK. The candidate list above was computed before the
+    -- lock existed, so a story could have been published against these bytes in
+    -- between. Without this the lock would only narrow the window instead of
+    -- closing it.
+    if exists (
+      select 1
+        from public.stories s
+       where (s.media_path = r.name or s.inset_path = r.name)
+         and s.deleted_at is null
+         and s.expires_at > now()
+    ) then
+      continue;  -- published while we were getting here; the bytes stay
+    end if;
+
     insert into public.media_objects (owner_id, bucket_id, storage_path)
     values (v_owner, 'story-media', r.name)
     on conflict (bucket_id, storage_path) do nothing;
@@ -1149,6 +1195,7 @@ declare
   v_author uuid := auth.uid();
   v_story public.stories;
   v_id uuid;
+  v_path text;
 begin
   if v_author is null then
     raise exception 'publish_story: not authenticated' using errcode = '28000';
@@ -1177,6 +1224,23 @@ begin
 
   -- ADDITION 1. Taken BEFORE the existence check, so the existence check is a
   -- fact about the present rather than a fact about the past.
+  --
+  -- THE PATH LOCK COMES FIRST, and it is what makes this work for an object with
+  -- no registry row at all: `for update` below locks nothing in that case, which
+  -- is precisely the orphan sweep's population. Sorted, distinct, and blocking —
+  -- sorted so two publishers sharing a main/inset pair cannot deadlock against
+  -- each other, blocking because a publisher must NOT proceed onto bytes a sweep
+  -- is claiming.
+  for v_path in
+    select p
+      from unnest(array[p_media_path, p_inset_path]) as p
+     where p is not null
+     group by p
+     order by p
+  loop
+    perform pg_advisory_xact_lock(public.media_path_lock_key('story-media', v_path));
+  end loop;
+
   perform 1
      from public.media_objects m
     where m.bucket_id = 'story-media'
@@ -1445,6 +1509,131 @@ comment on function public.get_profile_by_handle(text) is
 
 revoke all on function public.get_profile_by_handle(text) from public, anon;
 grant execute on function public.get_profile_by_handle(text) to authenticated;
+
+-- ...AND AT THE PROFILE-CONTENT READERS, NOT ONLY THE DISCOVERY ONES.
+--
+-- Gating search_handles and get_profile_by_handle closes how a blocked account
+-- FINDS someone. It does not close what they can still READ about them once they
+-- hold the id, and an id survives a block: it is in every cached page the blocked
+-- account already loaded.
+--
+-- get_follower_count (0010) gates on privacy and on a daily search cap, never on
+-- blocks. Redefined here, not edited in 0010, because that file belongs to another
+-- lane; this is the same approach 0066 already takes for the two discovery RPCs.
+-- The body is 0010's, unchanged, plus one term.
+create or replace function public.get_follower_count(profile_id uuid)
+returns integer
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  search_cap constant integer := 500;  -- shared with handle search (0006/0007)
+  uid uuid := auth.uid();
+  attempts integer;
+  target_private boolean;
+begin
+  if uid is null or profile_id is null then
+    return null;
+  end if;
+
+  -- Own count is free (no cap spend, no visibility gate).
+  if profile_id = uid then
+    return (
+      select count(*)::integer from public.follows f
+       where f.followee_id = uid
+    );
+  end if;
+
+  -- V8-R-FEED-009. THE SAME NULL a private or unknown profile returns, so the
+  -- block is not itself observable: a blocked account cannot distinguish "blocked"
+  -- from "no such profile" and so cannot use this to detect that it was blocked.
+  -- Placed before the cap spend, so probing costs the prober nothing to learn
+  -- nothing.
+  if public.is_blocked_between(uid, profile_id) then
+    return null;
+  end if;
+
+  insert into public.handle_search_attempts as a (user_id, day, count)
+  values (uid, current_date, 1)
+  on conflict (user_id, day) do update set count = a.count + 1
+  returning count into attempts;
+
+  if attempts > search_cap then
+    return null;
+  end if;
+
+  select p.is_private into target_private
+    from public.profiles p
+   where p.id = profile_id;
+
+  -- Unknown profile and hidden private profile are the SAME null.
+  if target_private is null then
+    return null;
+  end if;
+  if target_private and not exists (
+    select 1 from public.follows f
+     where f.follower_id = uid and f.followee_id = profile_id
+  ) then
+    return null;
+  end if;
+
+  return (
+    select count(*)::integer from public.follows f
+     where f.followee_id = profile_id
+  );
+end;
+$$;
+
+comment on function public.get_follower_count(uuid) is
+  'V8-R-FEED-009 (0066) over 0010. Follower count, with the block gate 0010 lacked. Returns the same null a private or unknown profile returns, so the block itself is not observable, and returns it before spending the search cap.';
+
+revoke all on function public.get_follower_count(uuid) from public, anon;
+grant execute on function public.get_follower_count(uuid) to authenticated;
+
+-- get_public_ratings (0015) is the OTHER half of the same report, and it is not the
+-- same defect. It is granted to ANON as well as authenticated, and returns only
+-- profiles that set shares_list_publicly = true with is_private = false. A block
+-- gate on the authenticated path therefore cannot achieve V8-R-FEED-009 here: the
+-- blocked account signs out and reads identical bytes. It is added because reading
+-- someone's list while signed in as the account they blocked is still interaction
+-- the requirement speaks to, and it costs nothing — but it is DEFENCE IN DEPTH, not
+-- enforcement, and pretending otherwise would be the more dangerous outcome.
+--
+-- auth.uid() is null for anon, and is_blocked_between(null, x) is false, so the
+-- anonymous path is unchanged by construction.
+--
+-- OPEN PRODUCT QUESTION, deliberately not decided in this lane: should an explicit
+-- "share my list publicly" opt-in survive a block? If it should not, the fix is to
+-- withdraw the anon grant or to exclude blocked pairs at the sharing surface, and
+-- that is a product decision with a visible behavioural consequence.
+create or replace function public.get_public_ratings(handle_query text)
+returns table (bar_id text, tier text, rated_at timestamptz)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with gated as materialized (
+    select r.bar_id, r.tier::text, r.rated_at
+      from public.ratings r
+      join public.profiles p on p.id = r.user_id
+     where p.shares_list_publicly = true
+       and p.handle_normalized = lower(coalesce(handle_query, ''))
+       and p.is_private = false
+       and not public.is_blocked_between(auth.uid(), p.id)
+     order by r.rated_at desc
+     limit 50
+  )
+  select * from gated;
+$$;
+
+comment on function public.get_public_ratings(text) is
+  'V8-R-FEED-009 (0066) over 0015. Opted-in public ratings, now excluding blocked pairs for a SIGNED-IN caller. Defence in depth only: the function is anon-granted, so a blocked account can still read the same rows signed out. Whether a public-sharing opt-in should survive a block is an open product decision.';
+
+revoke all on function public.get_public_ratings(text) from public, anon, authenticated;
+grant execute on function public.get_public_ratings(text) to anon, authenticated;
 
 -- ...AND AT EVERY TABLE THAT CARRIES A CONNECTION BETWEEN TWO ACCOUNTS.
 --
@@ -1760,8 +1949,21 @@ grant execute on function public.is_mutual_friend(uuid, uuid) to authenticated;
 create table if not exists public.content_reports (
   id uuid primary key default gen_random_uuid(),
   reporter_id uuid not null references public.profiles(id) on delete cascade,
+  -- EC-03: THE CONSTRAINT AND THE FUNCTION WIDEN TOGETHER, ALWAYS.
+  --
+  -- This previously admitted 'feed_post', 'comment' and 'group_message' while
+  -- report_content raised on every one of them. That is not strictness, it is a
+  -- table promising a vocabulary nothing can satisfy: feed_posts and comments
+  -- arrive in WP5's 0069 and group_messages in WP6's 0067, so at 0066 there is no
+  -- table to check existence or visibility against, and a report that cannot be
+  -- resolved cannot hide anything either.
+  --
+  -- V8-R-FEED-010 is CROSS-LANE. 0066 owns the foundation and the story case;
+  -- 0067 adds 'group_message'; 0069 adds 'feed_post' and 'comment'. Each of those
+  -- migrations widens THIS constraint and teaches report_content the matching
+  -- existence/visibility branch in the same migration. Neither half alone.
   subject_kind text not null
-    check (subject_kind in ('story', 'feed_post', 'comment', 'group_message')),
+    check (subject_kind in ('story')),
   subject_ref text not null,
   reason text,
   created_at timestamptz not null default now(),
@@ -1889,7 +2091,7 @@ begin
       from public.content_reports cr
      where cr.reporter_id = auth.uid()
        and cr.subject_kind = p_subject_kind
-       and cr.subject_ref = btrim(p_subject_ref)
+       and cr.subject_ref = lower(btrim(p_subject_ref))
   ) and (
     select count(*)
       from public.content_reports cr
@@ -1911,8 +2113,16 @@ begin
   -- null, and the caller treats a null id as a FAILED report and refuses to
   -- hide the content. Re-reporting has to stay idempotent all the way out to
   -- the UI.
+  -- NORMALIZED, because the shape check accepts a casing the hide sites cannot
+  -- match. The regex above is case-INSENSITIVE (`!~*`), so an uppercase uuid is a
+  -- valid subject_ref; it was then stored verbatim while every hide site compares
+  -- against `id::text`, which PostgreSQL always renders lowercase. The report was
+  -- filed, the content was never hidden — the exact opposite of V8-R-FEED-010's
+  -- "reporting IMMEDIATELY HIDES the reported content FOR THE REPORTER" — and each
+  -- casing variant occupied its own row in the one-per-subject unique index, which
+  -- is the anti-flood measure this function's own comments call load bearing.
   insert into public.content_reports (reporter_id, subject_kind, subject_ref, reason)
-  values (auth.uid(), p_subject_kind, btrim(p_subject_ref), p_reason)
+  values (auth.uid(), p_subject_kind, lower(btrim(p_subject_ref)), p_reason)
   on conflict (reporter_id, subject_kind, subject_ref) do update
      set reason = public.content_reports.reason
   returning id into v_id;
@@ -1953,6 +2163,44 @@ grant execute on function public.report_content(text, text, text) to authenticat
 -- self-report succeeded and changed nothing the author could see: the story
 -- stayed in their own feed and its bytes went on signing. This is 0065's policy
 -- verbatim plus the same one term the audience gate below carries.
+-- THE HIDE, ASKED THROUGH A DEFINER PREDICATE INSTEAD OF A BARE SUBQUERY.
+--
+-- content_reports is operator-only: no SELECT policy, no grant to `authenticated`.
+-- A policy USING expression runs with the CALLER's privileges, so the bare
+-- `select 1 from public.content_reports` these two policies used to carry would
+-- now raise permission denied, or contribute nothing and make `not exists (...)`
+-- unconditionally true. The second outcome is the dangerous one: it un-hides every
+-- reported story silently, and it does so via the change that was supposed to
+-- tighten the record.
+--
+-- Not an oracle: it answers only about the CALLER's OWN reports (reporter_id =
+-- auth.uid()), so it discloses nothing about anyone else's reporting activity.
+--
+-- Compares against `p_story::text`, which PostgreSQL renders lowercase, matching
+-- the normalized subject_ref that report_content now stores.
+create or replace function public.story_reported_by_caller(p_story uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+      from public.content_reports cr
+     where auth.uid() is not null
+       and cr.reporter_id = auth.uid()
+       and cr.subject_kind = 'story'
+       and cr.subject_ref = p_story::text
+  );
+$$;
+
+comment on function public.story_reported_by_caller(uuid) is
+  'V8-R-FEED-010. Whether the CALLER reported this story. The stories SELECT policies ask through this definer predicate because content_reports carries no reporter grant; a bare subquery there would fail open and un-hide reported content.';
+
+revoke all on function public.story_reported_by_caller(uuid) from public, anon;
+grant execute on function public.story_reported_by_caller(uuid) to authenticated;
+
 drop policy if exists "stories: author reads own" on public.stories;
 create policy "stories: author reads own"
   on public.stories for select
@@ -1960,13 +2208,7 @@ create policy "stories: author reads own"
     auth.uid() = author_id
     and deleted_at is null
     and expires_at > now()
-    and not exists (
-      select 1
-        from public.content_reports cr
-       where cr.reporter_id = auth.uid()
-         and cr.subject_kind = 'story'
-         and cr.subject_ref = public.stories.id::text
-    )
+    and not public.story_reported_by_caller(public.stories.id)
   );
 
 drop policy if exists "stories: audience reads unexpired" on public.stories;
@@ -1977,13 +2219,7 @@ create policy "stories: audience reads unexpired"
     and expires_at > now()
     and auth.uid() <> author_id
     and public.is_mutual_friend(auth.uid(), author_id)
-    and not exists (
-      select 1
-        from public.content_reports cr
-       where cr.reporter_id = auth.uid()
-         and cr.subject_kind = 'story'
-         and cr.subject_ref = public.stories.id::text
-    )
+    and not public.story_reported_by_caller(public.stories.id)
     and (
       audience = 'friends'
       -- Through the definer helper, NOT a bare subquery: story_audience's own
@@ -2051,13 +2287,19 @@ create policy "profile_blocks: blocker deletes own"
   to authenticated
   using (auth.uid() = blocker_id);
 
--- Read-own only. Insert goes through report_content(); there is deliberately no
--- UPDATE and no DELETE policy.
+-- OPERATOR-ONLY, with NO reporter SELECT policy at all.
+--
+-- V8-R-FEED-010's audience clause is explicit: "the reporter sees the hide; the
+-- report record is visible only to operators". A read-own policy is not that. It
+-- handed the reporter the whole row — `reason`, `created_at`, and `resolved_at`,
+-- which is operator resolution state, so a reporter could watch an operator work.
+-- Both review lanes reported it independently.
+--
+-- The reporter still needs ONE thing from this table: which subjects to hide. That
+-- is two columns and no more, and it is served by the definer function below
+-- rather than by direct table access. Removing the policy without replacing that
+-- read would silently unhide everything a user has ever reported.
 drop policy if exists "content_reports: reporter reads own" on public.content_reports;
-create policy "content_reports: reporter reads own"
-  on public.content_reports for select
-  to authenticated
-  using (auth.uid() = reporter_id);
 
 ------------------------------------------------------------------------------
 -- 11. Grants
@@ -2071,6 +2313,31 @@ revoke all on public.content_reports    from public, anon;
 grant select on public.media_objects      to authenticated;
 grant select on public.media_destinations to authenticated;
 grant select, insert, delete on public.profile_blocks to authenticated;
--- SELECT only. The absence of insert/update/delete here is what makes the
--- report record server-owned; report_content() is definer and does not need it.
-grant select on public.content_reports to authenticated;
+-- NO GRANT AT ALL on content_reports. The record is operator-only: `authenticated`
+-- cannot read, insert, update or delete it by any path. report_content() and
+-- my_reported_subjects() are SECURITY DEFINER and do not need a caller grant.
+--
+-- This is the difference between "server-owned" and "server-written": the previous
+-- SELECT grant made the row server-WRITTEN but reporter-READABLE, which the
+-- requirement's audience clause forbids.
+
+-- The minimum the reporter is entitled to: the identifiers of what they reported,
+-- so the client can hide it. No id, no reason, no created_at, no resolved_at.
+create or replace function public.my_reported_subjects()
+returns table (subject_kind text, subject_ref text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select cr.subject_kind, cr.subject_ref
+    from public.content_reports cr
+   where auth.uid() is not null
+     and cr.reporter_id = auth.uid();
+$$;
+
+comment on function public.my_reported_subjects() is
+  'V8-R-FEED-010. The reporter-scoped hide set, and nothing else. The raw content_reports row is operator-only: no SELECT policy and no grant, so operator resolution state cannot be observed by the person who filed the report.';
+
+revoke all on function public.my_reported_subjects() from public, anon;
+grant execute on function public.my_reported_subjects() to authenticated;
