@@ -172,6 +172,9 @@ describe('clearPresence', () => {
 
 describe('fetchCirclePresence', () => {
   const row = {
+    // get_circle_presence projects the profile id so the Stories rail, whose cells are
+    // keyed on it, can match a pin. A row without it is malformed and is dropped.
+    user_id: '11111111-1111-1111-1111-111111111111',
     handle: 'ana',
     display_name: 'Ana',
     status: 'going',
@@ -183,6 +186,7 @@ describe('fetchCirclePresence', () => {
     const { client } = rpcClient({ data: [row], error: null });
     await expect(fetchCirclePresence(client)).resolves.toEqual([
       {
+        userId: '11111111-1111-1111-1111-111111111111',
         handle: 'ana',
         displayName: 'Ana',
         status: 'going',
