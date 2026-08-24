@@ -23,6 +23,15 @@ import { mediaFailure, mediaUnavailable, type MediaResult } from './types';
  * outside this module.
  */
 
+/**
+ * How much one sweep tick takes on.
+ *
+ * Bounded because a sweep runs inside a request: an unbounded batch turns a
+ * routine delete into a multi-minute storage call. Whatever is left is still
+ * there for the next tick, which is the property that makes a small batch safe.
+ */
+export const SWEEP_BATCH = 25;
+
 export type DestinationRemoval = {
   mediaId: string;
   storagePath: string;
@@ -89,37 +98,103 @@ export async function removeDestination(
   }
 }
 
+/** One object the database has committed to removing. */
+export type MediaClaim = {
+  mediaId: string;
+  storagePath: string;
+};
+
+type ClaimRow = {
+  media_id: string;
+  bucket_id: string;
+  storage_path: string;
+};
+
+function claimRows(data: unknown): MediaClaim[] {
+  return (Array.isArray(data) ? (data as ClaimRow[]) : [])
+    .filter((row) => typeof row?.media_id === 'string' && typeof row?.storage_path === 'string')
+    .map((row) => ({ mediaId: row.media_id, storagePath: row.storage_path }));
+}
+
 /**
- * Does anything still reference these bytes RIGHT NOW?
+ * CLAIM the bytes, don't ask whether they look free.
  *
- * The deletion RPCs count references under a row lock and release it when they
- * commit, so between that answer and the removal a new reference can appear —
- * a second device publishing a story that names the same object, for instance.
- * This is the re-check that catches it, asked on the CALLER'S client because
- * 0066 grants the function to `authenticated` and the media is theirs.
+ * The old shape here was `pathHasLiveReference` — a question asked immediately
+ * before a service-role delete. It read as a careful last-moment re-check and it
+ * was a race: the answer was already in the past by the time the delete went
+ * out, and a `publish_story` committing in that gap lost its photo silently.
  *
- * FAILS CLOSED: anything other than an explicit `false` means the bytes stay.
- * Deleting because a lookup broke is the one outcome that cannot be undone.
+ * `claim_media_for_removal` recounts under the same `media_objects` row lock
+ * that 0066's `publish_story` takes, and stamps `bytes_removed_at` in that same
+ * transaction. An empty result means the database declined — a reference
+ * survived, someone else already claimed it, or the object is not the caller's.
+ * There is no "probably safe" answer any more, only a claim or nothing.
  *
- * It narrows the window rather than closing it — Storage removal is not in the
- * RPC's transaction and no lock spans both — and that residual is stated rather
- * than implied.
+ * FAILS CLOSED: an error or a throw yields no claims, so nothing is deleted.
  */
-export async function pathHasLiveReference(
+export async function claimMediaForRemoval(
   client: SupabaseClient | null,
-  bucket: string,
-  storagePath: string,
-): Promise<boolean> {
-  if (client === null) return true;
+  mediaId: string | null,
+  limit?: number,
+): Promise<MediaClaim[]> {
+  if (client === null) return [];
   try {
-    const { data, error } = await client.rpc('media_path_has_live_reference', {
-      p_bucket: bucket,
-      p_name: storagePath,
+    const { data, error } = await client.rpc('claim_media_for_removal', {
+      p_media_id: mediaId,
+      p_limit: limit ?? SWEEP_BATCH,
     });
-    if (error) return true;
-    return data !== false;
+    if (error) return [];
+    return claimRows(data);
   } catch {
-    return true;
+    return [];
+  }
+}
+
+/**
+ * Hand a claim back when the removal did not happen.
+ *
+ * Without this an orphan stays stamped, which tells every future sweep the bytes
+ * are gone while they sit in the bucket. Releasing is the only thing that puts
+ * the object back in front of the sweep, so a failure here is logged loudly
+ * rather than swallowed.
+ */
+export async function releaseMediaClaim(
+  client: SupabaseClient | null,
+  mediaId: string,
+): Promise<boolean> {
+  if (client === null) return false;
+  try {
+    const { error } = await client.rpc('release_media_claim', { p_media_id: mediaId });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Storage objects the registry cannot account for.
+ *
+ * Everything uploaded before this boundary existed has no `media_objects` row,
+ * so no claim can ever cover it — and that is every story photo in the product
+ * today. So does an object a crashed removal left stamped-but-present. These are
+ * paths, not claims: there is no row to stamp, and the removal is the whole of
+ * the reclamation.
+ */
+export async function listOrphanPaths(
+  client: SupabaseClient | null,
+  limit?: number,
+): Promise<string[]> {
+  if (client === null) return [];
+  try {
+    const { data, error } = await client.rpc('unreferenced_orphan_paths', {
+      p_limit: limit ?? SWEEP_BATCH,
+    });
+    if (error) return [];
+    return (Array.isArray(data) ? data : [])
+      .map((row) => String((row as { storage_path?: unknown })?.storage_path ?? ''))
+      .filter(Boolean);
+  } catch {
+    return [];
   }
 }
 

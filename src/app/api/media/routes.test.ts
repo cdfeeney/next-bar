@@ -66,6 +66,7 @@ vi.mock('@/lib/media/uploadBody', () => ({
 const { DELETE } = await import('./[mediaId]/route');
 const { GET } = await import('./[mediaId]/url/route');
 const { POST } = await import('./upload/route');
+const { POST: RECLAIM } = await import('./reclaim/route');
 
 const ENV = { url: 'https://example.test', anonKey: 'anon', serviceKey: 'service' };
 
@@ -176,25 +177,47 @@ describe('DELETE /api/media/:mediaId', () => {
     expect(response.status).toBe(400);
   });
 
-  // THE REGRESSION THIS FILE EXISTS FOR. `:mediaId` is an unvalidated path
-  // segment; the destination the RPC actually removed need not belong to it. If
-  // the handler stamps the path's id, a service-role write marks somebody else's
-  // live media byte-removed — a 404 for bytes that are still there.
   /**
-   * A caller client for the delete path.
+   * A caller client for the delete path, dispatched by RPC NAME.
    *
-   * The route makes TWO RPCs on it: the deletion verb, then
-   * media_path_has_live_reference as the last-moment re-check. They are
-   * dispatched by name so a test can answer each one independently — which is
-   * the whole point, since the re-check is what decides whether the bytes go.
+   * The route makes up to four calls on it: the deletion verb, then
+   * `claim_media_for_removal` for the object that verb freed, then the sweep's
+   * own claim and `unreferenced_orphan_paths`. Answering by name is what lets a
+   * test decide each one independently — and the claim is the one that decides
+   * whether any bytes go at all, so it has to be separately answerable.
+   *
+   * `claims` defaults to null meaning "the database claims the object the verb
+   * named", which is the ordinary path. Passing `[]` is the DECLINED claim: a
+   * reference reappeared, or somebody else got there first.
    */
-  function deleteCaller(removal: unknown, stillReferenced = false) {
+  function deleteCaller(
+    removal: unknown,
+    claims: unknown[] | null = null,
+    sweep: { claims?: unknown[]; orphans?: unknown[] } = {},
+  ) {
     const caller = db({}).client;
-    caller.rpc = vi.fn(async (name: string) => (
-      name === 'media_path_has_live_reference'
-        ? { data: stillReferenced, error: null }
-        : { data: removal, error: null }
-    ));
+    caller.rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'claim_media_for_removal') {
+        // A null media id is the SWEEP's claim, which must never speak for the
+        // targeted one the deletion verb triggered.
+        if (args?.p_media_id === null) return { data: sweep.claims ?? [], error: null };
+        if (claims !== null) return { data: claims, error: null };
+        const row = (Array.isArray(removal) ? removal[0] : null) as Record<string, unknown> | null;
+        return {
+          data: row === null ? [] : [{
+            media_id: row.media_id ?? args?.p_media_id,
+            bucket_id: 'story-media',
+            storage_path: row.storage_path,
+          }],
+          error: null,
+        };
+      }
+      if (name === 'unreferenced_orphan_paths') {
+        return { data: sweep.orphans ?? [], error: null };
+      }
+      if (name === 'release_media_claim') return { data: true, error: null };
+      return { data: removal, error: null };
+    });
     return caller;
   }
 
@@ -203,19 +226,23 @@ describe('DELETE /api/media/:mediaId', () => {
     error: null,
   });
 
-  it('stamps the media the RPC removed, never the id in the URL', async () => {
+  const removal = (mediaId: string, path: string) => [{
+    media_id: mediaId,
+    bucket_id: 'story-media',
+    storage_path: path,
+    reclaimable: true,
+  }];
+
+  // THE REGRESSION THIS FILE EXISTS FOR. `:mediaId` is an unvalidated path
+  // segment; the destination the RPC actually removed need not belong to it.
+  // Claiming the path's id would commit somebody else's live object to removal
+  // with service-role authority, while the object actually freed stayed behind.
+  it('claims the media the RPC removed, never the id in the URL', async () => {
     signedIn();
-    const admin = db(
-      { media_objects: { data: null, error: null } },
-      { remove: vi.fn(async () => REMOVED('owner-1/really-mine')) },
-    );
+    const admin = db({}, { remove: vi.fn(async () => REMOVED('owner-1/really-mine')) });
     adminClient.mockReturnValue(admin.client);
-    callerClient.mockReturnValue(deleteCaller([{
-      media_id: 'really-mine',
-      bucket_id: 'story-media',
-      storage_path: 'owner-1/really-mine',
-      reclaimable: true,
-    }]));
+    const caller = deleteCaller(removal('really-mine', 'owner-1/really-mine'));
+    callerClient.mockReturnValue(caller);
 
     const response = await DELETE(
       new Request('https://app.test/api/media/someone-elses?destination=d1', {
@@ -225,49 +252,46 @@ describe('DELETE /api/media/:mediaId', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(admin.builders.media_objects.eq).toHaveBeenCalledWith('id', 'really-mine');
-    expect(admin.builders.media_objects.eq)
-      .not.toHaveBeenCalledWith('id', 'someone-elses');
+    expect(caller.rpc).toHaveBeenCalledWith(
+      'claim_media_for_removal',
+      expect.objectContaining({ p_media_id: 'really-mine' }),
+    );
+    expect(caller.rpc).not.toHaveBeenCalledWith(
+      'claim_media_for_removal',
+      expect.objectContaining({ p_media_id: 'someone-elses' }),
+    );
   });
 
   // 0066 revokes every story-media SELECT policy and Storage must SEE an object
   // to delete it, so a caller-scoped remove matches nothing — and reports that
   // by returning an empty list with NO error. The removal therefore runs with
-  // service role, and the race is caught by the explicit re-check instead.
+  // service role, against an object the database has already claimed.
   it('removes the bytes with the service-role client', async () => {
     signedIn();
     const adminRemove = vi.fn(async () => REMOVED('owner-1/m1'));
-    const admin = db({ media_objects: { data: null, error: null } }, { remove: adminRemove });
+    const admin = db({}, { remove: adminRemove });
     adminClient.mockReturnValue(admin.client);
-    callerClient.mockReturnValue(deleteCaller([{
-      media_id: 'm1',
-      bucket_id: 'story-media',
-      storage_path: 'owner-1/m1',
-      reclaimable: true,
-    }]));
+    callerClient.mockReturnValue(deleteCaller(removal('m1', 'owner-1/m1')));
 
-    await DELETE(
+    const response = await DELETE(
       new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
       { params: { mediaId: 'm1' } },
     );
 
     expect(adminRemove).toHaveBeenCalledWith(['owner-1/m1']);
+    await expect(response.json()).resolves.toMatchObject({ bytesReclaimed: true });
   });
 
-  // THE RACE. The RPC answered "reclaimable" under a row lock it has since
-  // released. If a reference reappeared in that window the bytes must stay, and
-  // nothing may be stamped as removed.
-  it('keeps the bytes when a reference reappears before the removal', async () => {
+  // THE RACE, and the reason the shape changed. The verb answered "reclaimable"
+  // under a row lock it has since released. The claim re-decides under the lock
+  // `publish_story` also takes; a claim that comes back EMPTY means a reference
+  // won, and Storage must not be touched at all.
+  it('does not touch Storage when the database declines the claim', async () => {
     signedIn();
     const adminRemove = vi.fn(async () => REMOVED('owner-1/m1'));
-    const admin = db({ media_objects: { data: null, error: null } }, { remove: adminRemove });
+    const admin = db({}, { remove: adminRemove });
     adminClient.mockReturnValue(admin.client);
-    callerClient.mockReturnValue(deleteCaller([{
-      media_id: 'm1',
-      bucket_id: 'story-media',
-      storage_path: 'owner-1/m1',
-      reclaimable: true,
-    }], true));
+    callerClient.mockReturnValue(deleteCaller(removal('m1', 'owner-1/m1'), []));
 
     const response = await DELETE(
       new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
@@ -277,26 +301,18 @@ describe('DELETE /api/media/:mediaId', () => {
     const body = await response.json();
     expect(adminRemove).not.toHaveBeenCalled();
     expect(body.bytesReclaimed).toBe(false);
-    expect(body.orphanedPaths).toEqual(['owner-1/m1']);
-    expect(admin.builders.media_objects.update).not.toHaveBeenCalled();
+    expect(body.orphanedPaths).toEqual([]);
   });
 
   // Storage reports a skipped object by leaving it out of the removed list,
-  // with error null. Reading that as success would stamp bytes_removed_at on
-  // bytes still in the bucket.
-  it('reports an orphan and does not stamp when Storage silently skips the object', async () => {
+  // with error null. Reading that as success would leave the claim standing over
+  // bytes still in the bucket, which every future sweep would then skip.
+  it('reports an orphan and releases the claim when Storage silently skips', async () => {
     signedIn();
-    const admin = db(
-      { media_objects: { data: null, error: null } },
-      { remove: vi.fn(async () => ({ data: [], error: null })) },
-    );
+    const admin = db({}, { remove: vi.fn(async () => ({ data: [], error: null })) });
     adminClient.mockReturnValue(admin.client);
-    callerClient.mockReturnValue(deleteCaller([{
-      media_id: 'm1',
-      bucket_id: 'story-media',
-      storage_path: 'owner-1/m1',
-      reclaimable: true,
-    }]));
+    const caller = deleteCaller(removal('m1', 'owner-1/m1'));
+    callerClient.mockReturnValue(caller);
 
     const response = await DELETE(
       new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
@@ -306,24 +322,20 @@ describe('DELETE /api/media/:mediaId', () => {
     const body = await response.json();
     expect(body.bytesReclaimed).toBe(false);
     expect(body.orphanedPaths).toEqual(['owner-1/m1']);
-    expect(admin.builders.media_objects.update).not.toHaveBeenCalled();
+    expect(caller.rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1' });
   });
 
-  it('does not stamp anything when the removal left the bytes referenced', async () => {
+  it('claims nothing when the removal left the bytes referenced', async () => {
     signedIn();
-    const admin = db({ media_objects: { data: null, error: null } });
-    adminClient.mockReturnValue(admin.client);
+    const adminRemove = vi.fn(async () => REMOVED('owner-1/m1'));
+    adminClient.mockReturnValue(db({}, { remove: adminRemove }).client);
 
-    const caller = db({}).client;
-    caller.rpc = vi.fn(async () => ({
-      data: [{
-        media_id: 'm1',
-        bucket_id: 'story-media',
-        storage_path: 'owner-1/m1',
-        reclaimable: false,
-      }],
-      error: null,
-    }));
+    const caller = deleteCaller([{
+      media_id: 'm1',
+      bucket_id: 'story-media',
+      storage_path: 'owner-1/m1',
+      reclaimable: false,
+    }]);
     callerClient.mockReturnValue(caller);
 
     const response = await DELETE(
@@ -332,7 +344,11 @@ describe('DELETE /api/media/:mediaId', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(admin.builders.media_objects.update).not.toHaveBeenCalled();
+    expect(caller.rpc).not.toHaveBeenCalledWith(
+      'claim_media_for_removal',
+      expect.objectContaining({ p_media_id: 'm1' }),
+    );
+    expect(adminRemove).not.toHaveBeenCalled();
   });
 
   it('reports a refused removal as denied instead of as a success', async () => {
@@ -354,20 +370,15 @@ describe('DELETE /api/media/:mediaId', () => {
 
   it('states the references an archive hold kept, rather than reporting a full delete', async () => {
     signedIn();
-    const admin = db({ media_objects: { data: null, error: null } });
-    adminClient.mockReturnValue(admin.client);
+    const adminRemove = vi.fn(async () => REMOVED('owner-1/m1'));
+    adminClient.mockReturnValue(db({}, { remove: adminRemove }).client);
 
-    const caller = db({}).client;
-    caller.rpc = vi.fn(async () => ({
-      data: [{
-        bucket_id: 'story-media',
-        storage_path: 'owner-1/m1',
-        reclaimable: false,
-        remaining_references: 1,
-      }],
-      error: null,
-    }));
-    callerClient.mockReturnValue(caller);
+    callerClient.mockReturnValue(deleteCaller([{
+      bucket_id: 'story-media',
+      storage_path: 'owner-1/m1',
+      reclaimable: false,
+      remaining_references: 1,
+    }]));
 
     const response = await DELETE(
       new Request('https://app.test/api/media/m1?scope=everywhere', { method: 'DELETE' }),
@@ -381,7 +392,214 @@ describe('DELETE /api/media/:mediaId', () => {
       bytesReclaimed: false,
       remainingReferences: 1,
     });
-    expect(admin.builders.media_objects.update).not.toHaveBeenCalled();
+    expect(adminRemove).not.toHaveBeenCalled();
+  });
+
+  // RECLAMATION HAS A CALLER, and this is one of them. Expired stories and
+  // abandoned uploads never get a deletion verb of their own, so without a tick
+  // like this they stay eligible forever and reclaimed never.
+  it('sweeps the caller\'s other reclaimable media on the way out', async () => {
+    signedIn();
+    const adminRemove = vi.fn(async (paths: string[]) => ({
+      data: paths.map((name) => ({ name })),
+      error: null,
+    }));
+    adminClient.mockReturnValue(db({}, { remove: adminRemove }).client);
+
+    callerClient.mockReturnValue(deleteCaller(
+      removal('m1', 'owner-1/m1'),
+      null,
+      {
+        claims: [{ media_id: 'expired', bucket_id: 'story-media', storage_path: 'owner-1/expired.jpg' }],
+        orphans: [{ bucket_id: 'story-media', storage_path: 'owner-1/legacy.jpg' }],
+      },
+    ));
+
+    const response = await DELETE(
+      new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
+      { params: { mediaId: 'm1' } },
+    );
+
+    // Two more objects than the one the caller asked about, and pre-boundary
+    // media (no registry row at all) is one of them.
+    await expect(response.json()).resolves.toMatchObject({ alsoReclaimed: 2 });
+    expect(adminRemove).toHaveBeenCalledWith(['owner-1/expired.jpg']);
+    expect(adminRemove).toHaveBeenCalledWith(['owner-1/legacy.jpg']);
+  });
+
+  // The sweep is a courtesy. If it throws, the deletion the caller actually
+  // asked for still has to be reported honestly.
+  it('still reports the caller\'s own deletion when the sweep fails', async () => {
+    signedIn();
+    let call = 0;
+    const adminRemove = vi.fn(async (paths: string[]) => {
+      call += 1;
+      if (call > 1) throw new Error('storage down');
+      return { data: paths.map((name) => ({ name })), error: null };
+    });
+    adminClient.mockReturnValue(db({}, { remove: adminRemove }).client);
+
+    callerClient.mockReturnValue(deleteCaller(
+      removal('m1', 'owner-1/m1'),
+      null,
+      { claims: [{ media_id: 'x', bucket_id: 'story-media', storage_path: 'owner-1/x.jpg' }] },
+    ));
+
+    const response = await DELETE(
+      new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
+      { params: { mediaId: 'm1' } },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      bytesReclaimed: true,
+      alsoReclaimed: 0,
+    });
+  });
+});
+
+/**
+ * V8-R-CMP-012's other half: something has to actually delete the bytes.
+ *
+ * 0066 can only decide eligibility — Postgres cannot remove a Storage object —
+ * so without an invoked caller "bytes die with the last reference" is a rule
+ * with no executor. This route is that caller, and the two things it must get
+ * right are WHOSE media a sweep touches and how a service key is compared.
+ */
+describe('POST /api/media/reclaim', () => {
+  function sweepCaller(claims: unknown[] = [], orphans: unknown[] = []) {
+    const client = db({}).client;
+    client.rpc = vi.fn(async (name: string) => (
+      name === 'claim_media_for_removal'
+        ? { data: claims, error: null }
+        : { data: name === 'unreferenced_orphan_paths' ? orphans : true, error: null }
+    ));
+    return client;
+  }
+
+  const removeAll = () => vi.fn(async (paths: string[]) => ({
+    data: paths.map((name) => ({ name })),
+    error: null,
+  }));
+
+  it('refuses a request with no bearer token', async () => {
+    readMediaEnv.mockReturnValue(ENV);
+    bearerToken.mockReturnValue(null);
+
+    const response = await RECLAIM(
+      new Request('https://app.test/api/media/reclaim', { method: 'POST' }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it('refuses a token that is neither a session nor the service key', async () => {
+    readMediaEnv.mockReturnValue(ENV);
+    bearerToken.mockReturnValue('not-a-real-token');
+    verifiedUserId.mockResolvedValue(null);
+    adminClient.mockReturnValue(db({}).client);
+
+    const response = await RECLAIM(
+      new Request('https://app.test/api/media/reclaim', { method: 'POST' }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  // A prefix of the service key is not the service key. The comparison is
+  // length-checked and then constant-time, so a near-miss is rejected as an
+  // ordinary unauthenticated token rather than escalating to a global sweep.
+  it('does not treat a prefix of the service key as the service key', async () => {
+    readMediaEnv.mockReturnValue(ENV);
+    bearerToken.mockReturnValue('servic');
+    verifiedUserId.mockResolvedValue(null);
+    adminClient.mockReturnValue(db({}).client);
+
+    const response = await RECLAIM(
+      new Request('https://app.test/api/media/reclaim', { method: 'POST' }),
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it('sweeps only the caller\'s own media for a user token', async () => {
+    signedIn();
+    const remove = removeAll();
+    adminClient.mockReturnValue(db({}, { remove }).client);
+    const caller = sweepCaller(
+      [{ media_id: 'm1', bucket_id: 'story-media', storage_path: 'owner-1/m1' }],
+    );
+    callerClient.mockReturnValue(caller);
+
+    const response = await RECLAIM(
+      new Request('https://app.test/api/media/reclaim', { method: 'POST' }),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      scope: 'own',
+      reclaimed: 1,
+    });
+    // The scoping is 0066's, not this handler's: the RPCs run on the CALLER'S
+    // client, which is what makes auth.uid() non-null and narrows them.
+    expect(caller.rpc).toHaveBeenCalledWith(
+      'claim_media_for_removal',
+      expect.objectContaining({ p_media_id: null }),
+    );
+    expect(remove).toHaveBeenCalledWith(['owner-1/m1']);
+  });
+
+  // The scheduled path. Passing the ADMIN client as the caller is what widens
+  // the sweep: 0066's functions drop their owner filter exactly when auth.uid()
+  // is null, and a service-role client is the only one for which it is.
+  it('sweeps everyone\'s media for the service key, and never builds a caller client', async () => {
+    readMediaEnv.mockReturnValue(ENV);
+    bearerToken.mockReturnValue(ENV.serviceKey);
+    const remove = removeAll();
+    const admin = db({}, { remove }).client;
+    admin.rpc = vi.fn(async (name: string) => (
+      name === 'unreferenced_orphan_paths'
+        ? { data: [{ bucket_id: 'story-media', storage_path: 'someone/else.jpg' }], error: null }
+        : { data: [], error: null }
+    ));
+    adminClient.mockReturnValue(admin);
+
+    const response = await RECLAIM(
+      new Request('https://app.test/api/media/reclaim', { method: 'POST' }),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      scope: 'all',
+      reclaimed: 1,
+    });
+    expect(callerClient).not.toHaveBeenCalled();
+    expect(verifiedUserId).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith(['someone/else.jpg']);
+  });
+
+  it('is honest about an orphan instead of counting it as reclaimed', async () => {
+    signedIn();
+    adminClient.mockReturnValue(
+      db({}, { remove: vi.fn(async () => ({ data: [], error: null })) }).client,
+    );
+    callerClient.mockReturnValue(sweepCaller(
+      [{ media_id: 'm1', bucket_id: 'story-media', storage_path: 'owner-1/m1' }],
+    ));
+
+    const response = await RECLAIM(
+      new Request('https://app.test/api/media/reclaim', { method: 'POST' }),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      reclaimed: 0,
+      orphanedPaths: ['owner-1/m1'],
+    });
+  });
+
+  it('is a 503 when this deployment has no media configuration', async () => {
+    readMediaEnv.mockReturnValue(null);
+    const response = await RECLAIM(
+      new Request('https://app.test/api/media/reclaim', { method: 'POST' }),
+    );
+    expect(response.status).toBe(503);
   });
 });
 

@@ -1,11 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import {
-  deleteEverywhere,
-  pathHasLiveReference,
-  reclaimBytes,
-  removeDestination,
-} from '@/lib/media/destinations';
+import { deleteEverywhere, removeDestination } from '@/lib/media/destinations';
+import { claimAndRemove, sweepReclaimable } from '@/lib/media/reclaim';
 import {
   adminClient,
   bearerToken,
@@ -13,7 +9,6 @@ import {
   readMediaEnv,
   verifiedUserId,
 } from '@/lib/media/serverClients';
-import { MEDIA_BUCKET } from '@/lib/media/types';
 
 /**
  * DELETE /api/media/:mediaId — the two deletion verbs (V8-R-CMP-015,
@@ -26,20 +21,16 @@ import { MEDIA_BUCKET } from '@/lib/media/types';
  * the destructive verb one typo away from the safe one, and D-C-33's whole
  * point is that the two are distinct and name their scope.
  *
- * BYTES ARE NEVER RECLAIMED BY THIS HANDLER'S OWN JUDGEMENT. The decision comes
- * back from 0066's definer functions, which count references under a row lock
- * in the same transaction as the removal.
+ * BYTES ARE NEVER RECLAIMED BY THIS HANDLER'S OWN JUDGEMENT, and no longer by a
+ * question asked just before deleting either. The handler asks the database to
+ * CLAIM them: 0066 recounts under the same `media_objects` row lock
+ * `publish_story` takes and stamps the tombstone in that transaction, so a story
+ * published a microsecond later cannot land on bytes already committed to
+ * removal. An empty claim means the database declined and nothing is deleted.
  *
- * THE SECOND GUARD IS AN EXPLICIT RE-CHECK, not the storage policy. The RPC's
- * row lock is gone by the time the bytes go, so a reference created in that
- * window would otherwise be destroyed by a decision taken before it existed.
- * The obvious defence — remove as the CALLER so 0066's storage DELETE policy
- * re-checks — does not work here and fails in the worst possible direction:
- * 0066 revokes every `story-media` SELECT policy, Storage must see an object to
- * delete it, and a remove that matches nothing returns an EMPTY LIST WITH NO
- * ERROR. The route would then stamp `bytes_removed_at` on bytes that are still
- * in the bucket. So the removal runs with service role, and the reference count
- * is re-asked on the caller's client immediately before it.
+ * The previous shape asked `media_path_has_live_reference` and then deleted with
+ * service role. Two steps, no lock across them — it narrowed the race and could
+ * not close it, and losing that race destroys a live story's photo silently.
  */
 export const runtime = 'nodejs';
 
@@ -89,28 +80,24 @@ export async function DELETE(
         );
       }
 
-      const orphans = removed.value.reclaimable
-        ? await reclaimIfUnreferenced(caller, admin, removed.value.storagePath)
-        : [];
-
-      if (removed.value.reclaimable) {
-        // THE RPC'S media id, never the one in the URL. The RPC authorized and
-        // removed a DESTINATION; which media that destination belonged to is
-        // its answer to give, and `:mediaId` here is an unvalidated path
-        // segment that the destination need not match. Stamping the path's id
-        // would write `bytes_removed_at` on somebody else's live row with
-        // service-role authority — a 404 for media whose bytes are still there
-        // — while the row actually reclaimed stayed unstamped.
-        await markBytesRemoved(admin, removed.value.mediaId, orphans);
-      }
+      // THE RPC'S media id, never the one in the URL. The RPC authorized and
+      // removed a DESTINATION; which media that destination belonged to is its
+      // answer to give, and `:mediaId` here is an unvalidated path segment that
+      // the destination need not match. Claiming the path's id would commit
+      // somebody else's live row to removal with service-role authority, while
+      // the object actually freed stayed behind.
+      const swept = removed.value.reclaimable
+        ? await claimAndRemove(caller, admin, removed.value.mediaId)
+        : { reclaimed: [], orphaned: [] };
 
       return NextResponse.json({
         ok: true,
         scope: 'destination',
         // The remaining destinations are untouched, and saying so is the
         // difference between this verb and the other one.
-        bytesReclaimed: removed.value.reclaimable && orphans.length === 0,
-        orphanedPaths: orphans,
+        bytesReclaimed: swept.reclaimed.length > 0,
+        orphanedPaths: swept.orphaned,
+        ...(await sweepRest(caller, admin)),
       });
     }
 
@@ -122,22 +109,19 @@ export async function DELETE(
       );
     }
 
-    const orphans = deleted.value.reclaimable
-      ? await reclaimIfUnreferenced(caller, admin, deleted.value.storagePath)
-      : [];
-
-    if (deleted.value.reclaimable) {
-      await markBytesRemoved(admin, params.mediaId, orphans);
-    }
+    const swept = deleted.value.reclaimable
+      ? await claimAndRemove(caller, admin, params.mediaId)
+      : { reclaimed: [], orphaned: [] };
 
     return NextResponse.json({
       ok: true,
       scope: 'everywhere',
-      bytesReclaimed: deleted.value.reclaimable && orphans.length === 0,
+      bytesReclaimed: swept.reclaimed.length > 0,
       // Non-zero means a Saved Nights Out archive still holds the bytes. Stated,
       // because "a partial delete must be reported, never reported as complete".
       remainingReferences: deleted.value.remainingReferences,
-      orphanedPaths: orphans,
+      orphanedPaths: swept.orphaned,
+      ...(await sweepRest(caller, admin)),
     });
   } catch (error) {
     console.error(
@@ -149,51 +133,29 @@ export async function DELETE(
 }
 
 /**
- * Re-ask the reference count, then remove — or keep the bytes and say so.
+ * The rest of this caller's reclaimable media, swept on the way out.
  *
- * The RPC answered "reclaimable" while holding a row lock it has since
- * released. This asks again, on the caller's client, at the last moment before
- * anything is destroyed. A reference that reappeared is reported through the
- * same orphan channel the caller already renders: the bytes survived, which is
- * exactly what an orphan means here.
+ * Expired stories and abandoned uploads have no deletion event of their own —
+ * nothing ever calls a verb on them — so without a tick like this they are
+ * eligible for reclamation forever and reclaimed never. Hanging it off a
+ * deletion is deliberate: someone deleting media is someone whose media is worth
+ * looking at, and the batch is bounded so the request stays a request.
+ *
+ * It never affects the outcome of the deletion the caller asked for. A failure
+ * in here is reported in the payload and nowhere else.
  */
-async function reclaimIfUnreferenced(
+async function sweepRest(
   caller: ReturnType<typeof callerClient>,
   admin: ReturnType<typeof adminClient>,
-  storagePath: string,
-): Promise<string[]> {
-  if (await pathHasLiveReference(caller, MEDIA_BUCKET, storagePath)) {
+): Promise<{ alsoReclaimed: number }> {
+  try {
+    const swept = await sweepReclaimable(caller, admin);
+    return { alsoReclaimed: swept.reclaimed.length };
+  } catch (error) {
     console.error(
-      '[media/delete] reference reappeared before removal, bytes kept:',
-      storagePath,
+      '[media/delete] sweep failed:',
+      error instanceof Error ? error.message : 'unknown',
     );
-    return [storagePath];
-  }
-  return reclaimBytes(admin, MEDIA_BUCKET, [storagePath]);
-}
-
-/**
- * Record that the bytes are gone — but only if they actually are.
- *
- * An orphan means the object survived the remove, so stamping
- * `bytes_removed_at` would file it as reclaimed and hide it from any future
- * sweep. The orphan is logged instead, the same contract as `reportOrphans` in
- * stories.server.ts.
- */
-async function markBytesRemoved(
-  admin: ReturnType<typeof adminClient>,
-  mediaId: string,
-  orphans: readonly string[],
-): Promise<void> {
-  if (orphans.length > 0) {
-    console.error('[media/delete] ORPHAN — bytes survived removal:', orphans.join(', '));
-    return;
-  }
-  const { error } = await admin
-    .from('media_objects')
-    .update({ bytes_removed_at: new Date().toISOString() })
-    .eq('id', mediaId);
-  if (error) {
-    console.error('[media/delete] could not stamp bytes_removed_at:', error.message);
+    return { alsoReclaimed: 0 };
   }
 }

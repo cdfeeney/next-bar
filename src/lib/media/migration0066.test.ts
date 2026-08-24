@@ -344,11 +344,15 @@ describe('0066 — V8-R-FEED-009 blocking is enforced both ways', () => {
     );
   });
 
+  // is_blocked_between REFUSES a caller who is not one of the two parties, and
+  // a trigger can fire under a writer that is neither — a migration, a
+  // server-side job. The invariant belongs to the table, so the lookup must not
+  // depend on who is asking.
   it('inlines the block lookup in the trigger rather than calling the guarded helper', () => {
     expect(FLAT).toContain(
       'if exists ( select 1 from public.profile_blocks pb'
-      + ' where (pb.blocker_id = v_a and pb.blocked_id = v_b)'
-      + ' or (pb.blocker_id = v_b and pb.blocked_id = v_a) ) then',
+      + ' where (pb.blocker_id = v_self and pb.blocked_id = v_other)'
+      + ' or (pb.blocker_id = v_other and pb.blocked_id = v_self) ) then',
     );
   });
 });
@@ -456,6 +460,188 @@ describe('0066 — the media registry is not client-writable', () => {
   });
 });
 
+/**
+ * THE THREE REDESIGNS.
+ *
+ * Each of these replaced a shape that review found broken in a DIFFERENT
+ * instance three rounds running. What is pinned here is the structural property
+ * that makes the family impossible, not the individual instance — an assertion
+ * on one call site would go green again the moment a fourth site appeared.
+ */
+describe('0066 — reclamation is a claim, not a check-then-delete', () => {
+  // Check-then-delete cannot be fixed by narrowing the gap: the answer is about
+  // the past by the time the bytes go, and losing that race destroys a live
+  // story's photo. What CAN be atomic is the claim.
+  it('recounts UNDER the row lock and stamps in the same transaction', () => {
+    expect(FLAT).toContain('for update of m skip locked');
+    expect(FLAT).toContain('if public.media_live_reference_count(r.id) = 0 then');
+    expect(FLAT).toContain(
+      'update public.media_objects m set bytes_removed_at = now()'
+      + ' where m.id = r.id and m.bytes_removed_at is null;',
+    );
+  });
+
+  // The other half of the lock. Without this, publication still races: the claim
+  // holds a lock nothing else takes, which is no lock at all.
+  it('makes publish_story take the SAME lock the claim takes', () => {
+    expect(FLAT).toContain(
+      "perform 1 from public.media_objects m where m.bucket_id = 'story-media'"
+      + ' and m.storage_path in (p_media_path, p_inset_path) for update;',
+    );
+    expect(FLAT).toContain(
+      "raise exception 'publish_story: those bytes have already been reclaimed'",
+    );
+  });
+
+  // 0065 published without writing the spine, which is why the reference count
+  // needs a second term that counts stories directly. The destination is now
+  // recorded where it is actually created.
+  it('writes the destination spine row where the destination is created', () => {
+    expect(FLAT).toContain(
+      "insert into public.media_destinations (media_id, kind, ref_id)"
+      + " select m.id, 'story', v_id::text",
+    );
+  });
+
+  // A stamp left standing over bytes that are still in the bucket is the
+  // registry lying, and every future sweep skips it.
+  it('hands the claim back when the removal did not happen', () => {
+    expect(FLAT).toContain(
+      'update public.media_objects m set bytes_removed_at = null'
+      + ' where m.id = p_media_id and m.bytes_removed_at is not null',
+    );
+  });
+});
+
+describe('0066 — zero-reference bytes have a reclamation PATH, not just eligibility', () => {
+  // Every story photo in the product today predates this registry and so has no
+  // media_objects row. A sweep that only looked at the registry would be
+  // eligible to reclaim nothing that actually exists.
+  it('offers unregistered objects, which is where all existing media lives', () => {
+    expect(FLAT).toMatch(
+      /create or replace function public\.unreferenced_orphan_paths\(p_limit integer default 25\)/i,
+    );
+    expect(FLAT).toContain(
+      'not exists ( select 1 from public.media_objects m'
+      + " where m.bucket_id = 'story-media' and m.storage_path = o.name"
+      + ' and m.bytes_removed_at is null )',
+    );
+  });
+
+  // Upload-then-publish means a fresh object legitimately has zero references
+  // while the composer is open. Sweeping it deletes the photo mid-post.
+  it('keeps a grace window so an in-progress upload is never swept', () => {
+    expect(FLAT).toContain("o.created_at < now() - interval '24 hours'");
+    expect(FLAT).toContain("m.created_at < now() - interval '24 hours'");
+  });
+
+  it('never offers a path a live story still names', () => {
+    expect(FLAT).toContain(
+      'not exists ( select 1 from public.stories s'
+      + ' where (s.media_path = o.name or s.inset_path = o.name)'
+      + ' and s.deleted_at is null and s.expires_at > now() )',
+    );
+  });
+});
+
+describe('0066 — V8-R-FEED-009 the block is enforced at the TABLES, not per call site', () => {
+  // r3 patched the follow path, r4 the follow-request path, r5 the night-out
+  // invitation path — three rounds, three surfaces, one defect. A connection
+  // cannot exist without a row, so guarding the rows is the only version of this
+  // list that is ever finished.
+  it('guards every table in the schema that holds a connection between two accounts', () => {
+    for (const table of [
+      'follows',
+      'follow_requests',
+      'night_out_members',
+      'story_audience',
+      'story_tags',
+    ]) {
+      expect(
+        FLAT,
+        `no blocked-edge trigger on public.${table}`,
+      ).toMatch(
+        new RegExp(
+          `create trigger \\w+ before insert on public\\.${table}`
+          + ' for each row execute function public\\.forbid_blocked_edge\\(\\);',
+          'i',
+        ),
+      );
+    }
+  });
+
+  // A trigger wired to a table the function cannot read a pair out of would
+  // enforce nothing while looking enforced.
+  it('refuses a table it has no pair rule for, rather than passing the row', () => {
+    expect(FLAT).toContain(
+      "raise exception 'forbid_blocked_edge: no pair rule for table %', tg_table_name",
+    );
+  });
+
+  // The night-out case is the one that proves the shape: invite_to_night_out has
+  // never heard of blocks, and the guard does not need it to.
+  it('reads the night-out pair from the existing members and the inviter', () => {
+    expect(FLAT).toContain(
+      'select nm.user_id as party from public.night_out_members nm'
+      + ' where nm.night_out_id = new.night_out_id and nm.user_id <> new.user_id',
+    );
+    expect(FLAT).toContain('select new.invited_by where new.invited_by is not null');
+  });
+
+  // Without a shared lock, a block INSERT and a follow INSERT each miss the
+  // other's uncommitted row and BOTH commit — a block with a live follow beside
+  // it. Both sides have to take it or it serializes nothing.
+  it('serializes block creation against connection creation on the ordered pair', () => {
+    expect(FLAT).toContain('perform public.blocked_pair_lock(v_self, v_other);');
+    expect(FLAT).toContain(
+      'perform public.blocked_pair_lock(new.blocker_id, new.blocked_id);',
+    );
+    expect(FLAT).toContain(
+      "least(a::text, b::text) || '|' || greatest(a::text, b::text)",
+    );
+  });
+
+  // Two multi-pair inserts locking overlapping sets in different orders deadlock.
+  it('locks pairs in a sorted order', () => {
+    expect(FLAT).toContain('array_agg(p order by p)');
+  });
+});
+
+describe('0066 — V8-R-FEED-010 a report names something the reporter can see', () => {
+  // The one-report-per-subject index is the anti-flood measure, and arbitrary
+  // text walks straight past it: vary the ref, mint another row.
+  it('requires the subject ref to be an id, not arbitrary text', () => {
+    expect(FLAT).toContain(
+      "if btrim(p_subject_ref) !~*"
+      + " '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then",
+    );
+  });
+
+  // A report is a durable, non-withdrawable accusation. A caller who cannot
+  // reach the content could otherwise fabricate one about a story they were
+  // never shown.
+  it('refuses a story the reporter cannot actually see', () => {
+    expect(FLAT).toContain(
+      "if p_subject_kind = 'story' and not exists ( select 1 from public.stories s",
+    );
+    expect(FLAT).toContain(
+      "raise exception 'report_content: that story is not yours to report'",
+    );
+  });
+
+  it('caps how many NEW subjects one account can report in a day', () => {
+    expect(FLAT).toContain(
+      "raise exception 'report_content: too many reports from this account today'",
+    );
+    // Applied to new subjects only: re-reporting must stay idempotent, because
+    // the caller hides the content on a returned id and only on a returned id.
+    expect(FLAT).toContain(
+      'if not exists ( select 1 from public.content_reports cr'
+      + ' where cr.reporter_id = auth.uid() and cr.subject_kind = p_subject_kind',
+    );
+  });
+});
+
 describe('0066 — idempotency', () => {
   it('creates every table with if not exists', () => {
     const creates = STATEMENTS.match(/create table[^(]*/gi) ?? [];
@@ -473,6 +659,19 @@ describe('0066 — idempotency', () => {
         SQL,
         `policy ${name} is created without a preceding drop policy if exists`,
       ).toContain(`drop policy if exists "${name}"`);
+    }
+  });
+
+  // `create trigger` has no IF NOT EXISTS, so a re-run fails outright without
+  // the preceding drop — the one shape in this file that breaks a replay.
+  it('drops each trigger before creating it', () => {
+    const created = [...STATEMENTS.matchAll(/create trigger\s+(\w+)\s+/gi)].map((m) => m[1]);
+    expect(created.length).toBeGreaterThan(0);
+    for (const name of created) {
+      expect(
+        FLAT,
+        `trigger ${name} is created without a preceding drop trigger if exists`,
+      ).toContain(`drop trigger if exists ${name} on`);
     }
   });
 

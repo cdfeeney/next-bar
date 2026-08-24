@@ -447,6 +447,201 @@ create policy "story-media: owner deletes own prefix"
   );
 
 ------------------------------------------------------------------------------
+-- 5a. Reclamation is a CLAIM, not a check-then-delete (V8-R-CMP-012)
+------------------------------------------------------------------------------
+
+-- WHY THIS REPLACES THE OLD SHAPE, written down because the old shape looked
+-- correct and was reported three review rounds running.
+--
+-- The route used to (1) ask "are there zero references?", then (2) remove the
+-- bytes with service role. Two steps, no lock spanning both, so a `publish_story`
+-- committing in between produced a live story whose photo was destroyed
+-- microseconds later. Narrowing the window is not closing it, and the loss is
+-- silent and permanent.
+--
+-- Storage is not in the database transaction, so the removal itself can never be
+-- atomic with the count. What CAN be atomic is the CLAIM: under a row lock on
+-- `media_objects`, recount and stamp `bytes_removed_at` in the same transaction.
+-- After that the object is spoken for — `publish_story` (section 7b) takes the
+-- SAME lock and refuses a claimed object, so a story can no longer appear
+-- against bytes already committed to removal. The removal then happens outside
+-- the transaction against an object nothing may attach to any more.
+--
+-- The stamp is the tombstone AND the claim, one fact in one column. If the
+-- removal does not happen, `release_media_claim` puts the object back; if the
+-- process dies in between, section 5a's orphan sweep finds it again because the
+-- bytes are still in the bucket. There is no state in which a claim silently
+-- becomes a lie.
+--
+-- `skip locked`: a row another transaction is already working on is somebody
+-- else's claim, and waiting for it only to find it stamped is wasted work.
+create or replace function public.claim_media_for_removal(
+  p_media_id uuid default null,
+  p_limit integer default 25
+)
+returns table (media_id uuid, bucket_id text, storage_path text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+  v_limit integer := least(greatest(coalesce(p_limit, 25), 1), 100);
+  r record;
+begin
+  for r in
+    select m.id as id, m.bucket_id as bucket_id, m.storage_path as storage_path
+      from public.media_objects m
+     where m.bytes_removed_at is null
+       and (p_media_id is null or m.id = p_media_id)
+       -- OWNER SCOPING. A null caller is trusted infrastructure (the service
+       -- role sweep); an authenticated caller reclaims only their own bytes.
+       and (v_caller is null or m.owner_id = v_caller)
+       -- THE GRACE WINDOW, and it only applies to the SWEEP.
+       --
+       -- Upload-then-publish means a freshly verified object legitimately has
+       -- zero references for as long as the composer stays open. Sweeping it
+       -- would delete the photo out from under someone mid-post. An object that
+       -- has EVER carried a destination is past that stage, so it is eligible
+       -- immediately; one that never has waits out the window.
+       --
+       -- A targeted claim (p_media_id given) skips this entirely: the caller
+       -- just deleted that object's last destination and is entitled to an
+       -- immediate answer.
+       and (
+         p_media_id is not null
+         or m.created_at < now() - interval '24 hours'
+         or exists (
+           select 1
+             from public.media_destinations d
+            where d.media_id = m.id
+         )
+       )
+     order by m.created_at
+     limit v_limit
+     for update of m skip locked
+  loop
+    -- Recounted UNDER THE LOCK. The count the caller was given earlier was
+    -- taken under a lock that has since been released; this one is taken under
+    -- the lock that also blocks publication, which is what makes it binding.
+    if public.media_live_reference_count(r.id) = 0 then
+      update public.media_objects m
+         set bytes_removed_at = now()
+       where m.id = r.id
+         and m.bytes_removed_at is null;
+
+      if found then
+        media_id := r.id;
+        bucket_id := r.bucket_id;
+        storage_path := r.storage_path;
+        return next;
+      end if;
+    end if;
+  end loop;
+end;
+$$;
+
+comment on function public.claim_media_for_removal(uuid, integer) is
+  'V8-R-CMP-012. Atomically claims zero-reference bytes for removal: recounts under a row lock and stamps bytes_removed_at in the same transaction, so publish_story cannot attach a new destination to bytes already committed to deletion. Pass a media id for a targeted claim, or nothing for a bounded sweep.';
+
+revoke all on function public.claim_media_for_removal(uuid, integer) from public, anon;
+grant execute on function public.claim_media_for_removal(uuid, integer) to authenticated;
+
+-- THE CLAIM IS GIVEN BACK WHEN THE REMOVAL DID NOT HAPPEN.
+--
+-- Storage can refuse or silently skip an object. Leaving the stamp in place
+-- would file bytes as reclaimed while they sit in the bucket, and every future
+-- sweep would skip them — the registry lying about the world. Releasing puts the
+-- object back in front of the sweep.
+create or replace function public.release_media_claim(p_media_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+begin
+  update public.media_objects m
+     set bytes_removed_at = null
+   where m.id = p_media_id
+     and m.bytes_removed_at is not null
+     and (v_caller is null or m.owner_id = v_caller);
+
+  return found;
+end;
+$$;
+
+comment on function public.release_media_claim(uuid) is
+  'V8-R-CMP-012. Undoes a claim whose byte removal did not actually happen, so an orphan returns to the sweep instead of being recorded as reclaimed.';
+
+revoke all on function public.release_media_claim(uuid) from public, anon;
+grant execute on function public.release_media_claim(uuid) to authenticated;
+
+-- BYTES THE REGISTRY CANNOT SEE AT ALL.
+--
+-- Two populations never reach `claim_media_for_removal`, and both leak forever
+-- without this:
+--
+--   * Objects written before this boundary existed, or by any caller that still
+--     talks to Storage directly. They have no `media_objects` row, so there is
+--     nothing to claim and nothing to stamp. Every story photo in the product
+--     today is in this population.
+--   * Objects whose claim was stamped but whose removal never landed and whose
+--     release never ran — a crashed process between the two. The registry says
+--     gone; the bucket says otherwise. The BUCKET is the evidence, so a row that
+--     claims removal while its object is still there is treated as unreclaimed.
+--
+-- Eligibility is deliberately conservative: past the grace window, under the
+-- caller's own prefix (or anywhere, for the service-role sweep), and named by no
+-- live story. Being wrong here destroys data, so every uncertain case keeps the
+-- bytes.
+create or replace function public.unreferenced_orphan_paths(p_limit integer default 25)
+returns table (bucket_id text, storage_path text)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+  v_limit integer := least(greatest(coalesce(p_limit, 25), 1), 100);
+begin
+  return query
+  select 'story-media'::text, o.name
+    from storage.objects o
+   where o.bucket_id = 'story-media'
+     and o.created_at < now() - interval '24 hours'
+     and (
+       v_caller is null
+       or (storage.foldername(o.name))[1] = v_caller::text
+     )
+     and not exists (
+       select 1
+         from public.media_objects m
+        where m.bucket_id = 'story-media'
+          and m.storage_path = o.name
+          and m.bytes_removed_at is null
+     )
+     and not exists (
+       select 1
+         from public.stories s
+        where (s.media_path = o.name or s.inset_path = o.name)
+          and s.deleted_at is null
+          and s.expires_at > now()
+     )
+   order by o.created_at
+   limit v_limit;
+end;
+$$;
+
+comment on function public.unreferenced_orphan_paths(integer) is
+  'V8-R-CMP-012 / V8-R-STO-016. Storage objects no live story and no unclaimed registry row accounts for — pre-boundary media, abandoned uploads, and bytes a crashed removal left behind. The reclaim route removes these; nothing else ever will.';
+
+revoke all on function public.unreferenced_orphan_paths(integer) from public, anon;
+grant execute on function public.unreferenced_orphan_paths(integer) to authenticated;
+
+------------------------------------------------------------------------------
 -- 5b. THE BOUNDARY ITSELF: no client reaches these bytes directly
 ------------------------------------------------------------------------------
 
@@ -473,11 +668,38 @@ create policy "story-media: owner deletes own prefix"
 -- reader (the url route, which decides the TTL) — the chokepoints both
 -- requirements describe.
 --
--- CONSEQUENCE, STATED RATHER THAN DISCOVERED: every caller that still talks to
--- Storage directly stops working and must go through /api/media. In this
--- repository that is `src/lib/stories.server.ts` and the capture/story
--- components, which are OUTSIDE this lane's write scope and are therefore
--- reported, not edited. Wiring them to the media API is an integration step.
+-- CONSEQUENCE, STATED RATHER THAN DISCOVERED — AND THIS FILE MUST NOT BE
+-- APPLIED BEFORE THE CLIENT MOVES.
+--
+-- Dropping these three policies breaks every caller that still talks to Storage
+-- directly, and in this repository that is `src/lib/stories.server.ts` plus the
+-- capture/story components — ALL OUTSIDE this lane's exclusive write scope, so
+-- they are reported here and not edited. Applying 0066 on its own leaves the
+-- product with failing uploads and unsignable story photos. The three edits that
+-- must land in the SAME deployment, named exactly so integration is a checklist
+-- and not an investigation:
+--
+--   1. `uploadStoryMedia` (stories.server.ts) — POST the bytes to
+--      /api/media/upload instead of `storage.from('story-media').upload(...)`.
+--      That route decodes and re-encodes them, which is the whole of
+--      V8-R-STO-014.
+--   2. story rendering — GET /api/media/:id/url instead of
+--      `createSignedUrl(path, ttl)`. The route decides the lifetime, which is
+--      the whole of V8-R-STO-015.
+--   3. `deleteStory` (stories.server.ts) — call `delete_story` FIRST and remove
+--      the bytes afterwards, or better, let /api/media handle the removal. Its
+--      current order (remove, then RPC) removes while the reference is still
+--      live, and 0066's DELETE policy correctly refuses that. Storage reports a
+--      refusal by OMITTING the object from the returned list with `error` null,
+--      and `removeBytes` there inspects only `error`, so the refusal reads as
+--      success and the bytes are orphaned.
+--
+-- Item 3 orphans bytes rather than destroying them, and section 5a's sweep is
+-- what stops that being permanent: a soft-deleted story stops counting, the
+-- object has no unclaimed registry row, and `unreferenced_orphan_paths` hands it
+-- to the reclaim route. The orphan is bounded by the sweep interval instead of
+-- being forever. That is a mitigation, not a fix — the fix is item 3, and it is
+-- outside this lane.
 drop policy if exists "story-media: owner writes own prefix" on storage.objects;
 drop policy if exists "story-media: owner reads own prefix" on storage.objects;
 drop policy if exists "story-media: audience reads referenced" on storage.objects;
@@ -753,6 +975,181 @@ revoke all on function public.delete_story(uuid) from public, anon;
 grant execute on function public.delete_story(uuid) to authenticated;
 
 ------------------------------------------------------------------------------
+-- 7b. Publication takes the same lock reclamation takes (V8-R-CMP-012)
+------------------------------------------------------------------------------
+
+-- Replaces 0065's `publish_story`. Same signature, same defaults, same
+-- validation, same return — 0065's body is preserved verbatim between the two
+-- additions marked below, so this is not a rewrite of somebody else's function.
+--
+-- ADDITION 1 — THE LOCK. 0065 checked that the object EXISTS and nothing else.
+-- Existence is a fact about the past: `claim_media_for_removal` can have
+-- recounted, stamped and be on its way to Storage while this check passes, and
+-- the story then goes live against bytes that are already gone. Taking `for
+-- update` on the same `media_objects` rows the claim takes makes the two
+-- mutually exclusive — whichever arrives second sees the first's committed
+-- decision instead of a stale one. A claimed object is refused; an object being
+-- published is skipped by the claim's `skip locked`.
+--
+-- ADDITION 2 — THE SPINE ROW. 0065 published without writing to
+-- `media_destinations`, which is why `media_live_reference_count` needs a second
+-- term that counts stories directly. That term is defence in depth and stays,
+-- but the spine is now written where the destination is actually created, so the
+-- count's FIRST term is true on its own for everything published after this
+-- migration, and "one media object, several destinations" (V8-R-CMP-012) has a
+-- row to hang a second destination beside.
+--
+-- Objects with no registry row (everything uploaded before this boundary) simply
+-- match nothing in either addition and behave exactly as they did under 0065.
+create or replace function public.publish_story(
+  p_media_path text,
+  p_media_kind text default 'single',
+  p_inset_path text default null,
+  p_bar_id text default null,
+  p_caption text default null,
+  p_audience text default 'friends',
+  p_audience_ids uuid[] default '{}',
+  p_tag_ids uuid[] default '{}'
+)
+returns public.stories
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_author uuid := auth.uid();
+  v_story public.stories;
+  v_id uuid;
+begin
+  if v_author is null then
+    raise exception 'publish_story: not authenticated' using errcode = '28000';
+  end if;
+  if p_media_path is null or length(trim(p_media_path)) = 0 then
+    raise exception 'publish_story: media_path is required' using errcode = '22023';
+  end if;
+  if split_part(p_media_path, '/', 1) <> v_author::text then
+    raise exception 'publish_story: media_path is not owned by the caller'
+      using errcode = '42501';
+  end if;
+  if p_inset_path is not null
+     and split_part(p_inset_path, '/', 1) <> v_author::text then
+    raise exception 'publish_story: inset_path is not owned by the caller'
+      using errcode = '42501';
+  end if;
+  if p_audience not in ('friends', 'custom') then
+    raise exception 'publish_story: unknown audience %', p_audience
+      using errcode = '22023';
+  end if;
+  if p_audience = 'custom'
+     and (p_audience_ids is null or array_length(p_audience_ids, 1) is null) then
+    raise exception 'publish_story: a custom audience needs at least one recipient'
+      using errcode = '22023';
+  end if;
+
+  -- ADDITION 1. Taken BEFORE the existence check, so the existence check is a
+  -- fact about the present rather than a fact about the past.
+  perform 1
+     from public.media_objects m
+    where m.bucket_id = 'story-media'
+      and m.storage_path in (p_media_path, p_inset_path)
+    for update;
+
+  if exists (
+    select 1
+      from public.media_objects m
+     where m.bucket_id = 'story-media'
+       and m.storage_path in (p_media_path, p_inset_path)
+       and m.bytes_removed_at is not null
+  ) then
+    raise exception 'publish_story: those bytes have already been reclaimed'
+      using errcode = '22023';
+  end if;
+
+  if not exists (
+    select 1 from storage.objects o
+     where o.bucket_id = 'story-media' and o.name = p_media_path
+  ) then
+    raise exception 'publish_story: media_path names no uploaded object'
+      using errcode = '22023';
+  end if;
+  if p_inset_path is not null and not exists (
+    select 1 from storage.objects o
+     where o.bucket_id = 'story-media' and o.name = p_inset_path
+  ) then
+    raise exception 'publish_story: inset_path names no uploaded object'
+      using errcode = '22023';
+  end if;
+
+  if p_audience = 'custom' and exists (
+    select 1 from unnest(p_audience_ids) as candidate(id)
+     where not public.is_mutual_friend(v_author, candidate.id)
+  ) then
+    raise exception 'publish_story: every custom recipient must be a mutual friend'
+      using errcode = '42501';
+  end if;
+
+  if p_tag_ids is not null and exists (
+    select 1 from unnest(p_tag_ids) as candidate(id)
+     where candidate.id <> v_author
+       and not public.is_mutual_friend(v_author, candidate.id)
+  ) then
+    raise exception 'publish_story: you can only tag friends who follow you back'
+      using errcode = '42501';
+  end if;
+
+  if p_audience = 'custom' and p_tag_ids is not null and exists (
+    select 1 from unnest(p_tag_ids) as candidate(id)
+     where candidate.id <> v_author
+       and not (candidate.id = any (coalesce(p_audience_ids, '{}'::uuid[])))
+  ) then
+    raise exception
+      'publish_story: everyone you tag must be in a custom story''s audience'
+      using errcode = '42501';
+  end if;
+
+  insert into public.stories (
+    author_id, bar_id, caption, media_path, inset_path, media_kind, audience
+  )
+  values (
+    v_author, p_bar_id, p_caption, p_media_path, p_inset_path,
+    p_media_kind, p_audience
+  )
+  returning id into v_id;
+
+  -- ADDITION 2.
+  insert into public.media_destinations (media_id, kind, ref_id)
+  select m.id, 'story', v_id::text
+    from public.media_objects m
+   where m.bucket_id = 'story-media'
+     and m.storage_path in (p_media_path, p_inset_path)
+  on conflict do nothing;
+
+  if p_audience = 'custom' then
+    insert into public.story_audience (story_id, profile_id)
+      select v_id, distinct_id
+        from (select distinct unnest(p_audience_ids) as distinct_id) ids
+      on conflict do nothing;
+  end if;
+
+  if p_tag_ids is not null and array_length(p_tag_ids, 1) is not null then
+    insert into public.story_tags (story_id, profile_id)
+      select v_id, distinct_id
+        from (select distinct unnest(p_tag_ids) as distinct_id) ids
+      on conflict do nothing;
+  end if;
+
+  select * into v_story from public.stories where id = v_id;
+  return v_story;
+end;
+$$;
+
+comment on function public.publish_story(text, text, text, text, text, text, uuid[], uuid[]) is
+  '0065''s publication verb plus 0066''s two additions: it takes the same media_objects row lock reclamation takes (so a story can never appear against claimed bytes) and writes the destination spine row (V8-R-CMP-012).';
+
+revoke all on function public.publish_story(text, text, text, text, text, text, uuid[], uuid[]) from public, anon;
+grant execute on function public.publish_story(text, text, text, text, text, text, uuid[], uuid[]) to authenticated;
+
+------------------------------------------------------------------------------
 -- 8. Blocking (V8-R-FEED-009)
 ------------------------------------------------------------------------------
 
@@ -818,25 +1215,67 @@ comment on function public.is_blocked_between(uuid, uuid) is
 revoke all on function public.is_blocked_between(uuid, uuid) from public, anon;
 grant execute on function public.is_blocked_between(uuid, uuid) to authenticated;
 
--- ...AND AT THE TABLES THEMSELVES, because not every interaction path asks a
--- predicate. `is_mutual_friend` covers everything that reads or publishes a
--- story, but `follow_user` (0008) never consults it: it checks the rate cap and
--- the target's privacy flag and then inserts. So after A blocks B, B could
--- still follow A, or raise a follow request against them, and the resulting row
--- was readable to both parties — "interaction stops between the two users" with
--- the most direct interaction of all left open.
+-- ...AND AT EVERY TABLE THAT CARRIES A CONNECTION BETWEEN TWO ACCOUNTS.
 --
--- A BEFORE INSERT trigger on the two tables that carry those edges catches
--- every writer at once, including `accept_follow_request` and anything added
--- later, which a fix inside `follow_user` alone would not. `follow_user`
--- already wraps both of its inserts in `exception when others then return
--- 'rejected'`, so a raise here surfaces to the client as an ordinary rejection
--- rather than an error — the product behaviour a block should have.
+-- THIS IS THE REDESIGN, and it is worth saying why the obvious alternative kept
+-- failing. Enforcing the block inside each RPC that creates a connection is
+-- per-call-site enforcement: `follow_user` was patched, then
+-- `accept_follow_request`, then `invite_to_night_out` — each time a DIFFERENT
+-- surface, each time the same defect, and each time the next surface was still
+-- open. There is no version of that list that is finished, because the list
+-- grows with the product.
+--
+-- A connection between two accounts cannot exist without a ROW existing, and
+-- there are exactly five tables in this schema that hold one. Guarding the
+-- tables makes the invariant belong to the data rather than to whoever last
+-- wrote an RPC, and a surface added tomorrow inherits it without knowing it
+-- exists. The complete list, and what the pair is on each:
+--
+--   public.follows           follower_id  <-> followee_id
+--   public.follow_requests   requester_id <-> target_id
+--   public.night_out_members user_id      <-> invited_by AND every existing
+--                                             member of that night out
+--   public.story_audience    profile_id   <-> the story's author
+--   public.story_tags        profile_id   <-> the story's author
+--
+-- `follow_user` already wraps its inserts in `exception when others then return
+-- 'rejected'`, so a raise here surfaces as an ordinary rejection rather than an
+-- error — the product behaviour a block should have.
+--
+-- NIGHT OUTS ARE THE CASE THAT PROVES THE SHAPE. `invite_to_night_out` checks
+-- the cap and the token and inserts; it has never heard of blocks. After A
+-- blocks B, B could stay in a draft night out and have A added to it, putting
+-- the two back in a shared group. The guard refuses the INSERT, so it does not
+-- matter which RPC attempted it. Existing memberships are untouched — the
+-- contract says a block "does not retroactively dissolve existing shared
+-- GROUPS", so only a NEW co-membership is refused.
 --
 -- The lookup is INLINE rather than a call to is_blocked_between: that function
 -- refuses a caller who is not one of the two parties, and a trigger can fire
 -- under a writer that is neither (a migration, a server-side job). The
 -- invariant belongs to the table, so it must not depend on who is asking.
+--
+-- SERIALIZED against a concurrent block. Without the pair lock, an INSERT here
+-- and an INSERT into `profile_blocks` can each miss the other's uncommitted row
+-- and both commit, leaving a block and a live connection standing together. The
+-- lock is taken on the ORDERED pair by both sides, so whichever commits second
+-- sees the first. Pairs are locked in sorted order, which is what keeps two
+-- multi-pair night-out inserts from deadlocking against each other.
+create or replace function public.blocked_pair_lock(a uuid, b uuid)
+returns void
+language sql
+as $$
+  select pg_advisory_xact_lock(
+    hashtextextended(
+      least(a::text, b::text) || '|' || greatest(a::text, b::text),
+      0
+    )
+  );
+$$;
+
+comment on function public.blocked_pair_lock(uuid, uuid) is
+  'V8-R-FEED-009. Transaction-scoped advisory lock over an unordered pair of accounts. Both the block trigger and the connection guard take it, so a block and a connection between the same two people cannot commit concurrently.';
+
 create or replace function public.forbid_blocked_edge()
 returns trigger
 language plpgsql
@@ -844,33 +1283,77 @@ security definer
 set search_path = public
 as $$
 declare
-  v_a uuid;
-  v_b uuid;
+  v_self uuid;
+  v_parties uuid[];
+  v_other uuid;
 begin
   if tg_table_name = 'follows' then
-    v_a := new.follower_id;
-    v_b := new.followee_id;
+    v_self := new.follower_id;
+    v_parties := array[new.followee_id];
+
+  elsif tg_table_name = 'follow_requests' then
+    v_self := new.requester_id;
+    v_parties := array[new.target_id];
+
+  elsif tg_table_name = 'night_out_members' then
+    v_self := new.user_id;
+    select coalesce(array_agg(distinct s.party), '{}'::uuid[])
+      into v_parties
+      from (
+        select nm.user_id as party
+          from public.night_out_members nm
+         where nm.night_out_id = new.night_out_id
+           and nm.user_id <> new.user_id
+        union
+        select new.invited_by
+         where new.invited_by is not null
+           and new.invited_by <> new.user_id
+      ) s
+     where s.party is not null;
+
+  elsif tg_table_name in ('story_audience', 'story_tags') then
+    v_self := new.profile_id;
+    select coalesce(array_agg(st.author_id), '{}'::uuid[])
+      into v_parties
+      from public.stories st
+     where st.id = new.story_id
+       and st.author_id <> new.profile_id;
+
   else
-    v_a := new.requester_id;
-    v_b := new.target_id;
+    -- A trigger attached to a table this function does not know how to read is
+    -- a wiring mistake, and passing the row through would enforce nothing while
+    -- looking enforced.
+    raise exception 'forbid_blocked_edge: no pair rule for table %', tg_table_name
+      using errcode = '42P01';
   end if;
 
-  if exists (
-    select 1
-      from public.profile_blocks pb
-     where (pb.blocker_id = v_a and pb.blocked_id = v_b)
-        or (pb.blocker_id = v_b and pb.blocked_id = v_a)
-  ) then
-    raise exception 'blocked: no new connection between these accounts'
-      using errcode = '42501';
-  end if;
+  -- Sorted, so two transactions locking overlapping sets take them in the same
+  -- order and cannot deadlock.
+  select coalesce(array_agg(p order by p), '{}'::uuid[])
+    into v_parties
+    from unnest(v_parties) as p
+   where p is not null;
+
+  foreach v_other in array v_parties loop
+    perform public.blocked_pair_lock(v_self, v_other);
+
+    if exists (
+      select 1
+        from public.profile_blocks pb
+       where (pb.blocker_id = v_self and pb.blocked_id = v_other)
+          or (pb.blocker_id = v_other and pb.blocked_id = v_self)
+    ) then
+      raise exception 'blocked: no new connection between these accounts'
+        using errcode = '42501';
+    end if;
+  end loop;
 
   return new;
 end;
 $$;
 
 comment on function public.forbid_blocked_edge() is
-  'V8-R-FEED-009. Table-level guard: no follow edge and no follow request may be created between two accounts while either has blocked the other.';
+  'V8-R-FEED-009. Table-level guard on every table that holds a connection between two accounts — follows, follow_requests, night_out_members, story_audience, story_tags. No such row may be created while either party has blocked the other, whichever RPC attempts it.';
 
 drop trigger if exists follows_blocked_guard on public.follows;
 create trigger follows_blocked_guard
@@ -880,6 +1363,21 @@ create trigger follows_blocked_guard
 drop trigger if exists follow_requests_blocked_guard on public.follow_requests;
 create trigger follow_requests_blocked_guard
   before insert on public.follow_requests
+  for each row execute function public.forbid_blocked_edge();
+
+drop trigger if exists night_out_members_blocked_guard on public.night_out_members;
+create trigger night_out_members_blocked_guard
+  before insert on public.night_out_members
+  for each row execute function public.forbid_blocked_edge();
+
+drop trigger if exists story_audience_blocked_guard on public.story_audience;
+create trigger story_audience_blocked_guard
+  before insert on public.story_audience
+  for each row execute function public.forbid_blocked_edge();
+
+drop trigger if exists story_tags_blocked_guard on public.story_tags;
+create trigger story_tags_blocked_guard
+  before insert on public.story_tags
   for each row execute function public.forbid_blocked_edge();
 
 -- ...AND THE EDGES THAT ALREADY EXIST, because refusing new ones changes
@@ -908,6 +1406,13 @@ security definer
 set search_path = public
 as $$
 begin
+  -- THE SAME LOCK THE CONNECTION GUARD TAKES. Without it this trigger and a
+  -- concurrent follow insert each run against a snapshot taken before the
+  -- other's row existed: the guard sees no block, this sees no edge, and both
+  -- commit — a block with a live follow standing beside it. Taking the pair lock
+  -- on both sides forces one of them to observe the other.
+  perform public.blocked_pair_lock(new.blocker_id, new.blocked_id);
+
   delete from public.follows f
    where (f.follower_id = new.blocker_id and f.followee_id = new.blocked_id)
       or (f.follower_id = new.blocked_id and f.followee_id = new.blocker_id);
@@ -1051,6 +1556,67 @@ begin
   if p_reason is not null and length(p_reason) > 1000 then
     raise exception 'report_content: reason is too long'
       using errcode = '22001';
+  end if;
+
+  -- A SUBJECT REF IS AN ID, NOT A STRING. Every one of the four subject kinds is
+  -- keyed by a uuid in this schema. Accepting arbitrary text let one account
+  -- mint an unlimited number of distinct "subjects" and so walk straight past
+  -- the one-report-per-subject index, which is the anti-flood measure.
+  if btrim(p_subject_ref) !~*
+     '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    raise exception 'report_content: subject_ref is not an id'
+      using errcode = '22023';
+  end if;
+
+  -- YOU MAY ONLY REPORT WHAT YOU CAN SEE. Reporting is an accusation against a
+  -- named account attached to a durable, non-withdrawable operator record, so a
+  -- caller who cannot reach the content has no business filing one — and could
+  -- otherwise fabricate reports about stories they were never shown. `story` is
+  -- the only kind whose table exists yet; the others are checked here as soon as
+  -- their surfaces land, and until then the id shape and the rate cap below are
+  -- what bound them.
+  if p_subject_kind = 'story' and not exists (
+    select 1
+      from public.stories s
+     where s.id = btrim(p_subject_ref)::uuid
+       and (
+         s.author_id = auth.uid()
+         or (
+           public.is_mutual_friend(auth.uid(), s.author_id)
+           and (
+             s.audience = 'friends'
+             or public.is_story_recipient(s.id, auth.uid())
+           )
+         )
+       )
+  ) then
+    raise exception 'report_content: that story is not yours to report'
+      using errcode = '42501';
+  end if;
+
+  -- AND A CEILING ON THE QUEUE. The visibility check bounds WHAT can be
+  -- reported; this bounds HOW MUCH, which is the other half of the same abuse.
+  -- Deliberately generous: a real person reporting fifty distinct things in a
+  -- day is already extraordinary, so this never reaches ordinary use.
+  --
+  -- It applies to NEW subjects only. Re-reporting something already reported
+  -- writes nothing, and it has to keep returning the existing id, because the
+  -- caller hides the content on a returned id and only on a returned id — a
+  -- rate limit that made the hide fail would punish the reporter.
+  if not exists (
+    select 1
+      from public.content_reports cr
+     where cr.reporter_id = auth.uid()
+       and cr.subject_kind = p_subject_kind
+       and cr.subject_ref = btrim(p_subject_ref)
+  ) and (
+    select count(*)
+      from public.content_reports cr
+     where cr.reporter_id = auth.uid()
+       and cr.created_at > now() - interval '24 hours'
+  ) >= 50 then
+    raise exception 'report_content: too many reports from this account today'
+      using errcode = '54000';
   end if;
 
   -- THE FIRST REPORT IS THE REPORT. V8-R-FEED-010 makes the record

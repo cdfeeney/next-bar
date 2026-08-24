@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  claimMediaForRemoval,
   deleteEverywhere,
-  pathHasLiveReference,
+  listOrphanPaths,
   reclaimBytes,
+  releaseMediaClaim,
   removeDestination,
+  SWEEP_BATCH,
 } from './destinations';
 
 /**
@@ -216,35 +219,115 @@ describe('reclaimBytes — orphans are returned, never swallowed', () => {
   });
 });
 
-describe('pathHasLiveReference — the last-moment re-check', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const client = (response: { data: unknown; error: unknown }): any => ({
-    rpc: vi.fn(async () => response),
+/**
+ * The claim replaced a question.
+ *
+ * `pathHasLiveReference` used to be asked immediately before a service-role
+ * delete, and its tests asserted it failed closed. Failing closed on a lookup
+ * error was never the problem — the problem was that the answer, however
+ * correct, was about the past. These assertions are about the replacement, and
+ * the property that matters is that NOTHING IS DELETED THAT THE DATABASE DID
+ * NOT HAND BACK: an empty claim is the safe outcome for every failure mode.
+ */
+describe('claimMediaForRemoval — the atomic claim', () => {
+  it('returns exactly what the database committed to removing', async () => {
+    const client = rpcClient({
+      data: [
+        { media_id: 'm1', bucket_id: 'story-media', storage_path: 'u1/a.jpg' },
+        { media_id: 'm2', bucket_id: 'story-media', storage_path: 'u1/b.jpg' },
+      ],
+      error: null,
+    });
+
+    await expect(claimMediaForRemoval(client, null)).resolves.toEqual([
+      { mediaId: 'm1', storagePath: 'u1/a.jpg' },
+      { mediaId: 'm2', storagePath: 'u1/b.jpg' },
+    ]);
   });
 
-  it('is false only on an explicit negative answer', async () => {
-    await expect(pathHasLiveReference(client({ data: false, error: null }), 'b', 'p'))
-      .resolves.toBe(false);
+  it('passes the media id through for a targeted claim', async () => {
+    const client = rpcClient({ data: [], error: null });
+    await claimMediaForRemoval(client, 'm1');
+    expect(client.rpc).toHaveBeenCalledWith('claim_media_for_removal', {
+      p_media_id: 'm1',
+      p_limit: SWEEP_BATCH,
+    });
   });
 
-  it('is true when a reference reappeared', async () => {
-    await expect(pathHasLiveReference(client({ data: true, error: null }), 'b', 'p'))
-      .resolves.toBe(true);
+  // A declined claim is the ordinary answer when a reference survived or
+  // somebody else got there first. It is not an error and it must not read as
+  // permission.
+  it('claims nothing when the database declines', async () => {
+    await expect(claimMediaForRemoval(rpcClient({ data: [], error: null }), 'm1'))
+      .resolves.toEqual([]);
   });
 
-  // Deleting because a lookup broke is the one outcome that cannot be undone.
-  it('FAILS CLOSED when the check errors', async () => {
+  it('claims nothing when the RPC errors', async () => {
     await expect(
-      pathHasLiveReference(client({ data: null, error: { message: 'down' } }), 'b', 'p'),
-    ).resolves.toBe(true);
+      claimMediaForRemoval(rpcClient({ data: null, error: { message: 'down' } }), 'm1'),
+    ).resolves.toEqual([]);
   });
 
-  it('FAILS CLOSED on an unexpected answer shape', async () => {
-    await expect(pathHasLiveReference(client({ data: null, error: null }), 'b', 'p'))
+  it('claims nothing on an unexpected answer shape', async () => {
+    await expect(claimMediaForRemoval(rpcClient({ data: { nope: 1 }, error: null }), null))
+      .resolves.toEqual([]);
+  });
+
+  it('drops a row that names no path, rather than deleting an empty key', async () => {
+    const client = rpcClient({
+      data: [
+        { media_id: 'm1', bucket_id: 'story-media' },
+        { media_id: 'm2', bucket_id: 'story-media', storage_path: 'u1/b.jpg' },
+      ],
+      error: null,
+    });
+    await expect(claimMediaForRemoval(client, null)).resolves.toEqual([
+      { mediaId: 'm2', storagePath: 'u1/b.jpg' },
+    ]);
+  });
+
+  it('claims nothing with no client at all', async () => {
+    await expect(claimMediaForRemoval(null, 'm1')).resolves.toEqual([]);
+  });
+});
+
+describe('releaseMediaClaim — handing a claim back', () => {
+  it('reports success when the release lands', async () => {
+    await expect(releaseMediaClaim(rpcClient({ data: true, error: null }), 'm1'))
       .resolves.toBe(true);
   });
 
-  it('FAILS CLOSED with no client at all', async () => {
-    await expect(pathHasLiveReference(null, 'b', 'p')).resolves.toBe(true);
+  // A failed release leaves the registry saying "gone" over bytes that are
+  // still there. The caller logs it; what it must never do is report success.
+  it('reports failure when the release errors', async () => {
+    await expect(
+      releaseMediaClaim(rpcClient({ data: null, error: { message: 'down' } }), 'm1'),
+    ).resolves.toBe(false);
+  });
+
+  it('reports failure with no client at all', async () => {
+    await expect(releaseMediaClaim(null, 'm1')).resolves.toBe(false);
+  });
+});
+
+describe('listOrphanPaths — bytes the registry never saw', () => {
+  it('returns the paths the database offered', async () => {
+    const client = rpcClient({
+      data: [
+        { bucket_id: 'story-media', storage_path: 'u1/old.jpg' },
+        { bucket_id: 'story-media', storage_path: 'u1/older.jpg' },
+      ],
+      error: null,
+    });
+    await expect(listOrphanPaths(client)).resolves.toEqual(['u1/old.jpg', 'u1/older.jpg']);
+  });
+
+  it('offers nothing when the lookup errors', async () => {
+    await expect(listOrphanPaths(rpcClient({ data: null, error: { message: 'x' } })))
+      .resolves.toEqual([]);
+  });
+
+  it('offers nothing with no client at all', async () => {
+    await expect(listOrphanPaths(null)).resolves.toEqual([]);
   });
 });
