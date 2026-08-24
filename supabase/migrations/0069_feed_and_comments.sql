@@ -158,8 +158,23 @@ $$;
 comment on function public.feed_post_destination_is_live(uuid) is
   'V8-R-CMP-015. Does this Feed post still hold its media destination? remove_media_destination retires the spine row rather than deleting it, so this READ-GATE term is what makes "removing the Feed destination removes that post and its comments" real; the anticipated on-delete cascade could never fire against a soft retirement.';
 
-revoke all on function public.feed_post_destination_is_live(uuid) from public, anon;
-grant execute on function public.feed_post_destination_is_live(uuid) to authenticated;
+-- NOT GRANTED TO `authenticated`, and the omission is the point.
+--
+-- This is an internal helper with exactly one caller: `can_view_feed_post`, which is
+-- SECURITY DEFINER and therefore executes as the owner, who holds EXECUTE regardless.
+-- No application role needs it, and granting it made it a LIVENESS ORACLE: it is
+-- SECURITY DEFINER, takes a caller-supplied post id, and applies no party guard, so any
+-- authenticated holder of a post uuid — an audience member who has since been blocked or
+-- unfriended, and who saw the id while authorised — could call it directly over PostgREST
+-- and poll whether that post's destination is still live, watching the flip when the
+-- author deletes.
+--
+-- That is the same shape 0066 closed for the story-shaped helper after it shipped a
+-- cross-user disclosure oracle: a definer function taking an identity or a subject from
+-- its caller and answering a question the caller is no longer entitled to ask. The rule
+-- (EC-08): the caller gets their own data through a scoped path, and a helper only
+-- definer functions call is granted to nobody.
+revoke all on function public.feed_post_destination_is_live(uuid) from public, anon, authenticated;
 
 -- THE HIDE, ASKED THROUGH DEFINER PREDICATES — 0066's rule, applied to this
 -- lane's two new subject kinds.
