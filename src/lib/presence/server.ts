@@ -129,18 +129,21 @@ export async function fetchCirclePresence(
  */
 export async function fetchMyPresence(
   supabase: SupabaseClient,
-  userId: string,
-  night: string,
 ): Promise<MyPresence | null> {
-  const { data, error } = await supabase
-    .from('night_presence')
-    .select('status, bar_id, audience, updated_at')
-    .eq('user_id', userId)
-    .eq('night', night)
-    .maybeSingle();
-
-  if (error || data === null) return null;
-  const row = data as CirclePresenceRow & { audience: unknown };
+  // THROUGH THE RPC, NEVER THE TABLE. This read used to be
+  // `.from('night_presence').select(...).eq('user_id', userId).eq('night', night)`, relying
+  // on the own-row RLS policy to scope it. That policy never ran: 0068 revokes ALL table
+  // privileges on night_presence from every application role, so the query was denied at
+  // the PERMISSION layer before any policy was evaluated. It failed 42501 for every caller
+  // — no pill activated, and the row could not be cleared by tapping again.
+  //
+  // `get_my_presence()` takes no arguments on purpose: identity is auth.uid() and the night
+  // is the server-side boundary, so the caller's own row is the only row it can ever
+  // return. The userId and night parameters are gone rather than ignored — a parameter a
+  // function does not honour is a lie a later caller will believe.
+  const { data, error } = await supabase.rpc('get_my_presence');
+  if (error || !Array.isArray(data) || data.length === 0) return null;
+  const row = data[0] as CirclePresenceRow & { audience: unknown };
   if (!isPresenceStatus(row.status)) return null;
   const barId = isBarId(row.bar_id) ? row.bar_id : null;
   if (!isValidPin(row.status, barId)) return null;

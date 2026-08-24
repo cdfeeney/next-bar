@@ -5,8 +5,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { useNightRefresh } from '@/hooks/useIntent';
 import { nycNightKey } from '@/lib/nightKey';
 import { getBrowserSupabase } from '@/lib/supabase/client';
-import { fetchCirclePresence } from '@/lib/presence/server';
-import type { CirclePresence } from '@/lib/presence';
+import { fetchCirclePresence, fetchMyPresence } from '@/lib/presence/server';
+import type { CirclePresence, MyPresence } from '@/lib/presence';
 
 /**
  * Who in your circle is out tonight (V8-R-SOC-001, V8-R-PRE-001..005).
@@ -117,4 +117,50 @@ export function usePinnedHandles(): PinnedHandlesState {
   }, [auth.status, night, nonce]);
 
   return { loading, rows, night, refresh };
+}
+
+/**
+ * The caller's OWN presence tonight.
+ *
+ * Separate from `usePinnedHandles` because the sources are separate on purpose:
+ * `get_circle_presence` answers "who ELSE is out" and excludes `auth.uid()`, while
+ * `get_my_presence` returns only the caller's row. The Stories rail needs both — your own
+ * pin and everyone else's — and unioning them in the page keeps each RPC honest about the
+ * question it answers.
+ *
+ * It listens for PRESENCE_CHANGED_EVENT because the rail and TonightPresence are two
+ * INDEPENDENT readers of the same row. Without it, pinning a spot updated the panel you
+ * were looking at and left the rail a night behind — which is the staleness the event was
+ * introduced to fix, and why removing the event as "dead" would have been the wrong repair.
+ */
+export function useMyPresence(): MyPresence | null {
+  const auth = useAuth();
+  const isSignedIn = auth.status === 'signed-in';
+  const [mine, setMine] = useState<MyPresence | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const bumpNonce = useCallback(() => setNonce((n) => n + 1), []);
+  // Re-read at the 4:00 AM boundary: the night key changes and the server returns nothing
+  // for last night, so the badge clears itself at the same instant on both sides.
+  useNightRefresh(bumpNonce);
+
+  useEffect(() => {
+    const bump = () => setNonce((n) => n + 1);
+    if (typeof window === 'undefined') return undefined;
+    window.addEventListener(PRESENCE_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(PRESENCE_CHANGED_EVENT, bump);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isSignedIn) { setMine(null); return () => { cancelled = true; }; }
+    const supabase = getBrowserSupabase();
+    if (supabase === null) { setMine(null); return () => { cancelled = true; }; }
+    void (async () => {
+      const next = await fetchMyPresence(supabase);
+      if (!cancelled) setMine(next);
+    })();
+    return () => { cancelled = true; };
+  }, [isSignedIn, nonce]);
+
+  return mine;
 }

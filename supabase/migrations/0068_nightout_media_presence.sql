@@ -296,6 +296,44 @@ grant execute on function public.clear_night_presence() to authenticated;
 -- read. There is no caller-supplied predicate here today, and the fence is what
 -- keeps that true if one is ever added.
 
+-- THE CALLER'S OWN ROW, THROUGH AN RPC, BECAUSE THE TABLE IS CLOSED.
+--
+-- `revoke all on table public.night_presence` above is correct and stays: direct table
+-- grants are forbidden here and the RPCs are the entire surface. The consequence is easy
+-- to miss and cost this lane a HIGH: application code was reading the table directly to
+-- get its own row, reasoning that the own-row RLS policy would scope it. It never ran.
+-- Revoking the table privilege means RLS IS NEVER CONSULTED — the query is denied at the
+-- PERMISSION layer before any policy is evaluated — so the read failed 42501 for every
+-- caller, no pill ever activated, and the row could not be cleared by tapping again.
+--
+-- It takes NO parameters by design. The caller's identity comes from auth.uid() and the
+-- night from the server-side boundary, so this cannot be asked about anybody else and
+-- cannot be pointed at another night. That is the same rule that removed the viewer
+-- parameter from media_path_unreported_live_expiry after it became a cross-user oracle.
+create or replace function public.get_my_presence()
+returns table (
+  status     text,
+  bar_id     text,
+  audience   text,
+  updated_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select np.status, np.bar_id, np.audience, np.updated_at
+    from public.night_presence np
+   where np.user_id = auth.uid()
+     and np.night = public.nyc_night_key()
+$$;
+
+comment on function public.get_my_presence() is
+  'V8-R-PRE-001..005. The caller''s own presence for tonight, or no row. Takes no arguments: identity is auth.uid() and the night is public.nyc_night_key(), so it can neither be asked about another account nor pointed at another night. night_presence grants no direct table privilege to any application role, so this RPC is how a client reads its own row.';
+
+revoke all on function public.get_my_presence() from public, anon;
+grant execute on function public.get_my_presence() to authenticated;
+
 create or replace function public.get_circle_presence()
 returns table (
   -- PROFILE ID IS PART OF THE CONTRACT. The Stories rail keys its cells on the profile

@@ -18,7 +18,7 @@ import {
   fetchMyPresence,
   setPresence,
 } from '@/lib/presence/server';
-import { usePinnedHandles } from './usePinnedHandles';
+import { usePinnedHandles, announcePresenceChanged } from './usePinnedHandles';
 
 /**
  * Social · Tonight — current awareness (V8-R-SOC-001, V8-R-PRE-001..005).
@@ -75,7 +75,7 @@ export default function TonightPresence(): JSX.Element {
     }
     const supabase = getBrowserSupabase();
     if (!supabase) return;
-    setMine(await fetchMyPresence(supabase, userId, night));
+    setMine(await fetchMyPresence(supabase));
   }, [userId, night]);
 
   useEffect(() => {
@@ -115,6 +115,9 @@ export default function TonightPresence(): JSX.Element {
       if (ok) {
         await reloadMine();
         refresh();
+        // Tell every other reader of this row — the Stories rail's own-pin badge is a
+        // separate consumer and would otherwise sit a whole night behind this write.
+        announcePresenceChanged();
       } else {
         setFailed(true);
       }

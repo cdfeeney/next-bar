@@ -230,69 +230,65 @@ describe('fetchCirclePresence', () => {
 });
 
 describe('fetchMyPresence', () => {
-  /** Minimal PostgREST builder double for the own-row select. */
-  function tableClient(result: RpcResult) {
-    const maybeSingle = vi.fn().mockResolvedValue(result);
-    const eqNight = vi.fn().mockReturnValue({ maybeSingle });
-    const eqUser = vi.fn().mockReturnValue({ eq: eqNight });
-    const select = vi.fn().mockReturnValue({ eq: eqUser });
-    const from = vi.fn().mockReturnValue({ select });
+  /**
+   * RPC double. The own-row read goes through `get_my_presence()`, NOT a table select:
+   * 0068 revokes every table privilege on night_presence, so a direct read is denied at
+   * the permission layer before RLS is consulted. A builder double would let a
+   * table-reading regression pass here while failing against a real database.
+   */
+  function rpcOwnPresence(result: RpcResult) {
+    const rpc = vi.fn().mockResolvedValue(result);
+    const from = vi.fn(() => { throw new Error('night_presence must not be read as a table'); });
     return {
-      client: { from } as unknown as Parameters<typeof fetchMyPresence>[0],
+      client: { rpc, from } as unknown as Parameters<typeof fetchMyPresence>[0],
+      rpc,
       from,
-      eqUser,
-      eqNight,
     };
   }
 
-  it('scopes the read to the caller and to tonight', async () => {
-    const t = tableClient({
-      data: {
+  it('reads the own row through the RPC, never the table', async () => {
+    const t = rpcOwnPresence({
+      data: [{
         status: 'going',
         bar_id: 'attaboy',
         audience: 'close',
         updated_at: '2026-07-25T02:00:00Z',
-      },
+      }],
       error: null,
     });
-    await expect(
-      fetchMyPresence(t.client, 'user-1', '2026-07-24'),
-    ).resolves.toEqual({
+    await expect(fetchMyPresence(t.client)).resolves.toEqual({
       status: 'going',
       barId: 'attaboy',
       audience: 'close',
       updatedAt: '2026-07-25T02:00:00Z',
     });
-    expect(t.from).toHaveBeenCalledWith('night_presence');
-    expect(t.eqUser).toHaveBeenCalledWith('user_id', 'user-1');
-    expect(t.eqNight).toHaveBeenCalledWith('night', '2026-07-24');
+    // No arguments: identity is auth.uid() and the night is the server-side boundary, so
+    // this cannot be asked about another account or pointed at another night.
+    expect(t.rpc).toHaveBeenCalledWith('get_my_presence');
+    expect(t.from).not.toHaveBeenCalled();
   });
 
   it('is null when nothing is set tonight, and on error', async () => {
-    const none = tableClient({ data: null, error: null });
-    await expect(
-      fetchMyPresence(none.client, 'user-1', '2026-07-24'),
-    ).resolves.toBeNull();
-    const failed = tableClient({ data: null, error: { message: 'x' } });
-    await expect(
-      fetchMyPresence(failed.client, 'user-1', '2026-07-24'),
-    ).resolves.toBeNull();
+    const none = rpcOwnPresence({ data: [], error: null });
+    await expect(fetchMyPresence(none.client)).resolves.toBeNull();
+    const failed = rpcOwnPresence({ data: null, error: { message: 'x' } });
+    await expect(fetchMyPresence(failed.client)).resolves.toBeNull();
   });
 
   it('falls back to the narrower reading of an unknown audience', async () => {
     // An unrecognised audience must never widen who can see a pin. It is
     // reported as 'friends' only because that is what the UI shows the OWNER;
     // the actual gate is server-side and never consults this value.
-    const t = tableClient({
-      data: {
+    const t = rpcOwnPresence({
+      data: [{
         status: 'going',
         bar_id: null,
         audience: 'everyone',
         updated_at: '2026-07-25T02:00:00Z',
-      },
+      }],
       error: null,
     });
-    const mine = await fetchMyPresence(t.client, 'user-1', '2026-07-24');
+    const mine = await fetchMyPresence(t.client);
     expect(mine?.audience).toBe('friends');
   });
 });

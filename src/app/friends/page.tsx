@@ -7,7 +7,7 @@ import FeedSection from './_components/FeedSection';
 import GroupsAndPeople, {
   GROUPS_AND_PEOPLE_ID,
 } from './_components/GroupsAndPeople';
-import { usePinnedHandles } from './_components/usePinnedHandles';
+import { usePinnedHandles, useMyPresence } from './_components/usePinnedHandles';
 import AddStoryFlow from '@/components/story/AddStoryFlow';
 import StoriesRail from '@/components/story/StoriesRail';
 import StoryViewer from '@/components/story/StoryViewer';
@@ -63,10 +63,25 @@ export default function SocialPage(): JSX.Element {
   // `usePinnedHandles` now returns presence state rather than a bare id list, and a "pin"
   // is a presence row that names a bar — a status without a place is not a pin.
   const { rows: presenceRows } = usePinnedHandles();
-  const pinnedIds = useMemo(
-    () => (presenceRows ?? []).filter((row) => row.barId !== null).map((row) => row.userId),
-    [presenceRows],
-  );
+  const myPresence = useMyPresence();
+  // YOUR OWN PIN IS UNIONED IN HERE, and it has to be. `get_circle_presence` answers
+  // "who ELSE is out" — its SQL carries `np.user_id <> auth.uid()` on purpose, because
+  // Social - Tonight lists other people. Deriving the rail's badges from it alone made the
+  // viewer's own pin structurally unreachable: StoriesRail asks `pinnedIds.includes(you.id)`
+  // and that id could never appear. WP1's version called own-pin visibility non-optional and
+  // it was right.
+  //
+  // The union happens HERE rather than by widening the RPC. Adding self to
+  // get_circle_presence would change what Social - Tonight means for the sake of a badge,
+  // and the caller's own row already has its own scoped accessor.
+  const pinnedIds = useMemo(() => {
+    const ids = (presenceRows ?? [])
+      .filter((row) => row.barId !== null)
+      .map((row) => row.userId);
+    // A status without a place is not a pin — the same rule applied to everyone else.
+    if (youId !== null && myPresence?.barId != null) ids.push(youId);
+    return ids;
+  }, [presenceRows, myPresence, youId]);
   // The queue only ever contains people who have something to show. Memoised
   // so the viewer's navigation callbacks are not rebuilt on every render.
   const queue = useMemo(
