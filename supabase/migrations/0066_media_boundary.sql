@@ -111,6 +111,23 @@ comment on column public.media_destinations.id is
 -- SECURITY DEFINER: the count must be the TRUE count. A caller-visible count
 -- filtered by that caller's RLS would report zero for references it merely
 -- cannot see, and "reclaim the bytes" is the action taken on zero.
+--
+-- TWO TERMS, and both are load-bearing.
+--
+--   * A live destination ROW is not automatically a live reference. Nothing
+--     retires a story destination when its story EXPIRES — `delete_story` covers
+--     deletion, expiry has no owner (0065 records that gap) — so counting the
+--     row itself would hold every expired story's bytes forever, and the storage
+--     DELETE policy below would refuse the cleanup that is supposed to free
+--     them. A story destination counts only while its story is actually live.
+--
+--   * A story can reference an object WITHOUT a spine row at all. `publish_story`
+--     predates this table and still does not write to it, and there is no
+--     backfill, so for every story published outside the media route the spine is
+--     EMPTY. Counting only the spine would report zero references for a photo two
+--     live stories are still showing, and zero is the licence to destroy the
+--     bytes. The second term counts those stories directly, skipping any that the
+--     first term already counted through a spine row.
 create or replace function public.media_live_reference_count(p_media_id uuid)
 returns integer
 language sql
@@ -118,10 +135,37 @@ stable
 security definer
 set search_path = public
 as $$
-  select count(*)::int
-    from public.media_destinations d
-   where d.media_id = p_media_id
-     and d.removed_at is null;
+  select
+    (select count(*)::int
+       from public.media_destinations d
+      where d.media_id = p_media_id
+        and d.removed_at is null
+        and (
+          d.kind <> 'story'
+          or exists (
+            select 1
+              from public.stories s
+             where s.id::text = d.ref_id
+               and s.deleted_at is null
+               and s.expires_at > now()
+          )
+        ))
+    +
+    (select count(*)::int
+       from public.media_objects m
+       join public.stories s
+         on (s.media_path = m.storage_path or s.inset_path = m.storage_path)
+      where m.id = p_media_id
+        and s.deleted_at is null
+        and s.expires_at > now()
+        and not exists (
+          select 1
+            from public.media_destinations d2
+           where d2.media_id = p_media_id
+             and d2.kind = 'story'
+             and d2.ref_id = s.id::text
+             and d2.removed_at is null
+        ));
 $$;
 
 revoke all on function public.media_live_reference_count(uuid) from public, anon;
@@ -129,6 +173,12 @@ grant execute on function public.media_live_reference_count(uuid) to authenticat
 
 -- Path-keyed variant, for the storage DELETE policy, which sees a name and not
 -- an id.
+--
+-- It delegates to the count above rather than restating the join, so the two can
+-- never drift — and it carries the same second term for the same reason: an
+-- object uploaded before this registry existed has NO `media_objects` row, so a
+-- registry-only lookup answers "no references" for a photo a live story is
+-- showing right now.
 create or replace function public.media_path_has_live_reference(
   p_bucket text,
   p_name text
@@ -142,11 +192,19 @@ as $$
   select exists (
     select 1
       from public.media_objects m
-      join public.media_destinations d
-        on d.media_id = m.id
-       and d.removed_at is null
      where m.bucket_id = p_bucket
        and m.storage_path = p_name
+       and public.media_live_reference_count(m.id) > 0
+  )
+  or (
+    p_bucket = 'story-media'
+    and exists (
+      select 1
+        from public.stories s
+       where (s.media_path = p_name or s.inset_path = p_name)
+         and s.deleted_at is null
+         and s.expires_at > now()
+    )
   );
 $$;
 
@@ -187,10 +245,18 @@ begin
   -- in between the removal and the count, and this function would report
   -- reclaimable:true for bytes that just acquired a new reference — the exact
   -- "reference count that cannot be read" V8-R-CMP-012 forbids guessing on.
+  --
+  -- `kind <> 'archive'` is the retention hold, and it belongs HERE rather than
+  -- only in delete_media_everywhere. An archive row is "a retention HOLD, not a
+  -- destination a user can see or remove"; without this clause the owner reads
+  -- the hold's id through the owner SELECT policy, passes it to this function,
+  -- and strips the very reference V8-R-CMP-016 keeps the bytes for. Zero rows
+  -- back is the same answer as any other unremovable destination.
   select m.id into v_media
     from public.media_objects m
     join public.media_destinations d on d.media_id = m.id
    where d.id = p_destination_id
+     and d.kind <> 'archive'
      and m.owner_id = auth.uid()
    for update of m;
 
@@ -220,7 +286,7 @@ end;
 $$;
 
 comment on function public.remove_media_destination(uuid) is
-  'V8-R-CMP-015. Removes ONE destination. Other destinations and the bytes survive. Zero rows returned = nothing was removed.';
+  'V8-R-CMP-015. Removes ONE destination, never a kind=archive retention hold. Other destinations and the bytes survive. Zero rows returned = nothing was removed.';
 
 revoke all on function public.remove_media_destination(uuid) from public, anon;
 grant execute on function public.remove_media_destination(uuid) to authenticated;
@@ -302,6 +368,108 @@ create policy "story-media: owner deletes own prefix"
   );
 
 ------------------------------------------------------------------------------
+-- 5b. THE BOUNDARY ITSELF: no client reaches these bytes directly
+------------------------------------------------------------------------------
+
+-- 0065 let an authenticated client write to and read from `story-media` on its
+-- own account, and that is the hole this whole work package exists to close.
+-- Two requirements are unsatisfiable while those policies stand, and no amount
+-- of server code closes them from the other side:
+--
+--   V8-R-STO-014 — "SERVER. A client-side strip is bypassable by definition."
+--     While `story-media: owner writes own prefix` grants INSERT, a modified
+--     client uploads an EXIF/GPS-bearing JPEG straight into its own prefix and
+--     `publish_story` — which checks that the object EXISTS, not where it came
+--     from — publishes the original bytes. The re-encode in
+--     src/app/api/media/upload is then optional, and an optional strip is not a
+--     trust boundary.
+--
+--   V8-R-STO-015 — the signed-URL lifetime is decided by the SERVER.
+--     While SELECT is granted, any authorised viewer calls
+--     `createSignedUrl(path, 86400)` for themselves. A route that computes a
+--     300-second TTL is a suggestion when the client can mint its own.
+--
+-- So both grants go. The service role bypasses RLS, which leaves exactly one
+-- writer (the upload route, which decodes and re-encodes) and exactly one
+-- reader (the url route, which decides the TTL) — the chokepoints both
+-- requirements describe.
+--
+-- CONSEQUENCE, STATED RATHER THAN DISCOVERED: every caller that still talks to
+-- Storage directly stops working and must go through /api/media. In this
+-- repository that is `src/lib/stories.server.ts` and the capture/story
+-- components, which are OUTSIDE this lane's write scope and are therefore
+-- reported, not edited. Wiring them to the media API is an integration step.
+drop policy if exists "story-media: owner writes own prefix" on storage.objects;
+drop policy if exists "story-media: owner reads own prefix" on storage.objects;
+drop policy if exists "story-media: audience reads referenced" on storage.objects;
+
+-- The read decision those two SELECT policies used to make, moved into one
+-- function the url route asks BEFORE it mints anything with service role.
+--
+-- SECURITY DEFINER, and it still answers as the CALLER: `auth.uid()` is
+-- preserved through a definer function, and every helper it leans on
+-- (`is_mutual_friend`, `is_story_recipient`, `story_media_is_dead`) carries its
+-- own party guard keyed to that same id. Moving the mint to service role
+-- therefore moves WHO SIGNS, never WHO IS ALLOWED.
+--
+-- `is_blocked_between` is consumed HERE. V8-R-FEED-009 says a block is
+-- server-enforced in both directions; a helper no policy and no route calls is
+-- a recorded intention, not an enforcement point, and a blocked viewer who
+-- still holds an audience row would otherwise keep receiving signed URLs.
+--
+-- It is created in section 8, BELOW. That is deliberate and safe: this function
+-- is plpgsql, whose body is only syntax-checked at creation and whose names
+-- resolve at call time. A `language sql` body here would be validated eagerly
+-- and would fail on the forward reference, so the language choice is load
+-- bearing rather than incidental.
+create or replace function public.can_read_media_path(p_name text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+begin
+  if v_caller is null or p_name is null then
+    return false;
+  end if;
+
+  -- The owner, on their own prefix — but not for an object whose every
+  -- referencing story is already dead or expired. That is 0065's rule that an
+  -- author cannot sign their own expired media, kept rather than quietly
+  -- relaxed, and it is also what keeps the upload-before-publish window
+  -- readable (an object no story references at all is not "dead").
+  if (storage.foldername(p_name))[1] = v_caller::text then
+    return not public.story_media_is_dead(p_name);
+  end if;
+
+  -- A viewer, only through a story they can actually read. Same predicate the
+  -- dropped audience policy carried, plus the block.
+  return exists (
+    select 1
+      from public.stories s
+     where (s.media_path = p_name or s.inset_path = p_name)
+       and s.deleted_at is null
+       and s.expires_at > now()
+       and public.is_mutual_friend(v_caller, s.author_id)
+       and not public.is_blocked_between(v_caller, s.author_id)
+       and (
+         s.audience = 'friends'
+         or public.is_story_recipient(s.id, v_caller)
+       )
+  );
+end;
+$$;
+
+comment on function public.can_read_media_path(text) is
+  'V8-R-STO-015 / V8-R-FEED-009. May the CALLER read this object? The url route asks this before minting with service role, so authorization stays in the database while the lifetime is decided by the server.';
+
+revoke all on function public.can_read_media_path(text) from public, anon;
+grant execute on function public.can_read_media_path(text) to authenticated;
+
+------------------------------------------------------------------------------
 -- 6. Deletion clears metadata too (V8-R-STO-016)
 ------------------------------------------------------------------------------
 
@@ -348,10 +516,24 @@ create policy "story_audience: parties read"
 -- carried no liveness term at all, so tag metadata survived expiry and
 -- deletion. Withdrawal still works after this change: remove_my_story_tag is
 -- SECURITY DEFINER and does not read through this policy.
+--
+-- LIVENESS IS ADDED TO 0065'S TEST, NOT SUBSTITUTED FOR IT. `is_story_live` is
+-- SECURITY DEFINER, so on its own it answers true for every authenticated
+-- caller and would publish the tag list of every live private story to anyone
+-- who asked — a wider read than 0065 allowed, introduced by the migration that
+-- was meant to narrow it. 0065's `exists (select 1 from public.stories ...)`
+-- runs under the CALLER's RLS and is therefore audience-scoped; it stays, and
+-- liveness is an additional term.
 drop policy if exists "story_tags: readable with story" on public.story_tags;
 create policy "story_tags: readable with story"
   on public.story_tags for select
-  using (public.is_story_live(story_id));
+  using (
+    public.is_story_live(story_id)
+    and (
+      auth.uid() = profile_id
+      or exists (select 1 from public.stories s where s.id = story_id)
+    )
+  );
 
 ------------------------------------------------------------------------------
 -- 7. Story deletion retires its destination references
@@ -508,10 +690,34 @@ begin
     raise exception 'report_content: not authenticated' using errcode = '28000';
   end if;
 
+  -- BOUNDS BELONG HERE, not only in reports.ts. This function is granted to
+  -- `authenticated`, so it is callable directly over PostgREST; a cap that
+  -- exists only in the TypeScript caller bounds the app's own UI and nothing
+  -- else. Without it one account can post unbounded reasons under fabricated
+  -- refs and the one-report-per-subject index — the anti-flood measure — is
+  -- defeated by simply varying the ref.
+  if p_subject_ref is null or length(btrim(p_subject_ref)) = 0 then
+    raise exception 'report_content: subject_ref is required'
+      using errcode = '22023';
+  end if;
+  if length(p_subject_ref) > 200 then
+    raise exception 'report_content: subject_ref is too long'
+      using errcode = '22001';
+  end if;
+  if p_reason is not null and length(p_reason) > 1000 then
+    raise exception 'report_content: reason is too long'
+      using errcode = '22001';
+  end if;
+
+  -- FIRST REASON WINS. V8-R-FEED-010 makes the record server-owned and says the
+  -- reporter cannot edit or withdraw it; `set reason = excluded.reason` handed
+  -- the edit straight back, so re-reporting could rewrite what the operator
+  -- reads. Re-reporting stays idempotent — it returns the same id — but it only
+  -- FILLS a reason that was never given, it never replaces one.
   insert into public.content_reports (reporter_id, subject_kind, subject_ref, reason)
-  values (auth.uid(), p_subject_kind, p_subject_ref, p_reason)
+  values (auth.uid(), p_subject_kind, btrim(p_subject_ref), p_reason)
   on conflict (reporter_id, subject_kind, subject_ref) do update
-     set reason = coalesce(excluded.reason, public.content_reports.reason)
+     set reason = coalesce(public.content_reports.reason, excluded.reason)
   returning id into v_id;
 
   return v_id;

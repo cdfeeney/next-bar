@@ -130,12 +130,29 @@ describe('resolveMediaWindow — the window is the LAST live destination', () =>
     expect(window).toEqual({ readable: true, expiresAt: at(90_000) });
   });
 
-  it('treats a destination with no expiry as unbounded', () => {
+  it('treats a shown destination with no expiry as unbounded', () => {
     const window = resolveMediaWindow([
       { kind: 'story', expiresAt: at(10_000) },
-      { kind: 'archive', expiresAt: null },
+      { kind: 'feed', expiresAt: null },
     ]);
     expect(window).toEqual({ readable: true, expiresAt: null });
+  });
+
+  // An archive row RETAINS bytes; it never SHOWS them. Treating it as a
+  // destination made it the branch that reads "no expiry", so after "delete
+  // everywhere" the author was still minted a URL for media nothing displays —
+  // V8-R-CMP-016's end state is audience: nobody.
+  it('does not let a Saved Nights Out archive hold keep the media readable', () => {
+    expect(resolveMediaWindow([{ kind: 'archive', expiresAt: null }]))
+      .toEqual({ readable: false });
+  });
+
+  it('ignores an archive hold when a real destination still shows the media', () => {
+    const window = resolveMediaWindow([
+      { kind: 'archive', expiresAt: null },
+      { kind: 'story', expiresAt: at(10_000) },
+    ]);
+    expect(window).toEqual({ readable: true, expiresAt: at(10_000) });
   });
 
   it('does not turn corrupt timestamps into an unbounded window', () => {

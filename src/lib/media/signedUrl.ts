@@ -67,14 +67,16 @@ export type SignedMediaUrl = {
 /**
  * Mint a signed URL for one object.
  *
- * `client` is deliberately the CALLER'S user-scoped client, not a service-role
- * one: Storage evaluates the bucket SELECT policies at mint time, so passing
- * the caller's own client is what keeps 0065's audience rules authoritative
- * over who may read the object. Service role here would mint for anyone who
- * could reach the route.
+ * THIS FUNCTION DOES NOT AUTHORIZE ANYTHING, and that is the one thing a caller
+ * must know about it. 0066 revokes the authenticated SELECT grant on the bucket
+ * — the grant that let a client mint its own URL with its own lifetime and made
+ * V8-R-STO-015 unenforceable — so the only client that can mint at all is now
+ * the service-role one. Whoever passes it here has ALREADY had to decide the
+ * caller may read the object (`can_read_media_path`); minting without that check
+ * hands a URL to anyone who reached the route.
  *
- * The TTL, by contrast, is computed by the SERVER from `expiresAt` — which the
- * route reads from the database, never from the request.
+ * The TTL is computed by the SERVER from `expiresAt` — which the route reads
+ * from the database, never from the request.
  */
 export async function mintSignedMediaUrl(
   client: SupabaseClient | null,

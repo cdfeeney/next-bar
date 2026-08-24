@@ -80,7 +80,14 @@ export async function DELETE(
         : [];
 
       if (removed.value.reclaimable) {
-        await markBytesRemoved(admin, params.mediaId, orphans);
+        // THE RPC'S media id, never the one in the URL. The RPC authorized and
+        // removed a DESTINATION; which media that destination belonged to is
+        // its answer to give, and `:mediaId` here is an unvalidated path
+        // segment that the destination need not match. Stamping the path's id
+        // would write `bytes_removed_at` on somebody else's live row with
+        // service-role authority — a 404 for media whose bytes are still there
+        // — while the row actually reclaimed stayed unstamped.
+        await markBytesRemoved(admin, removed.value.mediaId, orphans);
       }
 
       return NextResponse.json({

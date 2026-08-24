@@ -51,6 +51,16 @@ export async function POST(request: Request): Promise<NextResponse> {
   const userId = await verifiedUserId(admin, token);
   if (userId === null) return fail('unauthorized', 401);
 
+  // BEFORE the body is read. `Content-Length` is a client claim and is not the
+  // authority on size — the check after decoding still is — but refusing an
+  // obviously oversized upload here is what stops `formData()` from buffering
+  // gigabytes into this process first. A missing or unparseable header is not
+  // treated as zero; it simply falls through to the real check below.
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+    return fail('too_large', 413);
+  }
+
   let file: File;
   let destinationKind: string | null;
   let destinationRef: string | null;
@@ -67,8 +77,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return fail('bad_request', 400);
   }
 
-  // Checked before the body is read into memory as well as after decoding, so
-  // an oversized upload is refused without buffering all of it.
+  // The authority on size: the decoded body, not the header above.
   if (file.size > MAX_UPLOAD_BYTES) return fail('too_large', 413);
 
   // A destination may be named at upload time, but only a WELL-FORMED one. An
@@ -80,6 +89,48 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   if (destinationKind !== null && (destinationRef ?? '').trim().length === 0) {
     return fail('bad_request', 400);
+  }
+
+  // WHAT A CLIENT MAY NAME, and why it is only this.
+  //
+  // The insert below runs with SERVICE ROLE, so `media_destinations` gets no RLS
+  // opinion on it and `ref_id` has no foreign key. Whatever the request says is
+  // simply believed — which made two things possible that the spine's own rules
+  // forbid:
+  //
+  //   * `archive` — a Saved Nights Out RETENTION HOLD, the one kind
+  //     `delete_media_everywhere` deliberately never clears. A client could mint
+  //     itself an undeletable hold on its own bytes. Archive rows are written by
+  //     the archive surface, never by an uploader, so the kind is refused here.
+  //
+  //   * another user's ref — `destinationKind=story` with a victim's story id
+  //     attached the caller's media to that story for every consumer that reads
+  //     the spine by (kind, ref_id).
+  //
+  // `story` is therefore the only kind accepted, and only after the story is
+  // confirmed to exist and to be authored by the VERIFIED caller. `feed` and
+  // `group` have no table to check ownership against yet; accepting them would
+  // be accepting an unverifiable claim, so they wait for the surface that owns
+  // them.
+  if (destinationKind !== null && destinationKind !== 'story') {
+    return fail('bad_request', 400);
+  }
+  if (destinationKind === 'story') {
+    const { data: story, error: storyError } = await admin
+      .from('stories')
+      .select('id')
+      .eq('id', destinationRef)
+      .eq('author_id', userId)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (storyError) {
+      console.error('[media/upload] destination check failed:', storyError.message);
+      return fail('server_error', 500);
+    }
+    // Not yours, or not there. Refused rather than attached: a destination the
+    // caller does not own is not a reference this spine should hold.
+    if (!story) return fail('bad_request', 400);
   }
 
   let original: Uint8Array;

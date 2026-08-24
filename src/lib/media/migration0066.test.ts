@@ -78,6 +78,89 @@ describe('0066 — V8-R-CMP-012 bytes outlive nothing but their last reference',
     // still references them.
     expect(FLAT).toContain("and d.kind <> 'archive'");
   });
+
+  // A hold the owner can strip is not a hold. Without this clause the owner
+  // reads the archive row's id through the owner SELECT policy, passes it to
+  // remove_media_destination, and reclaims the bytes V8-R-CMP-016 retains.
+  it('refuses to remove an archive hold through the single-destination verb', () => {
+    expect(FLAT).toContain(
+      "where d.id = p_destination_id and d.kind <> 'archive' and m.owner_id = auth.uid()",
+    );
+  });
+
+  // Nothing retires a story destination when the story EXPIRES — delete_story
+  // covers deletion only. Counting the row itself would hold expired bytes
+  // forever AND make the DELETE policy refuse the cleanup meant to free them.
+  it('does not count a story destination whose story is dead or expired', () => {
+    expect(FLAT).toContain(
+      "d.kind <> 'story' or exists ( select 1 from public.stories s"
+      + ' where s.id::text = d.ref_id and s.deleted_at is null and s.expires_at > now() )',
+    );
+  });
+
+  // publish_story predates this spine and still does not write to it, so for
+  // every story published outside the media route the spine is EMPTY. A
+  // spine-only count reads zero for a photo two live stories are showing, and
+  // zero is the licence to destroy the bytes.
+  it('counts a live story that references the object without a spine row', () => {
+    expect(FLAT).toContain(
+      'join public.stories s on (s.media_path = m.storage_path'
+      + ' or s.inset_path = m.storage_path)',
+    );
+    expect(FLAT).toContain(
+      "p_bucket = 'story-media' and exists ( select 1 from public.stories s"
+      + ' where (s.media_path = p_name or s.inset_path = p_name)',
+    );
+  });
+});
+
+describe('0066 — V8-R-STO-014/015 the client cannot reach the bucket directly', () => {
+  // While 0065's INSERT policy stood, a modified client uploaded EXIF-bearing
+  // bytes straight into its own prefix and published them; the server re-encode
+  // was optional, and an optional strip is not a trust boundary.
+  it('revokes the authenticated write grant on story-media', () => {
+    expect(FLAT).toContain(
+      'drop policy if exists "story-media: owner writes own prefix" on storage.objects',
+    );
+    expect(FLAT).not.toMatch(
+      /create policy "story-media: owner writes own prefix"/i,
+    );
+  });
+
+  // While SELECT stood, any authorised viewer called createSignedUrl(path,
+  // 86400) for themselves and the route's server-decided TTL was a suggestion.
+  it('revokes both authenticated read grants on story-media', () => {
+    expect(FLAT).toContain(
+      'drop policy if exists "story-media: owner reads own prefix" on storage.objects',
+    );
+    expect(FLAT).toContain(
+      'drop policy if exists "story-media: audience reads referenced" on storage.objects',
+    );
+    expect(FLAT).not.toMatch(/create policy "story-media: owner reads own prefix"/i);
+    expect(FLAT).not.toMatch(/create policy "story-media: audience reads referenced"/i);
+  });
+
+  // The read decision the dropped policies made has to survive somewhere, or
+  // the route mints with service role for anyone who reaches it.
+  it('moves the read decision into a definer function the route must ask', () => {
+    expect(FLAT).toMatch(
+      /create or replace function public\.can_read_media_path\(p_name text\).*?security definer/i,
+    );
+    expect(FLAT).toContain(
+      'grant execute on function public.can_read_media_path(text) to authenticated',
+    );
+  });
+
+  it('keeps 0065\'s rule that an author cannot sign their own dead media', () => {
+    expect(FLAT).toContain('return not public.story_media_is_dead(p_name)');
+  });
+
+  it('carries the audience terms the dropped viewer policy had', () => {
+    expect(FLAT).toContain('public.is_mutual_friend(v_caller, s.author_id)');
+    expect(FLAT).toContain(
+      "s.audience = 'friends' or public.is_story_recipient(s.id, v_caller)",
+    );
+  });
 });
 
 describe('0066 — V8-R-STO-016 deletion clears metadata too', () => {
@@ -87,7 +170,18 @@ describe('0066 — V8-R-STO-016 deletion clears metadata too', () => {
 
   it('gates story_tags reads on the story still being live', () => {
     expect(FLAT).toContain(
-      'create policy "story_tags: readable with story" on public.story_tags for select using (public.is_story_live(story_id))',
+      'create policy "story_tags: readable with story" on public.story_tags for select using ( public.is_story_live(story_id)',
+    );
+  });
+
+  // is_story_live is SECURITY DEFINER, so on its own it is true for every
+  // authenticated caller. Liveness had to be ADDED to 0065's audience-scoped
+  // test, not substituted for it, or the migration meant to narrow tag reads
+  // would have published every live private story's tag list.
+  it('keeps the caller-scoped audience term on story_tags, not liveness alone', () => {
+    expect(FLAT).toContain(
+      'using ( public.is_story_live(story_id) and ( auth.uid() = profile_id'
+      + ' or exists (select 1 from public.stories s where s.id = story_id) ) )',
     );
   });
 
@@ -116,6 +210,13 @@ describe('0066 — V8-R-FEED-009 blocking is enforced both ways', () => {
     );
   });
 
+  // "SERVER-ENFORCED IN BOTH DIRECTIONS" needs a consumer. A helper that
+  // nothing calls is a recorded intention: a blocked viewer holding an audience
+  // row kept passing the friendship check and kept receiving signed URLs.
+  it('actually consults the block when deciding who may read media', () => {
+    expect(FLAT).toContain('not public.is_blocked_between(v_caller, s.author_id)');
+  });
+
   it('answers as definer, so the blocked party cannot read past it', () => {
     expect(FLAT).toMatch(
       /create or replace function public\.is_blocked_between\(a uuid, b uuid\).*?security definer/i,
@@ -138,7 +239,30 @@ describe('0066 — V8-R-FEED-010 the report record is server-owned', () => {
   });
 
   it('writes the report through a definer function that stamps the reporter', () => {
-    expect(FLAT).toContain('values (auth.uid(), p_subject_kind, p_subject_ref, p_reason)');
+    expect(FLAT).toContain(
+      'values (auth.uid(), p_subject_kind, btrim(p_subject_ref), p_reason)',
+    );
+  });
+
+  // The record is server-OWNED. `set reason = excluded.reason` handed the edit
+  // straight back to the reporter, who could rewrite what the operator reads
+  // simply by re-reporting the same subject.
+  it('keeps the FIRST reason on a repeat report rather than letting it be rewritten', () => {
+    expect(FLAT).toContain(
+      'set reason = coalesce(public.content_reports.reason, excluded.reason)',
+    );
+    expect(FLAT).not.toContain('set reason = coalesce(excluded.reason');
+  });
+
+  // report_content is granted to `authenticated` and is therefore callable
+  // directly over PostgREST. A cap that lives only in reports.ts bounds the
+  // app's own UI and nothing else.
+  it('bounds subject_ref and reason server-side, not only in the TypeScript caller', () => {
+    expect(FLAT).toContain('if length(p_subject_ref) > 200 then');
+    expect(FLAT).toContain('if p_reason is not null and length(p_reason) > 1000 then');
+    expect(FLAT).toContain(
+      'if p_subject_ref is null or length(btrim(p_subject_ref)) = 0 then',
+    );
   });
 });
 

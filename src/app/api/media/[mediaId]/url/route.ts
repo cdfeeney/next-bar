@@ -20,10 +20,16 @@ import { mintSignedMediaUrl } from '@/lib/media/signedUrl';
  * one would reintroduce the defect. The lifetime is derived from the media's
  * own window, read from the database inside this handler.
  *
- * AUTHORIZATION stays with the database. The mint runs on the CALLER'S client,
- * so 0065's bucket SELECT policies decide who may read the object — including
- * the rule that an expired or deleted story can no longer be signed by anyone,
- * its author included. Service role would mint for anyone who reached the URL.
+ * AUTHORIZATION STAYS WITH THE DATABASE — but it can no longer be a side effect
+ * of who signs. 0066 revokes the authenticated SELECT grant on the bucket,
+ * because while it stood any viewer could call `createSignedUrl(path, 86400)`
+ * themselves and this route's server-decided lifetime was a suggestion. With the
+ * grant gone the caller's own client cannot mint at all, so the mint moves to
+ * service role and the read decision is asked EXPLICITLY, first, through
+ * `can_read_media_path` — a definer function that still evaluates as the caller
+ * and carries the same audience, expiry and block rules the dropped policies
+ * did. Signing with service role WITHOUT that call would hand a URL to anyone
+ * who reached the route; the two halves are one change.
  */
 export const runtime = 'nodejs';
 
@@ -115,8 +121,20 @@ export async function GET(
       return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
     }
 
-    const signed = await mintSignedMediaUrl(
+    // THE AUTHORIZATION CALL. Asked on the CALLER's client so the definer
+    // function sees the real `auth.uid()`, and asked BEFORE anything is minted.
+    // A false answer is reported as not_found, not forbidden: whether a given
+    // media id exists is itself audience information.
+    const permitted = await callerMayRead(
       callerClient(env, token),
+      media.storage_path as string,
+    );
+    if (!permitted) {
+      return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 });
+    }
+
+    const signed = await mintSignedMediaUrl(
+      admin,
       media.storage_path as string,
       window.expiresAt,
     );
@@ -140,5 +158,31 @@ export async function GET(
       error instanceof Error ? error.message : 'unknown',
     );
     return NextResponse.json({ ok: false, error: 'server_error' }, { status: 500 });
+  }
+}
+
+/**
+ * May this caller read this object?
+ *
+ * FAILS CLOSED. An RPC error, a non-boolean answer, or a thrown request all
+ * return false. This is the only thing standing between a service-role mint and
+ * the whole bucket, so "the lookup broke" must never resolve to "allowed" — the
+ * same rule `isBlockedBetween` follows for the same reason.
+ */
+async function callerMayRead(
+  caller: ReturnType<typeof callerClient>,
+  storagePath: string,
+): Promise<boolean> {
+  try {
+    const { data, error } = await caller.rpc('can_read_media_path', {
+      p_name: storagePath,
+    });
+    if (error) {
+      console.error('[media/url] read check failed:', error.message);
+      return false;
+    }
+    return data === true;
+  } catch {
+    return false;
   }
 }
