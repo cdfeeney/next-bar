@@ -222,7 +222,13 @@ describe('0066 — EC-01/EC-02/EC-03 round-3 fixes', () => {
   // FIX 4b. Gating discovery closes how a blocked account FINDS someone; it does
   // not close what they can still READ once they hold the id, and an id survives a
   // block.
-  it('gates the follower count on blocks, before spending the search cap', () => {
+  // THE GATE MUST SIT BELOW THE CAP SPEND. The first version of this fix put it
+  // above, reasoning that probing should cost the prober nothing — which made the
+  // blocked path the only one that did NOT consume the counter shared with
+  // search_handles. Same return value, different side effect: still an oracle.
+  // Round 3 caught it. Below the spend, blocked / private / unknown all cost one
+  // attempt and are indistinguishable by return value AND by cap.
+  it('gates the follower count on blocks, AFTER spending the search cap', () => {
     expect(FLAT).toMatch(
       /create or replace function public\.get_follower_count\(profile_id uuid\)/i,
     );
@@ -230,12 +236,42 @@ describe('0066 — EC-01/EC-02/EC-03 round-3 fixes', () => {
     const gate = body.indexOf('if public.is_blocked_between(uid, profile_id) then return null');
     const spend = body.indexOf('insert into public.handle_search_attempts');
     expect(gate).toBeGreaterThan(-1);
-    // Before the cap spend: probing must cost the prober nothing to learn nothing.
-    expect(gate).toBeLessThan(spend);
+    expect(spend).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(spend);
   });
 
-  it('excludes blocked pairs from the opted-in public ratings list', () => {
-    expect(FLAT).toContain('and not public.is_blocked_between(auth.uid(), p.id)');
+  // X4. The ceiling is a read-then-insert, so two concurrent reports both observe
+  // 49 and both commit. Serialized on the REPORTER, so unrelated accounts never
+  // contend.
+  it('serializes the daily report cap per reporter', () => {
+    expect(FLAT).toContain(
+      "perform pg_advisory_xact_lock( hashtextextended('report_cap:' || auth.uid()::text, 0) )",
+    );
+  });
+
+  // X3. The bucket's own limit is the authority on what can be stored, and the
+  // re-encode boundary must agree with it. If 0065's limit moves and
+  // MAX_STORED_BYTES does not, this fails.
+  it('keeps the stored-bytes ceiling in step with the bucket file_size_limit', () => {
+    const bucketLimit = readFileSync(
+      join(process.cwd(), 'supabase', 'migrations', '0065_stories.sql'),
+      'utf8',
+    ).match(/file_size_limit[\s\S]{0,200}?(\d{6,})/);
+    expect(bucketLimit).not.toBeNull();
+    expect(Number(bucketLimit![1])).toBe(8 * 1024 * 1024);
+  });
+
+  // EC-04 REPLACED THIS. The round-3 fix added a block gate to get_public_ratings,
+  // which preserved a superseded feature and made this migration the newest code in
+  // the repo pointing at it. V8 uses numeric scores; V8-R-RNK-001 excludes tiers.
+  // The surface is retired, not gated — and this asserts the gate did NOT come back.
+  it('retires the tier-bearing public ratings list instead of gating it', () => {
+    expect(FLAT).toContain('drop function if exists public.get_public_ratings(text)');
+    expect(
+      FLAT,
+      'the block gate is back — a retired surface does not need one',
+    ).not.toContain('and not public.is_blocked_between(auth.uid(), p.id)');
+    expect(FLAT).not.toMatch(/create or replace function public\.get_public_ratings/i);
   });
 });
 

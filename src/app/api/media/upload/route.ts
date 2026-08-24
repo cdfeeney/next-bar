@@ -200,6 +200,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   // stored.
   const reEncoded = await reEncodeImage(original);
   if (!reEncoded.ok) {
+    // A too-large OUTPUT is a bounded refusal, not a server fault: 413, the same
+    // answer an over-sized input gets, so a client sees one consistent rule.
+    if (reEncoded.reason === 'too_large') return fail('too_large', 413);
     return fail(reEncoded.reason === 'rejected' ? 'rejected' : 'server_error', 400);
   }
 

@@ -272,12 +272,22 @@ export async function deleteEverywhere(
  * SERVICE ROLE, and the reason is worth writing down because the obvious
  * alternative is wrong in a way that reads as safer. Running the removal as the
  * CALLER looks like defence in depth — 0066's storage DELETE policy would
- * re-check the reference count — but 0066 also revokes every `story-media`
- * SELECT policy, and Storage has to see an object to delete it. As the caller
- * the remove matches nothing, and the API reports that by returning an EMPTY
- * REMOVED LIST rather than an error, so the route would stamp `bytes_removed_at`
- * on an object still sitting in the bucket. The re-check that actually catches
- * the race is the caller-scoped one the route makes BEFORE calling this.
+ * re-check the reference count — but that policy REFUSES by omitting the object
+ * from the returned list with `error` null, which is indistinguishable from a
+ * successful delete unless the list itself is inspected. A caller-scoped removal
+ * would therefore let the route stamp `bytes_removed_at` on an object still
+ * sitting in the bucket. The re-check that actually catches the race is the
+ * caller-scoped one the route makes BEFORE calling this.
+ *
+ * AND IT GETS STRICTLY MORE NECESSARY AFTER WP2's 0071. An earlier version of
+ * this comment justified service role by claiming "0066 also revokes every
+ * `story-media` SELECT policy". That is FALSE today: under EC-01 this lane's
+ * migration is additive and those SELECT policies still stand until 0071
+ * withdraws them, after WP2's consumer transition. Once 0071 lands, a caller
+ * genuinely cannot SEE the object and the removal would match nothing at all —
+ * so service role is required both before and after, for two different reasons.
+ * The reasoning is recorded in both halves rather than resting on a claim that
+ * was not yet true.
  *
  * WHAT CAME BACK IS CHECKED, not just whether an error came back. `remove`
  * resolves with the list of objects it actually deleted; anything it skipped is

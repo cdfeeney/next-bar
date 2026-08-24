@@ -1529,7 +1529,7 @@ security definer
 set search_path = public
 as $$
 declare
-  search_cap constant integer := 500;  -- shared with handle search (0006/0007)
+  search_cap constant integer := 500;  -- shared with handle search (0006_usernames, 0007_follows)
   uid uuid := auth.uid();
   attempts integer;
   target_private boolean;
@@ -1546,21 +1546,30 @@ begin
     );
   end if;
 
-  -- V8-R-FEED-009. THE SAME NULL a private or unknown profile returns, so the
-  -- block is not itself observable: a blocked account cannot distinguish "blocked"
-  -- from "no such profile" and so cannot use this to detect that it was blocked.
-  -- Placed before the cap spend, so probing costs the prober nothing to learn
-  -- nothing.
-  if public.is_blocked_between(uid, profile_id) then
-    return null;
-  end if;
-
   insert into public.handle_search_attempts as a (user_id, day, count)
   values (uid, current_date, 1)
   on conflict (user_id, day) do update set count = a.count + 1
   returning count into attempts;
 
   if attempts > search_cap then
+    return null;
+  end if;
+
+  -- V8-R-FEED-009. THE SAME NULL a private or unknown profile returns, AND AT THE
+  -- SAME COST.
+  --
+  -- The first version of this gate sat ABOVE the cap spend, reasoning that probing
+  -- should cost the prober nothing. That was backwards, and the round-3 review
+  -- caught it: returning early meant the blocked path did NOT consume the daily
+  -- counter while the private and unknown paths did. The counter is shared with
+  -- search_handles, so a caller could probe this 500+ times, then call
+  -- search_handles, and learn from whether search still worked that the target had
+  -- blocked them. Identical return value, different side effect — still an oracle,
+  -- just a slower one.
+  --
+  -- Below the spend, every non-self answer costs exactly one attempt, so blocked,
+  -- private and unknown are indistinguishable by return value AND by cap.
+  if public.is_blocked_between(uid, profile_id) then
     return null;
   end if;
 
@@ -1592,48 +1601,28 @@ comment on function public.get_follower_count(uuid) is
 revoke all on function public.get_follower_count(uuid) from public, anon;
 grant execute on function public.get_follower_count(uuid) to authenticated;
 
--- get_public_ratings (0015) is the OTHER half of the same report, and it is not the
--- same defect. It is granted to ANON as well as authenticated, and returns only
--- profiles that set shares_list_publicly = true with is_private = false. A block
--- gate on the authenticated path therefore cannot achieve V8-R-FEED-009 here: the
--- blocked account signs out and reads identical bytes. It is added because reading
--- someone's list while signed in as the account they blocked is still interaction
--- the requirement speaks to, and it costs nothing — but it is DEFENCE IN DEPTH, not
--- enforcement, and pretending otherwise would be the more dangerous outcome.
+-- RETIRED, NOT GATED: the obsolete tier-bearing public list (EC-04).
 --
--- auth.uid() is null for anon, and is_blocked_between(null, x) is false, so the
--- anonymous path is unchanged by construction.
+-- An earlier revision of this file added a block gate to `get_public_ratings` and
+-- recorded an "open product question" about whether a public-sharing opt-in should
+-- survive a block. Both were wrong. The V8 contract uses NUMERIC SCORES:
+-- V8-R-RNK-001 excludes "Loved / Liked / Pass" as "legacy implementation concepts,
+-- not the V8 model", and the founder-approved 3.1.0 ledger does not mention
+-- `get_public_ratings`, `shares_list_publicly`, or a public list ANYWHERE. There is
+-- no approved replacement, numeric or otherwise.
 --
--- OPEN PRODUCT QUESTION, deliberately not decided in this lane: should an explicit
--- "share my list publicly" opt-in survive a block? If it should not, the fix is to
--- withdraw the anon grant or to exclude blocked pairs at the sharing surface, and
--- that is a product decision with a visible behavioural consequence.
-create or replace function public.get_public_ratings(handle_query text)
-returns table (bar_id text, tier text, rated_at timestamptz)
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  with gated as materialized (
-    select r.bar_id, r.tier::text, r.rated_at
-      from public.ratings r
-      join public.profiles p on p.id = r.user_id
-     where p.shares_list_publicly = true
-       and p.handle_normalized = lower(coalesce(handle_query, ''))
-       and p.is_private = false
-       and not public.is_blocked_between(auth.uid(), p.id)
-     order by r.rated_at desc
-     limit 50
-  )
-  select * from gated;
-$$;
+-- Gating it preserved it, and made this migration the newest code in the repository
+-- pointing at a superseded feature — which is exactly how a dead surface convinces
+-- its next reader that it is alive. The question was never "should a block hide this
+-- list", it was "why does this list still exist".
+--
+-- `0015_public_shared_list.sql` is NOT rewritten: history stays as it happened. This
+-- is the smallest valid FORWARD change. 0015 was never applied to any database, so
+-- against a serving system the drop is a no-op and the point of it is the record.
+drop function if exists public.get_public_ratings(text);
 
-comment on function public.get_public_ratings(text) is
-  'V8-R-FEED-009 (0066) over 0015. Opted-in public ratings, now excluding blocked pairs for a SIGNED-IN caller. Defence in depth only: the function is anon-granted, so a blocked account can still read the same rows signed out. Whether a public-sharing opt-in should survive a block is an open product decision.';
-
-revoke all on function public.get_public_ratings(text) from public, anon, authenticated;
-grant execute on function public.get_public_ratings(text) to anon, authenticated;
+comment on schema public is
+  'V8. public.get_public_ratings(text) was retired by 0066 (EC-04): it returned the legacy Loved/Liked/Pass tier over a shares_list_publicly opt-in, and V8-R-RNK-001 excludes tiers from the product model. No public-list replacement is approved. Do not reintroduce it.';
 
 -- ...AND AT EVERY TABLE THAT CARRIES A CONNECTION BETWEEN TWO ACCOUNTS.
 --
@@ -2086,6 +2075,16 @@ begin
   -- writes nothing, and it has to keep returning the existing id, because the
   -- caller hides the content on a returned id and only on a returned id — a
   -- rate limit that made the hide fail would punish the reporter.
+  -- SERIALIZED PER REPORTER, because the ceiling is a read-then-insert and two
+  -- concurrent reports each read the count BEFORE either commits. With 49 rows in
+  -- the window, two simultaneous reports both observe 49, both pass, and both
+  -- insert — so the stated 50/day ceiling is whatever concurrency the caller can
+  -- muster. The lock is keyed on the REPORTER, so it never serializes unrelated
+  -- accounts and adds nothing to the ordinary one-report-at-a-time path.
+  perform pg_advisory_xact_lock(
+    hashtextextended('report_cap:' || auth.uid()::text, 0)
+  );
+
   if not exists (
     select 1
       from public.content_reports cr

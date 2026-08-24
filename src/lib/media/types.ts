@@ -14,6 +14,13 @@ export type MediaFailureReason =
   | 'denied'
   /** The bytes were rejected by inspection (V8-R-STO-014). */
   | 'rejected'
+  /**
+   * A legal request the product cannot store: the RE-ENCODED bytes exceed the
+   * bucket's own file_size_limit. Distinct from 'rejected', which means the
+   * bytes were refused on inspection, and from 'failed', which means we broke.
+   * The caller answers 413, matching the over-sized-input rule.
+   */
+  | 'too_large'
   /** The operation was attempted and did not complete. */
   | 'failed';
 

@@ -33,6 +33,22 @@ import { mediaFailure, type MediaResult } from './types';
 export const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 
 /**
+ * The ceiling on what comes OUT, which is a different number from what may come
+ * in and has to be, because re-encoding is not guaranteed to shrink anything.
+ *
+ * 0065 creates the `story-media` bucket with `file_size_limit` 8388608. A 12 MiB
+ * input is legal here, and a high-entropy PNG can re-encode to more than 8 MiB —
+ * at which point the boundary reported success and Storage then refused the write,
+ * so the caller got a 500. A server error is the wrong answer to a legal request
+ * the product simply cannot store: it reads as "we broke", invites a retry that
+ * will fail identically, and hides a bound the client could have respected.
+ *
+ * Kept in step with 0065 by the assertion in migration0066.test.ts: if the bucket
+ * limit moves and this does not, that test fails.
+ */
+export const MAX_STORED_BYTES = 8 * 1024 * 1024;
+
+/**
  * Cap on decoded dimensions. A small file can decode to an enormous bitmap (a
  * "decompression bomb"), and the memory that costs is spent before any of our
  * own code runs — so the limit goes to the decoder, not after it.
@@ -124,6 +140,13 @@ export async function reEncodeImage(
       : decodedType === 'image/webp'
         ? await rotated.webp({ quality: WEBP_QUALITY }).toBuffer({ resolveWithObject: true })
         : await rotated.jpeg({ quality: JPEG_QUALITY }).toBuffer({ resolveWithObject: true });
+
+    // THE OUTPUT IS BOUNDED TOO. Re-encoding is not guaranteed to shrink, so a
+    // legal 12 MiB input can produce more than the bucket's 8 MiB limit. Refusing
+    // here turns a Storage 500 into an honest, bounded rejection.
+    if (encoded.data.byteLength > MAX_STORED_BYTES) {
+      return mediaFailure('too_large', 'That image is too large to store.');
+    }
 
     return {
       ok: true,

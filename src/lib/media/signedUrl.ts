@@ -68,12 +68,20 @@ export type SignedMediaUrl = {
  * Mint a signed URL for one object.
  *
  * THIS FUNCTION DOES NOT AUTHORIZE ANYTHING, and that is the one thing a caller
- * must know about it. 0066 revokes the authenticated SELECT grant on the bucket
- * — the grant that let a client mint its own URL with its own lifetime and made
- * V8-R-STO-015 unenforceable — so the only client that can mint at all is now
- * the service-role one. Whoever passes it here has ALREADY had to decide the
- * caller may read the object (`can_read_media_path`); minting without that check
- * hands a URL to anyone who reached the route.
+ * must know about it. Whoever passes an object here has ALREADY had to decide the
+ * caller may read it — that decision is `media_read_window` in 0066 — and minting
+ * without it hands a URL to anyone who reached the route.
+ *
+ * THE LEGACY GRANT IS STILL STANDING. An earlier version of this comment said
+ * "0066 revokes the authenticated SELECT grant on the bucket". That is FALSE under
+ * EC-01: 0066 is additive and deliberately keeps "story-media: owner reads own
+ * prefix" and "story-media: audience reads referenced" alive until WP2's migration
+ * 0071 withdraws them, after its consumer transition. So a client CAN still mint
+ * its own URL with its own lifetime today, V8-R-STO-015 is NOT yet enforced, and
+ * this route is the safe path rather than the only path. WP2's 0071 sequencing
+ * depends on that fact, so it is stated here rather than left to be rediscovered.
+ * (The old comment also named `can_read_media_path`, which exists nowhere in this
+ * repository.)
  *
  * The TTL is computed by the SERVER from `expiresAt` — which the route reads
  * from the database, never from the request.

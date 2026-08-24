@@ -262,10 +262,13 @@ describe('DELETE /api/media/:mediaId', () => {
     );
   });
 
-  // 0066 revokes every story-media SELECT policy and Storage must SEE an object
-  // to delete it, so a caller-scoped remove matches nothing — and reports that
-  // by returning an empty list with NO error. The removal therefore runs with
-  // service role, against an object the database has already claimed.
+  // 0066's storage DELETE policy REFUSES by omitting the object from the returned
+  // list with `error` null, which is indistinguishable from success unless the
+  // list itself is read. A caller-scoped remove would therefore stamp bytes as
+  // gone while they remain. The removal runs with service role, against an object
+  // the database has already claimed. (Under EC-01 the story-media SELECT policies
+  // still stand until WP2's 0071; after it lands a caller could not see the object
+  // at all, so service role is required both before and after.)
   it('removes the bytes with the service-role client', async () => {
     signedIn();
     const adminRemove = vi.fn(async () => REMOVED('owner-1/m1'));
@@ -731,9 +734,11 @@ describe('GET /api/media/:mediaId/url', () => {
     expect(createSignedUrl).not.toHaveBeenCalled();
   });
 
-  // V8-R-STO-015. 0066 revokes the authenticated read grant precisely so a
-  // client cannot mint its own lifetime; the signing client must therefore be
-  // the service-role one, and the TTL must come from the media's own window.
+  // V8-R-STO-015. The signing client must be the service-role one and the TTL must
+  // come from the media's own window. NOTE: under EC-01 the authenticated read
+  // grant is NOT yet revoked — that is WP2's 0071, after its consumer transition —
+  // so this route is currently the SAFE path, not the only one, and V8-R-STO-015
+  // is not yet enforced end to end. This test pins the route's half of it.
   it('signs with the service-role client and a server-decided lifetime', async () => {
     signedIn('viewer-9');
     const admin = urlAdmin();
