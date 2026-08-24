@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { resolveMediaWindow } from './mediaWindow';
 import {
   mintSignedMediaUrl,
   serverTtlSeconds,
@@ -117,46 +116,24 @@ describe('mintSignedMediaUrl — the server decides, the caller cannot ask', () 
   });
 });
 
-describe('resolveMediaWindow — the window is the LAST live destination', () => {
-  it('is not readable with no live destination', () => {
-    expect(resolveMediaWindow([])).toEqual({ readable: false });
-  });
-
-  it('takes the latest expiry, so a shorter destination cannot cut a longer one short', () => {
-    const window = resolveMediaWindow([
-      { kind: 'story', expiresAt: at(10_000) },
-      { kind: 'story', expiresAt: at(90_000) },
-    ]);
-    expect(window).toEqual({ readable: true, expiresAt: at(90_000) });
-  });
-
-  it('treats a shown destination with no expiry as unbounded', () => {
-    const window = resolveMediaWindow([
-      { kind: 'story', expiresAt: at(10_000) },
-      { kind: 'feed', expiresAt: null },
-    ]);
-    expect(window).toEqual({ readable: true, expiresAt: null });
-  });
-
-  // An archive row RETAINS bytes; it never SHOWS them. Treating it as a
-  // destination made it the branch that reads "no expiry", so after "delete
-  // everywhere" the author was still minted a URL for media nothing displays —
-  // V8-R-CMP-016's end state is audience: nobody.
-  it('does not let a Saved Nights Out archive hold keep the media readable', () => {
-    expect(resolveMediaWindow([{ kind: 'archive', expiresAt: null }]))
-      .toEqual({ readable: false });
-  });
-
-  it('ignores an archive hold when a real destination still shows the media', () => {
-    const window = resolveMediaWindow([
-      { kind: 'archive', expiresAt: null },
-      { kind: 'story', expiresAt: at(10_000) },
-    ]);
-    expect(window).toEqual({ readable: true, expiresAt: at(10_000) });
-  });
-
-  it('does not turn corrupt timestamps into an unbounded window', () => {
-    expect(resolveMediaWindow([{ kind: 'story', expiresAt: 'nonsense' }]))
-      .toEqual({ readable: false });
-  });
-});
+/*
+ * `resolveMediaWindow` and its six tests were DELETED here, not moved.
+ *
+ * It computed the media's window in TypeScript from every live destination the
+ * SERVICE ROLE could see. Two things were wrong with that and neither is fixable
+ * in this layer. The set is not the caller's, so a viewer authorised through a
+ * story with two minutes left could be handed a lifetime borrowed from a
+ * destination they cannot read. And the spine it read is EMPTY for normally
+ * published and legacy stories, because publish_story does not write to it — so
+ * the honest answer for real story media was "no live destination", and the
+ * route 404'd it.
+ *
+ * The window is now `public.media_read_window` in 0066: same question, asked of
+ * the rows that actually authorise the caller, answered where the audience and
+ * expiry rules already live. Its clauses are pinned by migration0066.test.ts and
+ * its use by the route is pinned in src/app/api/media/routes.test.ts.
+ *
+ * Keeping the TypeScript copy would have left a second, unenforced source of
+ * truth for one rule — the same shape as the `is_blocked_between` helper that
+ * existed, was tested, and was called by nothing.
+ */

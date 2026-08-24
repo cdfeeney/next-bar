@@ -161,13 +161,12 @@ describe('DELETE /api/media/:mediaId', () => {
   // live media byte-removed — a 404 for bytes that are still there.
   it('stamps the media the RPC removed, never the id in the URL', async () => {
     signedIn();
-    const admin = db(
-      { media_objects: { data: null, error: null } },
-      { remove: vi.fn(async () => ({ error: null })) },
-    );
+    const adminRemove = vi.fn(async () => ({ error: null }));
+    const admin = db({ media_objects: { data: null, error: null } }, { remove: adminRemove });
     adminClient.mockReturnValue(admin.client);
 
-    const caller = db({}).client;
+    const callerRemove = vi.fn(async () => ({ error: null }));
+    const caller = db({}, { remove: callerRemove }).client;
     caller.rpc = vi.fn(async () => ({
       data: [{
         media_id: 'really-mine',
@@ -190,6 +189,71 @@ describe('DELETE /api/media/:mediaId', () => {
     expect(admin.builders.media_objects.eq).toHaveBeenCalledWith('id', 'really-mine');
     expect(admin.builders.media_objects.eq)
       .not.toHaveBeenCalledWith('id', 'someone-elses');
+  });
+
+  // The RPC's row lock is released when it commits, so a reference created
+  // before the bytes actually go would otherwise be destroyed by a decision
+  // taken before it existed. 0066's storage DELETE policy re-checks the count
+  // at removal time — and service role bypasses RLS, so an admin remove turns
+  // that documented backstop into a comment.
+  it('removes the bytes with the caller client, so the RLS re-check still runs', async () => {
+    signedIn();
+    const adminRemove = vi.fn(async () => ({ error: null }));
+    const admin = db({ media_objects: { data: null, error: null } }, { remove: adminRemove });
+    adminClient.mockReturnValue(admin.client);
+
+    const callerRemove = vi.fn(async () => ({ error: null }));
+    const caller = db({}, { remove: callerRemove }).client;
+    caller.rpc = vi.fn(async () => ({
+      data: [{
+        media_id: 'm1',
+        bucket_id: 'story-media',
+        storage_path: 'owner-1/m1',
+        reclaimable: true,
+      }],
+      error: null,
+    }));
+    callerClient.mockReturnValue(caller);
+
+    await DELETE(
+      new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
+      { params: { mediaId: 'm1' } },
+    );
+
+    expect(callerRemove).toHaveBeenCalledWith(['owner-1/m1']);
+    expect(adminRemove).not.toHaveBeenCalled();
+  });
+
+  // A refused delete is the policy catching that race. It must surface as an
+  // orphan report, never as a silent success.
+  it('reports an orphan and does not stamp when the policy refuses the removal', async () => {
+    signedIn();
+    const admin = db({ media_objects: { data: null, error: null } });
+    adminClient.mockReturnValue(admin.client);
+
+    const caller = db({}, {
+      remove: vi.fn(async () => ({ error: { message: 'denied by policy' } })),
+    }).client;
+    caller.rpc = vi.fn(async () => ({
+      data: [{
+        media_id: 'm1',
+        bucket_id: 'story-media',
+        storage_path: 'owner-1/m1',
+        reclaimable: true,
+      }],
+      error: null,
+    }));
+    callerClient.mockReturnValue(caller);
+
+    const response = await DELETE(
+      new Request('https://app.test/api/media/m1?destination=d1', { method: 'DELETE' }),
+      { params: { mediaId: 'm1' } },
+    );
+
+    const body = await response.json();
+    expect(body.bytesReclaimed).toBe(false);
+    expect(body.orphanedPaths).toEqual(['owner-1/m1']);
+    expect(admin.builders.media_objects.update).not.toHaveBeenCalled();
   });
 
   it('does not stamp anything when the removal left the bytes referenced', async () => {
@@ -269,25 +333,26 @@ describe('DELETE /api/media/:mediaId', () => {
 });
 
 describe('GET /api/media/:mediaId/url', () => {
-  function urlAdmin(destinations: unknown[], removedAt: string | null = null) {
+  function urlAdmin(removedAt: string | null = null) {
     return db({
       media_objects: {
         data: { storage_path: 'owner-1/m1', bytes_removed_at: removedAt },
         error: null,
       },
-      media_destinations: { data: destinations, error: null },
-      stories: {
-        data: [{ id: 's1', expires_at: new Date(Date.now() + 3_600_000).toISOString() }],
-        error: null,
-      },
     });
   }
 
-  function readerCaller(permitted: unknown) {
+  /** `media_read_window` is set-returning, so it comes back as an array. */
+  function readerCaller(window: unknown) {
     const caller = db({}).client;
-    caller.rpc = vi.fn(async () => ({ data: permitted, error: null }));
+    caller.rpc = vi.fn(async () => ({ data: window, error: null }));
     return caller;
   }
+
+  const READABLE = [{
+    readable: true,
+    expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+  }];
 
   it('refuses an unauthenticated caller', async () => {
     readMediaEnv.mockReturnValue(ENV);
@@ -303,8 +368,8 @@ describe('GET /api/media/:mediaId/url', () => {
 
   it('is not found once the bytes are stamped removed', async () => {
     signedIn();
-    adminClient.mockReturnValue(urlAdmin([], '2026-08-24T00:00:00.000Z').client);
-    callerClient.mockReturnValue(readerCaller(true));
+    adminClient.mockReturnValue(urlAdmin('2026-08-24T00:00:00.000Z').client);
+    callerClient.mockReturnValue(readerCaller(READABLE));
 
     const response = await GET(
       new Request('https://app.test/api/media/m1/url'),
@@ -315,19 +380,19 @@ describe('GET /api/media/:mediaId/url', () => {
   });
 
   // V8-R-FEED-009. The block, the audience and the expiry all live behind
-  // can_read_media_path; a false answer must stop the mint entirely, and it is
+  // media_read_window; a refusal must stop the mint entirely, and it is
   // reported as not_found because "this id exists" is itself audience
   // information.
   it('mints nothing when the database says this caller may not read it', async () => {
     signedIn('viewer-9');
-    const admin = urlAdmin([{ kind: 'story', ref_id: 's1' }]);
+    const admin = urlAdmin();
     const createSignedUrl = vi.fn(async () => ({
       data: { signedUrl: 'https://signed.test/x' },
       error: null,
     }));
     admin.client.storage.from = vi.fn(() => ({ createSignedUrl }));
     adminClient.mockReturnValue(admin.client);
-    callerClient.mockReturnValue(readerCaller(false));
+    callerClient.mockReturnValue(readerCaller([{ readable: false, expires_at: null }]));
 
     const response = await GET(
       new Request('https://app.test/api/media/m1/url'),
@@ -340,7 +405,7 @@ describe('GET /api/media/:mediaId/url', () => {
 
   it('FAILS CLOSED when the read check itself errors', async () => {
     signedIn('viewer-9');
-    const admin = urlAdmin([{ kind: 'story', ref_id: 's1' }]);
+    const admin = urlAdmin();
     const createSignedUrl = vi.fn(async () => ({
       data: { signedUrl: 'https://signed.test/x' },
       error: null,
@@ -361,12 +426,29 @@ describe('GET /api/media/:mediaId/url', () => {
     expect(createSignedUrl).not.toHaveBeenCalled();
   });
 
+  it('FAILS CLOSED when the window function answers with no row at all', async () => {
+    signedIn('viewer-9');
+    const admin = urlAdmin();
+    const createSignedUrl = vi.fn();
+    admin.client.storage.from = vi.fn(() => ({ createSignedUrl }));
+    adminClient.mockReturnValue(admin.client);
+    callerClient.mockReturnValue(readerCaller([]));
+
+    const response = await GET(
+      new Request('https://app.test/api/media/m1/url'),
+      { params: { mediaId: 'm1' } },
+    );
+
+    expect(response.status).toBe(404);
+    expect(createSignedUrl).not.toHaveBeenCalled();
+  });
+
   // V8-R-STO-015. 0066 revokes the authenticated read grant precisely so a
   // client cannot mint its own lifetime; the signing client must therefore be
   // the service-role one, and the TTL must come from the media's own window.
   it('signs with the service-role client and a server-decided lifetime', async () => {
     signedIn('viewer-9');
-    const admin = urlAdmin([{ kind: 'story', ref_id: 's1' }]);
+    const admin = urlAdmin();
     // Named parameters, so the TTL assertion below reads a typed argument
     // rather than indexing an empty tuple.
     const createSignedUrl = vi.fn(async (_path: string, _ttlSeconds: number) => ({
@@ -376,7 +458,7 @@ describe('GET /api/media/:mediaId/url', () => {
     admin.client.storage.from = vi.fn(() => ({ createSignedUrl }));
     adminClient.mockReturnValue(admin.client);
 
-    const caller = readerCaller(true);
+    const caller = readerCaller(READABLE);
     // The caller's own client must not be the one that signs.
     caller.storage.from = vi.fn(() => ({
       createSignedUrl: vi.fn(async () => ({ data: null, error: { message: 'denied' } })),
@@ -392,27 +474,64 @@ describe('GET /api/media/:mediaId/url', () => {
     expect(response.status).toBe(200);
     expect(body.url).toBe('https://signed.test/x');
     expect(createSignedUrl).toHaveBeenCalledTimes(1);
+    expect(createSignedUrl).toHaveBeenCalledWith('owner-1/m1', 300);
     // 300s ceiling, and never the ~3600s the story itself has left.
     expect(createSignedUrl.mock.calls[0][1]).toBe(300);
   });
 
-  // V8-R-CMP-016's end state is "audience: nobody". A retention hold keeps the
-  // bytes; it does not make them readable, not even for their owner.
-  it('is not found when only a Saved Nights Out archive hold survives', async () => {
-    signedIn();
-    const admin = urlAdmin([{ kind: 'archive', ref_id: 'night-1' }]);
-    const createSignedUrl = vi.fn();
+  // The lifetime is the CALLER's, not the longest one anybody holds. When the
+  // window that authorised this caller ends sooner than the ceiling, the URL
+  // ends with it.
+  it('cuts the lifetime to the caller own window when it is shorter than the ceiling', async () => {
+    signedIn('viewer-9');
+    const admin = urlAdmin();
+    const createSignedUrl = vi.fn(async (_path: string, _ttlSeconds: number) => ({
+      data: { signedUrl: 'https://signed.test/x' },
+      error: null,
+    }));
     admin.client.storage.from = vi.fn(() => ({ createSignedUrl }));
     adminClient.mockReturnValue(admin.client);
-    callerClient.mockReturnValue(readerCaller(true));
+    callerClient.mockReturnValue(readerCaller([{
+      readable: true,
+      expires_at: new Date(Date.now() + 42_000).toISOString(),
+    }]));
 
     const response = await GET(
       new Request('https://app.test/api/media/m1/url'),
       { params: { mediaId: 'm1' } },
     );
 
-    expect(response.status).toBe(404);
-    expect(createSignedUrl).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(createSignedUrl.mock.calls[0][1]).toBeLessThanOrEqual(42);
+    expect(createSignedUrl.mock.calls[0][1]).toBeGreaterThan(0);
+  });
+
+  // The route asks the caller's own client, so the definer function sees the
+  // real auth.uid(). Asking on the service-role client would make the answer
+  // "yes" for everybody.
+  it('asks the window function as the caller, not as the service role', async () => {
+    signedIn('viewer-9');
+    const admin = urlAdmin();
+    admin.client.storage.from = vi.fn(() => ({
+      createSignedUrl: vi.fn(async () => ({
+        data: { signedUrl: 'https://signed.test/x' },
+        error: null,
+      })),
+    }));
+    adminClient.mockReturnValue(admin.client);
+
+    const caller = readerCaller(READABLE);
+    callerClient.mockReturnValue(caller);
+
+    await GET(
+      new Request('https://app.test/api/media/m1/url'),
+      { params: { mediaId: 'm1' } },
+    );
+
+    expect(caller.rpc).toHaveBeenCalledWith('media_read_window', {
+      p_name: 'owner-1/m1',
+    });
+    expect(admin.client.rpc).not.toHaveBeenCalled();
   });
 });
 
@@ -427,7 +546,12 @@ describe('POST /api/media/upload', () => {
    * before the one that expects 200 exposed it. Handing the route the same
    * FormData object keeps both sides in one realm.
    */
-  function uploadRequest(fields: Record<string, string> = {}, headers: HeadersInit = {}) {
+  function uploadRequest(
+    fields: Record<string, string> = {},
+    // A declared length is REQUIRED by the route, so the default here is a
+    // well-formed request. Tests about the length itself override it.
+    headers: HeadersInit = { 'content-length': '1024' },
+  ) {
     const form = new FormData();
     form.set('file', new File([new Uint8Array([1, 2, 3])], 'p.jpg', { type: 'image/jpeg' }));
     for (const [key, value] of Object.entries(fields)) form.set(key, value);
@@ -473,6 +597,35 @@ describe('POST /api/media/upload', () => {
     const response = await POST(request);
 
     expect(response.status).toBe(413);
+    expect(formData).not.toHaveBeenCalled();
+  });
+
+  // Without this the pre-check was defeated by simply not declaring a length:
+  // Number(null) is NaN, the branch fell through, and a chunked body of any
+  // size was buffered in full before file.size was ever consulted.
+  it('refuses a body that declares no length at all, before reading it', async () => {
+    signedIn();
+    adminClient.mockReturnValue(uploadAdmin(null).client);
+
+    const request = uploadRequest({}, {});
+    const formData = vi.spyOn(request, 'formData');
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(411);
+    expect(formData).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unparseable declared length rather than reading past it', async () => {
+    signedIn();
+    adminClient.mockReturnValue(uploadAdmin(null).client);
+
+    const request = uploadRequest({}, { 'content-length': 'not-a-number' });
+    const formData = vi.spyOn(request, 'formData');
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(411);
     expect(formData).not.toHaveBeenCalled();
   });
 

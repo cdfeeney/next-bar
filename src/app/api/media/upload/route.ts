@@ -51,13 +51,29 @@ export async function POST(request: Request): Promise<NextResponse> {
   const userId = await verifiedUserId(admin, token);
   if (userId === null) return fail('unauthorized', 401);
 
-  // BEFORE the body is read. `Content-Length` is a client claim and is not the
-  // authority on size — the check after decoding still is — but refusing an
-  // obviously oversized upload here is what stops `formData()` from buffering
-  // gigabytes into this process first. A missing or unparseable header is not
-  // treated as zero; it simply falls through to the real check below.
-  const declaredLength = Number(request.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+  // BEFORE the body is read, and a DECLARED LENGTH IS REQUIRED.
+  //
+  // `Content-Length` is a client claim and is not the authority on size — the
+  // check after decoding still is — but it is the only thing available before
+  // `formData()` buffers the whole body into this process. Letting a request
+  // through when the header is absent or unparseable defeated the check
+  // completely: a chunked body carries no length, `Number(null)` is NaN, and an
+  // arbitrarily large upload was buffered in full before any size test ran.
+  // Next.js route handlers impose no cap of their own, so that was a
+  // memory-exhaustion path behind a comment claiming the opposite.
+  //
+  // Refusing an undeclared length costs nothing real: a browser sending
+  // multipart FormData always sets Content-Length.
+  // The HEADER is tested before the number is. `Number(null)` is 0, not NaN, so
+  // coercing first silently turns "no length declared" into "declares zero
+  // bytes" — which passes every bound and reads the body anyway. That is the
+  // precise shape of the hole this check exists to close, so the absent case is
+  // handled on its own rather than folded into the numeric test.
+  const lengthHeader = request.headers.get('content-length');
+  if (lengthHeader === null || !/^\d+$/.test(lengthHeader.trim())) {
+    return fail('bad_request', 411);
+  }
+  if (Number(lengthHeader) > MAX_UPLOAD_BYTES) {
     return fail('too_large', 413);
   }
 

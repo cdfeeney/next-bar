@@ -23,9 +23,17 @@ import { MEDIA_BUCKET } from '@/lib/media/types';
  *
  * BYTES ARE NEVER RECLAIMED BY THIS HANDLER'S OWN JUDGEMENT. The decision comes
  * back from 0066's definer functions, which count references under a row lock
- * in the same transaction as the removal. Belt and braces: 0066's storage
- * DELETE policy independently refuses any object that still has a live
- * reference, so even a wrong answer here cannot destroy shared media.
+ * in the same transaction as the removal.
+ *
+ * THE REMOVAL RUNS ON THE CALLER'S CLIENT, and that is what makes the second
+ * guard real. 0066's storage DELETE policy re-checks the reference count at
+ * removal time, which matters because the RPC's row lock is gone by the time
+ * the bytes go: a reference created in that window would otherwise be destroyed
+ * by a decision taken before it existed. Service role BYPASSES RLS, so reaching
+ * for the admin client here would have skipped the very re-check both this file
+ * and destinations.ts describe as the independent backstop — a documented guard
+ * that never ran. Service role stays for the registry stamp below, which has no
+ * write policy by design.
  */
 export const runtime = 'nodejs';
 
@@ -76,7 +84,7 @@ export async function DELETE(
       }
 
       const orphans = removed.value.reclaimable
-        ? await reclaimBytes(admin, MEDIA_BUCKET, [removed.value.storagePath])
+        ? await reclaimBytes(caller, MEDIA_BUCKET, [removed.value.storagePath])
         : [];
 
       if (removed.value.reclaimable) {
@@ -109,7 +117,7 @@ export async function DELETE(
     }
 
     const orphans = deleted.value.reclaimable
-      ? await reclaimBytes(admin, MEDIA_BUCKET, [deleted.value.storagePath])
+      ? await reclaimBytes(caller, MEDIA_BUCKET, [deleted.value.storagePath])
       : [];
 
     if (deleted.value.reclaimable) {

@@ -146,14 +146,21 @@ export async function deleteEverywhere(
  *
  * The guard is restated here rather than assumed: this function is the one that
  * destroys data, and "reference count says zero" is the entire licence for it.
- * Callers pass the flag they received; a caller that fabricates it still meets
- * 0066's storage policy, which refuses the delete independently.
+ *
+ * `client` MUST be the caller-scoped one, never service role. The RPC's row
+ * lock is released when it commits, so by the time these bytes go a new
+ * reference may exist that the count never saw. 0066's storage DELETE policy
+ * re-checks the reference count at removal time and is the only thing that
+ * catches that race — and service role bypasses RLS, so an admin client turns
+ * this function's stated second guard into a comment. A refused delete comes
+ * back as an orphan below, which is the honest outcome: the bytes are still
+ * referenced and must stay.
  *
  * Returns the paths that could NOT be removed, so an orphan is reported rather
  * than swallowed — the same contract as `reportOrphans` in stories.server.ts.
  */
 export async function reclaimBytes(
-  admin: SupabaseClient,
+  client: SupabaseClient,
   bucket: string,
   paths: readonly string[],
 ): Promise<string[]> {
@@ -163,7 +170,7 @@ export async function reclaimBytes(
   // failure; retrying further just races the same failing remove.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const { error } = await admin.storage.from(bucket).remove([...paths]);
+      const { error } = await client.storage.from(bucket).remove([...paths]);
       if (!error) return [];
     } catch {
       // fall through to the retry, then to the orphan report

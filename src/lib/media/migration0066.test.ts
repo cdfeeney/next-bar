@@ -98,6 +98,22 @@ describe('0066 — V8-R-CMP-012 bytes outlive nothing but their last reference',
     );
   });
 
+  // A LIVE STORY IS A DESTINATION. Retiring only the spine row left the story
+  // showing the photo, its audience and tag rows queryable against
+  // V8-R-STO-016, and the reference count permanently above zero — a delete
+  // that cannot complete rather than a partial delete honestly reported.
+  // Author-scoped: both verbs already established the caller owns the media.
+  it('closes the story destination itself, not just its spine row', () => {
+    expect(FLAT).toContain(
+      'update public.stories s set deleted_at = now() from public.media_objects m'
+      + ' where m.id = v_media and s.author_id = auth.uid()',
+    );
+    expect(FLAT).toContain(
+      'update public.stories s set deleted_at = now() from public.media_destinations d'
+      + " where d.id = p_destination_id and d.kind = 'story'",
+    );
+  });
+
   // publish_story predates this spine and still does not write to it, so for
   // every story published outside the media route the spine is EMPTY. A
   // spine-only count reads zero for a photo two live stories are showing, and
@@ -144,21 +160,39 @@ describe('0066 — V8-R-STO-014/015 the client cannot reach the bucket directly'
   // the route mints with service role for anyone who reaches it.
   it('moves the read decision into a definer function the route must ask', () => {
     expect(FLAT).toMatch(
-      /create or replace function public\.can_read_media_path\(p_name text\).*?security definer/i,
+      /create or replace function public\.media_read_window\(p_name text\).*?security definer/i,
     );
     expect(FLAT).toContain(
-      'grant execute on function public.can_read_media_path(text) to authenticated',
+      'grant execute on function public.media_read_window(text) to authenticated',
     );
   });
 
   it('keeps 0065\'s rule that an author cannot sign their own dead media', () => {
-    expect(FLAT).toContain('return not public.story_media_is_dead(p_name)');
+    expect(FLAT).toContain('if public.story_media_is_dead(p_name) then');
   });
 
   it('carries the audience terms the dropped viewer policy had', () => {
     expect(FLAT).toContain('public.is_mutual_friend(v_caller, s.author_id)');
     expect(FLAT).toContain(
       "s.audience = 'friends' or public.is_story_recipient(s.id, v_caller)",
+    );
+  });
+
+  // The window and the permission have to come from the SAME rows. Computed
+  // apart, a viewer authorised through a story with two minutes left could be
+  // handed a lifetime borrowed from a destination they cannot read at all.
+  it('returns the window with the permission, from the rows that granted it', () => {
+    expect(FLAT).toContain('returns table (readable boolean, expires_at timestamptz)');
+    expect(FLAT).toContain('return query select v_expiry is not null, v_expiry');
+  });
+
+  // publish_story writes no spine row and upload-before-publish cannot name a
+  // story that does not exist yet, so a window read from media_destinations is
+  // empty for every normally published and every legacy story photo.
+  it('reads the window from stories, which is where the expiry actually lives', () => {
+    expect(FLAT).toContain(
+      'select max(s.expires_at) into v_expiry from public.stories s'
+      + ' where (s.media_path = p_name or s.inset_path = p_name)',
     );
   });
 });
@@ -213,14 +247,33 @@ describe('0066 — V8-R-FEED-009 blocking is enforced both ways', () => {
   // "SERVER-ENFORCED IN BOTH DIRECTIONS" needs a consumer. A helper that
   // nothing calls is a recorded intention: a blocked viewer holding an audience
   // row kept passing the friendship check and kept receiving signed URLs.
-  it('actually consults the block when deciding who may read media', () => {
-    expect(FLAT).toContain('not public.is_blocked_between(v_caller, s.author_id)');
+  // Enforcement lives in the SHARED predicate. Blocking deletes no follows
+  // edge, so every rule 0065 keyed on mutuality kept passing for a blocked
+  // pair: the stories SELECT policy still returned the blocker's metadata, and
+  // publish_story still let either party name or TAG the other. Putting the
+  // term inside is_mutual_friend fixes all four call sites at once, and the
+  // fifth somebody adds later.
+  it('makes a blocked pair fail the mutual-friend predicate everything asks', () => {
+    expect(FLAT).toContain('and not public.is_blocked_between(a, b)');
+    expect(FLAT).toMatch(
+      /create or replace function public\.is_mutual_friend\(a uuid, b uuid\).*?security definer/i,
+    );
   });
 
   it('answers as definer, so the blocked party cannot read past it', () => {
     expect(FLAT).toMatch(
       /create or replace function public\.is_blocked_between\(a uuid, b uuid\).*?security definer/i,
     );
+  });
+
+  // SECURITY DEFINER is exactly what lets this function see a row the policy
+  // hides, so without a caller check it is a pairwise oracle over private block
+  // data. 0065 gave is_mutual_friend the same guard for the same reason.
+  it('refuses a caller asking about two other people', () => {
+    expect(FLAT).toContain(
+      "raise exception 'is_blocked_between: a caller may only ask about itself'",
+    );
+    expect(FLAT).toContain('if v_caller is not null and v_caller <> a and v_caller <> b then');
   });
 });
 
@@ -247,11 +300,13 @@ describe('0066 — V8-R-FEED-010 the report record is server-owned', () => {
   // The record is server-OWNED. `set reason = excluded.reason` handed the edit
   // straight back to the reporter, who could rewrite what the operator reads
   // simply by re-reporting the same subject.
-  it('keeps the FIRST reason on a repeat report rather than letting it be rewritten', () => {
-    expect(FLAT).toContain(
-      'set reason = coalesce(public.content_reports.reason, excluded.reason)',
-    );
-    expect(FLAT).not.toContain('set reason = coalesce(excluded.reason');
+  it('leaves the stored reason untouched on a repeat report', () => {
+    // Not even a coalesce that FILLS a null: that still let the reporter decide
+    // after the fact what the operator reads. The update is a deliberate no-op
+    // rather than DO NOTHING, because DO NOTHING returns no row and the caller
+    // reads a null id as a failed report and refuses to hide the content.
+    expect(FLAT).toContain('set reason = public.content_reports.reason');
+    expect(FLAT).not.toContain('set reason = coalesce(');
   });
 
   // report_content is granted to `authenticated` and is therefore callable

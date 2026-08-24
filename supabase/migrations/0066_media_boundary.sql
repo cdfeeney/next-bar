@@ -275,6 +275,19 @@ begin
     return;
   end if;
 
+  -- Same reading as delete_media_everywhere, narrowed to the ONE destination
+  -- being removed: if this row is a story reference, that story stops showing
+  -- the media. Retiring the spine row alone left the story live and still
+  -- displaying it, which is not "removed from this destination".
+  update public.stories s
+     set deleted_at = now()
+    from public.media_destinations d
+   where d.id = p_destination_id
+     and d.kind = 'story'
+     and s.id::text = d.ref_id
+     and s.author_id = auth.uid()
+     and s.deleted_at is null;
+
   return query
     select m.id,
            m.bucket_id,
@@ -328,6 +341,27 @@ begin
    where d.media_id = v_media
      and d.removed_at is null
      and d.kind <> 'archive';
+
+  -- A LIVE STORY IS A DESTINATION, so "every destination" has to include it.
+  --
+  -- This is an explicit reading of V8-R-CMP-016 and it is written down so it
+  -- can be overruled rather than discovered. Retiring only the spine rows left
+  -- any story that names these bytes still live: the photo went on being shown,
+  -- its audience and tag rows went on being queryable against V8-R-STO-016, the
+  -- reference count could never reach zero because the story still counts, and
+  -- the verb returned "one reference remaining" forever. That is not a partial
+  -- delete honestly reported — it is a delete that cannot complete.
+  --
+  -- Author-scoped by construction: v_media was already checked to be owned by
+  -- auth.uid(), and only that same account's stories are touched. Soft delete,
+  -- like delete_story, so the read gate closes instantly.
+  update public.stories s
+     set deleted_at = now()
+    from public.media_objects m
+   where m.id = v_media
+     and s.author_id = auth.uid()
+     and s.deleted_at is null
+     and (s.media_path = m.storage_path or s.inset_path = m.storage_path);
 
   return query
     select m.bucket_id,
@@ -422,8 +456,26 @@ drop policy if exists "story-media: audience reads referenced" on storage.object
 -- resolve at call time. A `language sql` body here would be validated eagerly
 -- and would fail on the forward reference, so the language choice is load
 -- bearing rather than incidental.
-create or replace function public.can_read_media_path(p_name text)
-returns boolean
+-- ONE function answers BOTH questions, because they have the same answer.
+--
+-- Splitting "may this caller read it?" from "how long is it readable?" is what
+-- let a URL outlive the permission it was granted under. The route used to
+-- compute the window from every LIVE DESTINATION the service role could see —
+-- a set the caller may have no access to — so a viewer authorised through a
+-- story expiring in two minutes could be handed a lifetime borrowed from a
+-- destination they cannot read at all. The window has to be the window of the
+-- references that ACTUALLY authorise this caller, so it is computed from
+-- exactly the rows that decided `readable`.
+--
+-- Reading it from `public.stories` rather than from `media_destinations` is
+-- also what makes the route work at all. `publish_story` does not write to the
+-- spine, and upload-before-publish cannot name a story that does not exist
+-- yet, so for normally published and for legacy media the spine is EMPTY. A
+-- window derived from spine rows alone reports "no live destination" and the
+-- route 404s every real story photo in the product. Stories carry their own
+-- expiry, and they are where the dropped 0065 SELECT policies read it from.
+create or replace function public.media_read_window(p_name text)
+returns table (readable boolean, expires_at timestamptz)
 language plpgsql
 stable
 security definer
@@ -431,43 +483,59 @@ set search_path = public
 as $$
 declare
   v_caller uuid := auth.uid();
+  v_expiry timestamptz;
 begin
   if v_caller is null or p_name is null then
-    return false;
+    return query select false, null::timestamptz;
+    return;
   end if;
 
-  -- The owner, on their own prefix — but not for an object whose every
-  -- referencing story is already dead or expired. That is 0065's rule that an
-  -- author cannot sign their own expired media, kept rather than quietly
-  -- relaxed, and it is also what keeps the upload-before-publish window
-  -- readable (an object no story references at all is not "dead").
+  -- THE OWNER, on their own prefix. `story_media_is_dead` is 0065's rule that
+  -- an author cannot sign their own expired or deleted media, kept rather than
+  -- quietly relaxed. It is also what keeps the upload-before-publish window
+  -- open: an object no story references at all is not "dead", and its window is
+  -- unbounded, so only the signed-URL ceiling applies.
   if (storage.foldername(p_name))[1] = v_caller::text then
-    return not public.story_media_is_dead(p_name);
-  end if;
-
-  -- A viewer, only through a story they can actually read. Same predicate the
-  -- dropped audience policy carried, plus the block.
-  return exists (
-    select 1
+    if public.story_media_is_dead(p_name) then
+      return query select false, null::timestamptz;
+      return;
+    end if;
+    select max(s.expires_at) into v_expiry
       from public.stories s
      where (s.media_path = p_name or s.inset_path = p_name)
        and s.deleted_at is null
-       and s.expires_at > now()
-       and public.is_mutual_friend(v_caller, s.author_id)
-       and not public.is_blocked_between(v_caller, s.author_id)
-       and (
-         s.audience = 'friends'
-         or public.is_story_recipient(s.id, v_caller)
-       )
-  );
+       and s.expires_at > now();
+    return query select true, v_expiry;
+    return;
+  end if;
+
+  -- A VIEWER, only through a story they can actually read. This is the
+  -- predicate the dropped "story-media: audience reads referenced" policy
+  -- carried. The block is inherited from is_mutual_friend rather than restated
+  -- here, so this site cannot drift from the other four that ask it.
+  select max(s.expires_at) into v_expiry
+    from public.stories s
+   where (s.media_path = p_name or s.inset_path = p_name)
+     and s.deleted_at is null
+     and s.expires_at > now()
+     and public.is_mutual_friend(v_caller, s.author_id)
+     and (
+       s.audience = 'friends'
+       or public.is_story_recipient(s.id, v_caller)
+     );
+
+  -- No readable story means no window and no read. Note the difference from the
+  -- owner branch: a null expiry here is "nothing authorises you", not
+  -- "unbounded".
+  return query select v_expiry is not null, v_expiry;
 end;
 $$;
 
-comment on function public.can_read_media_path(text) is
-  'V8-R-STO-015 / V8-R-FEED-009. May the CALLER read this object? The url route asks this before minting with service role, so authorization stays in the database while the lifetime is decided by the server.';
+comment on function public.media_read_window(text) is
+  'V8-R-STO-015 / V8-R-FEED-009. May the CALLER read this object, and until when? The url route asks this before minting with service role, so authorization stays in the database and the lifetime is the caller''s own rather than the longest one anybody holds.';
 
-revoke all on function public.can_read_media_path(text) from public, anon;
-grant execute on function public.can_read_media_path(text) to authenticated;
+revoke all on function public.media_read_window(text) from public, anon;
+grant execute on function public.media_read_window(text) to authenticated;
 
 ------------------------------------------------------------------------------
 -- 6. Deletion clears metadata too (V8-R-STO-016)
@@ -617,26 +685,99 @@ comment on table public.profile_blocks is
 -- row is readable only by its owner (policy below), so a non-definer check
 -- would return false for the blocked party and re-open the direction that
 -- matters most.
+-- THE PARTY GUARD IS NOT OPTIONAL, for exactly the reason 0065 gives for
+-- is_mutual_friend. SECURITY DEFINER is what lets this function see a row the
+-- policy below hides, so without a caller check it is a pairwise ORACLE over
+-- private block data: any authenticated account could ask "has either of these
+-- two blocked the other?" about ANY two ids and learn something the migration
+-- states only the blocker may read. Every legitimate call site passes the
+-- caller as one of the two arguments, so the guard changes no behaviour this
+-- schema depends on.
+--
+-- A NULL caller is trusted infrastructure — migrations, the service role, a
+-- server-side job — and is allowed through, the same carve-out 0065 makes.
 create or replace function public.is_blocked_between(a uuid, b uuid)
 returns boolean
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
-  select exists (
+declare
+  v_caller uuid := auth.uid();
+begin
+  if v_caller is not null and v_caller <> a and v_caller <> b then
+    raise exception 'is_blocked_between: a caller may only ask about itself'
+      using errcode = '42501';
+  end if;
+  return exists (
     select 1
       from public.profile_blocks pb
      where (pb.blocker_id = a and pb.blocked_id = b)
         or (pb.blocker_id = b and pb.blocked_id = a)
   );
+end;
 $$;
 
 comment on function public.is_blocked_between(uuid, uuid) is
-  'V8-R-FEED-009. True when EITHER user has blocked the other.';
+  'V8-R-FEED-009. True when EITHER user has blocked the other. Refuses any caller that is not one of the two parties, so it cannot be used as an oracle over block data.';
 
 revoke all on function public.is_blocked_between(uuid, uuid) from public, anon;
 grant execute on function public.is_blocked_between(uuid, uuid) to authenticated;
+
+-- ENFORCEMENT GOES IN THE SHARED PREDICATE, NOT AT EACH CALL SITE.
+--
+-- V8-R-FEED-009 is "visibility and interaction stop BETWEEN the two users",
+-- and blocking deletes no `follows` edge — `blockProfile` only inserts a
+-- profile_blocks row. So a blocked pair stays mutually following, and every
+-- rule 0065 keyed on mutuality kept passing: the stories SELECT policy still
+-- returned the blocker's live story metadata and caption to the blocked user,
+-- and publish_story still let either of them name the other in a custom
+-- audience or, worse, TAG them — a write onto the blocked person's own consent
+-- surface.
+--
+-- Adding `not is_blocked_between(...)` at each of those sites would be four
+-- edits today and a fifth one forgotten tomorrow. `is_mutual_friend` is the one
+-- predicate all of them already ask, so the block belongs inside it: a blocked
+-- pair are not, for any product purpose, mutual friends. Every existing call
+-- site (both story RLS policies, publish_story's audience check and its tag
+-- check) inherits the rule, and so does every call site added later.
+--
+-- The body is otherwise 0065's, verbatim, including the party guard.
+create or replace function public.is_mutual_friend(a uuid, b uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+begin
+  if v_caller is not null and v_caller <> a and v_caller <> b then
+    raise exception 'is_mutual_friend: a caller may only ask about itself'
+      using errcode = '42501';
+  end if;
+  return a is not null
+     and b is not null
+     and a <> b
+     and not public.is_blocked_between(a, b)
+     and exists (
+       select 1 from public.follows f
+        where f.follower_id = a and f.followee_id = b
+     )
+     and exists (
+       select 1 from public.follows f
+        where f.follower_id = b and f.followee_id = a
+     );
+end;
+$$;
+
+comment on function public.is_mutual_friend(uuid, uuid) is
+  'Accepted mutual friendship: follows edges in BOTH directions AND no block in either direction (V8-R-FEED-009, added by 0066). A one-way follow is not a friend and a blocked pair is not either. Refuses any caller that is not one of the two parties.';
+
+revoke all on function public.is_mutual_friend(uuid, uuid) from public, anon;
+grant execute on function public.is_mutual_friend(uuid, uuid) to authenticated;
 
 ------------------------------------------------------------------------------
 -- 9. Reporting (V8-R-FEED-010)
@@ -709,15 +850,21 @@ begin
       using errcode = '22001';
   end if;
 
-  -- FIRST REASON WINS. V8-R-FEED-010 makes the record server-owned and says the
-  -- reporter cannot edit or withdraw it; `set reason = excluded.reason` handed
-  -- the edit straight back, so re-reporting could rewrite what the operator
-  -- reads. Re-reporting stays idempotent — it returns the same id — but it only
-  -- FILLS a reason that was never given, it never replaces one.
+  -- THE FIRST REPORT IS THE REPORT. V8-R-FEED-010 makes the record
+  -- server-owned and says the reporter cannot edit or withdraw it, so a repeat
+  -- report changes NOTHING about the stored row — not even a reason that was
+  -- left null the first time. Filling a null still let the reporter choose,
+  -- after the fact, what the operator reads.
+  --
+  -- `do update set reason = <itself>` rather than `do nothing`: the write is a
+  -- no-op either way, but DO NOTHING returns no row, `v_id` would come back
+  -- null, and the caller treats a null id as a FAILED report and refuses to
+  -- hide the content. Re-reporting has to stay idempotent all the way out to
+  -- the UI.
   insert into public.content_reports (reporter_id, subject_kind, subject_ref, reason)
   values (auth.uid(), p_subject_kind, btrim(p_subject_ref), p_reason)
   on conflict (reporter_id, subject_kind, subject_ref) do update
-     set reason = coalesce(public.content_reports.reason, excluded.reason)
+     set reason = public.content_reports.reason
   returning id into v_id;
 
   return v_id;
