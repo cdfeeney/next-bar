@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { mediaFailure, mediaUnavailable, type MediaResult } from '@/lib/media/types';
+import { getNightOut } from '@/lib/nightOuts.server';
 
 /**
  * Server-mode Feed (migration 0069). Pure async functions — the React layer
@@ -343,10 +344,25 @@ export async function fetchFeedAuthors(
  * Share tokens for the nights these posts belong to — V8-R-FEED-004's server
  * authorization, performed by READING as the caller.
  *
- * `night_outs` RLS returns only the nights this viewer is owner of or a member
- * of (0044), so a night id that comes back with no token is one the viewer may
- * not open, and the card simply renders no "View night". The rule is not
- * restated here; it is exercised.
+ * THROUGH THE SCOPED RPC, NEVER THE TABLE. This read used to be
+ * `.from('night_outs').select('id, share_token')`, justified by "night_outs RLS returns
+ * only the nights this viewer is owner of or a member of (0044) ... the rule is not
+ * restated here; it is exercised."
+ *
+ * The rule was never exercised. 0047 deliberately revoked `share_token` from
+ * `authenticated` — a share token is a CAPABILITY, and a table grant would hand every
+ * user every token — so the query was denied at the PERMISSION layer, which runs BEFORE
+ * any policy. RLS was not consulted, the select failed 42501 for every caller, and
+ * "View night" (V8-R-FEED-004) never rendered for anyone. The `catch` swallowed it.
+ *
+ * `get_night_out` is the member-scoped accessor that already exists for this: it returns
+ * `share_token` only to a caller whose invite_status entitles them to it, and NULL to
+ * everyone else. Reusing it keeps the entitlement rule in ONE place instead of restating
+ * it in a second, weaker form here.
+ *
+ * ponytail: one RPC per distinct night on a page, bounded by the feed's own `limit`.
+ * Add a member-scoped bulk RPC if a page ever carries enough distinct nights to matter;
+ * a new grant surface is not the answer either way.
  */
 async function fetchNightTokens(
   client: SupabaseClient,
@@ -355,17 +371,14 @@ async function fetchNightTokens(
   const byId = new Map<string, string>();
   const ids = [...new Set(nightIds.filter((id): id is string => id !== null))];
   if (ids.length === 0) return byId;
-  try {
-    const { data, error } = await client
-      .from('night_outs')
-      .select('id, share_token')
-      .in('id', ids);
-    if (error) return byId;
-    for (const row of (data ?? []) as { id: string; share_token: string }[]) {
-      byId.set(row.id, row.share_token);
-    }
-  } catch {
-    return byId;
+  const settled = await Promise.all(ids.map(async (id) => {
+    const night = await getNightOut(client, id);
+    return [id, night?.shareToken ?? null] as const;
+  }));
+  for (const [id, token] of settled) {
+    // A null token is "this viewer may not open it" — the card renders no "View night",
+    // which is the same outcome the original comment described and never achieved.
+    if (token !== null) byId.set(id, token);
   }
   return byId;
 }
