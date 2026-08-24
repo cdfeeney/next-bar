@@ -131,10 +131,28 @@ describe('0066 — V8-R-CMP-012 bytes outlive nothing but their last reference',
       'update public.stories s set deleted_at = now() from public.media_objects m'
       + ' where m.id = v_media and s.author_id = auth.uid()',
     );
-    expect(FLAT).toContain(
-      'update public.stories s set deleted_at = now() from public.media_destinations d'
-      + " where d.id = p_destination_id and d.kind = 'story'",
-    );
+    // The FROM list gained `media_objects` so the close is also PATH-matched:
+    // a destination row whose ref_id names a story that does not actually carry
+    // this object's bytes no longer closes that story. Asserted piecewise
+    // rather than as one long literal, so the next legitimate predicate does
+    // not read as a missing statement.
+    const closeByDestination = FLAT.slice(
+      FLAT.indexOf(
+        'update public.stories s set deleted_at = now() from public.media_destinations d',
+      ),
+    ).split(';')[0];
+    expect(closeByDestination).not.toBe('');
+    for (const predicate of [
+      'public.media_objects m',
+      'd.id = p_destination_id',
+      "d.kind = 'story'",
+      's.id::text = d.ref_id',
+      's.author_id = auth.uid()',
+      's.deleted_at is null',
+      '(s.media_path = m.storage_path or s.inset_path = m.storage_path)',
+    ]) {
+      expect(closeByDestination, `destination close lost ${predicate}`).toContain(predicate);
+    }
   });
 
   // publish_story predates this spine and still does not write to it, so for
@@ -153,34 +171,47 @@ describe('0066 — V8-R-CMP-012 bytes outlive nothing but their last reference',
   });
 });
 
-describe('0066 — V8-R-STO-014/015 the client cannot reach the bucket directly', () => {
-  // While 0065's INSERT policy stood, a modified client uploaded EXIF-bearing
-  // bytes straight into its own prefix and published them; the server re-encode
-  // was optional, and an optional strip is not a trust boundary.
-  it('revokes the authenticated write grant on story-media', () => {
-    expect(FLAT).toContain(
-      'drop policy if exists "story-media: owner writes own prefix" on storage.objects',
-    );
-    expect(FLAT).not.toMatch(
-      /create policy "story-media: owner writes own prefix"/i,
-    );
+describe('0066 — this lane PROVIDES the boundary and must stay additive', () => {
+  // EC-01 (2026-08-24) restored V8-R-STO-014/015/016 to WP2 (goal g-f1e128da),
+  // matching the founder-approved 3.1.0 ledger. Withdrawing the legacy grants
+  // belongs to WP2's 0071, after the src/lib/stories.server.ts consumer moves.
+  // These three assertions are the regression guard for the defect both
+  // reviewers reported in every round: 0066 dropped the policies that every
+  // production caller still depends on, in a lane forbidden to fix the caller.
+  const LEGACY = [
+    'story-media: owner writes own prefix',
+    'story-media: owner reads own prefix',
+    'story-media: audience reads referenced',
+  ] as const;
+
+  it.each(LEGACY)('does not drop the legacy policy %s', (name) => {
+    expect(
+      FLAT,
+      `0066 must be additive: dropping "${name}" breaks the production story `
+        + 'client, whose file this lane may not edit. The drop belongs in WP2 0071.',
+    ).not.toContain(`drop policy if exists "${name}" on storage.objects`);
   });
 
-  // While SELECT stood, any authorised viewer called createSignedUrl(path,
-  // 86400) for themselves and the route's server-decided TTL was a suggestion.
-  it('revokes both authenticated read grants on story-media', () => {
-    expect(FLAT).toContain(
-      'drop policy if exists "story-media: owner reads own prefix" on storage.objects',
-    );
-    expect(FLAT).toContain(
-      'drop policy if exists "story-media: audience reads referenced" on storage.objects',
-    );
-    expect(FLAT).not.toMatch(/create policy "story-media: owner reads own prefix"/i);
-    expect(FLAT).not.toMatch(/create policy "story-media: audience reads referenced"/i);
+  // Nor does it recreate them: 0066 leaves the legacy grants entirely alone.
+  // Untouched is the additive position; re-issuing them would be this lane
+  // writing policy it does not own.
+  it.each(LEGACY)('does not recreate the legacy policy %s either', (name) => {
+    expect(FLAT).not.toMatch(new RegExp(`create policy "${name}"`, 'i'));
   });
 
-  // The read decision the dropped policies made has to survive somewhere, or
-  // the route mints with service role for anyone who reaches it.
+  // The one story-media policy this lane DOES replace. Drop-and-recreate is a
+  // replacement, not a premature drop, so it stays — and it is why the WP2
+  // deletion finding is real today.
+  it('still replaces the owner delete policy in place', () => {
+    expect(FLAT).toContain(
+      'drop policy if exists "story-media: owner deletes own prefix" on storage.objects',
+    );
+    expect(FLAT).toMatch(/create policy "story-media: owner deletes own prefix"/i);
+  });
+
+  // The read decision must ALSO exist server-side, or the url route mints with
+  // service role for anyone who reaches it. It stands beside the legacy grants
+  // rather than replacing them until WP2's 0071 withdraws those.
   it('moves the read decision into a definer function the route must ask', () => {
     expect(FLAT).toMatch(
       /create or replace function public\.media_read_window\(p_name text\).*?security definer/i,
@@ -673,9 +704,16 @@ describe('0066 — V8-R-FEED-010 a report names something the reporter can see',
   // reach the content could otherwise fabricate one about a story they were
   // never shown.
   it('refuses a story the reporter cannot actually see', () => {
+    // The kind check is now its own earlier statement, so an unresolvable kind
+    // is rejected outright instead of falling through a combined condition.
+    // That is stricter, and the visibility check below is now unconditional.
+    expect(FLAT).toContain("if p_subject_kind <> 'story' then raise exception");
     expect(FLAT).toContain(
-      "if p_subject_kind = 'story' and not exists ( select 1 from public.stories s",
+      'if not exists ( select 1 from public.stories s'
+      + ' where s.id = btrim(p_subject_ref)::uuid',
     );
+    // A retained uuid for gone content is not a story the reporter can see.
+    expect(FLAT).toContain('s.deleted_at is null and s.expires_at > now()');
     expect(FLAT).toContain(
       "raise exception 'report_content: that story is not yours to report'",
     );

@@ -19,15 +19,21 @@ import { mintSignedMediaUrl } from '@/lib/media/signedUrl';
  * one would reintroduce the defect.
  *
  * AUTHORIZATION STAYS WITH THE DATABASE — but it can no longer be a side effect
- * of who signs. 0066 revokes the authenticated SELECT grant on the bucket,
- * because while it stood any viewer could call `createSignedUrl(path, 86400)`
- * themselves and this route's server-decided lifetime was a suggestion. With the
- * grant gone the caller's own client cannot mint at all, so the mint moves to
- * service role and the read decision is asked EXPLICITLY, first, through
- * `media_read_window` — a definer function that still evaluates as the caller
- * and carries the same audience, expiry and block rules the dropped policies
- * did. Signing with service role WITHOUT that call would hand a URL to anyone
- * who reached the route; the two halves are one change.
+ * of who signs. While the authenticated SELECT grant on the bucket stands, any
+ * viewer can call `createSignedUrl(path, 86400)` themselves and this route's
+ * server-decided lifetime is a suggestion. This route is the replacement path:
+ * the mint moves to service role and the read decision is asked EXPLICITLY,
+ * first, through `media_read_window` — a definer function that still evaluates
+ * as the caller and carries the same audience, expiry and block rules the legacy
+ * policies do. Signing with service role WITHOUT that call would hand a URL to
+ * anyone who reached the route; the two halves are one change.
+ *
+ * THE GRANT IS STILL STANDING, DELIBERATELY. Per EC-01 (2026-08-24) this lane
+ * PROVIDES the boundary; it does not withdraw the legacy grants, because every
+ * production caller still reaches Storage directly through
+ * `src/lib/stories.server.ts` — WP2's file. WP2 moves those call sites onto this
+ * route and then withdraws the grants in migration 0071. Until then this route
+ * is the safe path, not the only path, and V8-R-STO-015 is not yet satisfied.
  *
  * ONE CALL ANSWERS BOTH QUESTIONS, and that is deliberate. This route used to
  * decide "may you read it?" and "for how long?" from different sources: the

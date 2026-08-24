@@ -736,13 +736,13 @@ grant execute on function public.claim_orphan_paths(integer) to authenticated;
 drop function if exists public.unreferenced_orphan_paths(integer);
 
 ------------------------------------------------------------------------------
--- 5b. THE BOUNDARY ITSELF: no client reaches these bytes directly
+-- 5b. THE BOUNDARY ITSELF: one writer, one reader, PROVIDED here — the legacy
+--     grants are withdrawn by WP2's 0071, not by this file
 ------------------------------------------------------------------------------
 
 -- 0065 let an authenticated client write to and read from `story-media` on its
--- own account, and that is the hole this whole work package exists to close.
--- Two requirements are unsatisfiable while those policies stand, and no amount
--- of server code closes them from the other side:
+-- own account. Two requirements are unsatisfiable while those policies stand,
+-- and no amount of server code closes them from the other side:
 --
 --   V8-R-STO-014 — "SERVER. A client-side strip is bypassable by definition."
 --     While `story-media: owner writes own prefix` grants INSERT, a modified
@@ -757,21 +757,29 @@ drop function if exists public.unreferenced_orphan_paths(integer);
 --     `createSignedUrl(path, 86400)` for themselves. A route that computes a
 --     300-second TTL is a suggestion when the client can mint its own.
 --
--- So both grants go. The service role bypasses RLS, which leaves exactly one
--- writer (the upload route, which decodes and re-encodes) and exactly one
--- reader (the url route, which decides the TTL) — the chokepoints both
--- requirements describe.
+-- BOTH REQUIREMENTS BELONG TO WP2, NOT TO THIS LANE. Execution-contract
+-- reconciliation EC-01 (2026-08-24) restored V8-R-STO-014, V8-R-STO-015 and
+-- V8-R-STO-016 to goal g-f1e128da, matching the founder-approved 3.1.0 ledger,
+-- which has always named `src/lib/stories.server.ts` as their implementation
+-- path. This file is the PROVIDER of the boundary they are satisfied through.
+-- It is not the place the legacy grants die.
 --
--- CONSEQUENCE, STATED RATHER THAN DISCOVERED — AND THIS FILE MUST NOT BE
--- APPLIED BEFORE THE CLIENT MOVES.
+-- SO THIS FILE IS ADDITIVE AND SAFE TO APPLY ON ITS OWN.
 --
--- Dropping these three policies breaks every caller that still talks to Storage
--- directly, and in this repository that is `src/lib/stories.server.ts` plus the
--- capture/story components — ALL OUTSIDE this lane's exclusive write scope, so
--- they are reported here and not edited. Applying 0066 on its own leaves the
--- product with failing uploads and unsignable story photos. The three edits that
--- must land in the SAME deployment, named exactly so integration is a checklist
--- and not an investigation:
+-- An earlier revision dropped `story-media: owner writes own prefix`,
+-- `story-media: owner reads own prefix` and `story-media: audience reads
+-- referenced` right here. That was a PREMATURE DROP: every production caller
+-- still reaches Storage directly through `src/lib/stories.server.ts`, a file
+-- outside this lane's exclusive write scope, so applying 0066 on its own left
+-- the product with failing uploads and unsignable story photos. Both reviewers
+-- reported it in every round, and this lane could never fix it, because the fix
+-- is in someone else's file.
+--
+-- The drops now live in WP2's reserved migration
+-- `supabase/migrations/0071_story_media_legacy_policy_removal.sql`, which runs
+-- ONLY AFTER the consumer transition exists. The three edits WP2 must land
+-- before 0071, named exactly so integration is a checklist and not an
+-- investigation:
 --
 --   1. `uploadStoryMedia` (stories.server.ts) — POST the bytes to
 --      /api/media/upload instead of `storage.from('story-media').upload(...)`.
@@ -783,20 +791,19 @@ drop function if exists public.unreferenced_orphan_paths(integer);
 --   3. `deleteStory` (stories.server.ts) — call `delete_story` FIRST and remove
 --      the bytes afterwards, or better, let /api/media handle the removal. Its
 --      current order (remove, then RPC) removes while the reference is still
---      live, and 0066's DELETE policy correctly refuses that. Storage reports a
---      refusal by OMITTING the object from the returned list with `error` null,
---      and `removeBytes` there inspects only `error`, so the refusal reads as
---      success and the bytes are orphaned.
+--      live, and this file's replacement DELETE policy correctly refuses that.
+--      Storage reports a refusal by OMITTING the object from the returned list
+--      with `error` null, and `removeBytes` there inspects only `error`, so the
+--      refusal reads as success and the bytes are orphaned.
 --
--- Item 3 orphans bytes rather than destroying them, and section 5a's sweep is
--- what stops that being permanent: a soft-deleted story stops counting, the
--- object has no unclaimed registry row, and `unreferenced_orphan_paths` hands it
--- to the reclaim route. The orphan is bounded by the sweep interval instead of
--- being forever. That is a mitigation, not a fix — the fix is item 3, and it is
--- outside this lane.
-drop policy if exists "story-media: owner writes own prefix" on storage.objects;
-drop policy if exists "story-media: owner reads own prefix" on storage.objects;
-drop policy if exists "story-media: audience reads referenced" on storage.objects;
+-- Item 3 is a WP2 obligation and it is REAL TODAY, independently of the drops:
+-- the replacement of `story-media: owner deletes own prefix` above IS a
+-- drop-and-recreate, and its stricter body already refuses a delete while a
+-- reference is live. Section 5a's claim bounds the damage rather than fixing it
+-- — a soft-deleted story stops counting, the object has no unclaimed registry
+-- row, and `claim_orphan_paths` hands it to the reclaim route, so the orphan is
+-- bounded by the sweep interval instead of being forever. That is a mitigation,
+-- not a fix. The fix is item 3, in WP2.
 
 -- The read decision those two SELECT policies used to make, moved into one
 -- function the url route asks BEFORE it mints anything with service role.

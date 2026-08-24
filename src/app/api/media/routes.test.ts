@@ -322,7 +322,13 @@ describe('DELETE /api/media/:mediaId', () => {
     const body = await response.json();
     expect(body.bytesReclaimed).toBe(false);
     expect(body.orphanedPaths).toEqual(['owner-1/m1']);
-    expect(caller.rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1' });
+    // THE RELEASE IS THE ADMIN'S, and asserting it on the caller was asserting a
+    // call production would refuse: 0066 revokes release_media_claim from
+    // `authenticated` as well as public/anon, because an owner able to un-stamp
+    // an object mid-removal could publish a story into the gap and lose its
+    // photo to a delete already in flight.
+    expect(admin.client.rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1' });
+    expect(caller.rpc).not.toHaveBeenCalledWith('release_media_claim', expect.anything());
   });
 
   it('claims nothing when the removal left the bytes referenced', async () => {
