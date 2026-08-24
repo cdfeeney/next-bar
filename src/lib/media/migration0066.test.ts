@@ -288,7 +288,21 @@ describe('0066 — round-5 fixes', () => {
     // story naming the path with no liveness condition, so one self-report on a
     // long-expired story permanently hid the bytes of a different, live, unreported
     // story reusing the same object. Both review families reported it.
-    expect(fn).toContain('public.media_path_unreported_live_expiry(p_name, auth.uid()) is null');
+    // NO VIEWER PARAMETER. The helper took an arbitrary p_viewer and was SECURITY
+    // DEFINER with no revoke, making it a PostgREST oracle over OTHER users' report
+    // activity. Both call sites only ever passed auth.uid(), so the parameter was
+    // deleted rather than guarded — a function that cannot be asked about anyone else
+    // cannot leak anyone else.
+    expect(fn).toContain('public.media_path_unreported_live_expiry(p_name) is null');
+    expect(FLAT).not.toContain('media_path_unreported_live_expiry(p_name, ');
+    expect(FLAT).toContain(
+      'revoke all on function public.media_path_unreported_live_expiry(text)'
+      + ' from public, anon, authenticated;',
+    );
+    expect(FLAT).toContain(
+      'revoke all on function public.media_claim_is_live(timestamptz)'
+      + ' from public, anon, authenticated;',
+    );
     expect(fn).not.toContain('join public.content_reports cr');
     // The hide is still keyed to a report by THIS caller — the matching just lives in
     // the shared helper now, so media_read_window and story_media_is_dead cannot
@@ -297,7 +311,7 @@ describe('0066 — round-5 fixes', () => {
       FLAT.indexOf('create or replace function public.media_path_unreported_live_expiry'),
     );
     const helperBody = helper.slice(0, helper.indexOf('$$;'));
-    expect(helperBody).toContain('cr.reporter_id = p_viewer');
+    expect(helperBody).toContain('cr.reporter_id = auth.uid()');
     expect(helperBody).toContain("cr.subject_kind = 'story'");
     // ...and it only ever considers stories that are actually live.
     expect(helperBody).toContain('s.deleted_at is null and s.expires_at > now()');
@@ -693,11 +707,17 @@ describe('0066 — reclamation is a claim, not a check-then-delete', () => {
     // inlined here and inlined AGAIN, differently, in claim_orphan_paths — which is
     // how the orphan sweep ended up with no re-check under its lock at all. Both
     // claimers now call take_media_claim, so the rule has a single definition.
-    expect(FLAT).toContain('if public.take_media_claim(r.id) then');
+    // The claim's STAMP comes back, because a caller that cannot name the claim it
+    // holds cannot give it back safely — see release_media_claim's compare-and-swap.
+    expect(FLAT).toContain('v_claimed_at := public.take_media_claim(r.id);');
+    expect(FLAT).toContain('if v_claimed_at is not null then');
+    // The stamp is written and RETURNED in one statement: the value handed back is
+    // the claim's identity, which release_media_claim compares against.
     expect(FLAT).toContain(
       'update public.media_objects m set bytes_removed_at = now()'
       + ' where m.id = p_media_id'
-      + ' and not public.media_claim_is_live(m.bytes_removed_at);',
+      + ' and not public.media_claim_is_live(m.bytes_removed_at)'
+      + ' returning m.bytes_removed_at into v_claimed_at;',
     );
   });
 
@@ -728,7 +748,8 @@ describe('0066 — reclamation is a claim, not a check-then-delete', () => {
   it('hands the claim back when the removal did not happen', () => {
     expect(FLAT).toContain(
       'update public.media_objects m set bytes_removed_at = null'
-      + ' where m.id = p_media_id and m.bytes_removed_at is not null',
+      + ' where m.id = p_media_id and m.bytes_removed_at is not null'
+      + ' and m.bytes_removed_at = p_claimed_at',
     );
   });
 });
@@ -799,7 +820,7 @@ describe('0066 — zero-reference bytes have a reclamation PATH, not just eligib
     // claim_orphan_paths calls both returned the same storage path.
     expect(FLAT).toContain(
       'if public.media_live_reference_count(v_id) = 0 then'
-      + ' if public.take_media_claim(v_id) then',
+      + ' v_claimed_at := public.take_media_claim(v_id);',
     );
   });
 
@@ -818,11 +839,11 @@ describe('0066 — zero-reference bytes have a reclamation PATH, not just eligib
   // delete already issued.
   it('grants release_media_claim to no application role', () => {
     expect(FLAT).toContain(
-      'revoke all on function public.release_media_claim(uuid)'
+      'revoke all on function public.release_media_claim(uuid, timestamptz)'
       + ' from public, anon, authenticated',
     );
     expect(FLAT).not.toContain(
-      'grant execute on function public.release_media_claim(uuid) to authenticated',
+      'grant execute on function public.release_media_claim(uuid, timestamptz) to authenticated',
     );
   });
 

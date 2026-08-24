@@ -228,6 +228,9 @@ describe('DELETE /api/media/:mediaId', () => {
             media_id: row.media_id ?? args?.p_media_id,
             bucket_id: 'story-media',
             storage_path: row.storage_path,
+            // The database always returns the claim's stamp; without it the claim is
+            // unreleasable and every release assertion here would silently pass.
+            claimed_at: row.claimed_at ?? CLAIM_STAMP,
           }],
           error: null,
         };
@@ -246,11 +249,15 @@ describe('DELETE /api/media/:mediaId', () => {
     error: null,
   });
 
+  // `claimed_at` is the claim's identity and the release quotes it back, so a fixture
+  // without it yields a claim that cannot be released at all.
+  const CLAIM_STAMP = '2026-08-24T18:00:00.000Z';
   const removal = (mediaId: string, path: string) => [{
     media_id: mediaId,
     bucket_id: 'story-media',
     storage_path: path,
     reclaimable: true,
+    claimed_at: CLAIM_STAMP,
   }];
 
   // THE REGRESSION THIS FILE EXISTS FOR. `:mediaId` is an unvalidated path
@@ -350,7 +357,7 @@ describe('DELETE /api/media/:mediaId', () => {
     // `authenticated` as well as public/anon, because an owner able to un-stamp
     // an object mid-removal could publish a story into the gap and lose its
     // photo to a delete already in flight.
-    expect(admin.client.rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1' });
+    expect(admin.client.rpc).toHaveBeenCalledWith('release_media_claim', expect.objectContaining({ p_media_id: 'm1' }));
     expect(caller.rpc).not.toHaveBeenCalledWith('release_media_claim', expect.anything());
   });
 

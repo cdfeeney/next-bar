@@ -261,8 +261,8 @@ describe('claimMediaForRemoval — the atomic claim', () => {
     });
 
     await expect(claimMediaForRemoval(client, null)).resolves.toEqual([
-      { mediaId: 'm1', storagePath: 'u1/a.jpg' },
-      { mediaId: 'm2', storagePath: 'u1/b.jpg' },
+      { mediaId: 'm1', storagePath: 'u1/a.jpg', claimedAt: null },
+      { mediaId: 'm2', storagePath: 'u1/b.jpg', claimedAt: null },
     ]);
   });
 
@@ -303,7 +303,7 @@ describe('claimMediaForRemoval — the atomic claim', () => {
       error: null,
     });
     await expect(claimMediaForRemoval(client, null)).resolves.toEqual([
-      { mediaId: 'm2', storagePath: 'u1/b.jpg' },
+      { mediaId: 'm2', storagePath: 'u1/b.jpg', claimedAt: null },
     ]);
   });
 
@@ -314,7 +314,7 @@ describe('claimMediaForRemoval — the atomic claim', () => {
 
 describe('releaseMediaClaim — handing a claim back', () => {
   it('reports success when the release lands', async () => {
-    await expect(releaseMediaClaim(rpcClient({ data: true, error: null }), 'm1'))
+    await expect(releaseMediaClaim(rpcClient({ data: true, error: null }), 'm1', '2026-08-24T18:00:00.000Z'))
       .resolves.toBe(true);
   });
 
@@ -322,12 +322,33 @@ describe('releaseMediaClaim — handing a claim back', () => {
   // still there. The caller logs it; what it must never do is report success.
   it('reports failure when the release errors', async () => {
     await expect(
-      releaseMediaClaim(rpcClient({ data: null, error: { message: 'down' } }), 'm1'),
+      releaseMediaClaim(rpcClient({ data: null, error: { message: 'down' } }), 'm1', '2026-08-24T18:00:00.000Z'),
     ).resolves.toBe(false);
   });
 
   it('reports failure with no client at all', async () => {
-    await expect(releaseMediaClaim(null, 'm1')).resolves.toBe(false);
+    await expect(releaseMediaClaim(null, 'm1', '2026-08-24T18:00:00.000Z')).resolves.toBe(false);
+  });
+
+  // THE CLAIM'S IDENTITY IS QUOTED BACK. Releasing by media id alone let a worker
+  // whose claim had already been taken over clear the NEWER worker's live claim, and
+  // publish_story would then attach a story to bytes a delete was already in flight
+  // against. The stamp goes to the database so the release matches only our own claim.
+  it('sends the claim stamp so only our own claim can be released', async () => {
+    const client = rpcClient({ data: true, error: null });
+    await releaseMediaClaim(client, 'm1', '2026-08-24T18:00:00.000Z');
+    expect(client.rpc).toHaveBeenCalledWith('release_media_claim', {
+      p_media_id: 'm1',
+      p_claimed_at: '2026-08-24T18:00:00.000Z',
+    });
+  });
+
+  // Without a stamp we cannot prove the claim on that row is still ours, so we do not
+  // touch it. The stamp stands until it goes stale and the sweep re-adopts it.
+  it('refuses to release at all when it has no claim stamp', async () => {
+    const client = rpcClient({ data: true, error: null });
+    await expect(releaseMediaClaim(client, 'm1', null)).resolves.toBe(false);
+    expect(client.rpc).not.toHaveBeenCalled();
   });
 });
 
@@ -346,8 +367,8 @@ describe('claimOrphanPaths — bytes the registry never saw', () => {
       error: null,
     });
     await expect(claimOrphanPaths(client)).resolves.toEqual([
-      { mediaId: 'm1', storagePath: 'u1/old.jpg' },
-      { mediaId: 'm2', storagePath: 'u1/older.jpg' },
+      { mediaId: 'm1', storagePath: 'u1/old.jpg', claimedAt: null },
+      { mediaId: 'm2', storagePath: 'u1/older.jpg', claimedAt: null },
     ]);
   });
 

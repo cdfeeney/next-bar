@@ -102,18 +102,31 @@ export async function removeDestination(
 export type MediaClaim = {
   mediaId: string;
   storagePath: string;
+  /**
+   * The stamp the database wrote when it handed us THIS claim — the claim's identity.
+   * Releasing quotes it back, so a worker whose claim has since been taken over by
+   * another one cannot clear the newer claim. Null only if the database did not
+   * report it, in which case the claim simply cannot be released and the stamp stands
+   * until it goes stale — the safe direction.
+   */
+  claimedAt: string | null;
 };
 
 type ClaimRow = {
   media_id: string;
   bucket_id: string;
   storage_path: string;
+  claimed_at: string | null;
 };
 
 function claimRows(data: unknown): MediaClaim[] {
   return (Array.isArray(data) ? (data as ClaimRow[]) : [])
     .filter((row) => typeof row?.media_id === 'string' && typeof row?.storage_path === 'string')
-    .map((row) => ({ mediaId: row.media_id, storagePath: row.storage_path }));
+    .map((row) => ({
+      mediaId: row.media_id,
+      storagePath: row.storage_path,
+      claimedAt: typeof row?.claimed_at === 'string' ? row.claimed_at : null,
+    }));
 }
 
 /**
@@ -167,10 +180,19 @@ export async function claimMediaForRemoval(
 export async function releaseMediaClaim(
   client: SupabaseClient | null,
   mediaId: string,
+  claimedAt: string | null,
 ): Promise<boolean> {
   if (client === null) return false;
+  // NO STAMP, NO RELEASE. Without the claim's identity we cannot prove the claim
+  // standing on that row is still ours, and clearing someone else's live claim is the
+  // failure this argument exists to prevent. Keeping the stamp costs one sweep
+  // interval; clearing the wrong one loses a live story's photo.
+  if (claimedAt === null) return false;
   try {
-    const { error } = await client.rpc('release_media_claim', { p_media_id: mediaId });
+    const { error } = await client.rpc('release_media_claim', {
+      p_media_id: mediaId,
+      p_claimed_at: claimedAt,
+    });
     return !error;
   } catch {
     return false;

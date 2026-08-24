@@ -208,7 +208,7 @@ async function removeClaims(
       continue;
     }
     console.error('[media/reclaim] ORPHAN — bytes survived removal:', claim.storagePath);
-    if (!(await releaseMediaClaim(admin, claim.mediaId))) {
+    if (!(await releaseMediaClaim(admin, claim.mediaId, claim.claimedAt))) {
       // The stamp is still in place and the bytes are still there, so the
       // registry now disagrees with the bucket. `claim_orphan_paths` covers
       // exactly this case on a later tick, which is why it looks at storage

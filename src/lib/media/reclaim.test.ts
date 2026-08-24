@@ -68,11 +68,17 @@ function adminWith(
   return { admin, remove, rpc, list };
 }
 
+// `claimed_at` is part of what the database hands back: it is the claim's identity,
+// and releaseMediaClaim quotes it back so a worker cannot clear a claim that is no
+// longer its own. A fixture without it produces claims that CANNOT be released, which
+// would quietly turn every release assertion below into a no-op.
+const CLAIM_STAMP = '2026-08-24T18:00:00.000Z';
 const claimed = (rows: Array<[string, string]>): RpcResponse => ({
   data: rows.map(([media_id, storage_path]) => ({
     media_id,
     bucket_id: 'story-media',
     storage_path,
+    claimed_at: CLAIM_STAMP,
   })),
   error: null,
 });
@@ -124,7 +130,7 @@ describe('claimAndRemove — nothing is deleted that was not claimed', () => {
       reclaimed: [],
       orphaned: ['u1/a.jpg'],
     });
-    expect(rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1' });
+    expect(rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1', p_claimed_at: CLAIM_STAMP });
   });
 
   // 0066 revokes `release_media_claim` from `authenticated`. A caller-scoped

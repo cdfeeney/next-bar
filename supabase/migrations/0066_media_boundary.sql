@@ -561,20 +561,31 @@ comment on function public.media_claim_is_live(timestamptz) is
 -- under READ COMMITTED an UPDATE that blocks on a concurrently-updated row
 -- re-evaluates this WHERE against the new row version, so a claim that went live
 -- while we waited makes the update match nothing and `found` is false.
+-- IT RETURNS THE STAMP IT WROTE, and that timestamp IS the claim's identity.
+--
+-- A boolean said only "you got a claim", which is not enough to give one back
+-- safely: by the time a worker releases, the claim it is releasing may not be its
+-- own. The stamp is unique per take (now() advances), so handing it back to the
+-- caller turns release into a compare-and-swap against the claim actually held.
+drop function if exists public.take_media_claim(uuid);
 create or replace function public.take_media_claim(p_media_id uuid)
-returns boolean
+returns timestamptz
 language plpgsql
 volatile
 security definer
 set search_path = public
 as $$
+declare
+  v_claimed_at timestamptz;
 begin
   update public.media_objects m
      set bytes_removed_at = now()
    where m.id = p_media_id
-     and not public.media_claim_is_live(m.bytes_removed_at);
+     and not public.media_claim_is_live(m.bytes_removed_at)
+  returning m.bytes_removed_at into v_claimed_at;
 
-  return found;
+  -- Null means another worker holds a live claim; it is not an error.
+  return v_claimed_at;
 end;
 $$;
 
@@ -586,11 +597,14 @@ comment on function public.take_media_claim(uuid) is
 -- sweep delete a published story''s bytes.
 revoke all on function public.take_media_claim(uuid) from public, anon, authenticated;
 
+-- Returns `claimed_at` as well, because a caller that cannot name the claim it holds
+-- cannot give that claim back safely. See release_media_claim.
+drop function if exists public.claim_media_for_removal(uuid, integer);
 create or replace function public.claim_media_for_removal(
   p_media_id uuid default null,
   p_limit integer default 25
 )
-returns table (media_id uuid, bucket_id text, storage_path text)
+returns table (media_id uuid, bucket_id text, storage_path text, claimed_at timestamptz)
 language plpgsql
 security definer
 set search_path = public
@@ -599,6 +613,7 @@ declare
   v_caller uuid := auth.uid();
   v_limit integer := least(greatest(coalesce(p_limit, 25), 1), 100);
   r record;
+  v_claimed_at timestamptz;
 begin
   for r in
     select m.id as id, m.bucket_id as bucket_id, m.storage_path as storage_path
@@ -646,10 +661,12 @@ begin
     -- the lock that also blocks publication, which is what makes it binding.
     if public.media_live_reference_count(r.id) = 0 then
       -- THROUGH THE SHARED GUARD. Same rule as the orphan sweep, one definition.
-      if public.take_media_claim(r.id) then
+      v_claimed_at := public.take_media_claim(r.id);
+      if v_claimed_at is not null then
         media_id := r.id;
         bucket_id := r.bucket_id;
         storage_path := r.storage_path;
+        claimed_at := v_claimed_at;
         return next;
       end if;
     end if;
@@ -669,7 +686,23 @@ grant execute on function public.claim_media_for_removal(uuid, integer) to authe
 -- would file bytes as reclaimed while they sit in the bucket, and every future
 -- sweep would skip them — the registry lying about the world. Releasing puts the
 -- object back in front of the sweep.
-create or replace function public.release_media_claim(p_media_id uuid)
+-- A COMPARE-AND-SWAP ON THE CLAIM YOU ACTUALLY HOLD.
+--
+-- This used to clear ANY non-null stamp, which made it possible for a worker to
+-- release a claim that was no longer its own. Worker A claims an object and stalls
+-- past the one-hour claim lifetime; worker B legitimately re-adopts the stale row,
+-- refreshes the stamp and begins its Storage deletion; A then finishes, observes the
+-- bytes still present, and releases - clearing B's LIVE claim. publish_story sees an
+-- unstamped object and attaches a story to bytes B's delete is already on its way to.
+--
+-- Passing the stamp the caller was given closes it: a release whose timestamp no
+-- longer matches the row matches no row at all, and returns false. A stale worker
+-- can no longer speak for a claim it lost.
+drop function if exists public.release_media_claim(uuid);
+create or replace function public.release_media_claim(
+  p_media_id uuid,
+  p_claimed_at timestamptz
+)
 returns boolean
 language plpgsql
 security definer
@@ -682,13 +715,15 @@ begin
      set bytes_removed_at = null
    where m.id = p_media_id
      and m.bytes_removed_at is not null
+     -- ONLY MY CLAIM. A mismatch means someone else's claim is standing here now.
+     and m.bytes_removed_at = p_claimed_at
      and (v_caller is null or m.owner_id = v_caller);
 
   return found;
 end;
 $$;
 
-comment on function public.release_media_claim(uuid) is
+comment on function public.release_media_claim(uuid, timestamptz) is
   'V8-R-CMP-012. Undoes a claim whose byte removal did not actually happen, so an orphan returns to the sweep instead of being recorded as reclaimed. SERVICE ROLE ONLY: releasing is the sweep telling the truth about its own failed removal, never a user reopening bytes the sweep is still holding.';
 
 -- NOT GRANTED TO `authenticated`, and the omission is the point.
@@ -701,7 +736,7 @@ comment on function public.release_media_claim(uuid) is
 -- delete destroy a live story's photo — the exact publish-versus-delete loss the
 -- claim exists to prevent, reintroduced through the undo. Only the sweep that
 -- took a claim may give it back, and the sweep runs as the service role.
-revoke all on function public.release_media_claim(uuid) from public, anon, authenticated;
+revoke all on function public.release_media_claim(uuid, timestamptz) from public, anon, authenticated;
 
 -- BYTES THE REGISTRY CANNOT SEE AT ALL.
 --
@@ -771,8 +806,9 @@ $$;
 comment on function public.media_path_lock_key(text, text) is
   'V8-R-CMP-012 / V8-R-STO-016. Advisory-lock key for one storage path. publish_story takes it blocking and in sorted order; claim_orphan_paths takes it with try-lock and skips, so the sweep never waits while holding a lock it took earlier.';
 
+drop function if exists public.claim_orphan_paths(integer);
 create or replace function public.claim_orphan_paths(p_limit integer default 25)
-returns table (media_id uuid, bucket_id text, storage_path text)
+returns table (media_id uuid, bucket_id text, storage_path text, claimed_at timestamptz)
 language plpgsql
 security definer
 set search_path = public
@@ -783,6 +819,7 @@ declare
   r record;
   v_owner uuid;
   v_id uuid;
+  v_claimed_at timestamptz;
 begin
   for r in
     select o.name as name, (storage.foldername(o.name))[1] as prefix
@@ -897,10 +934,12 @@ begin
       -- timestamp so a stale row stayed stale through re-adoption; refreshing fixed
       -- that but still stamped unconditionally. Both halves now live in
       -- take_media_claim, which refreshes a stale claim and declines a live one.
-      if public.take_media_claim(v_id) then
+      v_claimed_at := public.take_media_claim(v_id);
+      if v_claimed_at is not null then
         media_id := v_id;
         bucket_id := 'story-media';
         storage_path := r.name;
+        claimed_at := v_claimed_at;
         return next;
       end if;
     end if;
@@ -1042,10 +1081,23 @@ drop function if exists public.unreferenced_orphan_paths(integer);
 -- media_read_window consults story_media_is_dead first, its own correct per-story
 -- exclusion below could never be reached. Both review families reported the
 -- path-vs-story half independently.
-create or replace function public.media_path_unreported_live_expiry(
-  p_name text,
-  p_viewer uuid
-)
+-- IT ANSWERS ONLY ABOUT ITS OWN CALLER, and that is the security property.
+--
+-- The first version of this helper took a `p_viewer uuid` parameter, was SECURITY
+-- DEFINER, and carried no revoke - so it kept PostgreSQL's default EXECUTE-to-PUBLIC
+-- and was directly callable over PostgREST. That made it a differential oracle over
+-- OTHER USERS' report activity: for a path with one live story, calling it with
+-- p_viewer = a victim's uuid returns null while any other uuid returns a timestamp,
+-- which proves the victim reported that story. content_reports is operator-only
+-- everywhere else in this file - no SELECT policy, no grant, and my_reported_subjects
+-- is caller-scoped - so that was a straight bypass of the boundary section 10 builds.
+--
+-- The parameter is DELETED rather than guarded. Both call sites only ever passed
+-- auth.uid(), so it bought nothing and cost a cross-user disclosure; a guard would
+-- have left the shape in place for the next caller to misuse. A function that cannot
+-- be asked about anyone else cannot leak anyone else. The revoke below is then
+-- defence in depth rather than the only thing standing between this and the data.
+create or replace function public.media_path_unreported_live_expiry(p_name text)
 returns timestamptz
 language sql
 stable
@@ -1060,14 +1112,26 @@ as $$
      and not exists (
        select 1
          from public.content_reports cr
-        where cr.reporter_id = p_viewer
+        where cr.reporter_id = auth.uid()
           and cr.subject_kind = 'story'
           and cr.subject_ref = s.id::text
      );
 $$;
 
-comment on function public.media_path_unreported_live_expiry(text, uuid) is
-  'V8-R-FEED-010. Latest expiry among live stories on this path that the viewer has not reported; null when none. The single definition of "a report hides the REPORTED STORY, not every story that happens to reuse the same object".';
+comment on function public.media_path_unreported_live_expiry(text) is
+  'V8-R-FEED-010. Latest expiry among live stories on this path that THE CALLER has not reported; null when none. The single definition of "a report hides the REPORTED STORY, not every story that happens to reuse the same object". Takes no viewer parameter by design: it can only ever answer about auth.uid().';
+
+-- The old two-argument form must not survive as an overload; leaving it would keep the
+-- oracle reachable under a signature nothing calls any more.
+drop function if exists public.media_path_unreported_live_expiry(text, uuid);
+revoke all on function public.media_path_unreported_live_expiry(text) from public, anon, authenticated;
+
+-- EVERY FUNCTION IN THIS FILE STATES ITS GRANTS. This one was added in the same round
+-- as the helper above and inherited the same omission: default EXECUTE-to-PUBLIC. It
+-- reads no table and discloses nothing today, but the claim-staleness invariant routes
+-- through it, so it is pinned rather than left as an ungoverned public entry point that
+-- a later edit could turn into a table-reading one unnoticed.
+revoke all on function public.media_claim_is_live(timestamptz) from public, anon, authenticated;
 
 create or replace function public.media_read_window(p_name text)
 returns table (readable boolean, expires_at timestamptz)
@@ -1100,7 +1164,7 @@ begin
     -- the content FOR THE REPORTER — with no exception for the reporter also
     -- being the author. Without this term the self-report succeeded while the
     -- photo went on signing for the person who reported it.
-    v_expiry := public.media_path_unreported_live_expiry(p_name, v_caller);
+    v_expiry := public.media_path_unreported_live_expiry(p_name);
 
     -- A null expiry means one of two different things here, and they must not
     -- collapse: no story names these bytes at all (the upload-before-publish
@@ -1799,6 +1863,31 @@ begin
     return true;
   end if;
 
+  -- BYTES COMMITTED TO REMOVAL ARE DEAD, even when no story ever named them.
+  --
+  -- Nothing else in this function consulted the registry, so it answered "not dead"
+  -- for any path no story references - which is correct for the upload-before-publish
+  -- window and WRONG for an object the user asked to destroy. Concretely: upload
+  -- without publishing, then "delete everywhere". The claim stamps; if the Storage
+  -- removal is inconclusive the stamp correctly STAYS (a stamp is cleared only on
+  -- positive proof the bytes survived). No story ever named the path, so this returned
+  -- false and the RETAINED 0065 owner-read policy went on minting signed URLs for
+  -- bytes the user had asked to delete. With no scheduler, indefinitely.
+  --
+  -- That is outside the accepted carve-out, which covers bytes a user can no longer
+  -- REACH - not bytes they asked to DESTROY. A claim is exactly the signal: while it
+  -- stands the object is spoken for, and if it is ever released because the bytes
+  -- provably survived, the stamp clears and readability returns on its own.
+  if exists (
+       select 1
+         from public.media_objects m
+        where m.bucket_id = 'story-media'
+          and m.storage_path = p_name
+          and m.bytes_removed_at is not null
+     ) then
+    return true;
+  end if;
+
   -- V8-R-FEED-010: "reporting IMMEDIATELY HIDES the reported content FOR THE
   -- REPORTER". The caller here is always the prefix owner, so this is the
   -- self-report case, and dead-for-them is exactly right.
@@ -1817,7 +1906,7 @@ begin
           and s.deleted_at is null
           and s.expires_at > now()
      )
-     and public.media_path_unreported_live_expiry(p_name, auth.uid()) is null
+     and public.media_path_unreported_live_expiry(p_name) is null
   then
     return true;
   end if;
