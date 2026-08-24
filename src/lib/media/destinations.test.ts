@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   claimMediaForRemoval,
   deleteEverywhere,
-  listOrphanPaths,
+  claimOrphanPaths,
   reclaimBytes,
   releaseMediaClaim,
   removeDestination,
@@ -310,24 +310,42 @@ describe('releaseMediaClaim — handing a claim back', () => {
   });
 });
 
-describe('listOrphanPaths — bytes the registry never saw', () => {
-  it('returns the paths the database offered', async () => {
+describe('claimOrphanPaths — bytes the registry never saw', () => {
+  // A CLAIM, not a path. The predecessor returned bare paths, which meant the
+  // one population with no `media_objects` row — every pre-boundary story photo
+  // — had nothing for `publish_story` to lock against and nothing to hand back
+  // when the removal failed. The row shape is the assertion: a media id has to
+  // come back, or the caller cannot release what it could not remove.
+  it('returns a claim per adopted object, media id included', async () => {
     const client = rpcClient({
       data: [
-        { bucket_id: 'story-media', storage_path: 'u1/old.jpg' },
-        { bucket_id: 'story-media', storage_path: 'u1/older.jpg' },
+        { media_id: 'm1', bucket_id: 'story-media', storage_path: 'u1/old.jpg' },
+        { media_id: 'm2', bucket_id: 'story-media', storage_path: 'u1/older.jpg' },
       ],
       error: null,
     });
-    await expect(listOrphanPaths(client)).resolves.toEqual(['u1/old.jpg', 'u1/older.jpg']);
+    await expect(claimOrphanPaths(client)).resolves.toEqual([
+      { mediaId: 'm1', storagePath: 'u1/old.jpg' },
+      { mediaId: 'm2', storagePath: 'u1/older.jpg' },
+    ]);
   });
 
-  it('offers nothing when the lookup errors', async () => {
-    await expect(listOrphanPaths(rpcClient({ data: null, error: { message: 'x' } })))
+  // A row with no media id is not a claim, and treating it as one would delete
+  // bytes nothing could then be released for.
+  it('drops a row that carries no media id', async () => {
+    const client = rpcClient({
+      data: [{ bucket_id: 'story-media', storage_path: 'u1/old.jpg' }],
+      error: null,
+    });
+    await expect(claimOrphanPaths(client)).resolves.toEqual([]);
+  });
+
+  it('claims nothing when the lookup errors', async () => {
+    await expect(claimOrphanPaths(rpcClient({ data: null, error: { message: 'x' } })))
       .resolves.toEqual([]);
   });
 
-  it('offers nothing with no client at all', async () => {
-    await expect(listOrphanPaths(null)).resolves.toEqual([]);
+  it('claims nothing with no client at all', async () => {
+    await expect(claimOrphanPaths(null)).resolves.toEqual([]);
   });
 });

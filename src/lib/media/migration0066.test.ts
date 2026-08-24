@@ -519,12 +519,64 @@ describe('0066 — zero-reference bytes have a reclamation PATH, not just eligib
   // eligible to reclaim nothing that actually exists.
   it('offers unregistered objects, which is where all existing media lives', () => {
     expect(FLAT).toMatch(
-      /create or replace function public\.unreferenced_orphan_paths\(p_limit integer default 25\)/i,
+      /create or replace function public\.claim_orphan_paths\(p_limit integer default 25\)/i,
     );
     expect(FLAT).toContain(
       'not exists ( select 1 from public.media_objects m'
       + " where m.bucket_id = 'story-media' and m.storage_path = o.name"
       + ' and m.bytes_removed_at is null )',
+    );
+  });
+
+  // THE UNREGISTERED HALF IS A CLAIM TOO. Both lanes reported the same thing:
+  // an object with no media_objects row is an object publish_story's `for
+  // update` matches nothing for, so listing its path and removing it later with
+  // service role — which bypasses the storage DELETE policy's re-check — is the
+  // original check-then-delete race surviving in the one population that has no
+  // row. Adopting the object is what gives publish_story something to lock.
+  it('ADOPTS an unregistered object into the registry before claiming it', () => {
+    expect(FLAT).toContain(
+      'insert into public.media_objects (owner_id, bucket_id, storage_path)'
+      + " values (v_owner, 'story-media', r.name)"
+      + ' on conflict (bucket_id, storage_path) do nothing',
+    );
+    expect(FLAT).toContain(
+      "where m.bucket_id = 'story-media' and m.storage_path = r.name"
+      + ' for update skip locked',
+    );
+  });
+
+  // Recounted under the lock, exactly as the registered claim is: the scan that
+  // selected this object ran in an earlier snapshot, and a story can have been
+  // published against it since.
+  it('recounts under the adopted row lock before stamping', () => {
+    expect(FLAT).toContain(
+      'if public.media_live_reference_count(v_id) = 0 then'
+      + ' update public.media_objects m'
+      + ' set bytes_removed_at = coalesce(m.bytes_removed_at, now())',
+    );
+  });
+
+  // Leaving the path-returning predecessor installed keeps both the race and an
+  // "are these bytes unreferenced?" oracle standing beside the function that
+  // closes them, and it is granted to authenticated.
+  it('withdraws the path-returning predecessor', () => {
+    expect(FLAT).toContain(
+      'drop function if exists public.unreferenced_orphan_paths(integer)',
+    );
+  });
+
+  // A claim is the sweep's exclusive right to delete, and the removal it
+  // authorises happens outside the transaction. An owner able to un-stamp the
+  // object mid-flight publishes a story into the gap and loses its photo to a
+  // delete already issued.
+  it('grants release_media_claim to no application role', () => {
+    expect(FLAT).toContain(
+      'revoke all on function public.release_media_claim(uuid)'
+      + ' from public, anon, authenticated',
+    );
+    expect(FLAT).not.toContain(
+      'grant execute on function public.release_media_claim(uuid) to authenticated',
     );
   });
 

@@ -324,14 +324,26 @@ begin
   -- being removed: if this row is a story reference, that story stops showing
   -- the media. Retiring the spine row alone left the story live and still
   -- displaying it, which is not "removed from this destination".
+  --
+  -- AND THE STORY MUST ACTUALLY NAME THESE BYTES. `media_destinations.ref_id`
+  -- has no foreign key and the upload route lets a client name any story it
+  -- owns as the destination of a NEW object, so a spine row can point at a
+  -- story that references some other photo entirely. Without this term,
+  -- removing that mismatched destination soft-deletes an unrelated live story —
+  -- a destructive write driven by a value the client chose. The guard belongs
+  -- here rather than in the upload route because every caller of this verb
+  -- routes through it, and at upload time the story usually does not exist yet.
   update public.stories s
      set deleted_at = now()
-    from public.media_destinations d
+    from public.media_destinations d,
+         public.media_objects m
    where d.id = p_destination_id
      and d.kind = 'story'
+     and m.id = v_media
      and s.id::text = d.ref_id
      and s.author_id = auth.uid()
-     and s.deleted_at is null;
+     and s.deleted_at is null
+     and (s.media_path = m.storage_path or s.inset_path = m.storage_path);
 
   return query
     select m.id,
@@ -573,10 +585,19 @@ end;
 $$;
 
 comment on function public.release_media_claim(uuid) is
-  'V8-R-CMP-012. Undoes a claim whose byte removal did not actually happen, so an orphan returns to the sweep instead of being recorded as reclaimed.';
+  'V8-R-CMP-012. Undoes a claim whose byte removal did not actually happen, so an orphan returns to the sweep instead of being recorded as reclaimed. SERVICE ROLE ONLY: releasing is the sweep telling the truth about its own failed removal, never a user reopening bytes the sweep is still holding.';
 
-revoke all on function public.release_media_claim(uuid) from public, anon;
-grant execute on function public.release_media_claim(uuid) to authenticated;
+-- NOT GRANTED TO `authenticated`, and the omission is the point.
+--
+-- A claim is the sweep's exclusive right to delete an object; the removal it
+-- authorises happens OUTSIDE the transaction, against Storage. While that
+-- removal is in flight the stamp is the only thing keeping `publish_story` off
+-- those bytes. An owner who could call this over PostgREST would un-stamp the
+-- object, publish a story against it, and watch the sweep's already-issued
+-- delete destroy a live story's photo — the exact publish-versus-delete loss the
+-- claim exists to prevent, reintroduced through the undo. Only the sweep that
+-- took a claim may give it back, and the sweep runs as the service role.
+revoke all on function public.release_media_claim(uuid) from public, anon, authenticated;
 
 -- BYTES THE REGISTRY CANNOT SEE AT ALL.
 --
@@ -596,50 +617,123 @@ grant execute on function public.release_media_claim(uuid) to authenticated;
 -- caller's own prefix (or anywhere, for the service-role sweep), and named by no
 -- live story. Being wrong here destroys data, so every uncertain case keeps the
 -- bytes.
-create or replace function public.unreferenced_orphan_paths(p_limit integer default 25)
-returns table (bucket_id text, storage_path text)
+--
+-- AND ELIGIBILITY IS NOT ENOUGH — IT IS A CLAIM HERE TOO.
+--
+-- The first shape of this function returned PATHS. That reopened, for exactly
+-- the population it was written to cover, the race the claim above closes: an
+-- object with no `media_objects` row is an object `publish_story`'s `for update`
+-- matches nothing for, so the sweep could list a path, the owner could publish a
+-- story against it, and the sweep's service-role removal — which bypasses RLS
+-- and therefore the storage DELETE policy's live-reference re-check — could then
+-- destroy a live story's bytes. Both review lanes reported it. The window is not
+-- narrow: it spans an HTTP round trip to Storage.
+--
+-- So the unregistered object is ADOPTED before it is claimed. Inserting the
+-- registry row is what gives `publish_story` something to lock, and the stamp in
+-- the same transaction is what makes it refuse. After this function returns,
+-- there is no longer a population without a row, and both halves of reclamation
+-- are the same mechanism instead of two that only look alike.
+--
+-- Ownership comes from the path prefix, which is what ownership MEANS in this
+-- bucket — every policy 0065 wrote and every one 0066 replaces keys on it. A
+-- prefix that is not a real account's id is left alone: `continue` keeps the
+-- bytes, and keeping bytes is the safe direction.
+--
+-- A row already stamped but still present (a crashed removal) is claimed by
+-- `coalesce`, which preserves the original claim time and still returns the row,
+-- so the retry the bucket evidence calls for actually happens.
+create or replace function public.claim_orphan_paths(p_limit integer default 25)
+returns table (media_id uuid, bucket_id text, storage_path text)
 language plpgsql
-stable
 security definer
 set search_path = public
 as $$
 declare
   v_caller uuid := auth.uid();
   v_limit integer := least(greatest(coalesce(p_limit, 25), 1), 100);
+  r record;
+  v_owner uuid;
+  v_id uuid;
 begin
-  return query
-  select 'story-media'::text, o.name
-    from storage.objects o
-   where o.bucket_id = 'story-media'
-     and o.created_at < now() - interval '24 hours'
-     and (
-       v_caller is null
-       or (storage.foldername(o.name))[1] = v_caller::text
-     )
-     and not exists (
-       select 1
-         from public.media_objects m
-        where m.bucket_id = 'story-media'
-          and m.storage_path = o.name
-          and m.bytes_removed_at is null
-     )
-     and not exists (
-       select 1
-         from public.stories s
-        where (s.media_path = o.name or s.inset_path = o.name)
-          and s.deleted_at is null
-          and s.expires_at > now()
-     )
-   order by o.created_at
-   limit v_limit;
+  for r in
+    select o.name as name, (storage.foldername(o.name))[1] as prefix
+      from storage.objects o
+     where o.bucket_id = 'story-media'
+       and o.created_at < now() - interval '24 hours'
+       and (
+         v_caller is null
+         or (storage.foldername(o.name))[1] = v_caller::text
+       )
+       and not exists (
+         select 1
+           from public.media_objects m
+          where m.bucket_id = 'story-media'
+            and m.storage_path = o.name
+            and m.bytes_removed_at is null
+       )
+       and not exists (
+         select 1
+           from public.stories s
+          where (s.media_path = o.name or s.inset_path = o.name)
+            and s.deleted_at is null
+            and s.expires_at > now()
+       )
+     order by o.created_at
+     limit v_limit
+  loop
+    begin
+      v_owner := r.prefix::uuid;
+    exception when others then
+      continue;  -- not an account prefix; the bytes stay
+    end;
+
+    if not exists (select 1 from public.profiles p where p.id = v_owner) then
+      continue;  -- no account owns this prefix; the bytes stay
+    end if;
+
+    -- ADOPT. From here `publish_story` has a row to lock and a stamp to see.
+    insert into public.media_objects (owner_id, bucket_id, storage_path)
+    values (v_owner, 'story-media', r.name)
+    on conflict (bucket_id, storage_path) do nothing;
+
+    select m.id into v_id
+      from public.media_objects m
+     where m.bucket_id = 'story-media'
+       and m.storage_path = r.name
+     for update skip locked;
+
+    if v_id is null then
+      continue;  -- another transaction is already working on this object
+    end if;
+
+    -- RECOUNTED UNDER THE LOCK, exactly as claim_media_for_removal does: a story
+    -- can have been published against these bytes since the scan above.
+    if public.media_live_reference_count(v_id) = 0 then
+      update public.media_objects m
+         set bytes_removed_at = coalesce(m.bytes_removed_at, now())
+       where m.id = v_id;
+
+      media_id := v_id;
+      bucket_id := 'story-media';
+      storage_path := r.name;
+      return next;
+    end if;
+  end loop;
 end;
 $$;
 
-comment on function public.unreferenced_orphan_paths(integer) is
-  'V8-R-CMP-012 / V8-R-STO-016. Storage objects no live story and no unclaimed registry row accounts for — pre-boundary media, abandoned uploads, and bytes a crashed removal left behind. The reclaim route removes these; nothing else ever will.';
+comment on function public.claim_orphan_paths(integer) is
+  'V8-R-CMP-012 / V8-R-STO-016. Adopts and CLAIMS storage objects no live story and no unclaimed registry row accounts for — pre-boundary media, abandoned uploads, bytes a crashed removal left behind. Adoption is what makes publish_story able to refuse them, so the unregistered half of reclamation is no longer a check-then-delete.';
 
-revoke all on function public.unreferenced_orphan_paths(integer) from public, anon;
-grant execute on function public.unreferenced_orphan_paths(integer) to authenticated;
+revoke all on function public.claim_orphan_paths(integer) from public, anon;
+grant execute on function public.claim_orphan_paths(integer) to authenticated;
+
+-- The path-returning predecessor is withdrawn rather than left standing: it is
+-- granted to `authenticated`, it answers "are these bytes unreferenced?" for any
+-- path, and leaving it in place keeps both the race and a liveness oracle alive
+-- beside the function that closes them.
+drop function if exists public.unreferenced_orphan_paths(integer);
 
 ------------------------------------------------------------------------------
 -- 5b. THE BOUNDARY ITSELF: no client reaches these bytes directly
@@ -767,11 +861,39 @@ begin
       return query select false, null::timestamptz;
       return;
     end if;
+    -- THE HIDE APPLIES TO THE AUTHOR TOO. `report_content` explicitly accepts an
+    -- author reporting their own story, and V8-R-FEED-010 says a report hides
+    -- the content FOR THE REPORTER — with no exception for the reporter also
+    -- being the author. Without this term the self-report succeeded while the
+    -- photo went on signing for the person who reported it.
     select max(s.expires_at) into v_expiry
       from public.stories s
      where (s.media_path = p_name or s.inset_path = p_name)
        and s.deleted_at is null
-       and s.expires_at > now();
+       and s.expires_at > now()
+       and not exists (
+         select 1
+           from public.content_reports cr
+          where cr.reporter_id = v_caller
+            and cr.subject_kind = 'story'
+            and cr.subject_ref = s.id::text
+       );
+
+    -- A null expiry means one of two different things here, and they must not
+    -- collapse: no story names these bytes at all (the upload-before-publish
+    -- window, unbounded and readable), or every live story that names them is
+    -- one this caller reported (hidden).
+    if v_expiry is null and exists (
+      select 1
+        from public.stories s
+       where (s.media_path = p_name or s.inset_path = p_name)
+         and s.deleted_at is null
+         and s.expires_at > now()
+    ) then
+      return query select false, null::timestamptz;
+      return;
+    end if;
+
     return query select true, v_expiry;
     return;
   end if;
@@ -1215,6 +1337,108 @@ comment on function public.is_blocked_between(uuid, uuid) is
 revoke all on function public.is_blocked_between(uuid, uuid) from public, anon;
 grant execute on function public.is_blocked_between(uuid, uuid) to authenticated;
 
+-- ...AND AT THE TWO READ PATHS THAT FIND A PERSON IN THE FIRST PLACE.
+--
+-- V8-R-FEED-009 is "visibility and interaction stop BETWEEN the two users", and
+-- severing the follow edges (below) removes the pair from every reader of
+-- `follows` and `follow_requests` at once. Profile DISCOVERY is not one of those
+-- readers: `search_handles` (0006) and `get_profile_by_handle` (0007) are
+-- SECURITY DEFINER functions that read `public.profiles` directly, so no policy
+-- and no severed edge touches them. After A blocks B, B could still type A's
+-- handle and get back A's display name — and, on the exact-match lookup, A's
+-- profile id, which is the key every other surface is addressed by.
+--
+-- These are 0006's and 0007's bodies verbatim plus one term. The rate cap, the
+-- input shape, the privacy flag and the ordering are unchanged; only the block
+-- is added, and it is added through `is_blocked_between`, which the caller is
+-- always a party to here, so this site cannot drift from the others that ask it.
+create or replace function public.search_handles(query text)
+returns table (handle text, display_name text)
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  search_cap constant integer := 500;  -- searches per user per day
+  uid uuid := auth.uid();
+  attempts integer;
+begin
+  if uid is null then
+    return;
+  end if;
+  if lower(coalesce(query, '')) !~ '^[a-z0-9_]{1,20}$' then
+    return;
+  end if;
+
+  insert into public.handle_search_attempts as a (user_id, day, count)
+  values (uid, current_date, 1)
+  on conflict (user_id, day) do update set count = a.count + 1
+  returning count into attempts;
+
+  if attempts > search_cap then
+    return;
+  end if;
+
+  return query
+  select p.handle, p.display_name
+    from public.profiles p
+   where p.is_private = false
+     and p.handle_normalized like replace(lower(query), '_', '\_') || '%' escape '\'
+     and not public.is_blocked_between(uid, p.id)
+   order by p.handle_normalized
+   limit 10;
+end;
+$$;
+
+comment on function public.search_handles(text) is
+  '0006''s handle search plus V8-R-FEED-009''s block: a blocked pair does not find each other by search.';
+
+revoke all on function public.search_handles(text) from public, anon;
+grant execute on function public.search_handles(text) to authenticated;
+
+create or replace function public.get_profile_by_handle(h text)
+returns table (id uuid, handle text, display_name text)
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  search_cap constant integer := 500;  -- shared with search_handles
+  uid uuid := auth.uid();
+  attempts integer;
+begin
+  if uid is null then
+    return;
+  end if;
+  if lower(coalesce(h, '')) !~ '^[a-z0-9_]{3,20}$' then
+    return;
+  end if;
+
+  insert into public.handle_search_attempts as a (user_id, day, count)
+  values (uid, current_date, 1)
+  on conflict (user_id, day) do update set count = a.count + 1
+  returning count into attempts;
+
+  if attempts > search_cap then
+    return;
+  end if;
+
+  return query
+  select p.id, p.handle, p.display_name
+    from public.profiles p
+   where p.handle_normalized = lower(h)
+     and not public.is_blocked_between(uid, p.id);
+end;
+$$;
+
+comment on function public.get_profile_by_handle(text) is
+  '0007''s exact-handle lookup plus V8-R-FEED-009''s block: a blocked pair cannot resolve each other''s profile id.';
+
+revoke all on function public.get_profile_by_handle(text) from public, anon;
+grant execute on function public.get_profile_by_handle(text) to authenticated;
+
 -- ...AND AT EVERY TABLE THAT CARRIES A CONNECTION BETWEEN TWO ACCOUNTS.
 --
 -- THIS IS THE REDESIGN, and it is worth saying why the obvious alternative kept
@@ -1276,6 +1500,33 @@ $$;
 comment on function public.blocked_pair_lock(uuid, uuid) is
   'V8-R-FEED-009. Transaction-scoped advisory lock over an unordered pair of accounts. Both the block trigger and the connection guard take it, so a block and a connection between the same two people cannot commit concurrently.';
 
+-- SERIALIZED AGAINST A CONCURRENT MEMBER INSERT, which the pair lock alone
+-- cannot do.
+--
+-- The night-out rule is not "is this pair blocked?" — it is "is this new member
+-- blocked with anyone ALREADY IN the group?", and that question is answered by
+-- READING the other members. Two invitations arriving at once each read a member
+-- list taken before the other's uncommitted row existed, so neither sees the
+-- other and neither takes the (A, B) pair lock: both commit and a blocked pair
+-- lands in a NEW shared group, the one outcome the guard exists to refuse.
+--
+-- Locking the night out itself is what makes the read binding. The second
+-- transaction waits, and under READ COMMITTED its member query then runs after
+-- the first has committed — so it sees the new member and takes the pair lock
+-- that refuses it. Taken BEFORE the member query, and before any pair lock, so
+-- the lock order is the same in every transaction that reaches here.
+create or replace function public.night_out_guard_lock(p_night_out uuid)
+returns void
+language sql
+as $$
+  select pg_advisory_xact_lock(
+    hashtextextended('night_out:' || p_night_out::text, 0)
+  );
+$$;
+
+comment on function public.night_out_guard_lock(uuid) is
+  'V8-R-FEED-009. Transaction-scoped advisory lock over one night out. The membership guard takes it before reading the member list, so two concurrent invitations cannot each miss the other and seat a blocked pair together.';
+
 create or replace function public.forbid_blocked_edge()
 returns trigger
 language plpgsql
@@ -1297,6 +1548,9 @@ begin
 
   elsif tg_table_name = 'night_out_members' then
     v_self := new.user_id;
+    -- Before the member list is read, so the list is not a snapshot a concurrent
+    -- invitation can invalidate. See night_out_guard_lock.
+    perform public.night_out_guard_lock(new.night_out_id);
     select coalesce(array_agg(distinct s.party), '{}'::uuid[])
       into v_parties
       from (
@@ -1571,14 +1825,34 @@ begin
   -- YOU MAY ONLY REPORT WHAT YOU CAN SEE. Reporting is an accusation against a
   -- named account attached to a durable, non-withdrawable operator record, so a
   -- caller who cannot reach the content has no business filing one — and could
-  -- otherwise fabricate reports about stories they were never shown. `story` is
-  -- the only kind whose table exists yet; the others are checked here as soon as
-  -- their surfaces land, and until then the id shape and the rate cap below are
-  -- what bound them.
-  if p_subject_kind = 'story' and not exists (
+  -- otherwise fabricate reports about stories they were never shown.
+  --
+  -- A KIND WITH NO SUBJECT TABLE IS REFUSED, not waved through. The earlier
+  -- shape checked `story` and let `feed_post`, `comment` and `group_message`
+  -- past with nothing but an id-shaped string, on the reasoning that their
+  -- surfaces had not landed yet. That is unverifiable by construction: any
+  -- account could mint an unlimited number of distinct fabricated subjects and
+  -- walk straight past the one-report-per-subject index, which is the whole of
+  -- the anti-flood measure. The id shape bounds the STRING, never the CLAIM. So
+  -- a kind this schema cannot resolve is rejected until its table exists — the
+  -- check constraint still records the vocabulary, and adding a branch here is
+  -- what admits each new kind.
+  if p_subject_kind <> 'story' then
+    raise exception 'report_content: % has no reportable subject in this schema yet',
+      p_subject_kind
+      using errcode = '22023';
+  end if;
+
+  -- AND THE STORY HAS TO BE ONE THE CALLER CAN CURRENTLY READ. Omitting
+  -- `deleted_at` and `expires_at` let anyone holding a retained uuid report a
+  -- story that is already gone — content no read path would show them, so the
+  -- accusation cannot be one they are making about something they saw.
+  if not exists (
     select 1
       from public.stories s
      where s.id = btrim(p_subject_ref)::uuid
+       and s.deleted_at is null
+       and s.expires_at > now()
        and (
          s.author_id = auth.uid()
          or (
@@ -1665,6 +1939,29 @@ grant execute on function public.report_content(text, text, text) to authenticat
 -- Scoped to the CALLER's own reports by `cr.reporter_id = auth.uid()`: a report
 -- hides the content for the person who reported it, and for nobody else. It is
 -- not a moderation action and must not behave like one.
+-- THE AUTHOR IS A REPORTER LIKE ANY OTHER. `report_content` accepts an author
+-- reporting their own story (the `s.author_id = auth.uid()` branch of its
+-- visibility check), and V8-R-FEED-010 says the report hides the content FOR
+-- THE REPORTER. 0065's author policy gates on identity and expiry only, so a
+-- self-report succeeded and changed nothing the author could see: the story
+-- stayed in their own feed and its bytes went on signing. This is 0065's policy
+-- verbatim plus the same one term the audience gate below carries.
+drop policy if exists "stories: author reads own" on public.stories;
+create policy "stories: author reads own"
+  on public.stories for select
+  using (
+    auth.uid() = author_id
+    and deleted_at is null
+    and expires_at > now()
+    and not exists (
+      select 1
+        from public.content_reports cr
+       where cr.reporter_id = auth.uid()
+         and cr.subject_kind = 'story'
+         and cr.subject_ref = public.stories.id::text
+    )
+  );
+
 drop policy if exists "stories: audience reads unexpired" on public.stories;
 create policy "stories: audience reads unexpired"
   on public.stories for select

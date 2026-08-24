@@ -182,7 +182,7 @@ describe('DELETE /api/media/:mediaId', () => {
    *
    * The route makes up to four calls on it: the deletion verb, then
    * `claim_media_for_removal` for the object that verb freed, then the sweep's
-   * own claim and `unreferenced_orphan_paths`. Answering by name is what lets a
+   * own claim and `claim_orphan_paths`. Answering by name is what lets a
    * test decide each one independently — and the claim is the one that decides
    * whether any bytes go at all, so it has to be separately answerable.
    *
@@ -212,7 +212,7 @@ describe('DELETE /api/media/:mediaId', () => {
           error: null,
         };
       }
-      if (name === 'unreferenced_orphan_paths') {
+      if (name === 'claim_orphan_paths') {
         return { data: sweep.orphans ?? [], error: null };
       }
       if (name === 'release_media_claim') return { data: true, error: null };
@@ -411,7 +411,11 @@ describe('DELETE /api/media/:mediaId', () => {
       null,
       {
         claims: [{ media_id: 'expired', bucket_id: 'story-media', storage_path: 'owner-1/expired.jpg' }],
-        orphans: [{ bucket_id: 'story-media', storage_path: 'owner-1/legacy.jpg' }],
+        orphans: [{
+          media_id: 'legacy',
+          bucket_id: 'story-media',
+          storage_path: 'owner-1/legacy.jpg',
+        }],
       },
     ));
 
@@ -472,7 +476,7 @@ describe('POST /api/media/reclaim', () => {
     client.rpc = vi.fn(async (name: string) => (
       name === 'claim_media_for_removal'
         ? { data: claims, error: null }
-        : { data: name === 'unreferenced_orphan_paths' ? orphans : true, error: null }
+        : { data: name === 'claim_orphan_paths' ? orphans : true, error: null }
     ));
     return client;
   }
@@ -555,8 +559,15 @@ describe('POST /api/media/reclaim', () => {
     const remove = removeAll();
     const admin = db({}, { remove }).client;
     admin.rpc = vi.fn(async (name: string) => (
-      name === 'unreferenced_orphan_paths'
-        ? { data: [{ bucket_id: 'story-media', storage_path: 'someone/else.jpg' }], error: null }
+      name === 'claim_orphan_paths'
+        ? {
+          data: [{
+            media_id: 'm-legacy',
+            bucket_id: 'story-media',
+            storage_path: 'someone/else.jpg',
+          }],
+          error: null,
+        }
         : { data: [], error: null }
     ));
     adminClient.mockReturnValue(admin);

@@ -2,10 +2,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   claimMediaForRemoval,
-  listOrphanPaths,
+  claimOrphanPaths,
   reclaimBytes,
   releaseMediaClaim,
   SWEEP_BATCH,
+  type MediaClaim,
 } from './destinations';
 import { MEDIA_BUCKET } from './types';
 
@@ -29,9 +30,10 @@ import { MEDIA_BUCKET } from './types';
  *
  *   UNREGISTERED — everything written before this boundary existed, which today
  *   is every story photo in the product, plus anything a crashed removal left
- *   stamped-but-present. There is no row to claim; the removal is the whole of
- *   it, and 0066 only offers paths no live story accounts for and that are past
- *   the grace window.
+ *   stamped-but-present. `claim_orphan_paths` ADOPTS these into the registry and
+ *   claims them in one transaction, so they arrive here as ordinary claims. The
+ *   earlier shape returned bare paths and was the same check-then-delete race in
+ *   the one population that had no row for `publish_story` to lock against.
  *
  * The pass is BOUNDED and IDEMPOTENT: whatever it does not reach this tick is
  * still there for the next one, and running it twice over the same object is a
@@ -80,7 +82,27 @@ export async function claimAndRemove(
   mediaId: string | null,
   limit: number = SWEEP_BATCH,
 ): Promise<SweepResult> {
-  const claims = await claimMediaForRemoval(caller, mediaId, limit);
+  return removeClaims(admin, await claimMediaForRemoval(caller, mediaId, limit));
+}
+
+/**
+ * Remove the bytes of claims the database has already committed to, and hand
+ * back every claim whose removal did not land.
+ *
+ * One function for both populations, because after `claim_orphan_paths` adopts
+ * the unregistered ones there is only one population: a claim is a claim, and
+ * the difference between them lives entirely in how it was obtained.
+ *
+ * The release goes through the ADMIN client. 0066 grants `release_media_claim`
+ * to no application role — an owner able to un-stamp an object mid-removal
+ * could publish a story into the gap and lose its photo to a delete already in
+ * flight — so the sweep, which runs as the service role, is the only thing that
+ * gives a claim back.
+ */
+async function removeClaims(
+  admin: SupabaseClient,
+  claims: MediaClaim[],
+): Promise<SweepResult> {
   if (claims.length === 0) return EMPTY;
 
   const failed = new Set(
@@ -94,11 +116,11 @@ export async function claimAndRemove(
   for (const claim of claims) {
     if (!failed.has(claim.storagePath)) continue;
     console.error('[media/reclaim] ORPHAN — bytes survived removal:', claim.storagePath);
-    if (!(await releaseMediaClaim(caller, claim.mediaId))) {
+    if (!(await releaseMediaClaim(admin, claim.mediaId))) {
       // The stamp is still in place and the bytes are still there, so the
-      // registry now disagrees with the bucket. `unreferenced_orphan_paths`
-      // covers exactly this case on a later tick, which is why it looks at
-      // storage rather than trusting the stamp.
+      // registry now disagrees with the bucket. `claim_orphan_paths` covers
+      // exactly this case on a later tick, which is why it looks at storage
+      // rather than trusting the stamp.
       console.error('[media/reclaim] could not release claim:', claim.mediaId);
     }
   }
@@ -111,31 +133,12 @@ export async function claimAndRemove(
   };
 }
 
-/** Remove bytes the registry cannot account for at all. */
-async function removeOrphanPaths(
-  caller: SupabaseClient | null,
-  admin: SupabaseClient,
-  limit: number,
-): Promise<SweepResult> {
-  const paths = await listOrphanPaths(caller, limit);
-  if (paths.length === 0) return EMPTY;
-
-  const failed = await reclaimBytes(admin, MEDIA_BUCKET, paths);
-  if (failed.length > 0) {
-    console.error('[media/reclaim] orphan paths survived removal:', failed.join(', '));
-  }
-  return {
-    reclaimed: paths.filter((path) => !failed.includes(path)),
-    orphaned: failed,
-  };
-}
-
 /**
  * One full tick: registered claims first, then the unregistered remainder.
  *
- * Registered first on purpose — those are the objects with a lock and a
- * tombstone, so they are the cheap, exactly-decided half. The path scan is the
- * fallback for everything the registry never saw.
+ * Registered first on purpose — those are the objects that already carry a row,
+ * so they are the cheap half. The storage scan is the fallback for everything
+ * the registry never saw, and it adopts what it finds before claiming it.
  */
 export async function sweepReclaimable(
   caller: SupabaseClient | null,
@@ -143,6 +146,6 @@ export async function sweepReclaimable(
   limit: number = SWEEP_BATCH,
 ): Promise<SweepResult> {
   const claimed = await claimAndRemove(caller, admin, null, limit);
-  const orphans = await removeOrphanPaths(caller, admin, limit);
+  const orphans = await removeClaims(admin, await claimOrphanPaths(caller, limit));
   return merge(claimed, orphans);
 }

@@ -9,16 +9,23 @@ import { claimAndRemove, sweepReclaimable } from './reclaim';
  * Three review rounds reported the same missing half in three disguises —
  * expired stories, abandoned uploads, silently orphaned bytes — and all three
  * were "eligible but nothing ever removes them". So the assertions here are not
- * about eligibility, which 0066 decides. They are about the two properties a
+ * about eligibility, which 0066 decides. They are about the three properties a
  * caller can get wrong:
  *
  *   1. NOTHING IS DELETED THAT WAS NOT CLAIMED. A claim is the database
  *      committing, under a lock, that these bytes are unreferenced. No claim,
- *      no `storage.remove`, ever.
+ *      no `storage.remove`, ever. That now holds for the UNREGISTERED half too:
+ *      `claim_orphan_paths` adopts and stamps, where the earlier
+ *      `unreferenced_orphan_paths` handed back bare paths and left the
+ *      publish-versus-delete race open for exactly that population.
  *   2. A REMOVAL THAT DID NOT LAND GIVES THE CLAIM BACK. Otherwise the registry
  *      records bytes as reclaimed while they sit in the bucket, and every
  *      future sweep skips them — the leak the sweep exists to stop, caused by
  *      the sweep.
+ *   3. THE RELEASE IS THE SERVICE ROLE'S. 0066 grants `release_media_claim` to
+ *      no application role, because an owner who could un-stamp an object
+ *      mid-removal would publish a story into the gap and lose its photo to a
+ *      delete already in flight.
  */
 
 type RpcResponse = { data: unknown; error: unknown };
@@ -29,14 +36,19 @@ function callerWith(responses: Record<string, RpcResponse>) {
   return { rpc } as any;
 }
 
-/** A storage double whose `remove` reports back only the names it names. */
+/**
+ * A service-role double: a storage bucket whose `remove` reports back only the
+ * names it names, plus the `rpc` surface the release goes through.
+ */
 function adminWith(removedNames: (paths: string[]) => string[]) {
   const remove = vi.fn(async (paths: string[]) => ({
     data: removedNames(paths).map((name) => ({ name })),
     error: null,
   }));
+  const rpc = vi.fn(async () => ({ data: true, error: null }));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return { admin: { storage: { from: () => ({ remove }) } } as any, remove };
+  const admin = { storage: { from: () => ({ remove }) }, rpc } as any;
+  return { admin, remove, rpc };
 }
 
 const claimed = (rows: Array<[string, string]>): RpcResponse => ({
@@ -48,10 +60,10 @@ const claimed = (rows: Array<[string, string]>): RpcResponse => ({
   error: null,
 });
 
-const orphanPaths = (paths: string[]): RpcResponse => ({
-  data: paths.map((storage_path) => ({ bucket_id: 'story-media', storage_path })),
-  error: null,
-});
+const released = (rpc: { mock: { calls: unknown[][] } }): string[] =>
+  rpc.mock.calls
+    .filter((call) => call[0] === 'release_media_claim')
+    .map((call) => (call[1] as { p_media_id: string }).p_media_id);
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -87,40 +99,49 @@ describe('claimAndRemove — nothing is deleted that was not claimed', () => {
   it('releases the claim when Storage silently skips the object', async () => {
     const caller = callerWith({
       claim_media_for_removal: claimed([['m1', 'u1/a.jpg']]),
-      release_media_claim: { data: true, error: null },
     });
     // Storage reports a refusal by OMITTING the object, with error null.
-    const { admin } = adminWith(() => []);
+    const { admin, rpc } = adminWith(() => []);
 
     await expect(claimAndRemove(caller, admin, 'm1')).resolves.toEqual({
       reclaimed: [],
       orphaned: ['u1/a.jpg'],
     });
-    expect(caller.rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1' });
+    expect(rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1' });
+  });
+
+  // 0066 revokes `release_media_claim` from `authenticated`. A caller-scoped
+  // release would therefore fail in production while every test here still
+  // passed, so the client identity is asserted, not just the call.
+  it('releases with the SERVICE ROLE client, never the caller', async () => {
+    const caller = callerWith({
+      claim_media_for_removal: claimed([['m1', 'u1/a.jpg']]),
+    });
+    const { admin, rpc } = adminWith(() => []);
+
+    await claimAndRemove(caller, admin, 'm1');
+
+    expect(released(rpc)).toEqual(['m1']);
+    expect(released(caller.rpc)).toEqual([]);
   });
 
   it('releases only the claims that failed, never the ones that landed', async () => {
     const caller = callerWith({
       claim_media_for_removal: claimed([['m1', 'u1/a.jpg'], ['m2', 'u1/b.jpg']]),
-      release_media_claim: { data: true, error: null },
     });
-    const { admin } = adminWith((paths) => paths.filter((p) => p === 'u1/a.jpg'));
+    const { admin, rpc } = adminWith((paths) => paths.filter((p) => p === 'u1/a.jpg'));
 
     const result = await claimAndRemove(caller, admin, null);
     expect(result).toEqual({ reclaimed: ['u1/a.jpg'], orphaned: ['u1/b.jpg'] });
-
-    const released = caller.rpc.mock.calls
-      .filter(([name]: [string]) => name === 'release_media_claim')
-      .map(([, args]: [string, { p_media_id: string }]) => args.p_media_id);
-    expect(released).toEqual(['m2']);
+    expect(released(rpc)).toEqual(['m2']);
   });
 });
 
 describe('sweepReclaimable — the tick that actually runs', () => {
-  it('reclaims registered claims AND unregistered orphan paths in one pass', async () => {
+  it('reclaims registered claims AND adopted orphans in one pass', async () => {
     const caller = callerWith({
       claim_media_for_removal: claimed([['m1', 'u1/registered.jpg']]),
-      unreferenced_orphan_paths: orphanPaths(['u1/legacy.jpg']),
+      claim_orphan_paths: claimed([['m9', 'u1/legacy.jpg']]),
     });
     const { admin, remove } = adminWith((paths) => paths);
 
@@ -128,8 +149,8 @@ describe('sweepReclaimable — the tick that actually runs', () => {
       reclaimed: ['u1/registered.jpg', 'u1/legacy.jpg'],
       orphaned: [],
     });
-    // Two separate removals, because the two populations are decided
-    // differently: one by a claim, one by absence from the registry.
+    // Two removals, because the two populations are obtained differently: one
+    // already had a registry row, the other was adopted into one first.
     expect(remove).toHaveBeenCalledTimes(2);
   });
 
@@ -138,7 +159,7 @@ describe('sweepReclaimable — the tick that actually runs', () => {
   it('reclaims unregistered bytes even when there is nothing to claim', async () => {
     const caller = callerWith({
       claim_media_for_removal: { data: [], error: null },
-      unreferenced_orphan_paths: orphanPaths(['u1/legacy.jpg']),
+      claim_orphan_paths: claimed([['m9', 'u1/legacy.jpg']]),
     });
     const { admin } = adminWith((paths) => paths);
 
@@ -148,17 +169,22 @@ describe('sweepReclaimable — the tick that actually runs', () => {
     });
   });
 
-  it('reports an orphan path that survived, and reclaims nothing', async () => {
+  // The property the bare-path shape could not have: an adopted orphan whose
+  // removal was refused is a CLAIM, so it can be handed back. Left stamped, the
+  // registry would file pre-boundary bytes as gone while they sit in the bucket
+  // and no later tick would look at them again.
+  it('releases an adopted orphan whose removal Storage silently skipped', async () => {
     const caller = callerWith({
       claim_media_for_removal: { data: [], error: null },
-      unreferenced_orphan_paths: orphanPaths(['u1/legacy.jpg']),
+      claim_orphan_paths: claimed([['m9', 'u1/legacy.jpg']]),
     });
-    const { admin } = adminWith(() => []);
+    const { admin, rpc } = adminWith(() => []);
 
     await expect(sweepReclaimable(caller, admin)).resolves.toEqual({
       reclaimed: [],
       orphaned: ['u1/legacy.jpg'],
     });
+    expect(released(rpc)).toEqual(['m9']);
   });
 
   it('does nothing, safely, when the database offers nothing', async () => {

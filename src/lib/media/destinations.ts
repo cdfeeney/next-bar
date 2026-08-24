@@ -157,6 +157,12 @@ export async function claimMediaForRemoval(
  * are gone while they sit in the bucket. Releasing is the only thing that puts
  * the object back in front of the sweep, so a failure here is logged loudly
  * rather than swallowed.
+ *
+ * PASS THE ADMIN CLIENT. 0066 grants `release_media_claim` to no application
+ * role: while a removal is in flight the stamp is the only thing keeping
+ * `publish_story` off those bytes, so an owner who could un-stamp it would
+ * publish a story into the gap and lose its photo to the delete already on its
+ * way. Only the sweep gives a claim back, and the sweep is the service role.
  */
 export async function releaseMediaClaim(
   client: SupabaseClient | null,
@@ -172,27 +178,34 @@ export async function releaseMediaClaim(
 }
 
 /**
- * Storage objects the registry cannot account for.
+ * CLAIM the storage objects the registry cannot account for.
  *
- * Everything uploaded before this boundary existed has no `media_objects` row,
- * so no claim can ever cover it — and that is every story photo in the product
- * today. So does an object a crashed removal left stamped-but-present. These are
- * paths, not claims: there is no row to stamp, and the removal is the whole of
- * the reclamation.
+ * Everything uploaded before this boundary existed has no `media_objects` row —
+ * that is every story photo in the product today — and so does an object a
+ * crashed removal left stamped-but-present.
+ *
+ * This used to return PATHS, and that was the same check-then-delete race the
+ * claim above exists to close, reopened for exactly the population that has no
+ * row to lock: the sweep listed a path, `publish_story` had nothing to take
+ * `for update` on, and the service-role removal that followed bypassed the
+ * storage DELETE policy's live-reference re-check. `claim_orphan_paths` adopts
+ * the object into the registry and stamps it in one transaction, so what comes
+ * back is a CLAIM with the same guarantees as any other, and both halves of the
+ * sweep are now one mechanism.
+ *
+ * FAILS CLOSED: an error or a throw yields no claims, so nothing is deleted.
  */
-export async function listOrphanPaths(
+export async function claimOrphanPaths(
   client: SupabaseClient | null,
   limit?: number,
-): Promise<string[]> {
+): Promise<MediaClaim[]> {
   if (client === null) return [];
   try {
-    const { data, error } = await client.rpc('unreferenced_orphan_paths', {
+    const { data, error } = await client.rpc('claim_orphan_paths', {
       p_limit: limit ?? SWEEP_BATCH,
     });
     if (error) return [];
-    return (Array.isArray(data) ? data : [])
-      .map((row) => String((row as { storage_path?: unknown })?.storage_path ?? ''))
-      .filter(Boolean);
+    return claimRows(data);
   } catch {
     return [];
   }
