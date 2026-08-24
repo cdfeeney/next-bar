@@ -39,6 +39,8 @@ export type PresenceAudience = 'friends' | 'close';
 
 /** One person's presence tonight, as the viewer is allowed to see it. */
 export type CirclePresence = {
+  /** The pinner's profile id. The Stories rail keys its cells on this. */
+  userId: string;
   handle: string;
   displayName: string | null;
   status: PresenceStatus;

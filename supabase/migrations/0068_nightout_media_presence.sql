@@ -298,6 +298,12 @@ grant execute on function public.clear_night_presence() to authenticated;
 
 create or replace function public.get_circle_presence()
 returns table (
+  -- PROFILE ID IS PART OF THE CONTRACT. The Stories rail keys its cells on the profile
+  -- id and asks `pinnedIds.includes(id)`; a handle cannot answer that without a second
+  -- lookup. Projecting it here is what lets the pin badge read presence — the founder
+  -- decision of 2026-08-24 — instead of the suggestions table, whose audience model is
+  -- weaker and whose night is client-supplied.
+  user_id      uuid,
   handle       text,
   display_name text,
   status       text,
@@ -330,7 +336,8 @@ as $$
          )
        )
   )
-  select p.handle::text,
+  select v.user_id,
+         p.handle::text,
          p.display_name::text,
          v.status,
          v.bar_id,

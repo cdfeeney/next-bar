@@ -111,7 +111,16 @@ export default function FindFriends({
                 key={r.handle}
                 className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3"
               >
-                <Link href={`/u/${r.handle}`} className="min-w-0 flex-1">
+                {/* Criterion 9 / round-1 MEDIUM: the row IS a tap target — it
+                    navigates to the profile — so it owes the same 44px floor
+                    the Follow button beside it already carries. Two stacked
+                    lines came to ~36px. The signed-OUT twin in
+                    src/app/friends/_components/GroupsAndPeople.tsx was fixed
+                    first; this is the signed-in half of the same defect. */}
+                <Link
+                  href={`/u/${r.handle}`}
+                  className="min-w-0 flex-1 min-h-[44px] flex flex-col justify-center touch-manipulation"
+                >
                   <p className="font-display text-sm truncate">
                     {r.displayName ?? `@${r.handle}`}
                   </p>

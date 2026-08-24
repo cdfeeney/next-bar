@@ -31,6 +31,7 @@ import {
  */
 
 type CirclePresenceRow = {
+  user_id: unknown;
   handle: unknown;
   display_name: unknown;
   status: unknown;
@@ -95,6 +96,7 @@ export async function fetchCirclePresence(
   if (error || !Array.isArray(data)) return null;
 
   return (data as CirclePresenceRow[]).flatMap((row) => {
+    if (typeof row?.user_id !== 'string' || row.user_id.length === 0) return [];
     if (typeof row?.handle !== 'string' || row.handle.length === 0) return [];
     if (!isPresenceStatus(row.status)) return [];
     if (typeof row.updated_at !== 'string') return [];
@@ -104,6 +106,7 @@ export async function fetchCirclePresence(
     if (!isValidPin(row.status, barId)) return [];
     return [
       {
+        userId: row.user_id,
         handle: row.handle,
         displayName:
           typeof row.display_name === 'string' ? row.display_name : null,

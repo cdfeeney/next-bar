@@ -359,21 +359,22 @@ describeLive('0064 get_friend_ratings — the score stops at the follow edge', (
     expect(usable[0].authed, 'authenticated cannot execute get_friend_ratings').toBe(true);
   });
 
-  it('exposes NO score on the anonymous public-list surface (criterion 5)', async () => {
-    // 0015's get_public_ratings is the widest audience any rating data has, and
-    // 0064 deliberately does not touch it. Asked of the database, not the file:
-    // a later migration could add the column without editing 0015. RETURNS
-    // TABLE columns live in proargnames/proargmodes ('t'), not in a composite
-    // type — prorettype is the `record` pseudo-type here.
+  it('has no anonymous public-list surface at all (EC-04)', async () => {
+    // This used to inspect get_public_ratings' columns to prove no score leaked to
+    // the widest audience any rating data has. 0066 RETIRED that function: it served
+    // the legacy Loved/Liked/Pass tier, V8 uses numeric scores, and no public-list
+    // replacement is approved. Asked of the DATABASE rather than the file, because
+    // that is the only thing that settles whether the surface is really gone.
     const { rows } = await db.query(`
-      select a.name as column_name
+      select p.oid::regprocedure::text as signature
         from pg_proc p
-        cross join lateral unnest(p.proargnames, p.proargmodes) as a(name, mode)
-       where p.oid = 'public.get_public_ratings(text)'::regprocedure
-         and a.mode in ('o', 'b', 't')
+        join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'get_public_ratings'
     `);
-    const columns = rows.map((row) => row.column_name as string);
-    expect(columns.length, 'get_public_ratings returned no columns to inspect').toBeGreaterThan(0);
-    expect(columns, 'the anonymous surface now returns a score').not.toContain('score');
+    expect(
+      rows.map((row) => row.signature as string),
+      'get_public_ratings still exists - the retired tier-bearing public list is back',
+    ).toEqual([]);
   });
+
 });

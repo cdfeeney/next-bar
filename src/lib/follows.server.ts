@@ -18,7 +18,10 @@ import type { Rating } from '@/types/ratings';
  *     (founder decision 2026-08-19, Option B) added the numeric `score`
  *     alongside the tier, superseding the earlier owner-only rule for THIS
  *     surface only. The audience did not change: the 0007 follows edge.
- *     Anonymous surfaces (get_public_ratings, shared nights) stay tier-only.
+ *     Anonymous surfaces stay tier-only. NOTE: `get_public_ratings` was RETIRED
+ *     by 0066 (EC-04) — it served the legacy Loved/Liked/Pass tier and V8 uses
+ *     numeric scores; no public-list replacement is approved. Legacy shared-night
+ *     links are retired separately by WP7. Neither is a surface to build on.
  *
  * B3b (migration 0008) adds the consent layer for private accounts:
  *   - follow_user now returns text — 'followed' | 'requested' | 'rejected'.

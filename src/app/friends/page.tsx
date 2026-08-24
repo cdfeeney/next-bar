@@ -1,311 +1,286 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
-import PlanInvites from '@/components/PlanInvites';
-import FindFriends from '@/components/FindFriends';
-import { RequestRow } from '@/components/FollowRows';
-import { useAuth } from '@/hooks/useAuth';
-import { useFollows } from '@/hooks/useFollows';
-import { useFollowRequests } from '@/hooks/useFollowRequests';
-import { demoFriends } from '@/lib/demo';
 import TonightPresence from './_components/TonightPresence';
+import PlansSection from './_components/PlansSection';
+import FeedSection from './_components/FeedSection';
+import GroupsAndPeople, {
+  GROUPS_AND_PEOPLE_ID,
+} from './_components/GroupsAndPeople';
+import { usePinnedHandles } from './_components/usePinnedHandles';
+import AddStoryFlow from '@/components/story/AddStoryFlow';
+import StoriesRail from '@/components/story/StoriesRail';
+import StoryViewer from '@/components/story/StoryViewer';
+import StoriesEmptyState from '@/components/story/StoriesEmptyState';
+import { useStories } from '@/components/story/storyStore';
+import { useAuth } from '@/hooks/useAuth';
+import { useFollowRequests } from '@/hooks/useFollowRequests';
+import { useNightRefresh } from '@/hooks/useIntent';
+import { nycNightKey } from '@/lib/nightKey';
 
 /**
- * /friends — SOCIAL (V8-R-NAV-002, V8-R-SOC-001..008).
+ * /friends — SOCIAL, per `docs/design-reference/approved/next-bar-social-v2-core.png`.
  *
- * This route used to serve the legacy Friends dashboard: a "Plan Night Out"
- * card, an intent strip and two follower statistics. That is not the approved
- * V8 surface. Social is ONE tab with three sub-tabs — Tonight, Plans, Feed —
- * and tapping one swaps the content below it (V8-R-NAV-002).
+ * THREE sub-tabs, and only three: Tonight, Plans, Feed. The five-tab bottom
+ * contract is untouched — Social still owns one tab and this chrome lives
+ * inside it, so no job lives in two places.
  *
- *   Tonight · current awareness — who is out, and your own status.
- *   Plans   · coordination — Night Out invitations and the plans you are in.
- *   Feed    · photo memories.
+ * The STORIES rail sits across the top of Tonight and again on Feed, your own
+ * avatar first. The story queue lands on Tonight when it finishes, which is
+ * why the tab state lives here rather than inside the viewer: "the five-tab IA
+ * has no separate Home tab, so Tonight is the documented landing surface".
  *
- * TONIGHT IS THE LANDING SURFACE, documented as such in V8-R-NAV-002 and
- * implemented as the initial sub-tab here.
- *
- * The sub-tab state is deliberately LOCAL, not a route. The contract says
- * "tapping a sub-tab swaps the content below it"; making each sub-tab its own
- * URL would put the browser's back button between two halves of one screen,
- * which is not what a segmented control means to the person using it.
- *
- * WHAT THIS SURFACE DOES NOT DO: it collects no rating, score, pass or hide.
- * Those belong to Rankings; Social shows what people are doing, not what they
- * thought of it.
- *
- * SCOPE NOTE, recorded honestly rather than implied to be finished:
- * V8-R-SOC-002 (the stories rail) and V8-R-SOC-003 (the Next Bar? suggestion
- * card) render components — `src/components/story/StoriesRail.tsx` and the
- * shared lightbox — that this packet does not own and that are not present on
- * this branch. Tonight is therefore built with its rail slot empty, which is
- * also the approved behaviour when there is nothing to show: the rail HIDES
- * rather than rendering an empty ring (V8-R-SOC-001, V8-R-OPS-005). Wiring the
- * rail is an integration step, not a hole in this surface.
+ * `Groups & people` stays what the Wave-1 surface made it — one control that
+ * reveals the people graph — and now selects Tonight before scrolling to it,
+ * because the section it targets belongs to that sub-tab.
  */
 
-const SUB_TABS = [
+type Tab = 'tonight' | 'plans' | 'feed';
+
+const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: 'tonight', label: 'Tonight' },
   { id: 'plans', label: 'Plans' },
   { id: 'feed', label: 'Feed' },
-] as const;
-
-type SubTab = (typeof SUB_TABS)[number]['id'];
+];
 
 export default function SocialPage(): JSX.Element {
-  // V8-R-NAV-002: Tonight is the documented landing surface.
-  const [tab, setTab] = useState<SubTab>('tonight');
+  const { requests } = useFollowRequests();
+  const auth = useAuth();
+  // Night-scoped header line, on the shared clock signal so it re-labels at
+  // the 6am rollover without a reload.
+  const [night, setNight] = useState(() => nycNightKey());
+  useNightRefresh(() => setNight(nycNightKey()));
+
+  const [tab, setTab] = useState<Tab>('tonight');
+  // Closing returns you to whichever sub-tab opened the viewer for free: the
+  // tab is never changed on the way in, so only EXHAUSTION has to move it.
+  const [viewer, setViewer] = useState<string | null>(null);
+  const [addingStory, setAddingStory] = useState(false);
+
+  const stories = useStories();
+  const youId = auth.status === 'signed-in' ? auth.user.id : null;
+  // FOUNDER DECISION 2026-08-24: the rail's pin badge reads PRESENCE, not suggestions.
+  // `usePinnedHandles` now returns presence state rather than a bare id list, and a "pin"
+  // is a presence row that names a bar — a status without a place is not a pin.
+  const { rows: presenceRows } = usePinnedHandles();
+  const pinnedIds = useMemo(
+    () => (presenceRows ?? []).filter((row) => row.barId !== null).map((row) => row.userId),
+    [presenceRows],
+  );
+  // The queue only ever contains people who have something to show. Memoised
+  // so the viewer's navigation callbacks are not rebuilt on every render.
+  const queue = useMemo(
+    () => stories.groups.filter((group) => group.items.length > 0),
+    [stories.groups],
+  );
+
+  const openStories = (authorId: string): void => {
+    setViewer(authorId);
+  };
+
+  // The rail is only a rail when there is a real session behind it. Signed out,
+  // unreachable, or genuinely empty each get their OWN honest state — an empty
+  // feed and an unreachable backend must never look the same.
+  const rail = stories.status === 'ready' ? (
+    <StoriesRail
+      groups={stories.groups}
+      pinnedIds={pinnedIds}
+      onOpen={openStories}
+      onAddStory={() => setAddingStory(true)}
+    />
+  ) : (
+    <StoriesEmptyState status={stories.status} onRetry={stories.refresh} />
+  );
 
   return (
     <main className="min-h-screen pb-28">
-      <header className="px-6 pt-8 pb-4 text-center">
-        <h1 className="font-display text-3xl md:text-4xl">Social</h1>
+      <header className="px-6 pt-8 pb-4 max-w-md mx-auto w-full flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl uppercase tracking-[0.14em]">
+            Next Bar
+          </h1>
+          <p className="text-muted text-sm mt-1">{weekdayOf(night)}</p>
+        </div>
+        {/* The canvas's one header control. It selects Tonight first: the
+            people graph is a section of that sub-tab, and scrolling to an
+            anchor on a panel that is not rendered would go nowhere. */}
+        <button
+          type="button"
+          onClick={() => {
+            setTab('tonight');
+            requestAnimationFrame(() => {
+              document.getElementById(GROUPS_AND_PEOPLE_ID)?.scrollIntoView();
+            });
+          }}
+          className="shrink-0 flex items-center gap-2 rounded-2xl border border-border bg-surface px-3 min-h-[44px] touch-manipulation text-[11px] font-display uppercase tracking-widest text-text hover:border-accent transition-colors"
+        >
+          Groups &amp; people
+          {requests.length > 0 ? (
+            <span className="rounded-full bg-accent text-bg px-2 py-0.5 text-[11px] tabular-nums">
+              {requests.length}
+              <span className="sr-only"> follow requests waiting</span>
+            </span>
+          ) : null}
+        </button>
       </header>
 
       <div className="max-w-md mx-auto px-6">
-        <SubTabs active={tab} onChange={setTab} />
+        <div
+          role="tablist"
+          aria-label="Social"
+          data-testid="social-subtabs"
+          className="flex items-center gap-1 rounded-2xl border border-border bg-surface p-1"
+        >
+          {TABS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              id={`social-tab-${entry.id}`}
+              aria-selected={tab === entry.id}
+              aria-controls={`social-panel-${entry.id}`}
+              onClick={() => setTab(entry.id)}
+              className={[
+                'flex-1 min-h-[44px] rounded-xl font-display text-xs uppercase tracking-widest touch-manipulation transition-colors',
+                tab === entry.id
+                  ? 'bg-accent text-bg'
+                  : 'text-muted hover:text-text',
+              ].join(' ')}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <section className="max-w-md mx-auto px-6 pt-6 space-y-8">
+      <div className="max-w-md mx-auto px-6 mt-6 space-y-10">
         {tab === 'tonight' ? (
-          <div
-            role="tabpanel"
-            id="social-panel-tonight"
-            aria-labelledby="social-tab-tonight"
-          >
+          <Panel id="tonight">
+            {rail}
             <TonightPresence />
-          </div>
+            <GroupsAndPeople />
+          </Panel>
         ) : null}
-        {tab === 'plans' ? <PlansTab /> : null}
-        {tab === 'feed' ? <FeedTab /> : null}
-      </section>
+
+        {tab === 'plans' ? (
+          <Panel id="plans">
+            <PlansSection />
+          </Panel>
+        ) : null}
+
+        {tab === 'feed' ? (
+          <Panel id="feed">
+            {rail}
+            {/* READY-AND-EMPTY IS ITS OWN STATE. Rendering nothing here made a
+                signed-in account with no friends' stories look identical to a
+                surface that had not finished loading — the exact collapse
+                StoriesEmptyState exists to prevent, reintroduced one level
+                down. The rail above already distinguishes signed-out and
+                unreachable; this is the fourth case. */}
+            {stories.status === 'ready' ? (
+              stories.feed.length > 0 ? (
+                <FeedSection entries={stories.feed} onOpenStory={openStories} />
+              ) : (
+                <section data-testid="feed-empty" aria-labelledby="feed-empty-heading">
+                  <h2
+                    id="feed-empty-heading"
+                    className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
+                  >
+                    Feed
+                  </h2>
+                  <div className="rounded-2xl border border-border bg-surface p-5">
+                    <p className="text-sm leading-relaxed">
+                      Nothing here yet. Stories from you and the friends who
+                      follow you back show up here for 24 hours.
+                    </p>
+                  </div>
+                </section>
+              )
+            ) : null}
+          </Panel>
+        ) : null}
+      </div>
+
+      {/* The author has to actually BE in the queue. Opening on "somebody" and
+          letting the viewer pick a fallback is how tapping "View story" on a
+          fresh receipt landed on a friend's queue instead of your own: the
+          refresh had not returned your new story yet, so your id was not in
+          the queue and the viewer silently opened whoever was first. Waiting
+          one render is correct; showing the wrong person never is. */}
+      {viewer !== null && queue.some((group) => group.id === viewer) ? (
+        <StoryViewer
+          groups={queue}
+          startId={viewer}
+          youId={youId}
+          onClose={() => setViewer(null)}
+          onExhausted={() => {
+            setViewer(null);
+            setTab('tonight');
+          }}
+          onMarkSeen={stories.markSeen}
+          onUntagMe={stories.untagMe}
+        />
+      ) : null}
+
+      {addingStory ? (
+        <AddStoryFlow
+          friends={stories.friends}
+          friendsReady={stories.friendsReady}
+          onCancel={() => setAddingStory(false)}
+          onPublish={stories.publish}
+          onUndo={stories.removeItem}
+          onViewStory={() => {
+            setAddingStory(false);
+            if (youId !== null) setViewer(youId);
+          }}
+        />
+      ) : null}
     </main>
   );
 }
 
-/**
- * The segmented control. Real tab semantics — `role="tablist"` with
- * `aria-selected` — so the selected sub-tab is announced rather than only
- * looking selected, and the panel below is associated with it.
- */
-function SubTabs({
-  active,
-  onChange,
+function Panel({
+  id,
+  children,
 }: {
-  active: SubTab;
-  onChange: (tab: SubTab) => void;
+  id: Tab;
+  children: React.ReactNode;
 }): JSX.Element {
   return (
     <div
-      role="tablist"
-      aria-label="Social"
-      className="flex items-center gap-1 bg-surface border border-border rounded-full p-1"
+      role="tabpanel"
+      id={`social-panel-${id}`}
+      aria-labelledby={`social-tab-${id}`}
+      data-testid={`social-panel-${id}`}
+      className="space-y-10"
     >
-      {SUB_TABS.map((t) => {
-        const selected = t.id === active;
-        return (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            id={`social-tab-${t.id}`}
-            aria-selected={selected}
-            aria-controls={`social-panel-${t.id}`}
-            onClick={() => onChange(t.id)}
-            className={[
-              'flex-1 min-h-[44px] touch-manipulation rounded-full font-display text-sm transition-colors',
-              selected
-                ? 'bg-accent text-bg'
-                : 'bg-transparent text-muted hover:text-text',
-            ].join(' ')}
-          >
-            {t.label}
-          </button>
-        );
-      })}
+      {children}
     </div>
   );
+}
+
+/** "CF" from an email local part; a stable placeholder when signed out. */
+function initialsFor(email: string | null | undefined): string {
+  const local = email?.split('@')[0] ?? '';
+  const parts = local.split(/[._-]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return 'YO';
 }
 
 /**
- * Plans — coordination (V8-R-SOC-004, V8-R-NO-001, V8-R-OPS-005).
+ * "Friday" from a night key, the header line the canvas draws.
  *
- * The Start a Night Out row sits directly under the sub-tabs and above whatever
- * is open, so the same tap works with a plan open and with zero plans — where
- * it becomes the empty state's single primary action (V8-R-SOC-004). Follow
- * requests stay here because consent must never hide.
+ * UTC on purpose, matching the night-key convention shared with PlanInvites
+ * and `/night-out/[token]`: the key is a calendar day, not an instant, so
+ * letting the device's zone shift it would name the wrong weekday for anyone
+ * west of the line.
  */
-function PlansTab(): JSX.Element {
-  const { requests, accept, decline } = useFollowRequests();
-  const { mode } = useFollows();
-  const isServer = mode === 'server';
-
-  return (
-    <div
-      role="tabpanel"
-      id="social-panel-plans"
-      aria-labelledby="social-tab-plans"
-      className="space-y-8"
-    >
-      {/* The compact entry row, in its unchanged position. */}
-      <Link
-        href="/friends/consensus"
-        data-testid="start-night-out"
-        className="block bg-accent text-bg rounded-2xl px-5 py-3 text-center touch-manipulation hover:bg-accentDim transition-colors"
-      >
-        <p className="font-display text-lg leading-snug">Start a Night Out →</p>
-      </Link>
-
-      {/* Night Out invitations addressed to this account. Hides when empty —
-          PlanInvites owns that decision. */}
-      <PlanInvites />
-
-      {/* Follow requests — the consent inbox. Only when non-empty. */}
-      {isServer && requests.length > 0 ? (
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-            Requests · {requests.length}
-          </h2>
-          <div className="space-y-3">
-            {requests.map((r) => (
-              <RequestRow
-                key={r.id}
-                request={r}
-                onAccept={accept}
-                onDecline={decline}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Feed — photo memories (V8-R-NAV-002).
- *
- * Deliberately a stated empty state rather than a placeholder that pretends to
- * be a feed. The photo model it renders — Night Out media and its three
- * distinct lifetimes (V8-R-NO-008) — lives in `src/lib/nightOutMedia/`, which
- * this branch does not carry: it arrives with the media spine this packet
- * declares as a dependency. Naming that plainly is better than a grid of
- * skeletons implying content is loading, and it is the same honesty rule the
- * rest of this surface follows: never claim a state you cannot observe.
- *
- * Find friends lives here because a feed with nobody in it is a following
- * problem, and this is where the person is when they discover that.
- */
-function FeedTab(): JSX.Element {
-  const auth = useAuth();
-  const { isFollowing, isRequested, toggleFollow, mode } = useFollows();
-  const isServer = mode === 'server';
-
-  return (
-    <div
-      role="tabpanel"
-      id="social-panel-feed"
-      aria-labelledby="social-tab-feed"
-      className="space-y-8"
-    >
-      <p className="text-muted text-sm" data-testid="feed-empty">
-        {auth.status === 'signed-in'
-          ? 'No photos yet. Nights you and your friends capture will show up here.'
-          : 'Sign in to see nights from the people you follow.'}
-      </p>
-
-      <div>
-        <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-          Find friends
-        </h2>
-        {isServer ? (
-          <FindFriends
-            isFollowing={isFollowing}
-            isRequested={isRequested}
-            toggleFollow={toggleFollow}
-          />
-        ) : (
-          <DemoFind isFollowing={isFollowing} toggleFollow={toggleFollow} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** Signed-out search over the seeded curators (unchanged demo behavior). */
-function DemoFind({
-  isFollowing,
-  toggleFollow,
-}: {
-  isFollowing: (handle: string) => boolean;
-  toggleFollow: (handle: string) => void;
-}): JSX.Element {
-  const [query, setQuery] = useState('');
-  const q = query.trim().toLowerCase().replace(/^@/, '');
-  const suggested = useMemo(
-    () => demoFriends.filter((f) => !isFollowing(f.handle)),
-    [isFollowing],
-  );
-  const matches = useMemo(() => {
-    if (q.length === 0) return suggested;
-    return suggested.filter(
-      (f) =>
-        f.handle.includes(q) ||
-        f.displayName.toLowerCase().includes(q) ||
-        f.archetype.toLowerCase().includes(q),
-    );
-  }, [q, suggested]);
-
-  return (
-    <>
-      <label htmlFor="friend-search" className="sr-only">
-        Search by name or handle
-      </label>
-      <input
-        id="friend-search"
-        type="search"
-        inputMode="text"
-        autoComplete="off"
-        placeholder="Search @handle or name…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
-      />
-      <div className="mt-4 space-y-3">
-        {matches.length === 0 ? (
-          <p className="text-muted text-sm px-1">
-            {q.length > 0 ? `No one matching "${query}".` : 'You follow everyone here.'}
-          </p>
-        ) : (
-          matches.map((f) => (
-            <div
-              key={f.handle}
-              className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3"
-            >
-              {/* Criterion 9: this row IS a tap target — it navigates to the
-                  profile — so it owes the same 44px minimum the follow button
-                  beside it already carries. */}
-              <Link
-                href={`/u/${f.handle}`}
-                className="min-w-0 flex-1 min-h-[44px] flex flex-col justify-center touch-manipulation"
-              >
-                <p className="font-display text-sm truncate">{f.displayName}</p>
-                <p className="text-muted text-xs truncate">
-                  @{f.handle} · {f.archetype}
-                </p>
-              </Link>
-              <button
-                type="button"
-                onClick={() => toggleFollow(f.handle)}
-                className="shrink-0 min-h-[44px] touch-manipulation px-4 rounded-full text-sm font-display bg-accent text-bg"
-              >
-                Follow
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-    </>
-  );
+function weekdayOf(night: string): string {
+  const parsed = new Date(`${night}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return 'Tonight';
+  return parsed.toLocaleDateString('en-US', {
+    weekday: 'long',
+    timeZone: 'UTC',
+  });
 }

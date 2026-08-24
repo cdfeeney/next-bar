@@ -55,6 +55,8 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import { fetchCirclePresence } from '@/lib/presence/server';
 
 const ROW: CirclePresence = {
+  // The rail keys its cells on the profile id, so presence carries one.
+  userId: '11111111-1111-1111-1111-111111111111',
   handle: 'ana',
   displayName: 'Ana',
   status: 'going',

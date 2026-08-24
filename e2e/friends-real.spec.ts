@@ -114,9 +114,17 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/**', fulfillJson(200, []));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
 
-  await page.route(
-    '**/rest/v1/rpc/get_following**',
-    fulfillJson(200, opts.following ?? []),
+  // A settled write re-hydrates the circle (useFollows keys its hydrate on
+  // `circleState.generation`), so `get_following` is read AGAIN after an
+  // unfollow resolves. A stub that answers with the same row forever is
+  // therefore telling the app the unfollow did not happen, and the app
+  // correctly puts the row back — the assertion then wins or loses a race
+  // with the re-hydrate, which is what made this test ~50% red on Pixel 7.
+  // Model what the server would actually say instead. Only unfollow is
+  // modelled: it is the one write whose re-read a test asserts on.
+  let unfollowed = false;
+  await page.route('**/rest/v1/rpc/get_following**', (route) =>
+    fulfillJson(200, unfollowed ? [] : (opts.following ?? []))(route),
   );
   await page.route(
     '**/rest/v1/rpc/search_handles**',
@@ -130,10 +138,11 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     '**/rest/v1/rpc/follow_user**',
     fulfillJson(200, opts.followResult ?? true),
   );
-  await page.route(
-    '**/rest/v1/rpc/unfollow_user**',
-    fulfillJson(200, opts.unfollowResult ?? true),
-  );
+  await page.route('**/rest/v1/rpc/unfollow_user**', (route) => {
+    const removed = opts.unfollowResult ?? true;
+    if (removed) unfollowed = true;
+    return fulfillJson(200, removed)(route);
+  });
   await page.route(
     '**/rest/v1/rpc/get_friend_ratings**',
     fulfillJson(200, opts.friendRatings ?? []),
