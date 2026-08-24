@@ -534,3 +534,93 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     expect(remaining).toBeNull();
   });
 });
+
+/**
+ * Social — the surface the Night Out is planned FROM (V8-R-NAV-002,
+ * V8-R-SOC-001, V8-R-PRE-001..005, V8-R-OPS-005).
+ *
+ * /friends used to serve a Friends dashboard: a Plan Night Out card, an intent
+ * strip and two follower statistics. It now serves Social with three sub-tabs —
+ * Tonight, Plans, Feed — and Tonight is the landing surface.
+ *
+ * These run SIGNED OUT deliberately. Every assertion below is about the
+ * surface's own structure and its honest empty states, which is exactly the
+ * part that must hold with no session, no Supabase and no seeded circle. The
+ * signed-in presence path is unit-covered in usePinnedHandles.test.ts, where
+ * the three-state read can be driven directly.
+ *
+ * Both viewports, no viewport-specific selectors: everything here is by role or
+ * by test id.
+ */
+test.describe('Social sub-tabs (V8-R-NAV-002)', () => {
+  test('lands on Tonight with all three sub-tabs present', async ({ page }) => {
+    await page.goto('/friends');
+
+    await expect(page.getByRole('heading', { name: 'Social' })).toBeVisible();
+    const tabs = page.getByRole('tab');
+    await expect(tabs).toHaveCount(3);
+    await expect(page.getByRole('tab', { name: 'Tonight' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    // The documented landing surface actually renders.
+    await expect(page.getByTestId('social-tonight')).toBeVisible();
+  });
+
+  test('tapping a sub-tab swaps the content below it — and does NOT change the URL', async ({
+    page,
+  }) => {
+    await page.goto('/friends');
+    const urlBefore = page.url();
+
+    await page.getByRole('tab', { name: 'Plans' }).click();
+    await expect(page.getByTestId('start-night-out')).toBeVisible();
+    // The swapped-out panel is genuinely gone, not merely hidden behind it.
+    await expect(page.getByTestId('social-tonight')).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: 'Plans' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    await page.getByRole('tab', { name: 'Feed' }).click();
+    await expect(page.getByTestId('feed-empty')).toBeVisible();
+    await expect(page.getByTestId('start-night-out')).toHaveCount(0);
+
+    await page.getByRole('tab', { name: 'Tonight' }).click();
+    await expect(page.getByTestId('social-tonight')).toBeVisible();
+
+    // The negative that defines a segmented control: three sub-tab taps put
+    // nothing in the browser's history, because this is one screen.
+    expect(page.url()).toBe(urlBefore);
+  });
+
+  test('Tonight with no circle says nobody is out and offers a way forward, never an error', async ({
+    page,
+  }) => {
+    await page.goto('/friends');
+
+    // V8-R-OPS-005: "no friends yet offers Invite friends", and the story rail
+    // hides rather than showing an empty ring.
+    await expect(page.getByTestId('presence-empty')).toBeVisible();
+    await expect(
+      page.getByRole('link', { name: /invite friends/i }),
+    ).toBeVisible();
+
+    // The distinction this surface must never blur: an empty circle is NOT a
+    // failed read, so the failure state must be absent here.
+    await expect(page.getByTestId('presence-error')).toHaveCount(0);
+    await expect(page.getByTestId('presence-list')).toHaveCount(0);
+  });
+
+  test('the legacy Friends dashboard is gone from Social', async ({ page }) => {
+    await page.goto('/friends');
+
+    // The three legacy affordances, asserted absent so the dashboard cannot
+    // quietly return: the old primary card, and the two follower statistics.
+    await expect(
+      page.getByRole('link', { name: /^Plan Night Out/i }),
+    ).toHaveCount(0);
+    await expect(page.getByTestId('follow-stats')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: /^Friends$/ })).toHaveCount(0);
+  });
+});

@@ -28,11 +28,14 @@ describe('deriveNightPhase (E0.3)', () => {
 
   it('morning after a night out is RECAP; otherwise mornings PLAN', () => {
     expect(deriveNightPhase({ ...base, now: at(9), wasOutLastNight: true })).toBe('recap');
-    // The morning starts at the ONE rollover, 6am NYC. 5:59am is still the
-    // night you are having, not the morning after it: nycNightKey still says
-    // Friday, so 'out' is the honest answer and 'recap' would be a night early.
-    expect(deriveNightPhase({ ...base, now: at(5, 59), wasOutLastNight: true })).toBe('out');
-    expect(deriveNightPhase({ ...base, now: at(6), wasOutLastNight: true })).toBe('recap');
+    // The morning starts at the ONE rollover, 4:00 AM NYC (V8-R-PRE-005).
+    // MORNING_START is derived from NIGHT_ROLLOVER_HOUR, so this boundary
+    // MOVES with it — that is why this test is pinned at the minute.
+    // 3:59am is still the night you are having, not the morning after it.
+    expect(deriveNightPhase({ ...base, now: at(3, 59), wasOutLastNight: true })).toBe('out');
+    expect(deriveNightPhase({ ...base, now: at(4), wasOutLastNight: true })).toBe('recap');
+    // 5:59am is morning too — the retired 6am rule called this 'out'.
+    expect(deriveNightPhase({ ...base, now: at(5, 59), wasOutLastNight: true })).toBe('recap');
     expect(deriveNightPhase({ ...base, now: at(9) })).toBe('planning');
     expect(deriveNightPhase({ ...base, now: at(11, 59), wasOutLastNight: true })).toBe('recap');
   });
@@ -48,7 +51,8 @@ describe('deriveNightPhase (E0.3)', () => {
     expect(deriveNightPhase({ ...base, now: at(21), intent: 'going' })).toBe('out');
     expect(deriveNightPhase({ ...base, now: at(23, 30), intent: 'going' })).toBe('out');
     expect(deriveNightPhase({ ...base, now: at(3), intent: 'going' })).toBe('out');
-    expect(deriveNightPhase({ ...base, now: at(4, 59), intent: 'going' })).toBe('out');
+    // 3:59am is the last minute of the night; 4:00 is the morning after.
+    expect(deriveNightPhase({ ...base, now: at(3, 59), intent: 'going' })).toBe('out');
     // No-signal / "maybe" nights derive OUT too — the find-a-bar home is
     // the fail-safe surface now that 'starting' is deleted.
     expect(deriveNightPhase({ ...base, now: at(23) })).toBe('out');

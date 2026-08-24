@@ -46,6 +46,11 @@ export function shareProfileText(
  * E4.4: the shared-night link. The shareId is the bearer token minted by
  * share_night — the handle in the path is identity/display, the token is
  * the authorization (DeepSeek review: never make handle+date the key).
+ *
+ * ⚠ RETIRED (WP7, EC-04). The route this builds now answers 404 and migration
+ * 0068 drops the RPCs behind it. No caller remains. Kept only so the removal of
+ * this module's exports can happen alongside its own test at the integration
+ * gate; do not build a new share surface on it.
  */
 export function buildNightPath(handle: string, shareId: string): string {
   return `/u/${encodeURIComponent(handle)}/night/${encodeURIComponent(shareId)}`;

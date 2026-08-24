@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 import { stagingDatabaseTarget } from './liveDbTarget';
+// The client half of the ONE night definition. Imported so the rollover test
+// below can assert the SQL function and the TypeScript helper agree instant
+// for instant, rather than each being right about a different boundary.
+import { nycNightKey } from './nightKey';
 
 import {
   GUARDED_FUNCTIONS,
@@ -778,18 +782,31 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     });
   });
 
-  it('the night rollover is NYC with a 6am boundary, not UTC (cold panel HIGH)', async () => {
+  it('the night rollover is NYC with a 4:00 AM boundary, not UTC (V8-R-PRE-005)', async () => {
     // Pinned instants, because the defect lives in a three-to-four hour window
     // each evening and a test that reads the wall clock passes by accident.
+    //
+    // The boundary is 4:00 AM America/New_York (contract 3.1.0, D-C-39),
+    // served by migration 0068's replacement of public.nyc_night_key(). The
+    // four contract instants — 3:59 vs 4:00 in EDT and in EST — are asserted
+    // to the minute, then the SQL function is checked against the CLIENT
+    // helper at each one. A boundary that is right on one side and wrong on
+    // the other is the exact defect this test exists to catch.
     const cases: Array<[string, string, string]> = [
       ['2026-08-17T02:00:00Z', '2026-08-16', '22:00 EDT — the hours the bug lived in'],
-      ['2026-08-17T09:00:00Z', '2026-08-16', '05:00 EDT — before the 6am rollover'],
-      ['2026-08-17T11:00:00Z', '2026-08-17', '07:00 EDT — after it'],
+      ['2026-07-25T07:59:00Z', '2026-07-24', '03:59 EDT — the last minute of the night'],
+      ['2026-07-25T08:00:00Z', '2026-07-25', '04:00 EDT — the rollover instant'],
+      ['2026-01-24T08:59:00Z', '2026-01-23', '03:59 EST — winter, one minute before'],
+      ['2026-01-24T09:00:00Z', '2026-01-24', '04:00 EST — winter, the rollover'],
+      ['2026-08-17T09:00:00Z', '2026-08-17', '05:00 EDT — already the new night at 4am'],
+      ['2026-08-17T11:00:00Z', '2026-08-17', '07:00 EDT — well after it'],
       ['2026-01-15T02:00:00Z', '2026-01-14', '21:00 EST — winter, UTC-5'],
     ];
     for (const [instant, expected, why] of cases) {
       const { rows } = await db.query('select public.nyc_night_key($1::timestamptz) as night', [instant]);
       expect(rows[0].night.toISOString().slice(0, 10), why).toBe(expected);
+      // …and the client helper must agree at the very same instant.
+      expect(nycNightKey(new Date(instant)), `client/SQL disagree at ${why}`).toBe(expected);
     }
     // And the thing that actually broke: UTC disagrees at those instants.
     const { rows: utc } = await db.query(
