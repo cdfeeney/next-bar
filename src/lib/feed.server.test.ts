@@ -78,6 +78,12 @@ describe('fetchFeedPosts — the night-token read', () => {
     // The table read is what 0047 denies; the RPC is the entitlement-scoped path.
     expect(t.from).not.toHaveBeenCalledWith('night_outs');
     expect(t.rpc).toHaveBeenCalledWith('get_night_out', { p_night_out: NIGHT });
+    // AND THE TOKEN ACTUALLY ARRIVES. Asserting only that the RPC was called proves the
+    // mechanism and not the OUTCOME: token delivery could regress to always-null — the exact
+    // user-visible symptom of the original defect, "View night" rendering for nobody — with
+    // every other assertion in this file still green. Round 3 found precisely that gap.
+    const view = (result as { ok: true; value: { nightShareToken: string | null }[] }).value;
+    expect(view[0].nightShareToken).toBe('tok-abc');
   });
 
   it('asks once per DISTINCT night, not once per post', async () => {
@@ -100,6 +106,9 @@ describe('fetchFeedPosts — the night-token read', () => {
 
     expect(result.ok).toBe(true);
     expect(t.from).not.toHaveBeenCalledWith('night_outs');
+    // Null, not undefined and not a leaked token: the card renders no "View night".
+    const view = (result as { ok: true; value: { nightShareToken: string | null }[] }).value;
+    expect(view[0].nightShareToken).toBeNull();
   });
 
   it('posts with no night ask for no token at all', async () => {
