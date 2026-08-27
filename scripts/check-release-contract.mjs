@@ -107,6 +107,22 @@ const isEmpty = (v) =>
  * @param listDir     (relPath) => string[] | null — directory entries, for extra-file detection
  * @returns {{code:string, where:string, detail:string}[]}
  */
+/**
+ * @param {any} ledger  the traceability ledger, parsed from JSON. Deliberately `any`: this
+ *   guard's whole job is to police the shape of a document it cannot assume is well formed,
+ *   and every caller hands it an untrusted parse.
+ * @param {string} decisionMd  the decision record's markdown
+ * @param {(rel: string) => Buffer | null} readFile  reads a repo-relative file as BYTES,
+ *   null when absent. Bytes, not text: `digestOf` hashes the buffer and only decodes it for
+ *   files it classifies as text, so that CRLF can be normalised before hashing.
+ * @param {(rel: string) => string[] | null} [listDir]  lists a repo-relative directory,
+ *   null when absent
+ * @returns {Array<{ code: string, where: string, detail: string }>}
+ *
+ * `listDir`'s default is a PLACEHOLDER, not the contract. Without this annotation TypeScript
+ * infers the parameter type FROM that default — `() => null` — and then rejects every real
+ * caller that passes a directory lister, which is what produced six TS2345 errors here.
+ */
 export function checkContract(ledger, decisionMd, readFile, listDir = () => null) {
   const findings = [];
   const fail = (code, where, detail) => findings.push({ code, where, detail });
