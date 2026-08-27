@@ -307,6 +307,24 @@ begin
     return;
   end if;
 
+  -- LOCK ORDER, and it is the ONE rule every route through this table must obey:
+  --
+  --     the per-group advisory lock is taken BEFORE any group_members ROW lock.
+  --
+  -- Round-2 finding: round 1 gave succession the same advisory key leave_group uses, which fixed
+  -- the stale-read race but created an ABBA inversion. leave_group takes the advisory lock and
+  -- THEN deletes (advisory -> row). The profiles ON DELETE CASCADE route deletes the membership
+  -- row FIRST and only then reaches the AFTER trigger that asks for the advisory lock (row ->
+  -- advisory). Opposite orders, so: T1 holds advisory and blocks on T2's row lock while updating
+  -- the successor; T2 holds that row lock and blocks on T1's advisory. Postgres detects it and
+  -- aborts one with 40P01 — fail-closed, nothing is left administrator-less, but an ordinary
+  -- leave or an account deletion errors out for a reason its user cannot act on.
+  --
+  -- group_members_lock_before_delete_trigger (below) is what makes the cascade route obey the
+  -- rule: a BEFORE DELETE row trigger takes the advisory lock before the row lock is taken, so
+  -- both routes acquire in the same order and the cycle cannot form. Advisory locks are
+  -- re-entrant within a transaction, so leave_group and this trigger both taking it is free.
+  --
   -- SERIALIZED PER GROUP, ON THE SAME KEY `leave_group` TAKES.
   --
   -- Round-1 finding: `leave_group` held this lock, but succession itself did not — and the
@@ -414,6 +432,41 @@ begin
   return null;
 end;
 $$;
+
+-- LOCK ORDER ENFORCEMENT for the cascade route. See the long note in group_apply_succession.
+--
+-- Every route that removes a membership row must hold the per-group advisory lock BEFORE it holds
+-- a row lock on group_members. `leave_group` does that by construction. The `profiles ON DELETE
+-- CASCADE` route cannot: by the time the AFTER trigger runs, the row lock is already held, which
+-- is the opposite order and the ABBA half of a detected 40P01 deadlock.
+--
+-- A BEFORE DELETE row trigger runs while the delete is still being prepared, so taking the
+-- advisory lock here puts the cascade route into the same order as leave_group. Re-entrancy makes
+-- the double acquisition free when both fire in one transaction.
+create or replace function public.group_members_lock_before_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform pg_advisory_xact_lock(
+    hashtextextended('group_members:' || old.group_id::text, 0)
+  );
+  return old;
+end;
+$$;
+
+comment on function public.group_members_lock_before_delete() is
+  'Lock order: takes the per-group advisory lock BEFORE the group_members row lock, so the profiles ON DELETE CASCADE route acquires in the same order as leave_group and cannot deadlock against it.';
+
+revoke all on function public.group_members_lock_before_delete() from public, anon, authenticated;
+
+drop trigger if exists group_members_lock_before_delete_trigger on public.group_members;
+create trigger group_members_lock_before_delete_trigger
+  before delete on public.group_members
+  for each row
+  execute function public.group_members_lock_before_delete();
 
 drop trigger if exists group_members_succession_trigger on public.group_members;
 create trigger group_members_succession_trigger
@@ -1712,6 +1765,69 @@ $$;
 revoke all on function public.mark_night_out_invitation_notification_read(bigint) from public, anon;
 grant execute on function public.mark_night_out_invitation_notification_read(bigint) to authenticated;
 
+-- THE SINGLE DOOR EVERY NIGHT-OUT INVITE FROM THIS FILE GOES THROUGH.
+--
+-- Round-2 finding, raised independently by both review lanes: round 1 put the notification insert
+-- inside invite_group_to_night_out, and then the per-person Resend added in the same round called
+-- invite_to_night_out DIRECTLY — so the members whose first invite FAILED, the exact people the
+-- Resend exists for, joined the plan with no invitation notification. The fix for one finding
+-- reintroduced another on the narrower path.
+--
+-- Fixing that at the Resend caller would have left the same hole open for the next caller. This is
+-- the door instead: newness decided, invite performed, notification recorded, in ONE place that
+-- both paths call. A third caller gets the behaviour for free; a third caller that bypasses this
+-- is the thing to catch in review, and it is now a single grep.
+create or replace function public.invite_one_to_night_out(
+  p_night_out uuid,
+  p_user uuid,
+  p_group uuid default null
+)
+returns boolean
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+  v_was_member boolean;
+  v_invited boolean;
+begin
+  if v_caller is null then
+    raise exception 'invite_one_to_night_out: not authenticated' using errcode = '28000';
+  end if;
+
+  -- NEWNESS IS DECIDED BEFORE THE INVITE. invite_to_night_out returns true both for "newly
+  -- invited" and for "was already on the plan" — deliberately, so a duplicate invite is not
+  -- reported as a failure — which makes its return value useless for deciding whether to NOTIFY.
+  -- Notifying on it would tell people already going that they had just been invited, and
+  -- V8-R-GRP-008 is a notification-VOLUME requirement.
+  v_was_member := exists (
+    select 1
+      from public.night_out_members nm
+     where nm.night_out_id = p_night_out
+       and nm.user_id = p_user
+  );
+
+  v_invited := public.invite_to_night_out(p_night_out, p_user);
+
+  if v_invited and not v_was_member then
+    insert into public.night_out_invitation_notifications
+      (night_out_id, recipient_id, group_id, invited_by)
+    values (p_night_out, p_user, p_group, v_caller)
+    on conflict on constraint night_out_invitation_notifications_unique do nothing;
+  end if;
+
+  return v_invited;
+end;
+$$;
+
+comment on function public.invite_one_to_night_out(uuid, uuid, uuid) is
+  'V8-R-GRP-003 + V8-R-GRP-008. The single door: invites ONE person and records the invitation notification for a genuinely new invitee. Both the whole-group invite and the per-person Resend go through it, so neither can drift from the other.';
+
+revoke all on function public.invite_one_to_night_out(uuid, uuid, uuid) from public, anon;
+grant execute on function public.invite_one_to_night_out(uuid, uuid, uuid) to authenticated;
+
 create or replace function public.invite_group_to_night_out(
   p_night_out uuid,
   p_group uuid
@@ -1758,31 +1874,10 @@ begin
   loop
     profile_id := r.id;
 
-    -- NEWNESS IS DECIDED HERE, BEFORE THE INVITE. `invite_to_night_out` returns true both for
-    -- "newly invited" and for "was already on the plan" — deliberately, so a duplicate invite is
-    -- not reported as a failure. That makes its return value useless for deciding whether to
-    -- NOTIFY, and notifying on it would tell people who were already going that they had just
-    -- been invited. V8-R-GRP-008 is a notification-VOLUME requirement; this is exactly the
-    -- volume it is about.
-    v_was_member := exists (
-      select 1
-        from public.night_out_members nm
-       where nm.night_out_id = p_night_out
-         and nm.user_id = r.id
-    );
-
-    invited := public.invite_to_night_out(p_night_out, r.id);
-
-    -- V8-R-GRP-008: the invitation notification, for genuinely new invitees only, and only when
-    -- the invite actually took. ON CONFLICT DO NOTHING because the unique constraint is the real
-    -- guarantee — two administrators inviting overlapping groups at the same moment must still
-    -- produce one notification, not two.
-    if invited and not v_was_member then
-      insert into public.night_out_invitation_notifications
-        (night_out_id, recipient_id, group_id, invited_by)
-      values (p_night_out, r.id, p_group, v_caller)
-      on conflict on constraint night_out_invitation_notifications_unique do nothing;
-    end if;
+    -- ONE DOOR. Newness, the invite and the notification all live in invite_one_to_night_out, so
+    -- this path and the per-person Resend cannot drift apart — which is exactly what happened in
+    -- round 1, when this function held a private copy of the insert and the Resend did not.
+    invited := public.invite_one_to_night_out(p_night_out, r.id, p_group);
 
     return next;
   end loop;

@@ -566,8 +566,14 @@ export async function markGroupRead(
  * whole-group call to retry one person is what "unaffected" forbids, and it would also re-notify
  * (V8-R-GRP-008 is a notification-VOLUME requirement).
  *
- * `invite_to_night_out` is idempotent by design: a person already on the plan returns true and no
- * seat is taken, so a Resend that races an accepted invite is harmless.
+ * IT CALLS THE SHARED DOOR, NOT `invite_to_night_out`. Round-2 finding, raised by both review
+ * lanes: this path used to call `invite_to_night_out` directly, which skips the invitation
+ * notification that only the group path recorded — so the people whose first invite failed, the
+ * exact people this exists for, joined the plan silently. `invite_one_to_night_out` is the one
+ * place newness, the invite and the notification live, and both paths go through it.
+ *
+ * It remains idempotent by design: a person already on the plan returns true and no seat is taken,
+ * so a Resend racing an accepted invite is harmless and notifies nobody twice.
  */
 export async function inviteNightOutMember(
   client: SupabaseClient | null,
@@ -579,9 +585,10 @@ export async function inviteNightOutMember(
   if (!isUuid(profileId)) return rejected('That person could not be found.');
 
   try {
-    const { data, error } = await client.rpc('invite_to_night_out', {
+    const { data, error } = await client.rpc('invite_one_to_night_out', {
       p_night_out: nightOutId,
       p_user: profileId,
+      p_group: null,
     });
 
     if (error) {
