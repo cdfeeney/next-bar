@@ -32,6 +32,7 @@ import {
   fetchGroupMembers,
   fetchGroupMessages,
   inviteGroupToNightOut,
+  inviteNightOutMember,
   leaveGroup,
   markGroupRead,
   removeGroupMember,
@@ -39,6 +40,7 @@ import {
   sendGroupMessage,
   MAX_GROUP_MESSAGE_LENGTH,
   MAX_GROUP_NAME_LENGTH,
+  type GroupInviteOutcome,
   type GroupMember,
   type GroupMessage,
 } from '@/lib/groups.server';
@@ -82,7 +84,20 @@ export default function GroupThread({
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState('');
+  // TWO NAMES, DELIBERATELY, and the round-1 finding is what separated them.
+  //
+  // `name` is the CANONICAL group name — what the server last confirmed, and the only thing the
+  // heading may render. `nameDraft` is what the administrator is typing. They used to be one
+  // state, so typing renamed the group on screen before the server agreed, and a REJECTED
+  // `rename_group` left the uncommitted name in the heading: a failed administrative write that
+  // looked applied. The draft is promoted into `name` only after the RPC confirms.
   const [name, setName] = useState(groupName);
+  const [nameDraft, setNameDraft] = useState(groupName);
+  // The per-person outcomes of the LAST whole-group invite, kept so each failure can carry its
+  // own Resend (V8-R-GRP-003). Null means no invite has been attempted in this session.
+  const [inviteOutcomes, setInviteOutcomes] = useState<GroupInviteOutcome[] | null>(null);
+  // The plan those outcomes belong to — a Resend has to name the same plan the invite used.
+  const [invitePlanId, setInvitePlanId] = useState('');
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const viewerIsAdmin = useMemo(
@@ -119,14 +134,28 @@ export default function GroupThread({
     void load();
   }, [load]);
 
-  // V8-R-GRP-008. Opening the thread IS reading it. A failure here is deliberately
-  // silent: an unread badge that stays up is a cosmetic inaccuracy, and putting an
-  // error line above someone's conversation for it would be worse than the bug.
+  // V8-R-GRP-008. Opening the thread IS reading it — but only once it has actually BEEN read.
+  //
+  // Round-1 finding: this fired from its own mount effect, independent of the load. When
+  // `get_group_thread` failed while `mark_group_read` succeeded, the viewer saw "the conversation
+  // could not be loaded" while every prior message was marked read and the unread badge cleared.
+  // Read state advanced past messages that were never shown, and nothing could bring it back.
+  // Gated on `ready` so the claim "you have seen these" is only ever made once they are on screen.
+  //
+  // The ref keeps it to one call per group: `status` flips loading -> ready, and without it a
+  // re-render or a re-read from `run()` would mark read again on every pass.
+  //
+  // A FAILURE here is still deliberately silent: an unread badge that stays up is a cosmetic
+  // inaccuracy, and an error line above someone's conversation would be worse than the bug.
+  const readMarkedFor = useRef<string | null>(null);
   useEffect(() => {
+    if (status !== 'ready') return;
+    if (readMarkedFor.current === groupId) return;
+    readMarkedFor.current = groupId;
     void markGroupRead(client, groupId).then((result) => {
       if (result.ok) onChanged();
     });
-  }, [client, groupId, onChanged]);
+  }, [client, groupId, onChanged, status]);
 
   /** Run one write, state its outcome, and re-read rather than guess. */
   const run = useCallback(
@@ -333,17 +362,21 @@ export default function GroupThread({
 
           {viewerIsAdmin ? (
             <Administration
-              name={name}
+              name={nameDraft}
               members={members}
               viewerId={viewerId}
               addable={addable}
               busy={busy}
-              onName={setName}
+              onName={setNameDraft}
               onRename={(next) =>
                 void run(
                   () => renameGroup(client, groupId, next),
                   'Group renamed.',
-                )
+                ).then((ok) => {
+                  // ONLY a confirmed rename moves the heading. On failure the draft keeps what
+                  // was typed (so it can be corrected and retried) and `name` is untouched.
+                  if (ok) setName(next);
+                })
               }
               onAdd={(profileId) =>
                 void run(
@@ -363,14 +396,28 @@ export default function GroupThread({
           <NightOutInvite
             busy={busy}
             memberCount={members.length}
-            onInvite={(nightOutId) =>
+            members={members}
+            outcomes={inviteOutcomes}
+            onInvite={(nightOutId) => {
+              setInvitePlanId(nightOutId);
               void run(async () => {
                 const result = await inviteGroupToNightOut(
                   client,
                   nightOutId,
                   groupId,
                 );
-                if (!result.ok) return { ok: false, message: result.message };
+                if (!result.ok) {
+                  setInviteOutcomes(null);
+                  return { ok: false, message: result.message };
+                }
+                // THE PER-PERSON RESULT IS KEPT, not counted and thrown away.
+                //
+                // Round-1 finding: the returned profile ids were discarded and a mixed result
+                // became "N of M invites did not go through", whose only offered recovery was
+                // inviting the WHOLE GROUP again. V8-R-GRP-003 is explicit — "a failed invite
+                // shows a per-person Resend invite; other successful invites are unaffected" —
+                // and re-inviting everyone is exactly what "unaffected" forbids.
+                setInviteOutcomes(result.value);
                 const failed = result.value.filter((row) => !row.invited);
                 // PARTIAL SUCCESS IS REPORTED AS PARTIAL. Rounding a mixed
                 // result up to "invited" is what the requirement's per-person
@@ -379,9 +426,31 @@ export default function GroupThread({
                   ? { ok: true }
                   : {
                       ok: false,
-                      message: `${failed.length} of ${result.value.length} invites did not go through. Try those again.`,
+                      message: `${failed.length} of ${result.value.length} invites did not go through. Resend the ones below.`,
                     };
-              }, 'The group was invited.')
+              }, 'The group was invited.');
+            }}
+            onResend={(profileId) =>
+              void run(async () => {
+                const result = await inviteNightOutMember(
+                  client,
+                  invitePlanId,
+                  profileId,
+                );
+                if (!result.ok) return { ok: false, message: result.message };
+                // ONE person's outcome replaces ONE row. Everyone else's stands, which is the
+                // "other successful invites are unaffected" half of the requirement.
+                setInviteOutcomes((prev) =>
+                  (prev ?? []).map((row) =>
+                    row.profileId === profileId
+                      ? { ...row, invited: result.value }
+                      : row,
+                  ),
+                );
+                return result.value
+                  ? { ok: true }
+                  : { ok: false, message: 'That invite still did not go through.' };
+              }, 'Invite resent.')
             }
           />
 
@@ -722,13 +791,29 @@ function Administration({
 function NightOutInvite({
   busy,
   memberCount,
+  members,
+  outcomes,
   onInvite,
+  onResend,
 }: {
   busy: boolean;
   memberCount: number;
+  members: readonly GroupMember[];
+  /** Per-person results of the last whole-group invite, or null if none has run. */
+  outcomes: readonly GroupInviteOutcome[] | null;
   onInvite: (nightOutId: string) => void;
+  onResend: (profileId: string) => void;
 }): JSX.Element {
   const [planId, setPlanId] = useState('');
+
+  // Name the person, not the uuid. A Resend row that says "b3f1…" is not a per-person recovery
+  // in any sense a member could act on.
+  const labelFor = (profileId: string): string => {
+    const member = members.find((m) => m.profileId === profileId);
+    return member?.displayName ?? (member?.handle ? `@${member.handle}` : 'That member');
+  };
+
+  const failed = (outcomes ?? []).filter((row) => !row.invited);
 
   return (
     <div
@@ -762,6 +847,40 @@ function NightOutInvite({
       >
         Invite the group
       </button>
+
+      {/*
+        V8-R-GRP-003: "a failed invite shows a per-person Resend invite; other successful invites
+        are unaffected". Only the people who did NOT get in are listed — someone already invited
+        must not be offered a resend, both because it is noise and because re-inviting them is
+        the notification volume V8-R-GRP-008 exists to hold down.
+      */}
+      {failed.length > 0 ? (
+        <div data-testid="group-invite-failures" className="space-y-2 pt-1">
+          <p className="text-xs text-muted">
+            These invites did not go through. Everyone else is already invited.
+          </p>
+          <ul className="space-y-2">
+            {failed.map((row) => (
+              <li
+                key={row.profileId}
+                className="flex items-center justify-between gap-3 min-h-[44px]"
+              >
+                <span className="text-sm truncate">{labelFor(row.profileId)}</span>
+                <button
+                  type="button"
+                  onClick={() => onResend(row.profileId)}
+                  disabled={busy}
+                  data-testid={`group-invite-resend-${row.profileId}`}
+                  aria-label={`Resend invite to ${labelFor(row.profileId)}`}
+                  className="min-h-[44px] px-4 rounded-full border border-border text-sm font-display touch-manipulation disabled:opacity-50"
+                >
+                  Resend
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

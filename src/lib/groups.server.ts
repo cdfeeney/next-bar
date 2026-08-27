@@ -558,6 +558,42 @@ export async function markGroupRead(
  * unaffected". A single boolean would have to round a mixed result to one
  * answer, and either answer would be a lie about somebody.
  */
+/**
+ * Re-invite ONE person to a Night Out, for V8-R-GRP-003's per-person Resend.
+ *
+ * Separate from {@link inviteGroupToNightOut} deliberately. The requirement says "a failed invite
+ * shows a per-person Resend invite; other successful invites are unaffected" — re-running the
+ * whole-group call to retry one person is what "unaffected" forbids, and it would also re-notify
+ * (V8-R-GRP-008 is a notification-VOLUME requirement).
+ *
+ * `invite_to_night_out` is idempotent by design: a person already on the plan returns true and no
+ * seat is taken, so a Resend that races an accepted invite is harmless.
+ */
+export async function inviteNightOutMember(
+  client: SupabaseClient | null,
+  nightOutId: string,
+  profileId: string,
+): Promise<MediaResult<boolean>> {
+  if (client === null) return mediaUnavailable();
+  if (!isUuid(nightOutId)) return rejected('That plan could not be found.');
+  if (!isUuid(profileId)) return rejected('That person could not be found.');
+
+  try {
+    const { data, error } = await client.rpc('invite_to_night_out', {
+      p_night_out: nightOutId,
+      p_user: profileId,
+    });
+
+    if (error) {
+      return mediaFailure('failed', 'That invite could not be sent. Try again.');
+    }
+
+    return { ok: true, value: data === true };
+  } catch {
+    return mediaUnavailable();
+  }
+}
+
 export async function inviteGroupToNightOut(
   client: SupabaseClient | null,
   nightOutId: string,

@@ -300,13 +300,34 @@ set search_path = public
 as $$
 declare
   v_successor uuid;
+  v_promoted  integer;
+  v_attempts  integer := 0;
 begin
   if p_group is null then
     return;
   end if;
 
-  -- An administrator still standing means nothing to do. Checked FIRST so an
-  -- ordinary member's departure costs one index probe.
+  -- SERIALIZED PER GROUP, ON THE SAME KEY `leave_group` TAKES.
+  --
+  -- Round-1 finding: `leave_group` held this lock, but succession itself did not — and the
+  -- `profiles ON DELETE CASCADE` route reaches succession through
+  -- `group_members_succession_trigger` WITHOUT ever passing through `leave_group`. So the two
+  -- departure routes were not serialized against each other. A cascade could read a membership
+  -- row a concurrent `leave_group` had deleted but not yet committed, pick that departing member
+  -- as successor, and then have its promotion UPDATE match ZERO rows once the delete committed
+  -- (EvalPlanQual finds the tuple dead). The function returned happily and the group was left
+  -- administrator-less, with `rename_group`, `add_group_member` and `remove_group_member` all
+  -- frozen because each requires an existing admin row.
+  --
+  -- Advisory transaction locks are re-entrant within one transaction, so `leave_group` taking it
+  -- first and the trigger taking it again is free; what it buys is that the CASCADE route now
+  -- takes it too.
+  perform pg_advisory_xact_lock(
+    hashtextextended('group_members:' || p_group::text, 0)
+  );
+
+  -- RE-READ UNDER THE LOCK. Whoever held it before us may already have promoted an
+  -- administrator or deleted the group, so the pre-lock answer is not worth acting on.
   if exists (
     select 1
       from public.group_members m
@@ -321,23 +342,49 @@ begin
   -- a timestamp — `now()` is the transaction's clock, not the wall clock — and
   -- an arbitrary winner there means two replicas of the same history can
   -- disagree about who administers the group.
-  select m.profile_id into v_successor
-    from public.group_members m
-   where m.group_id = p_group
-   order by m.joined_at, m.profile_id
-   limit 1;
+  --
+  -- LOOPED, because choosing a successor and promoting them are two statements and the row can
+  -- die in between. A zero-row UPDATE is the signal to choose again, not to give up: giving up
+  -- silently is precisely what left a group with no administrator.
+  loop
+    v_attempts := v_attempts + 1;
+    if v_attempts > 100 then
+      -- Cannot happen under the lock in READ COMMITTED, where each statement takes a fresh
+      -- snapshot and a dead row stops being selected. Bounded anyway: a succession that cannot
+      -- converge must fail loudly rather than spin holding a per-group lock.
+      raise exception 'group_apply_succession: could not converge on a successor for %', p_group
+        using errcode = '55000';
+    end if;
 
-  if v_successor is null then
-    -- NO MEMBER REMAINS, so the group is DELETED. Messages and read state follow
-    -- through their own cascades.
-    delete from public.groups g where g.id = p_group;
-    return;
-  end if;
+    select m.profile_id into v_successor
+      from public.group_members m
+     where m.group_id = p_group
+     order by m.joined_at, m.profile_id
+     limit 1;
 
-  update public.group_members m
-     set is_admin = true
-   where m.group_id = p_group
-     and m.profile_id = v_successor;
+    if v_successor is null then
+      -- NO MEMBER REMAINS, so the group is DELETED. Messages and read state follow
+      -- through their own cascades.
+      --
+      -- Reached from inside the loop deliberately: in the last-two-out variant the old code
+      -- selected a successor, updated zero rows, and returned with v_successor non-null — so it
+      -- skipped this branch too and left an EMPTY, undeleted group, violating V8-R-GRP-006's
+      -- "DELETED when no member remains".
+      delete from public.groups g where g.id = p_group;
+      return;
+    end if;
+
+    update public.group_members m
+       set is_admin = true
+     where m.group_id = p_group
+       and m.profile_id = v_successor;
+
+    get diagnostics v_promoted = row_count;
+
+    -- ONE ROW IS THE ONLY ACCEPTABLE OUTCOME. Zero means the successor we chose is already
+    -- gone; go round again and choose from what is actually left.
+    exit when v_promoted = 1;
+  end loop;
 end;
 $$;
 
@@ -852,6 +899,55 @@ comment on function public.delete_group_message(uuid) is
 
 revoke all on function public.delete_group_message(uuid) from public, anon;
 grant execute on function public.delete_group_message(uuid) to authenticated;
+
+------------------------------------------------------------------------------
+-- 5b. Retiring a photo destination when the MESSAGE ITSELF dies
+------------------------------------------------------------------------------
+--
+-- `delete_group_message` above retires the destination, but it is only the SOFT-delete verb.
+-- Two hard-delete routes bypass it entirely, and both are ordinary:
+--
+--   * the group is deleted (succession's no-member-remains branch, or a group cascade), which
+--     cascades `group_messages` away;
+--   * the SENDER's profile is deleted, which cascades their `group_messages` rows away
+--     (`sender_id ... on delete cascade`, declared above and deliberate).
+--
+-- In both, the message row disappears while its `media_destinations` row with `kind='group'`
+-- and `ref_id=<message id>` stays LIVE. WP1's reclamation counts every live non-story
+-- destination, so those bytes are held off reclamation permanently by a reference to a message
+-- that no longer exists — unreclaimable and unexplainable, because nothing is left to point at.
+--
+-- Put on the TABLE rather than in the verb precisely because the verb is the one path that was
+-- already correct. A trigger is the only place both cascade routes pass through.
+create or replace function public.group_message_retire_destination()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if old.media_id is not null then
+    update public.media_destinations d
+       set removed_at = now()
+     where d.media_id = old.media_id
+       and d.kind = 'group'
+       and d.ref_id = old.id::text
+       and d.removed_at is null;
+  end if;
+  return old;
+end;
+$$;
+
+comment on function public.group_message_retire_destination() is
+  'Retires the kind=''group'' media destination when a group_messages row is HARD-deleted (group cascade or sender-profile cascade). delete_group_message covers only the soft-delete verb.';
+
+revoke all on function public.group_message_retire_destination() from public, anon, authenticated;
+
+drop trigger if exists group_messages_retire_destination_trigger on public.group_messages;
+create trigger group_messages_retire_destination_trigger
+  after delete on public.group_messages
+  for each row
+  execute function public.group_message_retire_destination();
 
 ------------------------------------------------------------------------------
 -- 6. Reading the thread, and unread state (V8-R-GRP-008)
@@ -1490,6 +1586,132 @@ grant execute on function public.media_read_window(text) to authenticated;
 -- THE GROUP IS NOT TOUCHED. There is no write to `group_members` anywhere in
 -- this function; the exclusion "inviting never alters the group's own
 -- membership" is satisfied by construction rather than by care.
+------------------------------------------------------------------------------
+-- 8b. V8-R-GRP-008, the half that was never built — INVITATION NOTIFICATIONS
+------------------------------------------------------------------------------
+--
+-- The requirement reads: "V8 PROVIDES IN-APP UNREAD STATE **and NIGHT OUT INVITATION
+-- NOTIFICATIONS**. V8 DOES NOT SEND A PUSH NOTIFICATION FOR EVERY ORDINARY GROUP MESSAGE."
+-- Its states include "invitation notification sent".
+--
+-- This file shipped only the first half. The exclusion ("no push per ordinary group message")
+-- was implemented as ABSENCE — correctly — but the inclusion was read as if it were part of the
+-- same exclusion, so nothing was built. Round-1 finding: an invitee became a plan member and was
+-- never told.
+--
+-- WHY `night_out_events` IS NOT ALREADY THIS. `invite_to_night_out` does insert
+-- `night_out_events (kind='invited')`, but that table has no recipient column and is revoked
+-- from `authenticated`: it is plan ACTIVITY, addressed to nobody and readable by nobody. A
+-- notification has to name who it is for and be readable by them.
+--
+-- SCOPE, stated so the boundary is not mistaken for an omission. This lane owns 0067 and cannot
+-- write a sender: APNs credentials, device tokens and the delivery worker are not in its write
+-- scope, and GRP-008 puts the preference surface in `src/app/settings/preferences/page.tsx`,
+-- which another lane owns. What belongs HERE is the durable, recipient-addressed record that a
+-- sender consumes and the in-app surface reads — `delivered_at` is the seam that sender writes.
+-- Building the record is what turns "entirely absent" into "present and addressable".
+create table if not exists public.night_out_invitation_notifications (
+  id            bigint      generated always as identity primary key,
+  night_out_id  uuid        not null references public.night_outs(id)  on delete cascade,
+  recipient_id  uuid        not null references public.profiles(id)    on delete cascade,
+  -- The group the invitation came THROUGH, kept so the surface can say "via <group>". Nullable
+  -- and ON DELETE SET NULL: deleting the group must not delete the invitation you received.
+  group_id      uuid        null references public.groups(id)          on delete set null,
+  invited_by    uuid        null references public.profiles(id)        on delete set null,
+  created_at    timestamptz not null default now(),
+  -- Written by the sender, not by this file. NULL means "not yet delivered to the OS surface".
+  delivered_at  timestamptz,
+  read_at       timestamptz,
+  -- ONE notification per plan per recipient. A re-invite, a retry, or a second group containing
+  -- the same person must not produce a second row: notification volume is the whole subject of
+  -- this requirement.
+  constraint night_out_invitation_notifications_unique unique (night_out_id, recipient_id)
+);
+
+create index if not exists night_out_invitation_notifications_recipient_idx
+  on public.night_out_invitation_notifications (recipient_id, created_at desc);
+
+alter table public.night_out_invitation_notifications enable row level security;
+revoke all on table public.night_out_invitation_notifications from public, anon, authenticated;
+
+-- SELECT ONLY, AND ONLY YOUR OWN. Every write goes through the definer functions below, exactly
+-- as the four group tables do.
+grant select on table public.night_out_invitation_notifications to authenticated;
+
+drop policy if exists night_out_invitation_notifications_own_select
+  on public.night_out_invitation_notifications;
+create policy night_out_invitation_notifications_own_select
+  on public.night_out_invitation_notifications
+  for select
+  to authenticated
+  using (recipient_id = auth.uid());
+
+comment on table public.night_out_invitation_notifications is
+  'V8-R-GRP-008. The recipient-addressed Night Out invitation notification. Distinct from night_out_events, which is plan activity with no recipient and no reader. One row per (plan, recipient); delivered_at is written by the sender, not by this file.';
+
+-- The recipient's own list. Zero-argument and auth-scoped, the same shape as
+-- get_my_night_outs: a notification nobody can query is not a notification.
+create or replace function public.get_my_night_out_invitation_notifications()
+returns table (
+  id            bigint,
+  night_out_id  uuid,
+  night         date,
+  title         text,
+  group_id      uuid,
+  group_name    text,
+  invited_by    uuid,
+  created_at    timestamptz,
+  read_at       timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select n.id, n.night_out_id, o.night, o.title, n.group_id, g.name,
+         n.invited_by, n.created_at, n.read_at
+    from public.night_out_invitation_notifications n
+    join public.night_outs o on o.id = n.night_out_id
+    left join public.groups g on g.id = n.group_id
+   where n.recipient_id = auth.uid()
+     and o.status <> 'cancelled'
+   order by n.created_at desc, n.id desc;
+$$;
+
+comment on function public.get_my_night_out_invitation_notifications() is
+  'V8-R-GRP-008. The caller''s own Night Out invitation notifications. Cancelled plans are excluded, matching get_my_night_outs.';
+
+revoke all on function public.get_my_night_out_invitation_notifications() from public, anon;
+grant execute on function public.get_my_night_out_invitation_notifications() to authenticated;
+
+create or replace function public.mark_night_out_invitation_notification_read(p_id bigint)
+returns boolean
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  v_caller uuid := auth.uid();
+begin
+  if v_caller is null then
+    raise exception 'mark_night_out_invitation_notification_read: not authenticated'
+      using errcode = '28000';
+  end if;
+
+  update public.night_out_invitation_notifications n
+     set read_at = now()
+   where n.id = p_id
+     and n.recipient_id = v_caller
+     and n.read_at is null;
+
+  return found;
+end;
+$$;
+
+revoke all on function public.mark_night_out_invitation_notification_read(bigint) from public, anon;
+grant execute on function public.mark_night_out_invitation_notification_read(bigint) to authenticated;
+
 create or replace function public.invite_group_to_night_out(
   p_night_out uuid,
   p_group uuid
@@ -1503,6 +1725,7 @@ as $$
 declare
   v_caller uuid := auth.uid();
   r record;
+  v_was_member boolean;
 begin
   if v_caller is null then
     raise exception 'invite_group_to_night_out: not authenticated'
@@ -1534,7 +1757,33 @@ begin
      order by m.joined_at, m.profile_id
   loop
     profile_id := r.id;
+
+    -- NEWNESS IS DECIDED HERE, BEFORE THE INVITE. `invite_to_night_out` returns true both for
+    -- "newly invited" and for "was already on the plan" — deliberately, so a duplicate invite is
+    -- not reported as a failure. That makes its return value useless for deciding whether to
+    -- NOTIFY, and notifying on it would tell people who were already going that they had just
+    -- been invited. V8-R-GRP-008 is a notification-VOLUME requirement; this is exactly the
+    -- volume it is about.
+    v_was_member := exists (
+      select 1
+        from public.night_out_members nm
+       where nm.night_out_id = p_night_out
+         and nm.user_id = r.id
+    );
+
     invited := public.invite_to_night_out(p_night_out, r.id);
+
+    -- V8-R-GRP-008: the invitation notification, for genuinely new invitees only, and only when
+    -- the invite actually took. ON CONFLICT DO NOTHING because the unique constraint is the real
+    -- guarantee — two administrators inviting overlapping groups at the same moment must still
+    -- produce one notification, not two.
+    if invited and not v_was_member then
+      insert into public.night_out_invitation_notifications
+        (night_out_id, recipient_id, group_id, invited_by)
+      values (p_night_out, r.id, p_group, v_caller)
+      on conflict on constraint night_out_invitation_notifications_unique do nothing;
+    end if;
+
     return next;
   end loop;
 end;
