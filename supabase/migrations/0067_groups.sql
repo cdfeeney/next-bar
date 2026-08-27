@@ -821,6 +821,35 @@ begin
         using errcode = '42501';
     end if;
 
+    -- OWNERSHIP IS NOT EVIDENCE. Round-3 finding: this checked that the caller OWNS the
+    -- media_objects row and that its bytes had not been reclaimed, and stopped there — so a row
+    -- the upload route never vouched for could still be attached to a group thread.
+    -- `server_verified` is exactly the distinction 0066 draws, and it defaults to FALSE: it is
+    -- true only for bytes the server decoded and accepted. Requiring it here is what makes "group
+    -- photos cross the WP1 boundary" a fact rather than a sentence in a comment.
+    if not exists (
+      select 1
+        from public.media_objects m
+       where m.id = p_media_id
+         and m.server_verified
+    ) then
+      raise exception 'send_group_message: those bytes were never verified by the upload route'
+        using errcode = '42501';
+    end if;
+
+    -- AND IN THE RIGHT BUCKET. The path lock below is taken on 'story-media'; if the object does
+    -- not actually live there, the lock guards nothing and the destination row points somewhere
+    -- the reclamation sweep does not look.
+    if not exists (
+      select 1
+        from storage.objects o
+       where o.bucket_id = 'story-media'
+         and o.name = v_path
+    ) then
+      raise exception 'send_group_message: that object is not in the story-media bucket'
+        using errcode = '22023';
+    end if;
+
     perform pg_advisory_xact_lock(public.media_path_lock_key('story-media', v_path));
 
     perform 1 from public.media_objects m where m.id = p_media_id for update;
@@ -1074,7 +1103,7 @@ grant execute on function public.group_message_is_visible(uuid) to authenticated
 
 -- V8-R-GRP-008. Reading is a caller-scoped write of one timestamp — the entire
 -- alternative to a push per message.
-create or replace function public.mark_group_read(p_group uuid)
+create or replace function public.mark_group_read(p_group uuid, p_through timestamptz default null)
 returns boolean
 language plpgsql
 security definer
@@ -1096,8 +1125,18 @@ begin
     return false;
   end if;
 
+  -- THE WATERMARK, NOT THE CLOCK.
+  --
+  -- Round-3 finding: this stamped now(), so read state advanced past any message that arrived
+  -- between the thread fetch and this call — messages the viewer never saw, marked read and gone
+  -- from the unread badge with no way back. The boundary must be the newest message the caller
+  -- was actually SHOWN, which only the caller knows, so the caller passes it.
+  --
+  -- coalesce keeps the old behaviour when nothing is supplied (an empty thread has no newest
+  -- message), and least() refuses a watermark from the future: neither a skewed client clock nor
+  -- a hand-made call may mark unseen messages read.
   insert into public.group_reads (group_id, profile_id, last_read_at)
-  values (p_group, v_caller, now())
+  values (p_group, v_caller, least(coalesce(p_through, now()), now()))
   on conflict (group_id, profile_id) do update
      -- NEVER BACKWARDS. Two tabs marking the same thread read can arrive out of
      -- order, and an older timestamp landing last would resurrect unread
@@ -1108,11 +1147,11 @@ begin
 end;
 $$;
 
-comment on function public.mark_group_read(uuid) is
+comment on function public.mark_group_read(uuid, timestamptz) is
   'V8-R-GRP-008. In-app read state, monotonic so an out-of-order write cannot resurrect read messages.';
 
-revoke all on function public.mark_group_read(uuid) from public, anon;
-grant execute on function public.mark_group_read(uuid) to authenticated;
+revoke all on function public.mark_group_read(uuid, timestamptz) from public, anon;
+grant execute on function public.mark_group_read(uuid, timestamptz) to authenticated;
 
 -- THE DELIVERY MECHANISM, and it is a READ. There is no push here and no sender
 -- anywhere in this file; V8-R-GRP-008's exclusion is "NO push notification per

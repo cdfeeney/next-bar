@@ -192,23 +192,86 @@ async function signInStub(page: import('@playwright/test').Page): Promise<void> 
 }
 
 test.describe('Social · Groups · signed in (stubbed transport, no database)', () => {
-  // NOTE ON WHAT IS AND IS NOT HERE. The per-person Resend control introduced for round-1
-  // finding 2 is proven at the component level in
-  // , which drives the real component through
-  // a mixed invite result and asserts the named Resend appears for the failure and NOT for the
-  // success. Reaching that same control from this file would need the whole group list, thread
-  // and roster stubbed through PostgREST first. That is worth doing and is NOT done here: see
-  // the honesty note at the top of this signed-in block.
 
-  test('the group surface renders for a signed-in viewer at all (V8-R-NAV-003, GRP-001)', async ({
-    page,
-  }) => {
+  /** Fulfil a PostgREST table read or an RPC with a JSON body. */
+  const json = (body: unknown) => async (route: import('@playwright/test').Route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  };
+
+  /**
+   * Stub the exact endpoints the Groups surface calls, and nothing else. Every one is a real call
+   * site in src/lib/groups.server.ts: the `groups` table read behind fetchMyGroups, and the
+   * group_unread_counts / get_group_thread / get_group_members / mark_group_read RPCs.
+   */
+  async function stubGroups(page: import('@playwright/test').Page, opts: {
+    groups?: unknown[];
+    unread?: unknown[];
+    thread?: unknown[] | null;
+    members?: unknown[];
+  } = {}): Promise<void> {
+    const marked: string[] = [];
+    (page as unknown as { __marked: string[] }).__marked = marked;
+    await page.route('**/rest/v1/groups?**', json(opts.groups ?? []));
+    await page.route('**/rest/v1/rpc/group_unread_counts', json(opts.unread ?? []));
+    await page.route('**/rest/v1/rpc/get_group_members', json(opts.members ?? []));
+    await page.route('**/rest/v1/rpc/mark_group_read', async (route) => {
+      marked.push(route.request().postData() ?? '');
+      await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
+    });
+    await page.route('**/rest/v1/rpc/get_group_thread', async (route) => {
+      if (opts.thread === null) {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'boom' }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(opts.thread ?? []) });
+    });
+  }
+
+  test('a signed-in member sees their own groups, not the signed-out placeholder (GRP-001)', async ({ page }) => {
     await signInStub(page);
+    await stubGroups(page, {
+      groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
+      unread: [{ group_id: GROUP_ID, unread: 2 }],
+    });
     await page.goto('/friends');
     await page.getByRole('button', { name: /groups & people/i }).click();
 
-    await expect(page.locator('#groups-and-people')).toBeVisible();
-    // With a session the signed-out placeholder must NOT be what greets a member.
+    await expect(page.getByTestId('group-list')).toBeVisible();
+    await expect(page.getByTestId('group-name').first()).toHaveText('Thursday Crew');
+    // The signed-out placeholder and its sign-in link must NOT render for a member.
+    await expect(page.getByTestId('groups-signed-out')).toHaveCount(0);
     await expect(page.getByTestId('groups-sign-in')).toHaveCount(0);
+  });
+
+  test('the unread badge is carried in-app, per V8-R-GRP-008', async ({ page }) => {
+    // GRP-008's included half: unread state is in-app, not only an OS badge. A count that never
+    // renders is the same defect as a push that never sends.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
+      unread: [{ group_id: GROUP_ID, unread: 3 }],
+    });
+    await page.goto('/friends');
+    await page.getByRole('button', { name: /groups & people/i }).click();
+    await expect(page.getByTestId('group-unread')).toContainText('3');
+  });
+
+  test('a failed thread load states the failure and does NOT clear unread state', async ({ page }) => {
+    // The round-1 finding, end to end: mark_group_read used to fire from its own mount effect, so
+    // a failed load still cleared the badge. Asserted here against the real network boundary
+    // rather than only at the component seam.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
+      unread: [{ group_id: GROUP_ID, unread: 2 }],
+      thread: null,
+    });
+    await page.goto('/friends');
+    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByTestId('group-row').first().click();
+
+    await expect(page.getByTestId('groups-notice').or(page.getByText(/could not be loaded/i)).first()).toBeVisible();
+    const marked = (page as unknown as { __marked: string[] }).__marked;
+    expect(marked, 'a failed thread load must not mark the group read').toEqual([]);
   });
 });

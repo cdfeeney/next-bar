@@ -545,9 +545,19 @@ export async function deleteGroupMessage(
 }
 
 /** Mark a thread read (V8-R-GRP-008). In-app state; nothing is pushed. */
+/**
+ * Mark a thread read UP TO A WATERMARK — the newest message the viewer was actually shown.
+ *
+ * Round-3 finding: this used to let the database stamp `now()`, so read state advanced past any
+ * message that landed between the thread fetch and this call. Those messages were never rendered,
+ * yet they were marked read and dropped out of the unread badge with no way back. Only the caller
+ * knows what was on screen, so the caller supplies the boundary. Omitting it preserves the old
+ * behaviour for an empty thread, and the RPC refuses a watermark from the future.
+ */
 export async function markGroupRead(
   client: SupabaseClient | null,
   groupId: string,
+  through?: string | null,
 ): Promise<MediaResult<true>> {
   if (client === null) return mediaUnavailable();
   if (!isUuid(groupId)) return rejected('That group could not be found.');
@@ -555,6 +565,7 @@ export async function markGroupRead(
   try {
     const { data, error } = await client.rpc('mark_group_read', {
       p_group: groupId,
+      p_through: through ?? null,
     });
 
     if (error || data !== true) {

@@ -152,10 +152,14 @@ export default function GroupThread({
     if (status !== 'ready') return;
     if (readMarkedFor.current === groupId) return;
     readMarkedFor.current = groupId;
-    void markGroupRead(client, groupId).then((result) => {
+    // Read up to the NEWEST MESSAGE ACTUALLY LOADED, not the clock — see markGroupRead. A
+    // message that arrives between the fetch and this call was never on screen and must stay
+    // unread.
+    const watermark = messages.length > 0 ? messages[messages.length - 1].createdAt : null;
+    void markGroupRead(client, groupId, watermark).then((result) => {
       if (result.ok) onChanged();
     });
-  }, [client, groupId, onChanged, status]);
+  }, [client, groupId, onChanged, status, messages]);
 
   /** Run one write, state its outcome, and re-read rather than guess. */
   const run = useCallback(

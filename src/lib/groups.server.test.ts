@@ -242,3 +242,37 @@ describe('round-3 panel findings', () => {
   // comment left behind — the same prose-matching vacuity code() was introduced to fix, in a
   // guard that was never routed through it.
 });
+
+describe('round-3, second pass', () => {
+  // FINDING C6 (Codex): send_group_message checked OWNERSHIP and reclamation but never the WP1
+  // evidence itself. media_objects.server_verified is precisely what distinguishes bytes the
+  // upload route decoded and vouched for from a row a client merely owns, and 0066 defaults it
+  // to false. Without that check a caller can attach an unverified object to a group thread.
+  it('a group photo must carry WP1 server_verified evidence', () => {
+    const body = code('send_group_message');
+    expect(body).toMatch(/server_verified/);
+  });
+
+  it('a group photo must live in the story-media bucket, not merely be owned', () => {
+    const body = code('send_group_message');
+    expect(body).toMatch(/story-media/);
+    expect(body).toMatch(/storage\.objects/);
+  });
+
+  // FINDING C5 (Codex): mark_group_read stamped database now(), so read state advanced past
+  // messages that arrived between the thread fetch and the mark — messages the viewer never saw.
+  // The boundary must be the newest message actually RETURNED, not the clock.
+  it('mark_group_read accepts a watermark rather than stamping the clock', () => {
+    expect(SQL).toMatch(/mark_group_read\(p_group uuid, p_through timestamptz/);
+    const body = code('mark_group_read');
+    expect(body).toMatch(/p_through/);
+    // now() may remain only as the fallback when no watermark is supplied.
+    expect(body).toMatch(/coalesce\(p_through/);
+  });
+
+  it('the client passes the newest loaded message as that watermark', () => {
+    const src = readFileSync(path.join(__dirname, 'groups.server.ts'), 'utf8')
+      .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+    expect(src).toMatch(/p_through/);
+  });
+});
