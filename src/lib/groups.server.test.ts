@@ -184,18 +184,61 @@ describe('round-2 panel findings', () => {
     expect(lockAt).toBeLessThan(firstRead);
   });
 
-  it('the cascade route takes the advisory lock BEFORE the row lock, via a BEFORE DELETE trigger', () => {
-    // This is the actual deadlock fix, and without this assertion nothing pins it. leave_group
-    // acquires advisory-then-row by construction; the profiles ON DELETE CASCADE route cannot,
-    // because by the time the AFTER trigger runs the row lock is already held. A BEFORE DELETE
-    // row trigger is the only place the cascade can acquire first.
-    expect(SQL).toMatch(/before delete on public\.group_members/i);
-    const body = fn('group_members_lock_before_delete');
-    expect(body).toContain("hashtextextended('group_members:' || old.group_id::text, 0)");
+
+});
+
+describe('round-3 panel findings', () => {
+  // RULING (a), operator, after adjudicating Codex vs Fable by evidence: PostgreSQL locks the
+  // target tuple in GetTupleForTrigger BEFORE any BEFORE ROW DELETE trigger body runs, so the
+  // round-2 trigger acquired row-then-advisory exactly like the AFTER trigger it replaced. It was
+  // ineffective. It is removed rather than kept as decoration.
+  it('the ineffective BEFORE DELETE lock trigger is gone', () => {
+    expect(SQL).not.toMatch(/group_members_lock_before_delete/);
+    expect(SQL).not.toMatch(/before delete on public\.group_members/i);
   });
 
-  it('0067 documents the single acquisition order both departure routes follow', () => {
-    // A lock-order rule that is not written down is a rule the next edit breaks.
-    expect(SQL).toMatch(/LOCK ORDER/);
+  it('0067 states the TRUE concurrency ceiling and never claims impossibility', () => {
+    // The round-2 comment said "the cycle cannot form". That is false on this evidence, and a
+    // false safety claim is worse than a named ceiling.
+    expect(SQL).not.toMatch(/cycle cannot form/i);
+    expect(SQL).toMatch(/40P01/);
   });
+
+  it('the deadlock ceiling is retried at the caller rather than hidden', () => {
+    // Fable's alternative, now the shipped design: accept 40P01 as fail-closed and retry where
+    // the work is initiated.
+    // CODE, not the comment above it. The first version of this guard matched /40P01/ anywhere in
+    // the file and survived replacing the comparison with `false` — the FOURTH guard in this lane
+    // to pass on prose. Strip line comments, then require the actual comparison expression.
+    const raw = readFileSync(path.join(__dirname, 'groups.server.ts'), 'utf8');
+    const src = raw.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+    expect(src).toMatch(/error\.code === '40P01'/);
+  });
+
+  // FINDING F1 (Claude/FABLE): invite_one_to_night_out is granted to authenticated and took an
+  // arbitrary p_group with no membership check, so any caller could forge "via <group>"
+  // attribution and leak a group's NAME to a non-member through
+  // get_my_night_out_invitation_notifications.
+  it('the invite door refuses a group the caller does not belong to', () => {
+    const body = code('invite_one_to_night_out');
+    expect(body).toMatch(/is_group_member|group_members/);
+    expect(body).toMatch(/42501/);
+  });
+
+  // FINDING C2 (Codex): deleted_by ON DELETE SET NULL contradicts
+  // group_messages_deletion_is_whole, which demanded deleted_by whenever deleted_at is set. When
+  // the deleter's account is removed the FK nulls deleted_by, the check fails, and the ACCOUNT
+  // DELETION itself errors out. Losing attribution must not unmake a deletion.
+  it('a deleted message survives the loss of its deleter, so account deletion cannot fail', () => {
+    const decl = SQL.slice(SQL.indexOf('constraint group_messages_deletion_is_whole'));
+    // The forbidden half stays forbidden: deleted_by without deleted_at is still a half-deletion.
+    expect(decl.slice(0, 400)).toMatch(/deleted_by is null/);
+    // But deleted_at with a null deleted_by must now be legal.
+    expect(decl.slice(0, 400)).not.toMatch(/deleted_at is not null and deleted_by is not null/);
+  });
+
+  // FINDING F3 (Claude/FABLE): the succession guard matched /loop/i against the body's own
+  // "LOOPED, because..." comment, so it stayed green if the retry loop were reverted with its
+  // comment left behind — the same prose-matching vacuity code() was introduced to fix, in a
+  // guard that was never routed through it.
 });

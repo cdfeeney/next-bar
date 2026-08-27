@@ -139,9 +139,17 @@ create table if not exists public.group_messages (
   ),
   -- The two halves of a deletion agree or the row is refused. A `deleted_by`
   -- with no `deleted_at` reads as an un-deleted message somebody deleted.
+  -- ROUND-3 FIX. This used to demand deleted_by whenever deleted_at was set, which collided head
+  -- on with `deleted_by ... on delete set null` above: when the DELETER's account was removed the
+  -- FK nulled deleted_by, the check then failed, and the ACCOUNT DELETION ITSELF errored out. A
+  -- user could be unable to delete their account because they had once deleted a group message.
+  --
+  -- Losing the attribution must not unmake the deletion. The half that was actually worth
+  -- forbidding is the OTHER one — a deleted_by with no deleted_at, which is a half-recorded
+  -- deletion nobody can explain — and that stays forbidden. A deleted_at with a null deleted_by
+  -- now means exactly what it should: deleted, by an account that no longer exists.
   constraint group_messages_deletion_is_whole check (
-    (deleted_at is null and deleted_by is null)
-    or (deleted_at is not null and deleted_by is not null)
+    deleted_by is null or deleted_at is not null
   )
 );
 
@@ -307,23 +315,34 @@ begin
     return;
   end if;
 
-  -- LOCK ORDER, and it is the ONE rule every route through this table must obey:
+  -- THE CONCURRENCY CEILING, STATED AS A CEILING AND NOT AS SAFETY.
   --
-  --     the per-group advisory lock is taken BEFORE any group_members ROW lock.
+  -- Two departure routes reach succession and they acquire locks in OPPOSITE orders.
+  -- `leave_group` takes the per-group advisory lock and THEN deletes (advisory -> row). The
+  -- `profiles ON DELETE CASCADE` route holds the row lock first and reaches the advisory request
+  -- only afterwards (row -> advisory). So: T1 holds advisory and blocks on T2's row lock while
+  -- promoting a successor; T2 holds that row lock and blocks on T1's advisory. PostgreSQL detects
+  -- the cycle and aborts one transaction with SQLSTATE 40P01.
   --
-  -- Round-2 finding: round 1 gave succession the same advisory key leave_group uses, which fixed
-  -- the stale-read race but created an ABBA inversion. leave_group takes the advisory lock and
-  -- THEN deletes (advisory -> row). The profiles ON DELETE CASCADE route deletes the membership
-  -- row FIRST and only then reaches the AFTER trigger that asks for the advisory lock (row ->
-  -- advisory). Opposite orders, so: T1 holds advisory and blocks on T2's row lock while updating
-  -- the successor; T2 holds that row lock and blocks on T1's advisory. Postgres detects it and
-  -- aborts one with 40P01 — fail-closed, nothing is left administrator-less, but an ordinary
-  -- leave or an account deletion errors out for a reason its user cannot act on.
+  -- ROUND 2 TRIED TO REMOVE THIS AND COULD NOT. It added a BEFORE DELETE row trigger that took
+  -- the advisory lock, on the theory that a BEFORE trigger runs before the row lock. IT DOES NOT:
+  -- ExecDelete -> ExecBRDeleteTriggers -> GetTupleForTrigger locks the tuple with
+  -- LockTupleExclusive BEFORE any BEFORE-ROW trigger body executes, precisely so the trigger sees
+  -- a stable OLD. The trigger therefore acquired row-then-advisory exactly like the AFTER trigger
+  -- it was meant to correct. It has been REMOVED rather than left as decoration, and the comment
+  -- asserting that no such cycle could arise has been removed with it, because a false safety claim is
+  -- worse than a named limit: it stops the next reader from designing around the real behaviour.
   --
-  -- group_members_lock_before_delete_trigger (below) is what makes the cascade route obey the
-  -- rule: a BEFORE DELETE row trigger takes the advisory lock before the row lock is taken, so
-  -- both routes acquire in the same order and the cycle cannot form. Advisory locks are
-  -- re-entrant within a transaction, so leave_group and this trigger both taking it is free.
+  -- A trigger on this table can never fix it. The row lock is already held whenever any trigger on
+  -- group_members runs, so advisory-before-row is unreachable from here by construction.
+  --
+  -- WHAT SHIPS INSTEAD: 40P01 is ACCEPTED as the fail-closed ceiling and retried at the caller
+  -- (see leaveGroup in src/lib/groups.server.ts). Nothing is corrupted when it fires — Postgres
+  -- rolls one transaction back whole, no group is left administrator-less, and the retry succeeds
+  -- because the competing transaction has finished by then. A SECOND, PRE-EXISTING case has the
+  -- same ceiling and the same answer: two concurrent profile-deletion cascades that share two or
+  -- more groups take per-group advisory locks in unordered per-row scan order and can deadlock
+  -- advisory-against-advisory. That predates round 2 and is not introduced here.
   --
   -- SERIALIZED PER GROUP, ON THE SAME KEY `leave_group` TAKES.
   --
@@ -432,41 +451,6 @@ begin
   return null;
 end;
 $$;
-
--- LOCK ORDER ENFORCEMENT for the cascade route. See the long note in group_apply_succession.
---
--- Every route that removes a membership row must hold the per-group advisory lock BEFORE it holds
--- a row lock on group_members. `leave_group` does that by construction. The `profiles ON DELETE
--- CASCADE` route cannot: by the time the AFTER trigger runs, the row lock is already held, which
--- is the opposite order and the ABBA half of a detected 40P01 deadlock.
---
--- A BEFORE DELETE row trigger runs while the delete is still being prepared, so taking the
--- advisory lock here puts the cascade route into the same order as leave_group. Re-entrancy makes
--- the double acquisition free when both fire in one transaction.
-create or replace function public.group_members_lock_before_delete()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  perform pg_advisory_xact_lock(
-    hashtextextended('group_members:' || old.group_id::text, 0)
-  );
-  return old;
-end;
-$$;
-
-comment on function public.group_members_lock_before_delete() is
-  'Lock order: takes the per-group advisory lock BEFORE the group_members row lock, so the profiles ON DELETE CASCADE route acquires in the same order as leave_group and cannot deadlock against it.';
-
-revoke all on function public.group_members_lock_before_delete() from public, anon, authenticated;
-
-drop trigger if exists group_members_lock_before_delete_trigger on public.group_members;
-create trigger group_members_lock_before_delete_trigger
-  before delete on public.group_members
-  for each row
-  execute function public.group_members_lock_before_delete();
 
 drop trigger if exists group_members_succession_trigger on public.group_members;
 create trigger group_members_succession_trigger
@@ -1795,6 +1779,25 @@ declare
 begin
   if v_caller is null then
     raise exception 'invite_one_to_night_out: not authenticated' using errcode = '28000';
+  end if;
+
+  -- THE ATTRIBUTION MUST BE EARNED, NOT ASSERTED.
+  --
+  -- Round-2 finding: this is granted to `authenticated` and took an arbitrary p_group with no
+  -- check at all. Any caller holding a group's uuid could create their own night_out, invite a
+  -- second account "via" that group, and the recipient's
+  -- get_my_night_out_invitation_notifications would return that group's NAME — a disclosure to
+  -- someone in neither the group nor the plan, and a forged provenance on a real notification.
+  -- invite_group_to_night_out already verified caller membership before passing p_group; this
+  -- door did not, which is exactly the gap a shared door is supposed to close rather than open.
+  if p_group is not null and not exists (
+    select 1
+      from public.group_members m
+     where m.group_id = p_group
+       and m.profile_id = v_caller
+  ) then
+    raise exception 'invite_one_to_night_out: you are not a member of that group'
+      using errcode = '42501';
   end if;
 
   -- NEWNESS IS DECIDED BEFORE THE INVITE. invite_to_night_out returns true both for "newly

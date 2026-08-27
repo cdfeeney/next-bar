@@ -426,10 +426,33 @@ export async function leaveGroup(
   if (client === null) return mediaUnavailable();
   if (!isUuid(groupId)) return rejected('That group could not be found.');
 
-  try {
+  // THE 40P01 RETRY, and it is the SHIPPED answer to a ceiling the database cannot remove.
+  //
+  // Two departure routes reach D-C-38 succession in opposite lock orders — leave_group takes the
+  // per-group advisory lock then the row, the profiles ON DELETE CASCADE route holds the row lock
+  // first — so PostgreSQL can detect a cycle and abort one side with SQLSTATE 40P01. Round 2 tried
+  // to remove that with a BEFORE DELETE trigger and could not: GetTupleForTrigger locks the tuple
+  // before any BEFORE-ROW trigger body runs, so advisory-before-row is unreachable from a trigger
+  // on that table. See the long note in 0067_groups.sql.
+  //
+  // A deadlock abort is FAIL-CLOSED, not corruption: Postgres rolls one transaction back whole, no
+  // group is left administrator-less, and the competing transaction has finished by the time we
+  // come back. So the honest handling is one retry here rather than a failure message for
+  // something the user did nothing wrong to cause. ONE retry, not a loop: a second 40P01 means
+  // sustained contention, which is a real condition to report rather than to hide behind spinning.
+  const attempt = async (): Promise<{ deadlocked: boolean; ok: boolean }> => {
     const { data, error } = await client.rpc('leave_group', { p_group: groupId });
+    if (error) {
+      return { deadlocked: error.code === '40P01', ok: false };
+    }
+    return { deadlocked: false, ok: data === true };
+  };
 
-    if (error || data !== true) {
+  try {
+    let result = await attempt();
+    if (result.deadlocked) result = await attempt();
+
+    if (!result.ok) {
       return mediaFailure('failed', 'You could not be removed from that group.');
     }
     return { ok: true, value: true };
