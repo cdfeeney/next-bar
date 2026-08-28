@@ -620,16 +620,22 @@ export async function inviteNightOutMember(
   client: SupabaseClient | null,
   nightOutId: string,
   profileId: string,
+  groupId: string,
 ): Promise<MediaResult<boolean>> {
   if (client === null) return mediaUnavailable();
   if (!isUuid(nightOutId)) return rejected('That plan could not be found.');
   if (!isUuid(profileId)) return rejected('That person could not be found.');
+  if (!isUuid(groupId)) return rejected('That group could not be found.');
 
   try {
+    // THE GROUP TRAVELS WITH THE RESEND. Round-5 finding: this used to send a NULL group, which
+    // bypassed BOTH membership checks the shared door performs and discarded the "via <group>"
+    // attribution the whole-group path records. A Resend exists to retry a GROUP invite; dropping
+    // the group turns it into a different operation wearing the same button.
     const { data, error } = await client.rpc('invite_one_to_night_out', {
       p_night_out: nightOutId,
       p_user: profileId,
-      p_group: null,
+      p_group: groupId,
     });
 
     if (error) {

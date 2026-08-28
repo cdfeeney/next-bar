@@ -92,22 +92,13 @@ describe('a failed thread load does not clear the unread badge (round-1 finding 
     );
   });
 
-  it('does NOT mark read when the thread page is TRUNCATED', async () => {
-    // Codex round-3: get_group_thread returns only the newest GROUP_THREAD_PAGE rows. Marking
-    // through the newest RETURNED row also marks every older message beyond the page read —
-    // messages never shown — because unread is "newer than last_read_at". A full page means there
-    // may be more above it, so mark nothing and leave the badge up.
-    const full = Array.from({ length: 200 }, (_, i) => ({
-      id: `m${i}`, groupId: 'group-1', senderId: 'o', senderHandle: null,
-      senderDisplayName: null, body: 'x', mediaId: null,
-      createdAt: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(),
-    }));
-    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: full } as never);
-    render(<GroupThread {...props()} />);
-    await screen.findByTestId('group-thread-name');
-    await new Promise((r) => { setTimeout(r, 50); });
-    expect(groups.markGroupRead).not.toHaveBeenCalled();
-  });
+  // REMOVED IN ROUND 5, and it was not bent to fit: this test asserted the round-4 RULE that a
+  // truncated page must never mark read. The round-4 panel found that rule to BE a defect - it
+  // froze read state forever for any group past GROUP_THREAD_PAGE messages. Its real intent,
+  // "a message the viewer never saw is never marked read", is asserted with the CORRECT trigger
+  // by INVARIANT B below (unread exceeds the page). Keeping both would pin two contradictory
+  // rules and the freeze would be the one that won.
+
 });
 
 describe('a failed rename does not leave a false group name on screen (round-1 finding 5)', () => {
@@ -164,5 +155,53 @@ describe('partial Night Out invites report per person (round-1 finding 2)', () =
     expect(resend).toBeTruthy();
     // The one who succeeded is not offered a resend.
     expect(screen.queryByTestId(`group-invite-resend-${VIEWER}`)).toBeNull();
+  });
+});
+
+/**
+ * ROUND 5 — THE WATERMARK'S TWO INVARIANTS, PINNED TOGETHER, BEFORE THE FIX.
+ *
+ * These pull in opposite directions and every previous attempt satisfied one by breaking the
+ * other. Round 3 marked through the newest row (unseen older messages marked read). Round 4
+ * refused to mark on a truncated page (read state frozen forever once a group passes 200
+ * messages). They are asserted as a PAIR so neither can be traded away again.
+ */
+describe('round-5: the watermark must satisfy BOTH invariants', () => {
+  const msg = (i: number, min: number) => ({
+    id: `m${i}`, groupId: 'group-1', senderId: 'o', senderHandle: null,
+    senderDisplayName: null, body: 'x', mediaId: null,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, min)).toISOString(),
+  });
+
+  it('INVARIANT A — the badge clears when every unread message was on screen', async () => {
+    // A long thread (a full page) whose UNREAD portion is small: all of it was rendered, so read
+    // state MUST advance. Round 4 refused to, and the badge grew forever on exactly the active
+    // groups GRP-008's unread state exists for.
+    const full = Array.from({ length: 200 }, (_, i) => msg(i, i));
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: full } as never);
+    render(<GroupThread {...props({ unreadCount: 3 })} />);
+    await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
+    expect(groups.markGroupRead).toHaveBeenCalledWith(
+      expect.anything(), 'group-1', full[full.length - 1].createdAt,
+    );
+  });
+
+  it('INVARIANT B — a message the viewer never saw is never marked read', async () => {
+    // A full page whose unread count EXCEEDS the page: there are unread messages above what was
+    // rendered, so nothing may be marked. Round 3 marked anyway and ate them.
+    const full = Array.from({ length: 200 }, (_, i) => msg(i, i));
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: full } as never);
+    render(<GroupThread {...props({ unreadCount: 250 })} />);
+    await screen.findByTestId('group-thread-name');
+    await new Promise((r) => { setTimeout(r, 50); });
+    expect(groups.markGroupRead).not.toHaveBeenCalled();
+  });
+
+  it('a short thread still marks read — the ordinary case is not collateral', async () => {
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue(
+      { ok: true, value: [msg(0, 0), msg(1, 1)] } as never,
+    );
+    render(<GroupThread {...props({ unreadCount: 2 })} />);
+    await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
   });
 });

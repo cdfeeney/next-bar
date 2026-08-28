@@ -62,6 +62,8 @@ type Props = {
   viewerId: string;
   /** Mutual friends, for the administrator's add control (V8-R-GRP-005). */
   addable: readonly AddableFriend[];
+  /** Unread count for this group, from group_unread_counts. See the watermark note. */
+  unreadCount?: number;
   onClose: () => void;
   /** The group list re-reads: a rename, a leave or a deletion changed it. */
   onChanged: () => void;
@@ -76,6 +78,7 @@ export default function GroupThread({
   groupName,
   viewerId,
   addable,
+  unreadCount = 0,
   onClose,
   onChanged,
 }: Props): JSX.Element {
@@ -156,20 +159,27 @@ export default function GroupThread({
     // Read up to the NEWEST MESSAGE ACTUALLY LOADED, not the clock — see markGroupRead. A message
     // that arrives between the fetch and this call was never on screen and must stay unread.
     //
-    // ROUND-4 CORRECTION, and round 3's version of this was wrong in the other direction.
-    // `get_group_thread` returns only the newest GROUP_THREAD_PAGE messages. Marking through the
-    // newest RETURNED timestamp therefore also marks every OLDER message read — including the ones
-    // beyond the page that the viewer has never seen — because unread is computed as "newer than
-    // last_read_at". Fixing "read state runs ahead of the screen" by moving the boundary from the
-    // clock to the newest row silently kept the same defect for any thread longer than a page.
+    // ROUND 5, and the third attempt at this boundary. The first two each fixed one half and broke
+    // the other, so both halves are now pinned as a PAIR in GroupThread.test.tsx.
     //
-    // So the watermark is only advanced when the page is NOT truncated: fewer rows than the limit
-    // means this really is the whole thread and everything above the boundary was on screen. A
-    // truncated page marks nothing, which leaves the badge up — the safe direction, and the one
-    // this requirement keeps choosing (an unread badge that lingers is cosmetic; read state that
-    // eats unseen messages is not recoverable).
-    const truncated = messages.length >= GROUP_THREAD_PAGE;
-    if (truncated) return;
+    // ROUND 3 marked through the newest RETURNED row. get_group_thread caps at GROUP_THREAD_PAGE,
+    // so on a longer thread that also marked every OLDER message read — including ones beyond the
+    // page the viewer never saw — because unread is "newer than last_read_at".
+    //
+    // ROUND 4 refused to mark at all on a full page. Safe in direction, but any group that ever
+    // reached GROUP_THREAD_PAGE messages then froze last_read_at FOREVER: the badge never cleared
+    // again and grew without bound on exactly the active groups unread state exists for, which
+    // degrades the whole in-app half of V8-R-GRP-008.
+    //
+    // WHAT ACTUALLY DECIDES IT: unread messages are a NEWEST-SUFFIX of the thread, and the page is
+    // the newest GROUP_THREAD_PAGE rows. So if the unread COUNT fits inside the page, every unread
+    // message was rendered and the watermark may advance — however long the thread is. Only when
+    // unread meets or exceeds the page can unread messages exist above what was shown, and only
+    // then is marking unsafe. Page length ALONE can never tell those apart, which is why rounds 3
+    // and 4 both got it wrong with only the page in hand.
+    const wholeThreadShown = messages.length < GROUP_THREAD_PAGE;
+    const unreadFitsInPage = unreadCount < GROUP_THREAD_PAGE;
+    if (!wholeThreadShown && !unreadFitsInPage) return;
     const watermark = messages.length > 0 ? messages[messages.length - 1].createdAt : null;
     void markGroupRead(client, groupId, watermark).then((result) => {
       if (result.ok) onChanged();
@@ -455,6 +465,7 @@ export default function GroupThread({
                   client,
                   invitePlanId,
                   profileId,
+                  groupId,
                 );
                 if (!result.ok) return { ok: false, message: result.message };
                 // ONE person's outcome replaces ONE row. Everyone else's stands, which is the

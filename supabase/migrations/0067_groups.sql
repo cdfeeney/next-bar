@@ -1946,7 +1946,30 @@ begin
     -- ONE DOOR. Newness, the invite and the notification all live in invite_one_to_night_out, so
     -- this path and the per-person Resend cannot drift apart — which is exactly what happened in
     -- round 1, when this function held a private copy of the insert and the Resend did not.
-    invited := public.invite_one_to_night_out(p_night_out, r.id, p_group);
+    --
+    -- ONE DOOR, TWO CALLERS, OPPOSITE NEEDS — and round 4 satisfied only one of them.
+    --
+    -- The door RAISES on a refusal, because the single-person Resend needs a refusal to surface
+    -- rather than be swallowed into a false success. But this caller is a LOOP whose entire
+    -- purpose is per-person outcomes: V8-R-GRP-003 says "a failed invite shows a per-person
+    -- Resend invite; OTHER SUCCESSFUL INVITES ARE UNAFFECTED". Round 4 added the block check as a
+    -- bare raise and let it propagate through here, so a single blocked member aborted the whole
+    -- group invite, rolled back every earlier iteration, and returned NO outcomes at all — the
+    -- exact whole-group failure the requirement forbids, reintroduced by the fix for another one.
+    --
+    -- A block between two members does NOT dissolve their shared group (this file's own design),
+    -- so a group containing a blocked pair is an ordinary, reachable state, not an edge case.
+    --
+    -- So the refusal is caught HERE, at the caller that needs it as data, and left to propagate at
+    -- the caller that needs it as an error. insufficient_privilege is exactly the class the door
+    -- raises for every refusal it owns — not a member of the group, recipient not a member, or
+    -- blocked — and each of those means the same thing to this loop: that person was not invited.
+    begin
+      invited := public.invite_one_to_night_out(p_night_out, r.id, p_group);
+    exception
+      when insufficient_privilege then
+        invited := false;
+    end;
 
     return next;
   end loop;

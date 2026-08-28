@@ -291,6 +291,10 @@ function GroupsSection({
         groupName={open.name}
         viewerId={viewerId}
         addable={addable}
+        // The watermark needs to know whether a full page contained ALL the unread messages —
+        // unread is a newest-suffix, so a count that fits inside the page means everything unread
+        // was rendered. This list already has the count; GroupThread cannot get it otherwise.
+        unreadCount={unread.get(open.id) ?? 0}
         onClose={() => setOpenId(null)}
         onChanged={() => void load()}
       />

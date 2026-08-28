@@ -307,3 +307,58 @@ describe('round-4 panel findings', () => {
     expect(src).toMatch(/limit = GROUP_THREAD_PAGE/);
   });
 });
+
+/**
+ * ROUND 5 — CALLER INVARIANTS FOR THE SHARED DOOR, WRITTEN BEFORE THE DOOR CHANGES.
+ *
+ * `invite_one_to_night_out` has TWO callers with OPPOSITE requirements, and three regressions in
+ * this lane came from changing a shared path while holding only one of them in mind:
+ *
+ *   invite_group_to_night_out (the loop) — V8-R-GRP-003: "a failed invite shows a per-person
+ *     Resend; OTHER SUCCESSFUL INVITES ARE UNAFFECTED". One member's refusal must become
+ *     invited=false for that person and nothing more. It must NOT abort the loop.
+ *   inviteNightOutMember (the single Resend) — one person, one answer. A refusal there IS the
+ *     result and must surface, not be swallowed into a false success.
+ *
+ * Round 4 added the block check as a bare `raise` inside the door and satisfied only the second.
+ * These two tests are the pair that would have caught it, so they are pinned together, permanently.
+ */
+describe('round-5: both callers of the shared invite door', () => {
+  it('the GROUP loop survives one member being refused — per-person, not whole-group', () => {
+    const body = code('invite_group_to_night_out');
+    // The loop must handle a refusal from the door rather than letting it propagate: an exception
+    // block inside the loop, recording invited=false for that person.
+    expect(body).toMatch(/exception/i);
+    expect(body).toMatch(/invited\s*:?=\s*false/);
+  });
+
+  it('the loop still returns a row for every member, refused or not', () => {
+    const body = code('invite_group_to_night_out');
+    // return next must be reached on every iteration, including the refused one — a row per
+    // member is what makes the per-person Resend list possible at all.
+    expect(body).toMatch(/return next;/);
+    const loopStart = body.indexOf('loop');
+    const returnNext = body.indexOf('return next;');
+    expect(returnNext).toBeGreaterThan(loopStart);
+  });
+
+  it('the SINGLE-person door still refuses loudly — a refusal is the answer, not a silent false', () => {
+    const body = code('invite_one_to_night_out');
+    // The door keeps raising: the Resend caller needs the refusal to surface.
+    expect(body).toMatch(/raise exception/);
+    expect(body).toMatch(/is_blocked_between/);
+  });
+});
+
+describe('round-5: the Resend carries its group', () => {
+  // Codex round-4: the per-person Resend passed p_group: null, so it bypassed BOTH membership
+  // checks the shared door performs and discarded the "via <group>" attribution the whole-group
+  // path records. The Resend exists to retry a GROUP invite; dropping the group makes it a
+  // different operation wearing the same button.
+  it('inviteNightOutMember passes the group through, never null', () => {
+    const src = readFileSync(path.join(__dirname, 'groups.server.ts'), 'utf8')
+      .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+    expect(src).not.toMatch(/p_group:\s*null/);
+    expect(src).toMatch(/p_group:\s*groupId/);
+  });
+});
