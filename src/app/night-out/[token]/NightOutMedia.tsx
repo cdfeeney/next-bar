@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import MediaThumb from '@/lib/nightOutMedia/MediaThumb';
 import {
+  describeNightOutMediaOpening,
   describeNightOutMediaWindow,
   type NightOutMediaItem,
   type NightOutMediaWindow,
@@ -75,10 +76,9 @@ export default function NightOutMedia({
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   // Null = we could not read the window. Deliberately NOT folded into a boolean:
-  // "closed" and "unknown" render differently and gate differently.
+  // "closed", "not yet" and "unknown" render differently and gate differently.
   const windowOpen = mediaWindow?.isOpen === true;
-  const windowWords =
-    mediaWindow === null ? null : describeNightOutMediaWindow(mediaWindow.expiresAt);
+  const windowWords = describeWindow(mediaWindow);
 
   const refresh = useCallback(async (): Promise<void> => {
     const supabase = getBrowserSupabase();
@@ -213,9 +213,7 @@ export default function NightOutMedia({
         </p>
       ) : (
         <p className="mt-1 text-xs opacity-60" data-testid="night-out-media-window">
-          {windowOpen && windowWords !== null
-            ? windowWords
-            : 'This night’s photo window has closed. Saved nights keep theirs.'}
+          {windowWords}
         </p>
       )}
 
@@ -288,6 +286,38 @@ export default function NightOutMedia({
       ) : null}
     </section>
   );
+}
+
+/**
+ * The window in words, on whichever of the SERVER's three sides we are on.
+ *
+ * Round 3 (Codex gate): the window now has a lower bound, so a closed one and
+ * one that has not opened yet are different answers and get different sentences.
+ * The side is `mediaWindow.state` — decided by the database — and never a
+ * comparison made here; that is the whole point of reading a window instead of a
+ * deadline. A sentence we cannot build (an unparseable instant) falls back to
+ * the state's own plain wording rather than to a blank line.
+ */
+function describeWindow(mediaWindow: NightOutMediaWindow | null): string | null {
+  if (mediaWindow === null) return null;
+  switch (mediaWindow.state) {
+    case 'before':
+      return (
+        describeNightOutMediaOpening(mediaWindow.opensAt) ??
+        'Photos open when this night starts.'
+      );
+    case 'open':
+      return (
+        describeNightOutMediaWindow(mediaWindow.expiresAt) ??
+        'Photos from this night are open now.'
+      );
+    case 'closed':
+      return 'This night’s photo window has closed. Saved nights keep theirs.';
+    default: {
+      const exhaustive: never = mediaWindow.state;
+      return exhaustive;
+    }
+  }
 }
 
 /**

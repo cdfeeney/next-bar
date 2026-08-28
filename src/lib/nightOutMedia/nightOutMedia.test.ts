@@ -38,12 +38,21 @@ function rpcClient(result: RpcResult) {
 describe('fetchNightOutMediaWindow (V8-R-NO-008, the SERVER owns the window)', () => {
   it('reports the window the server computed, not one derived here', async () => {
     const { client, rpc } = rpcClient({
-      data: [{ expires_at: '2026-07-25T21:00:00.000Z', is_open: true }],
+      data: [
+        {
+          opens_at: '2026-07-24T21:00:00.000Z',
+          expires_at: '2026-07-25T21:00:00.000Z',
+          is_open: true,
+          state: 'open',
+        },
+      ],
       error: null,
     });
     await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toEqual({
+      opensAt: '2026-07-24T21:00:00.000Z',
       expiresAt: '2026-07-25T21:00:00.000Z',
       isOpen: true,
+      state: 'open',
     });
     expect(rpc).toHaveBeenCalledWith('night_out_media_window', {
       p_night_out: UUID_A,
@@ -52,13 +61,78 @@ describe('fetchNightOutMediaWindow (V8-R-NO-008, the SERVER owns the window)', (
 
   it('carries a closed window through as closed', async () => {
     const { client } = rpcClient({
-      data: [{ expires_at: '2026-07-25T21:00:00.000Z', is_open: false }],
+      data: [
+        {
+          opens_at: '2026-07-24T21:00:00.000Z',
+          expires_at: '2026-07-25T21:00:00.000Z',
+          is_open: false,
+          state: 'closed',
+        },
+      ],
       error: null,
     });
     await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toEqual({
+      opensAt: '2026-07-24T21:00:00.000Z',
       expiresAt: '2026-07-25T21:00:00.000Z',
       isOpen: false,
+      state: 'closed',
     });
+  });
+
+  /**
+   * THE WINDOW HAS TWO ENDS (round-3 panel, Codex, HIGH), so a not-open window
+   * is two different answers and the server names which. A client that could
+   * only see `is_open: false` had to derive "not yet" from the device clock —
+   * the arithmetic this whole type exists to delete.
+   */
+  it('carries a window that has NOT OPENED YET as its own state', async () => {
+    const { client } = rpcClient({
+      data: [
+        {
+          opens_at: '2026-07-24T21:00:00.000Z',
+          expires_at: '2026-07-25T21:00:00.000Z',
+          is_open: false,
+          state: 'before',
+        },
+      ],
+      error: null,
+    });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toEqual({
+      opensAt: '2026-07-24T21:00:00.000Z',
+      expiresAt: '2026-07-25T21:00:00.000Z',
+      isOpen: false,
+      state: 'before',
+    });
+  });
+
+  it('refuses a row with no opens_at rather than inventing the lower bound', async () => {
+    const { client } = rpcClient({
+      data: [
+        {
+          expires_at: '2026-07-25T21:00:00.000Z',
+          is_open: true,
+          state: 'open',
+        },
+      ],
+      error: null,
+    });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toBeNull();
+  });
+
+  it('refuses an unrecognised state rather than defaulting it', async () => {
+    // A defaulted 'closed' would tell a member their window had ended.
+    const { client } = rpcClient({
+      data: [
+        {
+          opens_at: '2026-07-24T21:00:00.000Z',
+          expires_at: '2026-07-25T21:00:00.000Z',
+          is_open: true,
+          state: 'maybe',
+        },
+      ],
+      error: null,
+    });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toBeNull();
   });
 
   it('is null — "could not check" — on a failed read, never a closed window', async () => {
@@ -74,7 +148,14 @@ describe('fetchNightOutMediaWindow (V8-R-NO-008, the SERVER owns the window)', (
   it('refuses a row whose is_open is not a boolean rather than coercing it', async () => {
     // Coercing here would gate two authorized controls on a guess.
     const { client } = rpcClient({
-      data: [{ expires_at: '2026-07-25T21:00:00.000Z', is_open: 'yes' }],
+      data: [
+        {
+          opens_at: '2026-07-24T21:00:00.000Z',
+          expires_at: '2026-07-25T21:00:00.000Z',
+          is_open: 'yes',
+          state: 'open',
+        },
+      ],
       error: null,
     });
     await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toBeNull();

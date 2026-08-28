@@ -35,14 +35,30 @@
 export const NIGHT_OUT_MEDIA_WINDOW_HOURS = 24;
 
 /**
+ * Which side of the window the SERVER says we are on.
+ *
+ * Round 3 (Codex gate): the window gained a lower bound — it runs FROM the
+ * scheduled start rather than merely until 24 hours after it — and the moment it
+ * had two ends, `isOpen === false` started carrying two different answers. "Not
+ * yet" and "no longer" need different sentences, and deriving which one from the
+ * device clock is precisely what V8-R-NO-008's failure clause forbids and what
+ * this whole type exists to avoid. So the server names it.
+ */
+export type NightOutMediaWindowState = 'before' | 'open' | 'closed';
+
+/**
  * The server's window for one Night Out's media (`night_out_media_window`).
  *
- * `isOpen` is the DATABASE's answer, never a comparison made here.
+ * `isOpen` and `state` are both the DATABASE's answers, never a comparison made
+ * here.
  */
 export type NightOutMediaWindow = {
+  /** ISO instant the window opens — the plan's scheduled start. */
+  opensAt: string;
   /** ISO instant the window closes. */
   expiresAt: string;
   isOpen: boolean;
+  state: NightOutMediaWindowState;
 };
 
 /**
@@ -54,15 +70,35 @@ export type NightOutMediaWindow = {
  * than a sentence with a hole in it.
  */
 export function describeNightOutMediaWindow(expiresAt: string): string | null {
-  const expiry = new Date(expiresAt);
-  if (Number.isNaN(expiry.getTime())) return null;
-  const when = new Intl.DateTimeFormat('en-US', {
+  const when = newYorkMoment(expiresAt);
+  return when === null
+    ? null
+    : `Photos from this night stay here until ${when} New York time.`;
+}
+
+/**
+ * The OTHER end of the window in words, for a night that has not started yet.
+ *
+ * Same contract as above: the instant is the server's, and an unparseable one
+ * produces null rather than a sentence with a hole in it.
+ */
+export function describeNightOutMediaOpening(opensAt: string): string | null {
+  const when = newYorkMoment(opensAt);
+  return when === null
+    ? null
+    : `Photos open when this night starts, at ${when} New York time.`;
+}
+
+/** "Saturday at 9:00 PM", in the contract's zone. Null if unparseable. */
+function newYorkMoment(instant: string): string | null {
+  const parsed = new Date(instant);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat('en-US', {
     weekday: 'long',
     hour: 'numeric',
     minute: '2-digit',
     timeZone: 'America/New_York',
-  }).format(expiry);
-  return `Photos from this night stay here until ${when} New York time.`;
+  }).format(parsed);
 }
 
 /** One photo attached to a Night Out, as a member is allowed to see it. */

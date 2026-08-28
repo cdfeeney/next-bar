@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   NightOutMediaItem,
   NightOutMediaWindow,
+  NightOutMediaWindowState,
   SavedNight,
   SavedNightCard,
 } from './index';
@@ -166,14 +167,33 @@ export async function fetchNightOutMediaWindow(
   });
   if (error) return null;
   const row = (Array.isArray(data) ? data[0] : data) as
-    | { expires_at?: unknown; is_open?: unknown }
+    | {
+        opens_at?: unknown;
+        expires_at?: unknown;
+        is_open?: unknown;
+        state?: unknown;
+      }
     | null
     | undefined;
-  if (!row || !isNonEmptyString(row.expires_at)) return null;
+  if (!row || !isNonEmptyString(row.opens_at)) return null;
+  if (!isNonEmptyString(row.expires_at)) return null;
   // A non-boolean `is_open` is a row we cannot read, not a closed window: a
   // coerced value here would gate two authorized controls on a guess.
   if (typeof row.is_open !== 'boolean') return null;
-  return { expiresAt: row.expires_at, isOpen: row.is_open };
+  // Same rule for `state`. It decides which sentence the recap shows, and the
+  // one thing this module must never do is invent the server's answer — a
+  // defaulted 'closed' here would tell a member their window had ended.
+  if (!isWindowState(row.state)) return null;
+  return {
+    opensAt: row.opens_at,
+    expiresAt: row.expires_at,
+    isOpen: row.is_open,
+    state: row.state,
+  };
+}
+
+function isWindowState(value: unknown): value is NightOutMediaWindowState {
+  return value === 'before' || value === 'open' || value === 'closed';
 }
 
 export type ArchiveResult = { savedNightId: string; photoCount: number };

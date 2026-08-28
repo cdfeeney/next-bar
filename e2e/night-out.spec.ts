@@ -160,6 +160,45 @@ function openWindowNight(): string {
 /** Long past — the other half of the pair. */
 const CLOSED_WINDOW_NIGHT = '2020-01-01';
 
+/**
+ * The BEARER surface's reads (0068 section 8b) — the plan as a token-scoped
+ * recipient without an account is allowed to see it.
+ *
+ * `starts_at` is stubbed as the server would answer it: the plan's scheduled
+ * start, 9:00 PM America/New_York on its night (01:00Z the next day, in EDT).
+ * The client renders that instant and computes no hour of its own, which is why
+ * the assertion can be on a fixed "9:00 PM".
+ */
+async function stubBearerRpcs(page: Page): Promise<void> {
+  // ORDER MATTERS TWICE OVER. Playwright matches routes last-registered-first,
+  // and `preview_night_out*` is a prefix of all three bearer functions' names —
+  // so the general patterns go FIRST and the specific ones after, or the 0044
+  // preview's stub would answer `preview_night_out_shortlist` with a plan row.
+  await page.route('**/rest/v1/**', fulfillJson(200, []));
+  await page.route(
+    '**/rest/v1/rpc/preview_night_out*',
+    fulfillJson(200, [PREVIEW_ROW]),
+  );
+  await page.route(
+    '**/rest/v1/rpc/preview_night_out_detail*',
+    fulfillJson(200, [
+      { starts_at: '2026-08-21T01:00:00.000Z', decided_bar_id: null },
+    ]),
+  );
+  await page.route(
+    '**/rest/v1/rpc/preview_night_out_attendees*',
+    fulfillJson(200, [{ display_name: 'Sam', handle: 'sam' }]),
+  );
+  await page.route(
+    '**/rest/v1/rpc/preview_night_out_shortlist*',
+    fulfillJson(200, [{ bar_id: 'attaboy', votes: 1 }]),
+  );
+  await page.route(
+    '**/rest/v1/rpc/get_anon_rsvp_by_token*',
+    fulfillJson(200, null),
+  );
+}
+
 async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
   const planRow = night === undefined ? PLAN_ROW : { ...PLAN_ROW, night };
   // Playwright matches routes LAST-registered-first: the catch-all must be
@@ -209,6 +248,51 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
   });
 }
 
+/**
+ * The same plan seen by its OWNER, with a two-bar shortlist so "the top bar" is
+ * a real question. Bar B leads on votes and is deliberately returned SECOND, so
+ * a board that renders in RPC order fails the ranking assertion.
+ */
+async function stubOwnerRpcs(page: Page): Promise<void> {
+  await page.route('**/rest/v1/**', fulfillJson(200, []));
+  await page.route('**/auth/v1/**', fulfillJson(200, {}));
+  await page.route(
+    '**/rest/v1/rpc/resolve_night_out_by_token*',
+    fulfillJson(200, PLAN_ID),
+  );
+  await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
+    const url = route.request().url();
+    if (url.includes('get_night_out_members')) {
+      return fulfillJson(200, [
+        {
+          user_id: USER_ID,
+          handle: 'conor',
+          display_name: 'Conor',
+          role: 'owner',
+          invite_status: 'accepted',
+        },
+      ])(route);
+    }
+    if (url.includes('get_night_out_board')) {
+      return fulfillJson(200, [
+        {
+          bar_id: 'attaboy',
+          suggested_by_handle: 'conor',
+          votes: 1,
+          caller_voted: false,
+        },
+        {
+          bar_id: 'please-dont-tell',
+          suggested_by_handle: 'sam',
+          votes: 5,
+          caller_voted: false,
+        },
+      ])(route);
+    }
+    return fulfillJson(200, [{ ...PLAN_ROW, caller_role: 'owner' }])(route);
+  });
+}
+
 test.describe('/night-out/[token] — V8-3 canonical plan', () => {
   test('anon + dead link resolves to the terminal state and offers a way home', async ({
     page,
@@ -225,29 +309,113 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await expect(page.getByRole('link', { name: /find your next bar/i })).toBeVisible();
   });
 
-  test('anon + live link shows ONLY the bearer preview, and the CTA stores the invite context', async ({
+  test('anon + live link shows the bearer plan, and the CTA stores the invite context', async ({
     page,
   }) => {
-    await page.route(
-      '**/rest/v1/rpc/preview_night_out*',
-      fulfillJson(200, [PREVIEW_ROW]),
-    );
+    await stubBearerRpcs(page);
     await page.goto(`/night-out/${TOKEN}`);
     await expect(page.getByText(/you're invited/i)).toBeVisible();
     await expect(
       page.getByRole('heading', { name: /birthday crawl/i }),
     ).toBeVisible();
     await expect(page.getByText(/hosted by conor/i)).toBeVisible();
-    // The preview surface never renders member identities or bar data.
-    await expect(page.getByText(/attaboy/i)).toHaveCount(0);
 
-    await page.getByRole('button', { name: /sign in to join/i }).click();
+    // V8-R-INV-002: time, who is going, and the shortlist so far — the halves
+    // that were absent until round 3.
+    await expect(page.getByTestId('invite-when')).toContainText(/9:00\s*PM/i);
+    await expect(page.getByTestId('invite-attendees')).toContainText('Sam');
+    await expect(page.getByTestId('invite-shortlist')).toContainText(/1 vote/);
+
+    // ...and the exclusions still hold. A bearer may not vote or suggest, so
+    // there is no control for either — the negative assertion is the one that
+    // catches a widened anon surface.
+    await expect(page.getByRole('button', { name: /^vote$/i })).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: /^suggest$/i }),
+    ).toHaveCount(0);
+    // The limitation is STATED, not discovered by failure (V8-R-INV-001/002
+    // accessibility).
+    await expect(page.getByTestId('invite-limitation')).toBeVisible();
+
+    await page.getByTestId('invite-sign-in').click();
     await expect(page).toHaveURL(/\/auth/);
     const stored = await page.evaluate(
       (key) => window.sessionStorage.getItem(key),
       PENDING_KEY,
     );
     expect(stored).toBe(TOKEN);
+  });
+
+  /**
+   * V8-R-INV-001 / V8-R-INV-003 (D-C-23, D-C-22) — the requirement that was
+   * inverted until round 3.
+   *
+   * The surface used to offer a signed-out recipient one button, "Sign in to
+   * join". D-C-23 SUPERSEDES the frozen PRD sentence that pre-signup RSVP is not
+   * authorized: the three choices are Going, Maybe and Can't make it, and a
+   * token-scoped recipient may submit one WITHOUT an account.
+   */
+  test('anon can RSVP without signing up, and the optional upsell keeps the RSVP', async ({
+    page,
+  }) => {
+    await stubBearerRpcs(page);
+    const sent: Record<string, unknown>[] = [];
+    await page.route('**/rest/v1/rpc/rsvp_night_out_by_token*', async (route) => {
+      sent.push(route.request().postDataJSON() as Record<string, unknown>);
+      await fulfillJson(200, true)(route);
+    });
+
+    await page.goto(`/night-out/${TOKEN}`);
+    // All three, in the contract's own words. "Not tonight" belongs to neither
+    // RSVP nor presence and must not appear here (D-C-21, D-C-22).
+    await expect(page.getByTestId('invite-rsvp-going')).toBeVisible();
+    await expect(page.getByTestId('invite-rsvp-maybe')).toBeVisible();
+    await expect(page.getByTestId('invite-rsvp-declined')).toContainText(
+      /can't make it/i,
+    );
+
+    await page.getByTestId('invite-rsvp-maybe').click();
+    await expect(page.getByTestId('invite-rsvp-sent')).toContainText(/maybe/i);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.p_response).toBe('maybe');
+    // The key is the recipient's own capability, minted on the device.
+    expect(typeof sent[0]?.p_key).toBe('string');
+
+    // V8-R-INV-004: the upsell arrives AFTER the RSVP, is explicitly optional,
+    // and dismissing it does not take the RSVP with it.
+    const upsell = page.getByTestId('invite-upsell');
+    await expect(upsell).toContainText(/rsvp'd either way/i);
+    await page.getByTestId('invite-upsell-dismiss').click();
+    await expect(page.getByTestId('invite-upsell')).toHaveCount(0);
+    await expect(page.getByTestId('invite-rsvp-sent')).toContainText(/maybe/i);
+    // Dismissing an upsell is not a navigation.
+    await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}`));
+  });
+
+  /**
+   * "A failed RSVP must be labelled as not yet sent" (V8-R-INV-003, failure
+   * recovery). Showing the choice as taken would tell a recipient the host can
+   * see an answer that never landed.
+   */
+  test('a refused RSVP says it has not been sent, and does not show as chosen', async ({
+    page,
+  }) => {
+    await stubBearerRpcs(page);
+    await page.route(
+      '**/rest/v1/rpc/rsvp_night_out_by_token*',
+      fulfillJson(500, { message: 'boom' }),
+    );
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await page.getByTestId('invite-rsvp-going').click();
+    await expect(page.getByTestId('invite-rsvp-error')).toContainText(
+      /hasn't been sent/i,
+    );
+    await expect(page.getByTestId('invite-rsvp-sent')).toHaveCount(0);
+    await expect(page.getByTestId('invite-rsvp-going')).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
   });
 
   test('signed-in: joins by token, renders the member board, and "Not tonight" issues the decline', async ({
@@ -287,6 +455,92 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await expect
       .poll(() => declineCalled, { timeout: 5000 })
       .toBe(true);
+  });
+
+  /**
+   * V8-R-SOC-007 — "Closes voting immediately, TAKES THE TOP BAR, and tells
+   * everyone", one action with a fixed object.
+   *
+   * Until round 3 the owner got a "Pick this" on every row, calling
+   * `decide_night_out` with that row's bar: an unranked board and an arbitrary
+   * choice, which is a different requirement from the one the contract states.
+   * The negative assertion is the point — a per-row decide control must not come
+   * back, because it is how "the top bar" stops being the thing that gets taken.
+   */
+  test('the owner gets ONE "Lock the plan", not a Pick-this on every row', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubOwnerRpcs(page);
+    let lockedWith: Record<string, unknown> | null = null;
+    await page.route('**/rest/v1/rpc/lock_night_out*', async (route) => {
+      lockedWith = route.request().postDataJSON() as Record<string, unknown>;
+      await fulfillJson(200, 'attaboy')(route);
+    });
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('night-out-lock')).toBeVisible();
+    await expect(page.getByRole('button', { name: /pick this/i })).toHaveCount(0);
+
+    // THE BOARD IS RANKED, so the row on top is the one a lock takes.
+    const rows = page.getByTestId('night-out-board').getByRole('listitem');
+    await expect(rows.first()).toContainText(/5 votes/);
+
+    await page.getByTestId('night-out-lock').click();
+    await expect.poll(() => lockedWith, { timeout: 5000 }).not.toBeNull();
+    // The bar is NOT a parameter: the server picks the leader inside the same
+    // serialized section that takes it.
+    expect(Object.keys(lockedWith ?? {})).toEqual(['p_night_out']);
+  });
+
+  /**
+   * V8-R-SOC-008 — "The overflow renders only on a row the viewer may act on",
+   * and the removal behind it is server-authorized.
+   */
+  test('the shortlist overflow removes an entry, and renders only where it may act', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubOwnerRpcs(page);
+    let removedWith: Record<string, unknown> | null = null;
+    await page.route(
+      '**/rest/v1/rpc/remove_night_out_suggestion*',
+      async (route) => {
+        removedWith = route.request().postDataJSON() as Record<string, unknown>;
+        await fulfillJson(200, true)(route);
+      },
+    );
+
+    await page.goto(`/night-out/${TOKEN}`);
+    // The owner may act on every row, so every row has one.
+    const overflows = page.getByTestId('shortlist-overflow');
+    await expect(overflows).toHaveCount(2);
+    // 44px, as the requirement's accessibility clause states.
+    const box = await overflows.first().boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+
+    // The menu is not open until it is opened — "ownership and removal are
+    // carried by the control and its menu".
+    await expect(page.getByTestId('shortlist-remove')).toHaveCount(0);
+    await overflows.first().click();
+    await page.getByTestId('shortlist-remove').click();
+
+    await expect.poll(() => removedWith, { timeout: 5000 }).not.toBeNull();
+    // The FIRST row is the vote leader, because the board is ranked.
+    expect(removedWith).toEqual({
+      p_night_out: PLAN_ID,
+      p_bar: 'please-dont-tell',
+    });
   });
 
   test('a REFUSED response re-reads the plan before telling you to try again', async ({
@@ -761,6 +1015,101 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await dialog.getByRole('button', { name: /^Back$/ }).click();
     await expect(page.getByTestId('pin-bar-dialog')).toHaveCount(0);
     await expect(page.getByTestId('social-tonight')).toBeVisible();
+  });
+
+  /**
+   * V8-R-PRE-003 → V8-R-PRE-002, and the defect round 3 found (Codex gate,
+   * HIGH): picking a bar used to WRITE it immediately, carrying whatever
+   * audience was already there or the 'friends' default, and then close the
+   * dialog. A first-time pinner's location went live to every follower before
+   * anyone asked who should see it.
+   *
+   * "Tapping a result selects that bar and advances straight to the audience
+   * step." Selecting is not publishing — and the assertion that matters is the
+   * negative one: `set_night_presence` is not called until Pin it.
+   */
+  test('picking a bar advances to the audience step and writes NOTHING until it is confirmed', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubTonight(page, [
+      {
+        status: 'going',
+        bar_id: null,
+        audience: 'friends',
+        updated_at: '2026-08-20T02:00:00.000Z',
+        recipient_ids: [],
+      },
+    ]);
+    let writes = 0;
+    await page.route('**/rest/v1/rpc/set_night_presence*', async (route) => {
+      writes += 1;
+      await fulfillJson(200, true)(route);
+    });
+
+    await page.goto('/friends');
+    await page.getByTestId('pin-my-spot').click();
+    const dialog = page.getByTestId('pin-bar-dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('textbox', { name: /search bars/i }).fill('att');
+    await dialog.getByRole('button', { name: /attaboy/i }).first().click();
+
+    // The dialog closes into the audience STEP, not into a written pin.
+    await expect(page.getByTestId('pin-bar-dialog')).toHaveCount(0);
+    const step = page.getByTestId('pin-audience-step');
+    await expect(step).toBeVisible();
+    await expect(step).toContainText(/who can see this/i);
+    expect(writes, 'selecting a bar published the pin before it was confirmed').toBe(0);
+
+    // Confirming is the ONE write, and it carries the chosen audience.
+    await page.getByTestId('pin-pending-audience-close').click();
+    await page.getByTestId('pin-confirm').click();
+    await expect.poll(() => writes, { timeout: 5000 }).toBe(1);
+  });
+
+  /**
+   * Cancelling the sequence takes the selection with it and still writes
+   * nothing — the other half of "selecting is not publishing".
+   */
+  test('cancelling the audience step leaves no pin behind', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubTonight(page, [
+      {
+        status: 'going',
+        bar_id: null,
+        audience: 'friends',
+        updated_at: '2026-08-20T02:00:00.000Z',
+        recipient_ids: [],
+      },
+    ]);
+    let writes = 0;
+    await page.route('**/rest/v1/rpc/set_night_presence*', async (route) => {
+      writes += 1;
+      await fulfillJson(200, true)(route);
+    });
+
+    await page.goto('/friends');
+    await page.getByTestId('pin-my-spot').click();
+    const dialog = page.getByTestId('pin-bar-dialog');
+    await dialog.getByRole('textbox', { name: /search bars/i }).fill('att');
+    await dialog.getByRole('button', { name: /attaboy/i }).first().click();
+    await page.getByTestId('pin-cancel').click();
+
+    await expect(page.getByTestId('pin-audience-step')).toHaveCount(0);
+    await expect(page.getByTestId('social-tonight')).toBeVisible();
+    expect(writes, 'cancelling the pin sequence still wrote a pin').toBe(0);
   });
 
   test('all three audience choices are offered, and "some people" opens a picker', async ({

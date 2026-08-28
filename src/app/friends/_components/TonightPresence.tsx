@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
@@ -74,6 +74,31 @@ function timeLabel(iso: string): string {
   }).format(at);
 }
 
+/**
+ * WHAT WE KNOW ABOUT THE VIEWER'S OWN PIN, as three states that cannot collapse.
+ *
+ * Round 2 separated "you have no pin" from "we could not read your pin", which
+ * closed the write-with-a-default-audience hole for a FAILED read. Round 3
+ * (Codex gate, HIGH) found the third state was still missing: while the very
+ * first `get_my_presence` was in flight, the component was in neither of the two
+ * — `mine` was null and `mineUnreadable` false, i.e. exactly the shape of "no
+ * pin" — so the status pills rendered ENABLED, and a tap in that window wrote
+ * `audience: 'friends'` with an empty recipient list over a live 'close' or
+ * 'people' pin. `set_night_presence` replaces the row wholesale, so the pin
+ * widened to every follower and lost its recipients before the read that would
+ * have said so came back.
+ *
+ * A union rather than a second boolean: the pills read `kind === 'ok'`, so a
+ * fourth state added later cannot silently default to "safe to write".
+ */
+type MinePinState =
+  /** The first read has not answered yet. We know nothing. */
+  | { kind: 'loading' }
+  /** The server answered: `presence` is the pin, or null for no pin at all. */
+  | { kind: 'ok'; presence: MyPresence | null }
+  /** The read failed. Different from "no pin", and never written over. */
+  | { kind: 'unreadable' };
+
 export default function TonightPresence(): JSX.Element {
   // 0019 swap-day rule: this component renders getBarById lookups, so it
   // subscribes to a live server-catalog swap.
@@ -84,50 +109,84 @@ export default function TonightPresence(): JSX.Element {
   // than inside the dialog so the dialog stays a presentation of a list it is
   // given, and so "still loading" is distinguishable from "you have nobody".
   const follows = useFollows();
-  const [mine, setMine] = useState<MyPresence | null>(null);
-  /**
-   * TRUE WHEN WE DO NOT KNOW WHAT THE USER'S PIN IS — not when they have none.
-   *
-   * Round 2, both gates (HIGH). `mine === null` used to carry both, so a failed
-   * read rendered the unset row and the next tap wrote with
-   * `audience: mine?.audience ?? 'friends'`: a live 'close' or 'people' pin
-   * silently widened to every follower and lost its recipient list, because
-   * `set_night_presence` replaces the row and deletes its recipients wholesale.
-   *
-   * While this is true the status pills are DISABLED. Not "write with the
-   * narrowest audience" — that is still a change the user did not ask for, and
-   * it would clear a pin they cannot see. The honest move is to stop and say so.
-   */
-  const [mineUnreadable, setMineUnreadable] = useState(false);
+  const [minePin, setMinePin] = useState<MinePinState>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [pickingBar, setPickingBar] = useState(false);
-  const [pickingPeople, setPickingPeople] = useState(false);
+  /**
+   * Which flow opened the recipient picker: the live pin's audience row, or the
+   * pin sequence's own audience step. Both need the same dialog and they write
+   * to different places, so the dialog cannot know on its own.
+   */
+  const [pickingPeople, setPickingPeople] = useState<null | 'live' | 'pending'>(
+    null,
+  );
+  /**
+   * A bar the user has CHOSEN but not yet pinned, plus the audience they are
+   * choosing for it. Nothing here has been written; see `pinSequence` below.
+   */
+  const [pendingBarId, setPendingBarId] = useState<string | null>(null);
+  const [pendingAudience, setPendingAudience] =
+    useState<PresenceAudience>('friends');
+  const [pendingRecipients, setPendingRecipients] = useState<readonly string[]>(
+    [],
+  );
 
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
 
+  /**
+   * WHICH READ IS ALLOWED TO PAINT — the pair (account, night).
+   *
+   * Round 3 (Codex gate, HIGH): `reloadMine` called `setMinePin` unconditionally
+   * after its await, so a read started for account A could settle after a
+   * sign-out and put A's pinned bar and audience back on screen for whoever was
+   * looking at the page. The effect below clears the row first, and the stale
+   * completion then restored it. A night rollover is the same defect one axis
+   * over: the answer is about a night that is no longer the one being shown.
+   *
+   * The epoch is bumped in the same effect that starts the read, before its
+   * first await, so a load can only ever paint into the view that asked for it.
+   */
+  const readEpoch = useRef(0);
+
   const reloadMine = useCallback(async (): Promise<void> => {
+    const startedAt = readEpoch.current;
     if (!userId) {
       // Signed out: there is no pin to read, and nothing failed.
-      setMine(null);
-      setMineUnreadable(false);
+      setMinePin({ kind: 'ok', presence: null });
       return;
     }
     const supabase = getBrowserSupabase();
     if (!supabase) {
       // An unconfigured client is a FAILED read, not an absent pin.
-      setMine(null);
-      setMineUnreadable(true);
+      setMinePin({ kind: 'unreadable' });
       return;
     }
     const read = await fetchMyPresence(supabase);
-    setMine(read.kind === 'ok' ? read.presence : null);
-    setMineUnreadable(read.kind === 'failed');
+    // The view moved on while we were away: this answer is about a different
+    // account, or a different night, from the one on screen.
+    if (startedAt !== readEpoch.current) return;
+    setMinePin(
+      read.kind === 'ok'
+        ? { kind: 'ok', presence: read.presence }
+        : { kind: 'unreadable' },
+    );
   }, [userId, night]);
 
   useEffect(() => {
+    // Synchronously, before `reloadMine` captures it: every read already in
+    // flight belongs to the view that is leaving.
+    readEpoch.current += 1;
+    // ...and what is on screen belongs to it too. Back to "we know nothing"
+    // rather than to "no pin", which is a claim about this account we have not
+    // made yet.
+    setMinePin({ kind: 'loading' });
     void reloadMine();
   }, [reloadMine]);
+
+  const mine = minePin.kind === 'ok' ? minePin.presence : null;
+  /** The server has answered. The ONLY state in which a write may be built. */
+  const mineKnown = minePin.kind === 'ok';
 
   /**
    * One tap sets a status; tapping the lit one clears it (V8-R-PRE-005:
@@ -141,10 +200,11 @@ export default function TonightPresence(): JSX.Element {
   const choose = useCallback(
     async (status: PresenceStatus): Promise<void> => {
       if (busy) return;
-      // A write built on a pin we could not read would carry a DEFAULT audience
-      // over whatever the server is actually enforcing. Refuse rather than
-      // guess; the row already says the read failed.
-      if (mineUnreadable) return;
+      // A write built on a pin we have not read — because the read failed, or
+      // because it has not answered yet — would carry a DEFAULT audience over
+      // whatever the server is actually enforcing. Refuse rather than guess;
+      // the row already says which of the two it is.
+      if (!mineKnown) return;
       const supabase = getBrowserSupabase();
       if (!supabase) {
         setFailed(true);
@@ -175,49 +235,80 @@ export default function TonightPresence(): JSX.Element {
       }
       setBusy(false);
     },
-    [busy, mine, mineUnreadable, reloadMine, refresh],
+    [busy, mine, mineKnown, reloadMine, refresh],
   );
 
   /**
-   * V8-R-PRE-003 → V8-R-PRE-001/004: picking the bar IS the pin, and a pin sets
-   * Going out. The status is written alongside the bar rather than assumed to be
-   * already correct, so pinning from Maybe does the right thing in one write
-   * instead of leaving the invalid "at a bar, not going out" pair on the way
-   * through — a pair the RPC and the check constraint both refuse anyway.
+   * STEP ONE OF THE PIN SEQUENCE: choosing the bar SELECTS it. It does not
+   * write it.
    *
-   * "Tapping a result selects that bar and advances straight to the audience
-   * step" — but only on a write the server CONFIRMED. Advancing after a failed
-   * pin would ask who may see something that does not exist.
+   * Round 3 (Codex gate, HIGH). This used to send `set_night_presence` the
+   * moment a bar was tapped, carrying `mine?.audience ?? 'friends'`, and then
+   * close the dialog — so a first-time pinner's location went live to every
+   * follower before they were ever asked who should see it, and the audience
+   * step the docstring promised did not exist. V8-R-PRE-003 → V8-R-PRE-002 is
+   * two steps in one direction: "tapping a result selects that bar and advances
+   * straight to the audience step". Selecting is not publishing.
+   *
+   * So the bar is held here, the audience step renders, and ONE write happens
+   * on confirmation — which also means pinning from Maybe never passes through
+   * the invalid "at a bar, not going out" pair the RPC and the check constraint
+   * both refuse.
    */
-  const pinBar = useCallback(
-    async (barId: string): Promise<void> => {
-      if (busy) return;
-      const supabase = getBrowserSupabase();
-      if (!supabase) {
-        setFailed(true);
-        setPickingBar(false);
-        return;
-      }
-      setBusy(true);
+  const selectBar = useCallback(
+    (barId: string): void => {
+      setPendingBarId(barId);
+      // The audience step opens on what the pin already has, so a user changing
+      // only their spot re-confirms rather than re-chooses. A new pinner starts
+      // at the contract's default and still has to press Pin it.
+      setPendingAudience(mine?.audience ?? 'friends');
+      setPendingRecipients(mine?.recipientIds ?? []);
       setFailed(false);
-      const ok = await setPresence(supabase, {
-        status: 'going',
-        barId,
-        audience: mine?.audience ?? 'friends',
-        recipientIds: mine?.recipientIds ?? [],
-      });
       setPickingBar(false);
-      if (ok) {
-        await reloadMine();
-        refresh();
-        announcePresenceChanged();
-      } else {
-        setFailed(true);
-      }
-      setBusy(false);
     },
-    [busy, mine, reloadMine, refresh],
+    [mine],
   );
+
+  const cancelPin = useCallback((): void => {
+    setPendingBarId(null);
+    setPendingRecipients([]);
+    setPickingPeople(null);
+  }, []);
+
+  /**
+   * STEP TWO: the confirmation, and the ONLY write in the sequence. Status, bar,
+   * audience and recipients go together, so there is no instant at which the
+   * pin exists under an audience nobody chose.
+   */
+  const confirmPin = useCallback(async (): Promise<void> => {
+    if (busy || pendingBarId === null) return;
+    const supabase = getBrowserSupabase();
+    if (!supabase) {
+      setFailed(true);
+      return;
+    }
+    setBusy(true);
+    setFailed(false);
+    const ok = await setPresence(supabase, {
+      status: 'going',
+      barId: pendingBarId,
+      audience: pendingAudience,
+      recipientIds: pendingRecipients,
+    });
+    if (ok) {
+      setPendingBarId(null);
+      setPendingRecipients([]);
+      await reloadMine();
+      refresh();
+      announcePresenceChanged();
+    } else {
+      // The sequence STAYS OPEN on a failure: the user's chosen bar and
+      // audience are still on screen to retry from, rather than being thrown
+      // away with a banner.
+      setFailed(true);
+    }
+    setBusy(false);
+  }, [busy, pendingAudience, pendingBarId, pendingRecipients, reloadMine, refresh]);
 
   const writeAudience = useCallback(
     async (
@@ -253,15 +344,16 @@ export default function TonightPresence(): JSX.Element {
   );
 
   /**
-   * 'friends' and 'close' are one tap. 'people' cannot be: it needs a recipient
-   * list, and writing it without one is refused server-side rather than falling
-   * back to a wider audience — so the tap opens the picker instead of sending a
-   * request that can only fail.
+   * Changing the audience of a pin that is ALREADY LIVE. 'friends' and 'close'
+   * are one tap. 'people' cannot be: it needs a recipient list, and writing it
+   * without one is refused server-side rather than falling back to a wider
+   * audience — so the tap opens the picker instead of sending a request that
+   * can only fail.
    */
   const chooseAudience = useCallback(
     (audience: PresenceAudience): void => {
       if (audience === 'people') {
-        setPickingPeople(true);
+        setPickingPeople('live');
         return;
       }
       void writeAudience(audience, []);
@@ -269,8 +361,25 @@ export default function TonightPresence(): JSX.Element {
     [writeAudience],
   );
 
+  /**
+   * The same choice inside the pin sequence, where nothing is live yet, so it
+   * only records what the confirmation will send.
+   */
+  const choosePendingAudience = useCallback(
+    (audience: PresenceAudience): void => {
+      if (audience === 'people') {
+        setPickingPeople('pending');
+        return;
+      }
+      setPendingAudience(audience);
+      setPendingRecipients([]);
+    },
+    [],
+  );
+
   const myPin = mine ? describePresence(mine) : null;
   const myBar = myPin?.barId ? getBarById(myPin.barId) : null;
+  const pendingBar = pendingBarId === null ? null : getBarById(pendingBarId);
 
   return (
     <div className="space-y-8" data-testid="social-tonight">
@@ -292,9 +401,11 @@ export default function TonightPresence(): JSX.Element {
                 key={status}
                 type="button"
                 aria-pressed={active}
-                // Disabled while the pin is unreadable: every one of these taps
-                // is a WRITE that would have to invent the audience.
-                disabled={busy || mineUnreadable}
+                // Disabled until the server has ANSWERED — unreadable and
+                // still-loading alike. Every one of these taps is a WRITE that
+                // would otherwise have to invent the audience, and inventing it
+                // over a live 'close' or 'people' pin widens it to everyone.
+                disabled={busy || !mineKnown}
                 onClick={() => void choose(status)}
                 className={[
                   'min-h-[44px] touch-manipulation px-5 rounded-full font-display text-sm border transition-colors disabled:opacity-60',
@@ -309,10 +420,20 @@ export default function TonightPresence(): JSX.Element {
           })}
         </div>
 
-        {/* WE DO NOT KNOW YOUR PIN. Never the unset row, which invites a tap
-            that would overwrite a live pin with a default audience
-            (V8-R-OPS-005 — the same rule the circle list below follows). */}
-        {mineUnreadable ? (
+        {/* WE DO NOT KNOW YOUR PIN — and the two reasons say so differently.
+            Never the unset row, which invites a tap that would overwrite a live
+            pin with a default audience (V8-R-OPS-005 — the same rule the circle
+            list below follows). */}
+        {minePin.kind === 'loading' ? (
+          <p
+            className="text-xs text-muted mt-3"
+            role="status"
+            data-testid="my-pin-loading"
+          >
+            Checking your pin tonight…
+          </p>
+        ) : null}
+        {minePin.kind === 'unreadable' ? (
           <p
             className="text-xs text-muted mt-3"
             role="status"
@@ -390,6 +511,84 @@ export default function TonightPresence(): JSX.Element {
           </div>
         ) : null}
 
+        {/* STEP TWO OF THE PIN SEQUENCE, in the page rather than in a dialog.
+            Nothing here is live: the bar is chosen, the audience is being
+            chosen, and only "Pin it" writes. That is the whole fix for a pin
+            that used to go out to every follower the instant a bar was tapped
+            (V8-R-PRE-003 → V8-R-PRE-002). */}
+        {pendingBarId !== null ? (
+          <div
+            className="mt-4 rounded-2xl border border-border p-4 space-y-3"
+            data-testid="pin-audience-step"
+          >
+            <p className="text-sm">
+              <span className="font-display text-text">
+                {pendingBar?.name ?? pendingBarId}
+              </span>
+              {' — who can see this?'}
+            </p>
+            <div
+              className="flex flex-wrap items-center gap-2"
+              role="group"
+              aria-label="Who can see this pin tonight?"
+            >
+              {AUDIENCE_ORDER.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={pendingAudience === value}
+                  disabled={busy}
+                  onClick={() => choosePendingAudience(value)}
+                  data-testid={`pin-pending-audience-${value}`}
+                  className={[
+                    'min-h-[44px] touch-manipulation px-4 rounded-full text-xs font-display border transition-colors disabled:opacity-60',
+                    pendingAudience === value
+                      ? 'border-accent text-accent'
+                      : 'border-border text-muted hover:text-text',
+                  ].join(' ')}
+                >
+                  {AUDIENCE_LABELS[value]}
+                </button>
+              ))}
+            </div>
+            {pendingAudience === 'people' ? (
+              <p
+                className="text-xs text-muted"
+                data-testid="pin-pending-audience-count"
+              >
+                {pendingRecipients.length}{' '}
+                {pendingRecipients.length === 1 ? 'person' : 'people'} will see
+                this pin tonight.
+              </p>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                // 'people' with nobody selected is refused server-side rather
+                // than widened, so the confirmation does not offer to send it.
+                disabled={
+                  busy ||
+                  (pendingAudience === 'people' && pendingRecipients.length === 0)
+                }
+                onClick={() => void confirmPin()}
+                data-testid="pin-confirm"
+                className="min-h-[44px] touch-manipulation px-5 rounded-full text-sm font-display border border-accent text-accent transition-colors disabled:opacity-60"
+              >
+                {busy ? 'Pinning…' : 'Pin it'}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={cancelPin}
+                data-testid="pin-cancel"
+                className="min-h-[44px] touch-manipulation px-5 rounded-full text-sm font-display border border-border text-muted hover:text-text transition-colors disabled:opacity-60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {failed ? (
           <p className="text-xs text-muted mt-2" role="status">
             That didn&apos;t save — try again in a moment.
@@ -417,22 +616,35 @@ export default function TonightPresence(): JSX.Element {
         <PinBarDialog
           busy={busy}
           onClose={() => setPickingBar(false)}
-          onPick={(bar) => void pinBar(bar.id)}
+          // SELECTS, does not pin. The audience step above is step two.
+          onPick={(bar) => selectBar(bar.id)}
         />
       ) : null}
 
-      {pickingPeople ? (
+      {pickingPeople !== null ? (
         <PinAudienceDialog
           // MUTUALS ONLY. D-C-37 intersects any narrowed audience with the
           // pinner's mutual friends server-side, so anyone else shown here
           // would be a recipient the server had already dropped.
           friends={follows.mutuals}
           friendsLoading={follows.loading}
-          initialSelection={mine?.recipientIds ?? []}
+          initialSelection={
+            pickingPeople === 'pending'
+              ? pendingRecipients
+              : (mine?.recipientIds ?? [])
+          }
           busy={busy}
-          onClose={() => setPickingPeople(false)}
+          onClose={() => setPickingPeople(null)}
           onConfirm={(recipientIds) => {
-            setPickingPeople(false);
+            const flow = pickingPeople;
+            setPickingPeople(null);
+            // The pin sequence has not written anything yet, so its recipients
+            // are recorded and sent once, by "Pin it".
+            if (flow === 'pending') {
+              setPendingAudience('people');
+              setPendingRecipients(recipientIds);
+              return;
+            }
             void writeAudience('people', recipientIds);
           }}
         />

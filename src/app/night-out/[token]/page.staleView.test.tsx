@@ -162,8 +162,12 @@ describe('the plan page never paints an answer the view has moved on from', () =
       screen.queryByText(OWNER_PRIVATE_NAME),
       'a stale authenticated load put private member data in front of a signed-out viewer',
     ).toBeNull();
+    // The MEMBER board, by test id rather than by its heading: the bearer
+    // surface now has a "Who's in" of its own — the accepted COUNT, which
+    // 0044's preview has always made public — so the words no longer identify
+    // the private list on their own.
     expect(
-      screen.queryByText(/Who's in/),
+      screen.queryByTestId('member-board'),
       'the member board rendered for a signed-out viewer',
     ).toBeNull();
   });

@@ -9,9 +9,10 @@ import { getBarById } from '@/lib/catalog';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
 import NightOutMedia from './NightOutMedia';
+import InvitePreview from './InvitePreview';
+import { lockNightOut, removeNightOutSuggestion } from './planActions';
 import {
   cancelNightOut,
-  decideNightOut,
   declineNightOutByToken,
   getNightOut,
   getNightOutBoard,
@@ -92,6 +93,60 @@ function isSettled(kind: PageState['kind']): boolean {
   }
 }
 
+/**
+ * V8-R-SOC-008's overflow control and its one action.
+ *
+ * "Ownership and removal are carried by the control and its menu, never by a
+ * paragraph" — so the affordance IS the control, and the row says nothing about
+ * who may act on it. 44px, as the requirement's accessibility clause states.
+ *
+ * The parent decides whether this renders at all, using the same predicate the
+ * RPC enforces; this component decides nothing about authorization.
+ */
+function ShortlistOverflow({
+  barName,
+  open,
+  onToggle,
+  onRemove,
+}: {
+  barName: string;
+  open: boolean;
+  onToggle: () => void;
+  onRemove: () => void;
+}): JSX.Element {
+  return (
+    <span className="relative">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`More for ${barName}`}
+        onClick={onToggle}
+        data-testid="shortlist-overflow"
+        className="inline-flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center rounded-full border text-sm"
+      >
+        ⋯
+      </button>
+      {open ? (
+        <span
+          role="menu"
+          className="absolute right-0 top-full z-10 mt-1 min-w-[10rem] rounded-lg border bg-black p-1 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={onRemove}
+            data-testid="shortlist-remove"
+            className="block w-full rounded-md px-3 py-2 text-left text-sm"
+          >
+            Remove from the shortlist
+          </button>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function nightDateLabel(nightKey: string): string {
   const [y, m, d] = nightKey.split('-').map(Number);
   if (!y || !m || !d) return nightKey;
@@ -118,6 +173,8 @@ export default function NightOutPage({
   const [suggestInput, setSuggestInput] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [shareNotice, setShareNotice] = useState<string | null>(null);
+  /** Which shortlist row's overflow menu is open, if any (V8-R-SOC-008). */
+  const [overflowBarId, setOverflowBarId] = useState<string | null>(null);
   const token = decodeURIComponent(params.token);
 
   /**
@@ -398,22 +455,19 @@ export default function NightOutPage({
 
   if (state.kind === 'preview') {
     const { preview } = state;
-    const host = preview.ownerDisplayName ?? preview.ownerHandle ?? 'A friend';
+    // THE BEARER SURFACE IS ITS OWN COMPONENT (round-3 panel, Codex, HIGH).
+    // What used to be here was a four-line poster and "Sign in to join", which
+    // is D-C-23 inverted: a token-scoped recipient may view the plan AND RSVP
+    // without an account. InvitePreview carries that contract; the signed-in
+    // non-member's Join / Not tonight actions are still the page's, because they
+    // need its epoch guard and its member loader, and are passed through.
     return (
-      <main className="min-h-screen px-6 py-10 text-center">
-        <p className="text-sm uppercase tracking-wide opacity-60">
-          You&apos;re invited
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold">
-          {preview.title ?? `${host}'s night out`}
-        </h1>
-        <p className="mt-2 opacity-80">{nightDateLabel(preview.night)}</p>
-        <p className="mt-1 text-sm opacity-60">
-          Hosted by {host}
-          {preview.acceptedCount > 0
-            ? ` · ${preview.acceptedCount} in so far`
-            : ''}
-        </p>
+      <InvitePreview
+        token={token}
+        preview={preview}
+        signedIn={auth.status === 'signed-in'}
+        onSignIn={handleSignInToJoin}
+      >
         {auth.status === 'signed-in' ? (
           // Joining is EXPLICIT (review round 1): a signed-in non-member
           // sees the preview and chooses to join — the RPC is the accept.
@@ -487,19 +541,11 @@ export default function NightOutPage({
           >
             Not tonight
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleSignInToJoin}
-            className="mt-6 rounded-full bg-white px-6 py-3 font-semibold text-black"
-          >
-            Sign in to join
-          </button>
-        )}
+        ) : null}
         {actionError !== null ? (
           <p className="mt-3 text-sm text-red-400">{actionError}</p>
         ) : null}
-      </main>
+      </InvitePreview>
     );
   }
 
@@ -559,6 +605,30 @@ export default function NightOutPage({
    * together.
    */
   const canAddPhoto = isOwner || plan.callerStatus === 'accepted';
+
+  /**
+   * THE BOARD IS RANKED (round-3 panel, Codex, HIGH). It used to render in
+   * whatever order `get_night_out_board` returned, with a "Pick this" on every
+   * row — so "the top bar" was not a thing the surface showed, and the owner's
+   * action was "choose any of these" rather than V8-R-SOC-007's "take the top
+   * bar". Ranked the same way `lock_night_out` ranks it (votes, then the row's
+   * own order as a stable tiebreak) so the row on top IS the one a lock takes.
+   *
+   * A COPY, not a sort in place: `board` is state, and `Array.prototype.sort`
+   * mutates its receiver.
+   */
+  const rankedBoard = [...board].sort((a, b) => b.votes - a.votes);
+
+  /**
+   * The viewer's own handle, for deciding which rows get an overflow control.
+   * The board carries the suggester's HANDLE and no id, so this is the only
+   * join available; the authorization itself is the RPC's, and this decides
+   * rendering only.
+   */
+  const myHandle =
+    auth.status === 'signed-in'
+      ? (members.find((m) => m.userId === auth.user.id)?.handle ?? null)
+      : null;
 
   return (
     // pb-28 CLEARS THE BOTTOM NAV. This page carried only `py-8` and got away
@@ -676,7 +746,14 @@ export default function NightOutPage({
         </section>
       ) : null}
 
-      <section className="mt-8">
+      {/* `data-testid`, not the heading text, is what "the member board" means
+          now: the bearer surface has its own "Who's in" — the accepted COUNT,
+          which 0044's preview has always made public — so a test asserting the
+          member board is absent cannot key on those words any more. The two
+          lists are different data with different audiences: this one names
+          every member and their invite status, and only accepted members' own
+          display identities reach the bearer one. */}
+      <section className="mt-8" data-testid="member-board">
         <h2 className="font-semibold">Who&apos;s in ({accepted.length})</h2>
         <ul className="mt-2 space-y-1">
           {members.map((m) => (
@@ -699,8 +776,8 @@ export default function NightOutPage({
       {!isCancelled ? (
         <section className="mt-8">
           <h2 className="font-semibold">Where should we go?</h2>
-          <ul className="mt-2 space-y-2">
-            {board.map((entry) => (
+          <ul className="mt-2 space-y-2" data-testid="night-out-board">
+            {rankedBoard.map((entry) => (
               <li
                 key={entry.barId}
                 className="flex items-center justify-between rounded-lg border px-3 py-2"
@@ -731,19 +808,38 @@ export default function NightOutPage({
                       Vote
                     </button>
                   ) : null}
-                  {isOwner && plan.status !== 'decided' ? (
-                    <button
-                      type="button"
-                      onClick={withRefresh(() => {
-                        const supabase = getBrowserSupabase();
-                        return supabase
-                          ? decideNightOut(supabase, plan.id, entry.barId)
-                          : Promise.resolve(false);
-                      })}
-                      className="rounded-full border px-3 py-1 text-sm"
-                    >
-                      Pick this
-                    </button>
+                  {/* V8-R-SOC-008. "The overflow renders only on a row the
+                      viewer may act on — their own suggestion as a participant,
+                      every row as the owner", and the same predicate the RPC
+                      enforces decides it. A menu on a row whose removal the
+                      server would refuse is a control that only produces an
+                      error. */}
+                  {isPlanOpen &&
+                  (isOwner ||
+                    (myHandle !== null &&
+                      entry.suggestedByHandle === myHandle)) ? (
+                    <ShortlistOverflow
+                      barName={barLabel(entry.barId)}
+                      open={overflowBarId === entry.barId}
+                      onToggle={() =>
+                        setOverflowBarId((current) =>
+                          current === entry.barId ? null : entry.barId,
+                        )
+                      }
+                      onRemove={() => {
+                        setOverflowBarId(null);
+                        void withRefresh(() => {
+                          const supabase = getBrowserSupabase();
+                          return supabase
+                            ? removeNightOutSuggestion(
+                                supabase,
+                                plan.id,
+                                entry.barId,
+                              )
+                            : Promise.resolve(false);
+                        })();
+                      }}
+                    />
                   ) : null}
                 </div>
               </li>
@@ -752,6 +848,34 @@ export default function NightOutPage({
               <li className="text-sm opacity-60">No suggestions yet.</li>
             ) : null}
           </ul>
+
+          {/* V8-R-SOC-007. ONE action with a fixed object, not a Pick-this on
+              every row (round-3 panel, Codex, HIGH). "Closes voting
+              immediately, takes the top bar, and tells everyone" — and the top
+              bar is chosen by `lock_night_out` inside the same serialized
+              section that takes it, so a vote landing mid-tap cannot leave the
+              plan locked to a bar that was not the leader. "The primary action
+              on the open plan", available whether or not a deadline is set. */}
+          {isOwner && isPlanOpen ? (
+            <button
+              type="button"
+              disabled={board.length === 0}
+              onClick={withRefresh(async () => {
+                const supabase = getBrowserSupabase();
+                if (!supabase) return false;
+                return (await lockNightOut(supabase, plan.id)) !== null;
+              })}
+              data-testid="night-out-lock"
+              className="mt-4 inline-flex min-h-[44px] w-full touch-manipulation items-center justify-center rounded-full bg-white px-6 font-semibold text-black disabled:opacity-60"
+            >
+              Lock the plan
+            </button>
+          ) : null}
+          {isOwner && isPlanOpen && board.length === 0 ? (
+            <p className="mt-2 text-sm opacity-60">
+              Nothing to lock yet — the shortlist is empty.
+            </p>
+          ) : null}
           {!canParticipate ? (
             <p className="mt-3 text-sm opacity-60">
               {!isPlanOpen

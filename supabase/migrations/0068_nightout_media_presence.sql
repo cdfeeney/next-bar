@@ -735,25 +735,89 @@ $$;
 -- caller — add_night_out_media, get_night_out_media, night_out_media_window,
 -- archive_night_out and media_read_window — follows without edit.
 
+-- THE WINDOW HAS TWO ENDS (round-3 panel, Codex, HIGH). Round 2 wrote the
+-- scheduled start down and then used it for ONE thing: an expiry anchor. Every
+-- gate asked `now() < expires_at` and nothing asked whether the window had
+-- OPENED, so a plan created at 10:00 AM served and accepted media immediately
+-- and went on doing it until 9:00 PM the following evening — about 35 hours,
+-- starting eleven hours before the start it claims to measure from. "24 hours
+-- measured from the scheduled start" is an interval, not a deadline, and an
+-- interval needs both of its ends enforced.
+--
+-- So the start is its own function and every gate now asks for the half-open
+-- interval [opens_at, expires_at).
+--
+-- CONSEQUENCE, STATED RATHER THAN BURIED: a member who reaches the bar at 8:30
+-- PM cannot attach a photo until 9:00 PM. That is what the requirement's own
+-- arithmetic says, and the alternative — an open-ended lower bound — is the
+-- defect above. When `night_outs` gains a real `starts_at`, THIS function reads
+-- it and both ends move together.
+
+-- ONE NAME FOR THE INSTANT, because two surfaces now need it. The media window
+-- opens at the plan's scheduled start, and V8-R-INV-002's bearer preview has to
+-- state "time" for the same plan. Calling it `night_out_media_opens_at` in the
+-- second place would be a lie about what it is, and defining a second 9:00 PM
+-- somewhere else is how the two drift. The media window is one CONSUMER of the
+-- scheduled start, not its owner.
+create or replace function public.night_out_scheduled_start(p_night date)
+returns timestamptz
+language sql
+immutable
+as $$
+  select (p_night + interval '21 hours') at time zone 'America/New_York'
+$$;
+
+comment on function public.night_out_scheduled_start(date) is
+  'V8-R-NO-002. When a Night Out on this night is scheduled to start: 9:00 PM '
+  'America/New_York, the default the contract names, DST-aware because the cast '
+  'resolves the offset at that date. The single definition — the media window '
+  'measures its 24 hours from here and the bearer preview states it as the '
+  'plan''s time. When night_outs gains a real starts_at column, this function '
+  'reads it and every consumer follows without edit.';
+
+revoke all on function public.night_out_scheduled_start(date) from public, anon, authenticated;
+grant execute on function public.night_out_scheduled_start(date) to anon, authenticated;
+
 create or replace function public.night_out_media_expires_at(p_night date)
 returns timestamptz
 language sql
 immutable
 as $$
-  select ((p_night + interval '21 hours') at time zone 'America/New_York')
-         + interval '24 hours'
+  select public.night_out_scheduled_start(p_night) + interval '24 hours'
 $$;
 
 comment on function public.night_out_media_expires_at(date) is
   'V8-R-NO-008. When Night Out media for this night stops being served: the '
-  'plan''s scheduled start — 9:00 PM America/New_York on its night, the default '
-  'V8-R-NO-002 names — plus 24 hours. Measured from the SCHEDULED START, never '
-  'from capture or publication. The single definition: add_night_out_media, '
-  'get_night_out_media, night_out_media_window, archive_night_out and '
-  'media_read_window all call it.';
+  'scheduled start (night_out_scheduled_start) plus 24 hours. Measured from the '
+  'SCHEDULED START, never from capture or publication. The single definition: '
+  'add_night_out_media, get_night_out_media, night_out_media_window, '
+  'archive_night_out and media_read_window all call it — and all of them ask '
+  'for the half-open interval [opens_at, expires_at), never the deadline alone.';
 
 revoke all on function public.night_out_media_expires_at(date) from public, anon, authenticated;
 grant execute on function public.night_out_media_expires_at(date) to authenticated;
+
+-- THE PREDICATE ITSELF, once. Five call sites asked `now() < expires_at`, and
+-- adding a second end to the interval in five places is how four of them end up
+-- right and one of them drifts. `stable`, not `immutable`: it reads now().
+create or replace function public.night_out_media_window_open(p_night date)
+returns boolean
+language sql
+stable
+as $$
+  select now() >= public.night_out_scheduled_start(p_night)
+     and now() <  public.night_out_media_expires_at(p_night)
+$$;
+
+comment on function public.night_out_media_window_open(date) is
+  'V8-R-NO-008. Is this night''s media window open RIGHT NOW, on the DATABASE''s '
+  'clock — the half-open interval [scheduled start, +24h). The single predicate '
+  'add_night_out_media, get_night_out_media, night_out_media_window, '
+  'archive_night_out and media_read_window all share, so the two ends of the '
+  'window cannot drift apart between them.';
+
+revoke all on function public.night_out_media_window_open(date) from public, anon, authenticated;
+grant execute on function public.night_out_media_window_open(date) to authenticated;
 
 ------------------------------------------------------------------------------
 -- 5b. add_night_out_media — attach one object to a Night Out
@@ -790,8 +854,12 @@ begin
   if v_night is null then
     raise exception 'no such night out' using errcode = '42501';
   end if;
-  if now() >= public.night_out_media_expires_at(v_night) then
-    raise exception 'the night out media window has closed' using errcode = '22023';
+  -- BOTH ENDS (round-3 panel, Codex, HIGH). Before the scheduled start is as
+  -- much "outside the window" as after the deadline; the message names the
+  -- window rather than which side of it the caller is on, because that is the
+  -- same information the surface already gets from night_out_media_window.
+  if not public.night_out_media_window_open(v_night) then
+    raise exception 'the night out media window is not open' using errcode = '22023';
   end if;
 
   -- OWN BYTES ONLY. Without this any member could attach another account's
@@ -867,14 +935,15 @@ as $$
      and n.id = p_night_out
      and m.bytes_removed_at is null
      and public.night_out_role(p_night_out) is not null
-     and now() < public.night_out_media_expires_at(n.night)
+     and public.night_out_media_window_open(n.night)
    order by d.created_at asc
 $$;
 
 comment on function public.get_night_out_media(uuid) is
-  'V8-R-NO-008. Live Night Out media for an ACCEPTED member, empty once the '
-  '24-hour window from the scheduled start has closed. The window is applied '
-  'here, not reported for the client to honour.';
+  'V8-R-NO-008. Live Night Out media for an ACCEPTED member, empty outside the '
+  '24-hour window that runs FROM the scheduled start — before it has opened as '
+  'well as after it has closed. The window is applied here, not reported for '
+  'the client to honour.';
 
 revoke all on function public.get_night_out_media(uuid) from public, anon;
 grant execute on function public.get_night_out_media(uuid) to authenticated;
@@ -901,26 +970,53 @@ grant execute on function public.get_night_out_media(uuid) to authenticated;
 -- rather than a window, because when someone else's plan ends is not theirs to
 -- know.
 
+-- ROUND 3 (Codex gate, HIGH) ADDS THE OTHER END AND THE WORD FOR IT. Once the
+-- window has a lower bound, `is_open = false` means two different things — not
+-- yet, or no longer — and a surface that cannot tell them apart either says the
+-- wrong sentence or computes the difference from the device clock, which is the
+-- thing this function exists to stop. `state` is therefore decided HERE, on the
+-- database's clock, and the client only chooses wording from it.
+--
+-- `opens_at` rides along for the same reason `expires_at` does: so the surface
+-- can state the window in words (V8-R-NO-008, accessibility) without doing any
+-- arithmetic of its own.
+--
+-- Return type CHANGED, so this drops forward rather than being replaced — a
+-- `create or replace` cannot alter an OUT list. Idempotent via `if exists`.
+drop function if exists public.night_out_media_window(uuid);
+
 create or replace function public.night_out_media_window(p_night_out uuid)
-returns table (expires_at timestamptz, is_open boolean)
+returns table (
+  opens_at   timestamptz,
+  expires_at timestamptz,
+  is_open    boolean,
+  state      text
+)
 language sql
 stable
 security definer
 set search_path = public
 as $$
-  select public.night_out_media_expires_at(n.night),
-         now() < public.night_out_media_expires_at(n.night)
+  select public.night_out_scheduled_start(n.night),
+         public.night_out_media_expires_at(n.night),
+         public.night_out_media_window_open(n.night),
+         case
+           when now() <  public.night_out_scheduled_start(n.night)  then 'before'
+           when now() >= public.night_out_media_expires_at(n.night) then 'closed'
+           else 'open'
+         end
     from public.night_outs n
    where n.id = p_night_out
      and public.night_out_role(p_night_out) is not null
 $$;
 
 comment on function public.night_out_media_window(uuid) is
-  'V8-R-NO-008. When this Night Out''s media window closes and whether it is '
-  'still open, decided by the SERVER''s clock. The recap gates its add-photo '
-  'and archive controls on this rather than on the device clock, because "a '
-  'skewed device clock must not hide media the server still serves". Zero rows '
-  'for a non-member.';
+  'V8-R-NO-008. When this Night Out''s media window OPENS and closes, whether it '
+  'is open now, and which side of it we are on (''before'' | ''open'' | '
+  '''closed''), all decided by the SERVER''s clock. The recap gates its '
+  'add-photo and archive controls on this rather than on the device clock, '
+  'because "a skewed device clock must not hide media the server still serves". '
+  'Zero rows for a non-member.';
 
 revoke all on function public.night_out_media_window(uuid) from public, anon;
 grant execute on function public.night_out_media_window(uuid) to authenticated;
@@ -1135,11 +1231,11 @@ begin
     raise exception 'no such night out' using errcode = '42501';
   end if;
 
-  -- AHEAD OF EVERY WRITE. Same errcode and same single definition as
+  -- AHEAD OF EVERY WRITE. Same errcode and same single predicate as
   -- add_night_out_media's own guard, so both halves of "you may act on this
-  -- night's media" close at exactly the same instant.
-  if now() >= public.night_out_media_expires_at(v_night) then
-    raise exception 'the night out media window has closed' using errcode = '22023';
+  -- night's media" open and close at exactly the same two instants.
+  if not public.night_out_media_window_open(v_night) then
+    raise exception 'the night out media window is not open' using errcode = '22023';
   end if;
 
   select count(distinct s.bar_id)::integer into v_bars
@@ -1155,14 +1251,48 @@ begin
     archived_at = now()
   returning id into v_saved;
 
-  -- THE ORDERED LIST. `sort_order` is the attachment order, so the archive
-  -- opens in the order the night actually happened.
-  insert into public.saved_night_media (saved_night_id, media_id, sort_order)
-  select v_saved,
-         live.media_id,
-         (row_number() over (order by live.created_at))::integer
+  -- THE ORDERED LIST, in two steps: take in whatever is live, then number the
+  -- WHOLE card.
+  --
+  -- ROUND-3 PANEL (Claude gate). One statement used to do both, numbering with
+  -- `row_number()` over the live set and inserting `on conflict do nothing` —
+  -- so a row that already existed KEPT the number an earlier pass gave it while
+  -- new rows got numbers from a freshly recomputed sequence. Archive A,B,C
+  -- (1,2,3); B's destination is removed; attach D and re-archive: the live set
+  -- A,C,D numbers 1,2,3, C's insert is skipped and keeps 3, and D arrives as 3
+  -- too. `get_saved_night`'s ORDER BY sort_order then returns those two in
+  -- whatever order the executor likes, and the archive stops opening "in the
+  -- order the night actually happened" — the only promise this column makes.
+  --
+  -- Renumbering just the live rows does NOT fix it, which is why the numbering
+  -- is its own statement over the whole saved night. The archive deliberately
+  -- OUTLIVES the live window — a retention hold keeps bytes an author removed
+  -- everywhere else (V8-R-CMP-016) — so a card routinely holds rows that are no
+  -- longer live, and those rows carry numbers from the pass that added them. B
+  -- above is exactly such a row: renumber A,C,D to 1,2,3 and B's stale 2
+  -- collides with C.
+  --
+  -- The key is the MEDIA's own created_at rather than the destination's: it is
+  -- the one instant every row on the card has, live or retained, and it is the
+  -- order the night happened in. media_id breaks ties so the result is total.
+  insert into public.saved_night_media (saved_night_id, media_id)
+  select v_saved, live.media_id
     from public.get_night_out_media(p_night_out) live
   on conflict on constraint saved_night_media_pkey do nothing;
+
+  with ordered as (
+    select snm.media_id,
+           (row_number() over (order by m.created_at, m.id))::integer as n
+      from public.saved_night_media snm
+      join public.media_objects m on m.id = snm.media_id
+     where snm.saved_night_id = v_saved
+  )
+  update public.saved_night_media snm
+     set sort_order = ordered.n
+    from ordered
+   where snm.saved_night_id = v_saved
+     and snm.media_id = ordered.media_id
+     and snm.sort_order is distinct from ordered.n;
 
   -- THE RETENTION HOLD, one per archived object. 0066 already treats a live
   -- kind='archive' row as the thing that keeps bytes from being reclaimed and
@@ -1371,7 +1501,10 @@ begin
      and m.storage_path = p_name
      and m.bytes_removed_at is null
      and public.night_out_role(n.id) is not null
-     and now() < public.night_out_media_expires_at(n.night);
+     -- The same half-open interval the rows themselves are served over, so a
+     -- URL cannot be minted for a night whose window has not opened yet
+     -- (round-3 panel, Codex, HIGH).
+     and public.night_out_media_window_open(n.night);
 
   if v_expiry is not null then
     return query select true, v_expiry;
@@ -1462,6 +1595,466 @@ grant execute on function public.media_read_window(text) to authenticated;
 
 
 ------------------------------------------------------------------------------
+-- 8. The bearer invitation contract (V8-R-INV-001 … V8-R-INV-004)
+------------------------------------------------------------------------------
+-- ADDED IN ROUND 3 (Codex gate, HIGH). 0044 shipped ONE anon grant — a preview
+-- carrying the night, the title, the host's display identity and an accepted
+-- count — and the surface offered a signed-out visitor nothing but "Sign in to
+-- join". The approved contract is larger than that in two specific ways, and
+-- both were simply absent:
+--
+--   V8-R-INV-001 (D-C-23): "A token-scoped recipient may VIEW the associated
+--   Night Out and SUBMIT AN RSVP WITHOUT SIGNING UP." D-C-23 explicitly
+--   SUPERSEDES the frozen PRD sentence that pre-signup RSVP is not authorized.
+--   V8-R-INV-003 (D-C-22): the three choices are Going, Maybe, and Can't make
+--   it — not the two-way accept/decline the member surface has.
+--   V8-R-INV-002: the bearer view shows "who invited them, the plan name, time
+--   and area, who is going, and the shortlist so far".
+--
+-- WHAT STAYS BEHIND THE AUTH WALL IS UNCHANGED. V8-R-INV-001's exclusions are
+-- "no voting, no suggesting, no browsing private application data", and nothing
+-- below grants any of the three. The bearer additions are exactly the plan's own
+-- shared facts: its scheduled start, the bar it settled on if it settled, the
+-- display identities of the people who accepted, and the shortlist with its vote
+-- COUNTS. No account ids, no handles-to-ids mapping beyond what 0044's preview
+-- already returns for the host, no voter identities, no ratings, no scores, no
+-- notification tokens — the trust boundary 0044 wrote down, held.
+--
+-- WHY THE RSVP NEEDS A TABLE OF ITS OWN: `night_out_members` keys on a profile
+-- id, and a recipient without the app has none. Their answer is owned by them
+-- ("the recipient owns their RSVP") and identified by a key their own device
+-- mints and keeps, so they can change it later without an account and nobody
+-- else can read or overwrite it.
+
+create table if not exists public.night_out_anon_rsvps (
+  night_out_id uuid        not null references public.night_outs(id) on delete cascade,
+  -- CLIENT-MINTED AND CLIENT-HELD. It is the recipient's capability over their
+  -- own answer: knowing the share token lets you RSVP, but only this key lets
+  -- you read or change the answer already stored under it.
+  rsvp_key     uuid        not null,
+  response     text        not null,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  constraint night_out_anon_rsvps_pkey primary key (night_out_id, rsvp_key),
+  -- 'declined' is the stored name for "Can't make it", matching
+  -- night_out_members.invite_status so the two vocabularies cannot drift. The
+  -- phrase "Not tonight" is deliberately absent — V8-R-INV-003 excludes it by
+  -- name (D-C-21, D-C-22).
+  constraint night_out_anon_rsvps_response_check
+    check (response in ('going', 'maybe', 'declined'))
+);
+
+comment on table public.night_out_anon_rsvps is
+  'V8-R-INV-001 / V8-R-INV-003 (D-C-23). One RSVP from a token-scoped recipient '
+  'who has no account. Identified by a key the recipient''s own device mints and '
+  'keeps — never by an account id, because there isn''t one. Direct grants are '
+  'forbidden; rsvp_night_out_by_token and get_anon_rsvp_by_token are the entire '
+  'surface.';
+
+alter table public.night_out_anon_rsvps enable row level security;
+revoke all on table public.night_out_anon_rsvps from public, anon, authenticated;
+-- No policy and no grant: with RLS on and every grant revoked the table is
+-- unreachable except through the SECURITY DEFINER functions below. That is the
+-- same shape 0044 gives every one of its tables.
+
+------------------------------------------------------------------------------
+-- 8a. rsvp_night_out_by_token — the anonymous RSVP write
+------------------------------------------------------------------------------
+-- The ONE anon WRITE grant in this file, and it is as narrow as the read one:
+-- holding the token authorizes exactly this, on exactly one plan, and the row
+-- it can reach is the one under the caller's own key.
+
+create or replace function public.rsvp_night_out_by_token(
+  p_token    uuid,
+  p_key      uuid,
+  p_response text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  -- A share token is forwardable by design, so an unbounded anon insert is a
+  -- write amplification anyone holding a link could aim at the table. The cap
+  -- bounds one plan's anonymous replies well above any real guest list; a
+  -- recipient CHANGING their answer never spends a slot, because the update
+  -- path below runs first.
+  anon_rsvp_cap constant integer := 100;
+  v_plan  uuid;
+  v_count integer;
+begin
+  if p_token is null or p_key is null or p_response is null
+     or p_response not in ('going', 'maybe', 'declined') then
+    return false;
+  end if;
+
+  -- A cancelled plan takes no more replies; a decided one still does, because
+  -- "we settled on a bar" is not "stop telling us whether you're coming".
+  select n.id into v_plan
+    from public.night_outs n
+   where n.share_token = p_token
+     and n.cancelled_at is null
+     and n.status in ('draft', 'open', 'decided')
+   limit 1;
+  if v_plan is null then
+    return false;
+  end if;
+
+  -- CHANGING AN ANSWER FIRST, before the cap is ever consulted: an existing
+  -- recipient must never be refused because other people filled the table.
+  -- This is also what makes a duplicate delivery idempotent, which
+  -- V8-R-INV-003's failure clause requires by name.
+  update public.night_out_anon_rsvps
+     set response = p_response, updated_at = now()
+   where night_out_id = v_plan
+     and rsvp_key = p_key;
+  if found then
+    return true;
+  end if;
+
+  -- Check-then-act on a count → serialize per plan (the 0011/0044 pattern).
+  perform pg_advisory_xact_lock(
+    hashtextextended('night_out_anon_rsvps:' || v_plan::text, 0));
+
+  select count(*) into v_count
+    from public.night_out_anon_rsvps r
+   where r.night_out_id = v_plan;
+  if v_count >= anon_rsvp_cap then
+    return false;
+  end if;
+
+  insert into public.night_out_anon_rsvps (night_out_id, rsvp_key, response)
+  values (v_plan, p_key, p_response)
+  on conflict on constraint night_out_anon_rsvps_pkey
+  do update set response = excluded.response, updated_at = now();
+  return true;
+end;
+$$;
+
+comment on function public.rsvp_night_out_by_token(uuid, uuid, text) is
+  'V8-R-INV-001 / V8-R-INV-003 (D-C-23, D-C-22). Records or changes ONE '
+  'token-scoped recipient''s RSVP — going | maybe | declined — without an '
+  'account. Idempotent: re-sending the same answer under the same key is a '
+  'no-op and never spends the per-plan cap. Grants nothing else: voting, '
+  'suggesting and every private read still require authentication.';
+
+revoke all on function public.rsvp_night_out_by_token(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.rsvp_night_out_by_token(uuid, uuid, text) to anon, authenticated;
+
+create or replace function public.get_anon_rsvp_by_token(p_token uuid, p_key uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  -- BOTH halves are required. The token alone cannot read anybody's answer —
+  -- otherwise every holder of a forwarded link could enumerate the replies —
+  -- and the key alone names no plan.
+  select r.response
+    from public.night_out_anon_rsvps r
+    join public.night_outs n on n.id = r.night_out_id
+   where n.share_token = p_token
+     and r.rsvp_key = p_key
+   limit 1;
+$$;
+
+comment on function public.get_anon_rsvp_by_token(uuid, uuid) is
+  'V8-R-INV-003. The answer stored under THIS recipient''s own key, so a '
+  'returning visitor sees the RSVP they already sent instead of being asked '
+  'again. Requires the token AND the key; either alone returns nothing.';
+
+revoke all on function public.get_anon_rsvp_by_token(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.get_anon_rsvp_by_token(uuid, uuid) to anon, authenticated;
+
+------------------------------------------------------------------------------
+-- 8b. The bearer view's missing halves (V8-R-INV-002)
+------------------------------------------------------------------------------
+-- Three functions rather than a wider `preview_night_out`, for two reasons: its
+-- return type cannot be extended by `create or replace`, and it belongs to 0044
+-- — replacing another migration's function to add columns is a change every
+-- later reader has to reconcile across two files. These are additive and each
+-- answers a different cardinality, so they could not have been one function
+-- anyway.
+
+create or replace function public.preview_night_out_detail(p_token uuid)
+returns table (starts_at timestamptz, decided_bar_id text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with gated as materialized (
+    select n.night, n.decided_bar_id
+      from public.night_outs n
+     where n.share_token = p_token
+       and n.status in ('draft', 'open', 'decided')
+     limit 1
+  )
+  select public.night_out_scheduled_start(g.night), g.decided_bar_id
+    from gated g;
+$$;
+
+comment on function public.preview_night_out_detail(uuid) is
+  'V8-R-INV-002''s "time and area" for a bearer. The time is the plan''s '
+  'SCHEDULED START from the single definition (night_out_scheduled_start), so '
+  'the recipient is never shown an hour the client computed and the server '
+  'disagrees with; the area is the bar the plan settled on, null while it is '
+  'still choosing. Nothing private: both are facts about the plan the recipient '
+  'was invited to.';
+
+revoke all on function public.preview_night_out_detail(uuid) from public, anon, authenticated;
+grant execute on function public.preview_night_out_detail(uuid) to anon, authenticated;
+
+create or replace function public.preview_night_out_attendees(p_token uuid)
+returns table (display_name text, handle text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with gated as materialized (
+    select n.id
+      from public.night_outs n
+     where n.share_token = p_token
+       and n.status in ('draft', 'open', 'decided')
+     limit 1
+  )
+  -- ACCEPTED ONLY, and DISPLAY IDENTITY ONLY. "Who is going" is the people who
+  -- said yes; a pending invitation is not a fact about who is coming, and
+  -- exposing it would tell a bearer who was asked. No profile ids leave here —
+  -- the same line 0044 drew for the host.
+  select p.display_name::text, p.handle::text
+    from gated g
+    join public.night_out_members m
+      on m.night_out_id = g.id and m.invite_status = 'accepted'
+    join public.profiles p on p.id = m.user_id
+   order by m.created_at asc;
+$$;
+
+comment on function public.preview_night_out_attendees(uuid) is
+  'V8-R-INV-002''s "who is going" for a bearer: the DISPLAY identities of the '
+  'accepted members, in the order they joined. Never account ids, never pending '
+  'or declined invitations.';
+
+revoke all on function public.preview_night_out_attendees(uuid) from public, anon, authenticated;
+grant execute on function public.preview_night_out_attendees(uuid) to anon, authenticated;
+
+create or replace function public.preview_night_out_shortlist(p_token uuid)
+returns table (bar_id text, votes bigint)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with gated as materialized (
+    select n.id
+      from public.night_outs n
+     where n.share_token = p_token
+       and n.status in ('draft', 'open', 'decided')
+     limit 1
+  )
+  -- COUNTS, NOT VOTERS. The shortlist is what the plan is choosing between;
+  -- who voted for what is members' business. Ranked the same way lock_night_out
+  -- ranks it, so the row a bearer sees on top is the one a lock would take.
+  select s.bar_id,
+         (select count(*)
+            from public.night_out_votes v
+           where v.night_out_id = g.id and v.bar_id = s.bar_id)
+    from gated g
+    join public.night_out_suggestions s on s.night_out_id = g.id
+   order by 2 desc, s.created_at asc, s.bar_id asc;
+$$;
+
+comment on function public.preview_night_out_shortlist(uuid) is
+  'V8-R-INV-002''s "the shortlist so far" for a bearer: the suggested bars with '
+  'their VOTE COUNTS, ranked as lock_night_out ranks them. No voter identities '
+  'and no suggester identities — a bearer may not vote or suggest '
+  '(V8-R-INV-001), and does not need to know who did.';
+
+revoke all on function public.preview_night_out_shortlist(uuid) from public, anon, authenticated;
+grant execute on function public.preview_night_out_shortlist(uuid) to anon, authenticated;
+
+------------------------------------------------------------------------------
+-- 8c. lock_night_out — the owner's one primary action (V8-R-SOC-007)
+------------------------------------------------------------------------------
+-- ADDED IN ROUND 3 (Codex gate, HIGH). The plan page drew a "Pick this" button
+-- on EVERY shortlist row and called `decide_night_out` with that row's bar, so
+-- the owner's action was "choose any bar" over an unranked board. V8-R-SOC-007
+-- is one action with a fixed object: "Closes voting immediately, TAKES THE TOP
+-- BAR, and tells everyone."
+--
+-- The top bar is chosen HERE, not by the client, for the same reason every other
+-- gate in this file is: a client that picks the row it believes is on top can be
+-- looking at a board one vote out of date, and would then lock a bar that was
+-- not the leader at the instant the lock landed.
+--
+-- `decide_night_out` is left exactly as 0044 wrote it. It is a different verb —
+-- the owner naming a specific bar — and other callers may still want it; this
+-- function is the contract's action, and the surface offers this one.
+
+create or replace function public.lock_night_out(p_night_out uuid)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_bar text;
+begin
+  if v_uid is null or p_night_out is null then
+    return null;
+  end if;
+
+  -- OWNER ONLY, server-enforced: "a participant cannot lock". Checked against
+  -- night_outs.owner_id rather than night_out_role, which answers 'owner' or
+  -- 'member' but is about ACCEPTED membership, not about who owns the plan.
+  if not exists (
+    select 1 from public.night_outs n
+     where n.id = p_night_out
+       and n.owner_id = v_uid
+       and n.status in ('draft', 'open')
+  ) then
+    return null;
+  end if;
+
+  -- Read the leader and take it in one serialized section, so a vote landing
+  -- between the read and the update cannot make the locked bar stale.
+  perform pg_advisory_xact_lock(
+    hashtextextended('night_out_lock:' || p_night_out::text, 0));
+
+  -- TOTAL ORDER, so "the top bar" is one bar and not a coin flip: most votes,
+  -- then the earliest suggestion, then the bar id.
+  select s.bar_id into v_bar
+    from public.night_out_suggestions s
+    left join public.night_out_votes v
+      on v.night_out_id = s.night_out_id and v.bar_id = s.bar_id
+   where s.night_out_id = p_night_out
+   group by s.bar_id, s.created_at
+   order by count(v.user_id) desc, s.created_at asc, s.bar_id asc
+   limit 1;
+
+  -- "A FAILED LOCK LEAVES VOTING OPEN AND SAYS SO." An empty shortlist has no
+  -- top bar to take, so nothing is decided and the caller gets null — the plan
+  -- is exactly as open as it was.
+  if v_bar is null then
+    return null;
+  end if;
+
+  update public.night_outs
+     set status = 'decided', decided_bar_id = v_bar
+   where id = p_night_out
+     and owner_id = v_uid
+     and status in ('draft', 'open');
+  if not found then
+    return null;
+  end if;
+
+  -- "and tells everyone" — the append-only record every member's plan view
+  -- reads. Pushed notification delivery is the shared invite/notify door that
+  -- does not exist on this branch (HFX-R-103) and is not minted here.
+  insert into public.night_out_events (night_out_id, actor_id, kind, bar_id)
+  values (p_night_out, v_uid, 'plan_changed', v_bar);
+  return v_bar;
+end;
+$$;
+
+comment on function public.lock_night_out(uuid) is
+  'V8-R-SOC-007. The plan owner closes voting and TAKES THE TOP BAR — chosen '
+  'here, by votes then suggestion age then bar id, so the client cannot lock a '
+  'bar that was not the leader when the lock landed. Returns the locked bar id, '
+  'or null when the caller is not the owner, the plan is not open, or the '
+  'shortlist is empty; a null lock changes nothing and leaves voting open.';
+
+revoke all on function public.lock_night_out(uuid) from public, anon, authenticated;
+grant execute on function public.lock_night_out(uuid) to authenticated;
+
+------------------------------------------------------------------------------
+-- 8d. remove_night_out_suggestion — the overflow's one action (V8-R-SOC-008)
+------------------------------------------------------------------------------
+-- "Removal is authorized to the entry owner or the plan owner", server-enforced.
+-- The votes go with the suggestion: a vote for a bar that is no longer on the
+-- shortlist is a row nothing can render and that lock_night_out would still
+-- count if the bar came back.
+
+create or replace function public.remove_night_out_suggestion(
+  p_night_out uuid,
+  p_bar       text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null or p_night_out is null
+     or p_bar is null or p_bar !~ '^[a-z0-9-]{1,60}$' then
+    return false;
+  end if;
+  -- Accepted membership is the floor, exactly as suggest/vote have it.
+  if public.night_out_role(p_night_out) is null then
+    return false;
+  end if;
+  -- Only while the plan is still choosing. Removing the decided bar from a
+  -- settled plan would leave night_outs.decided_bar_id naming a row nobody can
+  -- see, and a settled shortlist is a record of what was chosen from.
+  if not exists (
+    select 1 from public.night_outs n
+     where n.id = p_night_out and n.status in ('draft', 'open')
+  ) then
+    return false;
+  end if;
+  -- THE AUTHORIZATION, and it is deliberately one predicate: this row's own
+  -- suggester, or the plan's owner. A member cannot remove another member's
+  -- suggestion.
+  if not exists (
+    select 1
+      from public.night_out_suggestions s
+     where s.night_out_id = p_night_out
+       and s.bar_id = p_bar
+       and (
+         s.suggested_by = v_uid
+         or exists (
+           select 1 from public.night_outs n
+            where n.id = p_night_out and n.owner_id = v_uid
+         )
+       )
+  ) then
+    return false;
+  end if;
+
+  delete from public.night_out_votes v
+   where v.night_out_id = p_night_out and v.bar_id = p_bar;
+  delete from public.night_out_suggestions s
+   where s.night_out_id = p_night_out and s.bar_id = p_bar;
+  if not found then
+    return false;
+  end if;
+
+  -- 'plan_changed' is the existing kind for "the shortlist is different now";
+  -- night_out_events' check constraint holds the four approved kinds and this
+  -- file does not widen it.
+  insert into public.night_out_events (night_out_id, actor_id, kind, bar_id)
+  values (p_night_out, v_uid, 'plan_changed', p_bar);
+  return true;
+end;
+$$;
+
+comment on function public.remove_night_out_suggestion(uuid, text) is
+  'V8-R-SOC-008. Removes one shortlist entry and the votes cast for it. '
+  'Authorized to the entry''s own suggester or to the plan owner, server-side — '
+  'the overflow control only renders where this would succeed, and this is what '
+  'decides it. Refused once the plan is decided or cancelled.';
+
+revoke all on function public.remove_night_out_suggestion(uuid, text) from public, anon, authenticated;
+grant execute on function public.remove_night_out_suggestion(uuid, text) to authenticated;
+
+
+------------------------------------------------------------------------------
 -- APPLY GATE (attended — the behavioral half a committed-unapplied migration
 -- cannot prove; run after the ledger-aware runner applies this file):
 --   1. select public.nyc_night_key('2026-07-25T07:59:00Z') → 2026-07-24
@@ -1494,16 +2087,27 @@ grant execute on function public.media_read_window(text) to authenticated;
 --      two days back → get_night_out_media returns ZERO rows and
 --      add_night_out_media refuses, with no sweeper run.
 --   7a. THE SCHEDULED START IS 9:00 PM (V8-R-NO-002), NOT 4:00 AM:
---      select public.night_out_media_expires_at('2026-07-24') →
---      2026-07-26 01:00:00+00 (9:00 PM EDT on the 24th, plus 24 hours = 9:00 PM
---      EDT on the 25th). In EST: night_out_media_expires_at('2026-01-23') →
---      2026-01-25 02:00:00+00. A photo added at 11:00 PM on the plan's night
---      must still be returned by get_night_out_media the following afternoon —
---      the round-1 4:00 AM reading expired it five hours after capture.
+--      select public.night_out_scheduled_start('2026-07-24') →
+--      2026-07-25 01:00:00+00 (9:00 PM EDT on the 24th), and
+--      night_out_media_expires_at('2026-07-24') → 2026-07-26 01:00:00+00 (that
+--      start plus 24 hours). In EST: night_out_scheduled_start('2026-01-23') →
+--      2026-01-24 02:00:00+00, expires 2026-01-25 02:00:00+00. A photo added at
+--      11:00 PM on the plan's night must still be returned by
+--      get_night_out_media the following afternoon — the round-1 4:00 AM
+--      reading expired it five hours after capture.
 --   7b. THE WINDOW IS SERVER-ANSWERED: night_out_media_window(plan) as an
 --      accepted member returns exactly one row whose is_open agrees with
---      now() < expires_at, and ZERO rows for a non-member. The client gates its
---      add-photo and archive controls on this and never on its own clock.
+--      night_out_media_window_open(night), and ZERO rows for a non-member. The
+--      client gates its add-photo and archive controls on this and never on its
+--      own clock.
+--   7c. THE WINDOW HAS A LOWER BOUND (round-3 panel): create a plan whose night
+--      is TODAY and call the media path before 9:00 PM New York →
+--      night_out_media_window reports state 'before' with is_open false,
+--      add_night_out_media raises 22023, archive_night_out raises 22023, and
+--      get_night_out_media returns zero rows. media_read_window must not
+--      authorise on night-out grounds either. After 9:00 PM the same calls all
+--      succeed; two days later state is 'closed'. Before this bound, a plan
+--      created at 10:00 AM served media for about 35 hours starting immediately.
 --   8. SAVED NIGHTS OUT (V8-R-NO-009 / V8-R-ACC-002): archive_night_out as a
 --      member returns a photo_count matching the live media; get_saved_nights
 --      returns that card for the archiver and NOTHING for anyone else;
@@ -1526,6 +2130,41 @@ grant execute on function public.media_read_window(text) to authenticated;
 --   9. media_read_window: as an accepted member on a live night-out path →
 --      (true, the window); the same call after the window closes → falls through
 --      to the story/owner branches and does not authorise on night-out grounds.
+--   10. ARCHIVE ORDER SURVIVES A TOP-UP (round-3 panel, Claude): archive a night
+--      with three photos; remove the middle one's night_out destination; attach
+--      a fourth and re-archive. select media_id, sort_order from
+--      saved_night_media for that card → four rows with sort_order 1,2,3,4, all
+--      distinct, in media_objects.created_at order. Before this, the retained
+--      row and a new one both held the same number and get_saved_night's ORDER
+--      BY returned them in an unspecified order.
+--   11. THE BEARER CONTRACT (V8-R-INV-001…004, D-C-23). As ANON, holding a live
+--      share token:
+--      a. preview_night_out_detail → one row: starts_at equal to
+--         night_out_scheduled_start(night), decided_bar_id null while choosing.
+--      b. preview_night_out_attendees → the display identities of ACCEPTED
+--         members only; a pending invitee must NOT appear; no profile ids.
+--      c. preview_night_out_shortlist → the suggested bars with vote counts,
+--         top-ranked first, and NO suggester or voter identity in any column.
+--      d. rsvp_night_out_by_token(token, key1, 'maybe') → true; calling it again
+--         with 'going' under key1 → true and exactly ONE row for key1.
+--         get_anon_rsvp_by_token(token, key1) → 'going';
+--         get_anon_rsvp_by_token(token, gen_random_uuid()) → zero rows (the
+--         token alone reads nobody's answer). An invalid response → false and
+--         no row. A cancelled plan's token → false.
+--      e. Still refused as anon: select from night_out_anon_rsvps → permission
+--         denied; vote_night_out_bar / suggest_night_out_bar / get_night_out /
+--         get_night_out_members / get_night_out_board → permission denied.
+--   12. LOCK THE PLAN (V8-R-SOC-007): a plan whose bar A has 5 votes and bar B
+--      has 1. lock_night_out as a MEMBER → null and the plan is still open.
+--      As the OWNER → returns 'A', night_outs.status is 'decided',
+--      decided_bar_id is A, and one 'plan_changed' event names A. Locking an
+--      empty shortlist → null and the plan stays open. Locking twice → the
+--      second call returns null (the status guard) and changes nothing.
+--   13. SHORTLIST REMOVAL (V8-R-SOC-008): member M suggests bar X and another
+--      member votes for it. remove_night_out_suggestion as a THIRD member →
+--      false and X is still there. As M → true, and both the suggestion and the
+--      vote are gone. As the plan OWNER on another member's entry → true. After
+--      the plan is decided → false. M's suggestion cap has one slot back.
 --
 -- Rollback (in comments, per convention):
 --   * nyc_night_key: re-apply 0053's body (interval '6 hours'). Note this
@@ -1546,4 +2185,17 @@ grant execute on function public.media_read_window(text) to authenticated;
 --   * night_out_media_window: drop the function. Note the recap then has no
 --     server answer for "is the window open?" and cannot gate its controls
 --     without going back to the device clock this file removed.
+--   * the media window's LOWER bound: re-apply the round-2 bodies, i.e. replace
+--     every night_out_media_window_open(night) with now() <
+--     night_out_media_expires_at(night), then drop night_out_media_window_open
+--     and night_out_scheduled_start. Note this re-opens the window from midnight
+--     of the plan's night — media served for ~35 hours, starting before the
+--     start it measures from.
+--   * the bearer contract: drop remove_night_out_suggestion, lock_night_out,
+--     preview_night_out_shortlist, preview_night_out_attendees,
+--     preview_night_out_detail, get_anon_rsvp_by_token,
+--     rsvp_night_out_by_token, then night_out_anon_rsvps. Destructive — the
+--     table holds RSVPs from recipients who have no account and therefore no
+--     other copy of their answer. Note the surface then falls back to
+--     "Sign in to join", which D-C-23 supersedes.
 ------------------------------------------------------------------------------
