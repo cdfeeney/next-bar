@@ -82,6 +82,13 @@ export default function InvitePreview({
    * recipient's RSVP would be the same lie as reporting a failed write.
    */
   const [queued, setQueued] = useState<RsvpChoice | null>(null);
+  /**
+   * TRUE when we could not read whether this recipient has already answered —
+   * which is not the same as their not having answered. Answering again is
+   * harmless (the write is an upsert on their own key), so this informs rather
+   * than blocks: the controls stay live and the surface says it could not check.
+   */
+  const [rsvpUnreadable, setRsvpUnreadable] = useState(false);
   const [rsvpBusy, setRsvpBusy] = useState(false);
   const [rsvpError, setRsvpError] = useState<string | null>(null);
   const [upsellDismissed, setUpsellDismissed] = useState(false);
@@ -116,6 +123,7 @@ export default function InvitePreview({
     setShortlist(null);
     setRsvp(null);
     setQueued(null);
+    setRsvpUnreadable(false);
     setRsvpError(null);
     setUpsellDismissed(false);
     // ...INCLUDING THE IN-FLIGHT FLAG (round-3 panel, Claude gate). `answer()`
@@ -153,7 +161,14 @@ export default function InvitePreview({
       // The plan's own facts always apply; the RSVP does not, if the recipient
       // has answered since this read was issued. See `answered` above.
       if (!answered.current) {
+        // THREE OUTCOMES, NOT TWO (round-4 panel, Claude gate). `failed` used
+        // to land in the same branch as `none`, so a returning recipient whose
+        // read hit a transport blip was shown the un-answered state — asked to
+        // RSVP again to a plan they had already answered, with nothing on
+        // screen saying the read had failed. That is the distinction
+        // `RsvpRead` exists to carry.
         setRsvp(storedRsvp.kind === 'ok' ? storedRsvp.choice : null);
+        setRsvpUnreadable(storedRsvp.kind === 'failed');
       }
     })();
   }, [token]);
@@ -224,25 +239,35 @@ export default function InvitePreview({
    */
   useEffect(() => {
     const held = readQueuedRsvp(token);
-    if (held === null) return;
-    setQueued(held);
+    if (held !== null) setQueued(held);
 
     let cancelled = false;
+    /**
+     * THE QUEUE IS READ AT DELIVERY TIME, NOT AT MOUNT (round-4 panel, Codex).
+     * This effect used to return early when the queue was empty on arrival —
+     * which is the ordinary case — and so never installed the listener that the
+     * "we'll send this the moment you're back" promise depends on. An answer
+     * queued LATER in the same visit then sat there until a reload. The
+     * listener is now unconditional and asks storage for the current answer
+     * each time it fires.
+     */
     const deliver = async (): Promise<void> => {
+      const pending = readQueuedRsvp(token);
+      if (pending === null) return;
       const supabase = getBrowserSupabase();
       const key = readRsvpKey(token);
       if (supabase === null || key === null) return;
       const startedAt = epoch.current;
-      const result = await submitAnonRsvp(supabase, token, key, held);
+      const result = await submitAnonRsvp(supabase, token, key, pending);
       if (cancelled || startedAt !== epoch.current) return;
       if (result === 'sent') {
         answered.current = true;
         clearQueuedRsvp(token);
         setQueued(null);
-        setRsvp(held);
+        setRsvp(pending);
         setRsvpError(null);
       } else if (result === 'refused') {
-        // The plan moved on — cancelled, or the link died. Holding this
+        // The plan moved on — cancelled, or the link expired. Holding this
         // forever would keep telling the recipient it is about to be sent.
         clearQueuedRsvp(token);
         setQueued(null);
@@ -251,7 +276,9 @@ export default function InvitePreview({
       // 'unreachable' keeps the queue exactly as it is, for the next event.
     };
 
-    void deliver();
+    // An answer held from a previous visit goes out now; one queued during this
+    // visit goes out on the next `online`.
+    if (held !== null) void deliver();
     const onOnline = (): void => void deliver();
     window.addEventListener('online', onOnline);
     return () => {
@@ -289,6 +316,16 @@ export default function InvitePreview({
       <p className="mt-1 text-center text-sm opacity-60">
         Hosted by {host}
       </p>
+      {/* WHERE, in the two forms the plan can answer it. The AREA is the
+          plan's own (V8-R-NO-003) and is there while it is still choosing; the
+          decided bar arrives later and replaces nothing — a plan can have both.
+          Round 4 rendered only the bar, so a recipient of an open plan was told
+          nothing about where (round-4 panel, Codex). */}
+      {detail?.area != null ? (
+        <p className="mt-1 text-center text-sm opacity-80" data-testid="invite-area">
+          Around {detail.area}
+        </p>
+      ) : null}
       {decidedBar !== null ? (
         <p className="mt-1 text-center text-sm" data-testid="invite-where">
           It&apos;s decided: {decidedBar.name}
@@ -340,6 +377,20 @@ export default function InvitePreview({
                 : "You're down as can't make it. Change it any time."}
           </p>
         ) : null}
+        {/* WE COULD NOT CHECK whether you already answered — which is not the
+            same as your not having answered, and saying nothing would ask you
+            to reply again to a plan you may have replied to. */}
+        {rsvpUnreadable && rsvp === null && queued === null ? (
+          <p
+            className="mt-3 text-center text-sm opacity-70"
+            role="status"
+            data-testid="invite-rsvp-unreadable"
+          >
+            Couldn&apos;t check whether you already replied. Answering again is
+            fine — it replaces your last one.
+          </p>
+        ) : null}
+
         {/* HELD, AND SAID SO IN WORDS. V8-R-INV-003's failure clause is that an
             offline response is "queued and explicitly labelled as not yet
             sent" — the label is the requirement, not a nicety. */}

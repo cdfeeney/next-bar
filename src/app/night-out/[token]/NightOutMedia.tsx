@@ -80,7 +80,21 @@ export default function NightOutMedia({
   const windowOpen = mediaWindow?.isOpen === true;
   const windowWords = describeWindow(mediaWindow);
 
+  /**
+   * WHICH PLAN'S READS MAY PAINT (round-4 panel, Claude gate).
+   *
+   * This component is mounted unkeyed, and Next reuses it across
+   * `/night-out/A` → `/night-out/B` without remounting — the same reuse the
+   * page's `viewEpoch` and InvitePreview's `epoch` were added for. `refresh`
+   * painted unconditionally after its awaits, so A's photos and A's window
+   * state landed under B and stayed there: a stale 'open' offers Add-a-photo
+   * and Archive the server will refuse, and a stale 'closed' hides controls it
+   * would have honoured.
+   */
+  const epoch = useRef(0);
+
   const refresh = useCallback(async (): Promise<void> => {
+    const startedAt = epoch.current;
     const supabase = getBrowserSupabase();
     if (supabase === null) {
       // Unconfigured client is a FAILED read, not an empty night.
@@ -95,12 +109,23 @@ export default function NightOutMedia({
       fetchNightOutMedia(supabase, planId),
       fetchNightOutMediaWindow(supabase, planId),
     ]);
+    if (startedAt !== epoch.current) return;
     setItems(nextItems);
     setMediaWindow(nextWindow);
     setLoading(false);
   }, [planId]);
 
   useEffect(() => {
+    // Synchronously, before `refresh` captures it: any read still in flight
+    // belongs to the plan that is leaving.
+    epoch.current += 1;
+    // ...and so does what is on screen. Back to loading rather than to another
+    // plan's photos.
+    setItems(null);
+    setMediaWindow(null);
+    setLoading(true);
+    setNotice(null);
+    setSavedNightId(null);
     void refresh();
   }, [refresh]);
 

@@ -25,10 +25,19 @@ import {
 const TOKEN = '11111111-1111-1111-1111-111111111111';
 const KEY = '22222222-2222-2222-2222-222222222222';
 
-type RpcResult = { data: unknown; error: unknown };
+/**
+ * `status` is part of the shape the real client returns, and round 4 learned
+ * the hard way that leaving it out of a fixture models a client that does not
+ * exist: postgrest-js resolves a FETCH FAILURE as `{ error, status: 0 }` and a
+ * PostgREST refusal with a real HTTP status, and `submitAnonRsvp` has to tell
+ * those apart. A fixture with no status is a different case, tested on its own.
+ */
+type RpcResult = { data: unknown; error: unknown; status?: number };
 
 function rpcClient(result: RpcResult) {
-  const rpc = vi.fn().mockResolvedValue(result);
+  const rpc = vi
+    .fn()
+    .mockResolvedValue({ status: result.error ? 400 : 200, ...result });
   return { client: { rpc } as never, rpc };
 }
 
@@ -40,28 +49,68 @@ function throwingClient() {
 describe('fetchBearerDetail (V8-R-INV-002 — "time and area")', () => {
   it('carries the SERVER\'s scheduled start through unchanged', async () => {
     const { client, rpc } = rpcClient({
-      data: [{ starts_at: '2026-08-21T01:00:00.000Z', decided_bar_id: null }],
+      data: [
+        {
+          starts_at: '2026-08-21T01:00:00.000Z',
+          area: null,
+          decided_bar_id: null,
+          voting_closes_at: null,
+        },
+      ],
       error: null,
     });
     await expect(fetchBearerDetail(client, TOKEN)).resolves.toEqual({
       startsAt: '2026-08-21T01:00:00.000Z',
+      area: null,
       decidedBarId: null,
+      votingClosesAt: null,
     });
     expect(rpc).toHaveBeenCalledWith('preview_night_out_detail', {
       p_token: TOKEN,
     });
   });
 
-  it('reports the decided bar as the plan\'s area once there is one', async () => {
+  /**
+   * AREA IS ITS OWN FACT (round-4 panel, Codex). Round 4 answered "area" with
+   * the decided bar, which is null for exactly as long as the plan is still
+   * choosing — the window in which a recipient most needs to know roughly
+   * where. A plan can carry both, and they are different columns.
+   */
+  it('reports the plan\'s own area, decided bar and deadline separately', async () => {
     const { client } = rpcClient({
       data: [
-        { starts_at: '2026-08-21T01:00:00.000Z', decided_bar_id: 'attaboy' },
+        {
+          starts_at: '2026-08-21T01:00:00.000Z',
+          area: 'Lower East Side',
+          decided_bar_id: 'attaboy',
+          voting_closes_at: '2026-08-20T23:00:00.000Z',
+        },
       ],
       error: null,
     });
     await expect(fetchBearerDetail(client, TOKEN)).resolves.toEqual({
       startsAt: '2026-08-21T01:00:00.000Z',
+      area: 'Lower East Side',
       decidedBarId: 'attaboy',
+      votingClosesAt: '2026-08-20T23:00:00.000Z',
+    });
+  });
+
+  it('carries an area while the plan is still choosing a bar', async () => {
+    const { client } = rpcClient({
+      data: [
+        {
+          starts_at: '2026-08-21T01:00:00.000Z',
+          area: 'Lower East Side',
+          decided_bar_id: null,
+          voting_closes_at: null,
+        },
+      ],
+      error: null,
+    });
+    await expect(fetchBearerDetail(client, TOKEN)).resolves.toMatchObject({
+      area: 'Lower East Side',
+      decidedBarId: null,
     });
   });
 
@@ -168,6 +217,53 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003, D-C-23)', () => {
     await expect(
       submitAnonRsvp(throwingClient(), TOKEN, KEY, 'going'),
     ).resolves.toBe('unreachable');
+  });
+
+  /**
+   * THE SHAPE THE REAL CLIENT ACTUALLY RETURNS OFFLINE (round-4 panel, Claude
+   * gate, HIGH).
+   *
+   * supabase-js does not throw on a network failure unless `.throwOnError()`
+   * was called, and nothing here calls it: postgrest-js catches its own fetch
+   * rejection and RESOLVES with `{ error: { message: 'TypeError: Failed to
+   * fetch', code: '' }, status: 0 }` (dist/index.mjs:291-331). Round 4 detected
+   * "unreachable" by catching a throw, so the entire offline queue was dead
+   * code in production while its unit test — which mocked a REJECTING client —
+   * passed. This fixture is the resolved shape.
+   */
+  it('reports the resolved fetch-failure shape as unreachable, not refused', async () => {
+    const offline = {
+      rpc: vi.fn().mockResolvedValue({
+        data: null,
+        error: {
+          message: 'TypeError: Failed to fetch',
+          details: '',
+          hint: '',
+          code: '',
+        },
+        status: 0,
+        statusText: '',
+      }),
+    } as never;
+    await expect(submitAnonRsvp(offline, TOKEN, KEY, 'going')).resolves.toBe(
+      'unreachable',
+    );
+  });
+
+  it('still calls a PostgREST refusal refused, however it is worded', async () => {
+    // A real refusal carries a real HTTP status, which is what separates it
+    // from a request that never arrived.
+    const refused = {
+      rpc: vi.fn().mockResolvedValue({
+        data: null,
+        error: { message: 'permission denied', code: '42501' },
+        status: 403,
+        statusText: 'Forbidden',
+      }),
+    } as never;
+    await expect(submitAnonRsvp(refused, TOKEN, KEY, 'going')).resolves.toBe(
+      'refused',
+    );
   });
 
   it('never sends a malformed token or key to the server', async () => {

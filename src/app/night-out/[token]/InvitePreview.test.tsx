@@ -73,7 +73,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   fetchBearerDetail.mockResolvedValue({
     startsAt: '2026-08-21T01:00:00.000Z',
+    area: null,
     decidedBarId: null,
+    votingClosesAt: null,
   });
   fetchBearerAttendees.mockResolvedValue([
     { displayName: 'Sam', handle: 'sam' },
@@ -100,6 +102,40 @@ describe('what a token-scoped recipient may see (V8-R-INV-002)', () => {
     expect(screen.getByTestId('invite-shortlist').textContent).toContain(
       '1 vote',
     );
+  });
+
+  /**
+   * AREA IS NOT THE DECIDED BAR (round-4 panel, Codex). V8-R-NO-003's Area is
+   * the plan's own optional field; the decided bar arrives later and is null
+   * for exactly as long as the plan is still choosing — the window in which a
+   * recipient most needs to know roughly where. Round 4 rendered only the bar.
+   */
+  test('shows the area while the plan is still choosing a bar', async () => {
+    fetchBearerDetail.mockResolvedValue({
+      startsAt: '2026-08-21T01:00:00.000Z',
+      area: 'Lower East Side',
+      decidedBarId: null,
+      votingClosesAt: null,
+    });
+    renderPreview();
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-area').textContent).toContain(
+        'Lower East Side',
+      ),
+    );
+    expect(screen.queryByTestId('invite-where')).toBeNull();
+  });
+
+  test('shows the area AND the decided bar once one is locked', async () => {
+    fetchBearerDetail.mockResolvedValue({
+      startsAt: '2026-08-21T01:00:00.000Z',
+      area: 'Lower East Side',
+      decidedBarId: 'attaboy',
+      votingClosesAt: null,
+    });
+    renderPreview();
+    await waitFor(() => expect(screen.getByTestId('invite-where')).toBeTruthy());
+    expect(screen.getByTestId('invite-area')).toBeTruthy();
   });
 
   test('states the pre-signup limitation rather than leaving it to be discovered', () => {
@@ -155,6 +191,31 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003)', () => {
         /maybe/i,
       ),
     );
+  });
+
+  /**
+   * A FAILED READ IS NOT AN UN-ANSWERED ONE (round-4 panel, Claude gate). It
+   * used to collapse into the same unpressed state, so a recipient returning
+   * on a transport blip was asked to reply again to a plan they had already
+   * replied to, with nothing saying the read had failed.
+   */
+  test('says it could not check when the stored answer is unreadable', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    fetchAnonRsvp.mockResolvedValue({ kind: 'failed' });
+    renderPreview();
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-unreadable')).toBeTruthy(),
+    );
+    // The controls stay live: answering again is an upsert on their own key.
+    expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled();
+  });
+
+  test('says nothing of the sort when the recipient simply has not answered', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    fetchAnonRsvp.mockResolvedValue({ kind: 'none' });
+    renderPreview();
+    await waitFor(() => expect(fetchAnonRsvp).toHaveBeenCalled());
+    expect(screen.queryByTestId('invite-rsvp-unreadable')).toBeNull();
   });
 
   test('a returning recipient sees the answer they already sent', async () => {
@@ -285,6 +346,46 @@ describe('the offline queue (V8-R-INV-003)', () => {
    * you're back" over storage that refused the write would be a promise the
    * page cannot keep.
    */
+  /**
+   * THE LISTENER HAS TO EXIST BEFORE THERE IS ANYTHING TO SEND (round-4 panel,
+   * Codex). The delivery effect returned early when the queue was empty on
+   * arrival — the ordinary case — and so never installed the `online` handler
+   * the "we'll send this the moment you're back" promise depends on. An answer
+   * queued later in the same visit then sat there until a reload.
+   */
+  test('an answer queued during this visit is delivered on reconnect', async () => {
+    // Empty at mount, which is what used to skip the listener entirely.
+    readQueuedRsvp.mockReturnValue(null);
+    submitAnonRsvp.mockResolvedValue('unreachable');
+    readRsvpKey.mockReturnValue(KEY);
+    renderPreview();
+
+    screen.getByTestId('invite-rsvp-maybe').click();
+    await waitFor(() => expect(queueRsvp).toHaveBeenCalledWith(TOKEN, 'maybe'));
+    await waitFor(() => expect(screen.getByTestId('invite-rsvp-queued')).toBeTruthy());
+
+    // Now the answer IS queued, and the network is back.
+    readQueuedRsvp.mockReturnValue('maybe');
+    submitAnonRsvp.mockResolvedValue('sent');
+    submitAnonRsvp.mockClear();
+    window.dispatchEvent(new Event('online'));
+
+    await waitFor(() =>
+      expect(submitAnonRsvp).toHaveBeenCalledWith(
+        expect.anything(),
+        TOKEN,
+        KEY,
+        'maybe',
+      ),
+    );
+    await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(
+        /maybe/i,
+      ),
+    );
+  });
+
   test('says the answer was not sent when the queue itself could not be written', async () => {
     submitAnonRsvp.mockResolvedValue('unreachable');
     queueRsvp.mockReturnValue(false);

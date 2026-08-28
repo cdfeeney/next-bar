@@ -6,10 +6,16 @@ import { useMediaUrl } from './useMediaUrl';
  * One photo, resolved through the media boundary.
  *
  * Small on purpose: every Night Out and Saved Nights Out surface renders photos
- * the same way, and the three states — still loading, here, gone — are the part
- * that must not drift. A photo whose bytes the author deleted everywhere renders
- * as an explicit, worded absence rather than as a broken image or a decorative
- * placeholder that reads like a picture.
+ * the same way, and the four states — still loading, here, gone, and couldn't
+ * load — are the part that must not drift. A photo whose bytes the author
+ * deleted everywhere renders as an explicit, worded absence rather than as a
+ * broken image or a decorative placeholder that reads like a picture.
+ *
+ * GONE AND COULDN'T-LOAD ARE DIFFERENT CLAIMS (round-4 panel, Codex). Telling
+ * the owner of a saved night that a photo "is no longer available" because the
+ * network dropped is a statement about their archive that we have no evidence
+ * for — and one a retention hold is specifically keeping false. The temporary
+ * state says so and offers the retry.
  *
  * Plain <img>: the source is a short-lived signed URL, which next/image cannot
  * optimise and would only proxy.
@@ -44,6 +50,24 @@ export default function MediaThumb({
         <span className="text-muted text-[11px] text-center leading-tight">
           Photo no longer available
         </span>
+      </span>
+    );
+  }
+
+  if (state.status === 'unavailable') {
+    return (
+      <span
+        className={`${box} flex items-center justify-center p-2`}
+        data-testid="media-unavailable"
+      >
+        <button
+          type="button"
+          onClick={state.retry}
+          data-testid="media-retry"
+          className="text-muted text-[11px] text-center leading-tight underline underline-offset-2"
+        >
+          Couldn&apos;t load this photo. Tap to try again.
+        </button>
       </span>
     );
   }

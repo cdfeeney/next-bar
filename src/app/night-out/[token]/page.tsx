@@ -10,7 +10,14 @@ import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/l
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
 import NightOutMedia from './NightOutMedia';
 import InvitePreview from './InvitePreview';
-import { lockNightOut, removeNightOutSuggestion } from './planActions';
+import {
+  fetchAnonRsvpCounts,
+  fetchNightOutVoting,
+  lockNightOut,
+  removeNightOutSuggestion,
+  type AnonRsvpCounts,
+  type NightOutVoting,
+} from './planActions';
 import {
   cancelNightOut,
   declineNightOutByToken,
@@ -52,6 +59,13 @@ type PageState =
       plan: NightOut;
       members: NightOutMember[];
       board: NightOutBoardEntry[];
+      /**
+       * V8-R-NO-005. Null when the read failed — which is NOT "voting is
+       * closed", and is why this is not folded into a boolean.
+       */
+      voting: NightOutVoting | null;
+      /** V8-R-INV-003. Null when the read failed; zeroes mean nobody replied. */
+      anonRsvps: AnonRsvpCounts | null;
     };
 
 /**
@@ -145,6 +159,25 @@ function ShortlistOverflow({
       ) : null}
     </span>
   );
+}
+
+/**
+ * "Friday at 11:00 PM" for a voting deadline, in the contract's zone.
+ *
+ * America/New_York rather than the device's: the deadline is a fact about the
+ * plan, and every other instant this surface states — the scheduled start, the
+ * media window — is stated the same way. The empty string for an unparseable
+ * instant lets the caller render the sentence without a hole in it.
+ */
+function deadlineLabel(instant: string): string {
+  const at = new Date(instant);
+  if (Number.isNaN(at.getTime())) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+  }).format(at);
 }
 
 function nightDateLabel(nightKey: string): string {
@@ -271,10 +304,14 @@ export default function NightOutPage({
       if (!supabase) return false;
       const epoch = startedAt ?? viewEpoch.current;
       if (epoch !== viewEpoch.current) return false;
-      const [plan, members, board] = await Promise.all([
+      const [plan, members, board, voting, anonRsvps] = await Promise.all([
         getNightOut(supabase, planId),
         getNightOutMembers(supabase, planId),
         getNightOutBoard(supabase, planId),
+        // 0044's get_night_out predates the deadline column and belongs to
+        // another lane, so these two ride alongside it rather than through it.
+        fetchNightOutVoting(supabase, planId),
+        fetchAnonRsvpCounts(supabase, planId),
       ]);
       if (plan === null) return false;
       // The view moved while we were away: this answer belongs to a session, or
@@ -285,6 +322,8 @@ export default function NightOutPage({
         plan,
         members: members ?? [],
         board: board ?? [],
+        voting,
+        anonRsvps,
       });
       return true;
     },
@@ -549,7 +588,7 @@ export default function NightOutPage({
     );
   }
 
-  const { plan, members, board } = state;
+  const { plan, members, board, voting, anonRsvps } = state;
   const isOwner = plan.callerRole === 'owner';
   const accepted = members.filter((m) => m.inviteStatus === 'accepted');
   const isCancelled = plan.status === 'cancelled';
@@ -589,8 +628,19 @@ export default function NightOutPage({
   // the app rather than a closed plan. Kept as ONE predicate so the UI and the
   // SQL cannot drift apart silently.
   const isPlanOpen = plan.status === 'draft' || plan.status === 'open';
+  /**
+   * V8-R-NO-005. Once the deadline passes the plan is READ-ONLY for
+   * participants, and the server refuses suggestions, votes and removals from
+   * that instant — so the controls have to go with it, or they offer actions
+   * that can only fail.
+   *
+   * A window we could not READ is not a closed one: `voting === null` means the
+   * read failed, and treating that as closed would withdraw every control on a
+   * guess. The plan's own status still governs in that case, exactly as before.
+   */
+  const votingOpen = voting === null ? isPlanOpen : voting.votingOpen;
   const canParticipate =
-    isPlanOpen && (isOwner || plan.callerStatus === 'accepted');
+    isPlanOpen && votingOpen && (isOwner || plan.callerStatus === 'accepted');
   /**
    * MEDIA IS A DIFFERENT PERMISSION FROM SUGGESTING (round 2, Codex gate, HIGH).
    *
@@ -771,11 +821,33 @@ export default function NightOutPage({
             </li>
           ))}
         </ul>
+        {/* V8-R-INV-003's audience is "plan members", and until round 5 an
+            answer sent from the invitation link reached nobody: the only reader
+            of the anon RSVPs needed the recipient's own secret key. Counts, not
+            names — a token-scoped recipient has no account and gave none, and
+            inventing one would be worse than the silence this replaces. A
+            failed read says nothing rather than reporting zero replies. */}
+        {anonRsvps !== null &&
+        anonRsvps.going + anonRsvps.maybe + anonRsvps.declined > 0 ? (
+          <p className="mt-3 text-sm opacity-70" data-testid="night-out-link-replies">
+            From the invite link: {anonRsvps.going} going, {anonRsvps.maybe}{' '}
+            maybe, {anonRsvps.declined} can&apos;t make it.
+          </p>
+        ) : null}
       </section>
 
       {!isCancelled ? (
         <section className="mt-8">
           <h2 className="font-semibold">Where should we go?</h2>
+          {/* V8-R-NO-005. "Participants see it and cannot change it" — so it is
+              stated on the plan, on both sides of the deadline. */}
+          {voting?.votingClosesAt != null ? (
+            <p className="mt-1 text-xs opacity-60" data-testid="night-out-deadline">
+              {voting.votingOpen
+                ? `Voting closes ${deadlineLabel(voting.votingClosesAt)}.`
+                : `Voting closed ${deadlineLabel(voting.votingClosesAt)}.`}
+            </p>
+          ) : null}
           <ul className="mt-2 space-y-2" data-testid="night-out-board">
             {rankedBoard.map((entry) => (
               <li
@@ -877,12 +949,16 @@ export default function NightOutPage({
             </p>
           ) : null}
           {!canParticipate ? (
-            <p className="mt-3 text-sm opacity-60">
+            <p className="mt-3 text-sm opacity-60" data-testid="night-out-voting-closed">
               {!isPlanOpen
                 ? 'The plan is settled — suggestions are closed.'
-                : isDeclined
-                  ? "You're out for this one. Count yourself back in to suggest a bar."
-                  : "Say you're in to suggest a bar."}
+                : !votingOpen
+                  ? // V8-R-NO-005's read-only state, said in words rather than
+                    // left as controls that quietly stopped working.
+                    'Voting has closed for this plan.'
+                  : isDeclined
+                    ? "You're out for this one. Count yourself back in to suggest a bar."
+                    : "Say you're in to suggest a bar."}
             </p>
           ) : (
           <form

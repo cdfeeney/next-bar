@@ -76,3 +76,82 @@ export async function removeNightOutSuggestion(
   );
   return !error && data === true;
 }
+
+/**
+ * V8-R-NO-005: the voting deadline as a PARTICIPANT sees it — they read it and
+ * cannot change it, and once it passes their plan is read-only.
+ *
+ * `votingOpen` is the SERVER's answer, from the same predicate the writers ask,
+ * so the controls disappear at the instant the RPCs start refusing rather than
+ * whenever the device's clock happens to agree. Null means we could not read
+ * it, which is not the same as "voting is closed" and must not be rendered as
+ * one.
+ */
+export type NightOutVoting = {
+  votingClosesAt: string | null;
+  votingOpen: boolean;
+};
+
+export async function fetchNightOutVoting(
+  supabase: SupabaseClient,
+  nightOutId: string,
+): Promise<NightOutVoting | null> {
+  if (!UUID_RE.test(nightOutId)) return null;
+  const { data, error } = await callRpc(supabase, 'get_night_out_voting', {
+    p_night_out: nightOutId,
+  });
+  if (error) return null;
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { voting_closes_at?: unknown; voting_open?: unknown }
+    | null
+    | undefined;
+  // A non-boolean answer is a row we could not read, not a closed vote: a
+  // coerced value here would withdraw every participant control on a guess.
+  if (!row || typeof row.voting_open !== 'boolean') return null;
+  return {
+    votingClosesAt:
+      typeof row.voting_closes_at === 'string' && row.voting_closes_at.length > 0
+        ? row.voting_closes_at
+        : null,
+    votingOpen: row.voting_open,
+  };
+}
+
+/**
+ * V8-R-INV-003: how many people answered from the invitation link.
+ *
+ * COUNTS, NOT NAMES — a token-scoped recipient has no account and gave none.
+ * Null when the read failed; zeroes are a real answer meaning nobody replied
+ * from the link, and the two must not render the same way.
+ */
+export type AnonRsvpCounts = {
+  going: number;
+  maybe: number;
+  declined: number;
+};
+
+export async function fetchAnonRsvpCounts(
+  supabase: SupabaseClient,
+  nightOutId: string,
+): Promise<AnonRsvpCounts | null> {
+  if (!UUID_RE.test(nightOutId)) return null;
+  const { data, error } = await callRpc(supabase, 'get_night_out_anon_rsvps', {
+    p_night_out: nightOutId,
+  });
+  if (error) return null;
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { going?: unknown; maybe?: unknown; declined?: unknown }
+    | null
+    | undefined;
+  if (!row) return null;
+  return {
+    going: count(row.going),
+    maybe: count(row.maybe),
+    declined: count(row.declined),
+  };
+}
+
+function count(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : 0;
+}

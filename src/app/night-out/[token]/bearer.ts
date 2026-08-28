@@ -116,11 +116,20 @@ export function ensureRsvpKey(token: string): string | null {
 /* The bearer reads (V8-R-INV-002)                                            */
 /* -------------------------------------------------------------------------- */
 
-/** The plan's scheduled start, and the bar it settled on if it has. */
+/** The plan's when and where, as a bearer is allowed to see them. */
 export type BearerDetail = {
   /** ISO instant. The SERVER's scheduled start — never computed here. */
   startsAt: string;
+  /**
+   * V8-R-NO-003's optional Area. Round 4 answered V8-R-INV-002's "area" with
+   * the DECIDED BAR, which is a different and later decision — null for
+   * exactly as long as the plan is still choosing, which is when a recipient
+   * most needs to know roughly where.
+   */
+  area: string | null;
   decidedBarId: string | null;
+  /** V8-R-NO-005. ISO instant, or null for "No deadline". */
+  votingClosesAt: string | null;
 };
 
 export async function fetchBearerDetail(
@@ -133,7 +142,12 @@ export async function fetchBearerDetail(
   });
   if (error) return null;
   const row = (Array.isArray(data) ? data[0] : data) as
-    | { starts_at?: unknown; decided_bar_id?: unknown }
+    | {
+        starts_at?: unknown;
+        area?: unknown;
+        decided_bar_id?: unknown;
+        voting_closes_at?: unknown;
+      }
     | null
     | undefined;
   if (!row || typeof row.starts_at !== 'string' || row.starts_at.length === 0) {
@@ -141,11 +155,14 @@ export async function fetchBearerDetail(
   }
   return {
     startsAt: row.starts_at,
-    decidedBarId:
-      typeof row.decided_bar_id === 'string' && row.decided_bar_id.length > 0
-        ? row.decided_bar_id
-        : null,
+    area: nonEmpty(row.area),
+    decidedBarId: nonEmpty(row.decided_bar_id),
+    votingClosesAt: nonEmpty(row.voting_closes_at),
   };
+}
+
+function nonEmpty(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 /** One accepted member, as a bearer is allowed to see them: display only. */
@@ -266,9 +283,22 @@ export type RsvpSubmitResult =
 /**
  * Submit or change this recipient's RSVP without signing up (D-C-23).
  *
- * A thrown call is `unreachable` — offline, a dead connection, or a client that
- * is not a client. Anything the server answered with that is not an explicit
- * `true` is `refused`.
+ * HOW "UNREACHABLE" IS ACTUALLY DETECTED (round-4 panel, Claude gate, HIGH).
+ * Round 4 detected it by catching a throw, and supabase-js does not throw:
+ * unless `.throwOnError()` was called — nothing in this repo calls it —
+ * postgrest-js catches its own fetch rejection and RESOLVES with an error
+ * object (dist/index.mjs:291-331). So the offline branch, the queue behind it,
+ * and the whole V8-R-INV-003 failure-recovery feature were dead code under
+ * their own triggering condition: an offline recipient got "that hasn't been
+ * sent" and nothing was held.
+ *
+ * The discriminator is `status`, which that same catch sets to 0 because no
+ * response ever arrived. Every PostgREST refusal — a raise, an RLS denial, a
+ * bad argument — comes back with a real HTTP status and a `code`. Matching on
+ * the status is exact and does not depend on the wording of a message.
+ *
+ * The thrown branch is kept as well: a client object that is not a client at
+ * all still rejects, and that is also "we never reached the server".
  */
 export async function submitAnonRsvp(
   supabase: SupabaseClient,
@@ -277,21 +307,32 @@ export async function submitAnonRsvp(
   choice: RsvpChoice,
 ): Promise<RsvpSubmitResult> {
   if (!UUID_RE.test(token) || !UUID_RE.test(key)) return 'refused';
-  let thrown = false;
-  const { data, error } = await (async () => {
-    try {
-      return await supabase.rpc('rsvp_night_out_by_token', {
-        p_token: token,
-        p_key: key,
-        p_response: choice,
-      });
-    } catch (caught) {
-      thrown = true;
-      return { data: null, error: caught };
-    }
-  })();
-  if (thrown) return 'unreachable';
-  return !error && data === true ? 'sent' : 'refused';
+  try {
+    const result = await supabase.rpc('rsvp_night_out_by_token', {
+      p_token: token,
+      p_key: key,
+      p_response: choice,
+    });
+    if (isUnreachable(result)) return 'unreachable';
+    return !result.error && result.data === true ? 'sent' : 'refused';
+  } catch {
+    return 'unreachable';
+  }
+}
+
+/**
+ * Did this call reach the server at all?
+ *
+ * `status: 0` is postgrest-js's own marker for a fetch that never produced a
+ * response. A missing `status` is treated the same way only when there is an
+ * error to explain: a successful call always carries 200.
+ */
+function isUnreachable(result: {
+  error?: unknown;
+  status?: unknown;
+}): boolean {
+  if (!result.error) return false;
+  return result.status === 0 || result.status === undefined;
 }
 
 /* -------------------------------------------------------------------------- */
