@@ -496,13 +496,26 @@ export async function fetchFeedComments(
 
     if (error) return mediaFailure('failed', 'Those replies could not be loaded.');
 
-    // AN ENTRY FOR EVERY POST WE ASKED ABOUT, including the ones with no replies.
-    // The caller distinguishes "not read yet" from "read, and empty" by whether
-    // the key is present, so a successful read that simply omitted the quiet posts
-    // would report them as unread forever.
-    for (const postId of postIds) byPost.set(postId, []);
+    const rows = (data ?? []) as Parameters<typeof toComment>[0][];
 
-    for (const row of (data ?? []) as Parameters<typeof toComment>[0][]) {
+    // AN ENTRY FOR EVERY POST WE ASKED ABOUT, including the ones with no replies —
+    // BUT ONLY WHEN THE BATCH WAS NOT TRUNCATED. The caller tells "not read yet"
+    // from "read, and empty" by whether the key is present, so omitting the quiet
+    // posts would report them unread forever.
+    //
+    // The ceiling is FLAT ACROSS THE BATCH, though, so one busy post can consume
+    // it entirely and a quieter post's replies fall outside the window. Seeding
+    // that post with [] turns "we did not see this far" into the affirmative claim
+    // "no replies yet" — the same false ready state this whole distinction exists
+    // to remove, reintroduced by the bound that was supposed to be the safe half.
+    // On a full batch, only the posts actually represented in the rows are known;
+    // the rest stay ABSENT, which renders as unread rather than as empty.
+    const truncated = rows.length >= FEED_COMMENT_READ_LIMIT;
+    if (!truncated) {
+      for (const postId of postIds) byPost.set(postId, []);
+    }
+
+    for (const row of rows) {
       const comment = toComment(row);
       byPost.set(comment.postId, [comment, ...(byPost.get(comment.postId) ?? [])]);
     }

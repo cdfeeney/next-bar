@@ -185,6 +185,27 @@ describe('fetchFeedComments — the thread read is bounded, and honest about it'
     expect(thread?.map((row) => row.id)).toEqual(['oldest', 'newest']);
   });
 
+  it('a TRUNCATED batch names no post empty, because it did not see that far', async () => {
+    // Round 3 (MEDIUM, both lanes): the ceiling is flat across the batch, so one
+    // busy post can consume all of it. Seeding the quieter posts with [] turned
+    // "we did not read this far" into the affirmative "No replies yet." — the
+    // false ready state the third state exists to remove, reintroduced by the
+    // bound that was meant to be the safe half. An unseen post must stay ABSENT.
+    const full = Array.from({ length: FEED_COMMENT_READ_LIMIT }, (_, i) =>
+      comment({ id: `busy-${i}`, post_id: 'post-1' }));
+    const t = commentClient(full);
+
+    const result = await fetchFeedComments(t.client, ['post-1', 'post-2']);
+
+    expect(result.ok).toBe(true);
+    const value = (result as { ok: true; value: Map<string, unknown[]> }).value;
+    expect(
+      value.has('post-2'),
+      'a post the truncated batch never reached was reported as read and empty',
+    ).toBe(false);
+    expect(value.has('post-1')).toBe(true);
+  });
+
   it('a successful read names every post it was asked about, replies or not', async () => {
     // The caller tells "not read yet" from "read, and empty" by whether the key is
     // there, so omitting the quiet posts would report them unread forever — and

@@ -84,21 +84,44 @@ export default function FeedSection({
    */
   const requestSeq = useRef(0);
 
+  /**
+   * Whose Feed is currently ON SCREEN. `undefined` until the first refresh runs.
+   *
+   * Everything this component renders is audience-scoped to one account
+   * (V8-R-FEED-006), so it belongs to the viewer who loaded it and to nobody
+   * else.
+   */
+  const paintedFor = useRef<string | null | undefined>(undefined);
+
   const refresh = useCallback(async () => {
     const seq = (requestSeq.current += 1);
-    if (viewerId === null) {
-      // Signed out there is no Feed to read at all: V8-R-FEED-006 makes the
-      // audience mutual-friend scoped, so an anonymous read has no audience to
-      // be inside and the database would refuse every row anyway.
-      //
+
+    // THE FEED ON SCREEN BELONGS TO THE ACCOUNT THAT LOADED IT, and it is cleared
+    // the moment the viewer changes rather than when the next account's read
+    // happens to land.
+    //
+    // Signing OUT was already handled below. A signed-in to signed-in switch was
+    // not, and it never passes through null: `viewerId` goes straight from A to
+    // B, the effect re-runs, and until B's reads resolve — or forever, if they
+    // fail — B is looking at A's posts, A's threads and A's names. The epoch
+    // guard does not help: it rejects A's in-flight ANSWERS, and cannot unrender
+    // what has already painted.
+    if (paintedFor.current !== viewerId) {
+      paintedFor.current = viewerId;
+      setPosts([]);
+      setThreads(new Map());
+      setPeople(new Map());
       // AND THE FAILURE BANNER GOES WITH IT. Leaving `loadFailed` set told a
       // signed-out visitor that "the Feed could not be loaded" forever, about a
       // Feed there is nothing to load: the banner is not gated on auth, so a
       // read that failed while signed in outlived the session that issued it.
-      setPosts([]);
-      setThreads(new Map());
-      setPeople(new Map());
       setLoadFailed(false);
+    }
+
+    if (viewerId === null) {
+      // Signed out there is no Feed to read at all: V8-R-FEED-006 makes the
+      // audience mutual-friend scoped, so an anonymous read has no audience to
+      // be inside and the database would refuse every row anyway.
       return;
     }
     const supabase = getBrowserSupabase();

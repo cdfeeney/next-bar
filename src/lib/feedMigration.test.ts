@@ -147,6 +147,22 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     );
   });
 
+  it('the veto stands down when any live NON-FEED destination stands on the same bytes', () => {
+    // Round 3 (MEDIUM, codex): the prose always claimed this veto only reached a
+    // FEED-ONLY object, but nothing enforced it. An object also live in another
+    // lane's destination — a group message — was vetoed on the strength of a Feed
+    // report alone, and the photo went dark in a conversation 0069 cannot see and
+    // has no authority over. `kind <> 'feed'` rather than a list, because the
+    // kinds this file must defer to are the ones it has not heard of.
+    expect(sqlShape(body)).toContain(
+      'and not exists ( select 1 from public.media_destinations d'
+      + ' join public.media_objects m on m.id = d.media_id'
+      + ' where m.storage_path = p_name'
+      + " and d.kind <> 'feed'"
+      + ' and d.removed_at is null )',
+    );
+  });
+
   it('a report on a post whose Feed destination is already retired vetoes nothing', () => {
     // `deleted_at is null` alone kept vetoing after `remove_media_destination`
     // took the post off the Feed, so a report with nothing left to hide went on
@@ -161,6 +177,63 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
 
 describe('0069 — a named group is resolved server-side (D-C-37)', () => {
   const body = functionBody('public.publish_feed_post(');
+
+  /**
+   * The `'group'` arm of the audience materialisation, from `elsif` to the
+   * `on conflict` that closes its statement.
+   *
+   * A PREFIX ASSERTION IS NOT A WHOLE-BRANCH ASSERTION. Round 3 found the check
+   * below matching only the OPENING of this branch, so appending
+   * `and gm.profile_id = any(p_audience_ids)` to it left the suite green while
+   * handing the caller back the power to narrow a named group — the exact defect
+   * the branch was rewritten to remove. Slicing the branch out and asserting
+   * against the WHOLE of it is what makes an addition visible.
+   */
+  function groupBranch(): string {
+    const shaped = sqlShape(body);
+    const start = shaped.indexOf("elsif p_audience = 'group' then");
+    expect(start, "the group branch is not in publish_feed_post").toBeGreaterThan(-1);
+    const end = shaped.indexOf('on conflict do nothing;', start);
+    expect(end, 'the group branch is unterminated').toBeGreaterThan(start);
+    return shaped.slice(start, end + 'on conflict do nothing;'.length);
+  }
+
+  it('the group branch contains the intersection and NOTHING ELSE', () => {
+    // Whole-branch equality, not containment: any extra term — a caller-list
+    // filter, a silent narrowing, an added join — changes this string.
+    expect(groupBranch()).toBe(
+      "elsif p_audience = 'group' then"
+      + ' insert into public.feed_post_audience (post_id, profile_id)'
+      + ' select distinct v_id, gm.profile_id'
+      + ' from public.group_members gm'
+      + ' where gm.group_id = p_group_id'
+      + ' and gm.profile_id <> v_author'
+      + ' and public.is_mutual_friend(v_author, gm.profile_id)'
+      + ' and exists ( select 1 from public.group_members me'
+      + ' where me.group_id = p_group_id and me.profile_id = v_author )'
+      + ' on conflict do nothing;',
+    );
+  });
+
+  it('the caller-supplied list cannot reach the group branch', () => {
+    // The named defect, stated as its own case so the reason survives a reword.
+    expect(
+      groupBranch(),
+      'the caller list is back in the group branch, narrowing a named group',
+    ).not.toContain('p_audience_ids');
+  });
+
+  it('the poster membership that authorises the post is read in the SAME statement', () => {
+    // Round 3 (HIGH, codex): the guard is a separate statement, so at READ
+    // COMMITTED it sees a different snapshot from the enumeration. A poster
+    // removed from the group between the two published into a group they had
+    // already left, because the surviving members still resolved. One statement,
+    // one snapshot.
+    expect(groupBranch()).toContain(
+      'and exists ( select 1 from public.group_members me'
+      + ' where me.group_id = p_group_id and me.profile_id = v_author )',
+    );
+  });
 
   it('a group audience is enumerated FROM THE GROUP, not filtered from the caller list', () => {
     // Round 2 (HIGH) found the insert filtering the caller's ids by mutual
@@ -227,7 +300,63 @@ describe('0069 — a named group is resolved server-side (D-C-37)', () => {
   });
 });
 
+describe('0069 — you may only report what you can still see', () => {
+  const body = functionBody('public.report_content(');
+
+  it('a caller who hid the POST cannot then file a durable report on its comments', () => {
+    // Round 3 (MEDIUM, codex): the comments read policy vetoes on
+    // feed_post_reported_by_caller as well as the comment's own hide, so once the
+    // caller reports the post every comment beneath it is gone from their Feed.
+    // can_view_feed_comment deliberately omits the reporter hide — that is what
+    // keeps a REPEAT report idempotent — so the report path has to add the
+    // parent-post term itself, or it accepts a fresh accusation about content the
+    // accuser can no longer see.
+    expect(sqlShape(body)).toContain(
+      'or exists ( select 1 from public.feed_comments c where c.id = v_ref::uuid'
+      + ' and public.feed_post_reported_by_caller(c.post_id) )',
+    );
+  });
+
+  it('the comment’s OWN hide stays out of that term, so a repeat report is still idempotent', () => {
+    // If feed_comment_reported_by_caller were added here, the second report of the
+    // same comment would raise instead of returning the existing id, and the
+    // caller — which hides only on a returned id — would fail to hide it.
+    expect(
+      sqlShape(body),
+      'the repeat-report path was broken by folding the comment hide into the gate',
+    ).not.toContain('public.feed_comment_reported_by_caller(');
+  });
+});
+
 describe('0069 — the column-scoped tag grant is actually scoped', () => {
+  it('every revoke actually PRECEDES the grants it is supposed to precede', () => {
+    // Round 3 (MEDIUM, codex): the case below asserted only that both statements
+    // exist, so moving the revokes BELOW the grants kept it green — and that
+    // ordering leaves authenticated with no SELECT on any Feed table and no
+    // UPDATE(removed_at), which silently disables reads and tag-consent
+    // withdrawal for everyone. Existence was never the requirement. Order is.
+    const lastRevoke = Math.max(
+      ...['feed_posts', 'feed_post_audience', 'feed_post_tags', 'feed_comments'].map(
+        (table) => SQL.indexOf(`revoke all on public.${table} from public, anon, authenticated;`),
+      ),
+    );
+    const firstGrant = Math.min(
+      ...['feed_posts', 'feed_post_audience', 'feed_post_tags', 'feed_comments'].map(
+        (table) => SQL.indexOf(`grant select on public.${table}`),
+      ),
+    );
+    expect(lastRevoke, 'a revoke is missing entirely').toBeGreaterThan(-1);
+    expect(firstGrant, 'a select grant is missing entirely').toBeGreaterThan(-1);
+    expect(
+      lastRevoke,
+      'a revoke runs AFTER a grant, which withdraws the access the grant just gave',
+    ).toBeLessThan(firstGrant);
+    expect(
+      lastRevoke,
+      'the tag consent-withdrawal grant is revoked away after being granted',
+    ).toBeLessThan(SQL.indexOf('grant update (removed_at) on public.feed_post_tags'));
+  });
+
   it('authenticated is revoked from every new table before anything is granted back', () => {
     // Round 3 (MEDIUM, codex): Supabase's default privileges grant ALL on new
     // public tables to `authenticated`, and a later `grant update (removed_at)`

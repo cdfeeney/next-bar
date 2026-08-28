@@ -27,6 +27,7 @@ type Result<T> = { ok: true; value: T } | { ok: false; reason: string; message: 
 const VIEWER = '11111111-1111-4111-8111-111111111111';
 const COMMENTER = '22222222-2222-4222-8222-222222222222';
 const AUTHOR = '33333333-3333-4333-8333-333333333333';
+const OTHER_VIEWER = '44444444-4444-4444-8444-444444444444';
 
 const FAILED = {
   ok: false,
@@ -81,6 +82,8 @@ let authorPlan: Array<Map<string, FeedAuthor>> = [];
 let addResult: Result<FeedComment> = { ok: true, value: makeComment({ id: 'comment-2' }) };
 
 let authStatus: 'signed-in' | 'signed-out' = 'signed-in';
+/** Which account is signed in — a switch between two of them is its own case. */
+let viewer = VIEWER;
 let epoch = 1;
 
 function next<T>(plan: T[]): T {
@@ -90,7 +93,7 @@ function next<T>(plan: T[]): T {
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () =>
     authStatus === 'signed-in'
-      ? { status: 'signed-in', user: { id: VIEWER } }
+      ? { status: 'signed-in', user: { id: viewer } }
       : { status: 'signed-out', user: null },
 }));
 
@@ -119,6 +122,7 @@ const NAMED = new Map<string, FeedAuthor>([
 
 beforeEach(() => {
   authStatus = 'signed-in';
+  viewer = VIEWER;
   epoch = 1;
   postPlan = [{ ok: true, value: [makePost()] }];
   commentPlan = [{ ok: true, value: new Map([['post-1', [makeComment()]]]) }];
@@ -150,6 +154,34 @@ describe('FeedSection — the failure banner belongs to the session that failed'
       await screen.findByTestId('feed-load-failed'),
       'the banner stopped rendering for the case it exists for',
     ).toBeTruthy();
+  });
+});
+
+describe('FeedSection — the Feed on screen belongs to the account that loaded it', () => {
+  test('switching straight from one signed-in account to another clears the first one’s Feed', async () => {
+    // Round 3 (HIGH, codex). Signing OUT was handled; a signed-in to signed-in
+    // switch never passes through null, so viewerId went straight from A to B and
+    // A's posts stayed painted until B's reads landed — or forever, if they
+    // failed. The epoch guard rejects A's in-flight ANSWERS and cannot unrender
+    // what is already on screen.
+    postPlan = [{ ok: true, value: [makePost({ caption: 'account A memory' })] }];
+    const view = render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+    expect(await screen.findByText('account A memory')).toBeTruthy();
+
+    // Account B signs in directly. Its read never resolves.
+    const held = deferred<Result<FeedPostView[]>>();
+    postPlan = [held.promise];
+    authStatus = 'signed-in';
+    viewer = OTHER_VIEWER;
+    epoch = 2;
+    view.rerender(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('account A memory'),
+        "one account's Feed was left on screen for the next account to read",
+      ).toBeNull(),
+    );
   });
 });
 

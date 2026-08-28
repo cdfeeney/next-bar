@@ -831,12 +831,26 @@ begin
          and public.is_mutual_friend(v_author, ids.distinct_id)
       on conflict do nothing;
   elsif p_audience = 'group' then
+    -- THE POSTER'S OWN MEMBERSHIP IS RE-ASSERTED INSIDE THIS STATEMENT, and that
+    -- is not a duplicate of the guard above. The guard is a separate statement, so
+    -- at READ COMMITTED it sees a different snapshot: a poster removed from the
+    -- group between the two statements passed the check and then published into a
+    -- group they no longer belong to, because the surviving members still resolve.
+    -- One statement, one snapshot, so the membership that authorises the post is
+    -- the same membership that enumerates the audience. The guard above stays for
+    -- the honest error message on the ordinary refusal.
     insert into public.feed_post_audience (post_id, profile_id)
       select distinct v_id, gm.profile_id
         from public.group_members gm
        where gm.group_id = p_group_id
          and gm.profile_id <> v_author
          and public.is_mutual_friend(v_author, gm.profile_id)
+         and exists (
+           select 1
+             from public.group_members me
+            where me.group_id = p_group_id
+              and me.profile_id = v_author
+         )
       on conflict do nothing;
   end if;
 
@@ -1310,7 +1324,23 @@ begin
         using errcode = '42501';
     end if;
   else
-    if not public.can_view_feed_comment(v_ref::uuid) then
+    -- AND THE PARENT POST'S OWN HIDE COUNTS HERE. `can_view_feed_comment` leaves
+    -- the reporter hide out on purpose, so that RE-reporting the same subject stays
+    -- idempotent instead of raising on the second attempt. But the comments read
+    -- policy vetoes on `feed_post_reported_by_caller` as well as the comment's own
+    -- hide, so once this caller has reported the POST, every comment beneath it is
+    -- already gone from their Feed — and accepting a fresh, durable accusation
+    -- about content they can no longer see is exactly what "you may only report
+    -- what you can see" forbids. The comment's own hide is deliberately NOT part of
+    -- this term: that is the idempotent repeat, and it must keep returning the
+    -- existing id.
+    if not public.can_view_feed_comment(v_ref::uuid)
+       or exists (
+         select 1
+           from public.feed_comments c
+          where c.id = v_ref::uuid
+            and public.feed_post_reported_by_caller(c.post_id)
+       ) then
       raise exception 'report_content: that comment is not yours to report'
         using errcode = '42501';
     end if;
@@ -1424,10 +1454,22 @@ begin
     --     (media_id, kind, ref_id)), so reporting post A used to blank post B's
     --     photo for its own owner, and the branch that would have authorised B
     --     sits AFTER this return and could never be reached; and
-    --   * it requires that NO live story names these bytes at all.
+    --   * it requires that NO live story names these bytes at all; and
+    --   * it requires that the object is FEED-ONLY — no live destination of any
+    --     OTHER kind stands on these bytes.
     -- When a story does name them, 0066 has already applied its own reporter
     -- rule (`media_path_unreported_live_expiry`, plus the all-reported check
     -- below it) and whatever it decided stands untouched.
+    --
+    -- THE FEED-ONLY TERM IS WHAT KEEPS THIS FILE INSIDE ITS OWN LANE. The prose
+    -- above always claimed the veto only reached "a FEED-ONLY object on the
+    -- owner's prefix", but nothing enforced it: an object also live in a WP6
+    -- group destination was vetoed on the strength of a Feed report alone, and
+    -- the photo went dark in a conversation this migration cannot see and has no
+    -- authority over. 0069 can only judge the destinations it owns, so where any
+    -- other kind is live the previous decision — which does know about it —
+    -- stands. `kind <> 'feed'` rather than a list of kinds, because the kinds
+    -- this file must defer to are the ones it has not heard of.
     if v_prior.readable
        and not v_feed_readable
        and exists (
@@ -1449,6 +1491,14 @@ begin
           where (s.media_path = p_name or s.inset_path = p_name)
             and s.deleted_at is null
             and s.expires_at > now()
+       )
+       and not exists (
+         select 1
+           from public.media_destinations d
+           join public.media_objects m on m.id = d.media_id
+          where m.storage_path = p_name
+            and d.kind <> 'feed'
+            and d.removed_at is null
        )
     then
       return query select false, null::timestamptz;
