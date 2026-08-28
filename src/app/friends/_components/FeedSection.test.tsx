@@ -231,6 +231,43 @@ describe('FeedSection — a superseded refresh may not roll back a confirmed wri
   });
 });
 
+describe('FeedSection — "no replies" and "we have not read the replies" are different answers', () => {
+  test('a thread whose comment read failed does not claim the post has no replies', async () => {
+    const user = userEvent.setup();
+    // Posts load; the very first comment read fails, so nothing is known about
+    // this thread. Opening Reply must not assert an empty one.
+    commentPlan = [FAILED];
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+
+    expect(
+      await screen.findByTestId('feed-comments-unavailable'),
+      'an unread thread was rendered as a settled empty thread',
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId('feed-comments-empty'),
+      'a post whose replies were never read was told it has none',
+    ).toBeNull();
+  });
+
+  test('a thread that really is empty still says so', async () => {
+    const user = userEvent.setup();
+    // The read SUCCEEDS and returns an entry for this post with no comments —
+    // which is what fetchFeedComments does for every post it was asked about.
+    commentPlan = [{ ok: true, value: new Map([['post-1', []]]) }];
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+
+    expect(
+      await screen.findByTestId('feed-comments-empty'),
+      'a genuinely empty thread was reported as a failed read',
+    ).toBeTruthy();
+    expect(screen.queryByTestId('feed-comments-unavailable')).toBeNull();
+  });
+});
+
 describe('FeedSection — "no tags" and "we could not read the tags" are different answers', () => {
   test('an incomplete tag read renders a stated failure, not a confidently untagged post', async () => {
     postPlan = [{ ok: true, value: [makePost({ tagIds: [], tagsComplete: false })] }];

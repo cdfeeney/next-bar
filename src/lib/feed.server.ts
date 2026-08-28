@@ -40,6 +40,23 @@ export const MAX_FEED_CAPTION_LENGTH = 1000;
 export const MAX_FEED_COMMENT_LENGTH = 2000;
 
 /**
+ * How many comment rows one Feed read will fetch, across all the posts on screen.
+ *
+ * A FEED POST NEVER EXPIRES (V8-R-FEED-002), so its thread only ever grows, and
+ * `fetchFeedComments` re-runs on mount AND after every confirmed reply or
+ * deletion. Unbounded, that is a query whose cost rises for the whole life of the
+ * surface, and on a deployment with a PostgREST row cap it silently truncates —
+ * which is worse than truncating on purpose, because nothing says it happened.
+ *
+ * ponytail: one flat ceiling across the batch, newest-first so truncation drops
+ * the OLDEST replies rather than the ones people came back for. Per-post
+ * pagination is the upgrade when a real thread outgrows this; it needs a cursor
+ * the UI does not have yet, and building it now would be a paging surface with
+ * nothing paging it.
+ */
+export const FEED_COMMENT_READ_LIMIT = 500;
+
+/**
  * V8-R-FEED-006's three-way shape. There is deliberately no `'public'`: "FEED IS
  * NEVER PUBLIC", and a value the type cannot express is a value no caller can
  * accidentally send.
@@ -465,17 +482,29 @@ export async function fetchFeedComments(
   if (postIds.length === 0) return { ok: true, value: byPost };
 
   try {
+    // NEWEST FIRST, THEN BOUNDED, THEN REVERSED FOR DISPLAY. Reading oldest-first
+    // with a limit would have kept the oldest replies and dropped the newest — a
+    // just-sent reply vanishing is the one truncation a reply surface must never
+    // choose. The rows come back descending, the ceiling cuts the tail, and each
+    // thread is flipped to the oldest-first order the thread renders in.
     const { data, error } = await client
       .from('feed_comments')
       .select('id, post_id, author_id, body, created_at')
       .in('post_id', [...postIds])
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(FEED_COMMENT_READ_LIMIT);
 
     if (error) return mediaFailure('failed', 'Those replies could not be loaded.');
 
+    // AN ENTRY FOR EVERY POST WE ASKED ABOUT, including the ones with no replies.
+    // The caller distinguishes "not read yet" from "read, and empty" by whether
+    // the key is present, so a successful read that simply omitted the quiet posts
+    // would report them as unread forever.
+    for (const postId of postIds) byPost.set(postId, []);
+
     for (const row of (data ?? []) as Parameters<typeof toComment>[0][]) {
       const comment = toComment(row);
-      byPost.set(comment.postId, [...(byPost.get(comment.postId) ?? []), comment]);
+      byPost.set(comment.postId, [comment, ...(byPost.get(comment.postId) ?? [])]);
     }
     return { ok: true, value: byPost };
   } catch {

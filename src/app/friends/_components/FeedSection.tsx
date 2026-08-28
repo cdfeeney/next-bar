@@ -210,7 +210,11 @@ export default function FeedSection({
               <FeedPostCard
                 post={post}
                 viewerId={viewerId}
-                comments={threads.get(post.id) ?? []}
+                // `?? null`, never `?? []`: an absent entry means the comment read
+                // has not landed, and substituting an empty array here is what
+                // made FeedComments claim "No replies yet." for a thread nobody
+                // had read. A post with a settled empty thread HAS an entry.
+                comments={threads.get(post.id) ?? null}
                 authors={authors}
                 threadOpen={openThread === post.id}
                 onToggleThread={() =>
@@ -256,7 +260,8 @@ function FeedPostCard({
 }: {
   post: FeedPostView;
   viewerId: string | null;
-  comments: readonly FeedComment[];
+  /** Null when this post's thread has not been read yet — see FeedComments. */
+  comments: readonly FeedComment[] | null;
   authors: ReadonlyMap<string, FeedAuthor>;
   threadOpen: boolean;
   onToggleThread: () => void;

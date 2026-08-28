@@ -547,10 +547,27 @@ create policy "feed_comments: post audience reads"
 -- 5. Grants
 ------------------------------------------------------------------------------
 
-revoke all on public.feed_posts         from public, anon;
-revoke all on public.feed_post_audience from public, anon;
-revoke all on public.feed_post_tags     from public, anon;
-revoke all on public.feed_comments      from public, anon;
+-- `authenticated` IS REVOKED TOO, and leaving it out was not a harmless omission.
+-- Supabase ships `alter default privileges in schema public grant all on tables to
+-- anon, authenticated, service_role`, so every table created above arrives with a
+-- TABLE-LEVEL ALL grant to `authenticated` already on it. A later
+-- `grant update (removed_at)` does not narrow an existing table-level UPDATE — a
+-- column grant only ever ADDS — so the column list below was decorative and
+-- `authenticated` held UPDATE on every column of all four tables.
+--
+-- Three of the four were saved by RLS having no INSERT/UPDATE/DELETE policy at all,
+-- which denies by default. `feed_post_tags` was not: it HAS an UPDATE policy, and
+-- that policy only checks `auth.uid() = profile_id` in both USING and WITH CHECK.
+-- A tagged person could therefore PATCH their own row's `post_id` and move their
+-- tag onto any post id they know, bypassing publication's audience, mutual-friend
+-- and block checks entirely. Revoking first is what makes the column grant real.
+--
+-- Revoking a privilege that was never granted is not an error, so this is
+-- idempotent on a re-run and correct on a database whose defaults were changed.
+revoke all on public.feed_posts         from public, anon, authenticated;
+revoke all on public.feed_post_audience from public, anon, authenticated;
+revoke all on public.feed_post_tags     from public, anon, authenticated;
+revoke all on public.feed_comments      from public, anon, authenticated;
 
 grant select on public.feed_posts         to authenticated;
 grant select on public.feed_post_audience to authenticated;
@@ -597,17 +614,29 @@ grant update (removed_at) on public.feed_post_tags to authenticated;
 -- reachable by another mode is beside the point: the recipient, and anyone
 -- reading the provenance, is told this went to the group.
 --
--- `public.is_group_member(group, profile)` (WP6's 0067, which applies before this
--- file) is the resolution. It is SECURITY DEFINER and party-guarded: it answers
--- only when the caller IS the subject or is themselves a member of the group.
--- SECURITY DEFINER does not change `auth.uid()`, so the guard still sees the
--- POSTER here — and a poster is a member of the group they post to, so the guard
--- never blocks the legitimate call and a non-member's whole audience resolves
--- empty, which fails closed below. Membership on that surface IS row existence:
--- there is no accepted/pending column to check, unlike `night_out_members`.
+-- THE CALLER'S LIST IS NOT CONSULTED FOR A GROUP AT ALL, and the earlier version
+-- of this file that merely FILTERED it was still wrong. Filtering closed the
+-- widening direction only: a caller naming group G and passing one member of G
+-- published a one-person post stamped `audience_group_id = G`. D-C-37 says
+-- recipients EQUAL the selected group intersected with the poster's mutual
+-- friends — an equality, not a ceiling — so the group is enumerated from
+-- `public.group_members` and `p_audience_ids` is ignored. A poster who wants to
+-- reach some named people has the 'custom' mode for exactly that, and it records
+-- no group.
 --
--- The caller's list still narrows: a poster may post to SOME of a group. What it
--- can no longer do is widen past the group it named.
+-- `public.group_members` belongs to WP6's 0067, which applies before this file.
+-- Naming it is safe from a `language plpgsql` body, which PostgreSQL does not
+-- resolve at CREATE time, so 0069 still CREATEs cleanly against a schema that
+-- lacks it. Membership on that surface IS row existence: there is no
+-- accepted/pending column to check, unlike `night_out_members`.
+--
+-- `public.is_group_member(group, profile)` still has a job, and it is now the
+-- load-bearing one: it guards that THE POSTER is in the group before anything
+-- enumerates it. This function is SECURITY DEFINER, so the enumeration bypasses
+-- `group_members`' RLS; without that guard the definer would resolve a group the
+-- caller has no part in. `is_group_member` is itself party-guarded and SECURITY
+-- DEFINER does not change `auth.uid()`, so asking it about the poster is the case
+-- it always answers.
 --
 -- FAILS CLOSED. "If the mutual-friend set cannot be resolved the action FAILS
 -- CLOSED rather than delivering to the unintersected group" — so an intersection
@@ -656,7 +685,11 @@ begin
     raise exception 'publish_feed_post: only a group audience names a group'
       using errcode = '22023';
   end if;
-  if p_audience <> 'friends'
+  -- 'custom' IS a list, so an empty one is an error. 'group' is NOT a list: D-C-37
+  -- makes its recipients the GROUP intersected with the poster's mutual friends,
+  -- resolved server-side below, so `p_audience_ids` is not consulted for it at all
+  -- and requiring one would have been the caller's list creeping back in.
+  if p_audience = 'custom'
      and (p_audience_ids is null or array_length(p_audience_ids, 1) is null) then
     raise exception 'publish_feed_post: that audience needs at least one recipient'
       using errcode = '22023';
@@ -720,6 +753,18 @@ begin
       using errcode = '42501';
   end if;
 
+  -- 'group' — THE POSTER MUST BE IN THE GROUP THEY NAME, checked before anything
+  -- reads that group's membership. `publish_feed_post` is SECURITY DEFINER, so the
+  -- enumeration below bypasses `group_members`' RLS; this guard is what keeps that
+  -- from becoming a way to read, or post into, a group the caller does not belong
+  -- to. `is_group_member` is party-guarded and SECURITY DEFINER does not change
+  -- `auth.uid()`, so asking it about the poster themselves is the case it always
+  -- answers.
+  if p_audience = 'group' and not public.is_group_member(p_group_id, v_author) then
+    raise exception 'publish_feed_post: that is not a group of yours'
+      using errcode = '42501';
+  end if;
+
   -- 'custom' — every named person must be a mutual friend, or nothing is posted.
   if p_audience = 'custom' and exists (
     select 1 from unnest(p_audience_ids) as candidate(id)
@@ -756,24 +801,46 @@ begin
   values (p_media_id, 'feed', v_id::text)
   on conflict do nothing;
 
-  -- THE INTERSECTION, computed once and stored. Both non-'friends' modes go
-  -- through the same statement: 'custom' has already been proved to be entirely
-  -- mutual friends above, so the mutuality filter is a no-op there and the single
-  -- code path cannot drift between the two modes. The group term is the other
-  -- half of D-C-37 and applies only to 'group', where `p_group_id` is non-null by
-  -- the guard at the top of this function.
-  if p_audience <> 'friends' then
+  -- THE INTERSECTION, computed once and stored. The two non-'friends' modes take
+  -- their CANDIDATE SET from different places, and that difference is the whole of
+  -- D-C-37:
+  --
+  --   * 'custom' — the candidate set IS the caller's list, because the mode is
+  --     defined as "a CUSTOM MUTUAL-FRIEND SUBSET" and the poster naming people is
+  --     the point. Every name has already been proved a mutual friend above, so
+  --     the filter here is a restatement rather than a second gate.
+  --   * 'group' — the candidate set is THE GROUP, read from the server. Filtering
+  --     the caller's list by group membership closed the WIDENING direction only:
+  --     a caller passing one member of G still published a one-person post stamped
+  --     `audience_group_id = G`, and D-C-37 says recipients EQUAL the selected
+  --     group intersected with the poster's mutual friends. Nothing the caller
+  --     sends narrows it now.
+  --
+  -- `public.group_members` belongs to WP6's 0067, which applies BEFORE this file;
+  -- naming it from a `language plpgsql` body is safe because PostgreSQL does not
+  -- resolve those bodies at CREATE time. This function is SECURITY DEFINER, so the
+  -- read is not RLS-scoped to the caller — which is exactly what "resolved
+  -- server-side" requires, and exactly why the membership guard above is not
+  -- optional: without it the definer would happily enumerate a group the poster
+  -- does not belong to.
+  if p_audience = 'custom' then
     insert into public.feed_post_audience (post_id, profile_id)
       select v_id, ids.distinct_id
         from (select distinct unnest(p_audience_ids) as distinct_id) ids
        where ids.distinct_id <> v_author
          and public.is_mutual_friend(v_author, ids.distinct_id)
-         and (
-           p_audience <> 'group'
-           or public.is_group_member(p_group_id, ids.distinct_id)
-         )
       on conflict do nothing;
+  elsif p_audience = 'group' then
+    insert into public.feed_post_audience (post_id, profile_id)
+      select distinct v_id, gm.profile_id
+        from public.group_members gm
+       where gm.group_id = p_group_id
+         and gm.profile_id <> v_author
+         and public.is_mutual_friend(v_author, gm.profile_id)
+      on conflict do nothing;
+  end if;
 
+  if p_audience <> 'friends' then
     select count(*)::int into v_recipients
       from public.feed_post_audience fa
      where fa.post_id = v_id;
@@ -812,7 +879,7 @@ end;
 $$;
 
 comment on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) is
-  'V8-R-FEED-001 / V8-R-FEED-006. Publishes one Feed destination for a registered media object: takes the same path and row locks reclamation takes, writes the destination spine row, and materialises the audience as the selected set INTERSECTED with the poster''s mutual friends AND, for a named-group audience, with that group''s membership resolved server-side through public.is_group_member (D-C-37). An empty intersection raises rather than publishing to nobody.';
+  'V8-R-FEED-001 / V8-R-FEED-006. Publishes one Feed destination for a registered media object: takes the same path and row locks reclamation takes, and writes the destination spine row. AUDIENCE (D-C-37): a ''custom'' audience is the caller''s named list intersected with the poster''s mutual friends; a ''group'' audience EQUALS that group''s membership — enumerated server-side from public.group_members, with p_audience_ids ignored — intersected with the poster''s mutual friends, and the poster must be a member of the group they name. An empty intersection raises rather than publishing to nobody.';
 
 revoke all on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) from public, anon;
 grant execute on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) to authenticated;

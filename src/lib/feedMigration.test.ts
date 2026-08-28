@@ -162,24 +162,94 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
 describe('0069 — a named group is resolved server-side (D-C-37)', () => {
   const body = functionBody('public.publish_feed_post(');
 
-  it('the materialised audience intersects the caller list with the GROUP, not only with mutuality', () => {
-    // Round 2 (HIGH): the insert filtered the caller's ids by mutual friendship
-    // and never resolved p_group_id at all, so a poster could name group G and
-    // deliver to a mutual friend outside G — while the row records
-    // audience_group_id = G. D-C-37: recipients EQUAL the selected group
-    // INTERSECTED WITH the poster's mutual friends.
+  it('a group audience is enumerated FROM THE GROUP, not filtered from the caller list', () => {
+    // Round 2 (HIGH) found the insert filtering the caller's ids by mutual
+    // friendship and never resolving p_group_id. Round 3 (HIGH, both lanes) found
+    // the repair still wrong in the other direction: filtering the caller's list
+    // BY group membership closes only the widening half, and a caller passing one
+    // member of G published a one-person post stamped audience_group_id = G.
+    // D-C-37 is an EQUALITY — recipients EQUAL the selected group intersected with
+    // the poster's mutual friends — so the candidate set has to be the group.
     expect(sqlShape(body)).toContain(
-      'where ids.distinct_id <> v_author'
-      + ' and public.is_mutual_friend(v_author, ids.distinct_id)'
-      + " and ( p_audience <> 'group'"
-      + ' or public.is_group_member(p_group_id, ids.distinct_id) )',
+      "elsif p_audience = 'group' then"
+      + ' insert into public.feed_post_audience (post_id, profile_id)'
+      + ' select distinct v_id, gm.profile_id'
+      + ' from public.group_members gm'
+      + ' where gm.group_id = p_group_id'
+      + ' and gm.profile_id <> v_author'
+      + ' and public.is_mutual_friend(v_author, gm.profile_id)',
+    );
+  });
+
+  it('the caller-supplied list reaches the audience only for a custom audience', () => {
+    // p_audience_ids must not appear in the group branch at all. Asserting the
+    // custom branch owns it is what makes "ignored for a group" mechanical rather
+    // than a claim in a comment.
+    expect(sqlShape(body)).toContain(
+      "if p_audience = 'custom' then"
+      + ' insert into public.feed_post_audience (post_id, profile_id)'
+      + ' select v_id, ids.distinct_id'
+      + ' from (select distinct unnest(p_audience_ids) as distinct_id) ids',
+    );
+  });
+
+  it('the poster must be in the group before anything enumerates it', () => {
+    // publish_feed_post is SECURITY DEFINER, so the group_members read above
+    // bypasses that table's RLS. This guard is the only thing standing between a
+    // definer enumeration and a group the caller has no part in.
+    expect(sqlShape(body)).toContain(
+      "if p_audience = 'group'"
+      + ' and not public.is_group_member(p_group_id, v_author) then',
     );
   });
 
   it('a group audience still cannot be published without a group to resolve', () => {
-    // The group term reads p_group_id, so the guard that makes it non-null for
+    // The group branch reads p_group_id, so the guard that makes it non-null for
     // 'group' is load-bearing rather than a message.
     expect(sqlShape(body)).toContain(
       "if p_audience = 'group' and p_group_id is null then");
+  });
+
+  it('an empty intersection FAILS CLOSED instead of publishing to nobody', () => {
+    // Round 3 (MEDIUM): the suite pinned the intersection and the null-group guard
+    // but not the raise, so deleting the whole fail-closed block left every gate
+    // green. "If the mutual-friend set cannot be resolved the action FAILS CLOSED
+    // rather than delivering to the unintersected group" — a post whose audience
+    // table is empty reads to its author as delivered.
+    expect(sqlShape(body)).toContain(
+      "if p_audience <> 'friends' then"
+      + ' select count(*)::int into v_recipients'
+      + ' from public.feed_post_audience fa'
+      + ' where fa.post_id = v_id;'
+      + ' if v_recipients = 0 then',
+    );
+    expect(body).toMatch(/raise exception\s*\n\s*'publish_feed_post: nobody in that audience/);
+  });
+});
+
+describe('0069 — the column-scoped tag grant is actually scoped', () => {
+  it('authenticated is revoked from every new table before anything is granted back', () => {
+    // Round 3 (MEDIUM, codex): Supabase's default privileges grant ALL on new
+    // public tables to `authenticated`, and a later `grant update (removed_at)`
+    // only ever ADDS to that. Without this revoke the column list was decorative
+    // and a tagged person could PATCH their own feed_post_tags row's post_id onto
+    // any post id they knew, bypassing publication's audience, mutual-friend and
+    // block checks — feed_post_tags being the one of the four tables whose UPDATE
+    // policy admits the write at all.
+    for (const table of ['feed_posts', 'feed_post_audience', 'feed_post_tags', 'feed_comments']) {
+      expect(
+        sqlShape(SQL),
+        `${table} still leaves authenticated its default table-level grant`,
+      ).toContain(`revoke all on public.${table} from public, anon, authenticated;`);
+    }
+  });
+
+  it('the only write granted on a tag row is the consent withdrawal column', () => {
+    expect(SQL).toMatch(
+      /grant update \(removed_at\) on public\.feed_post_tags to authenticated;/,
+    );
+    // No table-wide UPDATE anywhere, which is what the revoke above exists to stop
+    // being re-granted by a later edit.
+    expect(SQL).not.toMatch(/grant update on public\.feed_post_tags/);
   });
 });

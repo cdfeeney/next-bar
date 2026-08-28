@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fetchFeedPosts } from './feed.server';
+import { FEED_COMMENT_READ_LIMIT, fetchFeedComments, fetchFeedPosts } from './feed.server';
 
 /**
  * The night-token read is the one this file exists for.
@@ -122,5 +122,80 @@ describe('fetchFeedPosts — the night-token read', () => {
 
   it('returns unavailable rather than throwing when there is no client', async () => {
     await expect(fetchFeedPosts(null, 10)).resolves.toMatchObject({ ok: false });
+  });
+});
+
+/**
+ * A PostgREST double for `feed_comments` that RECORDS the query it was asked to
+ * run, so the ordering and the ceiling can be asserted rather than assumed.
+ */
+function commentClient(rows: Row[]) {
+  const calls: { order?: [string, { ascending: boolean }]; limit?: number } = {};
+  const chain: Record<string, unknown> = {};
+  chain.select = vi.fn(() => chain);
+  chain.in = vi.fn(() => chain);
+  chain.order = vi.fn((column: string, options: { ascending: boolean }) => {
+    calls.order = [column, options];
+    return chain;
+  });
+  chain.limit = vi.fn(async (n: number) => {
+    calls.limit = n;
+    return { data: rows, error: null };
+  });
+  return { client: { from: vi.fn(() => chain) } as never, calls };
+}
+
+const comment = (over: Row = {}): Row => ({
+  id: 'c1',
+  post_id: 'post-1',
+  author_id: 'author-1',
+  body: 'a reply',
+  created_at: '2026-08-24T00:00:00Z',
+  ...over,
+});
+
+describe('fetchFeedComments — the thread read is bounded, and honest about it', () => {
+  it('reads newest-first under a ceiling, so truncation drops the OLDEST replies', async () => {
+    // A Feed post never expires (V8-R-FEED-002), so its thread only grows and this
+    // query re-runs after every confirmed write. Unbounded it costs more forever;
+    // bounded the WRONG WAY — oldest-first with a limit — it drops the newest, and
+    // a just-sent reply disappearing is the one truncation a reply surface must
+    // never choose.
+    const t = commentClient([comment()]);
+
+    await fetchFeedComments(t.client, ['post-1']);
+
+    expect(t.calls.order, 'the thread read is not ordered newest-first').toEqual([
+      'created_at',
+      { ascending: false },
+    ]);
+    expect(t.calls.limit, 'the thread read is unbounded').toBe(FEED_COMMENT_READ_LIMIT);
+  });
+
+  it('still hands each thread back oldest-first, whatever order the rows arrived in', async () => {
+    const t = commentClient([
+      comment({ id: 'newest', created_at: '2026-08-24T03:00:00Z' }),
+      comment({ id: 'oldest', created_at: '2026-08-24T01:00:00Z' }),
+    ]);
+
+    const result = await fetchFeedComments(t.client, ['post-1']);
+
+    expect(result.ok).toBe(true);
+    const thread = (result as { ok: true; value: Map<string, { id: string }[]> }).value.get('post-1');
+    expect(thread?.map((row) => row.id)).toEqual(['oldest', 'newest']);
+  });
+
+  it('a successful read names every post it was asked about, replies or not', async () => {
+    // The caller tells "not read yet" from "read, and empty" by whether the key is
+    // there, so omitting the quiet posts would report them unread forever — and
+    // FeedComments would tell their viewers the replies could not be loaded.
+    const t = commentClient([comment({ post_id: 'post-1' })]);
+
+    const result = await fetchFeedComments(t.client, ['post-1', 'post-2']);
+
+    expect(result.ok).toBe(true);
+    const value = (result as { ok: true; value: Map<string, unknown[]> }).value;
+    expect(value.has('post-2'), 'a post with no replies was left out of a successful read').toBe(true);
+    expect(value.get('post-2')).toEqual([]);
   });
 });

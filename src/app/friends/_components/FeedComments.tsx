@@ -47,7 +47,13 @@ export default function FeedComments({
   postAuthorId: string;
   /** Null when signed out — the composer is not offered at all. */
   viewerId: string | null;
-  comments: readonly FeedComment[];
+  /**
+   * The thread, or NULL when it has not been read yet — opened before the first
+   * comment read resolved, or that read failed. "No replies yet." is a claim
+   * about the database, and this component may only make it about a thread that
+   * actually came back.
+   */
+  comments: readonly FeedComment[] | null;
   /** Display identities for commenters, keyed by profile id. */
   authors: ReadonlyMap<string, FeedAuthor>;
   /** Called after a CONFIRMED write, so the parent re-reads the thread. */
@@ -106,7 +112,22 @@ export default function FeedComments({
     <section data-testid="feed-comments" data-post={postId} className="mt-3 border-t border-border pt-3">
       <h3 className="sr-only">Replies</h3>
 
-      {comments.length === 0 ? (
+      {/*
+        THREE STATES, NOT TWO. "We have not read this thread" is not "this thread
+        is empty", and rendering them the same way is the false-ready-state class
+        this lane has now hit in three separate places: an outage, or a network
+        round-trip the viewer opened Reply during, told them a commented post had
+        no replies. `comments === null` is the unread case and says so.
+      */}
+      {comments === null ? (
+        <p
+          data-testid="feed-comments-unavailable"
+          role="status"
+          className="text-[11px] text-muted"
+        >
+          Replies could not be loaded yet.
+        </p>
+      ) : comments.length === 0 ? (
         <p data-testid="feed-comments-empty" className="text-[11px] text-muted">
           No replies yet.
         </p>
