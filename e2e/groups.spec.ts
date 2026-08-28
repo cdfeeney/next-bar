@@ -401,6 +401,48 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await expect(page.getByTestId('group-message')).toContainText('still here');
   });
 
+  test('a message whose photo was removed renders a tombstone, not a blank bubble (round 6)', async ({ page }) => {
+    // The round-5 HIGH, from the browser's side. media_id is ON DELETE SET NULL and WP1's media
+    // cascades when its owner deletes their account, so a photo-only message that survives its
+    // author has no content left. The row is kept (V8-R-GRP-007 does not list "its photo was
+    // deleted" among the removal causes), so the thread must SAY the photo is gone. An empty
+    // bubble is the "empty row in a thread is a defect no reader can explain" case.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [GROUP_ROW],
+      members: ROSTER,
+      plans: [],
+      thread: [
+        { id: '88888888-8888-4888-8888-888888888888', sender_id: null, sender_handle: null,
+          sender_display_name: null, body: null, media_id: null,
+          media_removed_at: '2026-09-02T00:00:00Z', created_at: '2026-09-01T00:00:00Z' },
+      ],
+    });
+    await openThread(page);
+
+    await expect(page.getByTestId('group-message-photo-removed')).toBeVisible();
+    // Both facts survive together: the author is gone AND the photo is gone.
+    await expect(page.getByTestId('group-message')).toContainText('A departed member');
+  });
+
+  test('an ordinary text message shows no photo tombstone (round 6)', async ({ page }) => {
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [GROUP_ROW],
+      members: ROSTER,
+      plans: [],
+      thread: [
+        { id: '99999999-9999-4999-8999-999999999999', sender_id: OTHER_ID, sender_handle: 'them',
+          sender_display_name: 'Them', body: 'hello', media_id: null,
+          media_removed_at: null, created_at: '2026-09-01T00:00:00Z' },
+      ],
+    });
+    await openThread(page);
+
+    await expect(page.getByTestId('group-message')).toContainText('hello');
+    await expect(page.getByTestId('group-message-photo-removed')).toHaveCount(0);
+  });
+
   test('a present account with no name is Someone, NOT a departed member (X5)', async ({ page }) => {
     // The two cases must not collapse: one account is gone, the other is merely unnamed.
     await signInStub(page);
