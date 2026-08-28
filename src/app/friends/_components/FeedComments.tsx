@@ -5,6 +5,7 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
   addFeedComment,
   deleteFeedComment,
+  FEED_COMMENTS_PER_POST,
   MAX_FEED_COMMENT_LENGTH,
   type FeedAuthor,
   type FeedComment,
@@ -62,6 +63,22 @@ export default function FeedComments({
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * Comments the server has CONFIRMED deleted, held until a successful re-read
+   * drops them on its own.
+   *
+   * `onChanged` re-reads the thread, and that read is allowed to fail — when it
+   * does, FeedSection deliberately keeps the threads already on screen rather
+   * than blanking them. Without this set, that correct behaviour rendered a
+   * comment the server had just told us was gone, and the Remove button then
+   * refused a second attempt ("that reply is not yours to remove", because it is
+   * already deleted). A confirmed write must not be undone by a failed read.
+   */
+  const [removed, setRemoved] = useState<ReadonlySet<string>>(() => new Set());
+
+  const visible = comments === null
+    ? null
+    : comments.filter((comment) => !removed.has(comment.id));
 
   const submit = async (): Promise<void> => {
     if (busy) return;
@@ -102,6 +119,13 @@ export default function FeedComments({
         setNotice(result.message);
         return;
       }
+      // Confirmed by the server, so it leaves the screen NOW and stays gone even
+      // if the re-read below fails. Immutable update: a new Set, never a mutation
+      // of the one React is holding.
+      // Confirmed by the server, so it leaves the screen NOW and stays gone even
+      // if the re-read below fails. Immutable update: a new Set, never a mutation
+      // of the one React is holding.
+      setRemoved((prev) => new Set([...prev, commentId]));
       onChanged();
     } finally {
       setBusy(false);
@@ -119,7 +143,7 @@ export default function FeedComments({
         round-trip the viewer opened Reply during, told them a commented post had
         no replies. `comments === null` is the unread case and says so.
       */}
-      {comments === null ? (
+      {visible === null ? (
         <p
           data-testid="feed-comments-unavailable"
           role="status"
@@ -127,13 +151,13 @@ export default function FeedComments({
         >
           Replies could not be loaded yet.
         </p>
-      ) : comments.length === 0 ? (
+      ) : visible.length === 0 ? (
         <p data-testid="feed-comments-empty" className="text-[11px] text-muted">
           No replies yet.
         </p>
       ) : (
         <ul className="space-y-2">
-          {comments.map((comment) => (
+          {visible.map((comment) => (
             <li key={comment.id} data-testid="feed-comment" data-comment={comment.id}>
               <CommentRow
                 comment={comment}
@@ -149,6 +173,18 @@ export default function FeedComments({
           ))}
         </ul>
       )}
+
+      {/* THE CEILING SAYS SO. `fetchFeedComments` reads the newest
+          FEED_COMMENTS_PER_POST replies and drops the tail, and a thread sitting
+          exactly at that bound is the one case where "these are the replies" is
+          not the whole truth. Saying it is the difference between a bounded read
+          and a silent one; there is no pagination behind this yet, and inventing
+          a pager nothing can page would be worse than the honest sentence. */}
+      {visible !== null && visible.length >= FEED_COMMENTS_PER_POST ? (
+        <p data-testid="feed-comments-truncated" className="mt-2 text-[11px] text-muted">
+          Showing the most recent {FEED_COMMENTS_PER_POST} replies.
+        </p>
+      ) : null}
 
       {viewerId === null ? null : (
         <form

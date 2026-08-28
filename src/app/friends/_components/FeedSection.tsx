@@ -85,13 +85,23 @@ export default function FeedSection({
   const requestSeq = useRef(0);
 
   /**
-   * Whose Feed is currently ON SCREEN. `undefined` before the first render.
+   * Whose Feed is currently ON SCREEN.
    *
-   * Everything this component renders is audience-scoped to one account
-   * (V8-R-FEED-006), so it belongs to the viewer who loaded it and to nobody
-   * else.
+   * STATE, NOT A REF, and that is the whole point. Everything this component
+   * renders is audience-scoped to one account (V8-R-FEED-006), so it belongs to
+   * the viewer who loaded it and to nobody else — and the bookkeeping that says
+   * whose it is has to be discarded on exactly the same terms as the data.
+   *
+   * A ref mutated during render is not: React may ABANDON an in-progress render
+   * (a higher-priority update arrives, the work is thrown away and retried), and
+   * a ref write survives that while the render-phase state updates beside it do
+   * not. The retry would then find the ref already saying "painted for B", skip
+   * the reset, and commit account A's posts under B — the leak reopened by the
+   * mechanism meant to close it. State updates are discarded together with the
+   * render that queued them, which is why React's own "adjust state when a prop
+   * changes" guidance keeps this value in state.
    */
-  const paintedFor = useRef<string | null | undefined>(undefined);
+  const [paintedFor, setPaintedFor] = useState<string | null>(viewerId);
 
   // THE FEED ON SCREEN BELONGS TO THE ACCOUNT THAT LOADED IT, and it is dropped
   // DURING RENDER — before this commit paints — rather than in an effect.
@@ -109,8 +119,8 @@ export default function FeedSection({
   // rather than a different one. This is React's documented "adjust state when a
   // prop changes" shape: set state during render, and React re-renders
   // immediately with the new state without ever showing the old.
-  if (paintedFor.current !== viewerId) {
-    paintedFor.current = viewerId;
+  if (paintedFor !== viewerId) {
+    setPaintedFor(viewerId);
     setPosts([]);
     setThreads(new Map());
     setPeople(new Map());

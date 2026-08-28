@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { FEED_COMMENTS_PER_POST } from '@/lib/feed.server';
 import type { FeedAuthor, FeedComment, FeedPostView } from '@/lib/feed.server';
 
 /**
@@ -128,6 +132,10 @@ vi.mock('@/lib/accountCache', () => ({
 
 vi.mock('@/lib/feed.server', () => ({
   MAX_FEED_COMMENT_LENGTH: 2000,
+  // Deliberately tiny. The component compares a thread's length against this
+  // constant, so the BOUNDARY is what the test is about — building two hundred
+  // fixtures would prove the same thing slower.
+  FEED_COMMENTS_PER_POST: 3,
   fetchFeedPosts: async () => next(postPlan),
   fetchFeedComments: async () => next(commentPlan),
   fetchFeedAuthors: async () => next(authorPlan),
@@ -293,6 +301,61 @@ describe('FeedSection — a superseded refresh may not roll back a confirmed wri
   });
 });
 
+describe('FeedSection — the viewer bookkeeping is state, not a ref', () => {
+  /**
+   * A SOURCE-SHAPE ASSERTION, and the reason it is one is worth stating.
+   *
+   * The defect this pins (round 5, HIGH) only appears when React ABANDONS an
+   * interruptible render: a ref write survives the discarded work while the
+   * render-phase state updates beside it do not, so the retry sees "already
+   * handled" and commits the previous account's Feed. Testing Library renders
+   * synchronously and never abandons a render, so no behavioural test in this
+   * suite can distinguish the two — the ref version passes every case above.
+   *
+   * Rather than claim coverage this suite cannot give, the requirement itself is
+   * pinned: the value that records whose Feed is on screen must be STATE. That
+   * is React's own rule for adjusting state during render, and it is the thing a
+   * future edit would undo.
+   */
+  const SOURCE = readFileSync(
+    path.join(__dirname, 'FeedSection.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+
+  test('paintedFor is held in state so an abandoned render discards it with the clears', () => {
+    expect(SOURCE).toMatch(
+      /const \[paintedFor, setPaintedFor\] = useState<string \| null>\(viewerId\)/,
+    );
+    expect(
+      SOURCE,
+      'the viewer bookkeeping is a ref again, and a ref survives an abandoned render',
+    ).not.toMatch(/paintedFor[A-Za-z]*\.current\s*=/);
+  });
+});
+
+describe('FeedComments — a confirmed write is not undone by a failed read', () => {
+  test('a deleted reply stays gone even when the follow-up thread read fails', async () => {
+    const user = userEvent.setup();
+    // The viewer authored the comment, so the Remove affordance renders.
+    commentPlan = [{ ok: true, value: new Map([['post-1', [makeComment({ authorId: VIEWER })]]]) }];
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    expect(await screen.findByText('first reply')).toBeTruthy();
+
+    // The delete is CONFIRMED by the server, and the re-read it triggers fails.
+    commentPlan = [FAILED];
+    await user.click(screen.getByTestId('feed-comment-delete'));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('first reply'),
+        'a reply the server confirmed deleted came back because the re-read failed',
+      ).toBeNull(),
+    );
+  });
+});
+
 describe('FeedSection — "no replies" and "we have not read the replies" are different answers', () => {
   test('a thread whose comment read failed does not claim the post has no replies', async () => {
     const user = userEvent.setup();
@@ -311,6 +374,31 @@ describe('FeedSection — "no replies" and "we have not read the replies" are di
       screen.queryByTestId('feed-comments-empty'),
       'a post whose replies were never read was told it has none',
     ).toBeNull();
+  });
+
+  test('a thread sitting at the read ceiling says so, rather than implying it is all of them', async () => {
+    const user = userEvent.setup();
+    const full = Array.from({ length: FEED_COMMENTS_PER_POST }, (_, i) =>
+      makeComment({ id: `c-${i}`, body: `reply ${i}` }));
+    commentPlan = [{ ok: true, value: new Map([['post-1', full]]) }];
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+
+    expect(
+      await screen.findByTestId('feed-comments-truncated'),
+      'a thread read at its ceiling was presented as the whole thread',
+    ).toBeTruthy();
+  });
+
+  test('a short thread claims nothing about a ceiling', async () => {
+    const user = userEvent.setup();
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    await screen.findByText('first reply');
+
+    expect(screen.queryByTestId('feed-comments-truncated')).toBeNull();
   });
 
   test('a thread that really is empty still says so', async () => {

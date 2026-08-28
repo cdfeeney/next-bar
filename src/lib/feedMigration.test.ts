@@ -137,7 +137,9 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     // owner — and the branch that would have authorised B sits after the veto's
     // `return`, so it could never be reached. The all-unreported term is what
     // 0066's story analogue carries and this one was missing.
-    expect(sqlShape(body)).toContain('if v_prior.readable and not v_feed_readable and exists (');
+    expect(sqlShape(body)).toContain(
+      'if v_prior.readable and v_prior.expires_at is null and not v_feed_readable and exists (',
+    );
     // ...and that term has to mean the FEED answer, not a constant.
     expect(sqlShape(body)).toContain(
       'v_feed_readable := exists ( select 1 from public.feed_posts p'
@@ -147,33 +149,33 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     );
   });
 
-  it('the veto stands down when any live NON-FEED destination stands on the same bytes', () => {
-    // Round 3 (MEDIUM, codex): the prose always claimed this veto only reached a
-    // FEED-ONLY object, but nothing enforced it. An object also live in another
-    // lane's destination — a group message — was vetoed on the strength of a Feed
-    // report alone, and the photo went dark in a conversation 0069 cannot see and
-    // has no authority over. `kind <> 'feed'` rather than a list, because the
-    // kinds this file must defer to are the ones it has not heard of.
+  it('the veto fires ONLY on the prior unbounded yes, never on a backed one', () => {
+    // Rounds 3, 4 and 5 each found a different defect in one term that tried to
+    // re-derive "is anything else standing on these bytes" from another lane's
+    // destination rows: an ARCHIVE retention hold counted as visible; an EXPIRED
+    // story's spine row counted as live, because 0066 expresses story expiry
+    // passively through expires_at and never stamps removed_at; and a live GROUP
+    // destination counted either way, though only WP6 can say whether this caller
+    // can see it. The list was never the problem. Asking the question at all was.
+    //
+    // 0066's owner branch returns a NULL expiry for the upload-before-publish
+    // window and a real expiry whenever its yes is backed by something live it can
+    // see, so a readable prior answer with a null expiry is exactly the case 0069
+    // may correct.
     expect(sqlShape(body)).toContain(
-      'and not exists ( select 1 from public.media_destinations d'
-      + ' join public.media_objects m on m.id = d.media_id'
-      + ' where m.storage_path = p_name'
-      + " and d.kind not in ('feed', 'archive')"
-      + ' and d.removed_at is null )',
+      'if v_prior.readable and v_prior.expires_at is null and not v_feed_readable',
     );
   });
 
-  it('an ARCHIVE hold is not a destination, so it cannot stand the veto down', () => {
-    // Round 4 (HIGH, codex): `kind <> 'feed'` counted a Saved Nights Out retention
-    // hold as somewhere the photo is still visible, so an owner who reported their
-    // only Feed post kept getting signed URLs. This is 0066's own rule, not a new
-    // one — remove_media_destination carries the same `kind <> 'archive'` clause
-    // because "an archive row is a retention HOLD, not a destination a user can see
-    // or remove".
-    expect(
-      sqlShape(body),
-      'the veto treats an archive retention hold as a visible destination',
-    ).not.toContain("d.kind <> 'feed'");
+  it('no destination-kind list survives in the veto', () => {
+    // The three defects above were three spellings of the same mistake, so the
+    // assertion is against the SHAPE, not against any one spelling of it.
+    for (const shape of ["d.kind <> 'feed'", "d.kind not in ('feed', 'archive')"]) {
+      expect(
+        sqlShape(body),
+        'the veto is re-deriving another lane s destination liveness again',
+      ).not.toContain(shape);
+    }
   });
 
   it('a report on a post whose Feed destination is already retired vetoes nothing', () => {
@@ -236,22 +238,35 @@ describe('0069 — a named group is resolved server-side (D-C-37)', () => {
     ).not.toContain('p_audience_ids');
   });
 
-  it('the tag write re-asserts mutuality in its OWN statement', () => {
-    // Round 4 (MEDIUM, claude): the same two-snapshot shape as the group branch,
-    // one arm over. The guard near the top of publish_feed_post is a separate
-    // statement, so somebody who blocks or unfriends the poster while the media
-    // lock and the inserts run passed it and still got a tag row written onto
-    // their consent surface. The 'custom' and 'group' arms were never exposed —
-    // they test feed_post_audience, written inside this transaction — so it was
-    // the 'friends' arm alone.
+  it('the tag write re-asserts mutuality for EVERY arm that is not the poster', () => {
+    // Round 4 put this re-check on the 'friends' arm alone, reasoning that custom
+    // and group were covered by feed_post_audience rows written in-transaction.
+    // Round 5 (MEDIUM, both lanes) found that wrong by one statement: the audience
+    // insert judged mutuality in ITS snapshot and the recipient-count select runs
+    // between it and the tag insert, so the window is open there too. The term is
+    // hoisted out of the arms and applied to all of them — the shape, not another
+    // instance of it.
     expect(sqlShape(body)).toContain(
-      "or ( p_audience = 'friends'"
-      + ' and public.is_mutual_friend(v_author, ids.distinct_id) )',
+      'where ids.distinct_id = v_author'
+      + ' or ( public.is_mutual_friend(v_author, ids.distinct_id)'
+      + " and ( p_audience = 'friends'"
+      + ' or exists ( select 1 from public.feed_post_audience fa'
+      + ' where fa.post_id = v_id and fa.profile_id = ids.distinct_id ) ) )',
     );
-    expect(
-      sqlShape(body),
-      'the friends arm of the tag insert is unguarded again',
-    ).not.toContain("ids.distinct_id = v_author or p_audience = 'friends' or exists");
+  });
+
+  it('no arm of the tag write can admit somebody without that check', () => {
+    // The defect twice over was an arm reachable WITHOUT is_mutual_friend. Both
+    // previous spellings are named so a revert to either is caught.
+    for (const shape of [
+      "ids.distinct_id = v_author or p_audience = 'friends' or exists",
+      "or ( p_audience = 'friends' and public.is_mutual_friend(v_author, ids.distinct_id) ) or exists",
+    ]) {
+      expect(
+        sqlShape(body),
+        'an arm of the tag insert admits a recipient without re-checking mutuality',
+      ).not.toContain(shape);
+    }
   });
 
   it('the poster membership that authorises the post is read in the SAME statement', () => {

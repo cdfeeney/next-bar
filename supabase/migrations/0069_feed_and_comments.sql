@@ -873,28 +873,38 @@ begin
     -- the same reason a non-mutual group member is: the poster picked a group,
     -- not a list, and the narrowing is the server's job. Tagging yourself is
     -- always allowed and never needs an audience row.
-    -- THE MUTUALITY IS RE-ASSERTED HERE, in the same statement that writes the
-    -- row. The guard near the top of this function is a separate statement, so at
-    -- READ COMMITTED it sees an earlier snapshot: somebody who blocks or unfriends
-    -- the poster while the media lock and the inserts run passed that guard and
-    -- still got a tag row written onto their consent surface, which D-C-30 forbids
-    -- in both directions. The 'custom' and 'group' arms were never exposed — they
-    -- test `feed_post_audience`, written inside this transaction — so it was the
-    -- 'friends' arm alone, and it was the same two-snapshot shape as the group
-    -- membership check above.
+    -- THE MUTUALITY IS RE-ASSERTED HERE, ONCE, FOR EVERY ARM THAT IS NOT THE
+    -- POSTER THEMSELVES.
+    --
+    -- The guard near the top of this function is a separate statement, so at READ
+    -- COMMITTED it sees an earlier snapshot: somebody who blocks or unfriends the
+    -- poster while the media lock and the inserts run passed that guard and still
+    -- got a tag row written onto their consent surface, which D-C-30 forbids in
+    -- both directions.
+    --
+    -- A previous round put the re-check on the 'friends' arm only, on the
+    -- reasoning that 'custom' and 'group' were covered because they test
+    -- `feed_post_audience` rows written inside this transaction. That was wrong by
+    -- one statement: the audience insert judged mutuality in ITS snapshot, and the
+    -- recipient-count SELECT runs between it and this insert, so the window is
+    -- open there too. Hoisting the term out of the arms and applying it to all of
+    -- them closes the shape rather than the instance — which is what the arm-by-arm
+    -- version invited a second time.
     insert into public.feed_post_tags (post_id, profile_id)
       select v_id, ids.distinct_id
         from (select distinct unnest(p_tag_ids) as distinct_id) ids
        where ids.distinct_id = v_author
           or (
-            p_audience = 'friends'
-            and public.is_mutual_friend(v_author, ids.distinct_id)
-          )
-          or exists (
-            select 1
-              from public.feed_post_audience fa
-             where fa.post_id = v_id
-               and fa.profile_id = ids.distinct_id
+            public.is_mutual_friend(v_author, ids.distinct_id)
+            and (
+              p_audience = 'friends'
+              or exists (
+                select 1
+                  from public.feed_post_audience fa
+                 where fa.post_id = v_id
+                   and fa.profile_id = ids.distinct_id
+              )
+            )
           )
       on conflict do nothing;
   end if;
@@ -1467,22 +1477,38 @@ begin
     --     photo for its own owner, and the branch that would have authorised B
     --     sits AFTER this return and could never be reached; and
     --   * it requires that NO live story names these bytes at all; and
-    --   * it requires that the object is FEED-ONLY — no live destination of any
-    --     OTHER kind stands on these bytes.
+    --   * it requires that the prior YES was the UNBOUNDED one.
     -- When a story does name them, 0066 has already applied its own reporter
     -- rule (`media_path_unreported_live_expiry`, plus the all-reported check
     -- below it) and whatever it decided stands untouched.
     --
-    -- THE FEED-ONLY TERM IS WHAT KEEPS THIS FILE INSIDE ITS OWN LANE. The prose
-    -- above always claimed the veto only reached "a FEED-ONLY object on the
-    -- owner's prefix", but nothing enforced it: an object also live in a WP6
-    -- group destination was vetoed on the strength of a Feed report alone, and
-    -- the photo went dark in a conversation this migration cannot see and has no
-    -- authority over. 0069 can only judge the destinations it owns, so where any
-    -- other kind is live the previous decision — which does know about it —
-    -- stands. `kind <> 'feed'` rather than a list of kinds, because the kinds
-    -- this file must defer to are the ones it has not heard of.
+    -- WHY `v_prior.expires_at IS NULL` AND NOT A LIST OF DESTINATION KINDS.
+    -- Three rounds of review found three defects in one term, each a different
+    -- kind mis-classified: `kind <> 'feed'` counted an ARCHIVE retention hold as
+    -- somewhere the photo is visible; `kind not in ('feed','archive')` counted an
+    -- EXPIRED story's spine row, because 0066 never stamps `removed_at` on a story
+    -- destination and expresses expiry passively through `expires_at`; and either
+    -- form counted a live GROUP destination whose visibility to THIS caller only
+    -- WP6 can judge. The cause is not the list. It is that 0069 was trying to
+    -- re-derive, from another lane's rows, a question the previous implementation
+    -- has already answered.
+    --
+    -- So ask the previous answer instead. 0066's owner branch returns
+    -- `true, NULL` for the upload-before-publish window — an object whose bytes
+    -- nothing it knows about is standing on — and returns an EXPIRY whenever the
+    -- yes is backed by something live it can see. A null expiry on a readable
+    -- prior answer is therefore exactly, and only, the case this file is entitled
+    -- to correct: the owner's own unbounded window over bytes whose sole Feed
+    -- destination they have reported. Anything with a live backing keeps its
+    -- expiry, the veto does not fire, and that surface is left alone.
+    --
+    -- The residual, stated rather than hidden: this rests on 0066's documented
+    -- behaviour, and if a LATER migration adds a branch that grants an unbounded
+    -- window for a surface 0069 cannot see, the veto would reach it. That is a
+    -- cross-lane invariant no single migration can enforce, and it belongs in the
+    -- integration check alongside the rest of the chain.
     if v_prior.readable
+       and v_prior.expires_at is null
        and not v_feed_readable
        and exists (
          select 1
@@ -1503,22 +1529,6 @@ begin
           where (s.media_path = p_name or s.inset_path = p_name)
             and s.deleted_at is null
             and s.expires_at > now()
-       )
-       and not exists (
-         select 1
-           from public.media_destinations d
-           join public.media_objects m on m.id = d.media_id
-          where m.storage_path = p_name
-            -- 'archive' IS NOT A DESTINATION, and excluding it here is 0066's own
-            -- rule rather than a new one: "an archive row is a retention HOLD, not
-            -- a destination a user can see or remove", which is why
-            -- `remove_media_destination` carries the same `kind <> 'archive'`
-            -- clause. Counting a Saved Nights Out hold as somewhere the photo is
-            -- still visible defeated the veto outright — the owner reported their
-            -- only Feed post and the bytes kept signing, because a hold nobody can
-            -- look at stood in for a destination.
-            and d.kind not in ('feed', 'archive')
-            and d.removed_at is null
        )
     then
       return query select false, null::timestamptz;
