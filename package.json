@@ -17,7 +17,8 @@
     "db:bootstrap": "tsx scripts/apply-migrations.ts --bootstrap",
     "check:migrations": "tsx scripts/check-migration-ledger.ts",
     "check:catalog-bundle": "node scripts/check-client-catalog-bundle.mjs",
-    "db:whoami": "tsx scripts/db-whoami.mts"
+    "db:whoami": "tsx scripts/db-whoami.mts",
+    "db:dump": "tsx scripts/db-dump.mts"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.0",
