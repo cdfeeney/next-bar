@@ -31,19 +31,30 @@ const EMPTY_PENDING: PendingWrites = { added: [], removedIds: new Set() };
 /**
  * One thread as the viewer should see it: what the last successful read returned,
  * minus what has since been confirmed deleted, plus what has since been confirmed
- * added. Null in, null out — an unread thread stays unread.
+ * added and not since deleted.
+ *
+ * A CONFIRMED WRITE COUNTS EVEN WHEN THE BASELINE NEVER LOADED. Returning null the
+ * moment the thread was unread discarded a reply the server had accepted — the
+ * composer had cleared the draft and nothing on screen showed the reply had
+ * landed. The unread-ness is reported separately (see `unreadBaseline` on
+ * FeedComments), so showing the staged reply here does not claim the rest of the
+ * thread is empty.
  */
 function withPending(
   thread: readonly FeedComment[] | null,
   postId: string,
   pending: PendingWrites,
 ): readonly FeedComment[] | null {
-  if (thread === null) return null;
-  const kept = thread.filter((comment) => !pending.removedIds.has(comment.id));
+  // A DELETION OUTRANKS AN ADDITION, whichever order they arrived in: adding a
+  // reply and then deleting it, with both follow-up reads failing, left it staged
+  // and re-appended because only the baseline rows were filtered.
   const additions = pending.added.filter(
-    (comment) => comment.postId === postId && !kept.some((row) => row.id === comment.id),
+    (comment) => comment.postId === postId && !pending.removedIds.has(comment.id),
   );
-  return additions.length === 0 ? kept : [...kept, ...additions];
+  if (thread === null) return additions.length === 0 ? null : additions;
+  const kept = thread.filter((comment) => !pending.removedIds.has(comment.id));
+  const unseen = additions.filter((comment) => !kept.some((row) => row.id === comment.id));
+  return unseen.length === 0 ? kept : [...kept, ...unseen];
 }
 
 /**
@@ -241,7 +252,12 @@ export default function FeedSection({
       ? [...comments.value.values()].flat().map((comment) => comment.authorId)
       : [];
     const taggedIds = loaded.value.flatMap((post) => post.tagIds);
-    const named = await fetchFeedAuthors(supabase, [...commenterIds, ...taggedIds]);
+    // THE VIEWER'S OWN IDENTITY, always. A reply this viewer just sent is staged
+    // into the thread even when the read that would have named its author failed —
+    // and on that path `commenterIds` is empty, so their own reply rendered under
+    // the "Someone" fallback. They are the one person whose name we can always
+    // predict we will need.
+    const named = await fetchFeedAuthors(supabase, [...commenterIds, ...taggedIds, viewerId]);
     if (stale()) return;
     // A FAILED COMMENT READ MUST NOT RENAME THE THREADS IT LEFT ON SCREEN. With
     // no commenter ids to ask for, `named` covers only tagged people, so
@@ -298,6 +314,9 @@ export default function FeedSection({
                 // made FeedComments claim "No replies yet." for a thread nobody
                 // had read. A post with a settled empty thread HAS an entry.
                 comments={withPending(threads.get(post.id) ?? null, post.id, pending)}
+                // The BASELINE, not the overlay: a staged reply is something we
+                // know, and it must not be mistaken for the thread having loaded.
+                unreadBaseline={threads.get(post.id) === undefined}
                 authors={authors}
                 threadOpen={openThread === post.id}
                 onToggleThread={() =>
@@ -350,6 +369,7 @@ function FeedPostCard({
   post,
   viewerId,
   comments,
+  unreadBaseline,
   authors,
   threadOpen,
   onToggleThread,
@@ -359,6 +379,8 @@ function FeedPostCard({
   viewerId: string | null;
   /** Null when this post's thread has not been read yet — see FeedComments. */
   comments: readonly FeedComment[] | null;
+  /** True while the thread itself has never been read — see FeedComments. */
+  unreadBaseline: boolean;
   authors: ReadonlyMap<string, FeedAuthor>;
   threadOpen: boolean;
   onToggleThread: () => void;
@@ -450,6 +472,19 @@ function FeedPostCard({
             Tags could not be loaded, so this post may have more.
           </p>
         ) : null}
+        {/* "You may not open this night" and "we could not ask" are different
+            answers too, and the card showed the same nothing for both: the action
+            simply vanished. Absent-because-refused stays silent, which is the
+            contract; absent-because-unread says so. */}
+        {!post.nightTokenComplete ? (
+          <p
+            data-testid="feed-view-night-unavailable"
+            role="status"
+            className="text-[11px] text-muted mt-1"
+          >
+            This night&rsquo;s link could not be loaded.
+          </p>
+        ) : null}
 
         {/* EXACTLY TWO ACTIONS. "View night" is absent — not disabled — when
             there is no night, or when it is a night this viewer may not open;
@@ -481,6 +516,7 @@ function FeedPostCard({
             postAuthorId={post.authorId}
             viewerId={viewerId}
             comments={comments}
+            unreadBaseline={unreadBaseline}
             authors={authors}
             onChanged={onChanged}
           />

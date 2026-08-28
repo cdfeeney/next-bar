@@ -64,6 +64,7 @@ function makePost(over: Partial<FeedPostView> = {}): FeedPostView {
     mediaState: 'ok',
     nightShareToken: null,
     tagsComplete: true,
+    nightTokenComplete: true,
     ...over,
   };
 }
@@ -389,6 +390,55 @@ describe('FeedComments — a confirmed write is not undone by a failed read', ()
       screen.queryByText('first reply'),
       'closing and reopening the thread resurrected a confirmed deletion',
     ).toBeNull();
+  });
+
+  test('deleting a reply that is itself still staged removes it', async () => {
+    const user = userEvent.setup();
+    // Round 7 (MEDIUM, codex): only the BASELINE rows were filtered by the
+    // confirmed-deletion set, so a reply that was still staged from a failed
+    // add-refresh was appended straight back after being deleted.
+    commentPlan = [{ ok: true, value: new Map([['post-1', []]]) }];
+    addResult = { ok: true, value: makeComment({ id: 'staged', body: 'staged reply', authorId: VIEWER }) };
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    commentPlan = [FAILED];
+    await user.type(screen.getByTestId('feed-comment-input'), 'staged reply');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+    expect(await screen.findByText('staged reply')).toBeTruthy();
+
+    // Now delete the staged reply, with that refresh failing too.
+    await user.click(screen.getByTestId('feed-comment-delete'));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('staged reply'),
+        'a confirmed deletion did not reach a reply that was still staged',
+      ).toBeNull(),
+    );
+  });
+
+  test('a reply added to a thread that never loaded is shown, and the thread still says it is unread', async () => {
+    const user = userEvent.setup();
+    // Round 7 (MEDIUM, codex): withPending returned null the moment the baseline
+    // was unread, so a confirmed reply was discarded — the composer cleared and
+    // nothing showed it had landed. Both facts are true at once and both are said.
+    commentPlan = [FAILED];
+    addResult = { ok: true, value: makeComment({ id: 'staged', body: 'landed anyway', authorId: VIEWER }) };
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    await user.type(screen.getByTestId('feed-comment-input'), 'landed anyway');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+
+    expect(
+      await screen.findByText('landed anyway'),
+      'a confirmed reply was dropped because the thread around it had never loaded',
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId('feed-comments-unavailable'),
+      'the staged reply was allowed to stand for the whole thread',
+    ).toBeTruthy();
   });
 
   test('a reply the server confirmed added is not lost when the follow-up read fails', async () => {

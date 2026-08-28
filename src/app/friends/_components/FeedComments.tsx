@@ -53,6 +53,7 @@ export default function FeedComments({
   postAuthorId,
   viewerId,
   comments,
+  unreadBaseline,
   authors,
   onChanged,
 }: {
@@ -67,6 +68,15 @@ export default function FeedComments({
    * actually came back.
    */
   comments: readonly FeedComment[] | null;
+  /**
+   * True while the thread itself has never been read successfully.
+   *
+   * Separate from `comments` because the two are separate facts: a reply this
+   * viewer just sent is KNOWN even when the surrounding thread is not, and
+   * rendering that one reply on its own would otherwise read as "this is the
+   * whole thread".
+   */
+  unreadBaseline: boolean;
   /** Display identities for commenters, keyed by profile id. */
   authors: ReadonlyMap<string, FeedAuthor>;
   /**
@@ -141,7 +151,11 @@ export default function FeedComments({
         round-trip the viewer opened Reply during, told them a commented post had
         no replies. `comments === null` is the unread case and says so.
       */}
-      {visible === null ? (
+      {/* Stated whenever the thread itself has not been read, WHETHER OR NOT a
+          confirmed reply of the viewer's own is showing beneath it. Those are two
+          different facts and collapsing them is how a staged reply would come to
+          stand for a thread nobody has seen. */}
+      {unreadBaseline ? (
         <p
           data-testid="feed-comments-unavailable"
           role="status"
@@ -149,7 +163,9 @@ export default function FeedComments({
         >
           Replies could not be loaded yet.
         </p>
-      ) : visible.length === 0 ? (
+      ) : null}
+
+      {visible === null ? null : visible.length === 0 ? (
         <p data-testid="feed-comments-empty" className="text-[11px] text-muted">
           No replies yet.
         </p>

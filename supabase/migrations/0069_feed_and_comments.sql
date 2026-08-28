@@ -486,11 +486,25 @@ create policy "feed_post_audience: parties read"
   on public.feed_post_audience for select
   to authenticated
   using (
-    auth.uid() = profile_id
-    -- Definer helper rather than a bare subquery on public.feed_posts: that
-    -- table's SELECT policy reads feed_post_audience, so a plain subquery here
-    -- closes the cycle and PostgreSQL refuses BOTH tables.
-    or public.is_feed_post_author(post_id, auth.uid())
+    -- BOTH GATES, ON BOTH ARMS, and this table was the one Feed surface that had
+    -- neither. The posts, comments and tags policies all veto on the caller's own
+    -- report and judge the relevant pair for a block; the audience rows kept
+    -- answering regardless — so after P and R blocked each other, or after either
+    -- reported the post, R could still read "I am in the audience of P's post" and
+    -- P could still read R's row. The post itself is unreadable by then, which is
+    -- what makes the leftover row a leak rather than a duplicate.
+    (
+      auth.uid() = profile_id
+      -- Definer helper rather than a bare subquery on public.feed_posts: that
+      -- table's SELECT policy reads feed_post_audience, so a plain subquery here
+      -- closes the cycle and PostgreSQL refuses BOTH tables.
+      or public.is_feed_post_author(post_id, auth.uid())
+    )
+    -- The pair to judge is the caller and the ROW'S profile: on the own-row arm
+    -- that is a no-op (nobody blocks themselves), and on the author arm it is the
+    -- author against the recipient, which is the pair this row is about.
+    and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id)
+    and not public.feed_post_reported_by_caller(post_id)
   );
 
 drop policy if exists "feed_post_tags: readable with post" on public.feed_post_tags;

@@ -120,6 +120,38 @@ describe('fetchFeedPosts — the night-token read', () => {
     expect((t.rpc.mock.calls as unknown[][]).filter((c) => c[0] === 'get_night_out')).toHaveLength(0);
   });
 
+  it('a FAILED night lookup is not reported as "you may not open this"', async () => {
+    // Round 7 (MEDIUM, codex): get_night_out answers a refusal and an outage
+    // identically, and both collapsed to a missing token — so "View night"
+    // vanished on a failed read with nothing saying why. Same false-ready-state
+    // shape as an unread thread rendering as an empty one, on the other control.
+    const rpc = vi.fn(async () => ({ data: null, error: { message: 'denied' } }));
+    const t = feedClient([post()], rpc);
+
+    const result = await fetchFeedPosts(t.client, 10);
+
+    expect(result.ok).toBe(true);
+    const view = (result as { ok: true; value: { nightShareToken: string | null; nightTokenComplete: boolean }[] }).value;
+    expect(view[0].nightShareToken).toBeNull();
+    expect(
+      view[0].nightTokenComplete,
+      'a failed night-token read was reported as a settled refusal',
+    ).toBe(false);
+  });
+
+  it('a REFUSED night is a settled answer, not an unread one', async () => {
+    const rpc = vi.fn(async () => ({ data: [], error: null }));
+    const t = feedClient([post()], rpc);
+
+    const result = await fetchFeedPosts(t.client, 10);
+
+    const view = (result as { ok: true; value: { nightTokenComplete: boolean }[] }).value;
+    expect(
+      view[0].nightTokenComplete,
+      'a viewer who simply may not open the night was told the read failed',
+    ).toBe(true);
+  });
+
   it('returns unavailable rather than throwing when there is no client', async () => {
     await expect(fetchFeedPosts(null, 10)).resolves.toMatchObject({ ok: false });
   });

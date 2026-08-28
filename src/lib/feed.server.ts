@@ -125,6 +125,15 @@ export type FeedPostView = FeedPost & {
    * chip and the consent control behind it with nothing saying why.
    */
   tagsComplete: boolean;
+  /**
+   * False when this post names a night whose token read FAILED, so a null
+   * `nightShareToken` is not known to mean "this viewer may not open it".
+   *
+   * `get_night_out` answers a refusal and an outage identically, and collapsing
+   * them made "View night" disappear on a failed read with nothing saying why —
+   * the same shape as an unread comment thread rendering as an empty one.
+   */
+  nightTokenComplete: boolean;
 };
 
 export type FeedComment = {
@@ -292,7 +301,12 @@ export async function fetchFeedPosts(
           mediaUrl,
           mediaState: mediaUrl === null ? ('unsigned' as const) : ('ok' as const),
           nightShareToken:
-            row.night_out_id === null ? null : nights.get(row.night_out_id) ?? null,
+            row.night_out_id === null ? null : nights.byId.get(row.night_out_id) ?? null,
+          // False ONLY when this post names a night we could not ask about, so the
+          // card can say the link could not be loaded instead of silently dropping
+          // the action as though the viewer were not entitled to it.
+          nightTokenComplete:
+            row.night_out_id === null || !nights.unread.has(row.night_out_id),
           tagsComplete: tags.ok,
         };
       }),
@@ -394,20 +408,39 @@ export async function fetchFeedAuthors(
 async function fetchNightTokens(
   client: SupabaseClient,
   nightIds: readonly (string | null)[],
-): Promise<Map<string, string>> {
+): Promise<{ byId: Map<string, string>; unread: Set<string> }> {
   const byId = new Map<string, string>();
+  // NIGHTS WE COULD NOT ASK ABOUT, kept apart from nights the answer was "no" for.
+  // `getNightOut` returns null for BOTH a refusal and an outage, and collapsing
+  // them made a failed read look like a settled "you may not open this": the
+  // action simply vanished, with nothing anywhere saying a read had failed. That
+  // is the same false-ready-state class as an empty thread standing for an unread
+  // one, on the card's other control.
+  const unread = new Set<string>();
   const ids = [...new Set(nightIds.filter((id): id is string => id !== null))];
-  if (ids.length === 0) return byId;
+  if (ids.length === 0) return { byId, unread };
   const settled = await Promise.all(ids.map(async (id) => {
-    const night = await getNightOut(client, id);
-    return [id, night?.shareToken ?? null] as const;
+    try {
+      // The RPC directly rather than through `getNightOut`, ONLY so the error is
+      // visible here. It is the same entitlement-scoped accessor, so the rule
+      // still lives in one place — the database — and is not restated.
+      const { data, error } = await client.rpc('get_night_out', { p_night_out: id });
+      if (error) return [id, 'unread'] as const;
+      const rows = (Array.isArray(data) ? data : [data]).filter(Boolean) as {
+        share_token: string | null;
+      }[];
+      return [id, rows[0]?.share_token ?? null] as const;
+    } catch {
+      return [id, 'unread'] as const;
+    }
   }));
   for (const [id, token] of settled) {
-    // A null token is "this viewer may not open it" — the card renders no "View night",
-    // which is the same outcome the original comment described and never achieved.
-    if (token !== null) byId.set(id, token);
+    if (token === 'unread') unread.add(id);
+    // A null token is "this viewer may not open it" — the card renders no "View
+    // night", which is the outcome V8-R-FEED-004 describes.
+    else if (token !== null) byId.set(id, token);
   }
-  return byId;
+  return { byId, unread };
 }
 
 /**

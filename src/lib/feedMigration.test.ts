@@ -107,6 +107,20 @@ describe('0069 — the reporter hide reaches every surface of the post', () => {
     );
   });
 
+  it('the AUDIENCE rows carry both gates too, over both of their arms', () => {
+    // Round 7 (MEDIUM, codex): feed_post_audience was the one Feed surface with
+    // neither gate. After P and R blocked each other, or after either reported the
+    // post, the post row became unreadable while R could still read "I am in the
+    // audience of P's post" and P could still read R's row. Whole-expression, so
+    // the grouping — both gates OVER the two arms, not inside one — is pinned.
+    expect(sqlShape(policyBody('feed_post_audience: parties read'))).toContain(
+      '( auth.uid() = profile_id'
+      + ' or public.is_feed_post_author(post_id, auth.uid()) )'
+      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id)'
+      + ' and not public.feed_post_reported_by_caller(post_id)',
+    );
+  });
+
   it('the reader/tagged-person block sits INSIDE the can_view branch, not over the whole policy', () => {
     // Round 6 (HIGH, claude): a tag is a third party, exactly as a comment is, and
     // can_view_feed_post only judges the caller against the post's AUTHOR. Without
@@ -400,6 +414,13 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
       sqlShape(body),
       'the comment insert is unconditional again, so a lock wait can outlive the check',
     ).not.toContain('insert into public.feed_comments (post_id, author_id, body) values');
+    // AND THE BRANCH SENSE. Round 7 (MEDIUM, codex): flipping `if not found` to
+    // `if found` makes every AUTHORIZED insert raise and roll back, and the
+    // assertion above still passed because it only reads the INSERT text.
+    expect(
+      sqlShape(body),
+      'the zero-rows branch is inverted, so a permitted comment now raises',
+    ).toContain('if not found then raise exception');
   });
 
   it('a report re-checks the entitlement AFTER the durable record is written', () => {
@@ -407,11 +428,31 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
     // shared with the branches this file delegates to, so its insert cannot carry
     // a predicate only this branch knows. Re-checking on the latest snapshot and
     // raising rolls the whole transaction back, insert included.
-    const body = functionBody('public.report_content(');
-    expect(sqlShape(body)).toContain(
-      'v_id := public.record_content_report(p_subject_kind, v_ref, p_reason);',
-    );
-    expect(sqlShape(body)).toContain('stopped being yours to report');
+    //
+    // Round 7 (MEDIUM, both lanes): the first version of this case asserted only
+    // that two substrings existed. It stayed green when the comment arm was
+    // deleted (the post arm's message satisfied the toContain on its own), and it
+    // stayed green when both re-checks were moved ABOVE the write, which is the
+    // whole point of the fix. Order and both arms, therefore.
+    const body = sqlShape(functionBody('public.report_content('));
+    const wrote = body.indexOf('v_id := public.record_content_report(p_subject_kind, v_ref, p_reason);');
+    const postArm = body.indexOf('that post stopped being yours to report');
+    const commentArm = body.indexOf('that comment stopped being yours to report');
+
+    expect(wrote, 'the durable record is not written through v_id any more').toBeGreaterThan(-1);
+    expect(postArm, 'the feed_post arm of the post-write re-check is gone').toBeGreaterThan(-1);
+    expect(commentArm, 'the comment arm of the post-write re-check is gone').toBeGreaterThan(-1);
+    expect(
+      postArm,
+      'the post-write re-check runs BEFORE the write, which is the window it exists to close',
+    ).toBeGreaterThan(wrote);
+    expect(
+      commentArm,
+      'the post-write re-check runs BEFORE the write, which is the window it exists to close',
+    ).toBeGreaterThan(wrote);
+    // And the branch sense: dropping the `not` makes every permitted report roll
+    // back, with both messages still present.
+    expect(body).toContain('if not public.can_view_feed_post(v_ref::uuid) then raise exception');
   });
 });
 
