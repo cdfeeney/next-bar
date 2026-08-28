@@ -86,6 +86,12 @@ export type GroupMessage = {
    * lifetime (V8-R-STO-015). A path here would let a caller mint its own.
    */
   mediaId: string | null;
+  /**
+   * Set when this message's photo was removed out from under it — in practice when WP1's
+   * media cascade fired because its owner deleted their account. `mediaId` null with this set
+   * is a tombstone, not a text message; see 0067's media_removed_at.
+   */
+  mediaRemovedAt: string | null;
   createdAt: string;
 };
 
@@ -222,11 +228,16 @@ export async function fetchGroupMembers(
 
 type MessageRow = {
   id: string;
-  sender_id: string;
+  // ROUND 6 (gate finding): this was typed `string` while X5 made the wire value nullable — the
+  // type contradicted the schema at the exact seam round 5 changed. Safe at runtime only because
+  // the map below coalesces; the type itself invited a future consumer to assume non-null with
+  // TypeScript raising nothing.
+  sender_id: string | null;
   sender_handle: string | null;
   sender_display_name: string | null;
   body: string | null;
   media_id: string | null;
+  media_removed_at: string | null;
   created_at: string;
 };
 
@@ -274,6 +285,7 @@ export async function fetchGroupMessages(
         senderDisplayName: row.sender_display_name,
         body: row.body,
         mediaId: row.media_id,
+        mediaRemovedAt: row.media_removed_at ?? null,
         createdAt: row.created_at,
       })),
     };

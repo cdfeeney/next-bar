@@ -24,6 +24,7 @@ vi.mock('@/lib/groups.server', () => ({
   deleteGroupMessage: vi.fn(),
   inviteGroupToNightOut: vi.fn(),
   inviteNightOutMember: vi.fn(),
+  fetchUnreadCounts: vi.fn(),
   fetchInvitableNightOuts: vi.fn(),
   MAX_GROUP_MESSAGE_LENGTH: 2000,
   MAX_GROUP_NAME_LENGTH: 60,
@@ -61,6 +62,7 @@ beforeEach(() => {
   vi.mocked(groups.fetchGroupMembers).mockResolvedValue({ ok: true, value: ADMIN_ROSTER } as never);
   vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: [] } as never);
   vi.mocked(groups.fetchInvitableNightOuts).mockResolvedValue({ ok: true, value: [] } as never);
+  vi.mocked(groups.fetchUnreadCounts).mockResolvedValue({ ok: true, value: new Map() } as never);
 });
 
 describe('a failed thread load does not clear the unread badge (round-1 finding 4)', () => {
@@ -200,6 +202,12 @@ describe('round-5: the watermark must satisfy BOTH invariants', () => {
     // rendered, so nothing may be marked. Round 3 marked anyway and ate them.
     const full = Array.from({ length: 200 }, (_, i) => msg(i, i));
     vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: full } as never);
+    // ROUND 6: the count that decides safety is now re-read WITH the messages, not taken from the
+    // parent's prop — a prop fetched before the thread opened understates unread by everything
+    // that arrived since. The invariant is unchanged; its input moved to a trustworthy source.
+    vi.mocked(groups.fetchUnreadCounts).mockResolvedValue(
+      { ok: true, value: new Map([['group-1', 250]]) } as never,
+    );
     render(<GroupThread {...props({ unreadCount: 250 })} />);
     await screen.findByTestId('group-thread-name');
     await new Promise((r) => { setTimeout(r, 50); });
@@ -339,5 +347,90 @@ describe('round 5, X5: a message outlives its author and says so', () => {
 
     await screen.findByText('Someone');
     expect(screen.queryByText('A departed member')).toBeNull();
+  });
+});
+
+describe('round 6: a message whose photo was removed renders a tombstone', () => {
+  const base = {
+    id: 'm1', groupId: 'group-1', senderId: 'other', senderHandle: 'them',
+    senderDisplayName: 'Them', body: null, mediaId: null, createdAt: '2026-09-01T00:00:00.000Z',
+  };
+
+  it('says the photo is gone instead of rendering an empty message', async () => {
+    // The row survives account deletion by design (V8-R-GRP-007). Rendering it as a blank bubble
+    // would be the "empty row in a thread is a defect no reader can explain" case the schema
+    // comment already refuses.
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({
+      ok: true, value: [{ ...base, mediaRemovedAt: '2026-09-02T00:00:00.000Z' }],
+    } as never);
+
+    render(<GroupThread {...props()} />);
+
+    await screen.findByTestId('group-message-photo-removed');
+  });
+
+  it('does NOT show the tombstone for an ordinary text message', async () => {
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({
+      ok: true, value: [{ ...base, body: 'hello', mediaRemovedAt: null }],
+    } as never);
+
+    render(<GroupThread {...props()} />);
+
+    await screen.findByText('hello');
+    expect(screen.queryByTestId('group-message-photo-removed')).toBeNull();
+  });
+});
+
+describe('round 6: the three watermark defects both review families found', () => {
+  const msg = (i: number, min: number) => ({
+    id: 'm' + i, groupId: 'group-1', senderId: 'o', senderHandle: null,
+    senderDisplayName: null, body: 'x', mediaId: null, mediaRemovedAt: null,
+    createdAt: '2026-09-01T00:' + String(min).padStart(2, '0') + ':00.000Z',
+  });
+  const page = (n: number) => Array.from({ length: n }, (_, i) => msg(i, i % 60));
+
+  it('MEDIUM 1 — an EMPTY thread is never marked read', async () => {
+    // The defect: an empty load passed a null watermark, and mark_group_read coalesces null to
+    // now() (0067), so it marked EVERYTHING read up to the present — recreating the unseen-message
+    // race the watermark exists to prevent. Nothing was on screen, so nothing may be claimed read.
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: [] } as never);
+    render(<GroupThread {...props({ unreadCount: 0 })} />);
+    await screen.findByTestId('group-invite');
+    expect(groups.markGroupRead).not.toHaveBeenCalled();
+  });
+
+  it('MEDIUM 2 — exactly a full page of unread IS covered, not treated as truncated', async () => {
+    // Off by one: `unreadCount < GROUP_THREAD_PAGE` refused the case where exactly 200 unread sit
+    // in a 200-message page. Those 200 ARE every unread message and they were all rendered.
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: page(200) } as never);
+    vi.mocked(groups.fetchUnreadCounts).mockResolvedValue(
+      { ok: true, value: new Map([['group-1', 200]]) } as never,
+    );
+    render(<GroupThread {...props({ unreadCount: 200 })} />);
+    await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
+  });
+
+  it('MEDIUM 2b — more unread than were loaded is still refused', async () => {
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: page(200) } as never);
+    vi.mocked(groups.fetchUnreadCounts).mockResolvedValue(
+      { ok: true, value: new Map([['group-1', 201]]) } as never,
+    );
+    render(<GroupThread {...props({ unreadCount: 201 })} />);
+    await screen.findByTestId('group-invite');
+    expect(groups.markGroupRead).not.toHaveBeenCalled();
+  });
+
+  it('MEDIUM 3 — the count is re-read WITH the messages, not trusted from before the thread opened', async () => {
+    // The parent fetched unreadCount separately, before the thread was opened; messages arrive
+    // later. A stale count understates unread and can license an unsafe mark. Re-reading it in the
+    // same load does not make the pair atomic, but it removes the open-the-thread-and-wait window.
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: page(200) } as never);
+    vi.mocked(groups.fetchUnreadCounts).mockResolvedValue(
+      { ok: true, value: new Map([['group-1', 400]]) } as never,
+    );
+    // The STALE prop says everything fits; the FRESH read says it does not. Fresh must win.
+    render(<GroupThread {...props({ unreadCount: 0 })} />);
+    await screen.findByTestId('group-invite');
+    expect(groups.markGroupRead).not.toHaveBeenCalled();
   });
 });

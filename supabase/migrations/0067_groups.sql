@@ -112,6 +112,31 @@ comment on column public.group_members.is_admin is
 -- 2. Messages, and the read state that replaces a push (V8-R-GRP-008)
 ------------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- CROSS-LANE CONTRACT — WP5 (feed) reads this schema. Recorded here so the other
+-- lane can cite it instead of guessing at table shapes it cannot see.
+--
+-- WP5's decision D-C-37 requires a group-audience post to deliver to exactly
+-- (the selected group INTERSECTED WITH the poster's mutual friends), computed
+-- server-side. The two things it needs from this file:
+--
+--   public.is_group_member(p_group uuid, p_profile uuid) -> boolean
+--     SECURITY DEFINER, STABLE, granted to `authenticated`. IT CARRIES A PARTY
+--     GUARD: it returns false unless the caller IS p_profile, or the caller is
+--     themselves a member of p_group -- deliberate, so it cannot enumerate a
+--     group the caller is not in. SECURITY DEFINER does NOT change auth.uid(),
+--     so the guard still applies with the poster as caller. For D-C-37 that
+--     answers correctly, because a poster is a member of the group they post to.
+--
+--   public.group_members (group_id, profile_id, is_admin, joined_at)
+--     PRIMARY KEY (group_id, profile_id). THERE IS NO accepted / pending /
+--     invite_status COLUMN -- MEMBERSHIP IS THE ROW'S EXISTENCE. Unlike
+--     night_out_members, there is no status to filter on, and looking for one
+--     finds no column. Direct selects are RLS-gated by is_group_member, so they
+--     return rows only for groups the caller belongs to.
+--
+-- This lane owns 0067 and does not write WP5's migration; the note is a contract
+-- statement, not a dependency.
 create table if not exists public.group_messages (
   id uuid primary key default gen_random_uuid(),
   group_id uuid not null references public.groups(id) on delete cascade,
@@ -153,12 +178,26 @@ create table if not exists public.group_messages (
   created_at timestamptz not null default now(),
   deleted_at timestamptz,
   deleted_by uuid references public.profiles(id) on delete set null,
-  -- A message is text, or a photo, or both — never neither. Without this an
-  -- empty row is a legal message, and an empty row in a thread is a defect no
-  -- reader can explain.
+  -- ROUND 6. WHEN THIS MESSAGE'S PHOTO WENT AWAY, and why the column has to exist.
+  --
+  -- `media_id` is `on delete set null`, and WP1's `media_objects.owner_id` is `on delete cascade`
+  -- to profiles (0066_media_boundary.sql:39). Before X5 the sender cascade deleted this row first,
+  -- so the sequence never arose. Now the message SURVIVES its author: the media cascade nulls
+  -- `media_id` on a row with no body, the content CHECK below is violated, and THE WHOLE ACCOUNT
+  -- DELETION TRANSACTION ABORTS. That is not a wrong answer, it is a failed delete-my-account —
+  -- found independently by both review families at round 5, HIGH from each.
+  --
+  -- The row is kept rather than removed, because V8-R-GRP-007 enumerates the removal causes and
+  -- "its photo was deleted" is not one of them. The thread keeps its shape and renders a tombstone.
+  media_removed_at timestamptz,
+  -- A message is text, or a photo, or a photo that has since been removed — never nothing that
+  -- was never anything. The third arm is what lets the media cascade succeed; it can only become
+  -- true through the BEFORE trigger below, which fires only on a real non-null -> null transition,
+  -- so an INSERT still cannot create an empty message.
   constraint group_messages_has_content check (
     (body is not null and length(btrim(body)) > 0)
     or media_id is not null
+    or media_removed_at is not null
   ),
   -- The two halves of a deletion agree or the row is refused. A `deleted_by`
   -- with no `deleted_at` reads as an un-deleted message somebody deleted.
@@ -248,6 +287,68 @@ begin
   end if;
 end
 $$;
+
+-- ROUND 6 idempotency, same reason as X5's: `create table if not exists` is a no-op on a
+-- database that already has this table, so neither the new column nor the relaxed CHECK would
+-- reach one, and account deletion would go on aborting there while this file claims otherwise.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'group_messages'
+       and column_name = 'media_removed_at'
+  ) then
+    alter table public.group_messages add column media_removed_at timestamptz;
+  end if;
+end
+$$;
+
+do $$
+begin
+  -- Rewrite the content constraint only when it does not already admit the third arm.
+  if exists (
+    select 1 from pg_constraint c
+     join pg_class t on t.oid = c.conrelid
+     join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'public' and t.relname = 'group_messages'
+      and c.conname = 'group_messages_has_content'
+      and pg_get_constraintdef(c.oid) not like '%media_removed_at%'
+  ) then
+    alter table public.group_messages drop constraint group_messages_has_content;
+    alter table public.group_messages add constraint group_messages_has_content check (
+      (body is not null and length(btrim(body)) > 0)
+      or media_id is not null
+      or media_removed_at is not null
+    );
+  end if;
+end
+$$;
+
+-- The stamp itself. BEFORE, deliberately: a row-level BEFORE trigger runs ahead of CHECK
+-- validation for the same statement, so the constraint sees `media_removed_at` already set. An
+-- AFTER trigger would be too late and the cascade would still abort.
+create or replace function public.group_message_mark_media_removed()
+returns trigger
+language plpgsql
+as $$
+begin
+  -- Only a real non-null -> null transition, which is what the media cascade does. This must never
+  -- fire for an ordinary edit, or it would license an empty message.
+  if new.media_id is null and old.media_id is not null and new.media_removed_at is null then
+    new.media_removed_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists group_messages_media_removed on public.group_messages;
+create trigger group_messages_media_removed
+  before update of media_id on public.group_messages
+  for each row
+  execute function public.group_message_mark_media_removed();
+
+comment on function public.group_message_mark_media_removed() is
+  'V8-R-GRP-007 / round 6. Stamps media_removed_at when WP1 media cascade nulls media_id, so a photo-only message survives its author instead of aborting account deletion on the content CHECK.';
 
 create table if not exists public.group_reads (
   group_id uuid not null references public.groups(id) on delete cascade,
@@ -1092,7 +1193,7 @@ end;
 $$;
 
 comment on function public.group_message_retire_destination() is
-  'Retires the kind=''group'' media destination when a group_messages row is HARD-deleted (group cascade or sender-profile cascade). delete_group_message covers only the soft-delete verb.';
+  'Retires the kind=''group'' media destination when a group_messages row is HARD-deleted (the group cascade). delete_group_message covers only the soft-delete verb. The sender-profile cascade route named here previously no longer exists: sender_id is ON DELETE SET NULL, because V8-R-GRP-007 does not list account deletion among its removal causes.';
 
 revoke all on function public.group_message_retire_destination() from public, anon, authenticated;
 
@@ -1368,6 +1469,9 @@ returns table (
   sender_display_name text,
   body text,
   media_id uuid,
+  -- Round 6: null media plus a non-null stamp is "the photo is gone", which the UI renders as a
+  -- tombstone. Without it the client cannot tell that case from a text-only message.
+  media_removed_at timestamptz,
   created_at timestamptz
 )
 language plpgsql
@@ -1401,7 +1505,7 @@ begin
   -- the three answers drift.
   return query
     select t.id, t.sender_id, t.sender_handle, t.sender_display_name,
-           t.body, t.media_id, t.created_at
+           t.body, t.media_id, t.media_removed_at, t.created_at
       from (
         select msg.id,
                msg.sender_id,
@@ -1409,6 +1513,7 @@ begin
                p.display_name as sender_display_name,
                msg.body,
                msg.media_id,
+               msg.media_removed_at,
                msg.created_at
           from public.group_messages msg
           -- LEFT JOIN: an inner join drops every message whose sender has departed, which

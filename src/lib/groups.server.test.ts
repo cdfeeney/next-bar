@@ -448,3 +448,36 @@ describe('round 5, X5: a departed account does not delete other people-s history
     expect(code('get_group_thread')).toMatch(/left join public\.profiles p on p\.id = msg\.sender_id/);
   });
 });
+
+describe('round 6: account deletion must SUCCEED for a photo-only message', () => {
+  // THE DEFECT, corroborated by both review families and rated HIGH by each. media_id is
+  // `on delete set null` (0067:152), group_messages_has_content requires body-or-media, and WP1-s
+  // media_objects.owner_id is `on delete cascade` to profiles (0066:39). Before X5 the sender
+  // cascade removed the message first, so the sequence never arose. Now the message SURVIVES its
+  // author, the media cascade nulls media_id on a row with no body, the CHECK is violated, and the
+  // whole account-deletion transaction ABORTS. Not a wrong answer -- a failed delete-my-account.
+  //
+  // The fix keeps the row (V8-R-GRP-007: messages persist until removed or the group is deleted)
+  // and records that its photo is gone, so the thread keeps its shape and renders a tombstone.
+
+  it('records WHEN a photo went away, so an emptied message is still legal', () => {
+    expect(SQL).toMatch(/media_removed_at\s+timestamptz/);
+  });
+
+  it('the content CHECK admits a message whose photo was removed', () => {
+    const ddl = SQL.slice(SQL.indexOf('constraint group_messages_has_content'));
+    expect(ddl.slice(0, 400)).toMatch(/media_removed_at is not null/);
+  });
+
+  it('a BEFORE trigger stamps media_removed_at, so the CHECK sees it in the same statement', () => {
+    // BEFORE row triggers fire before CHECK validation; an AFTER trigger would be too late and the
+    // constraint would still abort the cascade.
+    expect(SQL).toMatch(/before update .* on public\.group_messages/i);
+    expect(code('group_message_mark_media_removed')).toMatch(/new\.media_id is null/);
+    expect(code('group_message_mark_media_removed')).toMatch(/old\.media_id is not null/);
+  });
+
+  it('the thread returns the tombstone marker so the UI can render it', () => {
+    expect(code('get_group_thread')).toMatch(/media_removed_at/);
+  });
+});
