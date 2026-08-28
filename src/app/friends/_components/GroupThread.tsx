@@ -32,7 +32,6 @@ import {
   fetchGroupMembers,
   fetchGroupMessages,
   fetchInvitableNightOuts,
-  fetchUnreadCounts,
   inviteGroupToNightOut,
   inviteNightOutMember,
   leaveGroup,
@@ -111,8 +110,6 @@ export default function GroupThread({
   // fails must not blank a conversation that loaded fine — so this never touches `status`.
   // `null` is "not loaded yet", `[]` is "genuinely none", and `plansFailed` is the third case the
   // other two must not be allowed to impersonate.
-  // The unread count as of the SAME load as `messages`; null means it could not be read.
-  const [freshUnread, setFreshUnread] = useState<number | null>(null);
   const [plans, setPlans] = useState<InvitableNightOut[] | null>(null);
   const [plansFailed, setPlansFailed] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -123,16 +120,9 @@ export default function GroupThread({
   );
 
   const load = useCallback(async (): Promise<void> => {
-    const [thread, roster, unread] = await Promise.all([
+    const [thread, roster] = await Promise.all([
       fetchGroupMessages(client, groupId),
       fetchGroupMembers(client, groupId),
-      // ROUND 6. The unread count is re-read HERE, with the messages, instead of being taken from
-      // the `unreadCount` prop the parent fetched before this thread was ever opened. A count from
-      // before the open understates unread by everything that arrived since, and it is the value
-      // the read-safety decision below depends on. This does not make the pair atomic — only the
-      // server could — but it closes the open-the-thread-and-wait window, and the decision now
-      // fails closed when the fresh count is unavailable.
-      fetchUnreadCounts(client),
     ]);
 
     // A FAILED LOAD IS ITS OWN STATE. Falling back to an empty thread would
@@ -151,9 +141,6 @@ export default function GroupThread({
 
     setMessages(thread.value);
     setMembers(roster.value);
-    // A failed unread read is recorded as UNKNOWN (null), never as zero: zero would read as
-    // "nothing unread" and license the mark this value exists to gate.
-    setFreshUnread(unread.ok ? (unread.value.get(groupId) ?? 0) : null);
     setStatus('ready');
   }, [client, groupId]);
 
@@ -218,30 +205,23 @@ export default function GroupThread({
     // unread meets or exceeds the page can unread messages exist above what was shown, and only
     // then is marking unsafe. Page length ALONE can never tell those apart, which is why rounds 3
     // and 4 both got it wrong with only the page in hand.
-    // ROUND 6 — THREE DEFECTS, ONE CONDITION. Both review families found these independently.
+    // ROUND 7. THE CLIENT NO LONGER DECIDES. It reports the window it rendered and lets the
+    // server refuse. Rounds 3, 4, 5 and 6 each put this judgement here and each was wrong in a
+    // different way, for one reason: THE CLIENT CANNOT KNOW WHAT IT WAS NOT SENT. Round 6's
+    // version compared an others-only unread count against a page that included the viewer's own
+    // messages, so the viewer's own replies pushed other people's unread messages off the bottom
+    // and the watermark advanced past them anyway — permanently, because the update is monotonic.
     //
-    // (a) AN EMPTY THREAD MUST NOT BE MARKED. The old code passed a null watermark when nothing
-    //     loaded, and mark_group_read coalesces null to now() (0067), so an empty load marked
-    //     EVERYTHING read up to the present — exactly the unseen-message race the watermark
-    //     exists to prevent. Nothing was on screen, so nothing may be claimed as read.
-    // (b) OFF BY ONE. `unreadCount < GROUP_THREAD_PAGE` refused the case where exactly a full page
-    //     of unread sits in a full page: those ARE every unread message and every one was
-    //     rendered. The honest comparison was never against the page size at all — it is whether
-    //     the unread suffix fits inside WHAT WAS ACTUALLY LOADED.
-    // (c) A STALE COUNT CANNOT DECIDE SAFETY. `unreadCount` is the parent's, fetched before this
-    //     thread was opened; `freshUnread` is re-read in the same load as `messages`. Unknown
-    //     (null) fails closed rather than reading as zero.
+    // Nothing on screen means nothing to claim: an empty thread sends nothing at all.
     if (messages.length === 0) return;
-    const wholeThreadShown = messages.length < GROUP_THREAD_PAGE;
-    // Unread is a newest-suffix of the thread, and the page is the newest N rows, so every unread
-    // message was on screen exactly when the unread count fits inside the loaded count.
-    const unreadCovered = freshUnread !== null && freshUnread <= messages.length;
-    if (!wholeThreadShown && !unreadCovered) return;
+    const windowStart = messages[0].createdAt;
     const watermark = messages[messages.length - 1].createdAt;
-    void markGroupRead(client, groupId, watermark).then((result) => {
-      if (result.ok) onChanged();
+    void markGroupRead(client, groupId, watermark, windowStart).then((result) => {
+      // `false` is the server declining to advance because unread messages sit below the window.
+      // That is a correct outcome, not an error, and the badge simply keeps its count.
+      if (result.ok && result.value) onChanged();
     });
-  }, [client, groupId, onChanged, status, messages, freshUnread]);
+  }, [client, groupId, onChanged, status, messages]);
 
   /** Run one write, state its outcome, and re-read rather than guess. */
   const run = useCallback(

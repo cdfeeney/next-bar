@@ -92,8 +92,9 @@ describe('a failed thread load does not clear the unread badge (round-1 finding 
     } as never);
     render(<GroupThread {...props()} />);
     await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
+    // Round 7: the window travels too — newest shown, then oldest shown.
     expect(groups.markGroupRead).toHaveBeenCalledWith(
-      expect.anything(), 'group-1', '2026-08-02T00:00:00Z',
+      expect.anything(), 'group-1', '2026-08-02T00:00:00Z', expect.any(String),
     );
   });
 
@@ -193,7 +194,7 @@ describe('round-5: the watermark must satisfy BOTH invariants', () => {
     render(<GroupThread {...props({ unreadCount: 3 })} />);
     await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
     expect(groups.markGroupRead).toHaveBeenCalledWith(
-      expect.anything(), 'group-1', full[full.length - 1].createdAt,
+      expect.anything(), 'group-1', full[full.length - 1].createdAt, full[0].createdAt,
     );
   });
 
@@ -211,7 +212,15 @@ describe('round-5: the watermark must satisfy BOTH invariants', () => {
     render(<GroupThread {...props({ unreadCount: 250 })} />);
     await screen.findByTestId('group-thread-name');
     await new Promise((r) => { setTimeout(r, 50); });
-    expect(groups.markGroupRead).not.toHaveBeenCalled();
+    // ROUND 7 RELOCATED THIS INVARIANT, IT DID NOT WEAKEN IT. The client no longer decides whether
+    // marking is safe — it reports the window it rendered and the SERVER refuses. So the call is
+    // now EXPECTED, and what this test pins is that the window travels truthfully: the oldest and
+    // newest messages actually shown. The refusal itself is proven where it now lives, against a
+    // real database (see the round-7 staging proof and the mark_group_read guards in
+    // groups.server.test.ts) — a mocked client cannot prove a server decision.
+    expect(groups.markGroupRead).toHaveBeenCalledWith(
+      {}, 'group-1', full[full.length - 1].createdAt, full[0].createdAt,
+    );
   });
 
   it('a short thread still marks read — the ordinary case is not collateral', async () => {
@@ -412,12 +421,15 @@ describe('round 6: the three watermark defects both review families found', () =
 
   it('MEDIUM 2b — more unread than were loaded is still refused', async () => {
     vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: page(200) } as never);
-    vi.mocked(groups.fetchUnreadCounts).mockResolvedValue(
-      { ok: true, value: new Map([['group-1', 201]]) } as never,
-    );
     render(<GroupThread {...props({ unreadCount: 201 })} />);
     await screen.findByTestId('group-invite');
-    expect(groups.markGroupRead).not.toHaveBeenCalled();
+    // ROUND 7: more unread than were loaded is still refused — BY THE SERVER, which is the only
+    // party that can see the messages below the page. The client's duty is to report the window
+    // honestly so that refusal is possible; it no longer guesses.
+    const p200 = page(200);
+    expect(groups.markGroupRead).toHaveBeenCalledWith(
+      {}, 'group-1', p200[199].createdAt, p200[0].createdAt,
+    );
   });
 
   it('MEDIUM 3 — the count is re-read WITH the messages, not trusted from before the thread opened', async () => {
@@ -425,12 +437,14 @@ describe('round 6: the three watermark defects both review families found', () =
     // later. A stale count understates unread and can license an unsafe mark. Re-reading it in the
     // same load does not make the pair atomic, but it removes the open-the-thread-and-wait window.
     vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: page(200) } as never);
-    vi.mocked(groups.fetchUnreadCounts).mockResolvedValue(
-      { ok: true, value: new Map([['group-1', 400]]) } as never,
-    );
-    // The STALE prop says everything fits; the FRESH read says it does not. Fresh must win.
+    // ROUND 7 SETTLED THIS BY DELETING THE QUESTION. Round 6 fixed a STALE count by re-reading it;
+    // round 7 removed the client's dependence on any count at all, stale or fresh. The prop is
+    // now irrelevant to safety — the window is what travels, and the server decides.
     render(<GroupThread {...props({ unreadCount: 0 })} />);
     await screen.findByTestId('group-invite');
-    expect(groups.markGroupRead).not.toHaveBeenCalled();
+    const pg = page(200);
+    expect(groups.markGroupRead).toHaveBeenCalledWith(
+      {}, 'group-1', pg[199].createdAt, pg[0].createdAt,
+    );
   });
 });

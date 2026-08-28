@@ -266,11 +266,14 @@ describe('round-3, second pass', () => {
   // messages that arrived between the thread fetch and the mark — messages the viewer never saw.
   // The boundary must be the newest message actually RETURNED, not the clock.
   it('mark_group_read accepts a watermark rather than stamping the clock', () => {
-    expect(SQL).toMatch(/mark_group_read\(p_group uuid, p_through timestamptz/);
+    expect(SQL).toMatch(/mark_group_read\(\s*p_group uuid,\s*p_through timestamptz/);
     const body = code('mark_group_read');
     expect(body).toMatch(/p_through/);
-    // now() may remain only as the fallback when no watermark is supplied.
-    expect(body).toMatch(/coalesce\(p_through/);
+    // ROUND 7 REMOVED THE FALLBACK ENTIRELY. `coalesce(p_through, now())` was the round-6 defect:
+    // an empty thread sent null and the server turned it into "everything up to now is read".
+    // A null watermark now means NOTHING WAS SHOWN, so the function no-ops instead.
+    expect(body).not.toMatch(/coalesce\(p_through/);
+    expect(body).toMatch(/if p_through is null then/);
   });
 
   it('the client passes the newest loaded message as that watermark', () => {
@@ -479,5 +482,51 @@ describe('round 6: account deletion must SUCCEED for a photo-only message', () =
 
   it('the thread returns the tombstone marker so the UI can render it', () => {
     expect(code('get_group_thread')).toMatch(/media_removed_at/);
+  });
+});
+
+describe('round 7: the unseen-message guard lives on the SERVER, not in a client heuristic', () => {
+  // WHY THE ROOT FIX. Rounds 3, 4, 5 and 6 each put this guard in the client and each got it wrong
+  // in a different way, because the client cannot know what it was not sent. Round 6-s condition
+  // compared an OTHERS-ONLY unread count against a page that INCLUDES the viewer-s own messages,
+  // so the viewer-s own replies displaced other people-s unread messages off the bottom of the
+  // page and the watermark advanced past them anyway -- permanently, because the update is
+  // monotonic. The client is now out of the safety business entirely: it reports the window it
+  // rendered, and the SERVER decides.
+
+  const body = code('mark_group_read');
+
+  it('takes the rendered WINDOW, not just a watermark', () => {
+    expect(SQL).toMatch(/mark_group_read\(\s*p_group uuid,\s*p_through timestamptz[^)]*p_window_start timestamptz/);
+  });
+
+  it('DROPs the old signature first — a changed signature cannot CREATE OR REPLACE', () => {
+    // Round 6 shipped exactly this defect on get_group_thread and only the upgrade path caught it:
+    // "cannot change return type of existing function". A changed ARGUMENT list has the same
+    // hazard, so the drop is part of the fix, not tidiness.
+    expect(SQL).toMatch(/drop function if exists public\.mark_group_read\(uuid, timestamptz\)/);
+  });
+
+  it('refuses to advance past an unread OTHER-SENDER message below the rendered window', () => {
+    expect(body).toMatch(/p_window_start/);
+    expect(body).toMatch(/sender_id is distinct from v_caller/);
+    // The message must be one the caller may actually see, or a blocked/reported message would
+    // pin the watermark forever.
+    expect(body).toMatch(/group_message_is_visible/);
+  });
+
+  it('still refuses a watermark from the future and still never moves backwards', () => {
+    expect(body).toMatch(/least\(/);
+    expect(body).toMatch(/greatest\(/);
+  });
+
+  it('the client no longer decides safety — the count heuristic is GONE', () => {
+    const ui = readFileSync(
+      path.join(__dirname, '..', 'app', 'friends', '_components', 'GroupThread.tsx'), 'utf8',
+    );
+    expect(ui).not.toMatch(/unreadCovered/);
+    expect(ui).not.toMatch(/freshUnread\s*<=\s*messages\.length/);
+    // What it DOES send is the window it rendered.
+    expect(ui).toMatch(/windowStart/);
   });
 });

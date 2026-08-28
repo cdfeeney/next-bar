@@ -1295,7 +1295,35 @@ grant execute on function public.group_message_is_visible(uuid) to authenticated
 
 -- V8-R-GRP-008. Reading is a caller-scoped write of one timestamp — the entire
 -- alternative to a push per message.
-create or replace function public.mark_group_read(p_group uuid, p_through timestamptz default null)
+-- ROUND 7. THE UNSEEN-MESSAGE GUARD MOVES TO THE SERVER, AND THE SIGNATURE CHANGES WITH IT.
+--
+-- The DROP is part of the fix, not tidiness. Round 6 changed get_group_thread's RETURNS TABLE
+-- under a bare CREATE OR REPLACE; applying to an empty database passed, and applying OVER THE
+-- PREVIOUS VERSION failed with `cannot change return type of existing function`. A changed
+-- ARGUMENT LIST carries the same hazard, and only the upgrade path shows it.
+drop function if exists public.mark_group_read(uuid, timestamptz);
+
+-- WHY THE GUARD IS HERE AND NOT IN THE CLIENT.
+--
+-- Rounds 3, 4, 5 and 6 each placed this decision in the browser and each was wrong differently:
+--   round 3 marked through the newest row, eating unseen older messages on a truncated page;
+--   round 4 refused on any full page, freezing read state forever past GROUP_THREAD_PAGE;
+--   round 5 compared the unread count to the PAGE SIZE, off by one at exactly a full page;
+--   round 6 compared an OTHERS-ONLY unread count to a page INCLUDING THE VIEWER'S OWN messages,
+--     so the viewer's own replies displaced other people's unread messages off the bottom of the
+--     page and the watermark advanced past them anyway.
+-- Every one of those is the same mistake: THE CLIENT CANNOT KNOW WHAT IT WAS NOT SENT. Only the
+-- database can see the messages that fell outside the page. So the client now reports the window
+-- it actually rendered -- oldest and newest shown -- and states no opinion about safety.
+--
+-- THE RULE: the watermark may advance to p_through only if NO message the caller could see, from
+-- somebody else, sits unread BELOW the rendered window. If one does, it was never on screen, and
+-- advancing would bury it permanently because the update below is monotonic.
+create or replace function public.mark_group_read(
+  p_group uuid,
+  p_through timestamptz default null,
+  p_window_start timestamptz default null
+)
 returns boolean
 language plpgsql
 security definer
@@ -1303,6 +1331,7 @@ set search_path = public
 as $$
 declare
   v_caller uuid := auth.uid();
+  v_last   timestamptz;
 begin
   if v_caller is null then
     raise exception 'mark_group_read: not authenticated' using errcode = '28000';
@@ -1317,18 +1346,45 @@ begin
     return false;
   end if;
 
+  select r.last_read_at into v_last
+    from public.group_reads r
+   where r.group_id = p_group and r.profile_id = v_caller;
+
+  -- THE GUARD. A message strictly BELOW the rendered window, newer than what the caller has
+  -- already read, sent by somebody else, and visible to this caller, is a message that exists and
+  -- was never shown. `is distinct from` because a departed sender's id is null and their message
+  -- is still not the caller's own. `group_message_is_visible` because a blocked or self-reported
+  -- message must not pin the watermark forever -- the caller is never going to be shown it.
+  if p_window_start is not null and exists (
+    select 1
+      from public.group_messages msg
+     where msg.group_id = p_group
+       and msg.deleted_at is null
+       and msg.created_at < p_window_start
+       and msg.created_at > coalesce(v_last, '-infinity'::timestamptz)
+       and msg.sender_id is distinct from v_caller
+       and public.group_message_is_visible(msg.id)
+  ) then
+    -- Refuse to ADVANCE, rather than failing: the read itself succeeded and the caller did see
+    -- what it saw. The badge simply keeps counting what is still genuinely unread.
+    return false;
+  end if;
+
   -- THE WATERMARK, NOT THE CLOCK.
   --
   -- Round-3 finding: this stamped now(), so read state advanced past any message that arrived
-  -- between the thread fetch and this call — messages the viewer never saw, marked read and gone
-  -- from the unread badge with no way back. The boundary must be the newest message the caller
-  -- was actually SHOWN, which only the caller knows, so the caller passes it.
+  -- between the thread fetch and this call. The boundary is the newest message the caller was
+  -- actually SHOWN, which only the caller knows, so the caller passes it.
   --
-  -- coalesce keeps the old behaviour when nothing is supplied (an empty thread has no newest
-  -- message), and least() refuses a watermark from the future: neither a skewed client clock nor
-  -- a hand-made call may mark unseen messages read.
+  -- A NULL p_through no longer means now(). Round 6 found that an empty thread sent null and
+  -- coalesce turned it into now(), marking everything read up to the present. Nothing was shown,
+  -- so nothing may be claimed: null is now a no-op.
+  if p_through is null then
+    return false;
+  end if;
+
   insert into public.group_reads (group_id, profile_id, last_read_at)
-  values (p_group, v_caller, least(coalesce(p_through, now()), now()))
+  values (p_group, v_caller, least(p_through, now()))
   on conflict (group_id, profile_id) do update
      -- NEVER BACKWARDS. Two tabs marking the same thread read can arrive out of
      -- order, and an older timestamp landing last would resurrect unread
@@ -1339,11 +1395,13 @@ begin
 end;
 $$;
 
-comment on function public.mark_group_read(uuid, timestamptz) is
-  'V8-R-GRP-008. In-app read state, monotonic so an out-of-order write cannot resurrect read messages.';
+comment on function public.mark_group_read(uuid, timestamptz, timestamptz) is
+  'V8-R-GRP-008. Advances the caller''s read watermark to the newest message they were SHOWN, and REFUSES to advance when a visible message from somebody else sits unread below the rendered window (p_window_start) -- that message was never on screen and the update is monotonic. Rounds 3-6 each tried to make this decision in the client and each was wrong differently; the client cannot know what it was not sent, so the guard is here.';
 
-revoke all on function public.mark_group_read(uuid, timestamptz) from public, anon;
-grant execute on function public.mark_group_read(uuid, timestamptz) to authenticated;
+-- Round 7: the signature gained p_window_start, so the grants must name the NEW one. Left on the
+-- old signature these would fail outright, because the function they name no longer exists.
+revoke all on function public.mark_group_read(uuid, timestamptz, timestamptz) from public, anon;
+grant execute on function public.mark_group_read(uuid, timestamptz, timestamptz) to authenticated;
 
 -- THE DELIVERY MECHANISM, and it is a READ. There is no push here and no sender
 -- anywhere in this file; V8-R-GRP-008's exclusion is "NO push notification per
