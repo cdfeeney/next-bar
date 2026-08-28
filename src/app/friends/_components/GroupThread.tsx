@@ -38,6 +38,7 @@ import {
   removeGroupMember,
   renameGroup,
   sendGroupMessage,
+  GROUP_THREAD_PAGE,
   MAX_GROUP_MESSAGE_LENGTH,
   MAX_GROUP_NAME_LENGTH,
   type GroupInviteOutcome,
@@ -152,9 +153,23 @@ export default function GroupThread({
     if (status !== 'ready') return;
     if (readMarkedFor.current === groupId) return;
     readMarkedFor.current = groupId;
-    // Read up to the NEWEST MESSAGE ACTUALLY LOADED, not the clock — see markGroupRead. A
-    // message that arrives between the fetch and this call was never on screen and must stay
-    // unread.
+    // Read up to the NEWEST MESSAGE ACTUALLY LOADED, not the clock — see markGroupRead. A message
+    // that arrives between the fetch and this call was never on screen and must stay unread.
+    //
+    // ROUND-4 CORRECTION, and round 3's version of this was wrong in the other direction.
+    // `get_group_thread` returns only the newest GROUP_THREAD_PAGE messages. Marking through the
+    // newest RETURNED timestamp therefore also marks every OLDER message read — including the ones
+    // beyond the page that the viewer has never seen — because unread is computed as "newer than
+    // last_read_at". Fixing "read state runs ahead of the screen" by moving the boundary from the
+    // clock to the newest row silently kept the same defect for any thread longer than a page.
+    //
+    // So the watermark is only advanced when the page is NOT truncated: fewer rows than the limit
+    // means this really is the whole thread and everything above the boundary was on screen. A
+    // truncated page marks nothing, which leaves the badge up — the safe direction, and the one
+    // this requirement keeps choosing (an unread badge that lingers is cosmetic; read state that
+    // eats unseen messages is not recoverable).
+    const truncated = messages.length >= GROUP_THREAD_PAGE;
+    if (truncated) return;
     const watermark = messages.length > 0 ? messages[messages.length - 1].createdAt : null;
     void markGroupRead(client, groupId, watermark).then((result) => {
       if (result.ok) onChanged();

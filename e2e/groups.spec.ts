@@ -162,6 +162,22 @@ test.describe('Social · Groups', () => {
  * static shape of the succession lock, the destination retirement and the invitation notification
  * is pinned in `src/lib/groups.server.test.ts`, which runs in this gate.
  *
+ * NOT EXECUTED IN THIS ENVIRONMENT — READ THIS BEFORE TREATING ANY OF IT AS A RECEIPT.
+ *
+ * Playwright cannot run on the attended driver machine for this lane: there is no dev server and
+ * the pre-build the e2e gate needs exceeds its budget on a changed tree. Round 3 nevertheless
+ * added assertions here and called a coverage finding closed. BOTH review lanes then found them
+ * DETERMINISTICALLY BROKEN - the unread fixture supplied the key "unread" while the client reads
+ * "unread_count", and the group-name assertion targeted the testid "group-name", which is the
+ * CREATION INPUT rather than any displayed name. Two bugs that a single execution would have
+ * caught, in tests offered as proof. Both are fixed above; neither fix has been executed either.
+ *
+ * So the honest status of this file is: WRITTEN AND REVIEWED, NOT RUN. The behaviours it targets
+ * that CAN be proven here are proven where they can actually execute - GroupThread.test.tsx and
+ * groups.server.test.ts run in the ordinary vitest gate and carry the mark-read, watermark,
+ * truncation, rename and per-person-resend guards, each mutation-verified. Treat what is below as
+ * a specification of the browser receipts still owed, not as evidence they pass.
+ *
  * HOW COMPLETE IS THIS, HONESTLY. Round-1 finding 6 asked for authenticated receipts across
  * GRP-001..008. What is below establishes the stubbed-session pattern and covers the signed-in
  * entry point only. It is a START on that finding, not its closure, and it is reported as such
@@ -231,13 +247,13 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await signInStub(page);
     await stubGroups(page, {
       groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
-      unread: [{ group_id: GROUP_ID, unread: 2 }],
+      unread: [{ group_id: GROUP_ID, unread_count: 2 }],
     });
     await page.goto('/friends');
     await page.getByRole('button', { name: /groups & people/i }).click();
 
     await expect(page.getByTestId('group-list')).toBeVisible();
-    await expect(page.getByTestId('group-name').first()).toHaveText('Thursday Crew');
+    await expect(page.getByTestId('group-row').first()).toContainText('Thursday Crew');
     // The signed-out placeholder and its sign-in link must NOT render for a member.
     await expect(page.getByTestId('groups-signed-out')).toHaveCount(0);
     await expect(page.getByTestId('groups-sign-in')).toHaveCount(0);
@@ -249,7 +265,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await signInStub(page);
     await stubGroups(page, {
       groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
-      unread: [{ group_id: GROUP_ID, unread: 3 }],
+      unread: [{ group_id: GROUP_ID, unread_count: 3 }],
     });
     await page.goto('/friends');
     await page.getByRole('button', { name: /groups & people/i }).click();
@@ -263,7 +279,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await signInStub(page);
     await stubGroups(page, {
       groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
-      unread: [{ group_id: GROUP_ID, unread: 2 }],
+      unread: [{ group_id: GROUP_ID, unread_count: 2 }],
       thread: null,
     });
     await page.goto('/friends');

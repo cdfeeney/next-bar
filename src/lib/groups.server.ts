@@ -44,6 +44,13 @@ export const MAX_GROUP_NAME_LENGTH = 60;
 /** Matches 0067's `length(body) <= 2000`. */
 export const MAX_GROUP_MESSAGE_LENGTH = 2000;
 
+/**
+ * One page of a group thread. EXPORTED because the client needs it: a caller that marks a thread
+ * read has to know whether the page it received was TRUNCATED, and a hardcoded 200 in two files
+ * drifts. See the watermark note in GroupThread.
+ */
+export const GROUP_THREAD_PAGE = 200;
+
 export type Group = {
   id: string;
   name: string;
@@ -221,7 +228,7 @@ type MessageRow = {
 export async function fetchGroupMessages(
   client: SupabaseClient | null,
   groupId: string,
-  limit = 200,
+  limit = GROUP_THREAD_PAGE,
 ): Promise<MediaResult<GroupMessage[]>> {
   if (client === null) return mediaUnavailable();
   if (!isUuid(groupId)) return rejected('That group could not be found.');

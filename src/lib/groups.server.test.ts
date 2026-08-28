@@ -46,14 +46,14 @@ describe('D-C-38 succession is serialized and verified (round-1 finding 7)', () 
     // The race: a departure via the profiles ON DELETE CASCADE fires the succession trigger
     // WITHOUT leave_group's lock, so it can read a membership row another transaction has
     // already deleted-but-not-committed and promote a member who is leaving.
-    const body = fn('group_apply_succession');
+    const body = code('group_apply_succession');
     expect(body).toMatch(/pg_advisory_xact_lock/);
     expect(body).toContain("hashtextextended('group_members:' || p_group::text, 0)");
   });
 
   it('group_apply_succession re-checks for a standing administrator AFTER taking the lock', () => {
     // Taking the lock is worthless if the decision was already made against the pre-lock read.
-    const body = fn('group_apply_succession');
+    const body = code('group_apply_succession');
     const lockAt = body.indexOf('pg_advisory_xact_lock');
     // Guard the guard: with no lock at all indexOf returns -1, and "after the lock" would be
     // vacuously true for every admin check in the function. Assert the lock exists FIRST — this
@@ -66,15 +66,18 @@ describe('D-C-38 succession is serialized and verified (round-1 finding 7)', () 
   it('group_apply_succession verifies its promotion UPDATE actually matched a row', () => {
     // EvalPlanQual: if the chosen successor's row was concurrently deleted, the UPDATE matches
     // zero rows and the old code returned happily, leaving the group administrator-less.
-    const body = fn('group_apply_succession');
+    const body = code('group_apply_succession');
     expect(body).toMatch(/get diagnostics|\bfound\b/i);
   });
 
   it('group_apply_succession cannot fall through leaving no administrator and no deletion', () => {
     // The last-two-out variant: a 0-row update left v_successor non-null, so the delete branch
     // was skipped too and an empty group survived, violating V8-R-GRP-006.
-    const body = fn('group_apply_succession');
-    expect(body).toMatch(/loop|retry|raise exception/i);
+    const body = code('group_apply_succession');
+    // CODE, not prose: this guard matched the body own LOOPED comment and stayed green against a
+    // reverted retry loop. It now names the constructs the retry is MADE of.
+    expect(body).toMatch(/get diagnostics/i);
+    expect(body).toMatch(/exit when/i);
   });
 });
 
@@ -115,13 +118,13 @@ describe('V8-R-GRP-008 Night Out invitation notifications exist (round-1 finding
   // round-2 tests below assert that the group path really does delegate rather than keeping a
   // private copy, which is what stops this from being a test bent to fit the implementation.
   it('inviting a group creates one notification per newly invited member', () => {
-    expect(fn('invite_one_to_night_out')).toMatch(/night_out_invitation_notifications/);
+    expect(code('invite_one_to_night_out')).toMatch(/night_out_invitation_notifications/);
   });
 
   it('a member already on the plan is not re-notified', () => {
     // invite_to_night_out returns true both for "newly invited" and "already a member", so the
     // door must decide newness itself or it will notify people who were already there.
-    expect(fn('invite_one_to_night_out')).toMatch(/night_out_members/);
+    expect(code('invite_one_to_night_out')).toMatch(/night_out_members/);
   });
 
   it('the recipient can read their own invitation notifications', () => {
@@ -159,7 +162,7 @@ describe('round-2 panel findings', () => {
   });
 
   it('the shared door records the notification for a genuinely new invitee', () => {
-    const body = fn('invite_one_to_night_out');
+    const body = code('invite_one_to_night_out');
     expect(body).toMatch(/night_out_invitation_notifications/);
     expect(body).toMatch(/night_out_members/);
   });
@@ -176,7 +179,7 @@ describe('round-2 panel findings', () => {
   // lock. Asserted structurally: in leave_group the advisory lock must precede the delete, and in
   // group_apply_succession the advisory lock must precede any read of group_members.
   it('group_apply_succession takes the advisory lock before it touches group_members', () => {
-    const body = fn('group_apply_succession');
+    const body = code('group_apply_succession');
     const lockAt = body.indexOf('pg_advisory_xact_lock');
     expect(lockAt).toBeGreaterThan(-1);
     const firstRead = body.indexOf('from public.group_members');
@@ -274,5 +277,33 @@ describe('round-3, second pass', () => {
     const src = readFileSync(path.join(__dirname, 'groups.server.ts'), 'utf8')
       .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
     expect(src).toMatch(/p_through/);
+  });
+});
+
+describe('round-4 panel findings', () => {
+  // Codex round-3: round 3 validated the CALLER's membership of p_group and stopped, so a member
+  // could attach their group and its NAME to an invitation for an arbitrary outsider.
+  it('the invite door checks BOTH parties belong to the group it attributes', () => {
+    const body = code('invite_one_to_night_out');
+    expect(body).toMatch(/m\.profile_id = v_caller/);
+    expect(body).toMatch(/m\.profile_id = p_user/);
+  });
+
+  // Codex round-3: the inherited invite_to_night_out has no is_blocked_between check, so a group
+  // invite could reach someone the caller has blocked. 0050 is another lane's file; this door is
+  // wp6's and both group paths go through it.
+  it('the invite door honours blocks', () => {
+    expect(code('invite_one_to_night_out')).toMatch(/is_blocked_between/);
+  });
+
+  // Codex round-3: get_group_thread caps at GROUP_THREAD_PAGE, so marking through the newest
+  // RETURNED row marked every older unshown message read. The client must not advance a watermark
+  // for a truncated page — asserted in GroupThread.test.tsx; this pins the shared constant that
+  // makes the client able to tell.
+  it('the page size is exported so the client can detect a truncated page', () => {
+    const src = readFileSync(path.join(__dirname, 'groups.server.ts'), 'utf8')
+      .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+    expect(src).toMatch(/export const GROUP_THREAD_PAGE\s*=\s*200/);
+    expect(src).toMatch(/limit = GROUP_THREAD_PAGE/);
   });
 });

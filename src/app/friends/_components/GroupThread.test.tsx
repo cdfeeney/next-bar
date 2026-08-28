@@ -25,6 +25,7 @@ vi.mock('@/lib/groups.server', () => ({
   inviteGroupToNightOut: vi.fn(),
   MAX_GROUP_MESSAGE_LENGTH: 2000,
   MAX_GROUP_NAME_LENGTH: 60,
+  GROUP_THREAD_PAGE: 200,
 }));
 
 vi.mock('@/lib/moderation/reports', () => ({ reportContent: vi.fn() }));
@@ -74,9 +75,38 @@ describe('a failed thread load does not clear the unread badge (round-1 finding 
     expect(groups.markGroupRead).not.toHaveBeenCalled();
   });
 
-  it('still marks the group read on a successful load', async () => {
+  it('marks the group read THROUGH THE NEWEST LOADED MESSAGE, not merely at all', async () => {
+    // ROUND-4: the round-3 version asserted only the CALL COUNT, so the watermark argument could
+    // be dropped entirely and every test stayed green. The argument IS the fix; assert it.
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({
+      ok: true,
+      value: [
+        { id: 'm1', groupId: 'group-1', senderId: 'o', senderHandle: null, senderDisplayName: null, body: 'a', mediaId: null, createdAt: '2026-08-01T00:00:00Z' },
+        { id: 'm2', groupId: 'group-1', senderId: 'o', senderHandle: null, senderDisplayName: null, body: 'b', mediaId: null, createdAt: '2026-08-02T00:00:00Z' },
+      ],
+    } as never);
     render(<GroupThread {...props()} />);
     await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
+    expect(groups.markGroupRead).toHaveBeenCalledWith(
+      expect.anything(), 'group-1', '2026-08-02T00:00:00Z',
+    );
+  });
+
+  it('does NOT mark read when the thread page is TRUNCATED', async () => {
+    // Codex round-3: get_group_thread returns only the newest GROUP_THREAD_PAGE rows. Marking
+    // through the newest RETURNED row also marks every older message beyond the page read —
+    // messages never shown — because unread is "newer than last_read_at". A full page means there
+    // may be more above it, so mark nothing and leave the badge up.
+    const full = Array.from({ length: 200 }, (_, i) => ({
+      id: `m${i}`, groupId: 'group-1', senderId: 'o', senderHandle: null,
+      senderDisplayName: null, body: 'x', mediaId: null,
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(),
+    }));
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: full } as never);
+    render(<GroupThread {...props()} />);
+    await screen.findByTestId('group-thread-name');
+    await new Promise((r) => { setTimeout(r, 50); });
+    expect(groups.markGroupRead).not.toHaveBeenCalled();
   });
 });
 

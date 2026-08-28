@@ -1839,6 +1839,33 @@ begin
       using errcode = '42501';
   end if;
 
+  -- AND THE RECIPIENT MUST BE IN IT TOO. Round-4 finding: round 3 checked the CALLER's membership
+  -- and stopped, so a member could still attach their group — and its NAME, which
+  -- get_my_night_out_invitation_notifications returns — to an invitation for an arbitrary
+  -- outsider. Half a check on a two-sided claim is not a check: "via <group>" asserts something
+  -- about BOTH parties, so both are verified.
+  if p_group is not null and not exists (
+    select 1
+      from public.group_members m
+     where m.group_id = p_group
+       and m.profile_id = p_user
+  ) then
+    raise exception 'invite_one_to_night_out: that person is not a member of that group'
+      using errcode = '42501';
+  end if;
+
+  -- BLOCKS ARE NOT NEGOTIABLE, and this door is where the group path can honour them.
+  --
+  -- Round-4 finding: the inherited invite_to_night_out (0050) carries no is_blocked_between check,
+  -- so a group invite could reach someone the caller has blocked or been blocked by, which the
+  -- group contract prohibits. 0050 is another lane's file and not this lane's to change; this door
+  -- is wp6's, both group paths go through it, and refusing here closes the route this lane owns.
+  -- The gap in the DIRECT invite path remains real and is recorded against HFX-R-103.
+  if public.is_blocked_between(v_caller, p_user) then
+    raise exception 'invite_one_to_night_out: that invitation cannot be sent'
+      using errcode = '42501';
+  end if;
+
   -- NEWNESS IS DECIDED BEFORE THE INVITE. invite_to_night_out returns true both for "newly
   -- invited" and for "was already on the plan" — deliberately, so a duplicate invite is not
   -- reported as a failure — which makes its return value useless for deciding whether to NOTIFY.
