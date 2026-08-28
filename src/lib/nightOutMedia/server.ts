@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type {
   NightOutMediaItem,
+  NightOutMediaWindow,
   SavedNight,
   SavedNightCard,
 } from './index';
@@ -142,6 +143,39 @@ export async function fetchNightOutMedia(
   });
 }
 
+/**
+ * When this Night Out's media window closes, and whether the SERVER still
+ * considers it open (`night_out_media_window`, migration 0068 section 5d).
+ *
+ * Null means "could not read", which includes a caller who is not a member —
+ * the RPC returns zero rows rather than a window, because when someone else's
+ * plan ends is not theirs to know. A null must never be read as "closed": the
+ * surface says it could not check, and offers nothing it cannot stand behind.
+ *
+ * This exists so the recap never compares the window against the DEVICE clock.
+ * V8-R-NO-008: "a skewed device clock must not hide media the server still
+ * serves."
+ */
+export async function fetchNightOutMediaWindow(
+  supabase: SupabaseClient,
+  nightOutId: string,
+): Promise<NightOutMediaWindow | null> {
+  if (!isUuid(nightOutId)) return null;
+  const { data, error } = await callRpc(supabase, 'night_out_media_window', {
+    p_night_out: nightOutId,
+  });
+  if (error) return null;
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { expires_at?: unknown; is_open?: unknown }
+    | null
+    | undefined;
+  if (!row || !isNonEmptyString(row.expires_at)) return null;
+  // A non-boolean `is_open` is a row we cannot read, not a closed window: a
+  // coerced value here would gate two authorized controls on a guess.
+  if (typeof row.is_open !== 'boolean') return null;
+  return { expiresAt: row.expires_at, isOpen: row.is_open };
+}
+
 export type ArchiveResult = { savedNightId: string; photoCount: number };
 
 /**
@@ -233,42 +267,70 @@ type SavedNightDetailRow = {
 };
 
 /**
+ * Reading ONE saved night has three outcomes, and collapsing any two of them
+ * loses the answer V8-R-ACC-002 asks for by name.
+ *
+ * Round 2, both gates: this used to be `SavedNight | null`, and `null` carried
+ * "the RPC failed" and "there is no such night in your archive" at once. The
+ * page then told an owner "That night isn't in your archive" whenever the
+ * network was down — the exact claim V8-R-ACC-002's failure clause forbids ("a
+ * night that cannot be read states so rather than rendering an empty archive"),
+ * and one the /nights list page already got right.
+ */
+export type SavedNightRead =
+  | { kind: 'ok'; night: SavedNight }
+  /** Zero rows: not this account's night, or no such night. */
+  | { kind: 'missing' }
+  /** The read itself failed — transport, RLS, or an unusable client. */
+  | { kind: 'failed' };
+
+/**
  * One archived night, "exactly as it was saved" (V8-R-ACC-002).
  *
- * Null means unreadable — a failed read, or a night that is not this account's.
- * A night with NO photos left still comes back as a night with an empty photo
- * list, because the RPC LEFT JOINs its media: "a night that cannot be read
- * states so rather than rendering an empty archive" cuts both ways, and an
- * archive whose bytes are gone is not the same as one that failed to load.
+ * A night with NO photos left still comes back as `ok` with an empty photo
+ * list, because the RPC LEFT JOINs its media: an archive whose bytes are gone
+ * is not the same as one that failed to load, and neither is the same as one
+ * that was never there.
  */
 export async function fetchSavedNight(
   supabase: SupabaseClient,
   savedNightId: string,
-): Promise<SavedNight | null> {
-  if (!isUuid(savedNightId)) return null;
+): Promise<SavedNightRead> {
+  // A malformed id is a question about nothing, not a failed read: no round
+  // trip could turn it into a night.
+  if (!isUuid(savedNightId)) return { kind: 'missing' };
   const { data, error } = await callRpc(supabase, 'get_saved_night', {
     p_id: savedNightId,
   });
-  if (error || !Array.isArray(data) || data.length === 0) return null;
+  if (error || !Array.isArray(data)) return { kind: 'failed' };
+  if (data.length === 0) return { kind: 'missing' };
 
   const rows = data as SavedNightDetailRow[];
   const head = rows[0];
-  if (!isUuid(head?.id)) return null;
-  if (typeof head?.night !== 'string' || !NIGHT_RE.test(head.night)) return null;
+  // The server answered with a row we cannot parse. That is a failed read, not
+  // an absent night — claiming absence would be a statement about the archive
+  // we have no evidence for.
+  if (!isUuid(head?.id)) return { kind: 'failed' };
+  if (typeof head?.night !== 'string' || !NIGHT_RE.test(head.night)) {
+    return { kind: 'failed' };
+  }
 
   return {
-    id: head.id,
-    title: isNonEmptyString(head.title) ? head.title : null,
-    night: head.night,
-    barCount: count(head.bar_count),
-    archivedAt: isNonEmptyString(head.archived_at) ? head.archived_at : '',
-    // The LEFT JOIN yields one all-null media half for a night with no photos.
-    // Filtering on the id is what turns that back into an empty list instead of
-    // one ghost photo.
-    photos: rows.flatMap((row) =>
-      isUuid(row.media_id) && isNonEmptyString(row.storage_path)
-        ? [{ mediaId: row.media_id, storagePath: row.storage_path }]
-        : [],
-    ),
+    kind: 'ok',
+    night: {
+      id: head.id,
+      title: isNonEmptyString(head.title) ? head.title : null,
+      night: head.night,
+      barCount: count(head.bar_count),
+      archivedAt: isNonEmptyString(head.archived_at) ? head.archived_at : '',
+      // The LEFT JOIN yields one all-null media half for a night with no
+      // photos. Filtering on the id is what turns that back into an empty list
+      // instead of one ghost photo.
+      photos: rows.flatMap((row) =>
+        isUuid(row.media_id) && isNonEmptyString(row.storage_path)
+          ? [{ mediaId: row.media_id, storagePath: row.storage_path }]
+          : [],
+      ),
+    },
   };
 }

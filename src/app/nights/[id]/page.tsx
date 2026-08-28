@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import MediaThumb from '@/lib/nightOutMedia/MediaThumb';
-import { savedNightSummary, type SavedNight } from '@/lib/nightOutMedia';
-import { fetchSavedNight } from '@/lib/nightOutMedia/server';
+import { savedNightSummary } from '@/lib/nightOutMedia';
+import { fetchSavedNight, type SavedNightRead } from '@/lib/nightOutMedia/server';
 
 /**
  * /nights/[id] — ONE ARCHIVED NIGHT (V8-R-ACC-002).
@@ -25,6 +25,12 @@ import { fetchSavedNight } from '@/lib/nightOutMedia/server';
  * alive through a retention hold, but an account deletion upstream can still
  * take them; when that happens this renders the night and says the photos are
  * gone, rather than rendering an empty page that looks like a failed read.
+ *
+ * "COULDN'T READ" IS NOT "ISN'T THERE" (round 2, both gates). A failed RPC used
+ * to land in the same branch as zero rows and tell the owner their night was not
+ * in their archive — a claim about their own data made from no evidence.
+ * V8-R-ACC-002's failure clause is explicit, and the /nights list page already
+ * kept the two apart; this page now does too.
  */
 export default function SavedNightPage({
   params,
@@ -32,7 +38,7 @@ export default function SavedNightPage({
   params: { id: string };
 }): JSX.Element {
   const auth = useAuth();
-  const [night, setNight] = useState<SavedNight | null>(null);
+  const [read, setRead] = useState<SavedNightRead>({ kind: 'missing' });
   const [loading, setLoading] = useState(true);
 
   const signedIn = auth.status === 'signed-in';
@@ -43,13 +49,15 @@ export default function SavedNightPage({
       return undefined;
     }
     if (!signedIn) {
-      setNight(null);
+      // Nothing was read, so nothing can be claimed about it.
+      setRead({ kind: 'missing' });
       setLoading(false);
       return undefined;
     }
     const supabase = getBrowserSupabase();
     if (supabase === null) {
-      setNight(null);
+      // An unconfigured client is a FAILED read, not an absent night.
+      setRead({ kind: 'failed' });
       setLoading(false);
       return undefined;
     }
@@ -59,7 +67,7 @@ export default function SavedNightPage({
     void (async () => {
       const next = await fetchSavedNight(supabase, params.id);
       if (cancelled) return;
-      setNight(next);
+      setRead(next);
       setLoading(false);
     })();
     return () => {
@@ -83,7 +91,15 @@ export default function SavedNightPage({
           <p className="text-muted text-sm" role="status">
             Opening that night…
           </p>
-        ) : night === null ? (
+        ) : read.kind === 'failed' ? (
+          <p
+            className="text-muted text-sm"
+            role="status"
+            data-testid="saved-night-error"
+          >
+            Couldn&apos;t open that night. Try again in a moment.
+          </p>
+        ) : read.kind === 'missing' ? (
           <p
             className="text-muted text-sm"
             role="status"
@@ -94,18 +110,18 @@ export default function SavedNightPage({
         ) : (
           <article data-testid="saved-night-open">
             <h1 className="font-display text-2xl leading-tight">
-              {night.title ?? 'Night out'}
+              {read.night.title ?? 'Night out'}
             </h1>
             <p className="text-muted text-xs mt-1">
               {savedNightSummary({
-                title: night.title,
-                night: night.night,
-                barCount: night.barCount,
-                photoCount: night.photos.length,
+                title: read.night.title,
+                night: read.night.night,
+                barCount: read.night.barCount,
+                photoCount: read.night.photos.length,
               })}
             </p>
 
-            {night.photos.length === 0 ? (
+            {read.night.photos.length === 0 ? (
               <p
                 className="text-muted text-sm mt-6"
                 data-testid="saved-night-no-photos"
@@ -117,7 +133,7 @@ export default function SavedNightPage({
                 className="grid grid-cols-2 gap-2 mt-6"
                 data-testid="saved-night-photos"
               >
-                {night.photos.map((photo) => (
+                {read.night.photos.map((photo) => (
                   <li key={photo.mediaId}>
                     <MediaThumb
                       mediaId={photo.mediaId}

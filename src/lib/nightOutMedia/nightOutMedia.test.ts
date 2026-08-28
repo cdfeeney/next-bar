@@ -1,17 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  NIGHT_OUT_MEDIA_WINDOW_HOURS,
   describeNightOutMediaWindow,
   formatNightDate,
-  isNightOutMediaLive,
-  nightOutMediaExpiry,
   savedNightSummary,
 } from '@/lib/nightOutMedia';
 import {
   addNightOutMedia,
   archiveNightOut,
   fetchNightOutMedia,
+  fetchNightOutMediaWindow,
   fetchSavedNight,
   fetchSavedNights,
 } from '@/lib/nightOutMedia/server';
@@ -37,73 +35,78 @@ function rpcClient(result: RpcResult) {
   };
 }
 
-describe('nightOutMediaExpiry (V8-R-NO-008)', () => {
-  it('is the night 4:00 AM start plus 24 hours, in EDT', () => {
-    // Night 2026-07-24 begins 2026-07-24 04:00 EDT = 08:00Z. Plus 24h.
-    expect(nightOutMediaExpiry('2026-07-24')?.toISOString()).toBe(
-      '2026-07-25T08:00:00.000Z',
-    );
+describe('fetchNightOutMediaWindow (V8-R-NO-008, the SERVER owns the window)', () => {
+  it('reports the window the server computed, not one derived here', async () => {
+    const { client, rpc } = rpcClient({
+      data: [{ expires_at: '2026-07-25T21:00:00.000Z', is_open: true }],
+      error: null,
+    });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toEqual({
+      expiresAt: '2026-07-25T21:00:00.000Z',
+      isOpen: true,
+    });
+    expect(rpc).toHaveBeenCalledWith('night_out_media_window', {
+      p_night_out: UUID_A,
+    });
   });
 
-  it('is the night 4:00 AM start plus 24 hours, in EST', () => {
-    // Night 2026-01-23 begins 2026-01-23 04:00 EST = 09:00Z. Plus 24h.
-    // The one-hour difference from the EDT case is the whole reason the offset
-    // is measured rather than hardcoded.
-    expect(nightOutMediaExpiry('2026-01-23')?.toISOString()).toBe(
-      '2026-01-24T09:00:00.000Z',
-    );
+  it('carries a closed window through as closed', async () => {
+    const { client } = rpcClient({
+      data: [{ expires_at: '2026-07-25T21:00:00.000Z', is_open: false }],
+      error: null,
+    });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toEqual({
+      expiresAt: '2026-07-25T21:00:00.000Z',
+      isOpen: false,
+    });
   });
 
-  it('is exactly the requirement s number of hours after the start', () => {
-    const expiry = nightOutMediaExpiry('2026-07-24');
-    const start = Date.parse('2026-07-24T08:00:00.000Z');
-    expect((expiry!.getTime() - start) / 3_600_000).toBe(
-      NIGHT_OUT_MEDIA_WINDOW_HOURS,
-    );
+  it('is null — "could not check" — on a failed read, never a closed window', async () => {
+    const { client } = rpcClient({ data: null, error: { message: 'nope' } });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toBeNull();
   });
 
-  it('has no window for a night that is not a date', () => {
-    expect(nightOutMediaExpiry('tonight')).toBeNull();
-    expect(nightOutMediaExpiry('')).toBeNull();
-    expect(nightOutMediaExpiry('2026-7-4')).toBeNull();
-  });
-});
-
-describe('isNightOutMediaLive', () => {
-  it('is open up to the instant before the boundary and closed at it', () => {
-    const night = '2026-07-24';
-    expect(
-      isNightOutMediaLive(night, new Date('2026-07-25T07:59:59.999Z')),
-    ).toBe(true);
-    expect(isNightOutMediaLive(night, new Date('2026-07-25T08:00:00.000Z'))).toBe(
-      false,
-    );
+  it('is null for a non-member, who gets zero rows rather than a window', async () => {
+    const { client } = rpcClient({ data: [], error: null });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toBeNull();
   });
 
-  it('is open during the night the plan is for', () => {
-    // 11pm on the night itself — the moment people are actually out.
-    expect(isNightOutMediaLive('2026-07-24', new Date('2026-07-25T03:00:00Z'))).toBe(
-      true,
-    );
+  it('refuses a row whose is_open is not a boolean rather than coercing it', async () => {
+    // Coercing here would gate two authorized controls on a guess.
+    const { client } = rpcClient({
+      data: [{ expires_at: '2026-07-25T21:00:00.000Z', is_open: 'yes' }],
+      error: null,
+    });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toBeNull();
   });
 
-  it('treats an unreadable night as CLOSED, never as open forever', () => {
-    // The dangerous direction is showing media the server has stopped serving.
-    expect(isNightOutMediaLive('nonsense', new Date('2026-07-24T12:00:00Z'))).toBe(
-      false,
-    );
+  it('never reaches the server for a malformed plan id', async () => {
+    const { client, rpc } = rpcClient({ data: [], error: null });
+    await expect(fetchNightOutMediaWindow(client, 'nope')).resolves.toBeNull();
+    expect(rpc).not.toHaveBeenCalled();
   });
 });
 
 describe('describeNightOutMediaWindow (the window in words)', () => {
-  it('names the closing instant in New York time', () => {
-    const words = describeNightOutMediaWindow('2026-07-24');
+  it('names the server closing instant in New York time', () => {
+    // 2026-07-25T21:00Z is 5:00 PM EDT on the Saturday.
+    const words = describeNightOutMediaWindow('2026-07-25T21:00:00.000Z');
     expect(words).toContain('Saturday');
-    expect(words).toContain('4:00');
+    expect(words).toContain('5:00');
   });
 
-  it('says nothing at all when there is no window to state', () => {
+  it('states the 9:00 PM scheduled start plus 24 hours as 9:00 PM the next evening', () => {
+    // V8-R-NO-002 defaults the start to 9:00 PM; V8-R-NO-008 gives it 24 hours.
+    // 2026-07-24 21:00 EDT = 2026-07-25T01:00Z, plus 24h = 2026-07-26T01:00Z,
+    // which is 9:00 PM EDT on the Saturday.
+    const words = describeNightOutMediaWindow('2026-07-26T01:00:00.000Z');
+    expect(words).toContain('Saturday');
+    expect(words).toContain('9:00');
+  });
+
+  it('says nothing at all when the instant cannot be read', () => {
     expect(describeNightOutMediaWindow('later')).toBeNull();
+    expect(describeNightOutMediaWindow('')).toBeNull();
   });
 });
 
@@ -159,8 +162,11 @@ describe('never throws (the module contract)', () => {
   it('reports a thrown call as a failed read, on every entry point', async () => {
     for (const client of [throwing, missing]) {
       await expect(fetchSavedNights(client)).resolves.toBeNull();
-      await expect(fetchSavedNight(client, UUID_C)).resolves.toBeNull();
+      await expect(fetchSavedNight(client, UUID_C)).resolves.toEqual({
+        kind: 'failed',
+      });
       await expect(fetchNightOutMedia(client, UUID_A)).resolves.toBeNull();
+      await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toBeNull();
       await expect(archiveNightOut(client, UUID_A)).resolves.toBeNull();
       await expect(addNightOutMedia(client, UUID_A, UUID_B)).resolves.toBeNull();
     }
@@ -333,15 +339,18 @@ describe('fetchSavedNight (V8-R-ACC-002)', () => {
       error: null,
     });
     await expect(fetchSavedNight(client, UUID_C)).resolves.toEqual({
-      id: UUID_C,
-      title: 'Birthday',
-      night: '2026-07-24',
-      barCount: 2,
-      archivedAt: '2026-07-25T05:00:00Z',
-      photos: [
-        { mediaId: UUID_A, storagePath: 'a/1.jpg' },
-        { mediaId: UUID_B, storagePath: 'a/2.jpg' },
-      ],
+      kind: 'ok',
+      night: {
+        id: UUID_C,
+        title: 'Birthday',
+        night: '2026-07-24',
+        barCount: 2,
+        archivedAt: '2026-07-25T05:00:00Z',
+        photos: [
+          { mediaId: UUID_A, storagePath: 'a/1.jpg' },
+          { mediaId: UUID_B, storagePath: 'a/2.jpg' },
+        ],
+      },
     });
   });
 
@@ -352,16 +361,45 @@ describe('fetchSavedNight (V8-R-ACC-002)', () => {
       data: [{ ...head, media_id: null, storage_path: null, sort_order: null }],
       error: null,
     });
-    const night = await fetchSavedNight(client, UUID_C);
-    expect(night?.id).toBe(UUID_C);
-    expect(night?.photos).toEqual([]);
+    const read = await fetchSavedNight(client, UUID_C);
+    expect(read.kind).toBe('ok');
+    expect(read.kind === 'ok' && read.night.id).toBe(UUID_C);
+    expect(read.kind === 'ok' && read.night.photos).toEqual([]);
   });
 
-  it('is null for a night this account cannot read, and on error', async () => {
+  /**
+   * THE FAILURE CLAUSE, IN THE TYPE. V8-R-ACC-002: "a night that cannot be read
+   * states so rather than rendering an empty archive." A failed read and an
+   * absent night used to be the same `null`, and /nights/[id] told the owner
+   * their night was not in their archive whenever the request threw.
+   */
+  it('keeps "not yours / no such night" apart from "the read failed"', async () => {
     // Another account's id returns zero rows — the RPC filters on auth.uid().
     const other = rpcClient({ data: [], error: null });
-    await expect(fetchSavedNight(other.client, UUID_C)).resolves.toBeNull();
+    await expect(fetchSavedNight(other.client, UUID_C)).resolves.toEqual({
+      kind: 'missing',
+    });
     const failed = rpcClient({ data: null, error: { message: 'x' } });
-    await expect(fetchSavedNight(failed.client, UUID_C)).resolves.toBeNull();
+    await expect(fetchSavedNight(failed.client, UUID_C)).resolves.toEqual({
+      kind: 'failed',
+    });
+  });
+
+  it('treats a row it cannot parse as a failed read, not an absent night', async () => {
+    const garbled = rpcClient({
+      data: [{ ...head, id: 'not-a-uuid' }],
+      error: null,
+    });
+    await expect(fetchSavedNight(garbled.client, UUID_C)).resolves.toEqual({
+      kind: 'failed',
+    });
+  });
+
+  it('answers a malformed id without a round trip', async () => {
+    const { client, rpc } = rpcClient({ data: [], error: null });
+    await expect(fetchSavedNight(client, 'nope')).resolves.toEqual({
+      kind: 'missing',
+    });
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

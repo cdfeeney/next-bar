@@ -85,6 +85,20 @@ export default function TonightPresence(): JSX.Element {
   // given, and so "still loading" is distinguishable from "you have nobody".
   const follows = useFollows();
   const [mine, setMine] = useState<MyPresence | null>(null);
+  /**
+   * TRUE WHEN WE DO NOT KNOW WHAT THE USER'S PIN IS — not when they have none.
+   *
+   * Round 2, both gates (HIGH). `mine === null` used to carry both, so a failed
+   * read rendered the unset row and the next tap wrote with
+   * `audience: mine?.audience ?? 'friends'`: a live 'close' or 'people' pin
+   * silently widened to every follower and lost its recipient list, because
+   * `set_night_presence` replaces the row and deletes its recipients wholesale.
+   *
+   * While this is true the status pills are DISABLED. Not "write with the
+   * narrowest audience" — that is still a change the user did not ask for, and
+   * it would clear a pin they cannot see. The honest move is to stop and say so.
+   */
+  const [mineUnreadable, setMineUnreadable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [pickingBar, setPickingBar] = useState(false);
@@ -94,12 +108,21 @@ export default function TonightPresence(): JSX.Element {
 
   const reloadMine = useCallback(async (): Promise<void> => {
     if (!userId) {
+      // Signed out: there is no pin to read, and nothing failed.
       setMine(null);
+      setMineUnreadable(false);
       return;
     }
     const supabase = getBrowserSupabase();
-    if (!supabase) return;
-    setMine(await fetchMyPresence(supabase));
+    if (!supabase) {
+      // An unconfigured client is a FAILED read, not an absent pin.
+      setMine(null);
+      setMineUnreadable(true);
+      return;
+    }
+    const read = await fetchMyPresence(supabase);
+    setMine(read.kind === 'ok' ? read.presence : null);
+    setMineUnreadable(read.kind === 'failed');
   }, [userId, night]);
 
   useEffect(() => {
@@ -118,6 +141,10 @@ export default function TonightPresence(): JSX.Element {
   const choose = useCallback(
     async (status: PresenceStatus): Promise<void> => {
       if (busy) return;
+      // A write built on a pin we could not read would carry a DEFAULT audience
+      // over whatever the server is actually enforcing. Refuse rather than
+      // guess; the row already says the read failed.
+      if (mineUnreadable) return;
       const supabase = getBrowserSupabase();
       if (!supabase) {
         setFailed(true);
@@ -148,7 +175,7 @@ export default function TonightPresence(): JSX.Element {
       }
       setBusy(false);
     },
-    [busy, mine, reloadMine, refresh],
+    [busy, mine, mineUnreadable, reloadMine, refresh],
   );
 
   /**
@@ -265,7 +292,9 @@ export default function TonightPresence(): JSX.Element {
                 key={status}
                 type="button"
                 aria-pressed={active}
-                disabled={busy}
+                // Disabled while the pin is unreadable: every one of these taps
+                // is a WRITE that would have to invent the audience.
+                disabled={busy || mineUnreadable}
                 onClick={() => void choose(status)}
                 className={[
                   'min-h-[44px] touch-manipulation px-5 rounded-full font-display text-sm border transition-colors disabled:opacity-60',
@@ -279,6 +308,20 @@ export default function TonightPresence(): JSX.Element {
             );
           })}
         </div>
+
+        {/* WE DO NOT KNOW YOUR PIN. Never the unset row, which invites a tap
+            that would overwrite a live pin with a default audience
+            (V8-R-OPS-005 — the same rule the circle list below follows). */}
+        {mineUnreadable ? (
+          <p
+            className="text-xs text-muted mt-3"
+            role="status"
+            data-testid="my-pin-error"
+          >
+            Couldn&apos;t check your pin tonight. Pull again in a moment —
+            nothing has been changed.
+          </p>
+        ) : null}
 
         {mine ? (
           <div className="mt-3 space-y-2">

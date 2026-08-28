@@ -6,26 +6,36 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import MediaThumb from '@/lib/nightOutMedia/MediaThumb';
 import {
   describeNightOutMediaWindow,
-  isNightOutMediaLive,
   type NightOutMediaItem,
+  type NightOutMediaWindow,
 } from '@/lib/nightOutMedia';
 import {
   addNightOutMedia,
   archiveNightOut,
   fetchNightOutMedia,
+  fetchNightOutMediaWindow,
 } from '@/lib/nightOutMedia/server';
 
 /**
  * The Night Out recap's photos, and the two things the contract says you may do
  * with them (V8-R-NO-008, V8-R-NO-009).
  *
- * THE WINDOW IS THE SERVER'S. `get_night_out_media` stops returning rows 24
- * hours after the night's scheduled start, and `add_night_out_media` refuses a
- * write past it. Nothing here gates on the device clock: V8-R-NO-008's failure
- * clause is "a skewed device clock must not hide media the server still serves",
- * and the mirror of it — that a skewed clock must not SHOW media the server has
- * stopped serving — only holds if the server is the one filtering. The local
- * check below decides which SENTENCE to render, never which photos.
+ * THE WINDOW IS THE SERVER'S, INCLUDING THE ANSWER TO "IS IT OPEN?".
+ * `get_night_out_media` stops returning rows 24 hours after the plan's
+ * scheduled start and `add_night_out_media` refuses a write past it — but rows
+ * alone cannot tell "no photos yet" from "the window has closed", so this
+ * component used to recompute the boundary from the DEVICE clock to decide
+ * which sentence to show and whether to offer its two controls.
+ *
+ * That is what V8-R-NO-008's failure clause forbids: "a skewed device clock must
+ * not hide media the server still serves". A phone running fast hid Add-a-photo
+ * and Archive while the server would still have honoured both. Round 2 replaces
+ * the local arithmetic with `night_out_media_window`, which answers from the
+ * DATABASE's clock. Nothing here compares instants any more.
+ *
+ * A WINDOW WE COULD NOT READ IS NOT A CLOSED ONE. When the window read fails
+ * the controls stay hidden and the surface says it could not check — it never
+ * offers an action it cannot stand behind, and never asserts the window closed.
  *
  * THE WINDOW IS ALSO STATED IN WORDS, which V8-R-NO-008 requires under
  * accessibility. A time limit nobody is told about is a deletion.
@@ -37,38 +47,56 @@ import {
  */
 export default function NightOutMedia({
   planId,
-  night,
-  canParticipate,
+  canAddPhoto,
 }: {
   planId: string;
-  /** The plan's night key. The window is measured from ITS 4:00 AM start. */
-  night: string;
   /**
-   * False for a pending, declined or settled plan. A non-participant may not
-   * add a photo — offering the control anyway produces "that didn't go
-   * through" on a tap that could never have succeeded.
+   * Whether this viewer is an ACCEPTED member — the only thing
+   * `add_night_out_media` and `archive_night_out` check besides the window.
+   *
+   * NOT the plan's own open/settled state (round 2, Codex gate). This used to
+   * receive the page's `canParticipate`, which also requires the plan to be
+   * draft or open because suggesting and voting close when a bar is decided.
+   * Photos do not: a locked plan is a night that is ABOUT to happen, and the
+   * server authorizes its members throughout the media window. Reusing the
+   * suggestion predicate hid Add-a-photo from every accepted member the moment
+   * the plan was decided.
    */
-  canParticipate: boolean;
+  canAddPhoto: boolean;
 }): JSX.Element {
   const [items, setItems] = useState<NightOutMediaItem[] | null>(null);
+  const [mediaWindow, setMediaWindow] = useState<NightOutMediaWindow | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [savedNightId, setSavedNightId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const windowOpen = isNightOutMediaLive(night);
-  const windowWords = describeNightOutMediaWindow(night);
+  // Null = we could not read the window. Deliberately NOT folded into a boolean:
+  // "closed" and "unknown" render differently and gate differently.
+  const windowOpen = mediaWindow?.isOpen === true;
+  const windowWords =
+    mediaWindow === null ? null : describeNightOutMediaWindow(mediaWindow.expiresAt);
 
   const refresh = useCallback(async (): Promise<void> => {
     const supabase = getBrowserSupabase();
     if (supabase === null) {
       // Unconfigured client is a FAILED read, not an empty night.
       setItems(null);
+      setMediaWindow(null);
       setLoading(false);
       return;
     }
-    setItems(await fetchNightOutMedia(supabase, planId));
+    // One round trip each, in parallel: the window decides what may be DONE,
+    // the rows decide what is SHOWN, and neither derives the other.
+    const [nextItems, nextWindow] = await Promise.all([
+      fetchNightOutMedia(supabase, planId),
+      fetchNightOutMediaWindow(supabase, planId),
+    ]);
+    setItems(nextItems);
+    setMediaWindow(nextWindow);
     setLoading(false);
   }, [planId]);
 
@@ -172,19 +200,29 @@ export default function NightOutMedia({
     <section className="mt-8" data-testid="night-out-media">
       <h2 className="font-semibold">Photos</h2>
 
-      {/* The window, in words, whichever side of it we are on. */}
-      {windowWords !== null ? (
+      {/* The window, in words, on whichever side of it the SERVER says we are.
+          A window we could not read says exactly that — it does not guess a
+          side, because both guesses are claims we have no evidence for. */}
+      {loading ? null : mediaWindow === null ? (
+        <p
+          className="mt-1 text-xs opacity-60"
+          role="status"
+          data-testid="night-out-media-window-unknown"
+        >
+          Couldn&apos;t check this night&apos;s photo window.
+        </p>
+      ) : (
         <p className="mt-1 text-xs opacity-60" data-testid="night-out-media-window">
-          {windowOpen
+          {windowOpen && windowWords !== null
             ? windowWords
             : 'This night’s photo window has closed. Saved nights keep theirs.'}
         </p>
-      ) : null}
+      )}
 
       <MediaList loading={loading} items={items} />
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        {canParticipate && windowOpen ? (
+        {canAddPhoto && windowOpen ? (
           <>
             {/* The platform's own picker. `capture` asks a phone for the
                 camera and is ignored elsewhere, so one control serves both

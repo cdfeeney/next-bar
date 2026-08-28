@@ -1,5 +1,3 @@
-import { NIGHT_ROLLOVER_HOUR } from '@/lib/nightKey';
-
 /**
  * Night Out media — the third lifetime (V8-R-NO-008), and the private archive
  * it can be saved into (V8-R-NO-009, V8-R-ACC-002).
@@ -13,84 +11,51 @@ import { NIGHT_ROLLOVER_HOUR } from '@/lib/nightKey';
  * The distinction is the requirement, not an implementation detail: V8-R-NO-008
  * names it "a third and distinct lifetime" and excludes measuring from capture.
  *
- * WHAT "THE SCHEDULED START" IS HERE. `public.night_outs` schedules a plan
- * against a `night` DATE — there is no start time in the schema — and a night
- * begins at 4:00 AM America/New_York (V8-R-PRE-005 / D-C-39). So the start of a
- * Night Out is the start of the night it is scheduled for, and the window closes
- * 24 hours later. That is the only reading available that invents no number:
- * `created_at` would be when the plan was MADE (a plan made three days ahead
- * would expire before the night began) and any chosen evening hour would be a
- * product decision this lane has no authority to mint.
+ * THE CLIENT DOES NOT COMPUTE THE WINDOW AT ALL — round 2, both gates.
  *
- * ⚠ CONSEQUENCE, FLAGGED RATHER THAN BURIED: because a night starts at 4:00 AM
- * and people go out in the evening, a photo taken at 11pm is readable for about
- * five hours, not twenty-four. The arithmetic is exactly "24 hours from the
- * scheduled start"; it is the SCHEDULE that is coarse. If a longer tail is
- * wanted the fix is a real start time on the plan and one call site here.
+ * This module used to mirror `public.night_out_media_expires_at(date)` in
+ * TypeScript, with its own DST offset measurement, and the recap gated its
+ * add-photo and archive controls on the result. Two defects came out of that one
+ * decision:
  *
- * THE CLIENT NEVER DECIDES THE WINDOW. `get_night_out_media` applies it in SQL
- * and returns nothing once it has closed, because V8-R-NO-008's failure clause
- * is "a skewed device clock must not hide media the server still serves" — and
- * its mirror, that a skewed clock must not SHOW media the server has stopped
- * serving, only holds if the server is the one filtering. What is here is for
- * WORDING the window ("the window is stated in words"), not for gating it.
+ *   * a device clock running fast hid controls the server would still have
+ *     honoured — precisely what V8-R-NO-008's failure clause forbids ("a skewed
+ *     device clock must not hide media the server still serves");
+ *   * the offset was measured at the GUESSED instant, so on a DST-transition
+ *     night the two sides disagreed by an hour even with a correct clock.
+ *
+ * Both are gone by deletion rather than by repair: `night_out_media_window`
+ * (migration 0068, section 5d) answers when the window closes and whether it is
+ * still open, from the DATABASE's clock. What remains here is WORDING — turning
+ * the instant the server gave us into a sentence, which V8-R-NO-008 requires
+ * under accessibility ("the window is stated in words").
  */
 
-/** The lifetime, in hours. The requirement's own number. */
+/** The lifetime, in hours. The requirement's own number, for wording only. */
 export const NIGHT_OUT_MEDIA_WINDOW_HOURS = 24;
 
 /**
- * When media for a Night Out on `night` stops being served.
+ * The server's window for one Night Out's media (`night_out_media_window`).
  *
- * Mirrors `public.night_out_media_expires_at(date)` in migration 0068. Both
- * sides resolve the same boundary from the same constant, so the words the
- * client shows and the rows the server serves cannot disagree.
- *
- * Returns null for a night key that is not a date — an unparseable night has no
- * window, and guessing one would be the surface inventing a deadline.
+ * `isOpen` is the DATABASE's answer, never a comparison made here.
  */
-export function nightOutMediaExpiry(night: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(night);
-  if (match === null) return null;
-  const [, year, month, day] = match;
-
-  // The night's own start, in New York, then 24 hours. `Date` cannot be given a
-  // zone directly, so the offset is measured rather than assumed: DST means the
-  // same wall-clock hour is 08:00Z in July and 09:00Z in January, and hardcoding
-  // either would be wrong for half the year.
-  const startUtcGuess = Date.UTC(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    NIGHT_ROLLOVER_HOUR,
-  );
-  if (!Number.isFinite(startUtcGuess)) return null;
-  const start = startUtcGuess + newYorkOffsetMs(startUtcGuess);
-  return new Date(start + NIGHT_OUT_MEDIA_WINDOW_HOURS * 3_600_000);
-}
-
-/** True while the window is open. `now` is injectable so this is testable. */
-export function isNightOutMediaLive(
-  night: string,
-  now: Date = new Date(),
-): boolean {
-  const expiry = nightOutMediaExpiry(night);
-  // NO WINDOW MEANS NOT LIVE. An unparseable night must not read as "open
-  // forever" — that is the direction that shows media the server has stopped
-  // serving.
-  return expiry !== null && now.getTime() < expiry.getTime();
-}
+export type NightOutMediaWindow = {
+  /** ISO instant the window closes. */
+  expiresAt: string;
+  isOpen: boolean;
+};
 
 /**
  * The window in words (V8-R-NO-008: "the window is stated in words"), e.g.
- * "Photos from this night stay here until 4:00 AM Sunday."
+ * "Photos from this night stay here until 9:00 PM Saturday New York time."
  *
- * Null when there is no window to state, so the caller renders nothing rather
+ * Takes the SERVER's `expires_at`, so the sentence and the rows cannot disagree.
+ * Null when the instant is unparseable, so the caller renders nothing rather
  * than a sentence with a hole in it.
  */
-export function describeNightOutMediaWindow(night: string): string | null {
-  const expiry = nightOutMediaExpiry(night);
-  if (expiry === null) return null;
+export function describeNightOutMediaWindow(expiresAt: string): string | null {
+  const expiry = new Date(expiresAt);
+  if (Number.isNaN(expiry.getTime())) return null;
   const when = new Intl.DateTimeFormat('en-US', {
     weekday: 'long',
     hour: 'numeric',
@@ -175,33 +140,3 @@ export function formatNightDate(night: string): string {
   }).format(new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))));
 }
 
-/**
- * How far `America/New_York` is from UTC at a given instant, in milliseconds.
- *
- * Measured through `Intl` rather than tabulated, so DST is the platform's
- * problem and not a table here that goes stale when a rule changes. Same
- * technique `nycNightKey` uses for the same reason.
- */
-function newYorkOffsetMs(utcMs: number): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).formatToParts(new Date(utcMs));
-  const field = (type: string): number =>
-    Number(parts.find((part) => part.type === type)?.value ?? '0');
-  const asUtc = Date.UTC(
-    field('year'),
-    field('month') - 1,
-    field('day'),
-    field('hour'),
-    field('minute'),
-    field('second'),
-  );
-  return utcMs - asUtc;
-}

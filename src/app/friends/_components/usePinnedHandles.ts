@@ -156,8 +156,12 @@ export function useMyPresence(): MyPresence | null {
     const supabase = getBrowserSupabase();
     if (supabase === null) { setMine(null); return () => { cancelled = true; }; }
     void (async () => {
-      const next = await fetchMyPresence(supabase);
-      if (!cancelled) setMine(next);
+      const read = await fetchMyPresence(supabase);
+      // A failed read is NO BADGE here, and that is safe in a way it is not in
+      // TonightPresence: this hook only DISPLAYS the pin. Nothing downstream of
+      // it writes, so there is no audience for a missing read to widen — the
+      // rail simply shows no pin until the next read lands.
+      if (!cancelled) setMine(read.kind === 'ok' ? read.presence : null);
     })();
     return () => { cancelled = true; };
   }, [isSignedIn, nonce]);

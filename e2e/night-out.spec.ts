@@ -143,20 +143,21 @@ const PLAN_ROW = {
 };
 
 /**
- * A night whose 24-hour media window is CERTAINLY open, computed at run time.
+ * A night in the future, computed at run time so a fixed fixture date cannot
+ * rot into the past between the day these are written and the day they run.
  *
- * The window closes 24 hours after the night's own 4:00 AM New York start, so a
- * fixture with a fixed date stops being "open" the day after it is written —
- * which is exactly how the first version of the archive tests below passed when
- * they were authored and failed eight days later. Tomorrow's date is at least
- * 24 hours of window away at every instant, in both zones.
+ * NOTE, ROUND 2: this used to be the whole window fixture, because the client
+ * computed the window from the night key. It no longer does — the server owns
+ * that answer through `night_out_media_window`, and the tests stub it directly
+ * (see `stubMedia`). This still exists so the plan row is coherent with the
+ * window being stubbed alongside it.
  */
 function openWindowNight(): string {
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
   return tomorrow.toISOString().slice(0, 10);
 }
 
-/** Long past, so its window is certainly SHUT — the other half of the pair. */
+/** Long past — the other half of the pair. */
 const CLOSED_WINDOW_NIGHT = '2020-01-01';
 
 async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
@@ -802,6 +803,58 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await picker.getByRole('button', { name: /^Back$/ }).click();
     await expect(page.getByTestId('pin-audience-dialog')).toHaveCount(0);
   });
+
+  /**
+   * THE ONE WHERE A FAILED READ USED TO CHANGE WHO CAN SEE YOU — round 2, both
+   * gates, HIGH.
+   *
+   * `fetchMyPresence` returned the same `null` for "no pin tonight" and "the
+   * read failed", so a transport error rendered the unset row. The next status
+   * tap then wrote `audience: mine?.audience ?? 'friends'`, and
+   * `set_night_presence` REPLACES the row and deletes its recipients wholesale
+   * — turning a live 'close' or 'people' pin into one every follower can see,
+   * on a tap the user made about something else entirely.
+   *
+   * The pills are disabled and the row says the read failed. The assertion that
+   * actually protects the user is the negative one: `set_night_presence` is
+   * never called.
+   */
+  test('a FAILED own-pin read disables the write instead of widening the audience', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    await page.route('**/rest/v1/rpc/get_circle_presence*', fulfillJson(200, []));
+    await page.route(
+      '**/rest/v1/rpc/get_my_presence*',
+      fulfillJson(500, { message: 'boom' }),
+    );
+    let wrote = false;
+    await page.route('**/rest/v1/rpc/set_night_presence*', async (route) => {
+      wrote = true;
+      await fulfillJson(200, true)(route);
+    });
+
+    await page.goto('/friends');
+    // Says what happened, and does NOT render the unset row as if there were
+    // no pin (V8-R-OPS-005).
+    await expect(page.getByTestId('my-pin-error')).toBeVisible();
+    await expect(page.getByTestId('my-pin')).toHaveCount(0);
+
+    const going = page.getByRole('button', { name: /going out/i }).first();
+    await expect(going).toBeDisabled();
+    // Force the tap past the disabled attribute: the guard must hold in the
+    // handler too, not only in the styling.
+    await going.dispatchEvent('click');
+    await expect(page.getByTestId('my-pin-error')).toBeVisible();
+    expect(wrote).toBe(false);
+  });
 });
 
 test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-002)', () => {
@@ -818,12 +871,34 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     expires_at: '2026-08-21T08:00:00.000Z',
   };
 
+  /** An instant safely inside the future, for the "still open" window stub. */
+  function futureIso(hours: number): string {
+    return new Date(Date.now() + hours * 3_600_000).toISOString();
+  }
+
   /**
+   * THE WINDOW IS A SERVER ANSWER NOW, so it is stubbed like any other RPC
+   * rather than implied by the fixture's night key (round 2, both gates).
+   *
    * `stubMemberRpcs` routes `get_night_out*`, which also matches
-   * `get_night_out_media`. Registering the media stub AFTER it wins, because
+   * `get_night_out_media`, and its rest/v1 catch-all matches
+   * `night_out_media_window`. Registering both stubs AFTER it wins, because
    * Playwright matches last-registered-first.
+   *
+   * `windowRows: 'fail'` is the third state the surface must keep separate:
+   * a window we could not READ, which is neither open nor closed.
    */
-  async function stubMedia(page: Page, rows: unknown[]): Promise<void> {
+  async function stubMedia(
+    page: Page,
+    rows: unknown[],
+    windowRows: unknown[] | 'fail' = [{ expires_at: futureIso(20), is_open: true }],
+  ): Promise<void> {
+    await page.route(
+      '**/rest/v1/rpc/night_out_media_window*',
+      windowRows === 'fail'
+        ? fulfillJson(500, { message: 'boom' })
+        : fulfillJson(200, windowRows),
+    );
     await page.route('**/rest/v1/rpc/get_night_out_media*', fulfillJson(200, rows));
   }
 
@@ -837,7 +912,9 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
     await stubMemberRpcs(page, CLOSED_WINDOW_NIGHT);
-    await stubMedia(page, []);
+    await stubMedia(page, [], [
+      { expires_at: '2020-01-02T02:00:00.000Z', is_open: false },
+    ]);
 
     await page.goto(`/night-out/${TOKEN}`);
     // A closed window says SO, and withdraws both controls rather than offering
@@ -879,6 +956,97 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     await expect(page.getByTestId('night-out-archive')).toHaveCount(0);
   });
 
+  /**
+   * V8-R-NO-008 FAILURE CLAUSE: "a skewed device clock must not hide media the
+   * server still serves."
+   *
+   * The two fixtures below make the server's verdict CONTRADICT any local
+   * comparison of `expires_at` against the device clock. Only a client that
+   * takes `is_open` from the server can pass both — which is the point: before
+   * round 2 the recap recomputed the boundary itself, so a phone running fast
+   * hid Add-a-photo and Archive while the server was still serving and still
+   * accepting writes.
+   *
+   * This is a stronger proof than mocking the clock, and it does not have to
+   * skew the session token to get it.
+   */
+  test('an OPEN window whose deadline has already passed still offers the controls', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page, openWindowNight());
+    // The deadline is in the PAST and the server says the window is OPEN. A
+    // local `now < expiresAt` check reads this as closed; the server does not.
+    await stubMedia(page, [MEDIA_ROW], [
+      { expires_at: futureIso(-48), is_open: true },
+    ]);
+    await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('night-out-media-window')).not.toContainText(
+      /window has closed/i,
+    );
+    await expect(page.getByTestId('night-out-add-photo')).toBeVisible();
+    await expect(page.getByTestId('night-out-archive')).toBeVisible();
+  });
+
+  test('a CLOSED window whose deadline is still ahead withdraws them anyway', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page, openWindowNight());
+    // The mirror: a device clock running SLOW must not show what the server has
+    // stopped serving either.
+    await stubMedia(page, [MEDIA_ROW], [
+      { expires_at: futureIso(48), is_open: false },
+    ]);
+    await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('night-out-media-window')).toContainText(
+      /window has closed/i,
+    );
+    await expect(page.getByTestId('night-out-add-photo')).toHaveCount(0);
+    await expect(page.getByTestId('night-out-archive')).toHaveCount(0);
+  });
+
+  /**
+   * A window we could not read is NEITHER open nor closed. It must not claim the
+   * window has closed, and it must not offer actions it cannot stand behind.
+   */
+  test('an unreadable window says it could not check, and asserts nothing', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page, openWindowNight());
+    await stubMedia(page, [MEDIA_ROW], 'fail');
+    await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(
+      page.getByTestId('night-out-media-window-unknown'),
+    ).toBeVisible();
+    // Neither claim is made, and neither control is offered.
+    await expect(page.getByTestId('night-out-media-window')).toHaveCount(0);
+    await expect(page.getByTestId('night-out-add-photo')).toHaveCount(0);
+    await expect(page.getByTestId('night-out-archive')).toHaveCount(0);
+  });
+
   test('a failed read says so, and NEVER renders the empty state', async ({
     page,
     context,
@@ -889,6 +1057,7 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
     await stubMemberRpcs(page, openWindowNight());
+    await stubMedia(page, []);
     await page.route(
       '**/rest/v1/rpc/get_night_out_media*',
       fulfillJson(500, { message: 'boom' }),
@@ -942,6 +1111,47 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     // The photo went through the media boundary; a 404 there renders the
     // honest absence rather than a broken image.
     expect(urlRouteCalled).toBe(true);
+  });
+
+  /**
+   * V8-R-NO-008 / V8-R-NO-009 vs the SUGGESTION predicate — round 2, Codex gate.
+   *
+   * `add_night_out_media` and `archive_night_out` authorize an ACCEPTED member
+   * throughout the media window; they do not care whether the plan is still
+   * open. The recap used to receive the page's `canParticipate`, which also
+   * requires draft/open because suggesting and voting close on a decided plan —
+   * so locking a plan hid Add-a-photo from every member, at precisely the moment
+   * the night is about to be photographed.
+   */
+  test('a DECIDED plan still offers its accepted members the photo controls', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    const night = openWindowNight();
+    await stubMemberRpcs(page, night);
+    await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
+      const url = route.request().url();
+      if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
+      if (url.includes('get_night_out_board')) return fulfillJson(200, [])(route);
+      return fulfillJson(200, [
+        { ...PLAN_ROW, night, status: 'decided', decided_bar_id: 'attaboy' },
+      ])(route);
+    });
+    await stubMedia(page, [MEDIA_ROW]);
+    await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
+
+    await page.goto(`/night-out/${TOKEN}`);
+    // The plan really is settled — the negative half of the pair, so this cannot
+    // pass by accidentally rendering an open plan.
+    await expect(page.getByText(/suggestions are closed/i)).toBeVisible();
+    // ...and the photo controls are still there.
+    await expect(page.getByTestId('night-out-add-photo')).toBeVisible();
+    await expect(page.getByTestId('night-out-archive')).toBeVisible();
   });
 
   test('a refused archive never reports a save', async ({ page, context, baseURL }) => {
@@ -1063,5 +1273,38 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     await page.goto(`/nights/${SAVED_ID}`);
     await expect(page.getByTestId('saved-night-missing')).toBeVisible();
     await expect(page.getByTestId('saved-night-photos')).toHaveCount(0);
+    // ...and it is NOT the failure state, which is a different sentence.
+    await expect(page.getByTestId('saved-night-error')).toHaveCount(0);
+  });
+
+  /**
+   * V8-R-ACC-002 FAILURE CLAUSE — round 2, both gates: "a night that cannot be
+   * read states so rather than rendering an empty archive."
+   *
+   * A failed RPC used to land in the same branch as zero rows, so a network
+   * blip told the owner their own night was not in their archive. The /nights
+   * LIST page already kept the two apart; the detail page did not.
+   */
+  test('an archived night that cannot be READ says so, never that it is missing', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    await page.route(
+      '**/rest/v1/rpc/get_saved_night*',
+      fulfillJson(500, { message: 'boom' }),
+    );
+
+    await page.goto(`/nights/${SAVED_ID}`);
+    await expect(page.getByTestId('saved-night-error')).toBeVisible();
+    // The claim it must never make about somebody's own archive.
+    await expect(page.getByTestId('saved-night-missing')).toHaveCount(0);
+    await expect(page.getByTestId('saved-night-open')).toHaveCount(0);
   });
 });

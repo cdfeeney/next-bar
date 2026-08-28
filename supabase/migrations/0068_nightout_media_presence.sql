@@ -430,6 +430,24 @@ grant execute on function public.clear_night_presence() to authenticated;
 -- serving groups later is a resolution step in front of this branch, not a
 -- second audience model. Recorded for the lane that owns groups.
 --
+-- RE-STATED IN ROUND 2, because the gate raised it again as a HIGH and the
+-- answer has to be checkable rather than asserted. Measured on this branch at
+-- the round-2 candidate: no migration here creates a groups or group-membership
+-- table (`0044`, `0064`, `0065`, `0066` and this file are the only ones that
+-- mention the word "group", and every one of them means either the
+-- `media_destinations.kind = 'group'` VALUE or an English sentence), and
+-- `public.invite_one_to_night_out` — the shared door WP6 builds alongside its
+-- groups model in `0067` — does not exist here either. The groups model arrives
+-- with that lane's migration, which this lane does not own and may not mint.
+--
+-- So the choice is: ship a 'group' audience whose membership resolves against
+-- nothing, or record the gap. A fourth `check` value with no table behind it
+-- would let a pin claim an audience the server cannot enforce, which is the one
+-- failure mode this whole section exists to prevent. The gap is recorded.
+-- CROSS-LANE, not descoped: V8-R-PRE-002's group third needs `0067`'s groups
+-- model on the same branch, and is a one-value extension of this `check` plus a
+-- membership intersection in `get_circle_presence` once it is there.
+--
 -- Never returns the caller's own row: the caller already has it, and mixing it
 -- into "who else is out" is how a surface ends up telling you about yourself.
 --
@@ -593,9 +611,21 @@ grant execute on function public.get_circle_presence() to authenticated;
 --     visible to the recipient — whereas silently voiding links as a side
 --     effect of a block is neither.
 --
---  3. There is no block model to gate on. This branch contains no blocks table
---     and no block relationship in any migration. A gate written here would
---     have to invent the model the decision is supposedly about.
+--  3. The block model EXISTS and still cannot be applied here. CORRECTION,
+--     round 2 (Claude/FABLE gate): this reason previously asserted that "this
+--     branch contains no blocks table and no block relationship in any
+--     migration". That was FALSE when it was written — 0066, on this same
+--     branch, creates `public.profile_blocks` (line ~1583) and
+--     `public.is_blocked_between(uuid, uuid)` (line ~1616), and the Feed
+--     consumes them for V8-R-FEED-009. A later lane reading the old sentence
+--     would have concluded there is no block model and skipped block-gating on
+--     a false premise, so it is corrected rather than left standing.
+--
+--     The decision is UNCHANGED, because it never rested on this reason.
+--     `is_blocked_between` refuses a caller asking about a pair it is not part
+--     of, and `preview_night_out` executes for ANON — there is no caller
+--     identity to ask about. The existing block model therefore cannot gate the
+--     anonymous path at all, which is reason 1 again by a truer route.
 --
 -- The finding is therefore ANSWERED, not silently closed: the behaviour it
 -- describes is intended, and the enforcement path is invite revocation.
@@ -677,41 +707,50 @@ $$;
 ------------------------------------------------------------------------------
 -- 5a. The window itself — ONE definition, derived from the approved boundary
 ------------------------------------------------------------------------------
--- THE SCHEDULED START OF A NIGHT OUT IS THE START OF THE NIGHT IT IS SCHEDULED
--- FOR, and that instant is already defined: `public.night_outs` schedules a plan
--- against a `night date`, never against a time, and section 1 fixes when a night
--- begins — 4:00 AM America/New_York, DST-aware (V8-R-PRE-005 / D-C-39).
+-- THE SCHEDULED START IS 9:00 PM AMERICA/NEW_YORK ON THE PLAN'S NIGHT.
 --
--- This is the only reading available that invents no number. The alternatives
--- were weighed and are recorded so nobody re-opens this by accident:
+-- CORRECTED IN ROUND 2 (Codex gate, HIGH). This previously read the scheduled
+-- start as the START OF THE NIGHT — 4:00 AM America/New_York — because
+-- `public.night_outs` schedules against a `night date` and carries no start
+-- time, and the note here claimed no hour was available to use without minting
+-- a product decision. That claim was wrong: V8-R-NO-002 states the When row
+-- "Defaults to the most likely context — Tonight, 9:00 PM". The contract names
+-- the hour. Using it invents nothing, and the old reading produced an expiry
+-- SEVEN hours after the scheduled start rather than twenty-four — a photo taken
+-- at 11:00 PM died at 4:00 AM the same night.
+--
+-- 9:00 PM on the plan's night, plus 24 hours, therefore closes at 9:00 PM the
+-- following evening: the whole night and the day after it, which is what
+-- V8-R-NO-008's "24 hours measured from the SCHEDULED NIGHT OUT START" asks for.
+--
+-- Still rejected, and recorded so nobody re-opens it:
 --   * `night_outs.created_at` — when the plan was MADE. A plan made three days
---     ahead would have a window that closed before the night started.
---   * a chosen evening hour (8pm, say) — a product decision this lane has no
---     authority to mint, and the contract names no hour.
+--     ahead would have a window that closed before the night began.
+--   * the night's 4:00 AM boundary — that is when the NIGHT KEY rolls over
+--     (V8-R-PRE-005 / D-C-39), not when a plan is scheduled to start. The two
+--     are different questions and conflating them is the defect above.
 --
--- ⚠ ATTENDED DECISION FLAGGED, NOT SILENTLY SETTLED. Under this derivation a
--- photo taken at 11pm is readable until 4:00 AM — about five hours, not
--- twenty-four — because the night it belongs to started nineteen hours earlier.
--- The arithmetic is exactly "24 hours from the scheduled start"; it is the
--- SCHEDULE that is coarse, because the schema has no start time to be precise
--- with. If the product wants a longer tail, the fix is a real `starts_at` on
--- `night_outs` and this function reading it — one function, one call site. The
--- direction this errs in is the safe one for a privacy-bearing photo surface.
+-- WHEN A REAL START TIME ARRIVES: `night_outs` gains a `starts_at`, and this
+-- function reads it instead of the 9:00 PM default. One function, and every
+-- caller — add_night_out_media, get_night_out_media, night_out_media_window,
+-- archive_night_out and media_read_window — follows without edit.
 
 create or replace function public.night_out_media_expires_at(p_night date)
 returns timestamptz
 language sql
 immutable
 as $$
-  select ((p_night + interval '4 hours') at time zone 'America/New_York')
+  select ((p_night + interval '21 hours') at time zone 'America/New_York')
          + interval '24 hours'
 $$;
 
 comment on function public.night_out_media_expires_at(date) is
   'V8-R-NO-008. When Night Out media for this night stops being served: the '
-  'night''s own 4:00 AM America/New_York start plus 24 hours. Measured from the '
-  'SCHEDULED START, never from capture or publication. The single definition — '
-  'add_night_out_media, get_night_out_media and media_read_window all call it.';
+  'plan''s scheduled start — 9:00 PM America/New_York on its night, the default '
+  'V8-R-NO-002 names — plus 24 hours. Measured from the SCHEDULED START, never '
+  'from capture or publication. The single definition: add_night_out_media, '
+  'get_night_out_media, night_out_media_window, archive_night_out and '
+  'media_read_window all call it.';
 
 revoke all on function public.night_out_media_expires_at(date) from public, anon, authenticated;
 grant execute on function public.night_out_media_expires_at(date) to authenticated;
@@ -840,6 +879,52 @@ comment on function public.get_night_out_media(uuid) is
 revoke all on function public.get_night_out_media(uuid) from public, anon;
 grant execute on function public.get_night_out_media(uuid) to authenticated;
 
+------------------------------------------------------------------------------
+-- 5d. night_out_media_window — the window itself, ANSWERED BY THE SERVER
+------------------------------------------------------------------------------
+-- ADDED IN ROUND 2 (Codex + Claude gates). `get_night_out_media` filters by the
+-- window, which is correct, but it can only answer with ROWS — and an empty
+-- result means either "no photos yet" or "the window has closed". The recap had
+-- no other source, so it recomputed the boundary from the device clock to
+-- decide which sentence to show and whether to offer Add-a-photo and Archive.
+--
+-- That is exactly what V8-R-NO-008's failure clause forbids: "a skewed device
+-- clock must not hide media the server still serves". A phone running fast hid
+-- two authorized controls while the server would still have honoured them.
+--
+-- So the server answers the question directly. `is_open` is computed from the
+-- DATABASE's `now()` against the same single definition every other caller
+-- uses; `expires_at` is returned so the surface can state the window in words
+-- (V8-R-NO-008, accessibility) without doing any arithmetic of its own.
+--
+-- Membership-gated like everything else here: a non-member gets zero rows
+-- rather than a window, because when someone else's plan ends is not theirs to
+-- know.
+
+create or replace function public.night_out_media_window(p_night_out uuid)
+returns table (expires_at timestamptz, is_open boolean)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.night_out_media_expires_at(n.night),
+         now() < public.night_out_media_expires_at(n.night)
+    from public.night_outs n
+   where n.id = p_night_out
+     and public.night_out_role(p_night_out) is not null
+$$;
+
+comment on function public.night_out_media_window(uuid) is
+  'V8-R-NO-008. When this Night Out''s media window closes and whether it is '
+  'still open, decided by the SERVER''s clock. The recap gates its add-photo '
+  'and archive controls on this rather than on the device clock, because "a '
+  'skewed device clock must not hide media the server still serves". Zero rows '
+  'for a non-member.';
+
+revoke all on function public.night_out_media_window(uuid) from public, anon;
+grant execute on function public.night_out_media_window(uuid) to authenticated;
+
 
 ------------------------------------------------------------------------------
 -- 6. Saved Nights Out — the PRIVATE archive (V8-R-NO-009, V8-R-ACC-002)
@@ -938,6 +1023,64 @@ create policy saved_night_media_own_row on public.saved_night_media
   );
 
 ------------------------------------------------------------------------------
+-- 6·5. A saved night that goes away RELEASES ITS RETENTION HOLDS
+------------------------------------------------------------------------------
+-- ADDED IN ROUND 2 (Codex gate, HIGH). The hold that keeps an archived photo's
+-- bytes alive is a `kind='archive'` row in `media_destinations`, and its
+-- `ref_id` is TEXT — the shared spine deliberately has no foreign key, because
+-- one column serves surfaces whose keys are not all uuids. So nothing retired
+-- those rows when the saved night they belong to disappeared:
+--
+--   account A archives a photo owned by B, then A deletes their account.
+--   `saved_nights` cascades from `profiles`, `saved_night_media` cascades from
+--   `saved_nights` — and the archive destination survives both, because it is
+--   joined by a string nothing enforces. B later deletes the media everywhere,
+--   and 0066's reference count still sees A's orphan hold, so the bytes are
+--   never reclaimable. The retention V8-R-CMP-016 grants is "until the
+--   ARCHIVING ACCOUNT deletes it"; a hold outliving that account is unbounded.
+--
+-- A TRIGGER, not a step inside a delete RPC, for the same reason the hold has no
+-- foreign key to lean on: the deletes arrive by CASCADE from `profiles`, where
+-- no application code runs at all. Anything written at a call site would be
+-- skipped by the exact path that produced the orphan.
+--
+-- `removed_at`, never DELETE: 0066 counts LIVE rows and keeps removed ones as
+-- the record that this destination once existed. Retiring is what "delete
+-- everywhere" already does to every other kind, so the reference count and the
+-- byte-reclamation policy need no new concept.
+--
+-- SECURITY DEFINER because the cascade can run as any role that may delete a
+-- profile, and `media_destinations` grants nothing to the application roles.
+-- Idempotent: `removed_at is null` means a re-run retires nothing twice.
+
+create or replace function public.release_saved_night_holds()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.media_destinations
+     set removed_at = now()
+   where kind = 'archive'
+     and ref_id = old.id::text
+     and removed_at is null;
+  return old;
+end;
+$$;
+
+comment on function public.release_saved_night_holds() is
+  'V8-R-CMP-016. Retires the kind=''archive'' retention holds of a saved night '
+  'that is being deleted — including by cascade from an account deletion, which '
+  'is the only path that produced orphans. Bytes become reclaimable exactly when '
+  'the archiving account stops holding them.';
+
+drop trigger if exists saved_nights_release_holds on public.saved_nights;
+create trigger saved_nights_release_holds
+  before delete on public.saved_nights
+  for each row execute function public.release_saved_night_holds();
+
+------------------------------------------------------------------------------
 -- 6a. archive_night_out — the private archive action
 ------------------------------------------------------------------------------
 -- "A failed archive must not report success, and must not consume the window."
@@ -945,9 +1088,20 @@ create policy saved_night_media_own_row on public.saved_night_media
 -- media list and the retention holds all commit together or not at all, so a
 -- partial archive cannot exist to be reported as a whole one.
 --
--- Only media that is LIVE RIGHT NOW is archived — get_night_out_media's own
--- window applies. Archiving after the window has closed archives nothing and
--- says so by returning a zero photo count rather than by pretending.
+-- BEFORE THE WINDOW CLOSES, AND ONLY BEFORE. V8-R-NO-009 grants the archive to
+-- a participant "before its 24-hour window closes", so a late call is REFUSED.
+--
+-- CORRECTED IN ROUND 2 (Codex gate, HIGH). This function used to have no window
+-- guard at all: it created or topped up the `saved_nights` row first and only
+-- then selected the window-filtered media, so an archive attempted after expiry
+-- SUCCEEDED with `photo_count = 0`. The caller was handed a saved-night id and
+-- reported an archived empty night — a permission that had lapsed, answered as
+-- a real save. The check is now the first thing after membership, ahead of every
+-- write, so a refusal leaves no row behind.
+--
+-- Zero photos remains a legitimate answer INSIDE the window — a night nobody
+-- photographed, or one whose bytes were removed — and that case still returns
+-- rather than raising. What it can no longer mean is "you were too late".
 
 create or replace function public.archive_night_out(p_night_out uuid)
 returns table (saved_night_id uuid, photo_count integer)
@@ -979,6 +1133,13 @@ begin
    where n.id = p_night_out;
   if v_night is null then
     raise exception 'no such night out' using errcode = '42501';
+  end if;
+
+  -- AHEAD OF EVERY WRITE. Same errcode and same single definition as
+  -- add_night_out_media's own guard, so both halves of "you may act on this
+  -- night's media" close at exactly the same instant.
+  if now() >= public.night_out_media_expires_at(v_night) then
+    raise exception 'the night out media window has closed' using errcode = '22023';
   end if;
 
   select count(distinct s.bar_id)::integer into v_bars
@@ -1025,7 +1186,10 @@ $$;
 comment on function public.archive_night_out(uuid) is
   'V8-R-NO-009. Privately archives the Night Out''s LIVE media to the calling '
   'participant''s Saved Nights Out, in one transaction, with a kind=''archive'' '
-  'retention hold per object. Idempotent: re-archiving tops the same card up.';
+  'retention hold per object. REFUSES once the media window has closed — the '
+  'grant is "before its 24-hour window closes" — so a late call writes nothing '
+  'rather than reporting an empty archive. Idempotent inside the window: '
+  're-archiving tops the same card up.';
 
 revoke all on function public.archive_night_out(uuid) from public, anon;
 grant execute on function public.archive_night_out(uuid) to authenticated;
@@ -1329,6 +1493,17 @@ grant execute on function public.media_read_window(text) to authenticated;
 --      attaching somebody else's media id is refused 42501. Set the plan's night
 --      two days back → get_night_out_media returns ZERO rows and
 --      add_night_out_media refuses, with no sweeper run.
+--   7a. THE SCHEDULED START IS 9:00 PM (V8-R-NO-002), NOT 4:00 AM:
+--      select public.night_out_media_expires_at('2026-07-24') →
+--      2026-07-26 01:00:00+00 (9:00 PM EDT on the 24th, plus 24 hours = 9:00 PM
+--      EDT on the 25th). In EST: night_out_media_expires_at('2026-01-23') →
+--      2026-01-25 02:00:00+00. A photo added at 11:00 PM on the plan's night
+--      must still be returned by get_night_out_media the following afternoon —
+--      the round-1 4:00 AM reading expired it five hours after capture.
+--   7b. THE WINDOW IS SERVER-ANSWERED: night_out_media_window(plan) as an
+--      accepted member returns exactly one row whose is_open agrees with
+--      now() < expires_at, and ZERO rows for a non-member. The client gates its
+--      add-photo and archive controls on this and never on its own clock.
 --   8. SAVED NIGHTS OUT (V8-R-NO-009 / V8-R-ACC-002): archive_night_out as a
 --      member returns a photo_count matching the live media; get_saved_nights
 --      returns that card for the archiver and NOTHING for anyone else;
@@ -1337,6 +1512,17 @@ grant execute on function public.media_read_window(text) to authenticated;
 --      remaining_references is non-zero and the bytes are NOT reclaimable, and
 --      the archiver can still read it through media_read_window. Re-run
 --      archive_night_out → the same saved night id, no duplicate card.
+--   8a. A LATE ARCHIVE IS REFUSED, NOT EMPTIED: set the plan's night two days
+--      back and call archive_night_out as an accepted member → it RAISES 22023
+--      and public.saved_nights gains no row. Before this guard it returned a
+--      saved-night id with photo_count 0, which the client reported as a real
+--      archive of an empty night.
+--   8b. AN ARCHIVE'S RETENTION HOLDS DIE WITH IT: account A archives an object
+--      owned by B, then delete A's profile row. The cascade removes A's
+--      saved_nights row, and the matching kind='archive' media_destinations row
+--      must now have removed_at set. media_reference_count for that object drops
+--      accordingly, and delete_media_everywhere by B leaves the bytes
+--      reclaimable — previously A's orphan hold held them forever.
 --   9. media_read_window: as an accepted member on a live night-out path →
 --      (true, the window); the same call after the window closes → falls through
 --      to the story/owner branches and does not authorise on night-out grounds.
@@ -1353,7 +1539,11 @@ grant execute on function public.media_read_window(text) to authenticated;
 --     photo and every archived photo unreadable through /api/media/:id/url.
 --   * media_destinations kind list: re-adding the 4-value check requires every
 --     kind='night_out' row to be gone first, which DESTROYS the attachments.
---   * Saved Nights Out: drop saved_night_media, then saved_nights. Destructive —
---     and it drops the retention holds keeping archived bytes alive, so a sweep
+--   * Saved Nights Out: drop the saved_nights_release_holds trigger and its
+--     function, then saved_night_media, then saved_nights. Destructive — and it
+--     drops the retention holds keeping archived bytes alive, so a sweep
 --     afterwards will reclaim photos accounts deliberately kept.
+--   * night_out_media_window: drop the function. Note the recap then has no
+--     server answer for "is the window open?" and cannot gate its controls
+--     without going back to the device clock this file removed.
 ------------------------------------------------------------------------------

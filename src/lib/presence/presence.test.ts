@@ -220,7 +220,7 @@ describe('never throws (the module contract)', () => {
     await expect(setPresence(throwing, { status: 'going' })).resolves.toBe(false);
     await expect(clearPresence(throwing)).resolves.toBe(false);
     await expect(fetchCirclePresence(throwing)).resolves.toBeNull();
-    await expect(fetchMyPresence(throwing)).resolves.toBeNull();
+    await expect(fetchMyPresence(throwing)).resolves.toEqual({ kind: 'failed' });
   });
 
   it('never reports a thrown circle read as an empty circle', async () => {
@@ -330,11 +330,14 @@ describe('fetchMyPresence', () => {
       error: null,
     });
     await expect(fetchMyPresence(t.client)).resolves.toEqual({
-      status: 'going',
-      barId: 'attaboy',
-      audience: 'close',
-      recipientIds: [],
-      updatedAt: '2026-07-25T02:00:00Z',
+      kind: 'ok',
+      presence: {
+        status: 'going',
+        barId: 'attaboy',
+        audience: 'close',
+        recipientIds: [],
+        updatedAt: '2026-07-25T02:00:00Z',
+      },
     });
     // No arguments: identity is auth.uid() and the night is the server-side boundary, so
     // this cannot be asked about another account or pointed at another night.
@@ -342,11 +345,40 @@ describe('fetchMyPresence', () => {
     expect(t.from).not.toHaveBeenCalled();
   });
 
-  it('is null when nothing is set tonight, and on error', async () => {
+  /**
+   * THE ONE THAT WIDENS AN AUDIENCE IF IT IS GOT WRONG. 'unset' is the only
+   * outcome a caller may choose a default audience for; a failed read that
+   * looked like 'unset' let the next status tap rewrite a live 'close' or
+   * 'people' pin as 'friends' and wipe its recipient list.
+   */
+  it('keeps "no pin tonight" apart from "the read failed"', async () => {
     const none = rpcOwnPresence({ data: [], error: null });
-    await expect(fetchMyPresence(none.client)).resolves.toBeNull();
+    await expect(fetchMyPresence(none.client)).resolves.toEqual({
+      kind: 'unset',
+    });
     const failed = rpcOwnPresence({ data: null, error: { message: 'x' } });
-    await expect(fetchMyPresence(failed.client)).resolves.toBeNull();
+    await expect(fetchMyPresence(failed.client)).resolves.toEqual({
+      kind: 'failed',
+    });
+    const nonsense = rpcOwnPresence({ data: { rows: [] }, error: null });
+    await expect(fetchMyPresence(nonsense.client)).resolves.toEqual({
+      kind: 'failed',
+    });
+  });
+
+  it('treats a row it cannot describe as a failed read, never as no pin', async () => {
+    // The server said there IS a pin. Calling that 'unset' would hand the next
+    // write a default audience for a row that already has one.
+    const t = rpcOwnPresence({
+      data: [{
+        status: 'raving',
+        bar_id: null,
+        audience: 'close',
+        updated_at: '2026-07-25T02:00:00Z',
+      }],
+      error: null,
+    });
+    await expect(fetchMyPresence(t.client)).resolves.toEqual({ kind: 'failed' });
   });
 
   it('falls back to the narrower reading of an unknown audience', async () => {
@@ -364,8 +396,8 @@ describe('fetchMyPresence', () => {
       }],
       error: null,
     });
-    const mine = await fetchMyPresence(t.client);
-    expect(mine?.audience).toBe('close');
+    const read = await fetchMyPresence(t.client);
+    expect(read.kind === 'ok' && read.presence.audience).toBe('close');
   });
 
   it('carries the people selection the SERVER kept', async () => {
@@ -380,11 +412,11 @@ describe('fetchMyPresence', () => {
       }],
       error: null,
     });
-    const mine = await fetchMyPresence(t.client);
-    expect(mine?.audience).toBe('people');
+    const read = await fetchMyPresence(t.client);
+    expect(read.kind === 'ok' && read.presence.audience).toBe('people');
     // Non-string entries are dropped rather than coerced: a recipient we cannot
     // name is not a recipient to show.
-    expect(mine?.recipientIds).toEqual([kept]);
+    expect(read.kind === 'ok' && read.presence.recipientIds).toEqual([kept]);
   });
 
   it('reports an absent recipient list as empty, never undefined', async () => {
@@ -398,7 +430,8 @@ describe('fetchMyPresence', () => {
       error: null,
     });
     await expect(fetchMyPresence(t.client)).resolves.toMatchObject({
-      recipientIds: [],
+      kind: 'ok',
+      presence: { recipientIds: [] },
     });
   });
 });

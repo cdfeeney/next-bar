@@ -168,7 +168,27 @@ export async function fetchCirclePresence(
 }
 
 /**
- * The caller's own presence tonight, or null when they have set none.
+ * Reading YOUR OWN pin has three outcomes, and two of them used to be one.
+ *
+ * Round 2, both gates (HIGH): this returned `MyPresence | null`, with `null`
+ * meaning both "you have no pin tonight" and "the read failed". The panel then
+ * rendered the unset row for a failed read, and the next status tap wrote
+ * `audience: mine?.audience ?? 'friends'` — silently widening a live 'close' or
+ * 'people' pin to every follower and wiping its recipient list. A transport
+ * blip could not be allowed to become a privacy change.
+ *
+ * The audience is the reason the distinction has to be in the TYPE rather than
+ * in a convention: 'unset' is the only outcome a default may be chosen for.
+ */
+export type MyPresenceRead =
+  | { kind: 'ok'; presence: MyPresence }
+  /** The server answered, and there is no pin for tonight. */
+  | { kind: 'unset' }
+  /** The read itself failed — transport, RLS, or an unusable client. */
+  | { kind: 'failed' };
+
+/**
+ * The caller's own presence tonight.
  *
  * Read through `get_my_presence()`, never off the table — see the body. The
  * night is the server's, so a row the client considers tonight's is the same
@@ -176,7 +196,7 @@ export async function fetchCirclePresence(
  */
 export async function fetchMyPresence(
   supabase: SupabaseClient,
-): Promise<MyPresence | null> {
+): Promise<MyPresenceRead> {
   // THROUGH THE RPC, NEVER THE TABLE. This read used to be
   // `.from('night_presence').select(...).eq('user_id', userId).eq('night', night)`, relying
   // on the own-row RLS policy to scope it. That policy never ran: 0068 revokes ALL table
@@ -189,14 +209,19 @@ export async function fetchMyPresence(
   // return. The userId and night parameters are gone rather than ignored — a parameter a
   // function does not honour is a lie a later caller will believe.
   const { data, error } = await callRpc(supabase, 'get_my_presence');
-  if (error || !Array.isArray(data) || data.length === 0) return null;
+  if (error || !Array.isArray(data)) return { kind: 'failed' };
+  if (data.length === 0) return { kind: 'unset' };
   const row = data[0] as CirclePresenceRow & {
     audience: unknown;
     recipient_ids: unknown;
   };
-  if (!isPresenceStatus(row.status)) return null;
+  // A ROW WE CANNOT PARSE IS A FAILED READ, NOT AN ABSENT PIN. The server said
+  // there IS a pin; we simply cannot describe it. Calling that 'unset' would
+  // hand the next write a default audience for a row that already has one — the
+  // same widening this type exists to stop, arriving one branch over.
+  if (!isPresenceStatus(row.status)) return { kind: 'failed' };
   const barId = isBarId(row.bar_id) ? row.bar_id : null;
-  if (!isValidPin(row.status, barId)) return null;
+  if (!isValidPin(row.status, barId)) return { kind: 'failed' };
   // AN UNRECOGNISED AUDIENCE READS AS THE NARROWEST ONE WE CAN NAME, not the
   // widest. This value drives which controls the surface offers; defaulting a
   // row we cannot parse to 'friends' would show the user a wider audience than
@@ -205,14 +230,17 @@ export async function fetchMyPresence(
     ? row.audience
     : 'close';
   return {
-    status: row.status,
-    barId,
-    audience,
-    recipientIds: Array.isArray(row.recipient_ids)
-      ? row.recipient_ids.filter(
-          (id): id is string => typeof id === 'string' && id.length > 0,
-        )
-      : [],
-    updatedAt: typeof row.updated_at === 'string' ? row.updated_at : '',
+    kind: 'ok',
+    presence: {
+      status: row.status,
+      barId,
+      audience,
+      recipientIds: Array.isArray(row.recipient_ids)
+        ? row.recipient_ids.filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          )
+        : [],
+      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : '',
+    },
   };
 }

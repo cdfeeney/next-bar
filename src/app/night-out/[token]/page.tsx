@@ -545,6 +545,20 @@ export default function NightOutPage({
   const isPlanOpen = plan.status === 'draft' || plan.status === 'open';
   const canParticipate =
     isPlanOpen && (isOwner || plan.callerStatus === 'accepted');
+  /**
+   * MEDIA IS A DIFFERENT PERMISSION FROM SUGGESTING (round 2, Codex gate, HIGH).
+   *
+   * `canParticipate` also requires the plan to be draft or open, because
+   * `suggest_night_out_bar` and `vote_night_out_bar` both close once a bar is
+   * decided. `add_night_out_media` and `archive_night_out` do not: they check
+   * `night_out_role(...) is not null` — accepted membership — and the media
+   * window, and nothing else. Passing the suggestion predicate to the photo
+   * section therefore hid Add-a-photo from every accepted member the moment the
+   * plan was locked, which is exactly when the night is about to be
+   * photographed. The two predicates are named apart so they cannot drift back
+   * together.
+   */
+  const canAddPhoto = isOwner || plan.callerStatus === 'accepted';
 
   return (
     // pb-28 CLEARS THE BOTTOM NAV. This page carried only `py-8` and got away
@@ -783,11 +797,7 @@ export default function NightOutPage({
       {/* V8-R-NO-008 / V8-R-NO-009. Rendered for a CANCELLED plan too: the
           night still happened, its photos are still inside their window, and
           the archive is the one thing a cancellation must not take away. */}
-      <NightOutMedia
-        planId={plan.id}
-        night={plan.night}
-        canParticipate={canParticipate}
-      />
+      <NightOutMedia planId={plan.id} canAddPhoto={canAddPhoto} />
     </main>
   );
 }
