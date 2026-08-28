@@ -158,9 +158,22 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
       'and not exists ( select 1 from public.media_destinations d'
       + ' join public.media_objects m on m.id = d.media_id'
       + ' where m.storage_path = p_name'
-      + " and d.kind <> 'feed'"
+      + " and d.kind not in ('feed', 'archive')"
       + ' and d.removed_at is null )',
     );
+  });
+
+  it('an ARCHIVE hold is not a destination, so it cannot stand the veto down', () => {
+    // Round 4 (HIGH, codex): `kind <> 'feed'` counted a Saved Nights Out retention
+    // hold as somewhere the photo is still visible, so an owner who reported their
+    // only Feed post kept getting signed URLs. This is 0066's own rule, not a new
+    // one — remove_media_destination carries the same `kind <> 'archive'` clause
+    // because "an archive row is a retention HOLD, not a destination a user can see
+    // or remove".
+    expect(
+      sqlShape(body),
+      'the veto treats an archive retention hold as a visible destination',
+    ).not.toContain("d.kind <> 'feed'");
   });
 
   it('a report on a post whose Feed destination is already retired vetoes nothing', () => {
@@ -221,6 +234,24 @@ describe('0069 — a named group is resolved server-side (D-C-37)', () => {
       groupBranch(),
       'the caller list is back in the group branch, narrowing a named group',
     ).not.toContain('p_audience_ids');
+  });
+
+  it('the tag write re-asserts mutuality in its OWN statement', () => {
+    // Round 4 (MEDIUM, claude): the same two-snapshot shape as the group branch,
+    // one arm over. The guard near the top of publish_feed_post is a separate
+    // statement, so somebody who blocks or unfriends the poster while the media
+    // lock and the inserts run passed it and still got a tag row written onto
+    // their consent surface. The 'custom' and 'group' arms were never exposed —
+    // they test feed_post_audience, written inside this transaction — so it was
+    // the 'friends' arm alone.
+    expect(sqlShape(body)).toContain(
+      "or ( p_audience = 'friends'"
+      + ' and public.is_mutual_friend(v_author, ids.distinct_id) )',
+    );
+    expect(
+      sqlShape(body),
+      'the friends arm of the tag insert is unguarded again',
+    ).not.toContain("ids.distinct_id = v_author or p_audience = 'friends' or exists");
   });
 
   it('the poster membership that authorises the post is read in the SAME statement', () => {

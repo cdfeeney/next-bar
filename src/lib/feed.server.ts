@@ -40,21 +40,31 @@ export const MAX_FEED_CAPTION_LENGTH = 1000;
 export const MAX_FEED_COMMENT_LENGTH = 2000;
 
 /**
- * How many comment rows one Feed read will fetch, across all the posts on screen.
+ * How many replies one Feed card will load. PER POST, not per batch.
  *
  * A FEED POST NEVER EXPIRES (V8-R-FEED-002), so its thread only ever grows, and
  * `fetchFeedComments` re-runs on mount AND after every confirmed reply or
  * deletion. Unbounded, that is a query whose cost rises for the whole life of the
  * surface, and on a deployment with a PostgREST row cap it silently truncates —
- * which is worse than truncating on purpose, because nothing says it happened.
+ * worse than truncating on purpose, because nothing says it happened.
  *
- * ponytail: one flat ceiling across the batch, newest-first so truncation drops
- * the OLDEST replies rather than the ones people came back for. Per-post
- * pagination is the upgrade when a real thread outgrows this; it needs a cursor
- * the UI does not have yet, and building it now would be a paging surface with
- * nothing paging it.
+ * WHY PER POST AND NOT ONE FLAT CEILING ACROSS THE BATCH. A flat ceiling was the
+ * smaller change, and it produced a defect in each of the two rounds that
+ * followed. One busy post consumes the whole budget, and then the quieter posts
+ * behind it get whatever the busy one left: first they were reported as settled
+ * and EMPTY, and once that was fixed by refusing to seed a truncated batch, they
+ * became permanently UNREAD instead — the batch is full every time, so no refresh
+ * ever reaches them. Both are the same cause wearing different symptoms, so the
+ * cause goes rather than the symptom. A per-post bound cannot starve a post,
+ * because no post competes with another for it.
+ *
+ * ponytail: one query per post on screen, bounded by the feed's own `limit`, in
+ * the same shape (and for the same reason) as `fetchNightTokens` below. A single
+ * batched read with a per-post window needs a lateral join PostgREST will not
+ * express, so it would mean a new RPC in 0069; worth doing when a page carries
+ * enough cards to feel it, not before.
  */
-export const FEED_COMMENT_READ_LIMIT = 500;
+export const FEED_COMMENTS_PER_POST = 200;
 
 /**
  * V8-R-FEED-006's three-way shape. There is deliberately no `'public'`: "FEED IS
@@ -470,8 +480,16 @@ export async function deleteFeedPost(
 /**
  * The visible thread on these posts (V8-R-FEED-003), oldest first.
  *
- * One query for many posts: a thread per card would be an N+1 against a surface
- * whose whole shape is "several cards, each with a few replies".
+ * ONE BOUNDED READ PER POST. A single batched read was the first shape here and it
+ * carried a flat ceiling across every card, which is what let one busy post starve
+ * the others — see {@link FEED_COMMENTS_PER_POST} for the two symptoms that came
+ * of it. Per post, every card gets its own budget and its own definite answer.
+ *
+ * EITHER EVERY THREAD IS READ OR THE READ FAILED. One post's refusal fails the
+ * whole call rather than returning a map with a silent hole in it: the caller
+ * distinguishes "not read" from "read, and empty" by key presence, so a partial
+ * success would quietly turn one card's outage into a permanent unread state with
+ * no banner to say why.
  */
 export async function fetchFeedComments(
   client: SupabaseClient | null,
@@ -479,45 +497,32 @@ export async function fetchFeedComments(
 ): Promise<MediaResult<Map<string, FeedComment[]>>> {
   if (client === null) return mediaUnavailable();
   const byPost = new Map<string, FeedComment[]>();
-  if (postIds.length === 0) return { ok: true, value: byPost };
+  const ids = [...new Set(postIds)];
+  if (ids.length === 0) return { ok: true, value: byPost };
 
   try {
     // NEWEST FIRST, THEN BOUNDED, THEN REVERSED FOR DISPLAY. Reading oldest-first
-    // with a limit would have kept the oldest replies and dropped the newest — a
-    // just-sent reply vanishing is the one truncation a reply surface must never
-    // choose. The rows come back descending, the ceiling cuts the tail, and each
-    // thread is flipped to the oldest-first order the thread renders in.
-    const { data, error } = await client
-      .from('feed_comments')
-      .select('id, post_id, author_id, body, created_at')
-      .in('post_id', [...postIds])
-      .order('created_at', { ascending: false })
-      .limit(FEED_COMMENT_READ_LIMIT);
+    // with a limit keeps the oldest replies and drops the newest — a just-sent
+    // reply vanishing is the one truncation a reply surface must never choose. The
+    // rows come back descending, the bound cuts the tail, and the thread is
+    // flipped into the oldest-first order it renders in.
+    const threads = await Promise.all(ids.map(async (postId) => {
+      const { data, error } = await client
+        .from('feed_comments')
+        .select('id, post_id, author_id, body, created_at')
+        .eq('post_id', postId)
+        .order('created_at', { ascending: false })
+        .limit(FEED_COMMENTS_PER_POST);
+      if (error) return null;
+      const rows = (data ?? []) as Parameters<typeof toComment>[0][];
+      return [postId, rows.map(toComment).reverse()] as const;
+    }));
 
-    if (error) return mediaFailure('failed', 'Those replies could not be loaded.');
-
-    const rows = (data ?? []) as Parameters<typeof toComment>[0][];
-
-    // AN ENTRY FOR EVERY POST WE ASKED ABOUT, including the ones with no replies —
-    // BUT ONLY WHEN THE BATCH WAS NOT TRUNCATED. The caller tells "not read yet"
-    // from "read, and empty" by whether the key is present, so omitting the quiet
-    // posts would report them unread forever.
-    //
-    // The ceiling is FLAT ACROSS THE BATCH, though, so one busy post can consume
-    // it entirely and a quieter post's replies fall outside the window. Seeding
-    // that post with [] turns "we did not see this far" into the affirmative claim
-    // "no replies yet" — the same false ready state this whole distinction exists
-    // to remove, reintroduced by the bound that was supposed to be the safe half.
-    // On a full batch, only the posts actually represented in the rows are known;
-    // the rest stay ABSENT, which renders as unread rather than as empty.
-    const truncated = rows.length >= FEED_COMMENT_READ_LIMIT;
-    if (!truncated) {
-      for (const postId of postIds) byPost.set(postId, []);
+    if (threads.some((thread) => thread === null)) {
+      return mediaFailure('failed', 'Those replies could not be loaded.');
     }
-
-    for (const row of rows) {
-      const comment = toComment(row);
-      byPost.set(comment.postId, [comment, ...(byPost.get(comment.postId) ?? [])]);
+    for (const thread of threads) {
+      if (thread !== null) byPost.set(thread[0], thread[1]);
     }
     return { ok: true, value: byPost };
   } catch {

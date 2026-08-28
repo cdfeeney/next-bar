@@ -85,7 +85,7 @@ export default function FeedSection({
   const requestSeq = useRef(0);
 
   /**
-   * Whose Feed is currently ON SCREEN. `undefined` until the first refresh runs.
+   * Whose Feed is currently ON SCREEN. `undefined` before the first render.
    *
    * Everything this component renders is audience-scoped to one account
    * (V8-R-FEED-006), so it belongs to the viewer who loaded it and to nobody
@@ -93,30 +93,36 @@ export default function FeedSection({
    */
   const paintedFor = useRef<string | null | undefined>(undefined);
 
+  // THE FEED ON SCREEN BELONGS TO THE ACCOUNT THAT LOADED IT, and it is dropped
+  // DURING RENDER — before this commit paints — rather than in an effect.
+  //
+  // Signing OUT was handled from the start. A signed-in to signed-in switch was
+  // not, and it never passes through null: `viewerId` goes straight from A to B,
+  // so until B's reads resolved — or forever, if they failed — B was looking at
+  // A's posts, A's threads and A's names. The epoch guard does not help; it
+  // rejects A's in-flight ANSWERS and cannot unrender what already painted.
+  //
+  // AND CLEARING IT IN THE EFFECT WAS STILL TOO LATE. React runs passive effects
+  // AFTER the browser paints, so the commit carrying `viewerId = B` painted with
+  // A's state intact and the clear arrived a frame later — a visible flash of one
+  // account's private Feed to another, which is the same leak in a smaller window
+  // rather than a different one. This is React's documented "adjust state when a
+  // prop changes" shape: set state during render, and React re-renders
+  // immediately with the new state without ever showing the old.
+  if (paintedFor.current !== viewerId) {
+    paintedFor.current = viewerId;
+    setPosts([]);
+    setThreads(new Map());
+    setPeople(new Map());
+    // AND THE FAILURE BANNER GOES WITH IT. Leaving `loadFailed` set told a
+    // signed-out visitor that "the Feed could not be loaded" forever, about a
+    // Feed there is nothing to load: the banner is not gated on auth, so a read
+    // that failed while signed in outlived the session that issued it.
+    setLoadFailed(false);
+  }
+
   const refresh = useCallback(async () => {
     const seq = (requestSeq.current += 1);
-
-    // THE FEED ON SCREEN BELONGS TO THE ACCOUNT THAT LOADED IT, and it is cleared
-    // the moment the viewer changes rather than when the next account's read
-    // happens to land.
-    //
-    // Signing OUT was already handled below. A signed-in to signed-in switch was
-    // not, and it never passes through null: `viewerId` goes straight from A to
-    // B, the effect re-runs, and until B's reads resolve — or forever, if they
-    // fail — B is looking at A's posts, A's threads and A's names. The epoch
-    // guard does not help: it rejects A's in-flight ANSWERS, and cannot unrender
-    // what has already painted.
-    if (paintedFor.current !== viewerId) {
-      paintedFor.current = viewerId;
-      setPosts([]);
-      setThreads(new Map());
-      setPeople(new Map());
-      // AND THE FAILURE BANNER GOES WITH IT. Leaving `loadFailed` set told a
-      // signed-out visitor that "the Feed could not be loaded" forever, about a
-      // Feed there is nothing to load: the banner is not gated on auth, so a
-      // read that failed while signed in outlived the session that issued it.
-      setLoadFailed(false);
-    }
 
     if (viewerId === null) {
       // Signed out there is no Feed to read at all: V8-R-FEED-006 makes the

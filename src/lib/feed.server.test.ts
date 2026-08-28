@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { FEED_COMMENT_READ_LIMIT, fetchFeedComments, fetchFeedPosts } from './feed.server';
+import { FEED_COMMENTS_PER_POST, fetchFeedComments, fetchFeedPosts } from './feed.server';
 
 /**
  * The night-token read is the one this file exists for.
@@ -126,23 +126,44 @@ describe('fetchFeedPosts — the night-token read', () => {
 });
 
 /**
- * A PostgREST double for `feed_comments` that RECORDS the query it was asked to
- * run, so the ordering and the ceiling can be asserted rather than assumed.
+ * A PostgREST double for `feed_comments` that RECORDS every query it was asked to
+ * run, so the per-post scoping, the ordering and the bound are asserted rather
+ * than assumed.
+ *
+ * `rowsFor` answers per post id, which is the whole point of the read this covers:
+ * one post's traffic must not decide what another post returns.
  */
-function commentClient(rows: Row[]) {
-  const calls: { order?: [string, { ascending: boolean }]; limit?: number } = {};
-  const chain: Record<string, unknown> = {};
-  chain.select = vi.fn(() => chain);
-  chain.in = vi.fn(() => chain);
-  chain.order = vi.fn((column: string, options: { ascending: boolean }) => {
-    calls.order = [column, options];
+function commentClient(
+  rowsFor: (postId: string) => Row[] | 'error',
+) {
+  const calls: {
+    eq: string[];
+    order: [string, { ascending: boolean }][];
+    limit: number[];
+  } = { eq: [], order: [], limit: [] };
+  const from = vi.fn(() => {
+    let postId = '';
+    const chain: Record<string, unknown> = {};
+    chain.select = vi.fn(() => chain);
+    chain.eq = vi.fn((_column: string, value: string) => {
+      postId = value;
+      calls.eq.push(value);
+      return chain;
+    });
+    chain.order = vi.fn((column: string, options: { ascending: boolean }) => {
+      calls.order.push([column, options]);
+      return chain;
+    });
+    chain.limit = vi.fn(async (n: number) => {
+      calls.limit.push(n);
+      const answer = rowsFor(postId);
+      return answer === 'error'
+        ? { data: null, error: { message: 'denied' } }
+        : { data: answer, error: null };
+    });
     return chain;
   });
-  chain.limit = vi.fn(async (n: number) => {
-    calls.limit = n;
-    return { data: rows, error: null };
-  });
-  return { client: { from: vi.fn(() => chain) } as never, calls };
+  return { client: { from } as never, calls, from };
 }
 
 const comment = (over: Row = {}): Row => ({
@@ -154,26 +175,66 @@ const comment = (over: Row = {}): Row => ({
   ...over,
 });
 
-describe('fetchFeedComments — the thread read is bounded, and honest about it', () => {
-  it('reads newest-first under a ceiling, so truncation drops the OLDEST replies', async () => {
+describe('fetchFeedComments — the thread read is bounded PER POST, and honest about it', () => {
+  it('reads newest-first under a per-post bound, so truncation drops the OLDEST replies', async () => {
     // A Feed post never expires (V8-R-FEED-002), so its thread only grows and this
-    // query re-runs after every confirmed write. Unbounded it costs more forever;
+    // read re-runs after every confirmed write. Unbounded it costs more forever;
     // bounded the WRONG WAY — oldest-first with a limit — it drops the newest, and
     // a just-sent reply disappearing is the one truncation a reply surface must
     // never choose.
-    const t = commentClient([comment()]);
+    const t = commentClient(() => [comment()]);
 
     await fetchFeedComments(t.client, ['post-1']);
 
     expect(t.calls.order, 'the thread read is not ordered newest-first').toEqual([
-      'created_at',
-      { ascending: false },
+      ['created_at', { ascending: false }],
     ]);
-    expect(t.calls.limit, 'the thread read is unbounded').toBe(FEED_COMMENT_READ_LIMIT);
+    expect(t.calls.limit, 'the thread read is unbounded').toEqual([FEED_COMMENTS_PER_POST]);
+  });
+
+  it('scopes each read to ONE post, so no post spends another post’s budget', async () => {
+    // Rounds 3 and 4 both found a defect caused by one flat ceiling across the
+    // batch: first the quiet posts were reported settled-and-empty, then — once
+    // that was fixed by refusing to seed a full batch — permanently unread,
+    // because the batch is full on every refresh. The cause is the shared budget,
+    // so each post now carries its own.
+    const t = commentClient(() => []);
+
+    await fetchFeedComments(t.client, ['post-1', 'post-2', 'post-3']);
+
+    expect(t.calls.eq, 'the reads are not scoped one per post').toEqual([
+      'post-1',
+      'post-2',
+      'post-3',
+    ]);
+    expect(t.calls.limit).toEqual([
+      FEED_COMMENTS_PER_POST,
+      FEED_COMMENTS_PER_POST,
+      FEED_COMMENTS_PER_POST,
+    ]);
+  });
+
+  it('a post with a full thread cannot starve a quieter post', async () => {
+    // The exact scenario both lanes named: P1 holds a full budget of recent
+    // replies, P2 holds one older reply. P2's reply must still arrive.
+    const busy = Array.from({ length: FEED_COMMENTS_PER_POST }, (_, i) =>
+      comment({ id: `busy-${i}`, post_id: 'post-1' }));
+    const t = commentClient((postId) =>
+      (postId === 'post-1' ? busy : [comment({ id: 'quiet', post_id: 'post-2' })]));
+
+    const result = await fetchFeedComments(t.client, ['post-1', 'post-2']);
+
+    expect(result.ok).toBe(true);
+    const value = (result as { ok: true; value: Map<string, { id: string }[]> }).value;
+    expect(
+      value.get('post-2')?.map((row) => row.id),
+      'a busy post consumed the quieter post’s replies',
+    ).toEqual(['quiet']);
+    expect(value.get('post-1')).toHaveLength(FEED_COMMENTS_PER_POST);
   });
 
   it('still hands each thread back oldest-first, whatever order the rows arrived in', async () => {
-    const t = commentClient([
+    const t = commentClient(() => [
       comment({ id: 'newest', created_at: '2026-08-24T03:00:00Z' }),
       comment({ id: 'oldest', created_at: '2026-08-24T01:00:00Z' }),
     ]);
@@ -185,32 +246,12 @@ describe('fetchFeedComments — the thread read is bounded, and honest about it'
     expect(thread?.map((row) => row.id)).toEqual(['oldest', 'newest']);
   });
 
-  it('a TRUNCATED batch names no post empty, because it did not see that far', async () => {
-    // Round 3 (MEDIUM, both lanes): the ceiling is flat across the batch, so one
-    // busy post can consume all of it. Seeding the quieter posts with [] turned
-    // "we did not read this far" into the affirmative "No replies yet." — the
-    // false ready state the third state exists to remove, reintroduced by the
-    // bound that was meant to be the safe half. An unseen post must stay ABSENT.
-    const full = Array.from({ length: FEED_COMMENT_READ_LIMIT }, (_, i) =>
-      comment({ id: `busy-${i}`, post_id: 'post-1' }));
-    const t = commentClient(full);
-
-    const result = await fetchFeedComments(t.client, ['post-1', 'post-2']);
-
-    expect(result.ok).toBe(true);
-    const value = (result as { ok: true; value: Map<string, unknown[]> }).value;
-    expect(
-      value.has('post-2'),
-      'a post the truncated batch never reached was reported as read and empty',
-    ).toBe(false);
-    expect(value.has('post-1')).toBe(true);
-  });
-
   it('a successful read names every post it was asked about, replies or not', async () => {
     // The caller tells "not read yet" from "read, and empty" by whether the key is
     // there, so omitting the quiet posts would report them unread forever — and
     // FeedComments would tell their viewers the replies could not be loaded.
-    const t = commentClient([comment({ post_id: 'post-1' })]);
+    const t = commentClient((postId) =>
+      (postId === 'post-1' ? [comment({ post_id: 'post-1' })] : []));
 
     const result = await fetchFeedComments(t.client, ['post-1', 'post-2']);
 
@@ -218,5 +259,19 @@ describe('fetchFeedComments — the thread read is bounded, and honest about it'
     const value = (result as { ok: true; value: Map<string, unknown[]> }).value;
     expect(value.has('post-2'), 'a post with no replies was left out of a successful read').toBe(true);
     expect(value.get('post-2')).toEqual([]);
+  });
+
+  it('one post’s refusal fails the whole read rather than leaving a silent hole', async () => {
+    // A partial success would put an ABSENT key in an ok result, and absent means
+    // "not read yet" — so that one card would sit unread forever with no banner
+    // saying why. The honest answer is that the read failed.
+    const t = commentClient((postId) => (postId === 'post-2' ? 'error' : []));
+
+    const result = await fetchFeedComments(t.client, ['post-1', 'post-2']);
+
+    expect(
+      result.ok,
+      'a refused thread was reported as a successful read with a hole in it',
+    ).toBe(false);
   });
 });

@@ -90,6 +90,27 @@ function next<T>(plan: T[]): T {
   return plan.length > 1 ? (plan.shift() as T) : plan[0];
 }
 
+/**
+ * A spy standing in for the card's avatar, so a COMMIT carrying a post can be
+ * observed rather than inferred.
+ *
+ * `rerender` runs inside `act()`, which flushes passive effects before it
+ * returns, so a queryBy* assertion straight after it cannot tell a render-time
+ * reset from an effect-time one — both look clean by then, and the effect version
+ * has already painted a frame of the previous account's Feed in a real browser.
+ * A child records what was actually RENDERED: React re-runs a component that sets
+ * state during its own render BEFORE rendering children, so with the reset in
+ * render this spy is never called with the old account's post, while an effect
+ * lets the whole card render and commit first.
+ */
+const { avatarRenders } = vi.hoisted(() => ({ avatarRenders: vi.fn<(seed: string) => void>() }));
+vi.mock('@/components/Avatar', () => ({
+  default: ({ seed }: { seed: string }) => {
+    avatarRenders(seed);
+    return null;
+  },
+}));
+
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () =>
     authStatus === 'signed-in'
@@ -174,14 +195,23 @@ describe('FeedSection — the Feed on screen belongs to the account that loaded 
     authStatus = 'signed-in';
     viewer = OTHER_VIEWER;
     epoch = 2;
+    avatarRenders.mockClear();
     view.rerender(<FeedSection entries={[]} onOpenStory={() => {}} />);
 
-    await waitFor(() =>
-      expect(
-        screen.queryByText('account A memory'),
-        "one account's Feed was left on screen for the next account to read",
-      ).toBeNull(),
-    );
+    // NOT a queryBy* assertion, and not waitFor. Round 4 (HIGH, codex): the clear
+    // used to live in the passive effect, and React runs those AFTER the browser
+    // paints — so the commit carrying account B's viewerId painted with A's posts
+    // still in state, and the clear arrived a frame later. `rerender` flushes
+    // effects inside act(), so BOTH versions look clean to a DOM query taken
+    // afterwards; the first version of this assertion passed against the defect.
+    // What separates them is whether A's card was ever RENDERED under B.
+    expect(
+      avatarRenders,
+      "the previous account's card was rendered and committed under the new account",
+    ).not.toHaveBeenCalled();
+
+    // And it is gone from the DOM too, once B's stalled read has had its chance.
+    await waitFor(() => expect(screen.queryByText('account A memory')).toBeNull());
   });
 });
 

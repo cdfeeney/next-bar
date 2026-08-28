@@ -873,11 +873,23 @@ begin
     -- the same reason a non-mutual group member is: the poster picked a group,
     -- not a list, and the narrowing is the server's job. Tagging yourself is
     -- always allowed and never needs an audience row.
+    -- THE MUTUALITY IS RE-ASSERTED HERE, in the same statement that writes the
+    -- row. The guard near the top of this function is a separate statement, so at
+    -- READ COMMITTED it sees an earlier snapshot: somebody who blocks or unfriends
+    -- the poster while the media lock and the inserts run passed that guard and
+    -- still got a tag row written onto their consent surface, which D-C-30 forbids
+    -- in both directions. The 'custom' and 'group' arms were never exposed — they
+    -- test `feed_post_audience`, written inside this transaction — so it was the
+    -- 'friends' arm alone, and it was the same two-snapshot shape as the group
+    -- membership check above.
     insert into public.feed_post_tags (post_id, profile_id)
       select v_id, ids.distinct_id
         from (select distinct unnest(p_tag_ids) as distinct_id) ids
        where ids.distinct_id = v_author
-          or p_audience = 'friends'
+          or (
+            p_audience = 'friends'
+            and public.is_mutual_friend(v_author, ids.distinct_id)
+          )
           or exists (
             select 1
               from public.feed_post_audience fa
@@ -1497,7 +1509,15 @@ begin
            from public.media_destinations d
            join public.media_objects m on m.id = d.media_id
           where m.storage_path = p_name
-            and d.kind <> 'feed'
+            -- 'archive' IS NOT A DESTINATION, and excluding it here is 0066's own
+            -- rule rather than a new one: "an archive row is a retention HOLD, not
+            -- a destination a user can see or remove", which is why
+            -- `remove_media_destination` carries the same `kind <> 'archive'`
+            -- clause. Counting a Saved Nights Out hold as somewhere the photo is
+            -- still visible defeated the veto outright — the owner reported their
+            -- only Feed post and the bytes kept signing, because a hold nobody can
+            -- look at stood in for a destination.
+            and d.kind not in ('feed', 'archive')
             and d.removed_at is null
        )
     then
