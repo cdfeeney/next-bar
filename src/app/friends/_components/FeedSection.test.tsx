@@ -108,7 +108,10 @@ function next<T>(plan: T[]): T {
  * render this spy is never called with the old account's post, while an effect
  * lets the whole card render and commit first.
  */
-const { avatarRenders } = vi.hoisted(() => ({ avatarRenders: vi.fn<(seed: string) => void>() }));
+const { avatarRenders, authorRequests } = vi.hoisted(() => ({
+  avatarRenders: vi.fn<(seed: string) => void>(),
+  authorRequests: [] as string[][],
+}));
 vi.mock('@/components/Avatar', () => ({
   default: ({ seed }: { seed: string }) => {
     avatarRenders(seed);
@@ -139,7 +142,13 @@ vi.mock('@/lib/feed.server', () => ({
   FEED_COMMENTS_PER_POST: 3,
   fetchFeedPosts: async () => next(postPlan),
   fetchFeedComments: async () => next(commentPlan),
-  fetchFeedAuthors: async () => next(authorPlan),
+  // RECORDS WHAT WAS ASKED FOR, not just what it answers. Round 8 (MEDIUM, both
+  // lanes): the repair that always requests the viewer's own identity had no test
+  // that could see it, because this mock ignored its arguments.
+  fetchFeedAuthors: async (_client: unknown, ids: readonly string[]) => {
+    authorRequests.push([...ids]);
+    return next(authorPlan);
+  },
   addFeedComment: async () => addResult,
   deleteFeedComment: async () => ({ ok: true, value: true }),
 }));
@@ -148,6 +157,9 @@ import FeedSection from './FeedSection';
 
 const NAMED = new Map<string, FeedAuthor>([
   [COMMENTER, { id: COMMENTER, handle: 'commenter', displayName: 'Commenter' }],
+  // The viewer's own identity, which the component asks for on every refresh so a
+  // reply it has staged is never rendered under the "Someone" fallback.
+  [VIEWER, { id: VIEWER, handle: 'viewer', displayName: 'Viewer' }],
 ]);
 
 beforeEach(() => {
@@ -157,6 +169,7 @@ beforeEach(() => {
   postPlan = [{ ok: true, value: [makePost()] }];
   commentPlan = [{ ok: true, value: new Map([['post-1', [makeComment()]]]) }];
   authorPlan = [NAMED];
+  authorRequests.length = 0;
   // A DISTINCT body, because a confirmed addition is now staged into the thread
   // until a successful read supersedes it — reusing the existing reply's text
   // would make every assertion about "the reply already on screen" ambiguous.
@@ -224,6 +237,39 @@ describe('FeedSection — the Feed on screen belongs to the account that loaded 
 
     // And it is gone from the DOM too, once B's stalled read has had its chance.
     await waitFor(() => expect(screen.queryByText('account A memory')).toBeNull());
+  });
+
+  test('one account staged reply is not carried into the next account thread', async () => {
+    const user = userEvent.setup();
+    // Round 8 (HIGH, claude): the render-phase reset cleared posts, threads and
+    // names but NOT the confirmed-writes overlay, so account A's staged reply
+    // bodies and deletion ids were applied to account B's threads — including
+    // where the server would refuse that row outright.
+    commentPlan = [{ ok: true, value: new Map([['post-1', []]]) }];
+    addResult = { ok: true, value: makeComment({ id: 'a-reply', body: 'account A reply', authorId: VIEWER }) };
+    const view = render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    // A's reply is confirmed and its follow-up read fails, so it stays staged.
+    commentPlan = [FAILED];
+    await user.type(screen.getByTestId('feed-comment-input'), 'account A reply');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+    expect(await screen.findByText('account A reply')).toBeTruthy();
+
+    // Account B signs in. B's posts load; B's comment read fails, which is what
+    // leaves the overlay as the only thing that could supply a thread.
+    viewer = OTHER_VIEWER;
+    epoch = 2;
+    postPlan = [{ ok: true, value: [makePost()] }];
+    commentPlan = [FAILED];
+    view.rerender(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+
+    expect(
+      screen.queryByText('account A reply'),
+      'one account staged reply was rendered into the next account thread',
+    ).toBeNull();
   });
 });
 
@@ -439,6 +485,20 @@ describe('FeedComments — a confirmed write is not undone by a failed read', ()
       screen.getByTestId('feed-comments-unavailable'),
       'the staged reply was allowed to stand for the whole thread',
     ).toBeTruthy();
+
+    // AND IT CARRIES A NAME. Round 8 (MEDIUM, both lanes): the repair that always
+    // asks for the viewer's own identity had no test that could see it — the
+    // identity mock ignored its arguments and no case asserted the byline. On a
+    // failed comment read there are no commenter ids to ask for, so without the
+    // viewer in that request their own reply renders as "Someone".
+    expect(
+      authorRequests.some((ids) => ids.includes(VIEWER)),
+      'the identity lookup never asked for the viewer, so their own reply has no name',
+    ).toBe(true);
+    expect(
+      screen.getByText('landed anyway').closest('li')?.textContent,
+      'the viewer own confirmed reply rendered under the Someone fallback',
+    ).toContain('Viewer');
   });
 
   test('a reply the server confirmed added is not lost when the follow-up read fails', async () => {
@@ -531,6 +591,32 @@ describe('FeedSection — "no tags" and "we could not read the tags" are differe
       await screen.findByTestId('feed-post-tags-unavailable'),
       'a failed feed_post_tags read rendered as a post with no tags',
     ).toBeTruthy();
+  });
+
+  test('a night whose token read FAILED says so, instead of just dropping View night', async () => {
+    // Round 8 (MEDIUM, codex): the server suite proved the boolean and the card
+    // rendered the notice, but no component test queried it — so deleting the
+    // rendering block regressed an RPC failure back to a silently missing action
+    // with every focused test green.
+    postPlan = [{ ok: true, value: [makePost({ nightOutId: 'night-1', nightTokenComplete: false })] }];
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    expect(
+      await screen.findByTestId('feed-view-night-unavailable'),
+      'a failed night-token read dropped View night with nothing said',
+    ).toBeTruthy();
+    expect(screen.queryByTestId('feed-view-night')).toBeNull();
+  });
+
+  test('a night the viewer simply may not open says nothing', async () => {
+    postPlan = [{ ok: true, value: [makePost({ nightOutId: 'night-1', nightTokenComplete: true })] }];
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await screen.findByTestId('feed-post');
+    expect(
+      screen.queryByTestId('feed-view-night-unavailable'),
+      'a settled refusal was reported to the viewer as a failed read',
+    ).toBeNull();
   });
 
   test('a complete read with no tags says nothing at all', async () => {

@@ -113,11 +113,31 @@ describe('0069 — the reporter hide reaches every surface of the post', () => {
     // post, the post row became unreadable while R could still read "I am in the
     // audience of P's post" and P could still read R's row. Whole-expression, so
     // the grouping — both gates OVER the two arms, not inside one — is pinned.
+    // Round 8 (CRITICAL, codex; MEDIUM, claude): the first version of this fix put
+    // the pair term over BOTH arms, and on the recipient's own-row arm the two
+    // sides are the same person — is_blocked_between(R, R) is false, so it gated
+    // nothing and R kept reading their membership of a post they could no longer
+    // see. Each arm now carries the question that is meaningful FOR THAT ARM: the
+    // recipient's row is gated by the post itself, the author's read of a
+    // recipient's row by the pair. Whole-expression, because the grouping IS the
+    // requirement.
     expect(sqlShape(policyBody('feed_post_audience: parties read'))).toContain(
-      '( auth.uid() = profile_id'
-      + ' or public.is_feed_post_author(post_id, auth.uid()) )'
-      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id)'
+      '( (auth.uid() = profile_id and public.can_view_feed_post(post_id))'
+      + ' or ( public.is_feed_post_author(post_id, auth.uid())'
+      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id) ) )'
       + ' and not public.feed_post_reported_by_caller(post_id)',
+    );
+  });
+
+  it('the recipient arm is not gated by a self-comparison', () => {
+    // The defect, named so a revert to it is caught by its own case rather than
+    // only by the whole-expression check above.
+    expect(
+      sqlShape(policyBody('feed_post_audience: parties read')),
+      'the audience policy is back to comparing the caller with itself',
+    ).not.toContain(
+      '( auth.uid() = profile_id or public.is_feed_post_author(post_id, auth.uid()) )'
+      + ' and not public.is_blocked_between',
     );
   });
 
@@ -144,11 +164,25 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     expect(body).toMatch(/public\.feed_post_reported_by_caller\(p\.id\)/);
     // The veto has to be evaluated BEFORE the unconditional pass-through of the
     // prior answer, or it can never run.
-    const veto = body.indexOf('feed_post_reported_by_caller(p.id)');
-    const passThrough = body.indexOf('return query select v_prior.readable, v_prior.expires_at;');
-    expect(veto).toBeGreaterThan(-1);
-    expect(passThrough).toBeGreaterThan(-1);
-    expect(veto).toBeLessThan(passThrough);
+    //
+    // Round 8 (MEDIUM, claude): this used to anchor on the first occurrence of
+    // `feed_post_reported_by_caller(p.id)`, which is inside the v_feed_readable
+    // ASSIGNMENT near the top of the function — always before the pass-through,
+    // wherever the veto block itself sits. Moving the whole veto below the
+    // pass-through left it green with the veto as dead code. Anchor on the veto's
+    // own opening condition, which is unique to the block.
+    const veto = sqlShape(body).indexOf(
+      'if v_prior.readable and v_prior.expires_at is null and not v_feed_readable',
+    );
+    const passThrough = sqlShape(body).indexOf(
+      'if v_prior.readable then return query select v_prior.readable, v_prior.expires_at;',
+    );
+    expect(veto, 'the veto block is gone').toBeGreaterThan(-1);
+    expect(passThrough, 'the prior-answer pass-through is gone').toBeGreaterThan(-1);
+    expect(
+      veto,
+      'the veto now runs after the pass-through returns, so it is dead code',
+    ).toBeLessThan(passThrough);
   });
 
   it('the veto cannot hide a story, because it requires that no live story names the bytes', () => {
@@ -450,9 +484,15 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
       commentArm,
       'the post-write re-check runs BEFORE the write, which is the window it exists to close',
     ).toBeGreaterThan(wrote);
-    // And the branch sense: dropping the `not` makes every permitted report roll
-    // back, with both messages still present.
+    // And the branch sense ON BOTH ARMS: dropping either `not` makes every
+    // permitted report of that kind write and immediately roll back, with both
+    // messages still present and in order. Round 8 (MEDIUM, codex) found the
+    // comment arm unconstrained after the post arm had been pinned.
     expect(body).toContain('if not public.can_view_feed_post(v_ref::uuid) then raise exception');
+    expect(
+      body,
+      'the comment arm of the post-write re-check is inverted, so every permitted comment report rolls back',
+    ).toContain('elsif not public.can_view_feed_comment(v_ref::uuid)');
   });
 });
 

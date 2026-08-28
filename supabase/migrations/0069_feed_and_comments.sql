@@ -494,16 +494,31 @@ create policy "feed_post_audience: parties read"
     -- P could still read R's row. The post itself is unreadable by then, which is
     -- what makes the leftover row a leak rather than a duplicate.
     (
-      auth.uid() = profile_id
-      -- Definer helper rather than a bare subquery on public.feed_posts: that
-      -- table's SELECT policy reads feed_post_audience, so a plain subquery here
-      -- closes the cycle and PostgreSQL refuses BOTH tables.
-      or public.is_feed_post_author(post_id, auth.uid())
+      -- THE RECIPIENT'S OWN ROW, gated by the POST, not by a self-comparison.
+      --
+      -- The previous shape put `is_blocked_between(auth.uid(), profile_id)` over
+      -- both arms, and on this arm those two are the SAME PERSON: the term
+      -- evaluated to is_blocked_between(R, R), which is false, so it gated
+      -- nothing. R kept reading their membership of P's post after unfollowing P
+      -- or after either account blocked the other — a row naming a post R can no
+      -- longer see, and a deletion oracle for it.
+      --
+      -- `can_view_feed_post` is the right question and already carries mutuality,
+      -- the block, and audience membership. Asking it here does not recurse: it
+      -- reaches this table only through `is_feed_post_recipient`, which is
+      -- SECURITY DEFINER and therefore reads with RLS bypassed.
+      (auth.uid() = profile_id and public.can_view_feed_post(post_id))
+      -- THE AUTHOR READING A RECIPIENT'S ROW. Here the two ARE different people,
+      -- so the pair term is the one that belongs: the author against the
+      -- recipient this row names. Definer helper rather than a bare subquery on
+      -- public.feed_posts, because that table's SELECT policy reads
+      -- feed_post_audience and a plain subquery closes the cycle — PostgreSQL
+      -- then refuses BOTH tables.
+      or (
+        public.is_feed_post_author(post_id, auth.uid())
+        and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id)
+      )
     )
-    -- The pair to judge is the caller and the ROW'S profile: on the own-row arm
-    -- that is a no-op (nobody blocks themselves), and on the author arm it is the
-    -- author against the recipient, which is the pair this row is about.
-    and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id)
     and not public.feed_post_reported_by_caller(post_id)
   );
 

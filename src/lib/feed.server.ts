@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { mediaFailure, mediaUnavailable, type MediaResult } from '@/lib/media/types';
-import { getNightOut } from '@/lib/nightOuts.server';
 
 /**
  * Server-mode Feed (migration 0069). Pure async functions — the React layer

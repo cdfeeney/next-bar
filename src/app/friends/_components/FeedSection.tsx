@@ -176,6 +176,14 @@ export default function FeedSection({
     setPosts([]);
     setThreads(new Map());
     setPeople(new Map());
+    // AND THE OVERLAY, AND THE OPEN THREAD. `pending` holds one account's
+    // confirmed reply bodies and deletion ids; left behind, `withPending` applied
+    // them to the NEXT account's threads — rendering A's words under B, including
+    // where the server would refuse that row outright, and suppressing rows B is
+    // entitled to see. It is account-scoped bookkeeping exactly like the data it
+    // overlays, so it is dropped on exactly the same terms.
+    setPending(EMPTY_PENDING);
+    setOpenThread(null);
     // AND THE FAILURE BANNER GOES WITH IT. Leaving `loadFailed` set told a
     // signed-out visitor that "the Feed could not be loaded" forever, about a
     // Feed there is nothing to load: the banner is not gated on auth, so a read
