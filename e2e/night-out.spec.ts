@@ -951,7 +951,14 @@ test.describe('Social sub-tabs (V8-R-NAV-002)', () => {
     await expect(card.getByRole('heading', { name: 'Next Bar?' })).toBeVisible();
     // The lead line carries the state in WORDS. Either a walk/Uber time or the
     // honest neighborhood fallback — never an invented distance.
-    await expect(page.getByTestId('next-bar-line')).not.toBeEmpty();
+    const line = page.getByTestId('next-bar-line');
+    await expect(line).not.toBeEmpty();
+    // ...and V8-R-SOC-003's THREE elements are all accounted for, even when one
+    // cannot be computed (round-7 panel, Codex). With no saved neighborhood
+    // there is no walk time, and the card used to simply omit it; it now says
+    // what is missing and what would fill it, the same third state the quiet
+    // read got in round 5.
+    await expect(line).toContainText(/walk time needs your area/i);
 
     // "ONE Open action", and it must be a 44px target.
     const open = page.getByTestId('next-bar-open');

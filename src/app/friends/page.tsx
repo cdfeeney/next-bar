@@ -353,6 +353,21 @@ function NextBarCard(): JSX.Element | null {
       : null;
   const lead = leadCopy(miles, displayHood(bar.neighborhood));
 
+  /**
+   * THE MISSING WALK TIME SAYS IT IS MISSING (round-7 panel, Codex, MEDIUM).
+   *
+   * V8-R-SOC-003 names three things the card carries, and with no saved
+   * neighborhood `leadCopy` falls back to "In <hood>" — an honest line, but one
+   * that silently drops the walk time rather than accounting for it, so the
+   * card looked complete while one of its three elements was simply gone.
+   *
+   * The fix is NOT to invent a distance, for exactly the reason `energyOf`
+   * gives one line down: the app would be describing a trip it never measured.
+   * This is the same third state that finding got in round 5 — say we do not
+   * know, and name the one thing that would fill it in.
+   */
+  const walkNote = lead.kind === 'neighborhood' ? 'walk time needs your area' : null;
+
   return (
     <section data-testid="next-bar-card">
       <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
@@ -363,7 +378,7 @@ function NextBarCard(): JSX.Element | null {
           <p className="font-display text-base truncate">{bar.name}</p>
           {/* Walk time and quiet state, both in WORDS, on one quiet line. */}
           <p className="text-muted text-xs truncate" data-testid="next-bar-line">
-            {[lead.text, energyOf(bar)].filter(Boolean).join(' · ')}
+            {[lead.text, walkNote, energyOf(bar)].filter(Boolean).join(' · ')}
           </p>
         </div>
         <button

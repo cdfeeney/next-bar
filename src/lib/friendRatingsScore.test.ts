@@ -116,6 +116,13 @@ describe('the anonymous surfaces stay tier-only (criterion 5)', () => {
     ).toMatch(/drop\s+function\s+if\s+exists\s+public\.get_public_ratings/);
   });
 
+  // THE BUDGET, NOT THE ASSERTION (WP7 round 8). `definingMigration` reads every
+  // committed migration to decide which ones can even mention the name, and that
+  // directory keeps growing — 0066 and 0068 are each larger than the whole chain
+  // that preceded the media spine. Alone this test takes ~2.4s; inside the full
+  // parallel suite it crossed vitest's 5s default and failed twice in a row on a
+  // green tree. The claim below is untouched: what changed is how long a
+  // file-system scan of the whole migration chain is allowed to take.
   it('no migration re-states get_public_ratings after its retirement', () => {
     // 0015 is history and is never rewritten, so it may still define it. Anything
     // NEWER defining it would be a reintroduction of a superseded surface.
@@ -124,7 +131,7 @@ describe('the anonymous surfaces stay tier-only (criterion 5)', () => {
       defining === null || defining === '0015_public_shared_list.sql',
       `get_public_ratings is redefined by ${defining}, after 0066 retired it`,
     ).toBe(true);
-  });
+  }, 30_000);
 
   it('0016 shared nights carries no score', () => {
     expect(migrationSkeleton('0016_shared_nights.sql')).not.toMatch(/\bscore\b/);

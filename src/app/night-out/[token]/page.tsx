@@ -182,11 +182,19 @@ function deadlineLabel(instant: string): string {
 
 /**
  * A second past the deadline, so the server has crossed it by its own clock
- * when we ask; and the longest single wait before the timer re-arms, because
- * `setTimeout` silently fires immediately past ~24.8 days.
+ * when we ask; the floor, which is what a deadline this device thinks is
+ * already behind waits instead of never arming at all; and the longest single
+ * wait before the timer re-arms, because `setTimeout` silently fires
+ * immediately past ~24.8 days.
  */
 const DEADLINE_GRACE_MS = 1_000;
+const MIN_RECHECK_MS = 60_000;
 const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
+
+/** The one place the three bounds meet, so no caller can apply two of them. */
+function clampRecheck(delayMs: number): number {
+  return Math.min(Math.max(delayMs, MIN_RECHECK_MS), MAX_REARM_MS);
+}
 
 function nightDateLabel(nightKey: string): string {
   const [y, m, d] = nightKey.split('-').map(Number);
@@ -216,6 +224,9 @@ export default function NightOutPage({
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   /** Which shortlist row's overflow menu is open, if any (V8-R-SOC-008). */
   const [overflowBarId, setOverflowBarId] = useState<string | null>(null);
+  // Bumped by the voting-deadline timer itself, so the next one is armed
+  // whether or not the answer that came back was different.
+  const [deadlineTick, setDeadlineTick] = useState(0);
   const token = decodeURIComponent(params.token);
 
   /**
@@ -417,25 +428,38 @@ export default function NightOutPage({
    * closed state is a state the surface has to be able to REACH on its own.
    *
    * The device clock chooses only WHEN to re-ask; `night_out_voting_open` on
-   * the server is still the one that answers. Armed only for a deadline this
-   * device thinks is still ahead, so a skewed clock costs one extra read rather
-   * than a poll — and a deadline that lands while the tab is asleep is caught by
-   * the timer firing late, which is exactly when we want it.
+   * the server is still the one that answers. A deadline that lands while the
+   * tab is asleep is caught by the timer firing late, which is exactly when we
+   * want it.
+   *
+   * A DEADLINE ALREADY BEHIND THIS DEVICE STILL ARMS (round-7 panel, Codex).
+   * Round 7 returned without a timer when `at <= Date.now()`, which drops the
+   * commonest case of all: the read starts before the deadline, the server
+   * answers `votingOpen: true`, and the response reaches React after the
+   * instant has passed — no skewed clock required, just latency. Vote, Suggest
+   * and Remove then stayed live indefinitely for a plan the server had made
+   * read-only. So it arms regardless, with `MIN_RECHECK_MS` as the floor: while
+   * this device and the server disagree it costs one read a minute, and that
+   * ends the moment the server says closed, because a closed vote arms nothing.
    */
   useEffect(() => {
     if (state.kind !== 'member') return;
     const voting = state.voting;
     if (voting === null || !voting.votingOpen || voting.votingClosesAt == null) return;
     const at = Date.parse(voting.votingClosesAt);
-    if (!Number.isFinite(at) || at <= Date.now()) return;
+    if (!Number.isFinite(at)) return;
     const planId = state.plan.id;
     const startedAt = viewEpoch.current;
-    const timer = setTimeout(
-      () => void loadMemberView(planId, startedAt),
-      Math.min(at - Date.now() + DEADLINE_GRACE_MS, MAX_REARM_MS),
-    );
+    const timer = setTimeout(() => {
+      // THE RE-ARM IS EXPLICIT. Depending on `state` alone meant a re-read that
+      // returned the same still-open answer — the whole disagreement case —
+      // produced no new state and therefore no next timer: one retry, then
+      // silence, exactly where the asking has to continue.
+      setDeadlineTick((n) => n + 1);
+      void loadMemberView(planId, startedAt);
+    }, clampRecheck(at - Date.now() + DEADLINE_GRACE_MS));
     return () => clearTimeout(timer);
-  }, [state, loadMemberView]);
+  }, [state, deadlineTick, loadMemberView]);
 
   const handleSignInToJoin = (): void => {
     // The handoff (criterion 7): the token rides sessionStorage through

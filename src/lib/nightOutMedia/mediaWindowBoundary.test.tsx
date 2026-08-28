@@ -96,6 +96,37 @@ describe('the media window re-asks the server at its own boundary', () => {
   });
 
   /**
+   * ROUND-7 PANEL, BOTH LANES. A cancelled plan keeps its Archive control until
+   * the window closes — that is deliberate, the night happened — so it has a
+   * boundary like any other. Only 'before' and 'open' armed, so past `expiresAt`
+   * the recap went on saying what is here can still be saved, for an archive the
+   * server refuses.
+   */
+  test('a cancelled plan still reaches its expiry', async () => {
+    const CANCELLED = { ...BEFORE, state: 'cancelled' as const };
+    vi.setSystemTime(Date.parse(EXPIRES_AT) - 60_000);
+    fetchNightOutMedia.mockResolvedValue([
+      { destinationId: 'd1', mediaId: 'm1', authorId: 'u1', createdAt: '', expiresAt: '' },
+    ]);
+    fetchNightOutMediaWindow
+      .mockResolvedValueOnce(CANCELLED)
+      .mockResolvedValue(CLOSED);
+
+    render(<NightOutMedia planId={PLAN} canAddPhoto />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-archive')).toBeTruthy(),
+    );
+
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByTestId('night-out-archive')).toBeNull(),
+    );
+  });
+
+  /**
    * A settled side has no boundary ahead of it, and a window we could not read
    * has no instant to arm from. Neither may turn into a poll.
    */
@@ -120,22 +151,37 @@ describe('the media window re-asks the server at its own boundary', () => {
   });
 
   /**
-   * The one thing a skewed clock may cost is a single early round trip. If the
-   * server still reports 'before' after the device thinks the start has passed,
-   * the timer is not re-armed — the boundary is no longer in this device's
-   * future — so there is no spin.
+   * ROUND-7 PANEL, BOTH LANES — AND THIS TEST ASSERTED THE DEFECT.
+   *
+   * It used to demand that a boundary already behind this device arm NOTHING,
+   * on the round-6 reasoning that a skew costs "at most one early round trip".
+   * It does not. Nothing else re-reads the window on the 'before' side — both
+   * controls are hidden, so there is no action to refresh from — so a fast
+   * clock, or merely a response that arrives after its own boundary, stranded
+   * the recap on the stale side for the whole session. It arms on the floor
+   * instead, and stops as soon as the server's answer moves.
    */
-  test('a boundary already past by this device does not re-arm', async () => {
-    fetchNightOutMediaWindow.mockResolvedValue(BEFORE);
+  test('a boundary already behind this device keeps asking until the server moves', async () => {
+    vi.setSystemTime(Date.parse(OPENS_AT) + 5 * 60_000); // this device is late/fast
+    fetchNightOutMediaWindow
+      .mockResolvedValueOnce(BEFORE)
+      .mockResolvedValueOnce(BEFORE)
+      .mockResolvedValue(OPEN);
 
     render(<NightOutMedia planId={PLAN} canAddPhoto />);
 
     await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('night-out-add-photo')).toBeNull();
+
+    // Still 'before' by the server: ask again on the floor rather than giving up.
     await vi.advanceTimersByTimeAsync(61_000);
     await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(2));
 
-    // The device clock is now past `opensAt`, and the answer is unchanged.
-    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1_000 + 60_000);
-    expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(2);
+    // The server crosses, and the surface follows it.
+    await vi.advanceTimersByTimeAsync(61_000);
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-add-photo')).toBeTruthy(),
+    );
   });
 });

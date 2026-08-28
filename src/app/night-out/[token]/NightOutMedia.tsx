@@ -19,10 +19,18 @@ import {
 
 /**
  * A second past the boundary, so the server has unambiguously crossed it by its
- * own clock when we ask, and the longest single wait before the timer re-arms.
+ * own clock when we ask; the floor, which is what a boundary this device thinks
+ * is already behind waits instead of never arming at all; and the longest
+ * single wait before the timer re-arms.
  */
 const BOUNDARY_GRACE_MS = 1_000;
+const MIN_RECHECK_MS = 60_000;
 const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
+
+/** The one place the three bounds meet, so no caller can apply two of them. */
+function clampRecheck(delayMs: number): number {
+  return Math.min(Math.max(delayMs, MIN_RECHECK_MS), MAX_REARM_MS);
+}
 
 /**
  * The Night Out recap's photos, and the two things the contract says you may do
@@ -80,6 +88,9 @@ export default function NightOutMedia({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [savedNightId, setSavedNightId] = useState<string | null>(null);
+  // Bumped by the boundary timer itself, so the next one is armed whether or
+  // not the answer that came back was different. See the effect below.
+  const [boundaryTick, setBoundaryTick] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   // Null = we could not read the window. Deliberately NOT folded into a boolean:
@@ -160,10 +171,28 @@ export default function NightOutMedia({
    * THE DEVICE CLOCK ONLY DECIDES WHEN TO ASK AGAIN. It never decides which
    * side we are on — that is still `night_out_media_window`'s answer, which is
    * the whole point of reading a window instead of a deadline (V8-R-NO-008).
-   * A skewed clock therefore costs at most one early round trip: the timer is
-   * armed only for a boundary that is still in the future by this device's
-   * reckoning, so a fresh answer that still reads 'before' arms nothing and
-   * cannot spin.
+   *
+   * A BOUNDARY ALREADY BEHIND THIS DEVICE STILL ARMS (round-7 panel, both
+   * lanes). Round 7 returned without a timer whenever `at <= Date.now()`, on
+   * the reasoning that a skew costs "at most one early round trip". It does
+   * not: nothing else re-reads the window while the recap sits on the 'before'
+   * side, because both controls are hidden there and there is no action to
+   * refresh from. A clock running fast — or merely a response that arrives
+   * after its own boundary, which needs no skew at all, just latency — left the
+   * recap stranded on the stale side for the whole session, hiding Add-a-photo,
+   * Archive and every photo the server was serving. That is the exact harm
+   * V8-R-NO-008's failure clause names.
+   *
+   * So a boundary always arms, and `MIN_RECHECK_MS` is the floor. The cost of
+   * disagreement is one read a minute WHILE the server and this device
+   * disagree, which ends the moment the server crosses: the next answer names
+   * a different side, and its boundary is hours away.
+   *
+   * A CANCELLED PLAN HAS A BOUNDARY TOO (round-7 panel, Codex). Only 'before'
+   * and 'open' armed, so a cancelled plan — whose archive control deliberately
+   * stays live until the window closes — went on offering "this can still be
+   * saved" past `expiresAt`, for an archive the server refuses. Past that
+   * instant the server reports 'closed', so asking again is all it takes.
    *
    * Far-future boundaries are re-armed in six-hour steps rather than handed to
    * `setTimeout` whole, which silently fires immediately past ~24.8 days.
@@ -173,18 +202,25 @@ export default function NightOutMedia({
     const boundary =
       mediaWindow.state === 'before'
         ? mediaWindow.opensAt
-        : mediaWindow.state === 'open'
+        : mediaWindow.state === 'open' || mediaWindow.state === 'cancelled'
           ? mediaWindow.expiresAt
           : null;
+    // 'closed' is settled: there is no later instant that changes the answer.
     if (boundary === null) return;
     const at = Date.parse(boundary);
-    if (!Number.isFinite(at) || at <= Date.now()) return;
-    const timer = setTimeout(
-      () => void refresh(),
-      Math.min(at - Date.now() + BOUNDARY_GRACE_MS, MAX_REARM_MS),
-    );
+    if (!Number.isFinite(at)) return;
+    const timer = setTimeout(() => {
+      // THE RE-ARM IS EXPLICIT, not a side effect of the answer changing. This
+      // effect used to depend on `mediaWindow` alone, so a second read that
+      // returned the SAME window — which is the whole disagreement case, where
+      // the server has not crossed yet — produced no new state, no re-render,
+      // and no next timer. One retry, then silence, in exactly the situation
+      // that needs to keep asking.
+      setBoundaryTick((n) => n + 1);
+      void refresh();
+    }, clampRecheck(at - Date.now() + BOUNDARY_GRACE_MS));
     return () => clearTimeout(timer);
-  }, [mediaWindow, refresh]);
+  }, [mediaWindow, boundaryTick, refresh]);
 
   /**
    * Upload the bytes, then attach them. Two steps because they are two

@@ -308,6 +308,32 @@ describe('the offline queue (V8-R-INV-003)', () => {
     expect(queueRsvp).not.toHaveBeenCalled();
   });
 
+  /**
+   * ROUND-7 PANEL (Codex, MEDIUM). Only the DELIVERY path cleared the queue on
+   * a refusal. A refused TAP left an older held answer in place, so the surface
+   * said this invitation could record nothing AND that a different answer was
+   * still about to be sent — and the held one cannot land either, because every
+   * reason the server refuses is a property of the plan, not of the answer.
+   */
+  test('a refused TAP also drops an answer held from before', async () => {
+    readQueuedRsvp.mockReturnValue('going');
+    readRsvpKey.mockReturnValue(KEY);
+    // The held answer's own delivery is unreachable, so it stays held...
+    submitAnonRsvp.mockResolvedValue('unreachable');
+    renderPreview();
+    await waitFor(() => expect(screen.getByTestId('invite-rsvp-queued')).toBeTruthy());
+
+    // ...until an explicit tap is REFUSED.
+    submitAnonRsvp.mockResolvedValue('refused');
+    screen.getByTestId('invite-rsvp-maybe').click();
+
+    await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
+    await waitFor(() => expect(screen.queryByTestId('invite-rsvp-queued')).toBeNull());
+    expect(screen.getByTestId('invite-rsvp-error').textContent).toMatch(
+      /let the host know/i,
+    );
+  });
+
   test('a held answer is delivered on arrival, and then stops being held', async () => {
     readQueuedRsvp.mockReturnValue('going');
     readRsvpKey.mockReturnValue(KEY);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useNightRefresh } from '@/hooks/useIntent';
 import { nycNightKey } from '@/lib/nightKey';
@@ -59,6 +59,13 @@ export function announcePresenceChanged(): void {
   window.dispatchEvent(new Event(PRESENCE_CHANGED_EVENT));
 }
 
+/**
+ * How long after THIS device's night rollover the circle read keeps asking, so
+ * the server's own 4:00 AM boundary is picked up even when the two clocks
+ * disagree. Fifteen minutes at the shared one-minute tick.
+ */
+const ROLLOVER_SETTLE_MS = 15 * 60 * 1_000;
+
 export type PinnedHandlesState = {
   /** True until the first answer arrives. Distinct from "nobody is out". */
   loading: boolean;
@@ -78,7 +85,37 @@ export function usePinnedHandles(): PinnedHandlesState {
   // Bumped to force a re-read; the effect below depends on it.
   const [nonce, setNonce] = useState(0);
 
-  useNightRefresh(() => setNight(nycNightKey()));
+  /**
+   * THE ROLLOVER IS THIS DEVICE'S GUESS AT THE SERVER'S (round-7 panel, Codex).
+   *
+   * The re-read was keyed on the night key CHANGING, and a key changes once.
+   * With the device clock running fast the key flipped before the server's own
+   * 4:00 AM boundary, that one re-read returned rows the server was still
+   * serving for the night in progress, and nothing asked again — so when the
+   * server did roll over and those rows expired, the panel went on showing
+   * friend pins that no longer existed, for the rest of the session.
+   *
+   * For a bounded window after our own rollover we therefore keep asking on the
+   * shared minute tick, until the server's answer catches up with ours. That is
+   * at most `ROLLOVER_SETTLE_MS / 60s` extra reads once a night, and strictly
+   * fewer than `useMyPresence` below already makes — it re-reads on EVERY tick.
+   *
+   * ponytail: covers a skew up to the settle window; a clock hours out is a
+   * device problem no client-side window can paper over.
+   */
+  const nightRef = useRef(night);
+  const rolledAt = useRef<number | null>(null);
+  useNightRefresh(() => {
+    const key = nycNightKey();
+    if (key !== nightRef.current) {
+      nightRef.current = key;
+      rolledAt.current = Date.now();
+      setNight(key);
+    }
+    if (rolledAt.current !== null && Date.now() - rolledAt.current < ROLLOVER_SETTLE_MS) {
+      setNonce((n) => n + 1);
+    }
+  });
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 

@@ -154,22 +154,38 @@ describe('the plan page reaches its own voting deadline', () => {
   });
 
   /**
-   * A skewed clock costs one early read, never a spin: once the deadline is
-   * behind this device, the timer is not armed again.
+   * ROUND-7 PANEL (Codex) — AND THIS TEST ASSERTED THE DEFECT.
+   *
+   * It used to demand that a deadline already behind this device arm nothing.
+   * That drops the commonest case of all, and it needs no skewed clock: the
+   * read starts before the deadline, the server answers `votingOpen: true`, and
+   * the response reaches React after the instant has passed. Vote, Suggest and
+   * Remove then stayed live indefinitely on a plan the server had made
+   * read-only. It keeps asking on the floor instead, and stops the moment the
+   * server says closed.
    */
-  test('a deadline already past by this device does not re-arm', async () => {
-    fetchNightOutVoting.mockResolvedValue({
-      votingClosesAt: CLOSES_AT,
-      votingOpen: true,
-    });
+  test('a deadline already behind this device keeps asking until the server closes it', async () => {
+    vi.setSystemTime(Date.parse(CLOSES_AT) + 5 * 60_000);
+    fetchNightOutVoting
+      .mockResolvedValueOnce({ votingClosesAt: CLOSES_AT, votingOpen: true })
+      .mockResolvedValueOnce({ votingClosesAt: CLOSES_AT, votingOpen: true })
+      .mockResolvedValue({ votingClosesAt: CLOSES_AT, votingOpen: false });
 
     renderPage();
 
     await waitFor(() => expect(fetchNightOutVoting).toHaveBeenCalledTimes(1));
+    // The same still-open answer must not end the asking.
     await vi.advanceTimersByTimeAsync(61_000);
     await waitFor(() => expect(fetchNightOutVoting).toHaveBeenCalledTimes(2));
 
+    // The server closes it, the page follows, and the asking stops.
+    await vi.advanceTimersByTimeAsync(61_000);
+    await waitFor(() => expect(fetchNightOutVoting).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-voting-closed')).toBeTruthy(),
+    );
+
     await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1_000 + 60_000);
-    expect(fetchNightOutVoting).toHaveBeenCalledTimes(2);
+    expect(fetchNightOutVoting).toHaveBeenCalledTimes(3);
   });
 });

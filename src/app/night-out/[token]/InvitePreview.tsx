@@ -249,6 +249,15 @@ export default function InvitePreview({
         // cannot succeed, which is the same defect round 5 closed on the
         // expired surface. The one forward path that does work is telling the
         // host, so that is what it offers.
+        //
+        // AND THE QUEUE GOES WITH IT (round-7 panel, Codex, MEDIUM). Only the
+        // DELIVERY path cleared the queue on a refusal; a refused TAP left an
+        // older held answer in place, so the surface said this invitation could
+        // record nothing AND that a different answer was still about to be
+        // sent. Every reason the server refuses is a property of the plan, not
+        // of the answer, so the held one cannot land either.
+        clearQueuedRsvp(token);
+        setQueued(null);
         setRsvpError(
           "We couldn't record that — this invitation may have expired. Let the host know directly.",
         );
