@@ -132,6 +132,36 @@ describe('the own-pin read is a THREE-state answer', () => {
     await expect(screen.findByTestId('my-pin-error')).resolves.toBeTruthy();
     expect(screen.queryByTestId('my-pin-loading')).toBeNull();
   });
+
+  /**
+   * NO PIN IS AN ANSWER, NOT A FAILURE — and it is the answer every account
+   * gets on every night before its first pin.
+   *
+   * Round 3 collapsed `fetchMyPresence`'s three kinds into two with a ternary,
+   * so `unset` landed in `unreadable`: the pills sat disabled behind "couldn't
+   * check your pin" and no account could ever set a first status. The round-3
+   * suite was green through it because every mock returned 'ok' or 'failed'.
+   * This is the case that was missing.
+   */
+  test('a signed-in account with NO pin can still set one', async () => {
+    fetchMyPresence.mockResolvedValue({ kind: 'unset' });
+    render(<TonightPresence />);
+
+    const going = await screen.findByRole('button', { name: 'Going out' });
+    await waitFor(() => expect(going).not.toBeDisabled());
+    expect(screen.queryByTestId('my-pin-error')).toBeNull();
+    expect(screen.queryByTestId('my-pin-loading')).toBeNull();
+
+    // And the tap actually writes, with the contract's default audience.
+    going.click();
+    await waitFor(() => expect(setPresence).toHaveBeenCalledTimes(1));
+    expect(setPresence.mock.calls[0]?.[1]).toEqual({
+      status: 'going',
+      barId: null,
+      audience: 'friends',
+      recipientIds: [],
+    });
+  });
 });
 
 describe('a read the view has moved on from cannot repaint', () => {
@@ -194,6 +224,47 @@ describe('the pin sequence publishes on confirmation, not on selection', () => {
       audience: 'friends',
       recipientIds: [],
     });
+  });
+
+  /**
+   * A HALF-COMPOSED PIN BELONGS TO THE ACCOUNT AND NIGHT THAT COMPOSED IT
+   * (round-3 panel, both gates).
+   *
+   * The pending bar, audience and recipient list are not written yet, and they
+   * used to survive a sign-out: account B arrived at a live "Pin it" carrying
+   * A's bar and A's recipients. The night rollover is the same defect on the
+   * other axis.
+   */
+  test('a pending pin does not survive an identity change', async () => {
+    fetchMyPresence.mockResolvedValue({
+      kind: 'ok',
+      presence: {
+        status: 'going',
+        barId: null,
+        audience: 'friends',
+        recipientIds: [],
+        updatedAt: '2026-08-20T02:00:00.000Z',
+      },
+    });
+
+    const view = render(<TonightPresence />);
+    (await screen.findByTestId('pin-my-spot')).click();
+    (await screen.findByTestId('fake-pick')).click();
+    await expect(
+      screen.findByTestId('pin-audience-step'),
+    ).resolves.toBeTruthy();
+
+    // Sign out on the same device, without a remount.
+    auth = { status: 'signed-out' };
+    view.rerender(<TonightPresence />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('pin-audience-step'),
+        "the previous account's composed pin was still on screen",
+      ).toBeNull(),
+    );
+    expect(setPresence).not.toHaveBeenCalled();
   });
 
   test('cancelling the sequence writes nothing and closes the step', async () => {

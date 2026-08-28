@@ -7,11 +7,14 @@ import type { NightOutPreview } from '@/lib/nightOuts.server';
 import {
   RSVP_LABELS,
   RSVP_ORDER,
+  clearQueuedRsvp,
   ensureRsvpKey,
   fetchAnonRsvp,
   fetchBearerAttendees,
   fetchBearerDetail,
   fetchBearerShortlist,
+  queueRsvp,
+  readQueuedRsvp,
   readRsvpKey,
   submitAnonRsvp,
   type BearerAttendee,
@@ -73,6 +76,12 @@ export default function InvitePreview({
     null,
   );
   const [rsvp, setRsvp] = useState<RsvpChoice | null>(null);
+  /**
+   * An answer HELD but not delivered (V8-R-INV-003). Deliberately not folded
+   * into `rsvp`: the host cannot see a queued answer, so showing it as the
+   * recipient's RSVP would be the same lie as reporting a failed write.
+   */
+  const [queued, setQueued] = useState<RsvpChoice | null>(null);
   const [rsvpBusy, setRsvpBusy] = useState(false);
   const [rsvpError, setRsvpError] = useState<string | null>(null);
   const [upsellDismissed, setUpsellDismissed] = useState(false);
@@ -106,8 +115,20 @@ export default function InvitePreview({
     setAttendees(null);
     setShortlist(null);
     setRsvp(null);
+    setQueued(null);
     setRsvpError(null);
     setUpsellDismissed(false);
+    // ...INCLUDING THE IN-FLIGHT FLAG (round-3 panel, Claude gate). `answer()`
+    // returns early on the epoch guard, which is right — its result belongs to
+    // the invite that asked — but that return also skipped `setRsvpBusy(false)`,
+    // and this effect reset everything except that one boolean. A write that
+    // settled across a token change therefore left `rsvpBusy` true forever:
+    // every RSVP control on the NEW invite rendered disabled and the re-entry
+    // guard swallowed each tap, so that recipient could not answer at all
+    // without a full reload. Next reuses this component across
+    // /night-out/A → /night-out/B without remounting, so that path is the
+    // ordinary one, not an edge.
+    setRsvpBusy(false);
 
     const supabase = getBrowserSupabase();
     if (supabase === null) return;
@@ -142,14 +163,11 @@ export default function InvitePreview({
       if (rsvpBusy) return;
       const startedAt = epoch.current;
       const supabase = getBrowserSupabase();
-      if (supabase === null) {
-        setRsvpError("That hasn't been sent yet — try again in a moment.");
-        return;
-      }
       const key = ensureRsvpKey(token);
       if (key === null) {
         // An answer under a key we cannot persist is one the recipient could
-        // never see or change again. Say so instead of sending it.
+        // never see or change again — and one we could not retry either, since
+        // the queue would have nothing to send it under. Say so instead.
         setRsvpError(
           "This browser won't let us remember your reply, so we haven't sent it.",
         );
@@ -157,21 +175,90 @@ export default function InvitePreview({
       }
       setRsvpBusy(true);
       setRsvpError(null);
-      const ok = await submitAnonRsvp(supabase, token, key, choice);
-      if (startedAt !== epoch.current) return;
-      if (ok) {
+      const result =
+        supabase === null
+          ? // No client is the same shape of failure as no network: nothing
+            // reached the server, so the answer is held rather than lost.
+            ('unreachable' as const)
+          : await submitAnonRsvp(supabase, token, key, choice);
+      if (startedAt !== epoch.current) {
+        setRsvpBusy(false);
+        return;
+      }
+      if (result === 'sent') {
         answered.current = true;
+        clearQueuedRsvp(token);
+        setQueued(null);
         setRsvp(choice);
         setUpsellDismissed(false);
+      } else if (result === 'unreachable') {
+        // "An offline response is QUEUED and explicitly labelled as not yet
+        // sent" (V8-R-INV-003, failure recovery). Held here and delivered by
+        // the `online` listener below — and never shown as the recipient's
+        // answer, because the host cannot see it yet.
+        answered.current = true;
+        const held = queueRsvp(token, choice);
+        setQueued(held ? choice : null);
+        setRsvpError(
+          held
+            ? "You're offline — we'll send this the moment you're back."
+            : "That hasn't been sent yet — try again in a moment.",
+        );
       } else {
-        // NEVER SHOW AN ANSWER THE SERVER DID NOT TAKE. V8-R-INV-003's failure
-        // clause requires an unsent response to be labelled as not yet sent.
+        // REFUSED. The server answered and said no, so retrying cannot make it
+        // land and queueing it would be a promise we cannot keep.
         setRsvpError("That hasn't been sent yet — try again in a moment.");
       }
       setRsvpBusy(false);
     },
     [rsvpBusy, token],
   );
+
+  /**
+   * Deliver a queued answer, on arrival and whenever the browser says it is
+   * back online.
+   *
+   * Idempotent by construction: the RPC upserts on the recipient's own key, so
+   * a delivery that lands twice is one row either way. That is what makes a
+   * fire-on-reconnect retry safe without any de-duplication of its own.
+   */
+  useEffect(() => {
+    const held = readQueuedRsvp(token);
+    if (held === null) return;
+    setQueued(held);
+
+    let cancelled = false;
+    const deliver = async (): Promise<void> => {
+      const supabase = getBrowserSupabase();
+      const key = readRsvpKey(token);
+      if (supabase === null || key === null) return;
+      const startedAt = epoch.current;
+      const result = await submitAnonRsvp(supabase, token, key, held);
+      if (cancelled || startedAt !== epoch.current) return;
+      if (result === 'sent') {
+        answered.current = true;
+        clearQueuedRsvp(token);
+        setQueued(null);
+        setRsvp(held);
+        setRsvpError(null);
+      } else if (result === 'refused') {
+        // The plan moved on — cancelled, or the link died. Holding this
+        // forever would keep telling the recipient it is about to be sent.
+        clearQueuedRsvp(token);
+        setQueued(null);
+        setRsvpError("That hasn't been sent yet — try again in a moment.");
+      }
+      // 'unreachable' keeps the queue exactly as it is, for the next event.
+    };
+
+    void deliver();
+    const onOnline = (): void => void deliver();
+    window.addEventListener('online', onOnline);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', onOnline);
+    };
+  }, [token]);
 
   const host =
     preview.ownerDisplayName ?? preview.ownerHandle ?? 'A friend';
@@ -221,13 +308,19 @@ export default function InvitePreview({
             <button
               key={choice}
               type="button"
+              // PRESSED means SENT. A queued answer is shown separately, in
+              // words, because the host cannot see it yet.
               aria-pressed={rsvp === choice}
               disabled={rsvpBusy}
               onClick={() => void answer(choice)}
               data-testid={`invite-rsvp-${choice}`}
               className={[
                 'inline-flex min-h-[44px] touch-manipulation items-center rounded-full border px-5 text-sm disabled:opacity-60',
-                rsvp === choice ? 'border-white font-semibold' : 'opacity-80',
+                rsvp === choice
+                  ? 'border-white font-semibold'
+                  : queued === choice
+                    ? 'border-dashed'
+                    : 'opacity-80',
               ].join(' ')}
             >
               {RSVP_LABELS[choice]}
@@ -245,6 +338,19 @@ export default function InvitePreview({
               : rsvp === 'maybe'
                 ? "You're down as a maybe. Change it any time."
                 : "You're down as can't make it. Change it any time."}
+          </p>
+        ) : null}
+        {/* HELD, AND SAID SO IN WORDS. V8-R-INV-003's failure clause is that an
+            offline response is "queued and explicitly labelled as not yet
+            sent" — the label is the requirement, not a nicety. */}
+        {queued !== null && rsvp === null ? (
+          <p
+            className="mt-3 text-center text-sm opacity-70"
+            role="status"
+            data-testid="invite-rsvp-queued"
+          >
+            {RSVP_LABELS[queued]} — not sent yet. We&apos;ll send it as soon as
+            you&apos;re back online.
           </p>
         ) : null}
         {rsvpError !== null ? (

@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  clearQueuedRsvp,
   ensureRsvpKey,
   fetchAnonRsvp,
   fetchBearerAttendees,
   fetchBearerDetail,
   fetchBearerShortlist,
+  queueRsvp,
+  readQueuedRsvp,
   readRsvpKey,
   submitAnonRsvp,
 } from './bearer';
@@ -129,7 +132,7 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003, D-C-23)', () => {
   it('sends the token, the recipient\'s key and the choice', async () => {
     const { client, rpc } = rpcClient({ data: true, error: null });
     await expect(submitAnonRsvp(client, TOKEN, KEY, 'maybe')).resolves.toBe(
-      true,
+      'sent',
     );
     expect(rpc).toHaveBeenCalledWith('rsvp_night_out_by_token', {
       p_token: TOKEN,
@@ -143,29 +146,37 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003, D-C-23)', () => {
    * explicit `true` is a response the server did not take, and reporting it as
    * sent would tell the recipient the host can see an answer that never landed.
    */
-  it('is false for every answer that is not an explicit true', async () => {
+  it('is refused for every answer that is not an explicit true', async () => {
     for (const data of [false, null, undefined, 'true', 1]) {
       const { client } = rpcClient({ data, error: null });
       await expect(submitAnonRsvp(client, TOKEN, KEY, 'going')).resolves.toBe(
-        false,
+        'refused',
       );
     }
     const errored = rpcClient({ data: true, error: { message: 'boom' } });
     await expect(
       submitAnonRsvp(errored.client, TOKEN, KEY, 'going'),
-    ).resolves.toBe(false);
+    ).resolves.toBe('refused');
+  });
+
+  /**
+   * REFUSED AND UNREACHABLE ARE DIFFERENT ANSWERS (round-3 panel, Codex).
+   * V8-R-INV-003 queues an OFFLINE response; a response the server refused must
+   * not be queued, because retrying cannot make it land.
+   */
+  it('reports a call that never reached the server as unreachable', async () => {
     await expect(
       submitAnonRsvp(throwingClient(), TOKEN, KEY, 'going'),
-    ).resolves.toBe(false);
+    ).resolves.toBe('unreachable');
   });
 
   it('never sends a malformed token or key to the server', async () => {
     const { client, rpc } = rpcClient({ data: true, error: null });
     await expect(submitAnonRsvp(client, 'not-a-uuid', KEY, 'going')).resolves.toBe(
-      false,
+      'refused',
     );
     await expect(submitAnonRsvp(client, TOKEN, 'nope', 'going')).resolves.toBe(
-      false,
+      'refused',
     );
     expect(rpc).not.toHaveBeenCalled();
   });
@@ -213,6 +224,9 @@ describe('the recipient\'s own key', () => {
       setItem: (k: string, v: string) => {
         store[k] = v;
       },
+      removeItem: (k: string) => {
+        delete store[k];
+      },
     });
     vi.stubGlobal('window', { localStorage } as never);
   });
@@ -259,5 +273,38 @@ describe('the recipient\'s own key', () => {
   it('ignores a stored value that is not a key', () => {
     store[`next-bar:night-out-rsvp:${TOKEN}`] = 'tampered';
     expect(readRsvpKey(TOKEN)).toBeNull();
+  });
+
+  /**
+   * The offline queue (V8-R-INV-003: "an offline response is queued and
+   * explicitly labelled as not yet sent").
+   */
+  it('holds ONE answer per plan, overwritten rather than appended', () => {
+    expect(readQueuedRsvp(TOKEN)).toBeNull();
+    expect(queueRsvp(TOKEN, 'maybe')).toBe(true);
+    expect(readQueuedRsvp(TOKEN)).toBe('maybe');
+    // An RSVP is a current answer, not a log: tapping Going after Maybe while
+    // offline must send Going once, not both in some order.
+    expect(queueRsvp(TOKEN, 'going')).toBe(true);
+    expect(readQueuedRsvp(TOKEN)).toBe('going');
+    clearQueuedRsvp(TOKEN);
+    expect(readQueuedRsvp(TOKEN)).toBeNull();
+  });
+
+  it('reports a queue it could not write, rather than claiming to hold it', () => {
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error('QuotaExceededError');
+        },
+      },
+    } as never);
+    expect(queueRsvp(TOKEN, 'going')).toBe(false);
+  });
+
+  it('ignores a queued value that is not one of the three choices', () => {
+    store[`next-bar:night-out-rsvp-queued:${TOKEN}`] = 'attending';
+    expect(readQueuedRsvp(TOKEN)).toBeNull();
   });
 });

@@ -247,24 +247,95 @@ export async function fetchAnonRsvp(
 }
 
 /**
+ * What happened to an RSVP, in the three outcomes the contract distinguishes.
+ *
+ * Round 3 (Codex gate): this used to be a boolean, and V8-R-INV-003's failure
+ * clause needs the difference. "An offline response is QUEUED and explicitly
+ * labelled as not yet sent" applies to a response that never reached the server;
+ * a response the server REFUSED — a cancelled plan, a dead token — must not be
+ * queued, because retrying it forever cannot make it land.
+ */
+export type RsvpSubmitResult =
+  /** The server took it. */
+  | 'sent'
+  /** The server answered, and said no. Retrying changes nothing. */
+  | 'refused'
+  /** We never reached the server. This is the one that gets queued. */
+  | 'unreachable';
+
+/**
  * Submit or change this recipient's RSVP without signing up (D-C-23).
  *
- * False on any refusal — a cancelled plan, a dead token, or the plan's
- * anonymous-reply cap. The caller reports it rather than assuming the answer
- * landed: V8-R-INV-003's failure clause is explicit that a response the server
- * did not take must be labelled as not yet sent.
+ * A thrown call is `unreachable` — offline, a dead connection, or a client that
+ * is not a client. Anything the server answered with that is not an explicit
+ * `true` is `refused`.
  */
 export async function submitAnonRsvp(
   supabase: SupabaseClient,
   token: string,
   key: string,
   choice: RsvpChoice,
-): Promise<boolean> {
-  if (!UUID_RE.test(token) || !UUID_RE.test(key)) return false;
-  const { data, error } = await callRpc(supabase, 'rsvp_night_out_by_token', {
-    p_token: token,
-    p_key: key,
-    p_response: choice,
-  });
-  return !error && data === true;
+): Promise<RsvpSubmitResult> {
+  if (!UUID_RE.test(token) || !UUID_RE.test(key)) return 'refused';
+  let thrown = false;
+  const { data, error } = await (async () => {
+    try {
+      return await supabase.rpc('rsvp_night_out_by_token', {
+        p_token: token,
+        p_key: key,
+        p_response: choice,
+      });
+    } catch (caught) {
+      thrown = true;
+      return { data: null, error: caught };
+    }
+  })();
+  if (thrown) return 'unreachable';
+  return !error && data === true ? 'sent' : 'refused';
+}
+
+/* -------------------------------------------------------------------------- */
+/* The offline queue (V8-R-INV-003 failure recovery)                          */
+/* -------------------------------------------------------------------------- */
+
+const QUEUED_RSVP_STORAGE_PREFIX = 'next-bar:night-out-rsvp-queued:';
+
+/**
+ * "An offline response is queued and explicitly labelled as not yet sent."
+ *
+ * ONE choice per plan, overwritten rather than appended: an RSVP is a current
+ * answer, not a log, so a recipient who taps Maybe and then Going while offline
+ * should send Going once — not both, in whatever order a queue drains.
+ *
+ * The same localStorage caveats as the key above: a browser that refuses to
+ * store simply has no queue, and the surface says the answer was not sent
+ * rather than pretending it was held.
+ */
+export function queueRsvp(token: string, choice: RsvpChoice): boolean {
+  try {
+    window.localStorage.setItem(QUEUED_RSVP_STORAGE_PREFIX + token, choice);
+    return readQueuedRsvp(token) === choice;
+  } catch {
+    return false;
+  }
+}
+
+export function readQueuedRsvp(token: string): RsvpChoice | null {
+  try {
+    const stored = window.localStorage.getItem(
+      QUEUED_RSVP_STORAGE_PREFIX + token,
+    );
+    return isRsvpChoice(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearQueuedRsvp(token: string): void {
+  try {
+    window.localStorage.removeItem(QUEUED_RSVP_STORAGE_PREFIX + token);
+  } catch {
+    // A queue we cannot clear is a queue that will be retried, which is the
+    // safe direction: the RPC is idempotent under the recipient's own key.
+  }
 }

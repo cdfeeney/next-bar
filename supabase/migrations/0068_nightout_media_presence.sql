@@ -778,6 +778,146 @@ comment on function public.night_out_scheduled_start(date) is
 revoke all on function public.night_out_scheduled_start(date) from public, anon, authenticated;
 grant execute on function public.night_out_scheduled_start(date) to anon, authenticated;
 
+-- THE PLAN'S OWN START, WHICH IS NOT ALWAYS THE DEFAULT (round-3 panel, Codex,
+-- HIGH). V8-R-NO-002 is "Change When (defaults to Tonight, 9:00 PM)" — the
+-- 9:00 PM is a DEFAULT that is "editable in place", and a function taking only
+-- a date cannot represent an edited one. A plan created for 10:00 PM still
+-- opened its media window at 9:00 and still told its bearer 9:00.
+--
+-- So `night_outs` gains the column the round-2 note said it was missing, the
+-- date-taking function above becomes the DEFAULT rather than the answer, and
+-- every consumer asks the PLAN.
+--
+-- Nullable, and null means "the default": a backfill would invent a decision
+-- for every existing plan, and coalescing is the same answer without the claim.
+alter table public.night_outs
+  add column if not exists starts_at timestamptz;
+
+comment on column public.night_outs.starts_at is
+  'V8-R-NO-002. The plan''s scheduled start when the owner edited it. NULL '
+  'means the default — 9:00 PM America/New_York on `night` — which '
+  'night_out_scheduled_start(uuid) resolves; nothing reads this column '
+  'directly.';
+
+create or replace function public.night_out_scheduled_start(p_night_out uuid)
+returns timestamptz
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(n.starts_at, public.night_out_scheduled_start(n.night))
+    from public.night_outs n
+   where n.id = p_night_out;
+$$;
+
+comment on function public.night_out_scheduled_start(uuid) is
+  'V8-R-NO-002. When THIS plan is scheduled to start: the owner''s edited '
+  'starts_at, or the 9:00 PM America/New_York default for its night. The single '
+  'answer every consumer asks — the media window measures its 24 hours from '
+  'here and the bearer preview states it as the plan''s time.';
+
+revoke all on function public.night_out_scheduled_start(uuid) from public, anon, authenticated;
+grant execute on function public.night_out_scheduled_start(uuid) to anon, authenticated;
+
+-- The same two derived answers, asked of the PLAN rather than of its date.
+create or replace function public.night_out_media_expires_at(p_night_out uuid)
+returns timestamptz
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.night_out_scheduled_start(p_night_out) + interval '24 hours'
+$$;
+
+revoke all on function public.night_out_media_expires_at(uuid) from public, anon, authenticated;
+grant execute on function public.night_out_media_expires_at(uuid) to authenticated;
+
+create or replace function public.night_out_media_window_open(p_night_out uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select now() >= public.night_out_scheduled_start(p_night_out)
+     and now() <  public.night_out_media_expires_at(p_night_out)
+$$;
+
+comment on function public.night_out_media_window_open(uuid) is
+  'V8-R-NO-008 for ONE plan, honouring an edited start (V8-R-NO-002). The '
+  'predicate every media gate asks; the date-taking overload computes the '
+  'default a plan falls back to.';
+
+revoke all on function public.night_out_media_window_open(uuid) from public, anon, authenticated;
+grant execute on function public.night_out_media_window_open(uuid) to authenticated;
+
+------------------------------------------------------------------------------
+-- set_night_out_start — the owner edits When (V8-R-NO-002, server half)
+------------------------------------------------------------------------------
+-- The CONTROL for this lives in the Start a Night Out form's When row, in
+-- `src/components/StartNightOutButton.tsx`, which this lane may not touch. What
+-- was missing and IS this lane's to fix is that the server could not hold the
+-- value at all — so the column, the resolution and this writer exist, and the
+-- owner-facing editor is the one piece left to another owner.
+--
+-- Bounded to the plan's own night so an edited start cannot wander into a
+-- different night than the one the plan is filed under, which would put its
+-- media window and its night key in different days.
+
+create or replace function public.set_night_out_start(
+  p_night_out uuid,
+  p_starts_at timestamptz
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid   uuid := auth.uid();
+  v_night date;
+begin
+  if v_uid is null or p_night_out is null then
+    return false;
+  end if;
+
+  -- Owner only, and only while the plan is still being planned.
+  select n.night into v_night
+    from public.night_outs n
+   where n.id = p_night_out
+     and n.owner_id = v_uid
+     and n.status in ('draft', 'open');
+  if v_night is null then
+    return false;
+  end if;
+
+  -- Null CLEARS the edit and returns the plan to the default, which is a real
+  -- thing an owner may want and is not the same as failing to set one.
+  if p_starts_at is not null then
+    if public.nyc_night_key(p_starts_at) <> v_night then
+      return false;
+    end if;
+  end if;
+
+  update public.night_outs
+     set starts_at = p_starts_at
+   where id = p_night_out
+     and owner_id = v_uid
+     and status in ('draft', 'open');
+  return found;
+end;
+$$;
+
+comment on function public.set_night_out_start(uuid, timestamptz) is
+  'V8-R-NO-002 server half. The plan OWNER edits When, or clears it back to the '
+  '9:00 PM default with null. Refused for anyone else, for a settled plan, and '
+  'for an instant whose night key is not the plan''s own night.';
+
+revoke all on function public.set_night_out_start(uuid, timestamptz) from public, anon, authenticated;
+grant execute on function public.set_night_out_start(uuid, timestamptz) to authenticated;
+
 create or replace function public.night_out_media_expires_at(p_night date)
 returns timestamptz
 language sql
@@ -858,7 +998,10 @@ begin
   -- much "outside the window" as after the deadline; the message names the
   -- window rather than which side of it the caller is on, because that is the
   -- same information the surface already gets from night_out_media_window.
-  if not public.night_out_media_window_open(v_night) then
+  --
+  -- Asked of the PLAN, not of its date, so an owner who edited When moves both
+  -- ends of the window with it (V8-R-NO-002, round-3 panel).
+  if not public.night_out_media_window_open(p_night_out) then
     raise exception 'the night out media window is not open' using errcode = '22023';
   end if;
 
@@ -926,7 +1069,7 @@ as $$
          m.owner_id,
          m.storage_path,
          d.created_at,
-         public.night_out_media_expires_at(n.night)
+         public.night_out_media_expires_at(n.id)
     from public.media_destinations d
     join public.night_outs n on n.id::text = d.ref_id
     join public.media_objects m on m.id = d.media_id
@@ -935,7 +1078,7 @@ as $$
      and n.id = p_night_out
      and m.bytes_removed_at is null
      and public.night_out_role(p_night_out) is not null
-     and public.night_out_media_window_open(n.night)
+     and public.night_out_media_window_open(n.id)
    order by d.created_at asc
 $$;
 
@@ -997,12 +1140,12 @@ stable
 security definer
 set search_path = public
 as $$
-  select public.night_out_scheduled_start(n.night),
-         public.night_out_media_expires_at(n.night),
-         public.night_out_media_window_open(n.night),
+  select public.night_out_scheduled_start(n.id),
+         public.night_out_media_expires_at(n.id),
+         public.night_out_media_window_open(n.id),
          case
-           when now() <  public.night_out_scheduled_start(n.night)  then 'before'
-           when now() >= public.night_out_media_expires_at(n.night) then 'closed'
+           when now() <  public.night_out_scheduled_start(n.id)  then 'before'
+           when now() >= public.night_out_media_expires_at(n.id) then 'closed'
            else 'open'
          end
     from public.night_outs n
@@ -1098,6 +1241,30 @@ comment on table public.saved_night_media is
   'alive is the matching kind=''archive'' row in media_destinations, which is '
   'what 0066''s reference count and "delete everywhere" already understand — '
   'this table is the ORDERED LIST, not the hold.';
+
+-- KNOWN DEFECT THIS FILE CANNOT CLOSE — recorded, not descoped (round-4 panel,
+-- Codex, HIGH).
+--
+-- V8-R-NO-009 retains an archived photo "indefinitely in Saved Nights Out,
+-- until account deletion", meaning the ARCHIVING account's deletion. It does
+-- not survive the AUTHOR's: `media_objects.owner_id` references
+-- `public.profiles(id) ON DELETE CASCADE` (0066:39), so deleting author B's
+-- profile deletes B's media_objects rows, and every path from an archive back
+-- to the bytes runs through one — this table's `media_id`, and the
+-- kind='archive' row in `media_destinations`. Archiver A's card silently loses
+-- the photo while A's account is untouched.
+--
+-- The fix belongs where the cascade is, which is 0066 and not this lane: the
+-- media spine has to stop destroying objects other accounts hold a live
+-- retention reference to (a restricted delete, an ownership transfer, or a
+-- tombstone that keeps the row and the bytes while any kind='archive' hold is
+-- live). Changing only THIS table's foreign key cannot fix it and would make it
+-- worse — `on delete restrict` turns the defect into a failed account deletion,
+-- and dropping the reference leaves a card pointing at bytes nothing keeps
+-- alive, which is the same loss with a row still on screen claiming otherwise.
+--
+-- So it is written down here rather than half-fixed. Reproduce: A archives an
+-- object owned by B, delete B's profile, and read A's saved_night_media.
 
 alter table public.saved_night_media enable row level security;
 revoke all on table public.saved_night_media from public, anon, authenticated;
@@ -1232,9 +1399,10 @@ begin
   end if;
 
   -- AHEAD OF EVERY WRITE. Same errcode and same single predicate as
-  -- add_night_out_media's own guard, so both halves of "you may act on this
-  -- night's media" open and close at exactly the same two instants.
-  if not public.night_out_media_window_open(v_night) then
+  -- add_night_out_media's own guard, asked of the same PLAN, so both halves of
+  -- "you may act on this night's media" open and close at exactly the same two
+  -- instants — including when the owner has edited When (V8-R-NO-002).
+  if not public.night_out_media_window_open(p_night_out) then
     raise exception 'the night out media window is not open' using errcode = '22023';
   end if;
 
@@ -1491,7 +1659,7 @@ begin
   -- Out's own 24-hour window is open (V8-R-NO-008). The window travels with the
   -- URL: `mintSignedMediaUrl` caps the signed lifetime at the time the media
   -- itself has left, so a URL cannot outlive the window it was granted under.
-  select max(public.night_out_media_expires_at(n.night))
+  select max(public.night_out_media_expires_at(n.id))
     into v_expiry
     from public.media_destinations d
     join public.media_objects m on m.id = d.media_id
@@ -1504,7 +1672,7 @@ begin
      -- The same half-open interval the rows themselves are served over, so a
      -- URL cannot be minted for a night whose window has not opened yet
      -- (round-3 panel, Codex, HIGH).
-     and public.night_out_media_window_open(n.night);
+     and public.night_out_media_window_open(n.id);
 
   if v_expiry is not null then
     return query select true, v_expiry;
@@ -1717,6 +1885,22 @@ begin
   perform pg_advisory_xact_lock(
     hashtextextended('night_out_anon_rsvps:' || v_plan::text, 0));
 
+  -- INSIDE THE LOCK, TRY THE UPDATE AGAIN FIRST (round-3 panel, Codex,
+  -- MEDIUM). The pre-lock update above can miss for a key that a CONCURRENT
+  -- call is inserting right now: two duplicate deliveries of the same reply
+  -- both miss, the first takes the lock and inserts row 100, and the second
+  -- then saw a full table and returned false — reporting as unsent a reply that
+  -- is stored under its own key. "Duplicate delivery is idempotent"
+  -- (V8-R-INV-003) has to hold at the cap boundary too, so the second look
+  -- happens where it can actually see the first call's committed row.
+  update public.night_out_anon_rsvps
+     set response = p_response, updated_at = now()
+   where night_out_id = v_plan
+     and rsvp_key = p_key;
+  if found then
+    return true;
+  end if;
+
   select count(*) into v_count
     from public.night_out_anon_rsvps r
    where r.night_out_id = v_plan;
@@ -1786,13 +1970,15 @@ security definer
 set search_path = public
 as $$
   with gated as materialized (
-    select n.night, n.decided_bar_id
+    select n.id, n.decided_bar_id
       from public.night_outs n
      where n.share_token = p_token
        and n.status in ('draft', 'open', 'decided')
      limit 1
   )
-  select public.night_out_scheduled_start(g.night), g.decided_bar_id
+  -- Asked of the PLAN, so a bearer is told the hour the owner actually chose
+  -- rather than the default the plan may have moved off (V8-R-NO-002).
+  select public.night_out_scheduled_start(g.id), g.decided_bar_id
     from gated g;
 $$;
 
@@ -1877,6 +2063,89 @@ revoke all on function public.preview_night_out_shortlist(uuid) from public, ano
 grant execute on function public.preview_night_out_shortlist(uuid) to anon, authenticated;
 
 ------------------------------------------------------------------------------
+-- 8c'. vote_night_out_bar — takes the shortlist lock too
+------------------------------------------------------------------------------
+-- ROUND 3 (Codex gate, HIGH + MEDIUM). `lock_night_out` and
+-- `remove_night_out_suggestion` below both take an advisory lock and both were
+-- written as if that made them exclusive with voting. It did not: 0044's
+-- `vote_night_out_bar` takes NO lock, so an advisory key nobody else holds
+-- serializes those two against each other and against nothing else. Two real
+-- interleavings came out of that:
+--
+--   * a vote passes its open-plan check, the owner locks and decides, and the
+--     vote INSERTs afterwards — a vote on a decided plan, and possibly a bar
+--     that was not the leader at the instant the lock took one;
+--   * a vote passes its suggestion-exists check, the suggestion is removed, and
+--     the vote INSERTs afterwards — an orphan row that `night_out_votes` has no
+--     foreign key to catch, and that counts again if the bar is re-suggested.
+--
+-- A lock only excludes writers that ASK FOR IT, so the vote writer is replaced
+-- forward here to take the same key. The body is 0044's, unchanged except for
+-- the lock: this is not a re-specification of voting, it is the missing half of
+-- two mutual exclusions this file introduced.
+--
+-- The key is the plan's shortlist, shared by all three functions.
+
+create or replace function public.vote_night_out_bar(
+  p_night_out uuid,
+  p_bar text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null or p_night_out is null
+     or p_bar is null or p_bar !~ '^[a-z0-9-]{1,60}$' then
+    return false;
+  end if;
+  if public.night_out_role(p_night_out) is null then
+    return false;  -- criterion 10
+  end if;
+
+  -- THE SHARED KEY, taken BEFORE the checks it protects. Everything below —
+  -- the plan's status, the suggestion's existence, and the insert — is now one
+  -- atomic decision with respect to lock_night_out and
+  -- remove_night_out_suggestion.
+  perform pg_advisory_xact_lock(
+    hashtextextended('night_out_shortlist:' || p_night_out::text, 0));
+
+  -- No voting on a cancelled or already-decided plan (review round 1).
+  if not exists (
+    select 1 from public.night_outs n
+     where n.id = p_night_out and n.status in ('draft', 'open')
+  ) then
+    return false;
+  end if;
+  -- Votes attach only to bars actually on the board.
+  if not exists (
+    select 1 from public.night_out_suggestions s
+     where s.night_out_id = p_night_out and s.bar_id = p_bar
+  ) then
+    return false;
+  end if;
+
+  insert into public.night_out_votes (night_out_id, bar_id, user_id)
+  values (p_night_out, p_bar, v_uid)
+  on conflict on constraint night_out_votes_pkey do nothing;
+  return true;
+end;
+$$;
+
+comment on function public.vote_night_out_bar(uuid, text) is
+  '0044''s vote writer, replaced forward in 0068 to take the shared '
+  'night_out_shortlist advisory lock. Without it, lock_night_out and '
+  'remove_night_out_suggestion serialized against each other and against '
+  'nothing else, so a vote could land after the plan was decided or after its '
+  'bar was removed.';
+
+revoke all on function public.vote_night_out_bar(uuid, text) from public, anon, authenticated;
+grant execute on function public.vote_night_out_bar(uuid, text) to authenticated;
+
+------------------------------------------------------------------------------
 -- 8c. lock_night_out — the owner's one primary action (V8-R-SOC-007)
 ------------------------------------------------------------------------------
 -- ADDED IN ROUND 3 (Codex gate, HIGH). The plan page drew a "Pick this" button
@@ -1922,8 +2191,13 @@ begin
 
   -- Read the leader and take it in one serialized section, so a vote landing
   -- between the read and the update cannot make the locked bar stale.
+  --
+  -- THE SAME KEY the vote writer and the removal take (section 8c'). Round 3
+  -- (Codex gate, HIGH): this key was `night_out_lock:` and nothing else asked
+  -- for it, so the "serialized section" excluded nobody and a vote could still
+  -- land between the SELECT below and the UPDATE.
   perform pg_advisory_xact_lock(
-    hashtextextended('night_out_lock:' || p_night_out::text, 0));
+    hashtextextended('night_out_shortlist:' || p_night_out::text, 0));
 
   -- TOTAL ORDER, so "the top bar" is one bar and not a coin flip: most votes,
   -- then the earliest suggestion, then the bar id.
@@ -1999,6 +2273,16 @@ begin
   if public.night_out_role(p_night_out) is null then
     return false;
   end if;
+
+  -- THE SHARED SHORTLIST LOCK (section 8c'), taken ahead of every check below.
+  -- Round 3 (Codex gate, MEDIUM): without the vote writer taking it too, a vote
+  -- could pass its suggestion-exists check, this function could delete the
+  -- suggestion and its votes, and the vote could then INSERT — leaving a row
+  -- attached to a bar that is no longer on the board, which nothing here would
+  -- see and which counts again if the bar is re-suggested.
+  perform pg_advisory_xact_lock(
+    hashtextextended('night_out_shortlist:' || p_night_out::text, 0));
+
   -- Only while the plan is still choosing. Removing the decided bar from a
   -- settled plan would leave night_outs.decided_bar_id naming a row nobody can
   -- see, and a settled shortlist is a record of what was chosen from.
@@ -2165,6 +2449,28 @@ grant execute on function public.remove_night_out_suggestion(uuid, text) to auth
 --      false and X is still there. As M → true, and both the suggestion and the
 --      vote are gone. As the plan OWNER on another member's entry → true. After
 --      the plan is decided → false. M's suggestion cap has one slot back.
+--   14. THE SHORTLIST LOCK IS SHARED (round-4, Codex HIGH + MEDIUM). In two
+--      sessions: BEGIN in A and call vote_night_out_bar (it takes the
+--      night_out_shortlist lock and holds it to COMMIT); in B call
+--      lock_night_out and, separately, remove_night_out_suggestion. Both must
+--      BLOCK until A commits, and the leader B then takes must include A's vote.
+--      Before this, B's advisory key was one nobody else asked for and both
+--      races were open.
+--   15. AN EDITED START MOVES EVERYTHING WITH IT (V8-R-NO-002, round-4, Codex
+--      HIGH). set_night_out_start(plan, <10:00 PM on the plan's night>) as the
+--      OWNER → true; night_out_scheduled_start(plan) is 10:00 PM,
+--      night_out_media_window_open(plan) is false at 9:30 PM and true at 10:01,
+--      night_out_media_window reports state 'before' then 'open', and
+--      preview_night_out_detail's starts_at is 10:00 PM. As a MEMBER → false.
+--      On a decided plan → false. With an instant whose nyc_night_key is a
+--      DIFFERENT night → false and starts_at unchanged. Passing null → true and
+--      the plan is back on the 9:00 PM default.
+--   16. THE ANON RSVP CAP IS IDEMPOTENT AT ITS BOUNDARY (round-4, Codex
+--      MEDIUM). Fill a plan to 99 anonymous RSVPs, then deliver the same NEW
+--      key twice concurrently. Both calls must return true and exactly one row
+--      must exist for that key — the second call re-reads its own key inside
+--      the lock rather than seeing a full table and reporting an unsent reply
+--      that is in fact stored.
 --
 -- Rollback (in comments, per convention):
 --   * nyc_night_key: re-apply 0053's body (interval '6 hours'). Note this
@@ -2191,6 +2497,14 @@ grant execute on function public.remove_night_out_suggestion(uuid, text) to auth
 --     and night_out_scheduled_start. Note this re-opens the window from midnight
 --     of the plan's night — media served for ~35 hours, starting before the
 --     start it measures from.
+--   * V8-R-NO-002's editable start: drop set_night_out_start, the uuid
+--     overloads of night_out_scheduled_start / night_out_media_expires_at /
+--     night_out_media_window_open, point every consumer back at the date-taking
+--     ones, then drop night_outs.starts_at. DESTRUCTIVE — it discards every
+--     start an owner actually chose, and the surfaces go back to asserting
+--     9:00 PM for plans that are not at 9:00 PM.
+--   * the shared shortlist lock: re-apply 0044's vote_night_out_bar body. Note
+--     this re-opens both races in item 14 above.
 --   * the bearer contract: drop remove_night_out_suggestion, lock_night_out,
 --     preview_night_out_shortlist, preview_night_out_attendees,
 --     preview_night_out_detail, get_anon_rsvp_by_token,

@@ -1236,11 +1236,34 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
    *
    * `windowRows: 'fail'` is the third state the surface must keep separate:
    * a window we could not READ, which is neither open nor closed.
+   *
+   * ROUND 3 CHANGED THE ROW SHAPE, and these stubs have to change with it
+   * (round-3 panel, Claude gate, HIGH). The window gained a lower bound, so
+   * `night_out_media_window` now returns `opens_at` and a server-decided
+   * `state` alongside the two old columns, and `fetchNightOutMediaWindow`
+   * rejects any row missing either — a round-2 fixture parses as "could not
+   * read", which is neither of the two states these tests assert. `windowRow`
+   * below builds a complete row so no fixture can drift from the parser again.
    */
+  function windowRow(
+    state: 'before' | 'open' | 'closed',
+    opensAt: string,
+    expiresAt: string,
+  ): Record<string, unknown> {
+    return {
+      opens_at: opensAt,
+      expires_at: expiresAt,
+      is_open: state === 'open',
+      state,
+    };
+  }
+
   async function stubMedia(
     page: Page,
     rows: unknown[],
-    windowRows: unknown[] | 'fail' = [{ expires_at: futureIso(20), is_open: true }],
+    windowRows: unknown[] | 'fail' = [
+      windowRow('open', futureIso(-4), futureIso(20)),
+    ],
   ): Promise<void> {
     await page.route(
       '**/rest/v1/rpc/night_out_media_window*',
@@ -1262,7 +1285,7 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     ]);
     await stubMemberRpcs(page, CLOSED_WINDOW_NIGHT);
     await stubMedia(page, [], [
-      { expires_at: '2020-01-02T02:00:00.000Z', is_open: false },
+      windowRow('closed', '2020-01-01T02:00:00.000Z', '2020-01-02T02:00:00.000Z'),
     ]);
 
     await page.goto(`/night-out/${TOKEN}`);
@@ -1332,7 +1355,7 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     // The deadline is in the PAST and the server says the window is OPEN. A
     // local `now < expiresAt` check reads this as closed; the server does not.
     await stubMedia(page, [MEDIA_ROW], [
-      { expires_at: futureIso(-48), is_open: true },
+      windowRow('open', futureIso(-72), futureIso(-48)),
     ]);
     await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
 
@@ -1357,7 +1380,7 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     // The mirror: a device clock running SLOW must not show what the server has
     // stopped serving either.
     await stubMedia(page, [MEDIA_ROW], [
-      { expires_at: futureIso(48), is_open: false },
+      windowRow('closed', futureIso(24), futureIso(48)),
     ]);
     await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
 

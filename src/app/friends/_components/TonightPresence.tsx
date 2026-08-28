@@ -166,11 +166,32 @@ export default function TonightPresence(): JSX.Element {
     // The view moved on while we were away: this answer is about a different
     // account, or a different night, from the one on screen.
     if (startedAt !== readEpoch.current) return;
-    setMinePin(
-      read.kind === 'ok'
-        ? { kind: 'ok', presence: read.presence }
-        : { kind: 'unreadable' },
-    );
+    // THREE KINDS IN, THREE STATES OUT — and the middle one is not optional.
+    //
+    // Round 3 collapsed `unset` into `unreadable` with a two-way ternary, which
+    // is the whole write path for every account that has not pinned yet: zero
+    // rows tonight is what `get_my_presence` returns for EVERY account on EVERY
+    // night before its first pin, so the pills sat permanently disabled behind
+    // "couldn't check your pin" and nobody could ever set a first status. The
+    // switch is exhaustive on purpose — `MyPresenceRead` gaining a fourth kind
+    // must not compile until someone says which of these three it is.
+    switch (read.kind) {
+      case 'ok':
+        setMinePin({ kind: 'ok', presence: read.presence });
+        return;
+      case 'unset':
+        // The server ANSWERED. There is no pin, which is a fact we may write
+        // over with the contract's default audience.
+        setMinePin({ kind: 'ok', presence: null });
+        return;
+      case 'failed':
+        setMinePin({ kind: 'unreadable' });
+        return;
+      default: {
+        const exhaustive: never = read;
+        return exhaustive;
+      }
+    }
   }, [userId, night]);
 
   useEffect(() => {
@@ -181,6 +202,23 @@ export default function TonightPresence(): JSX.Element {
     // rather than to "no pin", which is a claim about this account we have not
     // made yet.
     setMinePin({ kind: 'loading' });
+    // AND SO DOES EVERYTHING HALF-COMPOSED (round-3 panel, both gates). The
+    // pin sequence holds a bar, an audience and a recipient list that have not
+    // been written yet, and none of it survived a check that it still belongs
+    // to the account and night on screen: account A could compose a pin, sign
+    // out, and B's session would find A's bar and A's recipients still on
+    // screen with a live "Pin it" that sends them under B. The night rollover
+    // is the same defect on the other axis — confirming after 4:00 AM would
+    // write the previous night's choice into the new one.
+    //
+    // Cleared HERE, in the same effect that moves the epoch, so the two can
+    // never disagree about which view this state belongs to.
+    setPendingBarId(null);
+    setPendingAudience('friends');
+    setPendingRecipients([]);
+    setPickingBar(false);
+    setPickingPeople(null);
+    setFailed(false);
     void reloadMine();
   }, [reloadMine]);
 
@@ -287,6 +325,10 @@ export default function TonightPresence(): JSX.Element {
       setFailed(true);
       return;
     }
+    // The view this pin was composed in, captured before the first await. A
+    // sign-out or a rollover landing mid-write means neither the success nor
+    // the failure belongs to whatever is on screen now.
+    const startedAt = readEpoch.current;
     setBusy(true);
     setFailed(false);
     const ok = await setPresence(supabase, {
@@ -295,6 +337,10 @@ export default function TonightPresence(): JSX.Element {
       audience: pendingAudience,
       recipientIds: pendingRecipients,
     });
+    if (startedAt !== readEpoch.current) {
+      setBusy(false);
+      return;
+    }
     if (ok) {
       setPendingBarId(null);
       setPendingRecipients([]);
