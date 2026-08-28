@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -37,14 +37,19 @@ const caFile = join(dir, 'pooler-ca.crt');
 writeFileSync(caFile, ['-----BEGIN CERTIFICATE-----', 'not-a-real-certificate', '-----END CERTIFICATE-----', ''].join('\n'));
 
 /** Runs the real script and returns what an operator would see. */
-function runApplySet(file: string, env: Record<string, string> = {}): { status: number; output: string } {
+function runApplySet(
+  file: string,
+  env: Record<string, string> = {},
+  cwd: string = process.cwd(),
+): { status: number; output: string } {
+  const repo = process.cwd();
   try {
     const stdout = execFileSync(
       process.execPath,
-      ['node_modules/tsx/dist/cli.mjs', 'scripts/apply-migration-set.ts',
+      [join(repo, 'node_modules/tsx/dist/cli.mjs'), join(repo, 'scripts/apply-migration-set.ts'),
         '--secrets-file', file, '--env', 'staging', MIGRATION],
       {
-        cwd: process.cwd(),
+        cwd,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, PGSSLROOTCERT: caFile, ...env },
@@ -191,12 +196,34 @@ describe('apply-migration-set CLI target guard', () => {
   // is a pooler name that does not resolve, so the run dies in DNS instead of
   // opening a socket to anyone real.
   it('accepts the configured staging target and fails only afterwards', () => {
+    // THE CLASSIFICATION COMES FROM THE REPO-ROOT .env.local FILE, never from process.env — that is
+    // the rule that stops a --secrets-file from declaring what project it is allowed to be. So a
+    // fixture ref cannot be classified by injecting an env var: this case gets its OWN cwd with its
+    // OWN .env.local, which is the honest way to exercise a classified SUCCESS path without an
+    // override variable that production could also use.
+    //
+    // The API URL lives there too. Left to fall through from the real .env.local it would name the
+    // production project while DATABASE_URL named the fixture's, and the URL/API pair rule would
+    // refuse — correctly, and for a reason that has nothing to do with what this test is about.
+    const cwd = mkdtempSync(join(tmpdir(), 'apply-set-cwd-'));
+    mkdirSync(join(cwd, 'supabase', 'migrations'), { recursive: true });
+    copyFileSync(
+      join(process.cwd(), 'supabase', 'migrations', MIGRATION),
+      join(cwd, 'supabase', 'migrations', MIGRATION),
+    );
+    writeFileSync(join(cwd, '.env.local'), [
+      `NEXT_BAR_PRODUCTION_PROJECT_REF=${REF_B}`,
+      `NEXT_BAR_STAGING_PROJECT_REFS=${REF_A}`,
+      `NEXT_PUBLIC_SUPABASE_URL=https://${REF_A}.supabase.co`,
+      '',
+    ].join(String.fromCharCode(10)));
+
     const result = runApplySet(secretsFile('configured-staging', {
       NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
       NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
       NEXT_BAR_STAGING_PROJECT_REFS: REF_A,
       DATABASE_URL: url(REF_A, 'no-such-target.pooler.supabase.com'),
-    }));
+    }), {}, cwd);
     expect(result.output).not.toContain('REFUSING');
     expect(result.status).not.toBe(0);
   }, 120_000);

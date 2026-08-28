@@ -62,7 +62,7 @@
  * only thing that proves the peer answering that hostname is really Supabase.
  */
 
-import { config as loadEnv } from 'dotenv';
+import { config as loadEnv, parse as parseEnv } from 'dotenv';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
@@ -104,6 +104,27 @@ function parseArgs(argv: string[]): {
   return { env, execute, files, secretsFile };
 }
 
+/**
+ * The operator-set project classification, read from the repo-root `.env.local` FILE.
+ *
+ * Deliberately NOT from process.env: a `--secrets-file` loads with override:true and could
+ * otherwise supply or shadow these, which would let the file being pointed at decide what it is
+ * allowed to be. The guard stays pure — this is the caller's I/O, as its header requires.
+ */
+function readClassification(envLocalPath: string): { productionRef: string | null; stagingRefs: string[] } {
+  if (!existsSync(envLocalPath)) {
+    fail(`${envLocalPath} does not exist; the operator-set project lists live only there`);
+  }
+  const parsed = parseEnv(readFileSync(envLocalPath));
+  return {
+    productionRef: (parsed.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '').trim().toLowerCase() || null,
+    stagingRefs: (parsed.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
+      .split(/[,\s]+/)
+      .map((r) => r.trim().toLowerCase())
+      .filter(Boolean),
+  };
+}
+
 async function main(): Promise<void> {
   const { env, execute, files, secretsFile } = parseArgs(process.argv.slice(2));
 
@@ -112,6 +133,10 @@ async function main(): Promise<void> {
   // indistinguishable afterwards from one a file supplied — which is exactly
   // how a production connection string pairs with .env.local's staging label.
   const shellDatabaseUrl = process.env.DATABASE_URL;
+  // The LABEL is snapshotted for the same reason, and one more: a --secrets-file loads with
+  // override:true, so a label in that file REPLACES one exported in the shell. Without this, a
+  // human who exports a contradicting label is silently corrected instead of refused.
+  const shellDeclaredEnv = process.env.NEXT_BAR_DATABASE_ENVIRONMENT;
 
   // A separate --secrets-file is how you reach a NON-default target without editing
   // .env.local. Repointing .env.local at production is the obvious workaround
@@ -134,37 +159,44 @@ async function main(): Promise<void> {
   loadEnv({ path: '.env.local' });
   loadEnv({ path: '.env' });
 
-  // TWO different questions, both mandatory, in this order.
+  // TWO different questions, both mandatory, in THIS order — and the order is load-bearing.
   //
-  // First: did the URL and the LABEL come from the SAME file? A DATABASE_URL
-  // exported in the shell, or a --secrets-file supplying only one of the pair,
-  // survives dotenv's override:false and gets paired with .env.local's label —
-  // a production connection string wearing the word "staging". Nothing
-  // downstream can catch that: the shared pooler URL cannot tell the two apart.
-  // (scripts/lib/migration-target-guard.ts, pure, no I/O.)
+  // FIRST: is this endpoint safe to talk to at all? authorizeMigrationTarget refuses a non-pooler
+  // endpoint, a connection carrying startup options, disabled TLS, sslmode/ssl=no-verify, a missing
+  // or dropped pooler CA, NODE_TLS_REJECT_UNAUTHORIZED=0, and a DATABASE_URL pointing at the
+  // production ref under a staging run. Those are properties of the CHANNEL and they hold whatever
+  // project is on the other end.
+  //
+  // SECOND: which project is it, and is that the one the operator asked for? resolveTarget derives
+  // the label from the project REF (operator-set lists in the repo-root .env.local) and refuses a
+  // mismatched URL/API pair, an unclassified project, a label that contradicts the ref, and an
+  // --env that disagrees with the derived label.
+  //
+  // SECURITY LAYER FIRST, CLASSIFICATION SECOND. Reversed, an unclassified project short-circuits
+  // with "unknown project" and the operator never learns their connection had TLS verification off
+  // — the more dangerous fact, hidden behind the more procedural one. Measured: reversing this
+  // order turned 11 channel-security refusals into classification refusals.
+  const authorized = authorizeMigrationTarget(env);
+  if (authorized.refusal !== null) fail(authorized.refusal);
+  const { clientConfig, effective, env: actualEnv } = authorized.target;
+  const databaseUrl = clientConfig.connectionString;
+
   try {
     resolveTarget({
       env,
-      secretsFile,
-      secretsParsed,
       shellDatabaseUrl,
+      shellDeclaredEnv,
       databaseUrl: process.env.DATABASE_URL,
+      apiUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
       actualEnv: process.env.NEXT_BAR_DATABASE_ENVIRONMENT,
+      // Read from the repo-root .env.local FILE, never process.env: a --secrets-file must not be
+      // able to supply or shadow the operator's classification of which project is which.
+      classification: readClassification(join(process.cwd(), '.env.local')),
     });
   } catch (error) {
     if (error instanceof TargetRefusal) fail(error.message);
     throw error;
   }
-
-  // Second: which PROJECT and which SERVER does that pair actually reach, and
-  // is the channel authenticated? Every target refusal in the order that
-  // reports the most useful error first, plus the client config those refusals
-  // authorise. The sequence used to live inline here, which is precisely why
-  // the sibling applier had none of it: one resolver, every caller.
-  const authorized = authorizeMigrationTarget(env);
-  if (authorized.refusal !== null) fail(authorized.refusal);
-  const { clientConfig, effective, env: actualEnv } = authorized.target;
-  const databaseUrl = clientConfig.connectionString;
 
   // Read and hash first: a missing or unreadable file must stop us before we
   // open a transaction on anything.
