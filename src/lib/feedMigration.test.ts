@@ -102,7 +102,23 @@ describe('0069 — the reporter hide reaches every surface of the post', () => {
     expect(sqlShape(policyBody('feed_post_tags: readable with post'))).toContain(
       'auth.uid() = profile_id'
       + ' or ( public.can_view_feed_post(post_id)'
+      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_tags.profile_id)'
       + ' and not public.feed_post_reported_by_caller(post_id) )',
+    );
+  });
+
+  it('the reader/tagged-person block sits INSIDE the can_view branch, not over the whole policy', () => {
+    // Round 6 (HIGH, claude): a tag is a third party, exactly as a comment is, and
+    // can_view_feed_post only judges the caller against the post's AUTHOR. Without
+    // this term A could read C's tag row — and the card rendered C's name — after
+    // A blocked C, because nothing on the path compared A with C. The comments
+    // policy already carried it; this one was missed.
+    //
+    // Grouping is the requirement again: on the own-row arm it would take away the
+    // consent control instead of the content, so the whole-expression assertion
+    // above is what pins where it sits.
+    expect(sqlShape(policyBody('feed_post_tags: readable with post'))).toContain(
+      'and not public.is_blocked_between(auth.uid(), public.feed_post_tags.profile_id)',
     );
   });
 });
@@ -343,6 +359,39 @@ describe('0069 — a named group is resolved server-side (D-C-37)', () => {
       + ' if v_recipients = 0 then',
     );
     expect(body).toMatch(/raise exception\s*\n\s*'publish_feed_post: nobody in that audience/);
+  });
+});
+
+describe('0069 — a write carries its own authorization, not an older snapshot', () => {
+  it('the comment insert re-asserts the read gate in the SAME statement', () => {
+    // Round 6 (HIGH, codex): the visibility check and the insert were separate
+    // statements with an ADVISORY LOCK WAIT between them, so a caller blocked by
+    // the post's author while queued on the comment cap still committed a comment
+    // every other audience member could read. `insert ... select ... where` puts
+    // the predicate and the row on one snapshot.
+    const body = functionBody('public.add_feed_comment(');
+    expect(sqlShape(body)).toContain(
+      'insert into public.feed_comments (post_id, author_id, body)'
+      + ' select p_post_id, v_author, v_body'
+      + ' where public.can_view_feed_post(p_post_id)'
+      + ' and not public.feed_post_reported_by_caller(p_post_id)',
+    );
+    expect(
+      sqlShape(body),
+      'the comment insert is unconditional again, so a lock wait can outlive the check',
+    ).not.toContain('insert into public.feed_comments (post_id, author_id, body) values');
+  });
+
+  it('a report re-checks the entitlement AFTER the durable record is written', () => {
+    // Same shape, and it cannot be closed the same way: record_content_report is
+    // shared with the branches this file delegates to, so its insert cannot carry
+    // a predicate only this branch knows. Re-checking on the latest snapshot and
+    // raising rolls the whole transaction back, insert included.
+    const body = functionBody('public.report_content(');
+    expect(sqlShape(body)).toContain(
+      'v_id := public.record_content_report(p_subject_kind, v_ref, p_reason);',
+    );
+    expect(sqlShape(body)).toContain('stopped being yours to report');
   });
 });
 

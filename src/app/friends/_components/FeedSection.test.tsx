@@ -156,7 +156,10 @@ beforeEach(() => {
   postPlan = [{ ok: true, value: [makePost()] }];
   commentPlan = [{ ok: true, value: new Map([['post-1', [makeComment()]]]) }];
   authorPlan = [NAMED];
-  addResult = { ok: true, value: makeComment({ id: 'comment-2' }) };
+  // A DISTINCT body, because a confirmed addition is now staged into the thread
+  // until a successful read supersedes it — reusing the existing reply's text
+  // would make every assertion about "the reply already on screen" ambiguous.
+  addResult = { ok: true, value: makeComment({ id: 'comment-2', body: 'just sent' }) };
 });
 
 describe('FeedSection — the failure banner belongs to the session that failed', () => {
@@ -252,7 +255,14 @@ describe('FeedSection — a failed comment read keeps the thread AND its names',
       screen.queryByText(/Someone/),
       'the retained reply lost its author identity and fell back to "Someone"',
     ).toBeNull();
-    expect(screen.getByText(/Commenter/)).toBeTruthy();
+    // Scoped to the RETAINED reply. The confirmed addition is now staged into the
+    // thread as well, so it has a byline too and an unscoped query matches both;
+    // what this case is about is the reply that was already on screen keeping its
+    // name through the failed read.
+    expect(
+      screen.getByText('first reply').closest('li')?.textContent,
+      'the retained reply lost its byline',
+    ).toContain('Commenter');
   });
 });
 
@@ -326,10 +336,24 @@ describe('FeedSection — the viewer bookkeeping is state, not a ref', () => {
     expect(SOURCE).toMatch(
       /const \[paintedFor, setPaintedFor\] = useState<string \| null>\(viewerId\)/,
     );
+  });
+
+  test('the ONLY ref written anywhere in this file is the request sequence', () => {
+    // Round 6 (MEDIUM, codex): the previous version of this test forbade only ref
+    // names beginning with `paintedFor`, so keeping the state declaration and
+    // gating the reset through a differently named ref left it green while
+    // restoring the defect exactly. Naming the one write that is allowed, rather
+    // than the names that are not, is what closes that.
+    //
+    // `requestSeq.current += 1` is legitimate: it is inside `refresh`, a callback,
+    // not the render pass. Any OTHER ref write in this file is either a render-
+    // phase mutation — which does not survive an abandoned render the way the
+    // state beside it does — or a new one that has to justify itself here first.
+    const writes = SOURCE.match(/\w+\.current\s*(?:\+=|-=|=[^=])/g) ?? [];
     expect(
-      SOURCE,
-      'the viewer bookkeeping is a ref again, and a ref survives an abandoned render',
-    ).not.toMatch(/paintedFor[A-Za-z]*\.current\s*=/);
+      writes,
+      'a ref is being written somewhere new in FeedSection; if it is in render, an abandoned render keeps it',
+    ).toEqual(['requestSeq.current +=']);
   });
 });
 
@@ -353,6 +377,36 @@ describe('FeedComments — a confirmed write is not undone by a failed read', ()
         'a reply the server confirmed deleted came back because the re-read failed',
       ).toBeNull(),
     );
+
+    // AND IT SURVIVES CLOSING THE THREAD. Round 6 (MEDIUM, codex): held inside
+    // FeedComments, the confirmed deletion died with the component the moment
+    // Reply was toggled shut, and reopening rendered the deleted row again from
+    // the stale thread the parent still held.
+    await user.click(screen.getByTestId('feed-reply')); // close
+    await user.click(screen.getByTestId('feed-reply')); // reopen
+
+    expect(
+      screen.queryByText('first reply'),
+      'closing and reopening the thread resurrected a confirmed deletion',
+    ).toBeNull();
+  });
+
+  test('a reply the server confirmed added is not lost when the follow-up read fails', async () => {
+    const user = userEvent.setup();
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    await screen.findByText('first reply');
+
+    // The write is CONFIRMED and the re-read it triggers fails.
+    commentPlan = [FAILED];
+    await user.type(screen.getByTestId('feed-comment-input'), 'just sent');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+
+    expect(
+      await screen.findByText('just sent'),
+      'a reply the server accepted vanished because the read after it failed',
+    ).toBeTruthy();
   });
 });
 

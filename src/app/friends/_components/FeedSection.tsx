@@ -18,7 +18,33 @@ import {
   type FeedComment,
   type FeedPostView,
 } from '@/lib/feed.server';
-import FeedComments from './FeedComments';
+import FeedComments, { type ConfirmedWrite } from './FeedComments';
+
+/** Confirmed writes not yet reflected by a successful read. */
+type PendingWrites = {
+  readonly added: readonly FeedComment[];
+  readonly removedIds: ReadonlySet<string>;
+};
+
+const EMPTY_PENDING: PendingWrites = { added: [], removedIds: new Set() };
+
+/**
+ * One thread as the viewer should see it: what the last successful read returned,
+ * minus what has since been confirmed deleted, plus what has since been confirmed
+ * added. Null in, null out — an unread thread stays unread.
+ */
+function withPending(
+  thread: readonly FeedComment[] | null,
+  postId: string,
+  pending: PendingWrites,
+): readonly FeedComment[] | null {
+  if (thread === null) return null;
+  const kept = thread.filter((comment) => !pending.removedIds.has(comment.id));
+  const additions = pending.added.filter(
+    (comment) => comment.postId === postId && !kept.some((row) => row.id === comment.id),
+  );
+  return additions.length === 0 ? kept : [...kept, ...additions];
+}
 
 /**
  * Social → Feed.
@@ -70,6 +96,21 @@ export default function FeedSection({
   );
   const [loadFailed, setLoadFailed] = useState(false);
   const [openThread, setOpenThread] = useState<string | null>(null);
+
+  /**
+   * Writes the server CONFIRMED, held until a successful read supersedes them.
+   *
+   * A confirmed write is followed by a re-read, and that read may fail — at which
+   * point the threads already on screen are deliberately KEPT rather than
+   * blanked. Without this, that correct behaviour re-rendered a reply the server
+   * had just confirmed deleted (and the Remove button then refused a second
+   * attempt), and dropped a reply it had just confirmed added.
+   *
+   * IT LIVES HERE, NOT IN FeedComments, because FeedComments is unmounted every
+   * time the thread is closed. Held there, the fact died on the next toggle and
+   * the deleted reply came back from the stale thread this component still holds.
+   */
+  const [pending, setPending] = useState<PendingWrites>(EMPTY_PENDING);
 
   /**
    * The sequence number of the most recently STARTED refresh.
@@ -173,7 +214,10 @@ export default function FeedSection({
     // we have and say the read failed, honouring the module contract in
     // feed.server.ts: a failure is never reported as a settled empty result.
     if (comments.ok) {
+      // A successful read is the truth, and it supersedes every write we were
+      // holding: the rows it returns already reflect them.
       setThreads(comments.value);
+      setPending(EMPTY_PENDING);
     } else {
       // The threads on screen are KEPT, not replaced, and the failure is stated.
       // Neither branch here may reach setThreads(new Map()): that turned an
@@ -253,13 +297,27 @@ export default function FeedSection({
                 // has not landed, and substituting an empty array here is what
                 // made FeedComments claim "No replies yet." for a thread nobody
                 // had read. A post with a settled empty thread HAS an entry.
-                comments={threads.get(post.id) ?? null}
+                comments={withPending(threads.get(post.id) ?? null, post.id, pending)}
                 authors={authors}
                 threadOpen={openThread === post.id}
                 onToggleThread={() =>
                   setOpenThread((current) => (current === post.id ? null : post.id))
                 }
-                onChanged={() => void refresh()}
+                onChanged={(confirmed) => {
+                  // Recorded BEFORE the re-read is issued, so a read that fails
+                  // cannot undo a write the server already accepted.
+                  if (confirmed !== undefined) {
+                    setPending((prev) => ({
+                      added: confirmed.added === undefined
+                        ? prev.added
+                        : [...prev.added, confirmed.added],
+                      removedIds: confirmed.removedId === undefined
+                        ? prev.removedIds
+                        : new Set([...prev.removedIds, confirmed.removedId]),
+                    }));
+                  }
+                  void refresh();
+                }}
               />
             </li>
           ))}
@@ -304,7 +362,8 @@ function FeedPostCard({
   authors: ReadonlyMap<string, FeedAuthor>;
   threadOpen: boolean;
   onToggleThread: () => void;
-  onChanged: () => void;
+  /** Forwarded to FeedComments, which reports WHAT the confirmed write did. */
+  onChanged: (confirmed?: ConfirmedWrite) => void;
 }): JSX.Element {
   const bar = post.barId !== null ? getBarById(post.barId) : undefined;
   const author = post.author;

@@ -505,6 +505,23 @@ create policy "feed_post_tags: readable with post"
     auth.uid() = profile_id
     or (
       public.can_view_feed_post(post_id)
+      -- THE READER/TAGGED-PERSON BLOCK, and it is the SECOND pair on this path
+      -- just as it is for comments. `can_view_feed_post` judges the caller against
+      -- the post's AUTHOR; a tag introduces a third party, exactly like a comment
+      -- does. Without this term, A and C both being mutual friends of author P let
+      -- A read C's tag row — and the card then renders C's name in the Tagged chip
+      -- — after A blocked C, because nothing on the path ever compared A with C.
+      -- 0066 severs only the A-C follow edges, so P-C stays mutual and P may still
+      -- tag C. "Blocking PREVENTS VISIBILITY AND INTERACTION BETWEEN THE AFFECTED
+      -- USERS ... SERVER-ENFORCED IN BOTH DIRECTIONS" (D-C-30) is not scoped to
+      -- the pair that happens to own the surrounding row. The comments policy got
+      -- this term in an earlier round; the tags policy is the same shape and was
+      -- missed.
+      --
+      -- NOT on the `auth.uid() = profile_id` arm above: your own tag row is your
+      -- own consent surface, and a row you cannot read is a consent you cannot
+      -- revoke.
+      and not public.is_blocked_between(auth.uid(), public.feed_post_tags.profile_id)
       -- THE REPORTER HIDE REACHES THE TAGS. The post row and every comment
       -- beneath it already disappear for the reporter; without this term the tag
       -- rows — and the tagged people's profile ids — kept answering for a post
@@ -1053,9 +1070,31 @@ begin
       using errcode = '54000';
   end if;
 
+  -- THE AUTHORIZATION IS RE-ASSERTED BY THE INSERT ITSELF, in one statement with
+  -- the write.
+  --
+  -- The check above is a SEPARATE statement, and at READ COMMITTED it sees an
+  -- earlier snapshot than the insert does. Worse, the advisory lock sits between
+  -- them: a caller that waits on the cap lock can be blocked by the post's author,
+  -- or lose sight of the post entirely, while it waits — and the unconditional
+  -- insert then committed a comment the caller was no longer entitled to write,
+  -- readable by every other audience member. `insert ... select ... where` closes
+  -- that: the predicate and the row land on the same snapshot, and zero rows means
+  -- the entitlement went away while we waited.
+  --
+  -- The earlier check is kept because it is the one that produces the honest error
+  -- for the ordinary refusal, before the caller queues on a lock for a write that
+  -- was never going to be allowed.
   insert into public.feed_comments (post_id, author_id, body)
-  values (p_post_id, v_author, v_body)
+    select p_post_id, v_author, v_body
+     where public.can_view_feed_post(p_post_id)
+       and not public.feed_post_reported_by_caller(p_post_id)
   returning * into v_comment;
+
+  if not found then
+    raise exception 'add_feed_comment: that post is not yours to reply to'
+      using errcode = '42501';
+  end if;
 
   return v_comment;
 end;
@@ -1299,6 +1338,7 @@ set search_path = public
 as $$
 declare
   v_ref text := lower(btrim(coalesce(p_subject_ref, '')));
+  v_id uuid;
 begin
   -- NOT THIS LANE'S KIND: hand it back to whichever migration last taught this
   -- function about it, with the arguments exactly as received. Every check that
@@ -1368,7 +1408,38 @@ begin
     end if;
   end if;
 
-  return public.record_content_report(p_subject_kind, v_ref, p_reason);
+  v_id := public.record_content_report(p_subject_kind, v_ref, p_reason);
+
+  -- AND THE ENTITLEMENT IS RE-ASSERTED AFTER THE WRITE, because the write is not
+  -- in the same statement as the check and cannot be: `record_content_report` is
+  -- shared with the branches this file delegates to, and its insert cannot carry a
+  -- predicate only this branch knows.
+  --
+  -- `record_content_report` takes a per-reporter advisory lock, so a caller can
+  -- WAIT inside it — and a block, a deletion, or a report of the parent post
+  -- committed during that wait would leave a durable, non-withdrawable accusation
+  -- filed by somebody who, by the time it landed, could no longer see the subject.
+  -- Re-checking on the latest snapshot and raising rolls the whole transaction
+  -- back, insert included. It is not atomic, and the residual window between this
+  -- check and COMMIT is inherent to READ COMMITTED; what it removes is the long
+  -- window, the one with a lock wait in it.
+  if p_subject_kind = 'feed_post' then
+    if not public.can_view_feed_post(v_ref::uuid) then
+      raise exception 'report_content: that post stopped being yours to report'
+        using errcode = '42501';
+    end if;
+  elsif not public.can_view_feed_comment(v_ref::uuid)
+     or exists (
+       select 1
+         from public.feed_comments c
+        where c.id = v_ref::uuid
+          and public.feed_post_reported_by_caller(c.post_id)
+     ) then
+    raise exception 'report_content: that comment stopped being yours to report'
+      using errcode = '42501';
+  end if;
+
+  return v_id;
 end;
 $$;
 

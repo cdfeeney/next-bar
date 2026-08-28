@@ -36,6 +36,18 @@ import { ageLabel } from '@/components/story/storyStore';
  * success" and "a failed deletion must not report success". Every refusal from
  * the server lands in a live region beside the composer.
  */
+/**
+ * What a confirmed write did, handed up so the parent can hold it if the re-read
+ * that follows fails.
+ *
+ * THIS LIVES IN THE PARENT, not here. Held locally it was lost the moment the
+ * thread was closed — `FeedSection` unmounts this component on toggle — so
+ * reopening Reply after a failed refresh resurrected a deleted reply from the
+ * stale thread the parent still held. The confirmed fact has to outlive the
+ * component that observed it.
+ */
+export type ConfirmedWrite = { added?: FeedComment; removedId?: string };
+
 export default function FeedComments({
   postId,
   postAuthorId,
@@ -57,28 +69,18 @@ export default function FeedComments({
   comments: readonly FeedComment[] | null;
   /** Display identities for commenters, keyed by profile id. */
   authors: ReadonlyMap<string, FeedAuthor>;
-  /** Called after a CONFIRMED write, so the parent re-reads the thread. */
-  onChanged: () => void;
+  /**
+   * Called after a CONFIRMED write, so the parent re-reads the thread — and, when
+   * the write produced or removed a row, told WHICH so it can hold that fact if
+   * the re-read fails.
+   */
+  onChanged: (confirmed?: ConfirmedWrite) => void;
 }): JSX.Element {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  /**
-   * Comments the server has CONFIRMED deleted, held until a successful re-read
-   * drops them on its own.
-   *
-   * `onChanged` re-reads the thread, and that read is allowed to fail — when it
-   * does, FeedSection deliberately keeps the threads already on screen rather
-   * than blanking them. Without this set, that correct behaviour rendered a
-   * comment the server had just told us was gone, and the Remove button then
-   * refused a second attempt ("that reply is not yours to remove", because it is
-   * already deleted). A confirmed write must not be undone by a failed read.
-   */
-  const [removed, setRemoved] = useState<ReadonlySet<string>>(() => new Set());
 
-  const visible = comments === null
-    ? null
-    : comments.filter((comment) => !removed.has(comment.id));
+  const visible = comments;
 
   const submit = async (): Promise<void> => {
     if (busy) return;
@@ -98,7 +100,7 @@ export default function FeedComments({
       // Cleared only on a CONFIRMED write. Clearing first would throw away the
       // user's words on a refusal they now have to retype.
       setDraft('');
-      onChanged();
+      onChanged({ added: result.value });
     } finally {
       setBusy(false);
     }
@@ -122,11 +124,7 @@ export default function FeedComments({
       // Confirmed by the server, so it leaves the screen NOW and stays gone even
       // if the re-read below fails. Immutable update: a new Set, never a mutation
       // of the one React is holding.
-      // Confirmed by the server, so it leaves the screen NOW and stays gone even
-      // if the re-read below fails. Immutable update: a new Set, never a mutation
-      // of the one React is holding.
-      setRemoved((prev) => new Set([...prev, commentId]));
-      onChanged();
+      onChanged({ removedId: commentId });
     } finally {
       setBusy(false);
     }
