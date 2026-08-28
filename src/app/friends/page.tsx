@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import TonightPresence from './_components/TonightPresence';
 import PlansSection from './_components/PlansSection';
 import FeedSection from './_components/FeedSection';
@@ -16,7 +17,22 @@ import { useStories } from '@/components/story/storyStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { useNightRefresh } from '@/hooks/useIntent';
+import { useSuggestions } from '@/hooks/useSuggestions';
 import { nycNightKey } from '@/lib/nightKey';
+import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
+import { getBarById } from '@/lib/catalog';
+import { displayHood } from '@/lib/hoodDisplay';
+import { displayTag } from '@/lib/tagDisplay';
+import { haversineMiles } from '@/lib/distance';
+import { leadCopy } from '@/lib/travelTime';
+import { loadProfile } from '@/lib/storedProfile';
+import type { Bar, Coords, VibeProfile } from '@/types';
+
+// The lightbox is a full-screen panel with its own photo fetches; it has no
+// business in the Tonight bundle until somebody opens it.
+const BarLightbox = dynamic(() => import('@/components/BarLightbox'), {
+  ssr: false,
+});
 
 /**
  * /friends — SOCIAL, per `docs/design-reference/approved/next-bar-social-v2-core.png`.
@@ -46,8 +62,8 @@ const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
 export default function SocialPage(): JSX.Element {
   const { requests } = useFollowRequests();
   const auth = useAuth();
-  // Night-scoped header line, on the shared clock signal so it re-labels at
-  // the 6am rollover without a reload.
+  // Night-scoped header line, on the shared clock signal so it re-labels at the
+  // 4:00 AM America/New_York rollover without a reload (V8-R-PRE-005 / D-C-39).
   const [night, setNight] = useState(() => nycNightKey());
   useNightRefresh(() => setNight(nycNightKey()));
 
@@ -172,6 +188,7 @@ export default function SocialPage(): JSX.Element {
         {tab === 'tonight' ? (
           <Panel id="tonight">
             {rail}
+            <NextBarCard />
             <TonightPresence />
             <GroupsAndPeople />
           </Panel>
@@ -274,13 +291,113 @@ function Panel({
   );
 }
 
-/** "CF" from an email local part; a stable placeholder when signed out. */
-function initialsFor(email: string | null | undefined): string {
-  const local = email?.split('@')[0] ?? '';
-  const parts = local.split(/[._-]+/).filter(Boolean);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return 'YO';
+/**
+ * V8-R-SOC-003 — the Next Bar? card on Social · Tonight.
+ *
+ * "A compact card naming the suggested bar, walk time and quiet state, with one
+ * Open action into the shared lightbox." Two states: suggestion present, and
+ * none.
+ *
+ * IT RUNS THE SAME RANKER AS EVERYWHERE ELSE. `useSuggestions` is the shared
+ * entry point to the matching pipeline the home flow and the map both use, so
+ * Tonight cannot recommend a different bar from the rest of the app for the same
+ * person on the same night. Taking the top of that ranking is the whole of the
+ * "suggestion" here — this card owns no ranking logic of its own.
+ *
+ * THE LIGHTBOX IS THE SHARED ONE, unmodified. `BarLightbox`'s entire contract is
+ * two props, deliberately, "so a map marker, a ranking row and a search result
+ * can each pass the object they already hold" — and now a Tonight card too.
+ *
+ * NO LOCATION PROMPT. Social · Tonight is not a surface that should raise a
+ * permission dialog on arrival, so distance comes from the saved profile's
+ * preferred neighborhood, the way `ResultsView` resolves it without coords. With
+ * no neighborhood either, `leadCopy` renders the honest "In …" line instead of a
+ * walk time — a made-up number would be worse than none.
+ */
+function NextBarCard(): JSX.Element | null {
+  const [profile, setProfile] = useState<VibeProfile | null>(null);
+  const [profileChecked, setProfileChecked] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  // Client-side after mount, the same pattern WhereNextFlow and useSuggestions
+  // use: a localStorage read during render is an SSR hydration mismatch.
+  useEffect(() => {
+    const saved = loadProfile();
+    if (saved) {
+      setProfile({
+        tags: saved.tags,
+        archetype: saved.archetype,
+        preferredNeighborhoods: saved.preferredNeighborhoods,
+      });
+    }
+    setProfileChecked(true);
+  }, []);
+
+  const from: Coords | null = useMemo(() => {
+    const hood = profile?.preferredNeighborhoods?.[0];
+    return hood ? NEIGHBORHOOD_CENTROIDS[hood] : null;
+  }, [profile]);
+
+  // One suggestion is all this card shows, so ask for one.
+  const { suggestedIds } = useSuggestions(from, 1);
+  const bar = suggestedIds[0] ? getBarById(suggestedIds[0]) : undefined;
+
+  // NOTHING IS NOT AN EMPTY BOX. "none" is a real state in the contract, and the
+  // honest rendering of it on a panel that already carries a rail, a pin row and
+  // a circle list is to take up no room at all.
+  if (!profileChecked || bar === undefined) return null;
+
+  const miles =
+    from !== null && bar.lat !== undefined && bar.lng !== undefined
+      ? haversineMiles(from, { lat: bar.lat, lng: bar.lng })
+      : null;
+  const lead = leadCopy(miles, displayHood(bar.neighborhood));
+
+  return (
+    <section data-testid="next-bar-card">
+      <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+        Next Bar?
+      </h2>
+      <div className="flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <p className="font-display text-base truncate">{bar.name}</p>
+          {/* Walk time and quiet state, both in WORDS, on one quiet line. */}
+          <p className="text-muted text-xs truncate" data-testid="next-bar-line">
+            {[lead.text, energyOf(bar)].filter(Boolean).join(' · ')}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          data-testid="next-bar-open"
+          className="shrink-0 min-h-[44px] px-5 rounded-full border border-border font-display text-sm touch-manipulation hover:border-accent hover:text-accent transition-colors"
+        >
+          Open
+        </button>
+      </div>
+
+      {open ? <BarLightbox bar={bar} onClose={() => setOpen(false)} /> : null}
+    </section>
+  );
+}
+
+/** The loud/quiet axis, ascending. `chill` is the quiet end. */
+const ENERGY_TAGS = ['chill', 'buzzy', 'loud', 'dance'] as const;
+
+/**
+ * The "quiet state", in this catalog's own vocabulary.
+ *
+ * The Energy axis IS the loud/quiet axis, and `displayTag` is the one lookup a
+ * component may render a tag through. Nothing here invents a live-crowd signal:
+ * the app has no such measurement, and a card implying one would be describing a
+ * room nobody reported on.
+ *
+ * Empty string when the bar carries no energy tag, so the caller's join drops it
+ * rather than printing a trailing separator.
+ */
+function energyOf(bar: Bar): string {
+  const tag = ENERGY_TAGS.find((candidate) => bar.tags?.includes(candidate));
+  return tag ? displayTag(tag) : '';
 }
 
 /**

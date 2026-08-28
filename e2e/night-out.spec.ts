@@ -142,7 +142,25 @@ const PLAN_ROW = {
   caller_revision: 0,
 };
 
-async function stubMemberRpcs(page: Page): Promise<void> {
+/**
+ * A night whose 24-hour media window is CERTAINLY open, computed at run time.
+ *
+ * The window closes 24 hours after the night's own 4:00 AM New York start, so a
+ * fixture with a fixed date stops being "open" the day after it is written —
+ * which is exactly how the first version of the archive tests below passed when
+ * they were authored and failed eight days later. Tomorrow's date is at least
+ * 24 hours of window away at every instant, in both zones.
+ */
+function openWindowNight(): string {
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  return tomorrow.toISOString().slice(0, 10);
+}
+
+/** Long past, so its window is certainly SHUT — the other half of the pair. */
+const CLOSED_WINDOW_NIGHT = '2020-01-01';
+
+async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
+  const planRow = night === undefined ? PLAN_ROW : { ...PLAN_ROW, night };
   // Playwright matches routes LAST-registered-first: the catch-all must be
   // registered BEFORE the specific RPC stubs or it shadows them.
   await page.route('**/rest/v1/**', fulfillJson(200, []));
@@ -186,7 +204,7 @@ async function stubMemberRpcs(page: Page): Promise<void> {
         },
       ])(route);
     }
-    return fulfillJson(200, [PLAN_ROW])(route);
+    return fulfillJson(200, [planRow])(route);
   });
 }
 
@@ -654,5 +672,396 @@ test.describe('Social sub-tabs (V8-R-NAV-002)', () => {
     // not every element that survived it.
     await page.getByRole('button', { name: /Groups & people/i }).click();
     await expect(page.getByTestId('follow-stats')).toBeVisible();
+  });
+
+  test('the Next Bar? card names a bar, a lead line and ONE Open action (V8-R-SOC-003)', async ({
+    page,
+  }) => {
+    await page.goto('/friends');
+
+    // The card is signed-out reachable on purpose: the ranker runs on the local
+    // catalog and a saved quiz profile, neither of which needs a session. It
+    // renders nothing at all when the ranker has no suggestion — the contract's
+    // "none" state — so this asserts the shape only when a bar is present.
+    const card = page.getByTestId('next-bar-card');
+    await expect(card).toBeVisible();
+    await expect(card.getByRole('heading', { name: 'Next Bar?' })).toBeVisible();
+    // The lead line carries the state in WORDS. Either a walk/Uber time or the
+    // honest neighborhood fallback — never an invented distance.
+    await expect(page.getByTestId('next-bar-line')).not.toBeEmpty();
+
+    // "ONE Open action", and it must be a 44px target.
+    const open = page.getByTestId('next-bar-open');
+    await expect(open).toHaveCount(1);
+    expect((await open.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+
+    // Opening lands in the SHARED lightbox rather than navigating away: the
+    // card is a peek at a bar, not a route change out of Social.
+    const urlBefore = page.url();
+    await open.click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(page.url()).toBe(urlBefore);
+  });
+});
+
+test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-003)', () => {
+  /**
+   * A signed-in Tonight with NO presence set — the exact state round 1 found
+   * unreachable: choosing "Going out" could only ever send the bar the user
+   * already had, and a new pinner had none, so V8-R-PRE-001 and V8-R-PRE-003
+   * could not be satisfied at all.
+   */
+  async function stubTonight(page: Page, mine: unknown[]): Promise<void> {
+    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    await page.route('**/rest/v1/rpc/get_circle_presence*', fulfillJson(200, []));
+    await page.route('**/rest/v1/rpc/get_my_presence*', fulfillJson(200, mine));
+  }
+
+  test('a new pinner can reach the bar step, and the trust line is on it', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    // Status set, no bar — the state a first "Going out" tap produces.
+    await stubTonight(page, [
+      {
+        status: 'going',
+        bar_id: null,
+        audience: 'friends',
+        updated_at: '2026-08-20T02:00:00.000Z',
+        recipient_ids: [],
+      },
+    ]);
+
+    await page.goto('/friends');
+    await expect(page.getByTestId('my-pin')).toContainText(/no bar pinned/i);
+
+    // THE STEP THAT WAS MISSING.
+    const pin = page.getByTestId('pin-my-spot');
+    await expect(pin).toBeVisible();
+    await pin.click();
+
+    const dialog = page.getByTestId('pin-bar-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByRole('heading', { name: /where are you tonight/i }),
+    ).toBeVisible();
+    // One question, one field (V8-R-PRE-003).
+    await expect(dialog.getByRole('textbox', { name: /search bars/i })).toBeVisible();
+    // The trust line "stays in place throughout" (V8-R-PRE-001 accessibility).
+    await expect(dialog.getByText(/never tracks you automatically/i)).toBeVisible();
+
+    // Back returns to Tonight and takes nothing with it.
+    await dialog.getByRole('button', { name: /^Back$/ }).click();
+    await expect(page.getByTestId('pin-bar-dialog')).toHaveCount(0);
+    await expect(page.getByTestId('social-tonight')).toBeVisible();
+  });
+
+  test('all three audience choices are offered, and "some people" opens a picker', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubTonight(page, [
+      {
+        status: 'going',
+        bar_id: 'attaboy',
+        audience: 'friends',
+        updated_at: '2026-08-20T02:00:00.000Z',
+        recipient_ids: [],
+      },
+    ]);
+
+    await page.goto('/friends');
+    const choices = page.getByRole('group', { name: /who can see my pin tonight/i });
+    await expect(choices).toBeVisible();
+    await expect(page.getByTestId('pin-audience-friends')).toBeVisible();
+    await expect(page.getByTestId('pin-audience-close')).toBeVisible();
+    await expect(page.getByTestId('pin-audience-people')).toBeVisible();
+
+    // 'people' cannot be one tap: it needs a recipient list, and writing it
+    // without one is refused server-side rather than falling back to a wider
+    // audience. So the tap opens the picker instead of sending a request that
+    // could only fail.
+    await page.getByTestId('pin-audience-people').click();
+    const picker = page.getByTestId('pin-audience-dialog');
+    await expect(picker).toBeVisible();
+
+    // FAILS CLOSED IN THE UI TOO: nothing selected, nothing to confirm.
+    await expect(picker.getByTestId('pin-audience-confirm')).toBeDisabled();
+
+    await picker.getByRole('button', { name: /^Back$/ }).click();
+    await expect(page.getByTestId('pin-audience-dialog')).toHaveCount(0);
+  });
+});
+
+test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-002)', () => {
+  const MEDIA_ID = '523e4567-e89b-42d3-a456-426614174000';
+  const SAVED_ID = '623e4567-e89b-42d3-a456-426614174000';
+
+  /** One live photo on the plan. */
+  const MEDIA_ROW = {
+    destination_id: '723e4567-e89b-42d3-a456-426614174000',
+    media_id: MEDIA_ID,
+    author_id: USER_ID,
+    storage_path: `${USER_ID}/${MEDIA_ID}`,
+    created_at: '2026-08-21T02:00:00.000Z',
+    expires_at: '2026-08-21T08:00:00.000Z',
+  };
+
+  /**
+   * `stubMemberRpcs` routes `get_night_out*`, which also matches
+   * `get_night_out_media`. Registering the media stub AFTER it wins, because
+   * Playwright matches last-registered-first.
+   */
+  async function stubMedia(page: Page, rows: unknown[]): Promise<void> {
+    await page.route('**/rest/v1/rpc/get_night_out_media*', fulfillJson(200, rows));
+  }
+
+  test('the window is stated in words on BOTH sides of it', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page, CLOSED_WINDOW_NIGHT);
+    await stubMedia(page, []);
+
+    await page.goto(`/night-out/${TOKEN}`);
+    // A closed window says SO, and withdraws both controls rather than offering
+    // actions the server would refuse.
+    await expect(page.getByTestId('night-out-media-window')).toContainText(
+      /window has closed/i,
+    );
+    await expect(page.getByTestId('night-out-add-photo')).toHaveCount(0);
+    await expect(page.getByTestId('night-out-archive')).toHaveCount(0);
+  });
+
+  test('an open window names its deadline and offers the add control', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page, openWindowNight());
+    await stubMedia(page, []);
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('night-out-media')).toBeVisible();
+    // "the window is stated in words" (V8-R-NO-008 accessibility).
+    await expect(page.getByTestId('night-out-media-window')).toContainText(
+      /stay here until/i,
+    );
+    await expect(page.getByTestId('night-out-add-photo')).toBeVisible();
+
+    // Empty is EMPTY, not an error and not a loading state left on screen.
+    await expect(page.getByTestId('night-out-media-empty')).toBeVisible();
+    await expect(page.getByTestId('night-out-media-error')).toHaveCount(0);
+    await expect(page.getByTestId('night-out-media-list')).toHaveCount(0);
+
+    // Nothing to archive means no archive control — an action that could only
+    // report "nothing happened" is not an action.
+    await expect(page.getByTestId('night-out-archive')).toHaveCount(0);
+  });
+
+  test('a failed read says so, and NEVER renders the empty state', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page, openWindowNight());
+    await page.route(
+      '**/rest/v1/rpc/get_night_out_media*',
+      fulfillJson(500, { message: 'boom' }),
+    );
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('night-out-media-error')).toBeVisible();
+    // The distinction this surface must never blur.
+    await expect(page.getByTestId('night-out-media-empty')).toHaveCount(0);
+  });
+
+  test('archiving reports what it actually saved and offers the private destination', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page, openWindowNight());
+    await stubMedia(page, [MEDIA_ROW]);
+    // The photo itself resolves through the boundary route, not off Storage.
+    let urlRouteCalled = false;
+    await page.route('**/api/media/*/url', async (route) => {
+      urlRouteCalled = true;
+      await fulfillJson(404, { ok: false, error: 'not_found' })(route);
+    });
+
+    let archiveBody: Record<string, unknown> | null = null;
+    await page.route('**/rest/v1/rpc/archive_night_out*', async (route) => {
+      archiveBody = route.request().postDataJSON() as Record<string, unknown>;
+      await fulfillJson(200, [{ saved_night_id: SAVED_ID, photo_count: 1 }])(route);
+    });
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('night-out-media-list')).toBeVisible();
+
+    await page.getByTestId('night-out-archive').click();
+    await expect(page.getByTestId('night-out-media-notice')).toContainText(
+      /Saved 1 photo to your Saved Nights Out/i,
+    );
+    expect(archiveBody).toEqual({ p_night_out: PLAN_ID });
+
+    // "the private destination is named in words" — and it is reachable.
+    const open = page.getByTestId('night-out-open-archive');
+    await expect(open).toBeVisible();
+    await open.click();
+    await expect(page).toHaveURL(new RegExp(`/nights/${SAVED_ID}$`));
+
+    // The photo went through the media boundary; a 404 there renders the
+    // honest absence rather than a broken image.
+    expect(urlRouteCalled).toBe(true);
+  });
+
+  test('a refused archive never reports a save', async ({ page, context, baseURL }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page, openWindowNight());
+    await stubMedia(page, [MEDIA_ROW]);
+    await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
+    await page.route(
+      '**/rest/v1/rpc/archive_night_out*',
+      fulfillJson(403, { message: 'denied' }),
+    );
+
+    await page.goto(`/night-out/${TOKEN}`);
+    await page.getByTestId('night-out-archive').click();
+
+    // "a failed archive must not report success" (V8-R-NO-009).
+    const notice = page.getByTestId('night-out-media-notice');
+    await expect(notice).toContainText(/didn.t save/i);
+    await expect(notice).not.toContainText(/Saved \d/i);
+    await expect(page.getByTestId('night-out-open-archive')).toHaveCount(0);
+  });
+
+  test('Saved Nights Out keeps signed-out, empty and unreadable apart', async ({
+    page,
+  }) => {
+    await page.goto('/nights');
+    // No session: there is no archive to ask about, which is not an empty one.
+    await expect(page.getByTestId('saved-nights-signed-out')).toBeVisible();
+    await expect(page.getByTestId('saved-nights-empty')).toHaveCount(0);
+    await expect(page.getByTestId('saved-nights-error')).toHaveCount(0);
+  });
+
+  test('Saved Nights Out lists a card and opens that night', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
+    // ORDER MATTERS, AND THE GLOBS OVERLAP. `get_saved_night*` also matches
+    // `get_saved_nights`, and Playwright takes the LAST-registered match — so
+    // the list stub has to be registered SECOND or every list read is answered
+    // with a detail row (which is a row with no photo_count, and the card
+    // silently reads "0 photos").
+    await page.route(
+      '**/rest/v1/rpc/get_saved_night*',
+      fulfillJson(200, [
+        {
+          id: SAVED_ID,
+          title: 'Birthday crawl',
+          night: CLOSED_WINDOW_NIGHT,
+          bar_count: 3,
+          archived_at: '2020-01-02T05:00:00.000Z',
+          media_id: MEDIA_ID,
+          storage_path: `${USER_ID}/${MEDIA_ID}`,
+          sort_order: 1,
+        },
+      ]),
+    );
+    await page.route(
+      '**/rest/v1/rpc/get_saved_nights*',
+      fulfillJson(200, [
+        {
+          id: SAVED_ID,
+          title: 'Birthday crawl',
+          night: CLOSED_WINDOW_NIGHT,
+          bar_count: 3,
+          photo_count: 1,
+          archived_at: '2020-01-02T05:00:00.000Z',
+          cover_media_ids: [MEDIA_ID],
+        },
+      ]),
+    );
+
+    await page.goto('/nights');
+    const card = page.getByTestId('saved-night-card');
+    await expect(card).toBeVisible();
+    // "one quiet metadata line — name, date, bar count, photo count".
+    await expect(card).toContainText('Birthday crawl');
+    await expect(card).toContainText(/3 bars/);
+    await expect(card).toContainText(/1 photo/);
+
+    await card.click();
+    await expect(page).toHaveURL(new RegExp(`/nights/${SAVED_ID}$`));
+    await expect(page.getByTestId('saved-night-open')).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: /birthday crawl/i }),
+    ).toBeVisible();
+
+    // The archive holds the night even when its bytes cannot be served — the
+    // photo renders its worded absence rather than a broken image.
+    await expect(page.getByTestId('saved-night-photos')).toBeVisible();
+    await expect(page.getByTestId('media-gone').first()).toBeVisible();
+  });
+
+  test('an archived night that is not yours is not found, not an empty archive', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    // `get_saved_night` filters on auth.uid(), so somebody else's id is zero
+    // rows — the same answer a genuinely missing night gets, on purpose.
+    await page.route('**/rest/v1/rpc/get_saved_night*', fulfillJson(200, []));
+
+    await page.goto(`/nights/${SAVED_ID}`);
+    await expect(page.getByTestId('saved-night-missing')).toBeVisible();
+    await expect(page.getByTestId('saved-night-photos')).toHaveCount(0);
   });
 });

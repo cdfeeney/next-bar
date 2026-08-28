@@ -32,10 +32,21 @@ export type PresenceStatus = 'going' | 'maybe' | 'not-going';
  * Who sees the pin (V8-R-PRE-002 / D-C-37).
  *   'friends' — everyone who follows you.
  *   'close'   — only a mutual follow.
+ *   'people'  — only the mutual friends you named, and only while they stay
+ *               mutual. The list rides `MyPresence.recipientIds`.
+ *
  * Enforced server-side in `get_circle_presence`; this type is the vocabulary,
- * not the gate.
+ * not the gate. The client's recipient list is a REQUEST — `set_night_presence`
+ * intersects it with the pinner's mutual friends and fails the pin outright if
+ * nothing survives, so nothing here can widen an audience.
+ *
+ * THE CONTRACT'S THIRD CHOICE — a single named GROUP — IS NOT IN THIS UNION,
+ * and its absence is deliberate rather than an oversight. There is no groups
+ * model on this branch to name one, and D-C-37 resolves a group to "that group
+ * INTERSECTED WITH the pinner's mutual friends" — which is what 'people' already
+ * is. Serving groups is a resolution step in front of this, not a fourth value.
  */
-export type PresenceAudience = 'friends' | 'close';
+export type PresenceAudience = 'friends' | 'close' | 'people';
 
 /** One person's presence tonight, as the viewer is allowed to see it. */
 export type CirclePresence = {
@@ -55,6 +66,15 @@ export type MyPresence = {
   status: PresenceStatus;
   barId: string | null;
   audience: PresenceAudience;
+  /**
+   * The mutual friends this pin is addressed to, when `audience` is 'people'.
+   * Always `[]` for the other audiences — the server clears the list on every
+   * write, so a stale selection cannot survive an audience change.
+   *
+   * These are the ids the SERVER kept, not the ids the client asked for. A
+   * non-mutual friend the user tapped is simply not here.
+   */
+  recipientIds: readonly string[];
   updatedAt: string;
 };
 
@@ -67,7 +87,15 @@ const STATUSES: ReadonlySet<string> = new Set<PresenceStatus>([
 const AUDIENCES: ReadonlySet<string> = new Set<PresenceAudience>([
   'friends',
   'close',
+  'people',
 ]);
+
+/** The label each audience carries in the UI. Words, never colour alone. */
+export const AUDIENCE_LABELS: Readonly<Record<PresenceAudience, string>> = {
+  friends: 'Friends',
+  close: 'Close friends',
+  people: 'Only some people',
+};
 
 /** Same shape the migration's check constraint enforces. */
 const BAR_ID_RE = /^[a-z0-9-]{1,60}$/;

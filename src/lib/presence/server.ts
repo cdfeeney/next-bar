@@ -30,6 +30,41 @@ import {
  * night the caller is already looking at; presence is written for now.
  */
 
+/**
+ * The ONE place an RPC is called here, so "never throw" above is a property of
+ * the module rather than a habit four call sites have to keep.
+ *
+ * A Supabase call has two failure shapes and only one arrives as `error`: a
+ * transport fault or an unusable client THROWS. Reading only `error` lets that
+ * rejection escape into the React effect that called it, which leaves the panel
+ * on its loading state forever — the one state that never resolves into an
+ * honest message, and the exact failure the sibling nightOutMedia module was
+ * caught with. Fixed in both, at the shared point in each.
+ *
+ * A throw is reported as an error, never as `data: null, error: null`: callers
+ * read a null-with-no-error as "the server answered with nothing", which is a
+ * different claim from "we never reached the server".
+ */
+async function callRpc(
+  supabase: SupabaseClient,
+  fn: string,
+  args?: Record<string, unknown>,
+): Promise<{ data: unknown; error: unknown }> {
+  try {
+    // TRANSPARENT: a no-argument RPC is called with no second argument, not
+    // with an explicit `undefined`. The two are equivalent to Supabase but not
+    // to a test asserting the call shape, and "this RPC takes no arguments" is
+    // a security property here worth being able to assert exactly —
+    // `get_my_presence` can only answer about auth.uid() BECAUSE it has no
+    // parameters.
+    return args === undefined
+      ? await supabase.rpc(fn)
+      : await supabase.rpc(fn, args);
+  } catch (thrown) {
+    return { data: null, error: thrown ?? new Error(`${fn} threw`) };
+  }
+}
+
 type CirclePresenceRow = {
   user_id: unknown;
   handle: unknown;
@@ -52,6 +87,12 @@ export async function setPresence(
     status: PresenceStatus;
     barId?: string | null;
     audience?: PresenceAudience;
+    /**
+     * Only meaningful for the 'people' audience. A REQUEST, not a decision:
+     * `set_night_presence` intersects it with the caller's mutual friends and
+     * raises if nothing survives, so this can never widen who sees the pin.
+     */
+    recipientIds?: readonly string[];
   },
 ): Promise<boolean> {
   const barId = presence.barId ?? null;
@@ -60,10 +101,18 @@ export async function setPresence(
   if (!isPresenceAudience(audience)) return false;
   if (!isValidPin(presence.status, barId)) return false;
 
-  const { data, error } = await supabase.rpc('set_night_presence', {
+  const recipientIds = presence.recipientIds ?? [];
+  // FAIL BEFORE THE ROUND TRIP, matching the server's own rule. 'people' with an
+  // empty list is not "show it to nobody" and must never fall back to 'friends';
+  // the server raises on it, and returning false here spends no request to be
+  // told so.
+  if (audience === 'people' && recipientIds.length === 0) return false;
+
+  const { data, error } = await callRpc(supabase, 'set_night_presence', {
     p_status: presence.status,
     p_bar_id: barId,
     p_audience: audience,
+    p_recipient_ids: audience === 'people' ? [...recipientIds] : null,
   });
   return !error && data === true;
 }
@@ -72,7 +121,7 @@ export async function setPresence(
 export async function clearPresence(
   supabase: SupabaseClient,
 ): Promise<boolean> {
-  const { data, error } = await supabase.rpc('clear_night_presence');
+  const { data, error } = await callRpc(supabase, 'clear_night_presence');
   return !error && data === true;
 }
 
@@ -92,7 +141,7 @@ export async function clearPresence(
 export async function fetchCirclePresence(
   supabase: SupabaseClient,
 ): Promise<CirclePresence[] | null> {
-  const { data, error } = await supabase.rpc('get_circle_presence');
+  const { data, error } = await callRpc(supabase, 'get_circle_presence');
   if (error || !Array.isArray(data)) return null;
 
   return (data as CirclePresenceRow[]).flatMap((row) => {
@@ -121,11 +170,9 @@ export async function fetchCirclePresence(
 /**
  * The caller's own presence tonight, or null when they have set none.
  *
- * Read straight from the table rather than through an RPC: the own-row RLS
- * policy already scopes this to `auth.uid()`, and the night filter is applied
- * from the client's `nycNightKey()`. Both sides resolve the same 4:00 AM
- * America/New_York boundary from the same definition, so a row that the client
- * considers tonight's is the same row the server does.
+ * Read through `get_my_presence()`, never off the table — see the body. The
+ * night is the server's, so a row the client considers tonight's is the same
+ * row the server does.
  */
 export async function fetchMyPresence(
   supabase: SupabaseClient,
@@ -141,16 +188,31 @@ export async function fetchMyPresence(
   // is the server-side boundary, so the caller's own row is the only row it can ever
   // return. The userId and night parameters are gone rather than ignored — a parameter a
   // function does not honour is a lie a later caller will believe.
-  const { data, error } = await supabase.rpc('get_my_presence');
+  const { data, error } = await callRpc(supabase, 'get_my_presence');
   if (error || !Array.isArray(data) || data.length === 0) return null;
-  const row = data[0] as CirclePresenceRow & { audience: unknown };
+  const row = data[0] as CirclePresenceRow & {
+    audience: unknown;
+    recipient_ids: unknown;
+  };
   if (!isPresenceStatus(row.status)) return null;
   const barId = isBarId(row.bar_id) ? row.bar_id : null;
   if (!isValidPin(row.status, barId)) return null;
+  // AN UNRECOGNISED AUDIENCE READS AS THE NARROWEST ONE WE CAN NAME, not the
+  // widest. This value drives which controls the surface offers; defaulting a
+  // row we cannot parse to 'friends' would show the user a wider audience than
+  // the server is actually enforcing, which is the one direction that matters.
+  const audience: PresenceAudience = isPresenceAudience(row.audience)
+    ? row.audience
+    : 'close';
   return {
     status: row.status,
     barId,
-    audience: isPresenceAudience(row.audience) ? row.audience : 'friends',
+    audience,
+    recipientIds: Array.isArray(row.recipient_ids)
+      ? row.recipient_ids.filter(
+          (id): id is string => typeof id === 'string' && id.length > 0,
+        )
+      : [],
     updatedAt: typeof row.updated_at === 'string' ? row.updated_at : '',
   };
 }

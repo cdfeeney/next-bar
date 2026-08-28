@@ -6,7 +6,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
 import { useBars } from '@/lib/useBars';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { useFollows } from '@/hooks/useFollows';
 import {
+  AUDIENCE_LABELS,
   PRESENCE_LABELS,
   describePresence,
   type MyPresence,
@@ -18,6 +20,7 @@ import {
   fetchMyPresence,
   setPresence,
 } from '@/lib/presence/server';
+import { PinAudienceDialog, PinBarDialog } from '@/lib/presence/PinDialogs';
 import { usePinnedHandles, announcePresenceChanged } from './usePinnedHandles';
 
 /**
@@ -45,6 +48,21 @@ import { usePinnedHandles, announcePresenceChanged } from './usePinnedHandles';
 
 const STATUS_ORDER: readonly PresenceStatus[] = ['going', 'maybe', 'not-going'];
 
+/**
+ * The audience choices, in the contract's order (V8-R-PRE-002).
+ *
+ * 'close' sits between them as the mutual-follow narrowing this branch already
+ * shipped. The contract's own third top-level choice — a single named GROUP —
+ * is ABSENT because there is no groups model on this branch to name one; see
+ * `PresenceAudience` and migration 0068 section 3c, where the gap is recorded
+ * rather than faked with a control that could not resolve a group.
+ */
+const AUDIENCE_ORDER: readonly PresenceAudience[] = [
+  'friends',
+  'close',
+  'people',
+];
+
 /** '2026-07-25T02:00:00Z' → '10:00 PM'. Empty string when unparseable. */
 function timeLabel(iso: string): string {
   const at = new Date(iso);
@@ -62,9 +80,15 @@ export default function TonightPresence(): JSX.Element {
   useBars();
   const auth = useAuth();
   const { loading, rows, night, refresh } = usePinnedHandles();
+  // The mutual-follow list the 'people' audience picks from. Read here rather
+  // than inside the dialog so the dialog stays a presentation of a list it is
+  // given, and so "still loading" is distinguishable from "you have nobody".
+  const follows = useFollows();
   const [mine, setMine] = useState<MyPresence | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [pickingBar, setPickingBar] = useState(false);
+  const [pickingPeople, setPickingPeople] = useState(false);
 
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
 
@@ -108,9 +132,10 @@ export default function TonightPresence(): JSX.Element {
             status,
             // Changing the STATUS never silently keeps a bar that no longer
             // applies: only 'going' may carry one, and re-picking the bar is
-            // the separate step below.
+            // the "Where are you tonight?" step below.
             barId: status === 'going' ? (mine?.barId ?? null) : null,
             audience: mine?.audience ?? 'friends',
+            recipientIds: mine?.recipientIds ?? [],
           });
       if (ok) {
         await reloadMine();
@@ -126,8 +151,52 @@ export default function TonightPresence(): JSX.Element {
     [busy, mine, reloadMine, refresh],
   );
 
-  const chooseAudience = useCallback(
-    async (audience: PresenceAudience): Promise<void> => {
+  /**
+   * V8-R-PRE-003 → V8-R-PRE-001/004: picking the bar IS the pin, and a pin sets
+   * Going out. The status is written alongside the bar rather than assumed to be
+   * already correct, so pinning from Maybe does the right thing in one write
+   * instead of leaving the invalid "at a bar, not going out" pair on the way
+   * through — a pair the RPC and the check constraint both refuse anyway.
+   *
+   * "Tapping a result selects that bar and advances straight to the audience
+   * step" — but only on a write the server CONFIRMED. Advancing after a failed
+   * pin would ask who may see something that does not exist.
+   */
+  const pinBar = useCallback(
+    async (barId: string): Promise<void> => {
+      if (busy) return;
+      const supabase = getBrowserSupabase();
+      if (!supabase) {
+        setFailed(true);
+        setPickingBar(false);
+        return;
+      }
+      setBusy(true);
+      setFailed(false);
+      const ok = await setPresence(supabase, {
+        status: 'going',
+        barId,
+        audience: mine?.audience ?? 'friends',
+        recipientIds: mine?.recipientIds ?? [],
+      });
+      setPickingBar(false);
+      if (ok) {
+        await reloadMine();
+        refresh();
+        announcePresenceChanged();
+      } else {
+        setFailed(true);
+      }
+      setBusy(false);
+    },
+    [busy, mine, reloadMine, refresh],
+  );
+
+  const writeAudience = useCallback(
+    async (
+      audience: PresenceAudience,
+      recipientIds: readonly string[],
+    ): Promise<void> => {
       if (busy || !mine) return;
       const supabase = getBrowserSupabase();
       if (!supabase) {
@@ -140,12 +209,37 @@ export default function TonightPresence(): JSX.Element {
         status: mine.status,
         barId: mine.barId,
         audience,
+        recipientIds,
       });
-      if (ok) await reloadMine();
-      else setFailed(true);
+      if (ok) {
+        await reloadMine();
+        // The audience decides who ELSE can see this pin, so the circle list
+        // and the rail are both downstream of it — not just this panel.
+        refresh();
+        announcePresenceChanged();
+      } else {
+        setFailed(true);
+      }
       setBusy(false);
     },
-    [busy, mine, reloadMine],
+    [busy, mine, reloadMine, refresh],
+  );
+
+  /**
+   * 'friends' and 'close' are one tap. 'people' cannot be: it needs a recipient
+   * list, and writing it without one is refused server-side rather than falling
+   * back to a wider audience — so the tap opens the picker instead of sending a
+   * request that can only fail.
+   */
+  const chooseAudience = useCallback(
+    (audience: PresenceAudience): void => {
+      if (audience === 'people') {
+        setPickingPeople(true);
+        return;
+      }
+      void writeAudience(audience, []);
+    },
+    [writeAudience],
   );
 
   const myPin = mine ? describePresence(mine) : null;
@@ -198,24 +292,37 @@ export default function TonightPresence(): JSX.Element {
                 `${PRESENCE_LABELS[mine.status]} · no bar pinned`
               )}
             </p>
+
+            {/* V8-R-PRE-003, THE STEP THAT WAS MISSING. Choosing Going out sets
+                a status; it does not put you anywhere. Without this control a
+                new pinner could never create a bar-level pin at all, because
+                the only bar the write could carry was one they already had. */}
+            {mine.status === 'going' ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setPickingBar(true)}
+                data-testid="pin-my-spot"
+                className="min-h-[44px] touch-manipulation px-4 rounded-full text-xs font-display border border-border text-muted hover:text-text transition-colors disabled:opacity-60"
+              >
+                {myBar ? 'Change my spot' : 'Pin my spot'}
+              </button>
+            ) : null}
+
             {/* Who can see my pin tonight? (V8-R-PRE-002 / D-C-37.) */}
             <div
-              className="flex items-center gap-2"
+              className="flex flex-wrap items-center gap-2"
               role="group"
               aria-label="Who can see my pin tonight?"
             >
-              {(
-                [
-                  ['friends', 'Friends'],
-                  ['close', 'Close friends'],
-                ] as ReadonlyArray<readonly [PresenceAudience, string]>
-              ).map(([value, label]) => (
+              {AUDIENCE_ORDER.map((value) => (
                 <button
                   key={value}
                   type="button"
                   aria-pressed={mine.audience === value}
                   disabled={busy}
-                  onClick={() => void chooseAudience(value)}
+                  onClick={() => chooseAudience(value)}
+                  data-testid={`pin-audience-${value}`}
                   className={[
                     'min-h-[44px] touch-manipulation px-4 rounded-full text-xs font-display border transition-colors disabled:opacity-60',
                     mine.audience === value
@@ -223,10 +330,20 @@ export default function TonightPresence(): JSX.Element {
                       : 'border-border text-muted hover:text-text',
                   ].join(' ')}
                 >
-                  {label}
+                  {AUDIENCE_LABELS[value]}
                 </button>
               ))}
             </div>
+
+            {/* WHO, IN WORDS. An audience of "some people" that does not say how
+                many is not an audience the pinner can check. */}
+            {mine.audience === 'people' ? (
+              <p className="text-xs text-muted" data-testid="pin-audience-count">
+                {mine.recipientIds.length}{' '}
+                {mine.recipientIds.length === 1 ? 'person' : 'people'} can see
+                this pin tonight.
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -248,6 +365,35 @@ export default function TonightPresence(): JSX.Element {
           signedOut={auth.status !== 'loading' && auth.status !== 'signed-in'}
         />
       </section>
+
+      {/* THE TWO STEPS OF THE PIN SEQUENCE (V8-R-PRE-003 then V8-R-PRE-002).
+          Mounted only while open: `useModalDialog` marks the rest of the page
+          `inert` for as long as it lives, so a dialog left mounted-and-hidden
+          would take the page down with it. */}
+      {pickingBar ? (
+        <PinBarDialog
+          busy={busy}
+          onClose={() => setPickingBar(false)}
+          onPick={(bar) => void pinBar(bar.id)}
+        />
+      ) : null}
+
+      {pickingPeople ? (
+        <PinAudienceDialog
+          // MUTUALS ONLY. D-C-37 intersects any narrowed audience with the
+          // pinner's mutual friends server-side, so anyone else shown here
+          // would be a recipient the server had already dropped.
+          friends={follows.mutuals}
+          friendsLoading={follows.loading}
+          initialSelection={mine?.recipientIds ?? []}
+          busy={busy}
+          onClose={() => setPickingPeople(false)}
+          onConfirm={(recipientIds) => {
+            setPickingPeople(false);
+            void writeAudience('people', recipientIds);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

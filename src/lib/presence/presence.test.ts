@@ -42,10 +42,15 @@ describe('presence type guards', () => {
     expect(isPresenceStatus(null)).toBe(false);
   });
 
-  it('admits exactly the two audiences (V8-R-PRE-002)', () => {
+  it('admits exactly the three stored audiences (V8-R-PRE-002)', () => {
     expect(isPresenceAudience('friends')).toBe(true);
     expect(isPresenceAudience('close')).toBe(true);
+    expect(isPresenceAudience('people')).toBe(true);
     expect(isPresenceAudience('public')).toBe(false);
+    // No groups model exists on this branch, so nothing can resolve a named
+    // group to a recipient set. Admitting the value would let a pin claim an
+    // audience the server cannot enforce.
+    expect(isPresenceAudience('group')).toBe(false);
   });
 
   it('accepts catalog bar ids and rejects anything else', () => {
@@ -117,6 +122,7 @@ describe('setPresence', () => {
       p_status: 'going',
       p_bar_id: 'attaboy',
       p_audience: 'close',
+      p_recipient_ids: null,
     });
   });
 
@@ -127,7 +133,49 @@ describe('setPresence', () => {
       p_status: 'maybe',
       p_bar_id: null,
       p_audience: 'friends',
+      p_recipient_ids: null,
     });
+  });
+
+  it('sends the recipient list only for the people audience', async () => {
+    const { client, rpc } = rpcClient({ data: true, error: null });
+    await setPresence(client, {
+      status: 'going',
+      audience: 'people',
+      recipientIds: ['11111111-1111-1111-1111-111111111111'],
+    });
+    expect(rpc).toHaveBeenCalledWith('set_night_presence', {
+      p_status: 'going',
+      p_bar_id: null,
+      p_audience: 'people',
+      p_recipient_ids: ['11111111-1111-1111-1111-111111111111'],
+    });
+  });
+
+  it('drops a recipient list attached to a wider audience', async () => {
+    // Sending it would be harmless server-side (the RPC ignores it unless the
+    // audience is 'people') but it would read as though the list were doing
+    // something. A parameter that does nothing is a parameter a later caller
+    // will believe.
+    const { client, rpc } = rpcClient({ data: true, error: null });
+    await setPresence(client, {
+      status: 'going',
+      audience: 'friends',
+      recipientIds: ['11111111-1111-1111-1111-111111111111'],
+    });
+    const [, args] = rpc.mock.calls[0] as [string, Record<string, unknown>];
+    expect(args.p_recipient_ids).toBeNull();
+  });
+
+  it('refuses an empty people audience without a round trip (fails closed)', async () => {
+    // 'people' with nobody in it is not "show it to nobody" and must never fall
+    // back to 'friends' — V8-R-PRE-002: a failed audience write fails the pin
+    // rather than silently widening it.
+    const { client, rpc } = rpcClient({ data: true, error: null });
+    await expect(
+      setPresence(client, { status: 'going', audience: 'people' }),
+    ).resolves.toBe(false);
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it('never sends the night — the server resolves it', async () => {
@@ -154,6 +202,31 @@ describe('setPresence', () => {
     await expect(setPresence(odd.client, { status: 'going' })).resolves.toBe(
       false,
     );
+  });
+});
+
+describe('never throws (the module contract)', () => {
+  // Same rule, same shape, same test as nightOutMedia/server.ts: an RPC that
+  // throws is a FAILED read, never an empty one, and never an escaped
+  // rejection. The header above has claimed "never throw" since this module was
+  // written; this is what holds it to it.
+  const throwing = {
+    rpc: () => {
+      throw new TypeError('supabase.rpc is not a function');
+    },
+  } as unknown as Parameters<typeof setPresence>[0];
+
+  it('reports a thrown call as a failure, on every entry point', async () => {
+    await expect(setPresence(throwing, { status: 'going' })).resolves.toBe(false);
+    await expect(clearPresence(throwing)).resolves.toBe(false);
+    await expect(fetchCirclePresence(throwing)).resolves.toBeNull();
+    await expect(fetchMyPresence(throwing)).resolves.toBeNull();
+  });
+
+  it('never reports a thrown circle read as an empty circle', async () => {
+    // Rendering "no friends out yet tonight" for a read that never reached the
+    // server is the V8-R-OPS-005 lie this module exists to prevent.
+    await expect(fetchCirclePresence(throwing)).resolves.not.toEqual([]);
   });
 });
 
@@ -260,6 +333,7 @@ describe('fetchMyPresence', () => {
       status: 'going',
       barId: 'attaboy',
       audience: 'close',
+      recipientIds: [],
       updatedAt: '2026-07-25T02:00:00Z',
     });
     // No arguments: identity is auth.uid() and the night is the server-side boundary, so
@@ -276,9 +350,11 @@ describe('fetchMyPresence', () => {
   });
 
   it('falls back to the narrower reading of an unknown audience', async () => {
-    // An unrecognised audience must never widen who can see a pin. It is
-    // reported as 'friends' only because that is what the UI shows the OWNER;
-    // the actual gate is server-side and never consults this value.
+    // An unrecognised audience must never be REPORTED as a wider one. This
+    // value drives which audience control the owner sees lit and what the next
+    // status write sends back, so reading an unparseable row as 'friends' would
+    // show the owner a wider audience than the server is enforcing — and could
+    // then write it. 'close' is the narrowest value that always exists.
     const t = rpcOwnPresence({
       data: [{
         status: 'going',
@@ -289,6 +365,40 @@ describe('fetchMyPresence', () => {
       error: null,
     });
     const mine = await fetchMyPresence(t.client);
-    expect(mine?.audience).toBe('friends');
+    expect(mine?.audience).toBe('close');
+  });
+
+  it('carries the people selection the SERVER kept', async () => {
+    const kept = '22222222-2222-2222-2222-222222222222';
+    const t = rpcOwnPresence({
+      data: [{
+        status: 'going',
+        bar_id: 'attaboy',
+        audience: 'people',
+        updated_at: '2026-07-25T02:00:00Z',
+        recipient_ids: [kept, '', null, 7],
+      }],
+      error: null,
+    });
+    const mine = await fetchMyPresence(t.client);
+    expect(mine?.audience).toBe('people');
+    // Non-string entries are dropped rather than coerced: a recipient we cannot
+    // name is not a recipient to show.
+    expect(mine?.recipientIds).toEqual([kept]);
+  });
+
+  it('reports an absent recipient list as empty, never undefined', async () => {
+    const t = rpcOwnPresence({
+      data: [{
+        status: 'maybe',
+        bar_id: null,
+        audience: 'friends',
+        updated_at: '2026-07-25T02:00:00Z',
+      }],
+      error: null,
+    });
+    await expect(fetchMyPresence(t.client)).resolves.toMatchObject({
+      recipientIds: [],
+    });
   });
 });

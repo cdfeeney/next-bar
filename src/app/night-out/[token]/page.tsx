@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
+import NightOutMedia from './NightOutMedia';
 import {
   cancelNightOut,
   decideNightOut,
@@ -546,7 +547,14 @@ export default function NightOutPage({
     isPlanOpen && (isOwner || plan.callerStatus === 'accepted');
 
   return (
-    <main className="min-h-screen px-6 py-8">
+    // pb-28 CLEARS THE BOTTOM NAV. This page carried only `py-8` and got away
+    // with it while the suggestion form was the last thing on it — nothing at
+    // the bottom was interactive enough to notice. Adding the photo section
+    // below made it a real bug: the fixed `z-[1000]` nav sits over the last
+    // ~7rem of every scrollable page, so Save and Add a photo were visible,
+    // enabled, and un-tappable. Every other surface (/friends, /nights) already
+    // reserves this.
+    <main className="min-h-screen px-6 py-8 pb-28">
       <header className="text-center">
         <h1 className="text-2xl font-semibold">
           {plan.title ?? 'Night out'}
@@ -771,6 +779,15 @@ export default function NightOutPage({
           )}
         </section>
       ) : null}
+
+      {/* V8-R-NO-008 / V8-R-NO-009. Rendered for a CANCELLED plan too: the
+          night still happened, its photos are still inside their window, and
+          the archive is the one thing a cancellation must not take away. */}
+      <NightOutMedia
+        planId={plan.id}
+        night={plan.night}
+        canParticipate={canParticipate}
+      />
     </main>
   );
 }
