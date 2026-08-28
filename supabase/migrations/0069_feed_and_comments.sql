@@ -1573,11 +1573,38 @@ begin
     -- destination they have reported. Anything with a live backing keeps its
     -- expiry, the veto does not fire, and that surface is left alone.
     --
-    -- The residual, stated rather than hidden: this rests on 0066's documented
-    -- behaviour, and if a LATER migration adds a branch that grants an unbounded
-    -- window for a surface 0069 cannot see, the veto would reach it. That is a
-    -- cross-lane invariant no single migration can enforce, and it belongs in the
-    -- integration check alongside the rest of the chain.
+    -- AND THE DESTINATION TERM IS BACK ALONGSIDE IT, because the discriminator is
+    -- necessary and not sufficient. A null expiry says the prior answer was
+    -- unbounded; it does NOT say nothing else is standing on the bytes. An owner
+    -- whose media is live in a group destination AND in a reported Feed post gets
+    -- `(true, null)` from 0066's owner branch, and the discriminator alone would
+    -- then blank a group photo they can still legitimately see.
+    --
+    -- So both, and the destination term now carries 0066's OWN liveness rule
+    -- rather than a fourth hand-rolled one: `removed_at is null` is not liveness
+    -- for a story, because story expiry is passive and 0066 never stamps
+    -- `removed_at` on a story spine row — `media_live_reference_count` compensates
+    -- with exactly the `kind <> 'story' or exists (live story)` clause copied here.
+    -- 'archive' is excluded because 0066 calls it "a retention HOLD, not a
+    -- destination a user can see or remove" and `remove_media_destination` skips
+    -- it for that reason.
+    --
+    -- THE RESIDUAL, STATED PRECISELY, because the previous wording was wrong about
+    -- which migrations it concerned and would have pointed the integration check
+    -- at the wrong place:
+    --   * It is NOT only "a later migration". WP6's 0067 is ALREADY inside the
+    --     delegated chain — `media_read_window_before_0069` is whatever 0066 and
+    --     0067 installed — and this lane cannot read 0067 to verify what its
+    --     branch returns. The discriminator's safety property is verified against
+    --     0066's body alone.
+    --   * What remains unknowable here: whether a live destination of a kind this
+    --     file does not own is VISIBLE TO THIS CALLER. Only that lane can answer
+    --     it. The terms below therefore stand the veto down whenever any such
+    --     destination is live, which fails OPEN on the hide (the reported post is
+    --     hidden regardless; only the bytes stay signable) rather than fails
+    --     closed onto a surface 0069 has no authority over.
+    -- Both belong in the integration check, against the chain as actually
+    -- installed, not against this file.
     if v_prior.readable
        and v_prior.expires_at is null
        and not v_feed_readable
@@ -1600,6 +1627,30 @@ begin
           where (s.media_path = p_name or s.inset_path = p_name)
             and s.deleted_at is null
             and s.expires_at > now()
+       )
+       and not exists (
+         select 1
+           from public.media_destinations d
+           join public.media_objects m on m.id = d.media_id
+          where m.storage_path = p_name
+            and d.kind not in ('feed', 'archive')
+            and d.removed_at is null
+            -- 0066's own liveness rule, copied rather than re-derived: a story
+            -- destination row is never retired, so `removed_at is null` alone
+            -- counts an expired story as somewhere the photo still lives.
+            -- 0066's own liveness rule, copied rather than re-derived: a story
+            -- destination row is never retired, so `removed_at is null` alone
+            -- counts an expired story as somewhere the photo still lives.
+            and (
+              d.kind <> 'story'
+              or exists (
+                select 1
+                  from public.stories s2
+                 where s2.id::text = d.ref_id
+                   and s2.deleted_at is null
+                   and s2.expires_at > now()
+              )
+            )
        )
     then
       return query select false, null::timestamptz;

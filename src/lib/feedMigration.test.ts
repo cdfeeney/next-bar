@@ -183,15 +183,35 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     );
   });
 
-  it('no destination-kind list survives in the veto', () => {
-    // The three defects above were three spellings of the same mistake, so the
-    // assertion is against the SHAPE, not against any one spelling of it.
-    for (const shape of ["d.kind <> 'feed'", "d.kind not in ('feed', 'archive')"]) {
-      expect(
-        sqlShape(body),
-        'the veto is re-deriving another lane s destination liveness again',
-      ).not.toContain(shape);
-    }
+  it('a live destination this file does not own also stands the veto down', () => {
+    // Round 6 (MEDIUM, codex): the null-expiry discriminator is NECESSARY but not
+    // SUFFICIENT. It says the prior answer was unbounded; it does not say nothing
+    // else is standing on the bytes. An owner whose media is live in a group
+    // destination AND in a reported Feed post gets (true, null) from 0066's owner
+    // branch, so the discriminator alone blanked a group photo they can still see.
+    // Both terms, therefore.
+    expect(sqlShape(body)).toContain(
+      'and not exists ( select 1 from public.media_destinations d'
+      + ' join public.media_objects m on m.id = d.media_id'
+      + ' where m.storage_path = p_name'
+      + " and d.kind not in ('feed', 'archive')"
+      + ' and d.removed_at is null',
+    );
+  });
+
+  it('an EXPIRED story destination does not count as live, per 0066 own rule', () => {
+    // Round 5 (HIGH, claude): story expiry is passive — 0066 never stamps
+    // removed_at on a story spine row — so `removed_at is null` alone counted a
+    // long-dead story as somewhere the photo still lives, and the veto never
+    // fired. media_live_reference_count carries exactly this clause; it is copied
+    // rather than re-derived, which is what the three earlier attempts did wrong.
+    expect(sqlShape(body)).toContain(
+      "and ( d.kind <> 'story'"
+      + ' or exists ( select 1 from public.stories s2'
+      + ' where s2.id::text = d.ref_id'
+      + ' and s2.deleted_at is null'
+      + ' and s2.expires_at > now() ) )',
+    );
   });
 
   it('a report on a post whose Feed destination is already retired vetoes nothing', () => {
