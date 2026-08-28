@@ -112,6 +112,15 @@ export default function InvitePreview({
    * they had. A stale read may not overwrite a fresher local truth.
    */
   const answered = useRef(false);
+  /**
+   * The in-flight flag as a REF as well as state.
+   *
+   * `rsvpBusy` drives the disabled attribute and must be state; the automatic
+   * queued delivery needs to read and set the same mutual exclusion from
+   * outside React's render cycle, where a state value read from a stale closure
+   * would be worthless. Both writers take this one.
+   */
+  const rsvpBusyRef = useRef(false);
 
   useEffect(() => {
     epoch.current += 1;
@@ -175,7 +184,9 @@ export default function InvitePreview({
 
   const answer = useCallback(
     async (choice: RsvpChoice): Promise<void> => {
-      if (rsvpBusy) return;
+      // The REF, not the state: an automatic queued delivery holds the same
+      // lock and does not go through a render to take it.
+      if (rsvpBusy || rsvpBusyRef.current) return;
       const startedAt = epoch.current;
       const supabase = getBrowserSupabase();
       const key = ensureRsvpKey(token);
@@ -188,6 +199,12 @@ export default function InvitePreview({
         );
         return;
       }
+      // MARKED ANSWERED BEFORE THE AWAIT. The automatic queued delivery stands
+      // down on this flag, and it has to be set at the moment of the tap — not
+      // when the tap's round trip returns — or the delivery can start in
+      // between and overwrite what the recipient just asked for.
+      answered.current = true;
+      rsvpBusyRef.current = true;
       setRsvpBusy(true);
       setRsvpError(null);
       const result =
@@ -196,6 +213,7 @@ export default function InvitePreview({
             // reached the server, so the answer is held rather than lost.
             ('unreachable' as const)
           : await submitAnonRsvp(supabase, token, key, choice);
+      rsvpBusyRef.current = false;
       if (startedAt !== epoch.current) {
         setRsvpBusy(false);
         return;
@@ -252,14 +270,38 @@ export default function InvitePreview({
      * each time it fires.
      */
     const deliver = async (): Promise<void> => {
+      // THE TWO WRITERS TAKE ONE LOCK (round-5 panel, both lanes). This
+      // delivery and `answer()` upsert the same row, and neither waited for the
+      // other: queue Maybe offline, reload, tap Going before the automatic
+      // delivery settles, and the stale queued value could land last — on the
+      // server AND on screen, reporting the older answer as the one on record.
+      //
+      // The queue always holds the recipient's LATEST offline choice (it is
+      // overwritten, never appended), so delivering whatever is in it is
+      // correct; what was missing is that the two writers must not overlap, and
+      // that a delivery must not paint a value the recipient has since changed.
+      if (rsvpBusyRef.current) return;
       const pending = readQueuedRsvp(token);
       if (pending === null) return;
       const supabase = getBrowserSupabase();
       const key = readRsvpKey(token);
       if (supabase === null || key === null) return;
       const startedAt = epoch.current;
+      rsvpBusyRef.current = true;
+      // Visibly in flight, exactly as a tap is: the controls disable for the
+      // moment the delivery holds the lock, so the recipient is never offered a
+      // tap that the guard would silently swallow.
+      setRsvpBusy(true);
       const result = await submitAnonRsvp(supabase, token, key, pending);
+      rsvpBusyRef.current = false;
+      setRsvpBusy(false);
       if (cancelled || startedAt !== epoch.current) return;
+      // The queue moved on while we were away — the recipient answered again,
+      // and that newer choice is the one that must be sent and shown.
+      if (readQueuedRsvp(token) !== pending) {
+        void deliver();
+        return;
+      }
       if (result === 'sent') {
         answered.current = true;
         clearQueuedRsvp(token);

@@ -44,7 +44,18 @@ export const NIGHT_OUT_MEDIA_WINDOW_HOURS = 24;
  * device clock is precisely what V8-R-NO-008's failure clause forbids and what
  * this whole type exists to avoid. So the server names it.
  */
-export type NightOutMediaWindowState = 'before' | 'open' | 'closed';
+export type NightOutMediaWindowState =
+  | 'before'
+  | 'open'
+  | 'closed'
+  /**
+   * The plan was cancelled. Round-5 panel (Claude gate): the recap still
+   * RENDERS for a cancelled plan on purpose — the night happened, and its
+   * archive is the one thing a cancellation must not take away — but
+   * `add_night_out_media` refuses it, and reporting that refusal as a closed
+   * window blamed the clock for a decision somebody made.
+   */
+  | 'cancelled';
 
 /**
  * The server's window for one Night Out's media (`night_out_media_window`).

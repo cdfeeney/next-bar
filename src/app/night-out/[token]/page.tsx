@@ -654,7 +654,15 @@ export default function NightOutPage({
    * photographed. The two predicates are named apart so they cannot drift back
    * together.
    */
-  const canAddPhoto = isOwner || plan.callerStatus === 'accepted';
+  //
+  // ...AND NOT ON A CANCELLED PLAN (round-5 panel, Claude gate).
+  // `add_night_out_media` refuses one outright, so offering the control
+  // uploaded the bytes, had the attach refused, and blamed a window that was
+  // not the reason — leaving a registered object with no destination every
+  // time. The recap itself still renders for a cancelled plan, and archiving
+  // still works: what closes is only the write.
+  const canAddPhoto =
+    !isCancelled && (isOwner || plan.callerStatus === 'accepted');
 
   /**
    * THE BOARD IS RANKED (round-3 panel, Codex, HIGH). It used to render in
@@ -886,7 +894,12 @@ export default function NightOutPage({
                       enforces decides it. A menu on a row whose removal the
                       server would refuse is a control that only produces an
                       error. */}
-                  {isPlanOpen &&
+                  {/* `canParticipate`, not `isPlanOpen` (round-5 panel,
+                      Codex): `remove_night_out_suggestion` asks
+                      `night_out_voting_open`, so past the deadline the menu
+                      offered an action the server necessarily refuses — the
+                      exact drift this page's own rule forbids. */}
+                  {canParticipate &&
                   (isOwner ||
                     (myHandle !== null &&
                       entry.suggestedByHandle === myHandle)) ? (

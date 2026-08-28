@@ -386,6 +386,40 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
   });
 
+  /**
+   * THE TWO WRITERS TAKE ONE LOCK (round-5 panel, both lanes). The automatic
+   * delivery and an explicit tap upsert the same row; before this, a tap during
+   * an in-flight delivery raced it, and whichever committed last decided both
+   * the stored answer and what the surface claimed was on record.
+   */
+  test('a tap during an automatic delivery cannot race it', async () => {
+    readQueuedRsvp.mockReturnValue('maybe');
+    readRsvpKey.mockReturnValue(KEY);
+    // Hold the automatic delivery open.
+    let release: (value: 'sent') => void = () => undefined;
+    submitAnonRsvp.mockReturnValue(
+      new Promise<'sent'>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    renderPreview();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    // The controls are visibly in flight rather than silently swallowing taps.
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-going')).toBeDisabled(),
+    );
+    screen.getByTestId('invite-rsvp-going').click();
+    expect(
+      submitAnonRsvp,
+      'an explicit tap issued a second write while a delivery held the lock',
+    ).toHaveBeenCalledTimes(1);
+
+    release('sent');
+    await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
+  });
+
   test('says the answer was not sent when the queue itself could not be written', async () => {
     submitAnonRsvp.mockResolvedValue('unreachable');
     queueRsvp.mockReturnValue(false);

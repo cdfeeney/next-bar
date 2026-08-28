@@ -392,12 +392,19 @@ const ENERGY_TAGS = ['chill', 'buzzy', 'loud', 'dance'] as const;
  * the app has no such measurement, and a card implying one would be describing a
  * room nobody reported on.
  *
- * Empty string when the bar carries no energy tag, so the caller's join drops it
- * rather than printing a trailing separator.
+ * AN UNTAGGED BAR SAYS SO (round-5 panel, Codex). This returned an empty string
+ * and the caller's join dropped it, so a perfectly valid suggestion — any
+ * catalog bar without one of the four tags — rendered a card with no quiet
+ * state at all, which V8-R-SOC-003 requires the card to carry.
+ *
+ * The fix is NOT to guess one. The reasoning above stands: the app measures no
+ * room, and a card implying otherwise would be describing a night nobody
+ * reported on. Saying we do not know is the third state, and it is the one this
+ * codebase uses everywhere else it cannot answer.
  */
 function energyOf(bar: Bar): string {
   const tag = ENERGY_TAGS.find((candidate) => bar.tags?.includes(candidate));
-  return tag ? displayTag(tag) : '';
+  return tag ? displayTag(tag) : 'no quiet read yet';
 }
 
 /**

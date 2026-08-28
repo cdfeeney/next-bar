@@ -78,6 +78,18 @@ export default function NightOutMedia({
   // Null = we could not read the window. Deliberately NOT folded into a boolean:
   // "closed", "not yet" and "unknown" render differently and gate differently.
   const windowOpen = mediaWindow?.isOpen === true;
+  /**
+   * ARCHIVING OUTLIVES A CANCELLATION, ATTACHING DOES NOT.
+   *
+   * `add_night_out_media` refuses a cancelled plan; `archive_night_out` does
+   * not, and deliberately so — the night happened, its photos are still inside
+   * their window, and keeping them is the one thing a cancellation must not
+   * take away. `isOpen` now carries the cancellation (round-5 panel, Claude
+   * gate), so the two controls read different things rather than sharing one
+   * flag that is wrong for one of them.
+   */
+  const canArchiveWindow =
+    mediaWindow?.state === 'open' || mediaWindow?.state === 'cancelled';
   const windowWords = describeWindow(mediaWindow);
 
   /**
@@ -278,7 +290,7 @@ export default function NightOutMedia({
             24-hour window closes", so the control goes with the window rather
             than with the plan being open — a settled plan's photos are still
             worth keeping. */}
-        {windowOpen && (items?.length ?? 0) > 0 ? (
+        {canArchiveWindow && (items?.length ?? 0) > 0 ? (
           <button
             type="button"
             disabled={busy}
@@ -338,6 +350,10 @@ function describeWindow(mediaWindow: NightOutMediaWindow | null): string | null 
       );
     case 'closed':
       return 'This night’s photo window has closed. Saved nights keep theirs.';
+    case 'cancelled':
+      // The reason matters: blaming the clock for a cancellation tells the
+      // member to wait for a window that is not coming back.
+      return 'This night out was cancelled, so no more photos can be added. What’s here can still be saved.';
     default: {
       const exhaustive: never = mediaWindow.state;
       return exhaustive;

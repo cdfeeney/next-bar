@@ -119,6 +119,33 @@ describe('fetchNightOutMediaWindow (V8-R-NO-008, the SERVER owns the window)', (
     await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toBeNull();
   });
 
+  /**
+   * A CANCELLED PLAN IS ITS OWN ANSWER (round-5 panel, Claude gate).
+   * `add_night_out_media` refuses one outright, so reporting the window as
+   * merely "closed" blamed the clock for a decision somebody made — and, before
+   * the server carried the state at all, reported it as OPEN and offered an
+   * Add-a-photo whose upload was then thrown away.
+   */
+  it('carries a cancelled plan as its own state, not as a closed window', async () => {
+    const { client } = rpcClient({
+      data: [
+        {
+          opens_at: '2026-07-24T21:00:00.000Z',
+          expires_at: '2026-07-25T21:00:00.000Z',
+          is_open: false,
+          state: 'cancelled',
+        },
+      ],
+      error: null,
+    });
+    await expect(fetchNightOutMediaWindow(client, UUID_A)).resolves.toEqual({
+      opensAt: '2026-07-24T21:00:00.000Z',
+      expiresAt: '2026-07-25T21:00:00.000Z',
+      isOpen: false,
+      state: 'cancelled',
+    });
+  });
+
   it('refuses an unrecognised state rather than defaulting it', async () => {
     // A defaulted 'closed' would tell a member their window had ended.
     const { client } = rpcClient({

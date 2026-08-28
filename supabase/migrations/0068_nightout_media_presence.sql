@@ -1341,6 +1341,9 @@ returns table (
   opens_at   timestamptz,
   expires_at timestamptz,
   is_open    boolean,
+  -- 'before' | 'open' | 'closed' | 'cancelled'. The fourth was added in round 6
+  -- so a recap can say why it is not taking photos rather than blaming the
+  -- clock for a cancellation.
   state      text
 )
 language sql
@@ -1350,10 +1353,19 @@ set search_path = public
 as $$
   select public.night_out_scheduled_start(n.id),
          public.night_out_media_expires_at(n.id),
-         public.night_out_media_window_open(n.id),
+         -- A CANCELLED PLAN TAKES NO MORE PHOTOS (round-5 panel, Claude gate).
+         -- `add_night_out_media` refuses one outright, but this function had no
+         -- cancellation term, so the recap reported the window OPEN and offered
+         -- an enabled Add-a-photo: the file uploaded, the attach was refused,
+         -- and the surface blamed a window that was not the reason. The recap
+         -- still RENDERS for a cancelled plan on purpose — the night happened
+         -- and its archive must survive the cancellation — so the archive
+         -- control keeps working off `state`; it is only the write that closes.
+         public.night_out_media_window_open(n.id) and n.cancelled_at is null,
          case
            when now() <  public.night_out_scheduled_start(n.id)  then 'before'
            when now() >= public.night_out_media_expires_at(n.id) then 'closed'
+           when n.cancelled_at is not null                       then 'cancelled'
            else 'open'
          end
     from public.night_outs n
@@ -2146,11 +2158,16 @@ as $$
   -- BOTH halves are required. The token alone cannot read anybody's answer —
   -- otherwise every holder of a forwarded link could enumerate the replies —
   -- and the key alone names no plan.
+  --
+  -- AND THE INVITATION MUST STILL BE LIVE (round-5 panel, Claude gate): an
+  -- expired link that still returned the recipient's old answer showed it as
+  -- current on a surface that can no longer change it.
   select r.response
     from public.night_out_anon_rsvps r
     join public.night_outs n on n.id = r.night_out_id
    where n.share_token = p_token
      and r.rsvp_key = p_key
+     and public.night_out_invite_live(n.id)
    limit 1;
 $$;
 
@@ -2225,6 +2242,69 @@ comment on function public.get_night_out_voting(uuid) is
 
 revoke all on function public.get_night_out_voting(uuid) from public, anon;
 grant execute on function public.get_night_out_voting(uuid) to authenticated;
+
+------------------------------------------------------------------------------
+-- 8a''. preview_night_out — THE read that decides the page's whole shape
+------------------------------------------------------------------------------
+-- ROUND-5 PANEL, BOTH LANES, HIGH. Round 5 put `night_out_invite_live` on the
+-- three bearer functions this file added and on the RSVP write, and left the
+-- one 0044 already had — which is the read the page actually gates on.
+-- `src/app/night-out/[token]/page.tsx` settles into its 'preview' state
+-- whenever `preview_night_out` answers, so past the horizon the recipient got
+-- the full invitation surface with live RSVP buttons: every tap refused, every
+-- refusal reported as "that hasn't been sent yet — try again in a moment", a
+-- retry that could never succeed. The three gated reads returned nothing, and
+-- the surface rendered THAT as "couldn't load", so the one state the page could
+-- never reach was the true one.
+--
+-- Worse, this file's own comment claimed otherwise ("an old link reaches the
+-- expired state instead of serving plan facts forever") and apply-gate item 20
+-- listed `preview_night_out` among the functions that stop answering. Both were
+-- false as written. Replacing it forward here — the same pattern this file
+-- already uses for `suggest_night_out_bar` and `vote_night_out_bar` — makes
+-- them true.
+--
+-- 0044's body otherwise verbatim: the same six columns, the same materialized
+-- fence, the same refusal to expose member identities or account ids.
+
+create or replace function public.preview_night_out(p_token uuid)
+returns table (
+  night date,
+  title text,
+  status text,
+  owner_handle text,
+  owner_display_name text,
+  accepted_count bigint
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with gated as materialized (
+    select n.id, n.night, n.title, n.status, n.owner_id
+      from public.night_outs n
+     where n.share_token = p_token
+       and public.night_out_invite_live(n.id)
+     limit 1
+  )
+  select g.night, g.title, g.status,
+         p.handle::text, p.display_name::text,
+         (select count(*) from public.night_out_members m
+           where m.night_out_id = g.id and m.invite_status = 'accepted')
+    from gated g
+    join public.profiles p on p.id = g.owner_id;
+$$;
+
+comment on function public.preview_night_out(uuid) is
+  '0044''s anon bearer preview, replaced forward in 0068 to ask '
+  'night_out_invite_live instead of a bare status check. It is the read the '
+  'plan page gates its whole shape on, so without the horizon an expired link '
+  'served the invitation surface — with RSVP controls the server refuses — '
+  'forever, and V8-R-INV-001/002''s expired state was unreachable.';
+
+revoke all on function public.preview_night_out(uuid) from public, anon, authenticated;
+grant execute on function public.preview_night_out(uuid) to anon, authenticated;
 
 ------------------------------------------------------------------------------
 -- 8b. The bearer view's missing halves (V8-R-INV-002)
@@ -2879,6 +2959,21 @@ grant execute on function public.remove_night_out_suggestion(uuid, text) to auth
 --      get_night_out_anon_rsvps as a MEMBER → (1, 0, 0). As a NON-member →
 --      zero rows. The member board shows the count and no name, because a
 --      token-scoped recipient gave none.
+--   20a. ...AND THE LEGACY PREVIEW IS THE ONE THAT DECIDES (round-5 panel,
+--      BOTH lanes, HIGH). Item 20's list was false when written: 0068 gated the
+--      three bearer functions it ADDED and left 0044's preview_night_out, which
+--      is the read the page settles its whole shape on. Re-run item 20 and
+--      confirm preview_night_out ITSELF returns zero rows past the horizon —
+--      and that get_anon_rsvp_by_token does too, so an expired surface cannot
+--      show a stale answer as current. Before this, an expired link rendered
+--      the full invitation with live RSVP buttons whose every tap was refused.
+--   20b. A CANCELLED PLAN SAYS SO (round-5 panel, Claude gate). Cancel a plan
+--      inside its media window, then as an accepted member:
+--      night_out_media_window reports state 'cancelled' with is_open FALSE,
+--      add_night_out_media refuses, and archive_night_out STILL succeeds —
+--      the archive is what a cancellation must not take away. Before this the
+--      window read 'open', the recap offered Add-a-photo, the upload succeeded,
+--      the attach was refused, and the notice blamed the window.
 --   22. THE UNGATED PRIMITIVES ARE NOT REACHABLE (round-4, Claude gate).
 --      As an authenticated NON-member and as anon:
 --      select public.night_out_scheduled_start('<plan uuid>'),
@@ -2932,9 +3027,15 @@ grant execute on function public.remove_night_out_suggestion(uuid, text) to auth
 --     night_outs.voting_closes_at and night_out_voting_open. DESTRUCTIVE, and
 --     it makes every set deadline unenforced rather than merely unset.
 --   * the invitation's lifetime: replace night_out_invite_live(n.id) with the
---     status-only predicate in the four bearer functions and the anon RSVP
---     writer, then drop night_out_invite_live. Note an old token then serves
---     attendees and the shortlist, and accepts new RSVPs, forever.
+--     status-only predicate in the four bearer functions, the anon RSVP writer,
+--     get_anon_rsvp_by_token, and 0044's preview_night_out (re-apply 0044:860
+--     verbatim for that one), then drop night_out_invite_live. Note an old
+--     token then serves the whole invitation surface, with live RSVP controls
+--     the server refuses, forever.
+--   * the cancelled media state: drop the `and n.cancelled_at is null` term and
+--     the 'cancelled' case from night_out_media_window. Note the recap then
+--     offers Add-a-photo on a cancelled plan, uploads the bytes, has the attach
+--     refused, and blames the window.
 --   * the members' view of anonymous RSVPs: drop get_night_out_anon_rsvps.
 --     Note the answers are then stored and visible to nobody, which is the
 --     defect round 4 found.

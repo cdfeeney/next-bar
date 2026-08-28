@@ -193,7 +193,12 @@ export async function fetchNightOutMediaWindow(
 }
 
 function isWindowState(value: unknown): value is NightOutMediaWindowState {
-  return value === 'before' || value === 'open' || value === 'closed';
+  return (
+    value === 'before' ||
+    value === 'open' ||
+    value === 'closed' ||
+    value === 'cancelled'
+  );
 }
 
 export type ArchiveResult = { savedNightId: string; photoCount: number };
