@@ -102,13 +102,39 @@ export default function FeedSection({
     const ids = loaded.value.map((post) => post.id);
     const comments = await fetchFeedComments(supabase, ids);
     if (getCacheEpoch() !== epoch) return;
-    const byPost = comments.ok ? comments.value : new Map<string, FeedComment[]>();
-    setThreads(byPost);
+    // A FAILED COMMENT READ IS NOT AN EMPTY THREAD. Substituting an empty map
+    // here turned an outage into "No replies yet." — the same false ready state
+    // the posts branch above refuses, one read further down, and it also
+    // discarded threads already on screen so a just-posted reply looked deleted
+    // (the refresh that follows onChanged is exactly when this fires). Keep what
+    // we have and say the read failed, honouring the module contract in
+    // feed.server.ts: a failure is never reported as a settled empty result.
+    if (comments.ok) {
+      setThreads(comments.value);
+    } else {
+      // The threads on screen are KEPT, not replaced, and the failure is stated.
+      // Neither branch here may reach setThreads(new Map()): that turned an
+      // outage into "No replies yet." — the same false ready state the posts
+      // branch above refuses, one read further down — and it discarded threads
+      // already loaded, so a just-posted reply looked deleted. The refresh that
+      // follows onChanged is exactly when this fires.
+      setLoadFailed(true);
+    }
 
-    // Commenters are not necessarily post authors, so their identities are a
-    // separate lookup rather than a guess.
-    const commenterIds = [...byPost.values()].flat().map((comment) => comment.authorId);
-    const named = await fetchFeedAuthors(supabase, commenterIds);
+    // Identity resolution runs EITHER WAY, because the posts did load and their
+    // tag chips are owed a name whatever the comment read did.
+    //
+    // Commenters are not necessarily post authors, and TAGGED PEOPLE are
+    // neither: a tagged friend who wrote no post and left no comment in this
+    // batch is the common case, not the corner. Asking only for commenters left
+    // every such chip rendering the "Someone" fallback, which is the tag display
+    // V8-R-FEED-001 requires failing quietly on real data. One lookup covers
+    // both, because fetchFeedAuthors already de-duplicates its id list.
+    const commenterIds = comments.ok
+      ? [...comments.value.values()].flat().map((comment) => comment.authorId)
+      : [];
+    const taggedIds = loaded.value.flatMap((post) => post.tagIds);
+    const named = await fetchFeedAuthors(supabase, [...commenterIds, ...taggedIds]);
     if (getCacheEpoch() !== epoch) return;
     setPeople(named);
   }, [viewerId]);

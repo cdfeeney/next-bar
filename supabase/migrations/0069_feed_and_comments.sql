@@ -435,11 +435,21 @@ as $$
      where c.id = p_comment_id
        and c.deleted_at is null
        and public.can_view_feed_post(c.post_id)
+       -- THE BLOCK IS BETWEEN THE READER AND THE COMMENTER, and it is a SECOND
+       -- pair from the one the post gate judges. `can_view_feed_post` asks about
+       -- the caller and the post's AUTHOR; a comment introduces a third party.
+       -- Without this term, A and C both being mutual friends of author P let A
+       -- read C's comment after A blocked C, because no predicate on the path
+       -- ever compared A with C. "Blocking PREVENTS VISIBILITY AND INTERACTION
+       -- BETWEEN THE AFFECTED USERS ... SERVER-ENFORCED IN BOTH DIRECTIONS"
+       -- (V8-R-FEED-009 / D-C-30) is not scoped to the pair that happens to own
+       -- the surrounding row.
+       and not public.is_blocked_between(auth.uid(), c.author_id)
   );
 $$;
 
 comment on function public.can_view_feed_comment(uuid) is
-  'V8-R-FEED-003. A comment is visible exactly while it is live and its post is visible to this caller. Like can_view_feed_post it omits the reporter hide, so a repeat report stays idempotent.';
+  'V8-R-FEED-003 + V8-R-FEED-009. A comment is visible exactly while it is live, its post is visible to this caller, AND neither the caller nor the commenter has blocked the other — the post gate judges the caller against the post author, so the reader/commenter pair needs its own term. Like can_view_feed_post it omits the reporter hide, so a repeat report stays idempotent.';
 
 revoke all on function public.can_view_feed_comment(uuid) from public, anon;
 grant execute on function public.can_view_feed_comment(uuid) to authenticated;
@@ -488,8 +498,21 @@ create policy "feed_post_tags: readable with post"
   on public.feed_post_tags for select
   to authenticated
   using (
+    -- YOUR OWN TAG ROW IS YOUR OWN CONSENT SURFACE, and it stays readable even
+    -- after you report the post: the UPDATE policy below is how a tagged person
+    -- withdraws the tag, and a row you cannot read is a consent you cannot
+    -- revoke. Hiding it would take away the control, not the content.
     auth.uid() = profile_id
-    or public.can_view_feed_post(post_id)
+    or (
+      public.can_view_feed_post(post_id)
+      -- THE REPORTER HIDE REACHES THE TAGS. The post row and every comment
+      -- beneath it already disappear for the reporter; without this term the tag
+      -- rows — and the tagged people's profile ids — kept answering for a post
+      -- the reporter can no longer see, so "reporting IMMEDIATELY HIDES the
+      -- reported content" (V8-R-FEED-010) held for the card and leaked round the
+      -- side. Same veto, same predicate, as the posts and comments policies.
+      and not public.feed_post_reported_by_caller(post_id)
+    )
   );
 
 -- A tagged person withdraws THEIR OWN tag. Never the author's call, and never
@@ -511,6 +534,11 @@ create policy "feed_comments: post audience reads"
   using (
     deleted_at is null
     and public.can_view_feed_post(post_id)
+    -- The reader/commenter block, applied HERE and not only inside
+    -- `can_view_feed_comment`, because this policy is the actual read path: it
+    -- asks the POST gate, which compares the caller with the post's author and
+    -- never with the person who wrote this row.
+    and not public.is_blocked_between(auth.uid(), public.feed_comments.author_id)
     and not public.feed_post_reported_by_caller(post_id)
     and not public.feed_comment_reported_by_caller(public.feed_comments.id)
   );
@@ -1277,8 +1305,43 @@ begin
       from public.media_read_window_before_0069(p_name) w
      limit 1;
 
-    -- A yes is FINAL. A no (or no row at all) falls through, which is the only
-    -- thing this file is entitled to change about the previous decision.
+    -- A yes is FINAL, with ONE exception this file is entitled to make because
+    -- the previous decision could not have made it: 0066 knows nothing about
+    -- feed_posts, so its owner branch answers "yes, unbounded" for a FEED-ONLY
+    -- media object on the caller's own prefix — that is its upload-before-publish
+    -- window, and it cannot tell that the bytes are in fact published to a Feed
+    -- post the caller has since REPORTED. 0066 states the rule this restores in
+    -- its own words: "THE HIDE APPLIES TO THE AUTHOR TOO ... with no exception
+    -- for the reporter also being the author."
+    --
+    -- The veto is deliberately narrow, so it can never hide a story:
+    --   * it requires a live Feed post naming these bytes that THIS caller
+    --     reported, and
+    --   * it requires that NO live story names these bytes at all.
+    -- When a story does name them, 0066 has already applied its own reporter
+    -- rule (`media_path_unreported_live_expiry`, plus the all-reported check
+    -- below it) and whatever it decided stands untouched.
+    if v_prior.readable
+       and exists (
+         select 1
+           from public.feed_posts p
+           join public.media_objects m on m.id = p.media_id
+          where m.storage_path = p_name
+            and p.deleted_at is null
+            and public.feed_post_reported_by_caller(p.id)
+       )
+       and not exists (
+         select 1
+           from public.stories s
+          where (s.media_path = p_name or s.inset_path = p_name)
+            and s.deleted_at is null
+            and s.expires_at > now()
+       )
+    then
+      return query select false, null::timestamptz;
+      return;
+    end if;
+
     if v_prior.readable then
       return query select v_prior.readable, v_prior.expires_at;
       return;
