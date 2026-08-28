@@ -68,7 +68,15 @@ export type GroupMember = {
 export type GroupMessage = {
   id: string;
   groupId: string;
-  senderId: string;
+  /**
+   * Null when the sender has DELETED THEIR ACCOUNT (X5).
+   *
+   * `group_messages.sender_id` is `on delete set null`, because V8-R-GRP-007 enumerates the
+   * removal causes — sender deletes, administrator removes, group deleted — and account
+   * deletion is not among them. The message survives its author and renders as
+   * "a departed member".
+   */
+  senderId: string | null;
   senderHandle: string | null;
   senderDisplayName: string | null;
   body: string | null;
@@ -261,7 +269,7 @@ export async function fetchGroupMessages(
       value: rows.map((row) => ({
         id: row.id,
         groupId,
-        senderId: row.sender_id,
+        senderId: row.sender_id ?? null,
         senderHandle: row.sender_handle,
         senderDisplayName: row.sender_display_name,
         body: row.body,

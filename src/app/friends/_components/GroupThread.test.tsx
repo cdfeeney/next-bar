@@ -290,3 +290,54 @@ describe('round 5, X4: the night out plan is PICKED, not typed', () => {
     expect(screen.getByTestId('group-invite')).toBeTruthy();
   });
 });
+
+describe('round 5, X5: a message outlives its author and says so', () => {
+  const msg = (over: Record<string, unknown> = {}) => ({
+    id: 'm1',
+    groupId: 'group-1',
+    senderId: 'other',
+    senderHandle: 'them',
+    senderDisplayName: 'Them',
+    body: 'still here',
+    mediaId: null,
+    createdAt: '2026-09-01T00:00:00.000Z',
+    ...over,
+  });
+
+  it('renders a departed sender as a departed member, not as Someone', async () => {
+    // 'Someone' is the DIFFERENT case: a present account with neither display name nor handle.
+    // Collapsing the two would hide that the author is gone.
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({
+      ok: true,
+      value: [msg({ senderId: null, senderHandle: null, senderDisplayName: null })],
+    } as never);
+
+    render(<GroupThread {...props()} />);
+
+    await screen.findByText('A departed member');
+    expect(screen.queryByText('Someone')).toBeNull();
+  });
+
+  it('still shows the message body — the history is what survives', async () => {
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({
+      ok: true,
+      value: [msg({ senderId: null, senderHandle: null, senderDisplayName: null })],
+    } as never);
+
+    render(<GroupThread {...props()} />);
+
+    await screen.findByText('still here');
+  });
+
+  it('a present account with no name is still Someone, not departed', async () => {
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({
+      ok: true,
+      value: [msg({ senderId: 'other', senderHandle: null, senderDisplayName: null })],
+    } as never);
+
+    render(<GroupThread {...props()} />);
+
+    await screen.findByText('Someone');
+    expect(screen.queryByText('A departed member')).toBeNull();
+  });
+});

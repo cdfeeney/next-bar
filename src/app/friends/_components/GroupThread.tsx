@@ -585,8 +585,14 @@ function MessageRow({
     };
   }, [message.mediaId, accessToken]);
 
-  const who = message.senderDisplayName
-    ?? (message.senderHandle !== null ? `@${message.senderHandle}` : 'Someone');
+  // X5. A null sender is not an anonymous sender — it is a DEPARTED one, and the difference is
+  // worth naming. The message survives account deletion (V8-R-GRP-007 does not list that as a
+  // removal cause), so the thread stays whole and says plainly who is no longer there. 'Someone'
+  // still covers the different case of a present account with neither display name nor handle.
+  const who = message.senderId === null
+    ? 'A departed member'
+    : message.senderDisplayName
+      ?? (message.senderHandle !== null ? `@${message.senderHandle}` : 'Someone');
 
   return (
     <li

@@ -395,3 +395,56 @@ describe('round 5, X4: the invite picker offers exactly what the door accepts', 
     );
   });
 });
+
+describe('round 5, X5: a departed account does not delete other people-s history', () => {
+  // THE CONTRACT, not a preference. V8-R-GRP-007 behavior: "MESSAGES PERSIST UNTIL REMOVED OR THE
+  // GROUP IS DELETED", states present | deleted by sender | removed by administrator | removed
+  // with the group. Account deletion is not among the removal causes. V8-R-GRP-006 closes it from
+  // the other side: "leaving does not delete the member-s prior messages; those follow
+  // V8-R-GRP-007", and its behavior treats "leaves or deletes their account" as one departure.
+  // The column previously read `not null ... on delete cascade`, defended as an inferred erasure
+  // expectation — and silently deleted every remaining member-s half of the thread.
+
+  it('sender_id is nullable and SET NULL, never CASCADE', () => {
+    expect(SQL).toMatch(
+      /sender_id uuid references public\.profiles\(id\) on delete set null/,
+    );
+    expect(SQL).not.toMatch(
+      /sender_id uuid not null references public\.profiles\(id\) on delete cascade/,
+    );
+  });
+
+  it('alters an EXISTING database too — create table if not exists is a no-op there', () => {
+    // Without this the change is true only of a fresh database, while a live one goes on
+    // cascading and the file stops describing the deployment.
+    expect(SQL).toMatch(/alter column sender_id drop not null/);
+    expect(SQL).toMatch(/on delete set null'/);
+    expect(SQL).toMatch(/confdeltype/);
+  });
+
+  it('delete authorization uses IS DISTINCT FROM, closing the null-sender hole', () => {
+    // `v_sender <> v_caller` is NULL for a departed sender, and `NULL and true` is NULL, so the
+    // IF would not fire and the raise would be skipped — handing ANY member the right to delete
+    // a departed member-s messages.
+    const body = code('delete_group_message');
+    expect(body).toMatch(/v_sender is distinct from v_caller/);
+    expect(body).not.toMatch(/v_sender <> v_caller and not exists/);
+  });
+
+  it('a departed member-s message still COUNTS as unread', () => {
+    // `msg.sender_id <> v_caller` is NULL for a null sender, which drops the row from the count:
+    // the thread would show unread messages the badge refused to count.
+    expect(code('group_unread_counts')).toMatch(/sender_id is distinct from v_caller/);
+  });
+
+  it('visibility handles a null sender explicitly rather than by three-valued accident', () => {
+    expect(code('group_message_is_visible')).toMatch(/v_sender is not null and v_sender <> v_caller/);
+  });
+
+  it('the thread LEFT JOINs profiles, or the surviving message vanishes anyway', () => {
+    // An inner join would drop exactly the rows this change exists to preserve — the messages
+    // would survive in the table and disappear from every thread, which is worse than the cascade
+    // because nothing would explain it.
+    expect(code('get_group_thread')).toMatch(/left join public\.profiles p on p\.id = msg\.sender_id/);
+  });
+});

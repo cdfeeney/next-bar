@@ -115,12 +115,35 @@ comment on column public.group_members.is_admin is
 create table if not exists public.group_messages (
   id uuid primary key default gen_random_uuid(),
   group_id uuid not null references public.groups(id) on delete cascade,
-  -- CASCADE, deliberately. A deleted account's messages go with it; that is the
-  -- erasure expectation account deletion already sets elsewhere in this schema.
-  -- It does not contradict V8-R-GRP-007, whose "messages persist until removed"
-  -- is about the sender/administrator REMOVAL VERB, not about the continued
-  -- existence of an account that no longer exists.
-  sender_id uuid not null references public.profiles(id) on delete cascade,
+  -- SET NULL, AND THE CASCADE THAT WAS HERE CONTRADICTED THE CONTRACT.
+  --
+  -- This column read `not null ... on delete cascade`, defended as "the erasure
+  -- expectation account deletion already sets elsewhere in this schema". That
+  -- was an INFERENCE, and V8-R-GRP-007 is explicit against it:
+  --
+  --   behavior:  "MESSAGES PERSIST UNTIL REMOVED OR THE GROUP IS DELETED."
+  --   states:    present | deleted by sender for everyone |
+  --              removed by administrator | removed with the group
+  --   retention: "messages persist until removed or the group is deleted;
+  --              there is no automatic expiry"
+  --
+  -- Three removal causes are enumerated and "the sender deleted their account"
+  -- is not among them. V8-R-GRP-006 closes it from the other side: its retention
+  -- clause is "leaving does not delete the member's prior messages; those follow
+  -- V8-R-GRP-007", and its behavior treats "leaves OR DELETES THEIR ACCOUNT" as
+  -- the same departure. So a departing account is a departure, and a departure
+  -- explicitly preserves the messages.
+  --
+  -- The cascade also silently deleted OTHER PEOPLE'S conversation history: every
+  -- remaining member lost half a thread they were party to, with no record that
+  -- anything had been removed.
+  --
+  -- Null sender means "a departed member" and is rendered as such. Every read
+  -- path below treats a null sender explicitly rather than leaning on SQL's
+  -- three-valued logic — see delete_group_message, group_message_is_visible and
+  -- group_unread_counts, where `<>` against NULL would otherwise have silently
+  -- changed each answer.
+  sender_id uuid references public.profiles(id) on delete set null,
   body text check (body is null or length(body) <= 2000),
   -- The photo half of V8-R-GRP-002, and it is a REGISTRY REFERENCE rather than a
   -- storage path. A path is a string a client can invent; a media_objects id is
@@ -172,6 +195,60 @@ comment on table public.group_messages is
 -- PUSHES. There is deliberately no notification table, no queue, and no call to
 -- any sender anywhere in this file; `group_unread_counts` in section 6 is the
 -- entire delivery mechanism.
+-- ---------------------------------------------------------------------------
+-- X5 idempotency: `create table if not exists` is a NO-OP on a database that
+-- already has this table, so the column change above would never reach one. An
+-- existing deployment keeps `not null` + `on delete cascade` unless it is
+-- altered explicitly, and would go on deleting departed members' messages while
+-- this file claims otherwise -- a migration that is true only of a fresh
+-- database is the worst of the two states, because the text stops describing
+-- the deployment.
+--
+-- Both statements are guarded, so this is safe to re-run and safe on a fresh
+-- database where the table was just created in the shape it wants.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'group_messages'
+       and column_name = 'sender_id' and is_nullable = 'NO'
+  ) then
+    alter table public.group_messages alter column sender_id drop not null;
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_constraint text;
+  v_rule char;
+begin
+  select c.conname, c.confdeltype
+    into v_constraint, v_rule
+    from pg_constraint c
+    join pg_class t on t.oid = c.conrelid
+    join pg_namespace n on n.oid = t.relnamespace
+   where n.nspname = 'public'
+     and t.relname = 'group_messages'
+     and c.contype = 'f'
+     and c.conkey = array[
+       (select a.attnum from pg_attribute a
+         where a.attrelid = t.oid and a.attname = 'sender_id')
+     ]::smallint[];
+
+  -- 'n' is SET NULL, 'c' is CASCADE. Only rewrite when it is not already right.
+  if v_constraint is not null and v_rule is distinct from 'n' then
+    execute format(
+      'alter table public.group_messages drop constraint %I', v_constraint);
+    execute
+      'alter table public.group_messages
+         add constraint group_messages_sender_id_fkey
+         foreign key (sender_id) references public.profiles(id)
+         on delete set null';
+  end if;
+end
+$$;
+
 create table if not exists public.group_reads (
   group_id uuid not null references public.groups(id) on delete cascade,
   profile_id uuid not null references public.profiles(id) on delete cascade,
@@ -926,7 +1003,13 @@ begin
 
   -- ONLY THE SENDER OR THE ADMINISTRATOR. Read from the table, not through the
   -- party-guarded helper, because this is a write authorization.
-  if v_sender <> v_caller and not exists (
+  -- `IS DISTINCT FROM`, NOT `<>`. With a departed sender (null) `v_sender <> v_caller`
+  -- evaluates to NULL, and `NULL and true` is NULL, so this IF would not fire and the
+  -- raise would be skipped -- handing any member of the group the right to delete a
+  -- departed member's messages. `is distinct from` is true against NULL, so a null
+  -- sender falls through to the administrator check, which is the correct authority:
+  -- with no sender left, only an administrator may remove the message.
+  if v_sender is distinct from v_caller and not exists (
     select 1
       from public.group_members m
      where m.group_id = v_group
@@ -975,8 +1058,12 @@ grant execute on function public.delete_group_message(uuid) to authenticated;
 --
 --   * the group is deleted (succession's no-member-remains branch, or a group cascade), which
 --     cascades `group_messages` away;
---   * the SENDER's profile is deleted, which cascades their `group_messages` rows away
---     (`sender_id ... on delete cascade`, declared above and deliberate).
+--   * (X5 REMOVED THE SECOND ROUTE.) This used to read "the SENDER's profile is deleted,
+--     which cascades their `group_messages` rows away". `sender_id` is now `on delete set
+--     null`, because V8-R-GRP-007 enumerates removal causes and account deletion is not one
+--     of them -- so a departing sender no longer destroys the message OR its destination.
+--     The trigger stays exactly as it is: the group-deletion route above is still a hard
+--     delete, and it is still the only place both remaining cascade paths pass through.
 --
 -- In both, the message row disappears while its `media_destinations` row with `kind='group'`
 -- and `ref_id=<message id>` stays LIVE. WP1's reclamation counts every live non-story
@@ -1087,7 +1174,11 @@ begin
     return false;
   end if;
 
-  if v_sender <> v_caller and public.is_blocked_between(v_caller, v_sender) then
+  -- A departed sender (null) has no account left to be blocked, so no block applies and the
+  -- message stays visible. Stated explicitly rather than relying on `NULL <> caller` being NULL:
+  -- the same expression one function down decided a COUNT rather than a branch, and got it wrong.
+  if v_sender is not null and v_sender <> v_caller
+     and public.is_blocked_between(v_caller, v_sender) then
     return false;
   end if;
 
@@ -1180,7 +1271,11 @@ begin
               from public.group_messages msg
              where msg.group_id = m.group_id
                and msg.deleted_at is null
-               and msg.sender_id <> v_caller
+               -- `IS DISTINCT FROM` so a departed member's message still counts as
+               -- unread. `msg.sender_id <> v_caller` is NULL for a null sender, which
+               -- drops the row from the count -- the thread would show unread messages
+               -- the badge refused to count.
+               and msg.sender_id is distinct from v_caller
                and msg.created_at > coalesce(r.last_read_at, '-infinity'::timestamptz)
                and public.group_message_is_visible(msg.id))
       from public.group_members m
@@ -1316,7 +1411,10 @@ begin
                msg.media_id,
                msg.created_at
           from public.group_messages msg
-          join public.profiles p on p.id = msg.sender_id
+          -- LEFT JOIN: an inner join drops every message whose sender has departed, which
+          -- would delete the thread history this change exists to preserve. A null handle
+          -- and display name are what the UI renders as "a departed member".
+          left join public.profiles p on p.id = msg.sender_id
          where msg.group_id = p_group
            and msg.deleted_at is null
            and public.group_message_is_visible(msg.id)
