@@ -229,14 +229,25 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003)', () => {
     );
   });
 
-  test('a refused RSVP is labelled as not yet sent, and is not shown as chosen', async () => {
+  /**
+   * ROUND-6 PANEL (Codex, MEDIUM). This used to assert the OFFLINE sentence —
+   * "not sent yet, try again in a moment" — for an answer the server had
+   * already declined. Every reason it declines is durable (expired link,
+   * cancelled plan, the plan's link replies at their cap), so "in a moment" is
+   * a retry that can never succeed. The message must not promise one, and it
+   * must offer the path that does work.
+   */
+  test('a refused RSVP says so without promising a retry, and is not shown as chosen', async () => {
     submitAnonRsvp.mockResolvedValue('refused');
     renderPreview();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-error').textContent).toMatch(
-        /hasn't been sent/i,
+        /let the host know/i,
       ),
+    );
+    expect(screen.getByTestId('invite-rsvp-error').textContent).not.toMatch(
+      /try again in a moment/i,
     );
     expect(screen.queryByTestId('invite-rsvp-sent')).toBeNull();
     expect(
@@ -327,6 +338,10 @@ describe('the offline queue (V8-R-INV-003)', () => {
 
     await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
     await waitFor(() => expect(screen.getByTestId('invite-rsvp-error')).toBeTruthy());
+    // ...and the delivery path says the same durable thing the tap path does.
+    expect(screen.getByTestId('invite-rsvp-error').textContent).not.toMatch(
+      /try again in a moment/i,
+    );
     expect(screen.queryByTestId('invite-rsvp-queued')).toBeNull();
   });
 

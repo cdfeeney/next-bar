@@ -674,6 +674,11 @@ export default function TonightPresence(): JSX.Element {
           // would be a recipient the server had already dropped.
           friends={follows.mutuals}
           friendsLoading={follows.loading}
+          // THE FAILED READ IS ITS OWN STATE (round-6 panel, Codex, MEDIUM).
+          // Without it an empty `mutuals` from a failed `get_following` was
+          // rendered as "you have no mutual friends" — the same lie CircleList
+          // refuses to tell about the presence read a few lines up.
+          friendsFailed={follows.circleFailed}
           initialSelection={
             pickingPeople === 'pending'
               ? pendingRecipients

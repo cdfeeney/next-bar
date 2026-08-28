@@ -396,8 +396,13 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
    * "A failed RSVP must be labelled as not yet sent" (V8-R-INV-003, failure
    * recovery). Showing the choice as taken would tell a recipient the host can
    * see an answer that never landed.
+   *
+   * ROUND-6 PANEL (Codex, MEDIUM): the label must not promise a retry either.
+   * A refusal is the SERVER answering no — an expired link, a cancelled plan, a
+   * plan whose link replies are at their cap — and every one of those is
+   * durable, so "try again in a moment" was a retry that could never succeed.
    */
-  test('a refused RSVP says it has not been sent, and does not show as chosen', async ({
+  test('a refused RSVP says so without promising a retry, and does not show as chosen', async ({
     page,
   }) => {
     await stubBearerRpcs(page);
@@ -409,7 +414,10 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await page.goto(`/night-out/${TOKEN}`);
     await page.getByTestId('invite-rsvp-going').click();
     await expect(page.getByTestId('invite-rsvp-error')).toContainText(
-      /hasn't been sent/i,
+      /let the host know/i,
+    );
+    await expect(page.getByTestId('invite-rsvp-error')).not.toContainText(
+      /try again in a moment/i,
     );
     await expect(page.getByTestId('invite-rsvp-sent')).toHaveCount(0);
     await expect(page.getByTestId('invite-rsvp-going')).toHaveAttribute(

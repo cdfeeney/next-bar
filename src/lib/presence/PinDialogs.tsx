@@ -105,6 +105,7 @@ export function PinBarDialog({
 export function PinAudienceDialog({
   friends,
   friendsLoading,
+  friendsFailed,
   initialSelection,
   busy,
   onConfirm,
@@ -118,6 +119,15 @@ export function PinAudienceDialog({
    * failed presence read (V8-R-OPS-005).
    */
   friendsLoading: boolean;
+  /**
+   * True when the circle read FAILED. The third state, and it was missing
+   * (round-6 panel, Codex, MEDIUM): a failed `get_following` leaves `loading`
+   * false and `mutuals` empty, which is indistinguishable here from a real
+   * empty circle — so a network failure told the pinner they have no mutual
+   * friends, a claim about their friends we have no evidence for. Exactly the
+   * distinction CircleList already draws one component over.
+   */
+  friendsFailed: boolean;
   initialSelection: readonly string[];
   busy: boolean;
   onConfirm: (recipientIds: string[]) => void;
@@ -171,6 +181,15 @@ export function PinAudienceDialog({
           {friendsLoading ? (
             <p className="text-muted text-sm" role="status">
               Loading your friends…
+            </p>
+          ) : friendsFailed ? (
+            <p
+              className="text-muted text-sm"
+              role="status"
+              data-testid="pin-audience-error"
+            >
+              Couldn&apos;t load your friends. Try again in a moment — Close
+              friends or Friends will still work.
             </p>
           ) : friends.length === 0 ? (
             <p className="text-muted text-sm" data-testid="pin-audience-none">

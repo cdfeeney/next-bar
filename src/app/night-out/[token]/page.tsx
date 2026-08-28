@@ -180,6 +180,14 @@ function deadlineLabel(instant: string): string {
   }).format(at);
 }
 
+/**
+ * A second past the deadline, so the server has crossed it by its own clock
+ * when we ask; and the longest single wait before the timer re-arms, because
+ * `setTimeout` silently fires immediately past ~24.8 days.
+ */
+const DEADLINE_GRACE_MS = 1_000;
+const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
+
 function nightDateLabel(nightKey: string): string {
   const [y, m, d] = nightKey.split('-').map(Number);
   if (!y || !m || !d) return nightKey;
@@ -397,6 +405,37 @@ export default function NightOutPage({
       cancelled = true;
     };
   }, [auth.status, token, loadMemberView]);
+
+  /**
+   * THE DEADLINE ARRIVES WITHOUT A RELOAD (round-6 panel, Codex, MEDIUM).
+   *
+   * `voting.votingOpen` is a snapshot taken when the member view loaded, and
+   * nothing re-read it as `votingClosesAt` passed — so a plan left open across
+   * its deadline went on rendering Vote, Suggest and Remove for a server that
+   * had already made it read-only, and the first tap was necessarily refused
+   * before the action's own refresh finally corrected the page. V8-R-NO-005's
+   * closed state is a state the surface has to be able to REACH on its own.
+   *
+   * The device clock chooses only WHEN to re-ask; `night_out_voting_open` on
+   * the server is still the one that answers. Armed only for a deadline this
+   * device thinks is still ahead, so a skewed clock costs one extra read rather
+   * than a poll — and a deadline that lands while the tab is asleep is caught by
+   * the timer firing late, which is exactly when we want it.
+   */
+  useEffect(() => {
+    if (state.kind !== 'member') return;
+    const voting = state.voting;
+    if (voting === null || !voting.votingOpen || voting.votingClosesAt == null) return;
+    const at = Date.parse(voting.votingClosesAt);
+    if (!Number.isFinite(at) || at <= Date.now()) return;
+    const planId = state.plan.id;
+    const startedAt = viewEpoch.current;
+    const timer = setTimeout(
+      () => void loadMemberView(planId, startedAt),
+      Math.min(at - Date.now() + DEADLINE_GRACE_MS, MAX_REARM_MS),
+    );
+    return () => clearTimeout(timer);
+  }, [state, loadMemberView]);
 
   const handleSignInToJoin = (): void => {
     // The handoff (criterion 7): the token rides sessionStorage through
@@ -671,6 +710,14 @@ export default function NightOutPage({
    * action was "choose any of these" rather than V8-R-SOC-007's "take the top
    * bar". Ranked the same way `lock_night_out` ranks it (votes, then the row's
    * own order as a stable tiebreak) so the row on top IS the one a lock takes.
+   *
+   * THE TIEBREAK IS THE SERVER'S (round-6 panel, Codex, MEDIUM). This sort is
+   * stable, so it preserves whatever order the board arrived in — and 0044's
+   * board ordered by `created_at` alone, which is not total. Two rows sharing a
+   * timestamp arrived in an arbitrary order while `lock_night_out` broke that
+   * tie on `bar_id`, so the top row and the locked bar could differ. 0068
+   * replaces `get_night_out_board` with the lock's exact total order; the board
+   * carries no `created_at`, so this could never have been reconstructed here.
    *
    * A COPY, not a sort in place: `board` is state, and `Array.prototype.sort`
    * mutates its receiver.

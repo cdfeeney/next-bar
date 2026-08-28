@@ -1026,6 +1026,15 @@ begin
     return false;
   end if;
 
+  -- THE SHARED SHORTLIST LOCK, FIRST (round-6 panel, Codex, MEDIUM). Closing
+  -- voting is a shortlist writer like any other: without this key, a suggestion
+  -- or a vote that had already passed `night_out_voting_open` could commit
+  -- AFTER the deadline was set to now, which is precisely the interleaving the
+  -- other four writers take this lock to prevent. Same key, same position —
+  -- ahead of every check it protects — so the five cannot deadlock.
+  perform pg_advisory_xact_lock(
+    hashtextextended('night_out_shortlist:' || p_night_out::text, 0));
+
   -- "ONLY WHILE VOTING IS OPEN." Setting a deadline on a plan whose voting has
   -- already closed — by an earlier deadline or by a lock — would re-open it,
   -- which is a different action from setting one.
@@ -1215,13 +1224,37 @@ begin
 
   -- OWN BYTES ONLY. Without this any member could attach another account's
   -- object by id and hand the whole plan a read window over it.
-  if not exists (
+  --
+  -- LOCKED, NOT MERELY READ (round-6 panel, Codex, HIGH). This was a plain
+  -- `exists` on `bytes_removed_at is null`, which is a fact about the caller's
+  -- snapshot rather than about the row. `claim_media_for_removal` takes the
+  -- object `for update`, recounts its live references under that lock, and
+  -- stamps the row — so an attach whose snapshot predated that commit read
+  -- "still live", inserted its destination, and handed the plan a photo whose
+  -- bytes were already committed to deletion. `publish_story` takes the same
+  -- row lock for exactly this reason; the Night Out publisher was the one that
+  -- did not.
+  --
+  -- The sweep uses `skip locked`, so holding this lock does not block it: it
+  -- passes the row by, and its next pass recounts and finds our destination.
+  perform 1
+     from public.media_objects m
+    where m.id = p_media
+      and m.owner_id = v_uid
+    for update;
+  if not found then
+    raise exception 'that media is not yours' using errcode = '42501';
+  end if;
+
+  -- A SEPARATE STATEMENT, and that is the point: under READ COMMITTED it takes
+  -- a new snapshot, so it sees the claim that committed while we waited for the
+  -- lock above. Same refusal `publish_story` raises, for the same reason.
+  if exists (
     select 1 from public.media_objects m
      where m.id = p_media
-       and m.owner_id = v_uid
-       and m.bytes_removed_at is null
+       and m.bytes_removed_at is not null
   ) then
-    raise exception 'that media is not yours' using errcode = '42501';
+    raise exception 'those bytes have already been reclaimed' using errcode = '22023';
   end if;
 
   insert into public.media_destinations (media_id, kind, ref_id)
@@ -1593,12 +1626,14 @@ security definer
 set search_path = public
 as $$
 declare
-  v_uid   uuid := auth.uid();
-  v_night date;
-  v_title text;
-  v_bars  integer;
-  v_saved uuid;
-  v_count integer;
+  v_uid    uuid := auth.uid();
+  v_night  date;
+  v_title  text;
+  v_bars   integer;
+  v_saved  uuid;
+  v_count  integer;
+  v_locked uuid[];
+  v_media  uuid;
 begin
   if v_uid is null then
     raise exception 'not signed in' using errcode = '28000';
@@ -1663,9 +1698,30 @@ begin
   -- The key is the MEDIA's own created_at rather than the destination's: it is
   -- the one instant every row on the card has, live or retained, and it is the
   -- order the night happened in. media_id breaks ties so the result is total.
+  -- THE BYTES ARE LOCKED BEFORE THEY ARE ARCHIVED (round-6 panel, Codex, HIGH).
+  -- `get_night_out_media` filters `bytes_removed_at is null`, but that is a
+  -- fact about this transaction's snapshot: a reclamation that committed after
+  -- it still left the row in this list, and the archive then took a retention
+  -- hold on bytes already claimed for deletion — a saved card that loses its
+  -- photo the moment the sweep runs.
+  --
+  -- Ordered by media id so two participants archiving the same night cannot
+  -- deadlock against each other, and the INSERT below reads only the ids we
+  -- hold, in its own statement, so its snapshot is taken after every claim we
+  -- waited on had committed.
+  select coalesce(array_agg(live.media_id order by live.media_id), '{}'::uuid[])
+    into v_locked
+    from public.get_night_out_media(p_night_out) live;
+
+  foreach v_media in array v_locked loop
+    perform 1 from public.media_objects m where m.id = v_media for update;
+  end loop;
+
   insert into public.saved_night_media (saved_night_id, media_id)
-  select v_saved, live.media_id
-    from public.get_night_out_media(p_night_out) live
+  select v_saved, m.id
+    from public.media_objects m
+   where m.id = any(v_locked)
+     and m.bytes_removed_at is null
   on conflict on constraint saved_night_media_pkey do nothing;
 
   with ordered as (
@@ -2051,6 +2107,22 @@ revoke all on table public.night_out_anon_rsvps from public, anon, authenticated
 -- The ONE anon WRITE grant in this file, and it is as narrow as the read one:
 -- holding the token authorizes exactly this, on exactly one plan, and the row
 -- it can reach is the one under the caller's own key.
+--
+-- KNOWN LIMIT OF AN ACCOUNTLESS RSVP — recorded, not closed (round-6 panel,
+-- Codex, MEDIUM). `p_key` is minted by the CALLER, because a recipient who has
+-- no account and no session has nothing else to be identified by; D-C-23 grants
+-- the RSVP to whoever holds a forwardable link. One token-holder can therefore
+-- call this 100 times under 100 fresh uuids: the cap fills with rows that are
+-- one person, later recipients are refused, and members read counts nobody
+-- sent. Nothing available INSIDE the database distinguishes those calls — anon
+-- PostgREST requests carry no identity, and a server-minted key would be just
+-- as mintable 100 times. The mitigations that work are edge-side (per-IP rate
+-- limiting, a challenge in front of the RPC) and belong to the deployment, not
+-- to this migration.
+--
+-- What is closed here is the half that misled the recipient: a refusal is no
+-- longer reported as "not sent yet — try again in a moment", a retry that at
+-- the cap can never succeed. See InvitePreview's refused branch.
 
 create or replace function public.rsvp_night_out_by_token(
   p_token    uuid,
@@ -2791,6 +2863,61 @@ comment on function public.remove_night_out_suggestion(uuid, text) is
 revoke all on function public.remove_night_out_suggestion(uuid, text) from public, anon, authenticated;
 grant execute on function public.remove_night_out_suggestion(uuid, text) to authenticated;
 
+------------------------------------------------------------------------------
+-- 8e. get_night_out_board — THE BOARD IS RANKED THE WAY THE LOCK RANKS IT
+------------------------------------------------------------------------------
+-- ROUND-6 PANEL (Codex, MEDIUM). `lock_night_out` takes the top bar by a TOTAL
+-- order — votes, then the suggestion's age, then the bar id — and the plan page
+-- renders the board with a stable sort by votes alone, trusting the server's
+-- order underneath it. 0044's order was `s.created_at asc` and nothing else, so
+-- two suggestions sharing a `created_at` came back in whichever order the
+-- executor liked, and the row drawn on top was not necessarily the row the lock
+-- would take. "Take the top bar" (V8-R-SOC-007) is only a promise the surface
+-- can keep if the top row and the locked bar are decided the same way.
+--
+-- 0044's body, unchanged except for the ORDER BY, which is now character for
+-- character the one in section 8c. The board does not return `created_at`, so
+-- the client cannot reconstruct this tiebreak itself — the total order has to
+-- be the server's, and the client's stable sort by votes then preserves it.
+
+create or replace function public.get_night_out_board(p_night_out uuid)
+returns table (bar_id text, suggested_by_handle text, votes bigint, caller_voted boolean)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with gate as materialized (
+    select 1 from public.night_out_members g
+     where g.night_out_id = p_night_out
+       and g.user_id = auth.uid()
+       and g.invite_status = 'accepted'
+     limit 1
+  )
+  select s.bar_id,
+         p.handle::text,
+         count(v.user_id)::bigint,
+         bool_or(v.user_id = auth.uid())
+    from public.night_out_suggestions s
+    join public.profiles p on p.id = s.suggested_by
+    left join public.night_out_votes v
+      on v.night_out_id = s.night_out_id and v.bar_id = s.bar_id
+    cross join gate
+   where s.night_out_id = p_night_out
+   group by s.bar_id, p.handle, s.created_at
+   order by count(v.user_id) desc, s.created_at asc, s.bar_id asc;
+$$;
+
+comment on function public.get_night_out_board(uuid) is
+  '0044''s shortlist read, replaced forward in 0068 with lock_night_out''s '
+  'TOTAL order — votes, then suggestion age, then bar id. 0044 ordered by '
+  'created_at alone, so tied rows came back in an arbitrary order and the row '
+  'the page drew on top was not necessarily the bar a lock would take '
+  '(V8-R-SOC-007).';
+
+revoke all on function public.get_night_out_board(uuid) from public, anon, authenticated;
+grant execute on function public.get_night_out_board(uuid) to authenticated;
+
 
 ------------------------------------------------------------------------------
 -- APPLY GATE (attended — the behavioral half a committed-unapplied migration
@@ -2957,8 +3084,14 @@ grant execute on function public.remove_night_out_suggestion(uuid, text) to auth
 --   21. AN ANSWER FROM THE LINK REACHES THE PLAN (V8-R-INV-003, round-5).
 --      RSVP 'going' as anon under a fresh key, then call
 --      get_night_out_anon_rsvps as a MEMBER → (1, 0, 0). As a NON-member →
---      zero rows. The member board shows the count and no name, because a
---      token-scoped recipient gave none.
+--      ONE row of zeros, (0, 0, 0). The member board shows the count and no
+--      name, because a token-scoped recipient gave none.
+--      CORRECTED IN ROUND 6 (Claude gate, MEDIUM): this said "zero rows" for a
+--      non-member, which the function cannot produce — it is an ungrouped
+--      aggregate and always returns exactly one row. The role predicate in its
+--      WHERE clause is what makes every count zero, so nothing leaks; the gate
+--      text was simply false, and a checker running it would have reported a
+--      failure that was the checklist's, not the code's.
 --   20a. ...AND THE LEGACY PREVIEW IS THE ONE THAT DECIDES (round-5 panel,
 --      BOTH lanes, HIGH). Item 20's list was false when written: 0068 gated the
 --      three bearer functions it ADDED and left 0044's preview_night_out, which
@@ -2974,6 +3107,27 @@ grant execute on function public.remove_night_out_suggestion(uuid, text) to auth
 --      the archive is what a cancellation must not take away. Before this the
 --      window read 'open', the recap offered Add-a-photo, the upload succeeded,
 --      the attach was refused, and the notice blamed the window.
+--   23. RECLAIMED BYTES CANNOT BE PUBLISHED OR ARCHIVED (round-6, Codex, HIGH).
+--      In one session: begin; select public.claim_media_for_removal('<media>');
+--      leave it OPEN. In a second session as that object's owner:
+--      add_night_out_media('<plan>', '<media>') BLOCKS on the row lock (the
+--      first session holds it). Commit the first → the second raises 'those
+--      bytes have already been reclaimed' and writes no destination. Reverse
+--      the order — attach first, then claim — and the claim's recount finds the
+--      new destination and reclaims nothing.
+--      Same for archive_night_out: hold a claim on one of the night's photos
+--      and archive → that photo is absent from saved_night_media and got no
+--      'archive' hold; the night's other photos are archived normally.
+--   24. THE DEADLINE SETTER IS A SHORTLIST WRITER (round-6, Codex, MEDIUM).
+--      Pause a suggestion after it takes the shortlist lock (e.g. with a second
+--      session holding pg_advisory_xact_lock on the same key), call
+--      set_night_out_voting_deadline(now()) from a third → it BLOCKS rather
+--      than committing underneath the suggestion. Before this it returned true
+--      immediately and the suggestion landed after voting had closed.
+--   25. THE TOP ROW IS THE BAR THE LOCK TAKES (round-6, Codex, MEDIUM).
+--      Insert two suggestions with an identical created_at and no votes, then
+--      compare: the first row of get_night_out_board and the return of
+--      lock_night_out name the SAME bar (the lower bar_id), repeatably.
 --   22. THE UNGATED PRIMITIVES ARE NOT REACHABLE (round-4, Claude gate).
 --      As an authenticated NON-member and as anon:
 --      select public.night_out_scheduled_start('<plan uuid>'),

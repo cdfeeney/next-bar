@@ -18,6 +18,13 @@ import {
 } from '@/lib/nightOutMedia/server';
 
 /**
+ * A second past the boundary, so the server has unambiguously crossed it by its
+ * own clock when we ask, and the longest single wait before the timer re-arms.
+ */
+const BOUNDARY_GRACE_MS = 1_000;
+const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
+
+/**
  * The Night Out recap's photos, and the two things the contract says you may do
  * with them (V8-R-NO-008, V8-R-NO-009).
  *
@@ -140,6 +147,44 @@ export default function NightOutMedia({
     setSavedNightId(null);
     void refresh();
   }, [refresh]);
+
+  /**
+   * THE WINDOW RE-ASKS ITSELF WHEN IT TURNS (round-6 panel, Codex, MEDIUM).
+   *
+   * The window was read once per plan and once per successful attach, so a page
+   * left open across a boundary kept whichever side it had loaded on: opened at
+   * 8:59 PM it stayed 'before' past the 9 PM start and never offered Add-a-photo
+   * or Archive until a reload, and one left open past the expiry went on
+   * offering both for a write the server would refuse.
+   *
+   * THE DEVICE CLOCK ONLY DECIDES WHEN TO ASK AGAIN. It never decides which
+   * side we are on — that is still `night_out_media_window`'s answer, which is
+   * the whole point of reading a window instead of a deadline (V8-R-NO-008).
+   * A skewed clock therefore costs at most one early round trip: the timer is
+   * armed only for a boundary that is still in the future by this device's
+   * reckoning, so a fresh answer that still reads 'before' arms nothing and
+   * cannot spin.
+   *
+   * Far-future boundaries are re-armed in six-hour steps rather than handed to
+   * `setTimeout` whole, which silently fires immediately past ~24.8 days.
+   */
+  useEffect(() => {
+    if (mediaWindow === null) return;
+    const boundary =
+      mediaWindow.state === 'before'
+        ? mediaWindow.opensAt
+        : mediaWindow.state === 'open'
+          ? mediaWindow.expiresAt
+          : null;
+    if (boundary === null) return;
+    const at = Date.parse(boundary);
+    if (!Number.isFinite(at) || at <= Date.now()) return;
+    const timer = setTimeout(
+      () => void refresh(),
+      Math.min(at - Date.now() + BOUNDARY_GRACE_MS, MAX_REARM_MS),
+    );
+    return () => clearTimeout(timer);
+  }, [mediaWindow, refresh]);
 
   /**
    * Upload the bytes, then attach them. Two steps because they are two

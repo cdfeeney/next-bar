@@ -240,7 +240,18 @@ export default function InvitePreview({
       } else {
         // REFUSED. The server answered and said no, so retrying cannot make it
         // land and queueing it would be a promise we cannot keep.
-        setRsvpError("That hasn't been sent yet — try again in a moment.");
+        //
+        // AND THE COPY SAYS SO (round-6 panel, Codex, MEDIUM). This branch used
+        // the offline sentence — "not sent yet, try again in a moment" — for an
+        // answer the server had already declined. Every reason it declines is
+        // durable: the invitation has expired, the plan was cancelled, or the
+        // plan's link replies have hit their cap. "In a moment" is a retry that
+        // cannot succeed, which is the same defect round 5 closed on the
+        // expired surface. The one forward path that does work is telling the
+        // host, so that is what it offers.
+        setRsvpError(
+          "We couldn't record that — this invitation may have expired. Let the host know directly.",
+        );
       }
       setRsvpBusy(false);
     },
@@ -313,7 +324,9 @@ export default function InvitePreview({
         // forever would keep telling the recipient it is about to be sent.
         clearQueuedRsvp(token);
         setQueued(null);
-        setRsvpError("That hasn't been sent yet — try again in a moment.");
+        setRsvpError(
+          "We couldn't record that — this invitation may have expired. Let the host know directly.",
+        );
       }
       // 'unreachable' keeps the queue exactly as it is, for the next event.
     };
