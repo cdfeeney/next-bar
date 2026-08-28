@@ -205,20 +205,18 @@ export default function GroupThread({
     // unread meets or exceeds the page can unread messages exist above what was shown, and only
     // then is marking unsafe. Page length ALONE can never tell those apart, which is why rounds 3
     // and 4 both got it wrong with only the page in hand.
-    // ROUND 7. THE CLIENT NO LONGER DECIDES. It reports the window it rendered and lets the
-    // server refuse. Rounds 3, 4, 5 and 6 each put this judgement here and each was wrong in a
-    // different way, for one reason: THE CLIENT CANNOT KNOW WHAT IT WAS NOT SENT. Round 6's
-    // version compared an others-only unread count against a page that included the viewer's own
-    // messages, so the viewer's own replies pushed other people's unread messages off the bottom
-    // and the watermark advanced past them anyway — permanently, because the update is monotonic.
+    // ROUND 8. OPENING THE THREAD READS IT — the contract's own semantics.
     //
-    // Nothing on screen means nothing to claim: an empty thread sends nothing at all.
+    // V8-R-GRP-008 defines unread as a per-member state that "clears on read", with two states and
+    // no exactness clause; V8-R-GRP-002's "persistent thread" is a RETENTION guarantee and asks for
+    // no scroll-back. Rounds 3-7 defended an exactly-unrendered invariant the contract never posed,
+    // and each fixed one direction while breaking another. There is no predicate here now, which is
+    // why this cannot fail the way those did.
+    //
+    // The one refusal left is not a heuristic: nothing rendered means there is no watermark to send.
     if (messages.length === 0) return;
-    const windowStart = messages[0].createdAt;
     const watermark = messages[messages.length - 1].createdAt;
-    void markGroupRead(client, groupId, watermark, windowStart).then((result) => {
-      // `false` is the server declining to advance because unread messages sit below the window.
-      // That is a correct outcome, not an error, and the badge simply keeps its count.
+    void markGroupRead(client, groupId, watermark).then((result) => {
       if (result.ok && result.value) onChanged();
     });
   }, [client, groupId, onChanged, status, messages]);

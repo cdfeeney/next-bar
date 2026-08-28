@@ -594,18 +594,14 @@ export async function deleteGroupMessage(
 export async function markGroupRead(
   client: SupabaseClient | null,
   groupId: string,
-  /** The newest message the viewer was SHOWN. Null means nothing was shown; the server no-ops. */
-  through: string | null,
   /**
-   * The OLDEST message the viewer was shown — the bottom of the rendered window.
+   * The newest message the viewer was SHOWN. Null means nothing was rendered and the server no-ops.
    *
-   * ROUND 7. This is the whole fix. Rounds 3-6 each tried to decide read-safety in the browser and
-   * each was wrong differently, because the client cannot know what it was not sent: the server
-   * alone can see the messages that fell outside the page. The client now REPORTS its window and
-   * states no opinion; `mark_group_read` refuses to advance when a visible message from somebody
-   * else sits unread below it.
+   * ROUND 8 removed the window argument along with the server-side guard it fed. The contract does
+   * not define unread as exactly-unrendered — V8-R-GRP-008 clears unread ON READ — so opening the
+   * thread reads it, and there is no predicate left for a caller to satisfy or defeat.
    */
-  windowStart: string | null = null,
+  through: string | null,
 ): Promise<MediaResult<boolean>> {
   if (client === null) return mediaUnavailable();
   if (!isUuid(groupId)) return rejected('That group could not be found.');
@@ -614,7 +610,6 @@ export async function markGroupRead(
     const { data, error } = await client.rpc('mark_group_read', {
       p_group: groupId,
       p_through: through,
-      p_window_start: windowStart,
     });
 
     if (error) {
@@ -626,6 +621,7 @@ export async function markGroupRead(
     return mediaUnavailable();
   }
 }
+
 
 
 // ---------------------------------------------------------------------------

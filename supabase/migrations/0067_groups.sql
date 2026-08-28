@@ -1295,34 +1295,46 @@ grant execute on function public.group_message_is_visible(uuid) to authenticated
 
 -- V8-R-GRP-008. Reading is a caller-scoped write of one timestamp — the entire
 -- alternative to a push per message.
--- ROUND 7. THE UNSEEN-MESSAGE GUARD MOVES TO THE SERVER, AND THE SIGNATURE CHANGES WITH IT.
+-- ROUND 8. THE CONTRACT SETTLED THIS, AND THE GUARD IS DELETED.
 --
--- The DROP is part of the fix, not tidiness. Round 6 changed get_group_thread's RETURNS TABLE
--- under a bare CREATE OR REPLACE; applying to an empty database passed, and applying OVER THE
--- PREVIOUS VERSION failed with `cannot change return type of existing function`. A changed
--- ARGUMENT LIST carries the same hazard, and only the upgrade path shows it.
+-- Rounds 3-7 each defended an invariant the CONTRACT NEVER POSED: that a message may be marked
+-- read only if it was exactly-rendered. Each round fixed one direction and broke the other --
+-- round 3 ate unseen older messages, round 4 froze read state forever past a full page, round 5
+-- was off by one at exactly a full page, round 6 compared an others-only count against a page
+-- including the viewer's own messages, and round 7 moved the guard to the server where it was
+-- finally CORRECT and, being correct, refused forever for any member with more than one page of
+-- unread mail. Five rounds, one wrong premise.
+--
+-- WHAT THE FROZEN CONTRACT ACTUALLY SAYS:
+--
+--   V8-R-GRP-008 -- states ["unread","read","invitation notification sent"], retention "unread
+--     state is per member and clears on read". Two states, cleared ON READ. There is no
+--     exactly-unrendered clause anywhere, and the requirement's stated purpose is notification
+--     VOLUME: "V8 DOES NOT SEND A PUSH NOTIFICATION FOR EVERY ORDINARY GROUP MESSAGE."
+--
+--   V8-R-GRP-002 -- "Any member may send TEXT and PHOTOS into the persistent thread", retention
+--     "until removed by the sender or an administrator, or the group is deleted". PERSISTENT IS A
+--     RETENTION GUARANTEE, NOT A RENDERING ONE. No cursor, no scroll-back, no history depth is
+--     required by this or any other GRP requirement.
+--
+-- So: OPENING THE THREAD READS IT, which is standard chat semantics and what the contract asks
+-- for. The watermark is the newest message the caller was SHOWN. There is no window parameter and
+-- no predicate, which is why this round cannot fail the way the previous five did -- there is
+-- nothing left to get wrong.
+--
+-- THE CEILING, STATED HONESTLY RATHER THAN GUARDED AGAINST: get_group_thread returns the newest
+-- GROUP_THREAD_PAGE (200) messages and the product has no scroll-back. A member returning to a
+-- group with more than 200 unread messages sees the newest 200, and opening the thread marks the
+-- whole backlog read. The older messages REMAIN IN THE THREAD -- V8-R-GRP-002's retention is
+-- untouched -- they are simply not rendered and not counted unread afterwards. That is a product
+-- limit of having no pagination, it is accepted deliberately, and it is recorded in the ledger
+-- rather than hidden behind a predicate that would freeze the badge instead.
+drop function if exists public.mark_group_read(uuid, timestamptz, timestamptz);
 drop function if exists public.mark_group_read(uuid, timestamptz);
 
--- WHY THE GUARD IS HERE AND NOT IN THE CLIENT.
---
--- Rounds 3, 4, 5 and 6 each placed this decision in the browser and each was wrong differently:
---   round 3 marked through the newest row, eating unseen older messages on a truncated page;
---   round 4 refused on any full page, freezing read state forever past GROUP_THREAD_PAGE;
---   round 5 compared the unread count to the PAGE SIZE, off by one at exactly a full page;
---   round 6 compared an OTHERS-ONLY unread count to a page INCLUDING THE VIEWER'S OWN messages,
---     so the viewer's own replies displaced other people's unread messages off the bottom of the
---     page and the watermark advanced past them anyway.
--- Every one of those is the same mistake: THE CLIENT CANNOT KNOW WHAT IT WAS NOT SENT. Only the
--- database can see the messages that fell outside the page. So the client now reports the window
--- it actually rendered -- oldest and newest shown -- and states no opinion about safety.
---
--- THE RULE: the watermark may advance to p_through only if NO message the caller could see, from
--- somebody else, sits unread BELOW the rendered window. If one does, it was never on screen, and
--- advancing would bury it permanently because the update below is monotonic.
 create or replace function public.mark_group_read(
   p_group uuid,
-  p_through timestamptz default null,
-  p_window_start timestamptz default null
+  p_through timestamptz default null
 )
 returns boolean
 language plpgsql
@@ -1331,7 +1343,6 @@ set search_path = public
 as $$
 declare
   v_caller uuid := auth.uid();
-  v_last   timestamptz;
 begin
   if v_caller is null then
     raise exception 'mark_group_read: not authenticated' using errcode = '28000';
@@ -1346,39 +1357,9 @@ begin
     return false;
   end if;
 
-  select r.last_read_at into v_last
-    from public.group_reads r
-   where r.group_id = p_group and r.profile_id = v_caller;
-
-  -- THE GUARD. A message strictly BELOW the rendered window, newer than what the caller has
-  -- already read, sent by somebody else, and visible to this caller, is a message that exists and
-  -- was never shown. `is distinct from` because a departed sender's id is null and their message
-  -- is still not the caller's own. `group_message_is_visible` because a blocked or self-reported
-  -- message must not pin the watermark forever -- the caller is never going to be shown it.
-  if p_window_start is not null and exists (
-    select 1
-      from public.group_messages msg
-     where msg.group_id = p_group
-       and msg.deleted_at is null
-       and msg.created_at < p_window_start
-       and msg.created_at > coalesce(v_last, '-infinity'::timestamptz)
-       and msg.sender_id is distinct from v_caller
-       and public.group_message_is_visible(msg.id)
-  ) then
-    -- Refuse to ADVANCE, rather than failing: the read itself succeeded and the caller did see
-    -- what it saw. The badge simply keeps counting what is still genuinely unread.
-    return false;
-  end if;
-
-  -- THE WATERMARK, NOT THE CLOCK.
-  --
-  -- Round-3 finding: this stamped now(), so read state advanced past any message that arrived
-  -- between the thread fetch and this call. The boundary is the newest message the caller was
-  -- actually SHOWN, which only the caller knows, so the caller passes it.
-  --
-  -- A NULL p_through no longer means now(). Round 6 found that an empty thread sent null and
-  -- coalesce turned it into now(), marking everything read up to the present. Nothing was shown,
-  -- so nothing may be claimed: null is now a no-op.
+  -- A NULL watermark is a NO-OP, not now(). Round 6's defect: an empty thread sent null, coalesce
+  -- turned it into "everything up to the present is read", and messages that arrived later were
+  -- buried. Nothing rendered means nothing to claim.
   if p_through is null then
     return false;
   end if;
@@ -1386,22 +1367,24 @@ begin
   insert into public.group_reads (group_id, profile_id, last_read_at)
   values (p_group, v_caller, least(p_through, now()))
   on conflict (group_id, profile_id) do update
-     -- NEVER BACKWARDS. Two tabs marking the same thread read can arrive out of
-     -- order, and an older timestamp landing last would resurrect unread
-     -- messages the member has already seen.
+     -- NEVER BACKWARDS. Two tabs marking the same thread read can arrive out of order, and an
+     -- older timestamp landing last would resurrect unread messages the member has already seen.
+     -- least(..., now()) refuses a watermark from the future, so neither a skewed client clock nor
+     -- a hand-made call can mark a message that does not exist yet.
      set last_read_at = greatest(public.group_reads.last_read_at, excluded.last_read_at);
 
   return true;
 end;
 $$;
 
-comment on function public.mark_group_read(uuid, timestamptz, timestamptz) is
-  'V8-R-GRP-008. Advances the caller''s read watermark to the newest message they were SHOWN, and REFUSES to advance when a visible message from somebody else sits unread below the rendered window (p_window_start) -- that message was never on screen and the update is monotonic. Rounds 3-6 each tried to make this decision in the client and each was wrong differently; the client cannot know what it was not sent, so the guard is here.';
+comment on function public.mark_group_read(uuid, timestamptz) is
+  'V8-R-GRP-008. Opening the thread reads it: advances the caller''s watermark to the newest message they were SHOWN. Standard chat semantics, selected from the contract -- GRP-008 defines unread as clearing ON READ with no exactness clause, and GRP-002''s persistent thread is a RETENTION guarantee, not a rendering one. CEILING: with no scroll-back, a member with more than GROUP_THREAD_PAGE unread sees the newest page and opening marks the whole backlog read; the older messages remain in the thread. Accepted deliberately and recorded in the ledger.';
 
--- Round 7: the signature gained p_window_start, so the grants must name the NEW one. Left on the
--- old signature these would fail outright, because the function they name no longer exists.
-revoke all on function public.mark_group_read(uuid, timestamptz, timestamptz) from public, anon;
-grant execute on function public.mark_group_read(uuid, timestamptz, timestamptz) to authenticated;
+-- Round 8: the signature dropped p_window_start with the guard, so the grants name the 2-arg form
+-- again. Both prior signatures are dropped above, which is what makes this safe to apply over a
+-- database carrying either of them.
+revoke all on function public.mark_group_read(uuid, timestamptz) from public, anon;
+grant execute on function public.mark_group_read(uuid, timestamptz) to authenticated;
 
 -- THE DELIVERY MECHANISM, and it is a READ. There is no push here and no sender
 -- anywhere in this file; V8-R-GRP-008's exclusion is "NO push notification per

@@ -485,48 +485,29 @@ describe('round 6: account deletion must SUCCEED for a photo-only message', () =
   });
 });
 
-describe('round 7: the unseen-message guard lives on the SERVER, not in a client heuristic', () => {
-  // WHY THE ROOT FIX. Rounds 3, 4, 5 and 6 each put this guard in the client and each got it wrong
-  // in a different way, because the client cannot know what it was not sent. Round 6-s condition
-  // compared an OTHERS-ONLY unread count against a page that INCLUDES the viewer-s own messages,
-  // so the viewer-s own replies displaced other people-s unread messages off the bottom of the
-  // page and the watermark advanced past them anyway -- permanently, because the update is
-  // monotonic. The client is now out of the safety business entirely: it reports the window it
-  // rendered, and the SERVER decides.
+describe('round 8: mark_group_read is a watermark write, with no predicate left to get wrong', () => {
+  // THE ROUND-7 SUITE THAT STOOD HERE IS DELETED, NOT RELAXED. It asserted the SHAPE of a
+  // server-side guard (a p_window_start argument, a refusal branch, a visibility call) that round 8
+  // removed entirely, because the frozen contract does not define unread as exactly-unrendered:
+  // V8-R-GRP-008 clears unread ON READ and V8-R-GRP-002's "persistent thread" is a RETENTION
+  // guarantee, not a rendering one. Keeping those assertions would pin a rule the product does not
+  // have. They were also SQL-TOKEN tests, which is the weaker form the round-7 panel criticised.
+  //
+  // What replaces them is BEHAVIOUR: GroupThread.test.tsx drives the component and asserts that
+  // opening marks through the newest rendered message, that a full page still marks, that an empty
+  // thread and a failed load mark nothing. The migration itself is proven by EXECUTION on staging.
+  // The only assertions kept here are the two structural facts a behaviour test cannot see.
 
-  const body = code('mark_group_read');
-
-  it('takes the rendered WINDOW, not just a watermark', () => {
-    expect(SQL).toMatch(/mark_group_read\(\s*p_group uuid,\s*p_through timestamptz[^)]*p_window_start timestamptz/);
-  });
-
-  it('DROPs the old signature first — a changed signature cannot CREATE OR REPLACE', () => {
-    // Round 6 shipped exactly this defect on get_group_thread and only the upgrade path caught it:
-    // "cannot change return type of existing function". A changed ARGUMENT list has the same
-    // hazard, so the drop is part of the fix, not tidiness.
+  it('drops BOTH prior signatures, so it applies over a database carrying either', () => {
+    // Round 6 taught this the hard way: a bare CREATE OR REPLACE that changes a function's shape
+    // passes an empty-database apply and fails only over a prior version.
+    expect(SQL).toMatch(/drop function if exists public\.mark_group_read\(uuid, timestamptz, timestamptz\)/);
     expect(SQL).toMatch(/drop function if exists public\.mark_group_read\(uuid, timestamptz\)/);
   });
 
-  it('refuses to advance past an unread OTHER-SENDER message below the rendered window', () => {
-    expect(body).toMatch(/p_window_start/);
-    expect(body).toMatch(/sender_id is distinct from v_caller/);
-    // The message must be one the caller may actually see, or a blocked/reported message would
-    // pin the watermark forever.
-    expect(body).toMatch(/group_message_is_visible/);
-  });
-
-  it('still refuses a watermark from the future and still never moves backwards', () => {
-    expect(body).toMatch(/least\(/);
-    expect(body).toMatch(/greatest\(/);
-  });
-
-  it('the client no longer decides safety — the count heuristic is GONE', () => {
-    const ui = readFileSync(
-      path.join(__dirname, '..', 'app', 'friends', '_components', 'GroupThread.tsx'), 'utf8',
-    );
-    expect(ui).not.toMatch(/unreadCovered/);
-    expect(ui).not.toMatch(/freshUnread\s*<=\s*messages\.length/);
-    // What it DOES send is the window it rendered.
-    expect(ui).toMatch(/windowStart/);
+  it('states the 200-message ceiling in the migration rather than hiding it', () => {
+    // The ceiling is a product limit, accepted deliberately and recorded in the ledger. A limit
+    // nobody wrote down is how five rounds of guards got built to avoid admitting it.
+    expect(SQL).toMatch(/CEILING/);
   });
 });
