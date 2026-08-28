@@ -94,7 +94,11 @@ test.describe('Social · Groups', () => {
     await expect(page.getByTestId('group-admin')).toHaveCount(0);
     await expect(page.getByTestId('group-leave')).toHaveCount(0);
     await expect(page.getByTestId('group-invite')).toHaveCount(0);
+    // X5 round 5: the plan PICKER is a new control that reads the viewer's own night out plans.
+    // Signed out it must not render at all — it would call an RPC no anonymous caller can satisfy.
+    await expect(page.getByTestId('group-invite-plan')).toHaveCount(0);
     await expect(page.getByTestId('group-unread')).toHaveCount(0);
+    await expect(page.getByTestId('group-invite-send')).toHaveCount(0);
   });
 
   test('tapping sign-in from Groups goes to /auth and nowhere else', async ({
@@ -179,10 +183,22 @@ test.describe('Social · Groups', () => {
  * a specification of the browser receipts still owed, not as evidence they pass.
  *
  * HOW COMPLETE IS THIS, HONESTLY. Round-1 finding 6 asked for authenticated receipts across
- * GRP-001..008. What is below establishes the stubbed-session pattern and covers the signed-in
- * entry point only. It is a START on that finding, not its closure, and it is reported as such
- * rather than counted as done — a suite that claims eight requirements and exercises one is the
- * same defect finding 6 raised, wearing the opposite costume.
+ * GRP-001..008. Round 5 extends the stubbed-session pattern from the entry point to the two
+ * surfaces it changed — the GRP-003 plan picker and GRP-007's departed sender — so the covered
+ * set is now: the signed-in group list (GRP-001), the in-app unread badge (GRP-008), a failed
+ * thread load not clearing unread (GRP-008), the plan picker and its three load states (GRP-003),
+ * and a message outliving its author (GRP-007).
+ *
+ * STILL NOT COVERED, and named rather than left to be discovered: sending text and photos
+ * (GRP-002), the administration verbs — rename, add, remove (GRP-004/005), leaving and D-C-38
+ * succession (GRP-006), the reporter's hide (FEED-010), and the block. Those are authorization
+ * RULES; a stubbed transport can only prove what the client renders when the server has already
+ * decided, so stubbing them would assert the fixture rather than the rule. They belong to the
+ * attended staging run against an applied schema.
+ *
+ * So finding 6 is ADVANCED, not closed. A suite that claimed eight requirements while exercising
+ * one would be the same defect finding 6 raised wearing the opposite costume, and so would a
+ * suite that claims closure because the count went up.
  */
 
 const GROUP_ID = '11111111-1111-4111-8111-111111111111';
@@ -224,12 +240,23 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     unread?: unknown[];
     thread?: unknown[] | null;
     members?: unknown[];
+    /** X4: the viewer's invitable plans. `null` fulfils a FAILURE, which is its own state. */
+    plans?: unknown[] | null;
   } = {}): Promise<void> {
     const marked: string[] = [];
     (page as unknown as { __marked: string[] }).__marked = marked;
     await page.route('**/rest/v1/groups?**', json(opts.groups ?? []));
     await page.route('**/rest/v1/rpc/group_unread_counts', json(opts.unread ?? []));
     await page.route('**/rest/v1/rpc/get_group_members', json(opts.members ?? []));
+    // X4. The thread mounts a plans read; leaving it unrouted would let a real request escape to
+    // the network and turn every signed-in test into an accidental assertion about that failure.
+    await page.route('**/rest/v1/rpc/get_my_invitable_night_outs', async (route) => {
+      if (opts.plans === null) {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'boom' }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(opts.plans ?? []) });
+    });
     await page.route('**/rest/v1/rpc/mark_group_read', async (route) => {
       marked.push(route.request().postData() ?? '');
       await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
@@ -289,5 +316,107 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await expect(page.getByTestId('groups-notice').or(page.getByText(/could not be loaded/i)).first()).toBeVisible();
     const marked = (page as unknown as { __marked: string[] }).__marked;
     expect(marked, 'a failed thread load must not mark the group read').toEqual([]);
+  });
+
+  /** Open Thursday Crew's thread. Every signed-in thread test starts here. */
+  async function openThread(page: import('@playwright/test').Page): Promise<void> {
+    await page.goto('/friends');
+    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByTestId('group-row').first().click();
+  }
+
+  const GROUP_ROW = { id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' };
+  const ROSTER = [
+        { profile_id: VIEWER_ID, handle: 'me', display_name: 'Me', is_admin: true, joined_at: '2026-08-01T00:00:00Z' },
+        { profile_id: OTHER_ID, handle: 'them', display_name: 'Them', is_admin: false, joined_at: '2026-08-02T00:00:00Z' },
+      ];
+
+  test('the night out plan is PICKED from the viewer-s own plans (GRP-003, X4)', async ({ page }) => {
+    // Round 5 replaced a "Night out id" text box with a picker. A uuid is not a choice a person
+    // can make, and the browser is where that is actually visible.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [GROUP_ROW],
+      members: ROSTER,
+      thread: [],
+      plans: [
+        { night_out_id: '44444444-4444-4444-8444-444444444444', night: '2026-09-04', title: 'Sam-s birthday', status: 'open', my_role: 'owner' },
+        { night_out_id: '55555555-5555-4555-8555-555555555555', night: '2026-09-11', title: null, status: 'draft', my_role: 'member' },
+      ],
+    });
+    await openThread(page);
+
+    const picker = page.getByTestId('group-invite-plan');
+    await expect(picker).toBeVisible();
+    // A select, not a free-text field — the whole point of X4.
+    await expect(picker).toHaveJSProperty('tagName', 'SELECT');
+    await expect(picker.locator('option')).toContainText(['Sam-s birthday (yours)', '2026-09-11']);
+  });
+
+  test('a FAILED plans read is not "you have no plans", and does not blank the thread (X4)', async ({ page }) => {
+    // "You have no plans" sends someone off to create a plan they already have. The thread itself
+    // loaded fine and must stay on screen — the plans list is secondary content.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [GROUP_ROW],
+      members: ROSTER,
+      thread: [],
+      plans: null,
+    });
+    await openThread(page);
+
+    await expect(page.getByTestId('group-invite-plans-failed')).toBeVisible();
+    await expect(page.getByTestId('group-invite-plans-empty')).toHaveCount(0);
+    await expect(page.getByTestId('group-invite')).toBeVisible();
+  });
+
+  test('no invitable plans says so plainly (X4)', async ({ page }) => {
+    await signInStub(page);
+    await stubGroups(page, { groups: [GROUP_ROW], members: ROSTER, thread: [], plans: [] });
+    await openThread(page);
+
+    await expect(page.getByTestId('group-invite-plans-empty')).toBeVisible();
+    await expect(page.getByTestId('group-invite-plans-failed')).toHaveCount(0);
+  });
+
+  test('a message outlives its author and is attributed to a departed member (GRP-007, X5)', async ({ page }) => {
+    // X5: sender_id is `on delete set null`, because V8-R-GRP-007 does not list account deletion
+    // among its removal causes. The message survives, the thread stays whole, and the browser is
+    // where "A departed member" is actually read by a person.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [GROUP_ROW],
+      members: ROSTER,
+      plans: [],
+      thread: [
+        { id: '66666666-6666-4666-8666-666666666666', sender_id: null, sender_handle: null,
+          sender_display_name: null, body: 'still here', media_id: null,
+          created_at: '2026-09-01T00:00:00Z' },
+      ],
+    });
+    await openThread(page);
+
+    await expect(page.getByTestId('group-message')).toContainText('A departed member');
+    // The history is the thing that survives — the body must still be there.
+    await expect(page.getByTestId('group-message')).toContainText('still here');
+  });
+
+  test('a present account with no name is Someone, NOT a departed member (X5)', async ({ page }) => {
+    // The two cases must not collapse: one account is gone, the other is merely unnamed.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [GROUP_ROW],
+      members: ROSTER,
+      plans: [],
+      thread: [
+        { id: '77777777-7777-4777-8777-777777777777', sender_id: OTHER_ID, sender_handle: null,
+          sender_display_name: null, body: 'present', media_id: null,
+          created_at: '2026-09-01T00:00:00Z' },
+      ],
+    });
+    await openThread(page);
+
+    await expect(page.getByTestId('group-message')).toContainText('Someone');
+    await expect(page.getByTestId('group-message')).not.toContainText('A departed member');
   });
 });
