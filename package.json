@@ -18,7 +18,8 @@
     "check:migrations": "tsx scripts/check-migration-ledger.ts",
     "check:catalog-bundle": "node scripts/check-client-catalog-bundle.mjs",
     "db:whoami": "tsx scripts/db-whoami.mts",
-    "db:dump": "tsx scripts/db-dump.mts"
+    "db:dump": "tsx scripts/db-dump.mts",
+    "db:reset-staging": "tsx scripts/db-reset-staging.mts"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.0",
