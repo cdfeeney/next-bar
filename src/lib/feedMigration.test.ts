@@ -33,6 +33,22 @@ function policyBody(name: string): string {
   return SQL.slice(start, end);
 }
 
+/**
+ * One SQL fragment with its `--` comments removed and every run of whitespace
+ * collapsed to a single space.
+ *
+ * A GROUPING TEST HAS TO SEE THE PARENTHESES. Round 2 found the negative regex
+ * below asserting nothing: it looked for the veto immediately after
+ * `auth.uid() = profile_id`, so moving the veto OUTSIDE the OR — which is the
+ * actual defect, and which takes a tagged reporter's own consent row away from
+ * them — slipped between the two anchors and stayed green. Matching the whole
+ * normalised expression is the only shape that cannot be walked around: any
+ * regrouping changes where the brackets fall.
+ */
+function sqlShape(fragment: string): string {
+  return fragment.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 /** The body of one `create or replace function`, by qualified name. */
 function functionBody(signature: string): string {
   const start = SQL.indexOf(`create or replace function ${signature}`);
@@ -79,12 +95,14 @@ describe('0069 — the reporter hide reaches every surface of the post', () => {
   });
 
   it('a tagged person still reads their OWN tag row, because that is the consent they revoke', () => {
-    const policy = policyBody('feed_post_tags: readable with post');
-    expect(policy).toMatch(/auth\.uid\(\) = profile_id/);
-    // The report veto must sit inside the can_view branch, never over the whole
+    // The report veto must sit INSIDE the can_view branch, never over the whole
     // policy: hiding your own tag row takes away the control, not the content.
-    expect(policy).not.toMatch(
-      /auth\.uid\(\) = profile_id\s*\)?\s*and not public\.feed_post_reported_by_caller/,
+    // Asserted as the whole normalised expression, because the grouping IS the
+    // requirement — see `sqlShape`.
+    expect(sqlShape(policyBody('feed_post_tags: readable with post'))).toContain(
+      'auth.uid() = profile_id'
+      + ' or ( public.can_view_feed_post(post_id)'
+      + ' and not public.feed_post_reported_by_caller(post_id) )',
     );
   });
 });
@@ -111,5 +129,57 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     expect(body).toMatch(/and not exists \(\s*\n\s*select 1\s*\n\s*from public\.stories s/);
     expect(body).toMatch(/s\.deleted_at is null/);
     expect(body).toMatch(/s\.expires_at > now\(\)/);
+  });
+
+  it('the veto stands down when another post on the same bytes is still visible and unreported', () => {
+    // Both lanes, round 2: one media object may hold several live Feed
+    // destinations, so reporting post A blanked post B's photo for its own
+    // owner — and the branch that would have authorised B sits after the veto's
+    // `return`, so it could never be reached. The all-unreported term is what
+    // 0066's story analogue carries and this one was missing.
+    expect(sqlShape(body)).toContain('if v_prior.readable and not v_feed_readable and exists (');
+    // ...and that term has to mean the FEED answer, not a constant.
+    expect(sqlShape(body)).toContain(
+      'v_feed_readable := exists ( select 1 from public.feed_posts p'
+      + ' join public.media_objects m on m.id = p.media_id where m.storage_path = p_name'
+      + ' and m.bytes_removed_at is null and public.can_view_feed_post(p.id)'
+      + ' and not public.feed_post_reported_by_caller(p.id) );',
+    );
+  });
+
+  it('a report on a post whose Feed destination is already retired vetoes nothing', () => {
+    // `deleted_at is null` alone kept vetoing after `remove_media_destination`
+    // took the post off the Feed, so a report with nothing left to hide went on
+    // hiding the owner's own bytes.
+    expect(sqlShape(body)).toContain(
+      'and p.deleted_at is null'
+      + ' and public.feed_post_destination_is_live(p.id)'
+      + ' and public.feed_post_reported_by_caller(p.id)',
+    );
+  });
+});
+
+describe('0069 — a named group is resolved server-side (D-C-37)', () => {
+  const body = functionBody('public.publish_feed_post(');
+
+  it('the materialised audience intersects the caller list with the GROUP, not only with mutuality', () => {
+    // Round 2 (HIGH): the insert filtered the caller's ids by mutual friendship
+    // and never resolved p_group_id at all, so a poster could name group G and
+    // deliver to a mutual friend outside G — while the row records
+    // audience_group_id = G. D-C-37: recipients EQUAL the selected group
+    // INTERSECTED WITH the poster's mutual friends.
+    expect(sqlShape(body)).toContain(
+      'where ids.distinct_id <> v_author'
+      + ' and public.is_mutual_friend(v_author, ids.distinct_id)'
+      + " and ( p_audience <> 'group'"
+      + ' or public.is_group_member(p_group_id, ids.distinct_id) )',
+    );
+  });
+
+  it('a group audience still cannot be published without a group to resolve', () => {
+    // The group term reads p_group_id, so the guard that makes it non-null for
+    // 'group' is load-bearing rather than a message.
+    expect(sqlShape(body)).toContain(
+      "if p_audience = 'group' and p_group_id is null then");
   });
 });

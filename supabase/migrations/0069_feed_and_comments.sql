@@ -586,16 +586,28 @@ grant update (removed_at) on public.feed_post_tags to authenticated;
 --     mutual friends with, and refusing the whole publish would make the mode
 --     unusable.
 --
--- WHY THE MEMBER IDS COME FROM THE CALLER, stated plainly rather than left to be
--- discovered. Group membership lives on WP6's surface; this schema has no group
--- table to resolve at 0069, and inventing one would collide with the lane that
--- owns it. What V8-R-FEED-006 actually makes server-side is the NARROWING: "the
--- intersection is computed and enforced SERVER-SIDE; a client may not widen a
--- named-group audience beyond the poster's mutual friends." That property holds
--- here in full, and it is not weakened by trusting the caller's list, because a
--- caller who lied about membership would still reach only their own mutual
--- friends — a set they could equally have named as a 'custom' audience. There is
--- no privilege to escalate: the poster is choosing their own audience either way.
+-- THE GROUP IS RESOLVED SERVER-SIDE, NOT TAKEN FROM THE CALLER'S LIST. An
+-- earlier version of this function argued that trusting `p_audience_ids` was
+-- harmless because a liar still reaches only their own mutual friends, "a set
+-- they could equally have named as a 'custom' audience". D-C-37 does not say
+-- that. It says recipients EQUAL the selected group INTERSECTED WITH the
+-- poster's own mutual friends — so a caller naming group G and a mutual friend
+-- OUTSIDE G delivered to somebody the group never included, and the post carries
+-- `audience_group_id = G` while its audience is not G's. That the recipient was
+-- reachable by another mode is beside the point: the recipient, and anyone
+-- reading the provenance, is told this went to the group.
+--
+-- `public.is_group_member(group, profile)` (WP6's 0067, which applies before this
+-- file) is the resolution. It is SECURITY DEFINER and party-guarded: it answers
+-- only when the caller IS the subject or is themselves a member of the group.
+-- SECURITY DEFINER does not change `auth.uid()`, so the guard still sees the
+-- POSTER here — and a poster is a member of the group they post to, so the guard
+-- never blocks the legitimate call and a non-member's whole audience resolves
+-- empty, which fails closed below. Membership on that surface IS row existence:
+-- there is no accepted/pending column to check, unlike `night_out_members`.
+--
+-- The caller's list still narrows: a poster may post to SOME of a group. What it
+-- can no longer do is widen past the group it named.
 --
 -- FAILS CLOSED. "If the mutual-friend set cannot be resolved the action FAILS
 -- CLOSED rather than delivering to the unintersected group" — so an intersection
@@ -746,14 +758,20 @@ begin
 
   -- THE INTERSECTION, computed once and stored. Both non-'friends' modes go
   -- through the same statement: 'custom' has already been proved to be entirely
-  -- mutual friends above, so the filter is a no-op there and the single code
-  -- path cannot drift between the two modes.
+  -- mutual friends above, so the mutuality filter is a no-op there and the single
+  -- code path cannot drift between the two modes. The group term is the other
+  -- half of D-C-37 and applies only to 'group', where `p_group_id` is non-null by
+  -- the guard at the top of this function.
   if p_audience <> 'friends' then
     insert into public.feed_post_audience (post_id, profile_id)
       select v_id, ids.distinct_id
         from (select distinct unnest(p_audience_ids) as distinct_id) ids
        where ids.distinct_id <> v_author
          and public.is_mutual_friend(v_author, ids.distinct_id)
+         and (
+           p_audience <> 'group'
+           or public.is_group_member(p_group_id, ids.distinct_id)
+         )
       on conflict do nothing;
 
     select count(*)::int into v_recipients
@@ -764,7 +782,7 @@ begin
       -- FAIL CLOSED. Rolls the whole publication back rather than leaving a post
       -- whose audience is nobody, which the author would read as delivered.
       raise exception
-        'publish_feed_post: nobody in that audience is a mutual friend, so nothing was posted'
+        'publish_feed_post: nobody in that audience is both a mutual friend and, for a group, in that group, so nothing was posted'
         using errcode = '42501';
     end if;
   end if;
@@ -794,7 +812,7 @@ end;
 $$;
 
 comment on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) is
-  'V8-R-FEED-001 / V8-R-FEED-006. Publishes one Feed destination for a registered media object: takes the same path and row locks reclamation takes, writes the destination spine row, and materialises the audience as the selected set INTERSECTED with the poster''s mutual friends (D-C-37). An empty intersection raises rather than publishing to nobody.';
+  'V8-R-FEED-001 / V8-R-FEED-006. Publishes one Feed destination for a registered media object: takes the same path and row locks reclamation takes, writes the destination spine row, and materialises the audience as the selected set INTERSECTED with the poster''s mutual friends AND, for a named-group audience, with that group''s membership resolved server-side through public.is_group_member (D-C-37). An empty intersection raises rather than publishing to nobody.';
 
 revoke all on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) from public, anon;
 grant execute on function public.publish_feed_post(uuid, text, text, uuid, text, uuid[], uuid, uuid[]) to authenticated;
@@ -1293,11 +1311,25 @@ as $$
 declare
   v_caller uuid := auth.uid();
   v_prior record;
+  v_feed_readable boolean;
 begin
   if v_caller is null or p_name is null then
     return query select false, null::timestamptz;
     return;
   end if;
+
+  -- THE FEED ANSWER, COMPUTED ONCE. It is both the fallback branch at the bottom
+  -- and the thing the veto below has to consult, and writing it twice is how the
+  -- two spellings drift.
+  v_feed_readable := exists (
+    select 1
+      from public.feed_posts p
+      join public.media_objects m on m.id = p.media_id
+     where m.storage_path = p_name
+       and m.bytes_removed_at is null
+       and public.can_view_feed_post(p.id)
+       and not public.feed_post_reported_by_caller(p.id)
+  );
 
   if to_regprocedure('public.media_read_window_before_0069(text)') is not null then
     select w.readable, w.expires_at
@@ -1314,20 +1346,34 @@ begin
     -- its own words: "THE HIDE APPLIES TO THE AUTHOR TOO ... with no exception
     -- for the reporter also being the author."
     --
-    -- The veto is deliberately narrow, so it can never hide a story:
-    --   * it requires a live Feed post naming these bytes that THIS caller
-    --     reported, and
+    -- The veto is deliberately narrow, so it can never hide a story and never
+    -- hides bytes something the caller CAN still see is standing on:
+    --   * it requires a live Feed post, still holding its media destination,
+    --     naming these bytes, that THIS caller reported;
+    --   * it requires that NO OTHER Feed post naming these bytes is visible and
+    --     unreported to this caller — the ALL-UNREPORTED half 0066's story
+    --     analogue carries. One media object may hold several live Feed
+    --     destinations (`media_destinations_live_uniq` is on
+    --     (media_id, kind, ref_id)), so reporting post A used to blank post B's
+    --     photo for its own owner, and the branch that would have authorised B
+    --     sits AFTER this return and could never be reached; and
     --   * it requires that NO live story names these bytes at all.
     -- When a story does name them, 0066 has already applied its own reporter
     -- rule (`media_path_unreported_live_expiry`, plus the all-reported check
     -- below it) and whatever it decided stands untouched.
     if v_prior.readable
+       and not v_feed_readable
        and exists (
          select 1
            from public.feed_posts p
            join public.media_objects m on m.id = p.media_id
           where m.storage_path = p_name
             and p.deleted_at is null
+            -- A post whose Feed destination was already retired through
+            -- `remove_media_destination` is not on the Feed any more, so its
+            -- report has nothing left to hide and must not veto the owner's own
+            -- upload window. `deleted_at` alone missed that whole half.
+            and public.feed_post_destination_is_live(p.id)
             and public.feed_post_reported_by_caller(p.id)
        )
        and not exists (
@@ -1349,20 +1395,13 @@ begin
   end if;
 
   -- THE FEED BRANCH. A live, visible, unreported Feed post whose media object
-  -- names these bytes. `can_view_feed_post` is the same predicate the RLS policy
-  -- uses, so a viewer cannot be shown a photo for a card they cannot read, and
-  -- the reporter hide reaches the BYTES as well as the row — 0066 records why
-  -- that matters: "hiding the caption while the image still loads" does not
-  -- satisfy "reporting IMMEDIATELY HIDES the reported content".
-  if exists (
-    select 1
-      from public.feed_posts p
-      join public.media_objects m on m.id = p.media_id
-     where m.storage_path = p_name
-       and m.bytes_removed_at is null
-       and public.can_view_feed_post(p.id)
-       and not public.feed_post_reported_by_caller(p.id)
-  ) then
+  -- names these bytes — `v_feed_readable`, computed above. `can_view_feed_post`
+  -- is the same predicate the RLS policy uses, so a viewer cannot be shown a
+  -- photo for a card they cannot read, and the reporter hide reaches the BYTES as
+  -- well as the row — 0066 records why that matters: "hiding the caption while
+  -- the image still loads" does not satisfy "reporting IMMEDIATELY HIDES the
+  -- reported content".
+  if v_feed_readable then
     return query select true, null::timestamptz;
     return;
   end if;

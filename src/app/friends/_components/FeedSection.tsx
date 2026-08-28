@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Avatar from '@/components/Avatar';
 import StoryFrame from '@/components/story/StoryFrame';
@@ -71,22 +71,46 @@ export default function FeedSection({
   const [loadFailed, setLoadFailed] = useState(false);
   const [openThread, setOpenThread] = useState<string | null>(null);
 
+  /**
+   * The sequence number of the most recently STARTED refresh.
+   *
+   * The epoch guard below catches an ACCOUNT SWITCH and nothing else, so two
+   * refreshes for the same account — the mount read and the one `onChanged`
+   * fires after a confirmed write — both passed it and both committed, in
+   * whatever order they happened to resolve. When the older one landed last it
+   * overwrote the newer thread and the just-sent reply vanished (or a deleted
+   * one came back) until something refreshed again. Ordering is the missing
+   * term: only the newest request may write, whoever answers first.
+   */
+  const requestSeq = useRef(0);
+
   const refresh = useCallback(async () => {
+    const seq = (requestSeq.current += 1);
     if (viewerId === null) {
       // Signed out there is no Feed to read at all: V8-R-FEED-006 makes the
       // audience mutual-friend scoped, so an anonymous read has no audience to
       // be inside and the database would refuse every row anyway.
+      //
+      // AND THE FAILURE BANNER GOES WITH IT. Leaving `loadFailed` set told a
+      // signed-out visitor that "the Feed could not be loaded" forever, about a
+      // Feed there is nothing to load: the banner is not gated on auth, so a
+      // read that failed while signed in outlived the session that issued it.
       setPosts([]);
       setThreads(new Map());
+      setPeople(new Map());
+      setLoadFailed(false);
       return;
     }
     const supabase = getBrowserSupabase();
     if (supabase === null) return;
 
-    // An account switch mid-flight must not land another account's Feed.
+    // An account switch mid-flight must not land another account's Feed, and a
+    // superseded refresh must not land its own account's older one.
     const epoch = getCacheEpoch();
+    const stale = (): boolean => seq !== requestSeq.current || getCacheEpoch() !== epoch;
+
     const loaded = await fetchFeedPosts(supabase);
-    if (getCacheEpoch() !== epoch) return;
+    if (stale()) return;
 
     if (!loaded.ok) {
       // "a failed circle read must render an honest error, never an empty ready
@@ -101,7 +125,7 @@ export default function FeedSection({
 
     const ids = loaded.value.map((post) => post.id);
     const comments = await fetchFeedComments(supabase, ids);
-    if (getCacheEpoch() !== epoch) return;
+    if (stale()) return;
     // A FAILED COMMENT READ IS NOT AN EMPTY THREAD. Substituting an empty map
     // here turned an outage into "No replies yet." — the same false ready state
     // the posts branch above refuses, one read further down, and it also
@@ -135,8 +159,15 @@ export default function FeedSection({
       : [];
     const taggedIds = loaded.value.flatMap((post) => post.tagIds);
     const named = await fetchFeedAuthors(supabase, [...commenterIds, ...taggedIds]);
-    if (getCacheEpoch() !== epoch) return;
-    setPeople(named);
+    if (stale()) return;
+    // A FAILED COMMENT READ MUST NOT RENAME THE THREADS IT LEFT ON SCREEN. With
+    // no commenter ids to ask for, `named` covers only tagged people, so
+    // REPLACING the map stripped the byline off every retained reply and the
+    // thread we deliberately kept re-rendered as a wall of "Someone" — a
+    // different lie from the empty thread the branch above refuses, in the same
+    // place. A successful read already names everyone on screen, so it replaces;
+    // a failed one merges, and the newly-read names still win.
+    setPeople((prev) => (comments.ok ? named : new Map([...prev, ...named])));
   }, [viewerId]);
 
   useEffect(() => {
@@ -300,6 +331,20 @@ function FeedPostCard({
             {post.tagIds
               .map((id) => authors.get(id)?.displayName ?? authors.get(id)?.handle ?? 'Someone')
               .join(', ')}
+          </p>
+        ) : null}
+        {/* "NO TAGS" AND "WE COULD NOT READ THE TAGS" ARE DIFFERENT ANSWERS, and
+            `FeedPostView.tagsComplete` exists precisely to keep them apart. It
+            was never read here, so a failed `feed_post_tags` query rendered as a
+            confidently untagged post — the tagged person losing their chip and
+            the consent control behind it, with nothing on screen saying why. */}
+        {!post.tagsComplete ? (
+          <p
+            data-testid="feed-post-tags-unavailable"
+            role="status"
+            className="text-[11px] text-muted mt-1"
+          >
+            Tags could not be loaded, so this post may have more.
           </p>
         ) : null}
 
