@@ -87,6 +87,16 @@ export type GroupInviteOutcome = {
   invited: boolean;
 };
 
+/** One selectable plan from {@link fetchInvitableNightOuts}. */
+export type InvitableNightOut = {
+  nightOutId: string;
+  night: string;
+  title: string | null;
+  status: string;
+  /** 'owner' | 'member' — shown so a host can tell their own plan apart. */
+  myRole: string;
+};
+
 function isUuid(value: string | null | undefined): value is string {
   return typeof value === 'string' && UUID_RE.test(value);
 }
@@ -643,6 +653,60 @@ export async function inviteNightOutMember(
     }
 
     return { ok: true, value: data === true };
+  } catch {
+    return mediaUnavailable();
+  }
+}
+
+/**
+ * The plans this caller may invite a group to, for V8-R-GRP-003's picker.
+ *
+ * NOT `get_my_night_outs`, and the difference is the whole point. That function
+ * was narrowed by 0053 to invitations RECEIVED — `n.owner_id <> auth.uid()` —
+ * so it hides the plans the caller hosts, which are the ones a member most
+ * often invites a group to. It also returns decided and past plans that
+ * `invite_to_night_out` refuses. Offering that list would hide the useful
+ * entries and advertise failing ones.
+ *
+ * `get_my_invitable_night_outs` is defined in this lane's own 0067 and carries
+ * the invite door's exact predicate, so every row it returns is a plan the
+ * invite will accept.
+ *
+ * FAILS CLOSED AS A FAILURE, never as an empty list — the same rule as
+ * {@link fetchMyGroups}. "You have no plans" and "your plans could not be
+ * loaded" must never render identically, because the first invites the member
+ * to go create one they already have.
+ */
+export async function fetchInvitableNightOuts(
+  client: SupabaseClient | null,
+): Promise<MediaResult<InvitableNightOut[]>> {
+  if (client === null) return mediaUnavailable();
+
+  try {
+    const { data, error } = await client.rpc('get_my_invitable_night_outs');
+
+    if (error) {
+      return mediaFailure('failed', 'Your night out plans could not be loaded.');
+    }
+
+    const rows = (data ?? []) as {
+      night_out_id: string;
+      night: string;
+      title: string | null;
+      status: string;
+      my_role: string;
+    }[];
+
+    return {
+      ok: true,
+      value: rows.map((row) => ({
+        nightOutId: row.night_out_id,
+        night: row.night,
+        title: row.title ?? null,
+        status: row.status,
+        myRole: row.my_role,
+      })),
+    };
   } catch {
     return mediaUnavailable();
   }

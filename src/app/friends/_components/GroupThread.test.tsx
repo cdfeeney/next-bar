@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import GroupThread from './GroupThread';
@@ -23,6 +23,8 @@ vi.mock('@/lib/groups.server', () => ({
   sendGroupMessage: vi.fn(),
   deleteGroupMessage: vi.fn(),
   inviteGroupToNightOut: vi.fn(),
+  inviteNightOutMember: vi.fn(),
+  fetchInvitableNightOuts: vi.fn(),
   MAX_GROUP_MESSAGE_LENGTH: 2000,
   MAX_GROUP_NAME_LENGTH: 60,
   GROUP_THREAD_PAGE: 200,
@@ -58,6 +60,7 @@ beforeEach(() => {
   vi.mocked(groups.markGroupRead).mockResolvedValue({ ok: true } as never);
   vi.mocked(groups.fetchGroupMembers).mockResolvedValue({ ok: true, value: ADMIN_ROSTER } as never);
   vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: [] } as never);
+  vi.mocked(groups.fetchInvitableNightOuts).mockResolvedValue({ ok: true, value: [] } as never);
 });
 
 describe('a failed thread load does not clear the unread badge (round-1 finding 4)', () => {
@@ -141,6 +144,12 @@ describe('partial Night Out invites report per person (round-1 finding 2)', () =
         { profileId: 'other', invited: false },
       ],
     } as never);
+    // ROUND 5 (X4): the plan control is now a PICKER, so this test has to have a plan to pick.
+    // It used to type a raw uuid into a text box, which is the defect X4 closes.
+    vi.mocked(groups.fetchInvitableNightOuts).mockResolvedValue({
+      ok: true,
+      value: [{ nightOutId: 'plan-1', night: '2026-09-04', title: 'The plan', status: 'open', myRole: 'owner' }],
+    } as never);
 
     render(<GroupThread {...props()} />);
     const { fireEvent } = await import('@testing-library/react');
@@ -203,5 +212,81 @@ describe('round-5: the watermark must satisfy BOTH invariants', () => {
     );
     render(<GroupThread {...props({ unreadCount: 2 })} />);
     await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
+  });
+});
+
+
+describe('round 5, X4: the night out plan is PICKED, not typed', () => {
+  const PLANS = [
+    { nightOutId: 'plan-a', night: '2026-09-04', title: 'Sam-s birthday', status: 'open', myRole: 'owner' },
+    { nightOutId: 'plan-b', night: '2026-09-11', title: null, status: 'draft', myRole: 'member' },
+  ];
+
+  it('offers the viewer-s plans as options rather than asking for a uuid', async () => {
+    // The defect this closes: the control was a text input placeheld "Night out id". A uuid is
+    // not a choice a person can make, so the requirement-s invite surface was unusable by the
+    // person it is for.
+    vi.mocked(groups.fetchInvitableNightOuts).mockResolvedValue({ ok: true, value: PLANS } as never);
+
+    render(<GroupThread {...props()} />);
+
+    const picker = await screen.findByTestId('group-invite-plan');
+    expect(picker.tagName).toBe('SELECT');
+    // Titled plan by title; untitled plan falls back to its date.
+    expect(screen.getByRole('option', { name: 'Sam-s birthday (yours)' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: '2026-09-11' })).toBeTruthy();
+  });
+
+  it('invites the SELECTED plan, not whatever was typed', async () => {
+    vi.mocked(groups.fetchInvitableNightOuts).mockResolvedValue({ ok: true, value: PLANS } as never);
+    vi.mocked(groups.inviteGroupToNightOut).mockResolvedValue(
+      { ok: true, value: [{ profileId: 'other', invited: true }] } as never,
+    );
+
+    render(<GroupThread {...props()} />);
+    const picker = await screen.findByTestId('group-invite-plan');
+    fireEvent.change(picker, { target: { value: 'plan-b' } });
+    fireEvent.click(screen.getByTestId('group-invite-send'));
+
+    await waitFor(() =>
+      expect(groups.inviteGroupToNightOut).toHaveBeenCalledWith({}, 'plan-b', 'group-1'),
+    );
+  });
+
+  it('distinguishes a FAILED plans read from having no plans', async () => {
+    // The collapse this refuses: "you have no plans" sends someone off to create a plan they
+    // already have. fetchMyGroups and the feed both refuse the same collapse by name.
+    vi.mocked(groups.fetchInvitableNightOuts).mockResolvedValue(
+      { ok: false, message: 'Your night out plans could not be loaded.' } as never,
+    );
+
+    render(<GroupThread {...props()} />);
+
+    await screen.findByTestId('group-invite-plans-failed');
+    expect(screen.queryByTestId('group-invite-plans-empty')).toBeNull();
+    expect(screen.queryByTestId('group-invite-plan')).toBeNull();
+  });
+
+  it('says so plainly when there are genuinely no invitable plans', async () => {
+    vi.mocked(groups.fetchInvitableNightOuts).mockResolvedValue({ ok: true, value: [] } as never);
+
+    render(<GroupThread {...props()} />);
+
+    await screen.findByTestId('group-invite-plans-empty');
+    expect(screen.queryByTestId('group-invite-plans-failed')).toBeNull();
+  });
+
+  it('a plans read that fails does NOT blank the conversation', async () => {
+    // The plans list is secondary content. Round 4 taught this lane the cost of one failure
+    // taking down a surface that loaded fine.
+    vi.mocked(groups.fetchInvitableNightOuts).mockResolvedValue(
+      { ok: false, message: 'nope' } as never,
+    );
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: [] } as never);
+
+    render(<GroupThread {...props()} />);
+
+    await screen.findByTestId('group-invite-plans-failed');
+    expect(screen.getByTestId('group-invite')).toBeTruthy();
   });
 });

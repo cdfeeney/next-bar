@@ -362,3 +362,36 @@ describe('round-5: the Resend carries its group', () => {
     expect(src).toMatch(/p_group:\s*groupId/);
   });
 });
+
+describe('round 5, X4: the invite picker offers exactly what the door accepts', () => {
+  // The divergence this pins. `get_my_night_outs` already exists and was the obvious function to
+  // wrap, but 0053 narrowed it to invitations RECEIVED — `n.owner_id <> auth.uid()`, commented
+  // "invitations, not your own plans" — so it HIDES the plans the caller hosts, which are the ones
+  // a group is most often invited to. It also returns decided and past plans that
+  // `invite_to_night_out` refuses. A picker built on it would hide the useful entries and offer
+  // failing ones. Same shape as the EC-03 rule: the list a surface OFFERS and the check the door
+  // APPLIES must agree.
+  const body = code('get_my_invitable_night_outs');
+
+  it('requires an ACCEPTED membership row, which is what night_out_role means', () => {
+    expect(body).toMatch(/invite_status\s*=\s*'accepted'/);
+    expect(body).toMatch(/m\.user_id\s*=\s*auth\.uid\(\)/);
+  });
+
+  it("admits only the statuses the invite door admits — 'draft' and 'open'", () => {
+    expect(body).toMatch(/status\s+in\s*\(\s*'draft'\s*,\s*'open'\s*\)/);
+  });
+
+  it('does NOT exclude plans the caller owns — that exclusion is the whole defect', () => {
+    expect(body).not.toMatch(/owner_id\s*<>\s*auth\.uid\(\)/);
+  });
+
+  it('is readable by authenticated callers and nobody else', () => {
+    expect(SQL).toMatch(
+      /revoke all on function public\.get_my_invitable_night_outs\(\) from public, anon;/,
+    );
+    expect(SQL).toMatch(
+      /grant execute on function public\.get_my_invitable_night_outs\(\) to authenticated;/,
+    );
+  });
+});

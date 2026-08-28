@@ -1757,6 +1757,61 @@ $$;
 comment on function public.get_my_night_out_invitation_notifications() is
   'V8-R-GRP-008. The caller''s own Night Out invitation notifications. Cancelled plans are excluded, matching get_my_night_outs.';
 
+-- ---------------------------------------------------------------------------
+-- get_my_invitable_night_outs: the plans this caller may actually invite TO.
+--
+-- V8-R-GRP-003 needs a PICKER, and the group-invite surface previously made the
+-- member type a raw plan uuid into a text box. A uuid is not a choice a person
+-- can make.
+--
+-- WHY NOT `get_my_night_outs()`. That function exists and is the obvious reach,
+-- and it is the wrong set twice over. 0053 deliberately narrowed it to
+-- INVITATIONS -- `n.owner_id <> auth.uid()`, commented "invitations, not your
+-- own plans" -- so the plans you HOST, the ones a member most often invites a
+-- group to, are exactly the ones it hides. It also returns `decided` and past
+-- plans, which `invite_to_night_out` refuses. Wrapping it would have offered a
+-- list whose most useful entries were missing and whose visible entries could
+-- fail.
+--
+-- THIS PREDICATE IS THE INVITE DOOR'S PREDICATE, deliberately identical. The
+-- door admits when `night_out_role(id) is not null` -- an ACCEPTED member row,
+-- owner rows being created accepted -- and the plan's status is 'draft' or
+-- 'open'. The member join below is what `night_out_role` does, inlined for one
+-- query instead of one call per row. Same shape as the EC-03 rule one layer
+-- out: the list a surface OFFERS and the check the door APPLIES must agree, or
+-- the UI advertises failures.
+--
+-- No date filter, for that same reason. Past nights whose status is still open
+-- are invitable, and hiding them here while the door accepts them would be the
+-- divergence this comment exists to prevent.
+create or replace function public.get_my_invitable_night_outs()
+returns table (
+  night_out_id uuid,
+  night        date,
+  title        text,
+  status       text,
+  my_role      text
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select n.id, n.night, n.title, n.status, m.role::text
+    from public.night_out_members m
+    join public.night_outs n on n.id = m.night_out_id
+   where m.user_id = auth.uid()
+     and m.invite_status = 'accepted'
+     and n.status in ('draft', 'open')
+   order by n.night asc, n.id desc;
+$$;
+
+comment on function public.get_my_invitable_night_outs() is
+  'V8-R-GRP-003. The caller''s Night Out plans that invite_to_night_out would accept: accepted membership (owner included) and status draft or open. Deliberately NOT get_my_night_outs, which excludes plans the caller owns and includes decided and past ones.';
+
+revoke all on function public.get_my_invitable_night_outs() from public, anon;
+grant execute on function public.get_my_invitable_night_outs() to authenticated;
+
 revoke all on function public.get_my_night_out_invitation_notifications() from public, anon;
 grant execute on function public.get_my_night_out_invitation_notifications() to authenticated;
 

@@ -31,6 +31,7 @@ import {
   deleteGroupMessage,
   fetchGroupMembers,
   fetchGroupMessages,
+  fetchInvitableNightOuts,
   inviteGroupToNightOut,
   inviteNightOutMember,
   leaveGroup,
@@ -43,6 +44,7 @@ import {
   MAX_GROUP_NAME_LENGTH,
   type GroupInviteOutcome,
   type GroupMember,
+  type InvitableNightOut,
   type GroupMessage,
 } from '@/lib/groups.server';
 import { reportContent } from '@/lib/moderation/reports';
@@ -102,6 +104,14 @@ export default function GroupThread({
   const [inviteOutcomes, setInviteOutcomes] = useState<GroupInviteOutcome[] | null>(null);
   // The plan those outcomes belong to — a Resend has to name the same plan the invite used.
   const [invitePlanId, setInvitePlanId] = useState('');
+  // The plans this viewer may invite to (V8-R-GRP-003's picker).
+  //
+  // ITS OWN STATE, NOT PART OF `load()`. The thread is the primary content and a plans read that
+  // fails must not blank a conversation that loaded fine — so this never touches `status`.
+  // `null` is "not loaded yet", `[]` is "genuinely none", and `plansFailed` is the third case the
+  // other two must not be allowed to impersonate.
+  const [plans, setPlans] = useState<InvitableNightOut[] | null>(null);
+  const [plansFailed, setPlansFailed] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const viewerIsAdmin = useMemo(
@@ -137,6 +147,24 @@ export default function GroupThread({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Load the invitable plans once per viewer/client. Separate from `load()` on purpose: see the
+  // state declaration above. A failure here degrades the invite control alone.
+  useEffect(() => {
+    let live = true;
+    void fetchInvitableNightOuts(client).then((result) => {
+      if (!live) return;
+      if (!result.ok) {
+        setPlansFailed(true);
+        return;
+      }
+      setPlansFailed(false);
+      setPlans(result.value);
+    });
+    return () => {
+      live = false;
+    };
+  }, [client]);
 
   // V8-R-GRP-008. Opening the thread IS reading it — but only once it has actually BEEN read.
   //
@@ -426,6 +454,8 @@ export default function GroupThread({
             busy={busy}
             memberCount={members.length}
             members={members}
+            plans={plans}
+            plansFailed={plansFailed}
             outcomes={inviteOutcomes}
             onInvite={(nightOutId) => {
               setInvitePlanId(nightOutId);
@@ -813,15 +843,34 @@ function Administration({
  * Out. ANY member, not only the administrator, so this sits outside
  * {@link Administration} deliberately.
  *
- * The plan is named by its id rather than picked from a list: choosing among
- * the caller's plans is the Night Out surface's job and that surface is not this
- * lane's to write. The membership reuse — the part this requirement is about —
- * is complete.
+ * ROUND 5: THE PLAN IS PICKED, NOT TYPED. This used to be a text box asking for a
+ * "Night out id", on the reasoning that choosing among the caller's plans belonged to the Night
+ * Out surface. A raw uuid is not a choice a person can make, and the requirement is a group-invite
+ * control, so the choice belongs here.
+ *
+ * The list comes from `get_my_invitable_night_outs`, defined in this lane's own 0067, which
+ * carries the invite door's exact predicate — accepted membership, status draft or open. NOT
+ * `get_my_night_outs`: 0053 narrowed that one to invitations RECEIVED, so it hides the plans the
+ * viewer HOSTS, which are the ones a group most often gets invited to.
  */
+/**
+ * Name a plan the way its host would recognise it: its title if it has one, otherwise its date.
+ * A plan the viewer owns is marked, because "my Friday" and "someone else's Friday" are otherwise
+ * the same row.
+ */
+function planLabel(plan: InvitableNightOut): string {
+  const name = plan.title !== null && plan.title.trim().length > 0
+    ? plan.title
+    : plan.night;
+  return plan.myRole === 'owner' ? `${name} (yours)` : name;
+}
+
 function NightOutInvite({
   busy,
   memberCount,
   members,
+  plans,
+  plansFailed,
   outcomes,
   onInvite,
   onResend,
@@ -829,6 +878,10 @@ function NightOutInvite({
   busy: boolean;
   memberCount: number;
   members: readonly GroupMember[];
+  /** Plans the viewer may invite to; null while loading, [] when there genuinely are none. */
+  plans: readonly InvitableNightOut[] | null;
+  /** True when the plans read FAILED — which is not the same as having none. */
+  plansFailed: boolean;
   /** Per-person results of the last whole-group invite, or null if none has run. */
   outcomes: readonly GroupInviteOutcome[] | null;
   onInvite: (nightOutId: string) => void;
@@ -860,14 +913,39 @@ function NightOutInvite({
         Invites the {memberCount === 1 ? 'member' : `${memberCount} members`} in
         this group right now. The group itself is unchanged.
       </p>
-      <input
-        id="group-invite-plan"
-        data-testid="group-invite-plan"
-        value={planId}
-        onChange={(event) => setPlanId(event.target.value)}
-        placeholder="Night out id"
-        className="w-full bg-bg border border-border rounded-2xl px-4 py-3 text-base min-h-[44px]"
-      />
+      {/*
+        THREE STATES, RENDERED AS THREE. A failed read and an empty list are different facts:
+        "you have no plans" sends someone off to create a plan they already have, which is the
+        exact collapse fetchMyGroups and the feed both refuse by name.
+      */}
+      {plansFailed ? (
+        <p data-testid="group-invite-plans-failed" className="text-xs text-muted">
+          Your night out plans could not be loaded, so there is nothing to pick from yet.
+        </p>
+      ) : plans === null ? (
+        <p data-testid="group-invite-plans-loading" className="text-xs text-muted">
+          Loading your night out plans…
+        </p>
+      ) : plans.length === 0 ? (
+        <p data-testid="group-invite-plans-empty" className="text-xs text-muted">
+          You have no open night out plans to invite this group to.
+        </p>
+      ) : (
+        <select
+          id="group-invite-plan"
+          data-testid="group-invite-plan"
+          value={planId}
+          onChange={(event) => setPlanId(event.target.value)}
+          className="w-full bg-bg border border-border rounded-2xl px-4 py-3 text-base min-h-[44px]"
+        >
+          <option value="">Pick a night out…</option>
+          {plans.map((plan) => (
+            <option key={plan.nightOutId} value={plan.nightOutId}>
+              {planLabel(plan)}
+            </option>
+          ))}
+        </select>
+      )}
       <button
         type="button"
         onClick={() => onInvite(planId.trim())}
