@@ -276,6 +276,15 @@ describe('round-3, second pass', () => {
     expect(body).toMatch(/if p_through is null then/);
   });
 
+  // The two invariants that survive round 8's deletion of the guard, and the only ones a mocked
+  // client cannot reach: the watermark never moves BACKWARDS (two tabs racing) and never lands in
+  // the FUTURE (a skewed clock or a hand-made call marking messages that do not exist yet).
+  it('the watermark write is clamped to now() and is monotonic', () => {
+    const body = code('mark_group_read');
+    expect(body).toMatch(/least\(p_through, now\(\)\)/);
+    expect(body).toMatch(/greatest\(public\.group_reads\.last_read_at, excluded\.last_read_at\)/);
+  });
+
   it('the client passes the newest loaded message as that watermark', () => {
     const src = readFileSync(path.join(__dirname, 'groups.server.ts'), 'utf8')
       .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');

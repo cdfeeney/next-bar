@@ -92,7 +92,7 @@ describe('a failed thread load does not clear the unread badge (round-1 finding 
     } as never);
     render(<GroupThread {...props()} />);
     await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
-    // Round 7: the window travels too — newest shown, then oldest shown.
+    // Round 8: the watermark is the ONLY argument — the window went with the guard.
     expect(groups.markGroupRead).toHaveBeenCalledWith(
       expect.anything(), 'group-1', '2026-08-02T00:00:00Z',
     );
