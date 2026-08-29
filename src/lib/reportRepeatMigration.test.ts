@@ -124,11 +124,24 @@ describe('0075 — the idempotent repeat report is not a liveness oracle', () =>
       .toContain("revoke all on function public.report_content_before_0075(text, text, text)");
   });
 
-  it('scopes the early return to the kinds this lane owns', () => {
+  it('takes the early return only for this lane kinds, an authenticated caller, and IN-BOUNDS input', () => {
     // Every other kind carries its own idempotency inside its own lane's
     // implementation. Answering for them out of this table would be the exact
     // overreach the delegation exists to prevent.
-    expect(SQL).toContain("if p_subject_kind in ('feed_post', 'comment') and auth.uid() is not null then");
+    //
+    // AND THE BOUNDS ARE PART OF THE CONDITION (round 2, MEDIUM, codex). `btrim`
+    // strips whitespace, so a reported uuid padded to 286 characters normalises
+    // straight onto the stored row; without these two terms the early return
+    // answered it and the delegate's length checks never ran, so the RPC stopped
+    // being bounded on exactly the path that skips the delegate. Whole condition
+    // pinned as one string: dropping any single term is the defect, and a
+    // per-term assertion would stay green while a sibling term was deleted.
+    expect(SQL).toContain(
+      "  if p_subject_kind in ('feed_post', 'comment')\n"
+      + "     and auth.uid() is not null\n"
+      + "     and char_length(p_subject_ref) <= 200\n"
+      + "     and (p_reason is null or char_length(p_reason) <= 1000) then",
+    );
   });
 
   it('keeps the function callable by exactly the role 0069 granted', () => {

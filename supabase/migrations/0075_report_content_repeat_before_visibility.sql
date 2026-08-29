@@ -116,13 +116,28 @@ begin
   -- is precisely the overreach the delegation exists to prevent. A NULL kind
   -- makes this predicate NULL, which is falsy, so it delegates.
   --
-  -- No input validation is repeated here and none is needed: a stored row is
-  -- proof the ref was accepted when it was written, the lookup normalises the
-  -- ref exactly as the insert does, and anything that does NOT match a row falls
-  -- through to the delegate, which validates it as it always has. A caller who
-  -- is not authenticated matches no row either, because `reporter_id` is never
-  -- null — so the delegate still raises 28000.
-  if p_subject_kind in ('feed_post', 'comment') and auth.uid() is not null then
+  -- THE BOUNDS ARE PART OF THE CONDITION, and leaving them out was a real hole
+  -- (round 2, MEDIUM, codex). "A stored row proves the ref was accepted when it
+  -- was written" is true of the NORMALISED ref and says nothing about the
+  -- argument in hand: `btrim` strips whitespace, so 250 spaces followed by a
+  -- reported uuid is a 286-character argument that normalises onto the stored
+  -- row. The early return then answered it and the delegate's `> 200` check —
+  -- the one that makes this a bounded RPC — never ran. Same for an over-long
+  -- reason on a repeat.
+  --
+  -- Stated as a CONDITION rather than a raise of its own: an argument outside
+  -- the bounds simply does not take this path, and the delegate rejects it with
+  -- the message and SQLSTATE it always has. Restating the raise here would be a
+  -- second copy of a rule this file is trying not to own.
+  --
+  -- What genuinely does NOT need repeating: the uuid SHAPE check and the
+  -- audience checks. A ref of the wrong shape matches no stored row, and an
+  -- unauthenticated caller matches none either because `reporter_id` is never
+  -- null — both fall through and the delegate answers as before.
+  if p_subject_kind in ('feed_post', 'comment')
+     and auth.uid() is not null
+     and char_length(p_subject_ref) <= 200
+     and (p_reason is null or char_length(p_reason) <= 1000) then
     select cr.id
       into v_id
       from public.content_reports cr
