@@ -49,6 +49,23 @@ function sqlShape(fragment: string): string {
   return fragment.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Assert a `language sql` function ENDS with `expected`, not merely contains it.
+ *
+ * Round 10 (MEDIUM, codex; carried to g-7050b7b7): `toContain` over a whole
+ * normalised body is SATISFIABLE BY APPENDING. A `language sql` function returns
+ * its FINAL query, so a second `select` written after the guarded one leaves the
+ * guard in the file, the assertion green, and the guard no longer the answer.
+ * Pinning the tail is what makes the guarded select the statement that runs.
+ *
+ * Compared as a slice rather than with `endsWith` so a failure prints the two
+ * strings side by side; a boolean here says only that something moved.
+ */
+function expectTerminalSelect(body: string, expected: string, what: string): void {
+  expect(body.slice(-expected.length), `${what} is not the TERMINAL statement of the body`)
+    .toBe(expected);
+}
+
 /** The body of one `create or replace function`, by qualified name. */
 function functionBody(signature: string): string {
   const start = SQL.indexOf(`create or replace function ${signature}`);
@@ -113,15 +130,23 @@ describe('0069 — one definition of the Feed audience gate', () => {
 
   it('the hide is added by can_view_feed_post, on top of the same gate', () => {
     // The two-argument form is defined first, so this signature resolves to it.
-    expect(sqlShape(functionBody('public.can_view_feed_post('))).toContain(
+    // TERMINAL, for the reason on `expectTerminalSelect`: these two are the same
+    // satisfiable shape the party guard was found in, over the gate that ADDS the
+    // hide. Fixing only the assertion the finding named would leave the identical
+    // hole one screen above it.
+    expectTerminalSelect(
+      sqlShape(functionBody('public.can_view_feed_post(')),
       'select public.feed_post_visible_to(p_viewer, p_post_id)'
       + ' and not public.feed_post_reported_by(p_viewer, p_post_id);',
+      'the hide-adding gate',
     );
   });
 
   it('the caller-scoped spelling is the two-argument one with auth.uid(), so the overload cannot mean two things', () => {
-    expect(sqlShape(functionBody('public.can_view_feed_post(p_post_id uuid)'))).toContain(
+    expectTerminalSelect(
+      sqlShape(functionBody('public.can_view_feed_post(p_post_id uuid)')),
       'select public.can_view_feed_post(auth.uid(), p_post_id);',
+      'the caller-scoped overload',
     );
   });
 
@@ -188,7 +213,8 @@ describe('0069 — one definition of the Feed audience gate', () => {
     // Round 9 (MEDIUM, codex): none of this was pinned at all — the guard could be
     // deleted outright while every other assertion stayed green. Whole normalised
     // body, so a widened or removed term cannot slip past.
-    expect(sqlShape(functionBody('public.feed_post_visible_to_party('))).toContain(
+    expectTerminalSelect(
+      sqlShape(functionBody('public.feed_post_visible_to_party(')),
       'select ( auth.uid() is not null'
       + ' and p_post_id is not null'
       + ' and p_profile_id is not null'
@@ -197,6 +223,7 @@ describe('0069 — one definition of the Feed audience gate', () => {
       + ' and exists ( select 1 from public.feed_post_tags t'
       + ' where t.post_id = p_post_id and t.profile_id = auth.uid() ) ) ) )'
       + ' and public.feed_post_visible_to(p_profile_id, p_post_id);',
+      'the party guard',
     );
   });
 

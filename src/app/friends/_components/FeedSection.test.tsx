@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -586,6 +586,118 @@ describe('FeedComments — a confirmed write is not undone by a failed read', ()
         'a comment one account wrote was staged into another account’s Feed',
       ).toBeNull(),
     );
+  });
+
+  test('a late write from the previous account does not erase the current account’s overlay', async () => {
+    const user = userEvent.setup();
+    // Round 10 (MEDIUM, codex; carried to g-7050b7b7). THE OTHER HALF OF THE TEST
+    // ABOVE, and a regression the round-9 fix introduced. Refusing to READ a
+    // foreign overlay made the late write invisible; it did not stop it RUNNING.
+    // It still reached setPending, still stamped the overlay with the account
+    // that had gone — and so threw away the confirmed writes of the account now
+    // on screen. B's reply was accepted by the server, shown, and then vanished
+    // because A's write happened to land afterwards.
+    //
+    // The case above cannot catch this: B has no overlay there, so there is
+    // nothing for the late write to destroy.
+    const heldA = deferred<Result<FeedComment>>();
+    addResult = heldA.promise;
+    const view = render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    await user.type(screen.getByTestId('feed-comment-input'), 'account A words');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+
+    // Account B signs in while A's write is still open.
+    viewer = OTHER_VIEWER;
+    epoch = 2;
+    view.rerender(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    // B writes a reply OF ITS OWN, which the server confirms. The follow-up read
+    // fails for the same load-bearing reason as above: a successful one calls
+    // setPending(EMPTY_PENDING) and supersedes the overlay, and the overlay is
+    // the thing under test.
+    commentPlan = [FAILED];
+    addResult = {
+      ok: true,
+      value: makeComment({ id: 'b-reply', body: 'account B words', authorId: OTHER_VIEWER }),
+    };
+    await user.click(await screen.findByTestId('feed-reply'));
+    await user.type(screen.getByTestId('feed-comment-input'), 'account B words');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+    expect(
+      await screen.findByText('account B words'),
+      'the account on screen never saw its own confirmed reply, so the case proves nothing',
+    ).toBeTruthy();
+
+    // NOW A's write lands, into B's component, on top of B's overlay.
+    //
+    // NOT `waitFor`, AND THAT IS THE WHOLE DIFFERENCE BETWEEN THIS CASE AND A
+    // VACUOUS ONE. waitFor is satisfied by its FIRST passing attempt, so a "this
+    // must still be here" assertion under it is green before the write it is
+    // about has landed — the mutation probe found this exact case passing with
+    // both guards deleted. `act` flushes the continuation instead of racing it:
+    // one tick for the `await addFeedComment(...)` inside FeedComments to reach
+    // `onChanged`, a second for anything that queues, and act() commits the
+    // resulting render before it returns.
+    await act(async () => {
+      heldA.resolve({ ok: true, value: makeComment({ id: 'late', body: 'account A words', authorId: VIEWER }) });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.queryByText('account B words'),
+      'a late write from the previous account erased the current account’s confirmed reply',
+    ).toBeTruthy();
+    expect(
+      screen.queryByText('account A words'),
+      'the previous account’s words were staged into this one’s Feed',
+    ).toBeNull();
+  });
+
+  test('a late write from the previous account does not lock the next one out of its own overlay', async () => {
+    const user = userEvent.setup();
+    // THE FAILURE MODE OF THE FIX ITSELF, and the reason the fix is two terms
+    // rather than the one the finding named. "Never overwrite an overlay somebody
+    // else owns" alone is not safe: the late write reaches an overlay the
+    // account-switch reset has just emptied, `null` is claimable, so it takes
+    // ownership for the account that has GONE — and the refusal then locks the
+    // account actually on screen out of its own overlay for good. Dropping the
+    // stale write on the epoch is what keeps that state from existing.
+    const heldA = deferred<Result<FeedComment>>();
+    addResult = heldA.promise;
+    const view = render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    await user.type(screen.getByTestId('feed-comment-input'), 'account A words');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+
+    viewer = OTHER_VIEWER;
+    epoch = 2;
+    view.rerender(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    // A's write lands FIRST this time, onto the empty overlay the reset left.
+    commentPlan = [FAILED];
+    await act(async () => {
+      heldA.resolve({ ok: true, value: makeComment({ id: 'late', body: 'account A words', authorId: VIEWER }) });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Only now does B write. Its own confirmed reply has to reach the screen.
+    addResult = {
+      ok: true,
+      value: makeComment({ id: 'b-reply', body: 'account B words', authorId: OTHER_VIEWER }),
+    };
+    await user.click(await screen.findByTestId('feed-reply'));
+    await user.type(screen.getByTestId('feed-comment-input'), 'account B words');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+
+    expect(
+      await screen.findByText('account B words'),
+      'the account on screen was locked out of its own overlay by the previous account’s late write',
+    ).toBeTruthy();
   });
 
   test('a reply the server confirmed added is not lost when the follow-up read fails', async () => {

@@ -204,6 +204,21 @@ export default function FeedSection({
     setLoadFailed(false);
   }
 
+  /**
+   * The account generation THIS render belongs to.
+   *
+   * Read from the module counter rather than held in a ref, for the reason
+   * `paintedFor` is state: a ref written during render survives a render React
+   * abandons. This is a plain read of a value React does not own, captured into
+   * the closures this render creates, so an abandoned render captures nothing.
+   *
+   * It is what tells a write handler whether the account it was created for is
+   * still the account on screen. `viewerId` alone cannot: the handler closes over
+   * the ISSUING account, and comparing that with `pending.owner` says only that
+   * the two differ, not which of them is current.
+   */
+  const renderEpoch = getCacheEpoch();
+
   const refresh = useCallback(async () => {
     const seq = (requestSeq.current += 1);
 
@@ -366,15 +381,35 @@ export default function FeedSection({
                 onChanged={(confirmed) => {
                   // Recorded BEFORE the re-read is issued, so a read that fails
                   // cannot undo a write the server already accepted.
-                  if (confirmed !== undefined) {
+                  // AND ONLY WHILE THE ACCOUNT THAT ISSUED IT IS STILL THE ONE ON
+                  // SCREEN. Refusing to READ a foreign overlay made the late write
+                  // invisible; it did not make it inert. It still ran, still
+                  // claimed the overlay for the account that had gone, and so
+                  // ERASED the confirmed writes of the account now on screen — a
+                  // reply the server had accepted vanished from B's thread because
+                  // A's write arrived late. Dropping the stale write outright is
+                  // the whole of the fix: it was already unreadable, so nothing is
+                  // lost, and B's overlay is left exactly as it was.
+                  if (confirmed !== undefined && getCacheEpoch() === renderEpoch) {
                     setPending((prev) => {
                       // `viewerId` here is the one this render closed over, which
                       // is the account that ISSUED the write — not necessarily the
                       // one on screen when it returns. Stamping it is what lets the
                       // reader above refuse an overlay that is not theirs.
                       //
-                      // And never accumulate onto somebody else's overlay: if the
-                      // account changed, `prev` belongs to them, so start clean.
+                      // NEVER OVERWRITE AN OVERLAY SOMEBODY ELSE OWNS. The epoch
+                      // check above is what makes this safe to state as a refusal
+                      // rather than a reset: without it, a stale write reaching an
+                      // empty overlay would CLAIM it for the departed account, and
+                      // this line would then lock the account actually on screen
+                      // out of its own overlay for good. `null` is nobody's and is
+                      // claimable; a live foreign owner is not.
+                      if (prev.owner !== null && prev.owner !== viewerId) return prev;
+                      // SUBSUMED BY THE LINE ABOVE, and kept deliberately: the only
+                      // owner that now reaches here other than `viewerId` is `null`,
+                      // whose overlay is EMPTY_PENDING already. It costs nothing and
+                      // it is the term that stays correct if a later change ever
+                      // produces a null-owner overlay with contents in it.
                       const base = prev.owner === viewerId ? prev : EMPTY_PENDING;
                       return {
                         owner: viewerId,
