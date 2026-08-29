@@ -103,8 +103,31 @@ describeLive('0067 groups — live RLS/RPC denials', () => {
     return ids;
   }
 
+  /**
+   * MUTUAL FRIENDSHIP, BOTH DIRECTIONS.
+   *
+   * ROUND-9 REVIEW, CLAUDE HIGH, CORROBORATED BY CODEX. `add_group_member` refuses anyone who is
+   * not a mutual friend of the administrator (0067:779, `is_mutual_friend`), and the round-9
+   * fixture created identities and no follow edges at all — so six of the nine tests would have
+   * raised 42501 during SETUP against a perfectly correct schema, and the suite written to close a
+   * three-round coverage finding could not have run. `storiesRls.live.test.ts` seeds exactly these
+   * edges for the same predicate.
+   *
+   * Written as the owner: `follows` carries its own RLS, and seeding a fixture is not the thing
+   * under test.
+   */
+  async function befriend(a: string, b: string): Promise<void> {
+    await db.query('RESET ROLE');
+    await db.query(
+      `insert into public.follows (follower_id, followee_id)
+       values ($1, $2), ($2, $1) on conflict do nothing`,
+      [a, b],
+    );
+  }
+
   /** A group owned by `admin`, with `others` added as ordinary members. */
   async function makeGroup(admin: string, others: string[] = []): Promise<string> {
+    for (const uid of others) await befriend(admin, uid);
     await asRole('authenticated', admin);
     const { rows } = await db.query('select public.create_group($1) as id', ['probe group']);
     const groupId = rows[0].id as string;
@@ -117,12 +140,45 @@ describeLive('0067 groups — live RLS/RPC denials', () => {
     return groupId;
   }
 
+  /**
+   * A probe that is EXPECTED to raise, wrapped in a SAVEPOINT.
+   *
+   * ROUND-9 REVIEW, both lanes, medium. Without the savepoint the first expected raise leaves the
+   * transaction aborted, so every later statement — the next two probes, the `RESET ROLE`, and the
+   * state assertions this suite exists for — comes back 25P02 instead of measuring anything. The
+   * test then fails against CORRECT code, and the two denials after the first are never exercised
+   * at all. `nightOutsRls.live.test.ts` wraps identical probes for exactly this reason.
+   */
   const refusal = async (sql: string, params: unknown[] = []): Promise<string | null> => {
+    await db.query('SAVEPOINT probe');
     try {
       await db.query(sql, params);
+      await db.query('RELEASE SAVEPOINT probe');
       return null;
     } catch (error) {
+      await db.query('ROLLBACK TO SAVEPOINT probe');
+      await db.query('RELEASE SAVEPOINT probe');
       return (error as { message: string }).message;
+    }
+  };
+
+  /**
+   * A read whose refusal may arrive either way: a hard `permission denied`, or a grant plus RLS
+   * returning zero rows. Both are refusals and 0067 does not promise which; what must never happen
+   * is rows coming back. Savepoint-wrapped for the same reason as {@link refusal} — and here the
+   * consequence was worse than a failure, because a bare catch returning `[]` made a 25P02 from an
+   * EARLIER probe look exactly like a successful denial.
+   */
+  const rowsOrNone = async (sql: string, params: unknown[] = []): Promise<unknown[]> => {
+    await db.query('SAVEPOINT probe');
+    try {
+      const { rows } = await db.query(sql, params);
+      await db.query('RELEASE SAVEPOINT probe');
+      return rows;
+    } catch {
+      await db.query('ROLLBACK TO SAVEPOINT probe');
+      await db.query('RELEASE SAVEPOINT probe');
+      return [];
     }
   };
 
@@ -191,21 +247,21 @@ describeLive('0067 groups — live RLS/RPC denials', () => {
 
       await asRole('authenticated', outsider);
       // Whether it raises or returns nothing, what must NOT happen is the message coming back.
-      const thread = await db
-        .query('select * from public.get_group_thread($1)', [groupId])
-        .catch(() => ({ rows: [] as unknown[] }));
-      expect(thread.rows, 'an outsider read a group thread').toHaveLength(0);
+      expect(
+        await rowsOrNone('select * from public.get_group_thread($1)', [groupId]),
+        'an outsider read a group thread',
+      ).toHaveLength(0);
 
-      const roster = await db
-        .query('select * from public.get_group_members($1)', [groupId])
-        .catch(() => ({ rows: [] as unknown[] }));
-      expect(roster.rows, 'an outsider read a group roster').toHaveLength(0);
+      expect(
+        await rowsOrNone('select * from public.get_group_members($1)', [groupId]),
+        'an outsider read a group roster',
+      ).toHaveLength(0);
 
       // And the base table is not a way around the RPC.
-      const direct = await db
-        .query('select * from public.group_messages where group_id = $1', [groupId])
-        .catch(() => ({ rows: [] as unknown[] }));
-      expect(direct.rows, 'RLS let an outsider read group_messages directly').toHaveLength(0);
+      expect(
+        await rowsOrNone('select * from public.group_messages where group_id = $1', [groupId]),
+        'RLS let an outsider read group_messages directly',
+      ).toHaveLength(0);
     });
   });
 

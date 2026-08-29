@@ -220,7 +220,13 @@ function GroupsSection({
 
     // V8-R-GRP-008's inclusion half. A FAILED read is its own state here too: an empty list would
     // say "nobody invited you" to someone whose invitations could not be loaded.
-    setInvites(notifications.ok ? notifications.value : []);
+    //
+    // UNREAD ONLY. `get_my_night_out_invitation_notifications` deliberately returns read rows as
+    // well — the record is durable and a history surface could want them — so filtering is the
+    // CALLER's job, and round 9 forgot to do it: dismissing wrote read_at, the row left the list
+    // optimistically, and the very next load put it straight back (round-9 review, Codex, medium).
+    // This is also what makes the two paths agree, rather than one hiding the other's mistake.
+    setInvites(notifications.ok ? notifications.value.filter((n) => n.readAt === null) : []);
     setInvitesFailed(!notifications.ok);
 
     if (!mine.ok) {

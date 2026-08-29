@@ -126,7 +126,12 @@ export type NightOutInvitationNotification = {
   title: string | null;
   /** The group the invitation came through, or null when it was a direct invite. */
   groupName: string | null;
-  invitedBy: string;
+  /**
+   * Null once the inviter deletes their account: `invited_by` is nullable with ON DELETE SET NULL
+   * (0067), so a non-null type here would be a lie the compiler enforces on every future consumer
+   * — the same seam `GroupMessage.senderId` already had to fix (round-9 review, Claude, medium).
+   */
+  invitedBy: string | null;
   createdAt: string;
   /** Null until the recipient has seen it. */
   readAt: string | null;
@@ -794,7 +799,7 @@ export async function fetchNightOutInvitationNotifications(
       night: string;
       title: string | null;
       group_name: string | null;
-      invited_by: string;
+      invited_by: string | null;
       created_at: string;
       read_at: string | null;
     }[];
@@ -807,7 +812,7 @@ export async function fetchNightOutInvitationNotifications(
         night: row.night,
         title: row.title ?? null,
         groupName: row.group_name ?? null,
-        invitedBy: row.invited_by,
+        invitedBy: row.invited_by ?? null,
         createdAt: row.created_at,
         readAt: row.read_at ?? null,
       })),

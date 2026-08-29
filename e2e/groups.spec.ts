@@ -352,6 +352,49 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await expect(page.getByTestId('group-invite-notification')).toHaveCount(0);
   });
 
+  test('an ALREADY-DISMISSED invitation does not come back on the next load (round 10)', async ({ page }) => {
+    // ROUND-9 REVIEW, CODEX, MEDIUM. get_my_night_out_invitation_notifications deliberately
+    // returns read rows too, so filtering is the caller's job — and round 9 did not do it. Got it
+    // wrote read_at, the row left optimistically, and the next load put it straight back. Two
+    // fixtures, one read and one not, so this cannot pass by rendering neither.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
+      invites: [
+        {
+          id: 7,
+          night_out_id: '44444444-4444-4444-8444-444444444444',
+          night: '2026-09-04',
+          title: 'already seen',
+          group_id: GROUP_ID,
+          group_name: 'Thursday Crew',
+          invited_by: OTHER_ID,
+          created_at: '2026-09-01T00:00:00Z',
+          read_at: '2026-09-02T00:00:00Z',
+        },
+        {
+          id: 8,
+          night_out_id: '55555555-5555-4555-8555-555555555555',
+          night: '2026-09-05',
+          title: 'still new',
+          group_id: null,
+          // The inviter deleted their account: invited_by is nullable with ON DELETE SET NULL, and
+          // a null here must render like any other invitation rather than breaking the row.
+          group_name: null,
+          invited_by: null,
+          created_at: '2026-09-03T00:00:00Z',
+          read_at: null,
+        },
+      ],
+    });
+    await page.goto('/friends');
+    await page.getByRole('button', { name: /groups & people/i }).click();
+
+    await expect(page.getByTestId('group-invite-notification')).toHaveCount(1);
+    await expect(page.getByTestId('group-invite-notification')).toContainText('still new');
+    await expect(page.getByTestId('group-invite-notifications')).not.toContainText('already seen');
+  });
+
   test('a FAILED invitation read says so rather than saying nobody invited you (round 9)', async ({ page }) => {
     // The same collapse fetchMyGroups and the plan picker each refuse: an empty list and an
     // unreachable backend must never render identically.
