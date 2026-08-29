@@ -172,16 +172,21 @@ export async function readCounts(identity: CertifiedIdentity): Promise<WhoamiRes
       const users = await readCount(client, 'select count(*)::int n from auth.users');
       const profiles = await readCount(client, 'select count(*)::int n from public.profiles');
       const bars = await readCount(client, 'select count(*)::int n from public.bars');
+      // THE HEAD AND THE COUNT. The head alone cannot tell a complete chain from one that
+      // stopped early and was later topped up: after B3 stalled at 0019 on 2026-08-28, only the
+      // count distinguished "the chain ran" from "the last file happens to be present".
       let ledger: string | null = null;
+      let ledgerRows: number | null = null;
       try {
         const r = await client.query(
           'select name from public.schema_migrations order by name desc limit 1',
         );
         ledger = (r.rows[0]?.name as string | undefined) ?? null;
       } catch { ledger = null; }
+      ledgerRows = await readCount(client, 'select count(*)::int n from public.schema_migrations');
       const show = (n: number | null) => (n === null ? 'none' : String(n));
       line += ` users=${show(users)} profiles=${show(profiles)} bars=${show(bars)}`
-        + ` ledger=${ledger ?? 'none'}`;
+        + ` ledger=${ledger ?? 'none'} migrations=${show(ledgerRows)}`;
     } finally {
       await client.end();
     }
