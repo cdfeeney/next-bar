@@ -481,6 +481,32 @@ describe('an abandoned apply stops writing (round-10 round 4, Codex)', () => {
     expect(setNightOutArea).toHaveBeenCalledWith(supabase, PLAN, 'East Village');
   });
 
+  /**
+   * Round-10 round 7, Codex. The Area is seeded from the bar pinned tonight and
+   * that read is asynchronous. Tap Start before it resolves and the area
+   * written is empty — correct, nothing was known — but when the read landed a
+   * moment later the row began displaying a neighbourhood the plan does not
+   * have, and then navigated. The row is pinned to what was actually sent.
+   */
+  test('the Area row stops following presence once the plan has its answer', async () => {
+    presence = null;
+    const view = render(<Harness />);
+    expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe('');
+
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutArea).not.toHaveBeenCalled();
+
+    // Presence resolves AFTER the plan already has its answer.
+    presence = { barId: 'attaboy' };
+    view.rerender(<Harness />);
+
+    expect(
+      (screen.getByLabelText(/^Area/) as HTMLInputElement).value,
+      'the row showed an area the plan was never given',
+    ).toBe('');
+  });
+
   test('an un-aborted apply still writes all three', async () => {
     const controller = new AbortController();
     render(<HarnessWithSignal signal={controller.signal} />);

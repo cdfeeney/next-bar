@@ -77,6 +77,38 @@ describe('the media window re-asks the server at its own boundary', () => {
     );
   });
 
+  /**
+   * ROUND-10 ROUND 7, Codex. A boundary this device thinks is still AHEAD used
+   * to be waited for exactly, which is only right when the two clocks agree. On
+   * a device running slow the SERVER crosses first and starts serving media,
+   * while the recap goes on hiding both controls for the whole skew because its
+   * own timer is not due yet. The behind case already had a floor; the approach
+   * now has a cap, so neither direction of skew can hide a boundary for longer
+   * than one extra read.
+   */
+  test('a boundary far ahead is still re-asked within a minute, for a slow clock', async () => {
+    // This device believes the start is ten minutes away. The server has
+    // already crossed it — which is exactly what the second answer says.
+    vi.setSystemTime(Date.parse(OPENS_AT) - 10 * 60_000);
+    fetchNightOutMediaWindow.mockResolvedValueOnce(BEFORE).mockResolvedValue(OPEN);
+
+    render(<NightOutMedia planId={PLAN} canAddPhoto />);
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('night-out-add-photo')).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    await waitFor(() =>
+      expect(
+        fetchNightOutMediaWindow,
+        'a boundary ten minutes ahead was waited for exactly, so a slow clock hid it',
+      ).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-add-photo')).toBeTruthy(),
+    );
+  });
+
   test('a page open across the expiry stops offering a write it cannot land', async () => {
     vi.setSystemTime(Date.parse(EXPIRES_AT) - 60_000);
     fetchNightOutMediaWindow.mockResolvedValueOnce(OPEN).mockResolvedValue(CLOSED);

@@ -26,6 +26,18 @@ import {
 const BOUNDARY_GRACE_MS = 1_000;
 const MIN_RECHECK_MS = 60_000;
 const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
+/**
+ * The longest we will wait for a boundary this device believes is still AHEAD.
+ *
+ * Waiting an "ahead" boundary exactly is only right if the two clocks agree. On
+ * a device running ten minutes SLOW the server crosses first, starts serving
+ * media and accepting the writes, and this recap goes on hiding both controls
+ * for the whole skew because its own timer is not due yet (round-10 round 7,
+ * Codex). The behind case already had a floor for the disagreement; this is the
+ * same tolerance on the other side, and it costs at most one extra read per
+ * boundary approach.
+ */
+const MAX_APPROACH_MS = 60_000;
 
 /**
  * When to ask the server again about a boundary only the server owns.
@@ -39,6 +51,13 @@ const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
  * exactly. A boundary already behind cannot change its answer until the
  * server's clock catches up, so there the floor is right.
  *
+ * AND A BOUNDARY AHEAD IS NOT WAITED INDEFINITELY EITHER (round-10 round 7,
+ * Codex). "Waited exactly" is correct only when the clocks agree; on a slow
+ * device the server crosses first and this surface stays on the wrong side for
+ * the whole skew. Capping the approach at a minute makes the tolerance
+ * symmetric: neither direction of skew can hide a boundary for longer than one
+ * extra read.
+ *
  * The plan page carries the same rule for its voting deadline. One shared
  * module would be better and is not available: `src/lib/` outside
  * `nightOutMedia/` is another lane's write scope, and round 8 fixing one copy
@@ -46,7 +65,8 @@ const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
  * prevented. Recorded rather than silently duplicated.
  */
 function clampRecheck(delayMs: number): number {
-  return Math.min(delayMs > 0 ? delayMs : MIN_RECHECK_MS, MAX_REARM_MS);
+  const wait = delayMs > 0 ? Math.min(delayMs, MAX_APPROACH_MS) : MIN_RECHECK_MS;
+  return Math.min(wait, MAX_REARM_MS);
 }
 
 /**

@@ -50,6 +50,32 @@ import {
  * below is unconditional rather than an error the recipient meets by tapping
  * something.
  */
+
+/**
+ * Invite tokens with an RSVP write outstanding, MODULE-scoped on purpose.
+ *
+ * A component ref dies with the instance, and leaving the night-out route
+ * unmounts this one — so a returning recipient got an empty lock and could
+ * start a second write for an invite whose first was still in the air
+ * (round-10 round 7, Claude). The span that must be covered is the JS context.
+ *
+ * Not persisted: a reload genuinely ends the JS context, and a request that
+ * cannot outlive the page cannot race the next one either.
+ */
+const rsvpWritesInFlight = new Set<string>();
+
+/**
+ * Empty the lock. For TESTS, and the reason it has to exist is the same reason
+ * the lock is module-scoped: a hold is released when its write settles, and a
+ * suite that deliberately leaves a write hanging — which is most of the ones
+ * that matter here — leaves the hold behind for every case after it. Instance
+ * state got cleared by unmount for free; module state does not, and pretending
+ * otherwise made eight tests fail the moment the scope changed.
+ */
+export function resetRsvpWritesInFlight(): void {
+  rsvpWritesInFlight.clear();
+}
+
 export default function InvitePreview({
   token,
   preview,
@@ -139,8 +165,21 @@ export default function InvitePreview({
    * was still out — and returning to A then started a second one, which is the
    * defect the token was introduced to stop. Writes for different invites can
    * genuinely overlap, so the lock has to be able to say so.
+   *
+   * And it lives at MODULE scope, not in a ref (round-10 round 7, Claude).
+   * Every revision above reasoned from "Next reuses this component across
+   * /night-out/A → /night-out/B without remounting" and stopped there — but
+   * leaving the route entirely, by the bottom nav or a back gesture, UNMOUNTS
+   * it, and a fresh instance started with an empty set. Tap Going on a slow
+   * network, tab away, come back, tap Can't make it, and two last-write-wins
+   * upserts race: the server can end on "going" while the screen says
+   * "can't make it", and the dead instance's settle paints nothing to correct
+   * it. `StartNightOutButton` already wrote this lesson down for
+   * `creatingOwners` — the span that must be covered is the JS CONTEXT, not the
+   * component instance. Same reasoning, same shape. It is the module-level
+   * `rsvpWritesInFlight` above; there is no per-instance copy to fall out of
+   * step with it.
    */
-  const rsvpInFlight = useRef<Set<string>>(new Set());
   /**
    * The invite ON SCREEN right now, readable from a settling write's closure.
    *
@@ -192,7 +231,7 @@ export default function InvitePreview({
     // silence — no disable, no message, nothing — which is precisely what this
     // component says elsewhere must never be offered. Returning to an invite
     // that is still busy now looks busy.
-    setRsvpBusy(rsvpInFlight.current.has(token));
+    setRsvpBusy(rsvpWritesInFlight.has(token));
 
     const supabase = getBrowserSupabase();
     if (supabase === null) return;
@@ -234,7 +273,7 @@ export default function InvitePreview({
       // The REF, not the state: an automatic queued delivery holds the same
       // lock and does not go through a render to take it. Compared against THIS
       // invite, so a write still out for a different one never blocks this.
-      if (rsvpBusy || rsvpInFlight.current.has(token)) return;
+      if (rsvpBusy || rsvpWritesInFlight.has(token)) return;
       const heldToken = token;
       const startedAt = epoch.current;
       const supabase = getBrowserSupabase();
@@ -253,7 +292,7 @@ export default function InvitePreview({
       // when the tap's round trip returns — or the delivery can start in
       // between and overwrite what the recipient just asked for.
       answered.current = true;
-      rsvpInFlight.current.add(heldToken);
+      rsvpWritesInFlight.add(heldToken);
       setRsvpBusy(true);
       setRsvpError(null);
       const result =
@@ -267,10 +306,21 @@ export default function InvitePreview({
         // genuinely settled, so a later write for the SAME invite is safe to
         // allow — and holds for other invites are untouched, which is why the
         // lock is a set rather than one slot.
-        rsvpInFlight.current.delete(heldToken);
+        rsvpWritesInFlight.delete(heldToken);
         // If the invite it belonged to is the one back on screen, the buttons
-        // it was disabling have to come back with it.
-        if (liveToken.current === heldToken) setRsvpBusy(false);
+        // it was disabling have to come back with it — AND the answer it
+        // actually recorded has to come back with them (round-10 round 7,
+        // Codex). Releasing the lock without painting left the recipient
+        // looking at their own invite with every choice unpressed while the
+        // server held `going`; the re-entry read had already settled before the
+        // write did, so nothing else was ever going to correct it.
+        if (liveToken.current === heldToken) {
+          setRsvpBusy(false);
+          if (result === 'sent') {
+            setRsvp(choice);
+            setRsvpUnreadable(false);
+          }
+        }
         // ...AND IT STILL SPENDS THE QUEUE (round-10 round 5, Claude). This
         // branch returned before the `sent` handling below, so a successful
         // write that settled after a token change left an OLDER queued answer
@@ -282,7 +332,7 @@ export default function InvitePreview({
         if (result === 'sent') clearQueuedRsvp(heldToken);
         return;
       }
-      rsvpInFlight.current.delete(heldToken);
+      rsvpWritesInFlight.delete(heldToken);
       if (result === 'sent') {
         answered.current = true;
         clearQueuedRsvp(token);
@@ -365,7 +415,7 @@ export default function InvitePreview({
       // overwritten, never appended), so delivering whatever is in it is
       // correct; what was missing is that the two writers must not overlap, and
       // that a delivery must not paint a value the recipient has since changed.
-      if (rsvpInFlight.current.has(token)) return;
+      if (rsvpWritesInFlight.has(token)) return;
       const pending = readQueuedRsvp(token);
       if (pending === null) return;
       const supabase = getBrowserSupabase();
@@ -373,7 +423,7 @@ export default function InvitePreview({
       if (supabase === null || key === null) return;
       const heldToken = token;
       const startedAt = epoch.current;
-      rsvpInFlight.current.add(heldToken);
+      rsvpWritesInFlight.add(heldToken);
       // Visibly in flight, exactly as a tap is: the controls disable for the
       // moment the delivery holds the lock, so the recipient is never offered a
       // tap that the guard would silently swallow.
@@ -383,15 +433,22 @@ export default function InvitePreview({
       // changed paints nothing and releases only its OWN hold, never whatever
       // the invite now on screen may be holding.
       if (cancelled || startedAt !== epoch.current) {
-        rsvpInFlight.current.delete(heldToken);
-        // Same two rules as the stale branch in `answer()`: give the controls
-        // back if this invite is the one on screen, and spend the queue a sent
-        // answer satisfied wherever the viewer has gone.
-        if (liveToken.current === heldToken) setRsvpBusy(false);
+        rsvpWritesInFlight.delete(heldToken);
+        // Same rules as the stale branch in `answer()`: give the controls back
+        // if this invite is the one on screen, paint the answer that actually
+        // landed, and spend the queue a sent answer satisfied wherever the
+        // viewer has gone.
+        if (liveToken.current === heldToken) {
+          setRsvpBusy(false);
+          if (result === 'sent') {
+            setRsvp(pending);
+            setQueued(null);
+          }
+        }
         if (result === 'sent') clearQueuedRsvp(heldToken);
         return;
       }
-      rsvpInFlight.current.delete(heldToken);
+      rsvpWritesInFlight.delete(heldToken);
       setRsvpBusy(false);
       // The queue moved on while we were away — the recipient answered again,
       // and that newer choice is the one that must be sent and shown.

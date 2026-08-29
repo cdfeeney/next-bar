@@ -190,6 +190,17 @@ function deadlineLabel(instant: string): string {
 const DEADLINE_GRACE_MS = 1_000;
 const MIN_RECHECK_MS = 60_000;
 const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
+/**
+ * The longest we will wait for a deadline this device believes is still AHEAD.
+ *
+ * Waiting an "ahead" deadline exactly is only right if the two clocks agree. On
+ * a device running ten minutes SLOW the server closes voting first while
+ * Suggest, Vote and Remove stay editable here for the whole skew, and the first
+ * tap in that window is refused instead of the surface having gone read-only
+ * (round-10 round 7, Codex). The behind case already had a floor for the
+ * disagreement; this is the same tolerance on the other side.
+ */
+const MAX_APPROACH_MS = 60_000;
 
 /**
  * When to ask the server again about a deadline only the server enforces.
@@ -208,9 +219,15 @@ const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
  * one copy while leaving the other. A shared module in `src/lib/` would be the
  * repair and is another lane's write scope, so the duplication is recorded here
  * rather than hidden.
+ *
+ * AND A DEADLINE AHEAD IS NOT WAITED INDEFINITELY EITHER (round-10 round 7,
+ * Codex). "Waited exactly" is correct only when the clocks agree; on a slow
+ * device the server closes first and this surface stays editable for the whole
+ * skew. Capping the approach at a minute makes the tolerance symmetric.
  */
 function clampRecheck(delayMs: number): number {
-  return Math.min(delayMs > 0 ? delayMs : MIN_RECHECK_MS, MAX_REARM_MS);
+  const wait = delayMs > 0 ? Math.min(delayMs, MAX_APPROACH_MS) : MIN_RECHECK_MS;
+  return Math.min(wait, MAX_REARM_MS);
 }
 
 function nightDateLabel(nightKey: string): string {

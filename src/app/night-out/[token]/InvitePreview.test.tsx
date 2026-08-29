@@ -44,7 +44,7 @@ vi.mock('./bearer', async (importOriginal) => {
   };
 });
 
-import InvitePreview from './InvitePreview';
+import InvitePreview, { resetRsvpWritesInFlight } from './InvitePreview';
 
 const TOKEN = '11111111-1111-1111-1111-111111111111';
 const KEY = '22222222-2222-2222-2222-222222222222';
@@ -73,6 +73,9 @@ function renderPreview(signedIn = false) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The RSVP lock outlives component instances on purpose, so a case that
+  // leaves a write hanging would otherwise disable every case after it.
+  resetRsvpWritesInFlight();
   fetchBearerDetail.mockResolvedValue({
     startsAt: '2026-08-21T01:00:00.000Z',
     area: null,
@@ -667,6 +670,88 @@ describe('the offline queue (V8-R-INV-003)', () => {
     submitAnonRsvp.mockResolvedValue('sent');
     screen.getByTestId('invite-rsvp-maybe').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(2));
+  });
+
+  /**
+   * Round-10 round 7, Claude. Every revision of this lock reasoned from "Next
+   * reuses this component across A → B without remounting" and stopped there.
+   * Leaving the night-out route entirely UNMOUNTS it, and an instance-scoped
+   * set meant the returning recipient got an empty lock — so a second write
+   * could start while the first was still out, and two last-write-wins upserts
+   * could leave the server on the older choice.
+   */
+  test('an UNMOUNT does not forget a write that is still out', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
+
+    const first = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    // Away from the route entirely, then back — a remount, not a token swap.
+    first.unmount();
+    renderPreview();
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('invite-rsvp-maybe'),
+        'the remounted invite offered controls while its own write was still out',
+      ).toBeDisabled(),
+    );
+    screen.getByTestId('invite-rsvp-maybe').click();
+    expect(
+      submitAnonRsvp,
+      'a remount let a second write start for an invite that already had one in flight',
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Round-10 round 7, Codex. The stale branch released the lock and spent the
+   * queue but never painted, so a recipient who came back to their own invite
+   * saw every choice unpressed while the server held the answer they had sent.
+   */
+  test('a write that succeeds after you return shows the answer it recorded', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    let releaseA: (value: 'sent') => void = () => undefined;
+    submitAnonRsvp.mockReturnValueOnce(
+      new Promise<'sent'>((resolve) => {
+        releaseA = resolve;
+      }),
+    );
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <InvitePreview
+        token={OTHER_TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+    rerender(
+      <InvitePreview
+        token={TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+
+    // The re-entry read has to LAND FIRST — that is the order the finding
+    // describes, and it is what makes the write the last word. Releasing while
+    // the read is still out would just be testing which promise resolved first.
+    await waitFor(() => expect(fetchAnonRsvp).toHaveBeenCalledTimes(3));
+
+    releaseA('sent');
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('invite-rsvp-going'),
+        'the recorded answer was never painted after a stale settle',
+      ).toHaveAttribute('aria-pressed', 'true'),
+    );
   });
 
   test('a hung write for ANOTHER invite is still remembered when you come back to it', async () => {

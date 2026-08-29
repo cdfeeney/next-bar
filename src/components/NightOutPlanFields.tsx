@@ -352,7 +352,23 @@ export function useNightOutPlanFields({
           failed.push('the time');
         }
       }
+      /**
+       * THE ROW STOPS FOLLOWING PRESENCE ONCE THE PLAN HAS ITS ANSWER
+       * (round-10 round 7, Codex).
+       *
+       * The Area is SEEDED from the bar pinned tonight, and that read is
+       * asynchronous. Tap Start before it resolves and the area written is
+       * empty — correct, since nothing was known yet — but when the read landed
+       * a moment later the row began displaying a neighbourhood the plan does
+       * not have, and then navigated. Pinning the draft to the value actually
+       * used makes the row show what was sent. `useMyPresence` returns null for
+       * both "not read yet" and "no pin", so waiting for it is not something
+       * this hook can do without changing that contract, which is another
+       * lane's surface; making the display honest is what is available here and
+       * is the half that was lying.
+       */
       const trimmedArea = live.current.area.trim();
+      setAreaEdit((prev) => prev ?? live.current.area);
       if (trimmedArea !== '') {
         if (stopped()) failed.push('the area');
         else if (!(await setNightOutArea(supabase, planId, trimmedArea))) failed.push('the area');

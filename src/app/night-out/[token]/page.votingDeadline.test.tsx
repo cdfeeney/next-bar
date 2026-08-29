@@ -123,6 +123,39 @@ describe('the plan page reaches its own voting deadline', () => {
     );
   });
 
+  /**
+   * ROUND-10 ROUND 7, Codex — the twin of the media-window case, and the reason
+   * both copies of `clampRecheck` were changed together rather than one of them.
+   * A deadline this device thinks is still AHEAD used to be waited for exactly,
+   * which is only right when the clocks agree. On a slow device the server
+   * closes voting first while Suggest, Vote and Remove stay editable here for
+   * the whole skew, and the first tap is refused instead of the surface having
+   * gone read-only.
+   */
+  test('a deadline far ahead is still re-asked within a minute, for a slow clock', async () => {
+    vi.setSystemTime(Date.parse(CLOSES_AT) - 10 * 60_000);
+    fetchNightOutVoting
+      .mockResolvedValueOnce({ votingClosesAt: CLOSES_AT, votingOpen: true })
+      .mockResolvedValue({ votingClosesAt: CLOSES_AT, votingOpen: false });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('member-board')).toBeTruthy());
+    expect(screen.queryByTestId('night-out-voting-closed')).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    await waitFor(() =>
+      expect(
+        fetchNightOutVoting,
+        'a deadline ten minutes ahead was waited for exactly, so a slow clock kept voting editable',
+      ).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-voting-closed')).toBeTruthy(),
+    );
+  });
+
   test('a plan with no deadline arms nothing', async () => {
     fetchNightOutVoting.mockResolvedValue({
       votingClosesAt: null,
