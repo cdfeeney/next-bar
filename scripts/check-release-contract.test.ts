@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
-// @ts-expect-error - plain .mjs guard, deliberately not TypeScript
+// A plain .mjs guard, deliberately not TypeScript — its JSDoc now carries the types, so the
+// suppression this line used to hold is no longer needed and TypeScript flags it as unused.
 import { checkContract, digestOf } from './check-release-contract.mjs';
 
 // Why this exists: the release-contract guard is the ONLY mechanical enforcement of the

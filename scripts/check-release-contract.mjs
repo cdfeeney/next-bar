@@ -107,6 +107,18 @@ const isEmpty = (v) =>
  * @param listDir     (relPath) => string[] | null — directory entries, for extra-file detection
  * @returns {{code:string, where:string, detail:string}[]}
  */
+/**
+ * TYPES ARE DECLARED HERE BECAUSE THE DEFAULT LIES ABOUT THEM. TypeScript infers a parameter
+ * from its default, so `listDir = () => null` gave this a ZERO-ARGUMENT signature returning
+ * null — and every caller that passes the real reader, which takes a path and returns a list,
+ * failed to typecheck against it. The runtime was always right; only the inferred type was
+ * wrong, which is why the guard worked while its own test would not compile.
+ *
+ * @param {any} ledger
+ * @param {string} decisionMd
+ * @param {(rel: string) => Buffer | null} readFile
+ * @param {(rel: string) => string[] | null} [listDir]
+ */
 export function checkContract(ledger, decisionMd, readFile, listDir = () => null) {
   const findings = [];
   const fail = (code, where, detail) => findings.push({ code, where, detail });
