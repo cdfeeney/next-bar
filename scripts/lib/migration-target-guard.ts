@@ -167,13 +167,18 @@ export function checkConnectionEndpoint(
       + 'so the target was overridden by a query parameter';
   }
 
-  // TWO shapes are legitimate, and only two: the shared pooler, where the ref is in the username,
-  // and a DIRECT `db.<ref>.supabase.co`, where the ref is the host. Anything else is a server this
-  // tooling cannot identify, however Supabase-looking the username is.
+  // THE POOLER, AND NOTHING ELSE. Round 4 asked for direct `db.<ref>.supabase.co` hosts to be
+  // allowed as well; round 5 showed why that was wrong, and the specification was withdrawn.
+  //
+  // On the pooler the project ref rides in the USERNAME, which the server authenticates. On a
+  // direct host the ref is the HOSTNAME — and a hostname is a DNS answer, not an identity. A
+  // `hosts` entry pointing db.<staging-ref>.supabase.co at a local bridge to production certifies
+  // staging while the socket reaches production, and nothing in the string looks wrong. Requiring
+  // the pooler is what makes the ref mean "this project" again.
   const lower = effectiveHost.toLowerCase();
-  if (!lower.endsWith(POOLER_HOST_SUFFIX) && refFromHost(lower) === null) {
-    return `DATABASE_URL's host is not a Supabase pooler host (${POOLER_HOST_SUFFIX}) or a direct `
-      + 'db.<ref>.supabase.co host, so the project ref in its username cannot identify the target';
+  if (!lower.endsWith(POOLER_HOST_SUFFIX)) {
+    return `DATABASE_URL's host is not a Supabase pooler host (${POOLER_HOST_SUFFIX}), so the `
+      + 'project ref in its username cannot identify the target';
   }
 
   // libpq `options` reaches the server in the startup packet, and Supabase's shared pooler
@@ -303,10 +308,11 @@ export function resolveIdentity(connectionString: string | undefined): Certified
   // Both present and disagreeing is itself a contradiction: `?host=` pointing elsewhere than the
   // username is exactly the override this guard exists to catch.
   //
-  // SUBSUMED since round 4, kept deliberately: the endpoint rule forces pg's host to equal the
-  // authority's, so this and the authority comparison below now refuse exactly the same payloads
-  // and neither can go red alone. It stays as the cheaper, more direct statement of the rule; its
-  // matrix row is retired rather than left printing NOT PINNED.
+  // UNREACHABLE while the endpoint rule is pooler-only — a pooler hostname carries no ref, so
+  // `byHost` is always null here. It is kept, and only kept, as the thing that must still be true
+  // if direct `db.<ref>.supabase.co` hosts are ever allowed again: that was round 4's spec, it was
+  // withdrawn in round 5, and whoever restores it needs this check and the authority-host
+  // comparison below to be live. Its mutation row stays retired.
   if (byUser && byHost && byUser !== byHost) {
     throw new TargetRefusal(
       `pg would authenticate as project ${byUser} while connecting to host for ${byHost} — `

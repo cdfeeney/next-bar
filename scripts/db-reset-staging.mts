@@ -45,7 +45,7 @@ import pg from 'pg';
 import { readClassification } from './lib/classification';
 import { dumpDatabase, DumpFailure, DumpRefusal, formatDumpSummary } from './lib/dbDump';
 import { TargetRefusal } from './lib/migration-target-guard';
-import { whoami, WhoamiConnectionError } from './lib/whoami';
+import { certify, readCounts, WhoamiConnectionError } from './lib/whoami';
 
 const BACKUPS = 'D:\\harness-handoffs\\db-backups';
 
@@ -61,6 +61,22 @@ function arg(name: string): string | null {
 
 const EXECUTE = process.argv.includes('--execute');
 const secretsFile = arg('--secrets-file');
+
+/**
+ * THE OPERATOR'S CONSENT, SNAPSHOTTED BEFORE ANY FILE IS LOADED.
+ *
+ * Round 5, HIGH, and a regression this file introduced: identifying the target IN-PROCESS means
+ * `whoami()` loads the `--secrets-file` with `override: true` into THIS process's environment. Read
+ * afterwards, `process.env.HARNESS_DB_WRITE_OK` could therefore be supplied by the very file naming
+ * the target — so a secrets file could grant the per-act consent the operator is supposed to type,
+ * for the one script that empties a database. The child process that used to do this contained the
+ * mutation; nothing does now, so the value is captured at module load instead, which runs before
+ * `main()` and before any dotenv call.
+ *
+ * Consent is necessary and never sufficient: the production refusal and the staging-label rule
+ * below do not consult it at all.
+ */
+const SHELL_WRITE_CONSENT = (process.env.HARNESS_DB_WRITE_OK ?? '').trim().toLowerCase();
 
 function step(n: number, title: string): void {
   process.stdout.write(`\n=== STEP ${n}: ${title} ===\n`);
@@ -103,15 +119,19 @@ async function main(): Promise<void> {
 
   // ── STEP 1 ────────────────────────────────────────────────────────────────────────────────────
   step(1, 'identify the target (read-only) — this output IS the mandatory pre-count');
-  const identified = await whoami(secretsFile);
-  process.stdout.write(`${identified.line}\n`);
-  if (identified.refusals.length > 0) {
-    for (const reason of identified.refusals) process.stderr.write(`[db:reset-staging] ${reason}\n`);
+
+  // CERTIFY FIRST, WITHOUT A SOCKET. Every refusal below — production, label, consent — is decided
+  // before this script connects to anything, because authorization to destroy is not a question you
+  // should need a live database to answer. It also makes those rules testable without one, which is
+  // how a round-5 regression in the consent rule reached a review instead of a test.
+  const identity = await certify(secretsFile);
+  if (identity.refusals.length > 0) {
+    for (const reason of identity.refusals) process.stderr.write(`[db:reset-staging] ${reason}\n`);
     fail('db:whoami refused — nothing is emptied against an unidentified database', 2);
   }
-  const { certified } = identified;
-  const ref = identified.ref;
-  const label = identified.label;
+  const { certified } = identity;
+  const ref = identity.ref;
+  const label = identity.label;
 
   // THE REFUSAL THAT CANNOT BE OVERRIDDEN. Consent is necessary, never sufficient: a tool for
   // emptying a database must not be pointable at the one holding the only surviving data.
@@ -128,7 +148,7 @@ async function main(): Promise<void> {
     fail(`REFUSED: ${ref} derives the label "${label}", not "staging". Only staging may be reset.`, 2);
   }
 
-  const consent = (process.env.HARNESS_DB_WRITE_OK ?? '').trim().toLowerCase();
+  const consent = SHELL_WRITE_CONSENT;
   if (EXECUTE && consent !== ref) {
     fail(
       consent
@@ -136,6 +156,15 @@ async function main(): Promise<void> {
         : `REFUSED: --execute requires HARNESS_DB_WRITE_OK=${ref} in the shell. The operator types it, per act.`,
       2,
     );
+  }
+
+  // THE PRE-COUNT, now that the target is authorized. It is still printed before anything is
+  // destroyed — step 3 is below — and it is still the evidence the incident rules demand.
+  const counted = await readCounts(identity);
+  process.stdout.write(`${counted.line}\n`);
+  if (counted.refusals.length > 0) {
+    for (const reason of counted.refusals) process.stderr.write(`[db:reset-staging] ${reason}\n`);
+    fail('the target could not be read — nothing is emptied on a pre-count that failed', 1);
   }
 
   // ── STEP 2 ────────────────────────────────────────────────────────────────────────────────────

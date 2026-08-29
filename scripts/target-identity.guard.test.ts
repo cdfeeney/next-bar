@@ -245,12 +245,16 @@ describe('the destructive script — scripts/db-reset-staging.mts', () => {
    * covered it, because the check sat after a step that needs a live connection, so it was only
    * reachable when a database answered. The read now happens first, on the shared reader.
    */
-  const resetScript = (cwd: string, env: Record<string, string> = {}) => {
+  const resetScript = (
+    cwd: string,
+    env: Record<string, string> = {},
+    args: string[] = [],
+  ) => {
     const repo = process.cwd();
     try {
       execFileSync(
         process.execPath,
-        [join(repo, 'node_modules/tsx/dist/cli.mjs'), join(repo, 'scripts/db-reset-staging.mts')],
+        [join(repo, 'node_modules/tsx/dist/cli.mjs'), join(repo, 'scripts/db-reset-staging.mts'), ...args],
         { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } },
       );
       return { status: 0, output: '' };
@@ -259,6 +263,46 @@ describe('the destructive script — scripts/db-reset-staging.mts', () => {
       return { status: f.status ?? -1, output: `${f.stdout ?? ''}${f.stderr ?? ''}` };
     }
   };
+
+  /**
+   * ROUND 5, HIGH — A REGRESSION THE IN-PROCESS REFACTOR INTRODUCED.
+   *
+   * Identifying the target in this process means `whoami()` loads the `--secrets-file` with
+   * `override: true` into the script's OWN environment. Consent read after that could therefore be
+   * supplied by the very file naming the target: a secrets file carrying
+   * `HARNESS_DB_WRITE_OK=<staging-ref>` would satisfy the per-act approval the operator is supposed
+   * to type, for the one tool that empties a database. The child process that used to answer
+   * "which database is this" contained the mutation; nothing does now, so the value is snapshotted
+   * at module load.
+   *
+   * The consent check sits behind the production and staging-label refusals, so this test uses a
+   * legitimate staging target: what it pins is that the APPROVAL cannot come from a file.
+   */
+  it('a --secrets-file cannot grant its own destructive consent', () => {
+    const cwd = cwdWith(TRUE_LISTS);
+    const secrets = secretsFile('self-consenting', {
+      DATABASE_URL: poolerUrl(STAGING),
+      NEXT_PUBLIC_SUPABASE_URL: `https://${STAGING}.supabase.co`,
+      HARNESS_DB_WRITE_OK: STAGING,
+    });
+    const r = resetScript(cwd, {}, ['--execute', '--secrets-file', secrets]);
+    expect(r.status).toBe(2);
+    expect(r.output).toMatch(/--execute requires HARNESS_DB_WRITE_OK/);
+    // And it stopped at consent, before the dump step could open anything.
+    expect(r.output).not.toContain('STEP 2');
+  }, 60_000);
+
+  it('the operator typing it in the SHELL still works', () => {
+    // The other half of the proof: a guard that refused everything would pass the test above.
+    // Here the shell supplies consent and the run gets past it, dying later for want of a database.
+    const cwd = cwdWith(TRUE_LISTS);
+    const secrets = secretsFile('shell-consented', {
+      DATABASE_URL: poolerUrl(STAGING),
+      NEXT_PUBLIC_SUPABASE_URL: `https://${STAGING}.supabase.co`,
+    });
+    const r = resetScript(cwd, { HARNESS_DB_WRITE_OK: STAGING }, ['--execute', '--secrets-file', secrets]);
+    expect(r.output).not.toMatch(/--execute requires HARNESS_DB_WRITE_OK/);
+  }, 60_000);
 
   it('REFUSES to run at all when no production ref is declared', () => {
     const cwd = cwdWith({ NEXT_BAR_STAGING_PROJECT_REFS: STAGING });
@@ -461,13 +505,15 @@ describe('the endpoint is certified for every entry point', () => {
     expect(r.output).toMatch(/effective connection port does not match/);
   });
 
-  it('a DIRECT db.<ref>.supabase.co target is still legitimate', () => {
-    // The pooler is not the only honest shape, and refusing this one would have broken the direct
-    // connection string Supabase's own dashboard hands out.
+  it('REFUSES a DIRECT db.<ref>.supabase.co target — round 5 withdrew that allowance', () => {
+    // Round 4 asked for direct hosts; round 5 showed the ref then comes from DNS rather than from
+    // an authenticated username, so a hosts entry can point a staging name at production. The
+    // pooler is the only shape where the ref is something the server checks.
     const direct = `postgresql://postgres:pw@db.${STAGING}.supabase.co:5432/postgres`;
     const r = bootstrap(targeting(direct, {
       NEXT_PUBLIC_SUPABASE_URL: `https://${STAGING}.supabase.co`,
     }), cwdWith(TRUE_LISTS));
-    expect(r.output).not.toMatch(/not a Supabase pooler host/);
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/not a Supabase pooler host/);
   }, 60_000);
 });

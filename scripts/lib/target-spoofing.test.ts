@@ -169,43 +169,37 @@ describe('R3-2 — identity is the connecting client, not a parser', () => {
   });
 
   it('what the guard reports IS what the client will use — user and host, not just the ref', () => {
-    for (const url of [
-      poolerUrl(STAGING),
-      poolerUrl(PROD),
-      `postgresql://postgres@db.${STAGING}.supabase.co:5432/postgres`,
-    ]) {
+    for (const url of [poolerUrl(STAGING), poolerUrl(PROD)]) {
       const identity = resolveIdentity(url);
       expect({ user: identity.user ?? '', host: identity.host ?? '' }).toEqual(clientIdentity(url));
     }
   });
 });
 
-describe('a connection string whose two halves name different projects', () => {
+describe('R5-1 — a direct db.<ref>.supabase.co host is refused: DNS is not an identity', () => {
   /**
-   * NO OVERRIDES AT ALL — this is what makes it worth its own test. The endpoint rule passes it
-   * (the effective host IS the authority host, it is a legitimate direct Supabase host, the port
-   * matches, there are no startup options), so it reaches the identity rules on its merits, and
-   * the username says staging while the host says production.
-   *
-   * It is refused TWICE OVER, and that redundancy is a real finding rather than a comfort: with the
-   * endpoint rule forcing pg's host to equal the authority's, `byHost` and the authority's host-ref
-   * are the same value, so "the resolved user and host must name one project" and "the authority
-   * may not contradict pg" now catch exactly the same payloads. Disabling either one alone changes
-   * no verdict — which is why the mutation matrix retired that row instead of pretending a test
-   * pins it. What is pinned here is the BEHAVIOUR: this string never reaches a database.
+   * ROUND 4 ASKED FOR DIRECT HOSTS AND ROUND 5 WITHDREW THE REQUEST, which is worth a test rather
+   * than a comment. On the pooler the project ref is in the USERNAME and the server authenticates
+   * it. On a direct host the ref IS the hostname, so it is whatever DNS says it is: a `hosts` entry
+   * pointing db.<staging>.supabase.co at a bridge to production certifies staging and connects to
+   * production, with nothing in the string looking wrong to a reader.
    */
+  const DIRECT = `postgresql://postgres:pw@db.${STAGING}.supabase.co:5432/postgres`;
   const SPLIT_HALVES = `postgresql://postgres.${STAGING}:pw@db.${PROD}.supabase.co:5432/postgres`;
 
-  it('passes the endpoint check on its merits — no override, no options, matching port', () => {
-    const actual = clientIdentity(SPLIT_HALVES);
-    expect(actual.host).toBe(`db.${PROD}.supabase.co`);
-    expect(actual.user).toBe(`postgres.${STAGING}`);
+  it('refuses an honest-looking direct host, though pg would happily connect to it', () => {
+    expect(clientIdentity(DIRECT).host).toBe(`db.${STAGING}.supabase.co`);
+    expect(() => resolveIdentity(DIRECT)).toThrow(/not a Supabase pooler host/);
   });
 
-  it('and is REFUSED, because the username and the host name different projects', () => {
-    expect(() => resolveIdentity(SPLIT_HALVES)).toThrow(TargetRefusal);
-    expect(() => resolveIdentity(SPLIT_HALVES))
-      .toThrow(/authenticate as project|authority names project/);
+  it('refuses a direct host whose username and hostname name different projects', () => {
+    expect(() => resolveIdentity(SPLIT_HALVES)).toThrow(/not a Supabase pooler host/);
+  });
+
+  it('the API URL still reads its ref from a hostname — it names no connection', () => {
+    // parseApiRef is unaffected: NEXT_PUBLIC_SUPABASE_URL is a browser URL that opens no socket,
+    // and its only job here is to AGREE with the connection string's ref.
+    expect(parseApiRef(`https://${STAGING}.supabase.co`)).toBe(STAGING);
   });
 });
 

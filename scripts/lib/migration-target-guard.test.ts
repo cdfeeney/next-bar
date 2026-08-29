@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  deriveLabel, parseRef, resolveTarget, TargetRefusal, type TargetInput,
+  deriveLabel, parseApiRef, parseRef, resolveTarget, TargetRefusal, type TargetInput,
 } from './migration-target-guard';
 
 const PROD = 'nuhqlvneokucxomguxhi';
@@ -33,9 +33,15 @@ describe('parseRef', () => {
     expect(parseRef(poolerUrl(PROD))).toBe(PROD);
   });
 
-  it('reads the ref from an API URL and a direct connection (it is in the HOST)', () => {
-    expect(parseRef(apiUrl(STAGING))).toBe(STAGING);
-    expect(parseRef(`postgresql://postgres:pw@db.${STAGING}.supabase.co:5432/postgres`)).toBe(STAGING);
+  it('REFUSES an API URL and a direct connection — the ref must come from the pooler USERNAME', () => {
+    // This test used to assert the opposite. Round 5: a ref read from a HOSTNAME is whatever DNS
+    // says it is, so only the pooler shape — where the ref is in the username the server
+    // authenticates — can identify a connection target. The API URL keeps its own reader,
+    // parseApiRef, because it names no connection and opens no socket.
+    expect(() => parseRef(apiUrl(STAGING))).toThrow(/not a Supabase pooler host/);
+    expect(() => parseRef(`postgresql://postgres:pw@db.${STAGING}.supabase.co:5432/postgres`))
+      .toThrow(/not a Supabase pooler host/);
+    expect(parseApiRef(apiUrl(STAGING))).toBe(STAGING);
   });
 
   it('THROWS rather than guessing at something it does not recognise', () => {

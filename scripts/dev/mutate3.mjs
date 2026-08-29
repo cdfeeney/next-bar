@@ -200,6 +200,18 @@ const MUTATIONS = [
     from: "const GUARD_TAG = BOOTSTRAP ? '[bootstrap-guard]' : '[migrate-guard]';",
     to: "const GUARD_TAG = BOOTSTRAP ? '[bootstrap-guard]' : '[migrate-guard]';\nif (!BOOTSTRAP) { /* mutation: the pre-round-4 scope */ } else",
   },
+  {
+    name: 'RULE: the endpoint is pooler-only (round 5, CRITICAL R5-1)',
+    file: GUARD,
+    from: '  if (!lower.endsWith(POOLER_HOST_SUFFIX)) {',
+    to: '  if (false) {',
+  },
+  {
+    name: 'WIRING: consent is read from process.env after the secrets file loads (round 5, HIGH R5-2)',
+    file: RESET,
+    from: '  const consent = SHELL_WRITE_CONSENT;',
+    to: "  const consent = (process.env.HARNESS_DB_WRITE_OK ?? '').trim().toLowerCase();",
+  },
 ];
 
 function run() {

@@ -41,6 +41,15 @@ import {
 const SHELL_DATABASE_URL = process.env.DATABASE_URL;
 const SHELL_DECLARED_ENV = process.env.NEXT_BAR_DATABASE_ENVIRONMENT;
 
+export interface CertifiedIdentity {
+  /** The certified target. CONNECT WITH THIS — never with a fresh read of process.env. */
+  certified: CertifiedTarget;
+  ref: string;
+  label: string | null;
+  /** Non-empty means REFUSED. Established without opening a socket. */
+  refusals: string[];
+}
+
 export interface WhoamiResult {
   /** The certified target. CONNECT WITH THIS — never with a fresh read of process.env. */
   certified: CertifiedTarget;
@@ -68,15 +77,15 @@ async function readCount(client: pg.Client, sql: string): Promise<number | null>
 export class WhoamiConnectionError extends Error {}
 
 /**
- * Loads the environment, certifies the target, and reads the counts.
+ * EVERYTHING THAT CAN BE DECIDED WITHOUT OPENING A SOCKET.
  *
- * Throws TargetRefusal when the target cannot be certified at all (the caller maps that to exit 2),
- * and WhoamiConnectionError when nothing is wrong except that the database did not answer. A
- * refusal that is merely inconsistent — a contradicting label, an unclassified ref — comes back in
- * `refusals` WITH the counts, because the counts are the evidence and hiding them sends the
- * operator looking somewhere else.
+ * Split out because a caller that is about to DESTROY something must be able to refuse before it
+ * connects. `db:reset-staging` checks the production rule, the staging-label rule and the
+ * operator's consent against this; only then does it read the counts. Deciding authorization after
+ * the connection also made the consent rule untestable without a live database, which is how a
+ * round-5 regression in it went unnoticed.
  */
-export async function whoami(secretsFile: string | null): Promise<WhoamiResult> {
+export async function certify(secretsFile: string | null): Promise<CertifiedIdentity> {
   if (secretsFile !== null) {
     if (secretsFile === '') throw new TargetRefusal('--secrets-file needs a path');
     if (!existsSync(secretsFile)) throw new TargetRefusal(`--secrets-file ${secretsFile} does not exist`);
@@ -136,6 +145,17 @@ export async function whoami(secretsFile: string | null): Promise<WhoamiResult> 
     }
   }
 
+  return { certified, ref, label, refusals };
+}
+
+/**
+ * The counts, from the target `certify` returned. THE COUNTS ARE THE EVIDENCE, so they are read
+ * even when the identity is refused — a refusal that hides them sends the operator looking
+ * somewhere else — and the caller decides what to do with both.
+ */
+export async function readCounts(identity: CertifiedIdentity): Promise<WhoamiResult> {
+  const { certified, ref, label } = identity;
+  const refusals = [...identity.refusals];
   let line = `${ref} ${label ?? 'unknown'}`;
   const client = new pg.Client({ connectionString: certified.connectionString });
   let connected = false;
@@ -168,4 +188,9 @@ export async function whoami(secretsFile: string | null): Promise<WhoamiResult> 
   }
 
   return { certified, ref, label, line, refusals, connected };
+}
+
+/** Certify, then count. What `db:whoami` and `db:dump` want. */
+export async function whoami(secretsFile: string | null): Promise<WhoamiResult> {
+  return readCounts(await certify(secretsFile));
 }
