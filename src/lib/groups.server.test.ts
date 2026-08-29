@@ -134,6 +134,59 @@ describe('V8-R-GRP-008 Night Out invitation notifications exist (round-1 finding
   it('no application role may write the notification table directly', () => {
     expect(SQL).toMatch(/revoke all on table public\.night_out_invitation_notifications from public, anon, authenticated/);
   });
+
+  // ROUND 8 REVIEW, CODEX, HIGH. The record and the read RPC both existed and NOTHING READ THEM:
+  // no client function called the RPC and no surface rendered a row, so an invitee still became a
+  // plan member and was never told — the second half of the round-1 finding, wearing the opposite
+  // costume. Push delivery genuinely is another lane's file (`delivered_at` is that sender's seam
+  // and stays null here). The IN-APP half is this lane's, and the requirement names it: "V8
+  // PROVIDES IN-APP UNREAD STATE **and NIGHT OUT INVITATION NOTIFICATIONS**".
+  it('a client reader actually calls the notification RPC', () => {
+    const src = readFileSync(path.join(__dirname, 'groups.server.ts'), 'utf8');
+    expect(src).toMatch(/rpc\('get_my_night_out_invitation_notifications'\)/);
+    expect(src).toMatch(/rpc\('mark_night_out_invitation_notification_read'/);
+  });
+
+  it('a surface actually renders what that reader returns', () => {
+    // The RPC having a caller is not delivery either; a row nothing displays is still untold.
+    const ui = readFileSync(
+      path.join(__dirname, '..', 'app', 'friends', '_components', 'GroupsAndPeople.tsx'), 'utf8',
+    );
+    expect(ui).toMatch(/fetchNightOutInvitationNotifications/);
+    expect(ui).toMatch(/group-invite-notification/);
+  });
+});
+
+describe('round 9: a group photo authorises an UNBOUNDED read window', () => {
+  // ROUND 8 REVIEW, CODEX, MEDIUM. `media_read_window`'s boolean was already right and its
+  // TIMESTAMP was not: both terminal branches returned the STORY's expiry whenever a live story
+  // also referenced the media, so a group photo whose story copy had half a second left signed a
+  // near-zero-TTL URL and rendered as unavailable — in a thread whose retention has no clock at
+  // all. A group destination has no expiry of its own, and null is how that is spelled here.
+  //
+  // This is structural on purpose: the branch it guards is a decision only a database can make,
+  // and it is exactly the kind of silent regression a mocked client cannot see.
+  const body = code('media_read_window');
+
+  it('neither terminal branch hands back a story clock once the group grants the read', () => {
+    // BOTH of them — the owner's `return query select true, ...` and the viewer's. Counting is the
+    // point: guarding one and not the other is exactly the state round 8 shipped.
+    const guarded = body.match(
+      /case when v_group_readable then null::timestamptz else v_expiry end/g,
+    ) ?? [];
+    expect(guarded, 'the owner branch and the viewer branch each need the guard').toHaveLength(2);
+
+    // And nothing may return a BARE v_expiry as the window any more.
+    expect(body.replace(/\s+/g, ' ')).not.toMatch(/return query select true, v_expiry/);
+    expect(body.replace(/\s+/g, ' ')).not.toMatch(/or v_group_readable, v_expiry/);
+  });
+
+  it('the group term is still what makes the read READABLE, not the timestamp', () => {
+    // The complement, kept as a pair so neither can be traded away for the other: dropping
+    // v_group_readable from the boolean would refuse the case this section exists to allow.
+    expect(body).toMatch(/v_group_readable/);
+    expect(body).toMatch(/group_message_is_visible/);
+  });
 });
 
 describe('round-2 panel findings', () => {
@@ -308,11 +361,14 @@ describe('round-4 panel findings', () => {
     expect(code('invite_one_to_night_out')).toMatch(/is_blocked_between/);
   });
 
-  // Codex round-3: get_group_thread caps at GROUP_THREAD_PAGE, so marking through the newest
-  // RETURNED row marked every older unshown message read. The client must not advance a watermark
-  // for a truncated page — asserted in GroupThread.test.tsx; this pins the shared constant that
-  // makes the client able to tell.
-  it('the page size is exported so the client can detect a truncated page', () => {
+  // ROUND 9 REWRITES THIS COMMENT, because round 8 deleted what it described. It used to say the
+  // client "must not advance a watermark for a truncated page — asserted in GroupThread.test.tsx",
+  // and that suite now pins the OPPOSITE: opening the thread reads it, a full page included. A
+  // comment asserting a deleted rule is how the next reader reinstates it (round-8 review, Claude,
+  // medium). What the constant is actually for now is the PAGE ITSELF: get_group_thread returns
+  // the newest GROUP_THREAD_PAGE rows, that bound is the stated ceiling in 0067, and the client
+  // and the server have to agree on it.
+  it('the page size is exported and is the bound the thread read actually uses', () => {
     const src = readFileSync(path.join(__dirname, 'groups.server.ts'), 'utf8')
       .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
     expect(src).toMatch(/export const GROUP_THREAD_PAGE\s*=\s*200/);

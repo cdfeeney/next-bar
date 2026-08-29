@@ -391,6 +391,49 @@ describe('round 8: opening a thread reads it — standard chat semantics, from t
     expect(groups.markGroupRead).not.toHaveBeenCalled();
   });
 
+  it('re-marks when a message rendered mid-session ADVANCES the watermark', async () => {
+    // ROUND 8 REVIEW, CLAUDE, MEDIUM. The ref used to hold the GROUP ID, so exactly one
+    // mark_group_read could ever fire per opened thread. Another member's message that arrived
+    // while the viewer was in the thread got fetched by run() -> load(), rendered on screen, and
+    // then stayed counted unread in the group list until the thread was closed and reopened —
+    // which contradicts "clears on read" AND this component's own rule that the watermark is the
+    // newest message the caller was SHOWN.
+    const first = page(2);
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: first } as never);
+
+    const { rerender } = render(<GroupThread {...props()} />);
+    await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
+    expect(groups.markGroupRead).toHaveBeenLastCalledWith(
+      expect.anything(), 'group-1', first[first.length - 1].createdAt,
+    );
+
+    // A newer message arrives and is rendered by the next load.
+    const second = page(3);
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: second } as never);
+    rerender(<GroupThread {...props()} />);
+
+    await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(2));
+    expect(groups.markGroupRead).toHaveBeenLastCalledWith(
+      expect.anything(), 'group-1', second[second.length - 1].createdAt,
+    );
+  });
+
+  it('does NOT re-mark when the watermark has not advanced', async () => {
+    // The other half, and why the ref still exists: an ordinary re-render that returns the same
+    // newest message must cost nothing. The watermark only ever advances, so this terminates.
+    const same = page(3);
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: same } as never);
+
+    const { rerender } = render(<GroupThread {...props()} />);
+    await waitFor(() => expect(groups.markGroupRead).toHaveBeenCalledTimes(1));
+
+    rerender(<GroupThread {...props()} />);
+    rerender(<GroupThread {...props()} />);
+    await new Promise((r) => { setTimeout(r, 20); });
+
+    expect(groups.markGroupRead).toHaveBeenCalledTimes(1);
+  });
+
   it('a FAILED thread load still does not mark read', async () => {
     // Round-1 finding 4, which must survive every redesign: read state may never advance for a
     // conversation the viewer could not see.
@@ -402,5 +445,48 @@ describe('round 8: opening a thread reads it — standard chat semantics, from t
 
     await screen.findByText('The conversation could not be loaded.');
     expect(groups.markGroupRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('V8-R-GRP-002: a failed send is STATED and RETRYABLE, never silently dropped', () => {
+  // ROUND 8 REVIEW, CLAUDE, MEDIUM. The requirement carries that clause in its own words and it
+  // had no runnable test: nothing exercised a failed sendGroupMessage, so neither the failure
+  // notice nor the draft-preserved-on-failure behaviour was pinned. `onSend` clears the draft only
+  // when the send is CONFIRMED, and that `if (sent)` could be deleted with the whole gate green.
+  const type = (text: string) => {
+    fireEvent.change(screen.getByTestId('group-composer'), { target: { value: text } });
+  };
+
+  it('states the failure and KEEPS what was typed', async () => {
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: [] } as never);
+    vi.mocked(groups.sendGroupMessage).mockResolvedValue(
+      { ok: false, message: 'That message could not be sent. Try again.' } as never,
+    );
+
+    render(<GroupThread {...props()} />);
+    await screen.findByTestId('group-composer');
+    type('are we still on for thursday');
+    fireEvent.click(screen.getByTestId('group-send'));
+
+    // STATED: the person is told, rather than the message disappearing.
+    await screen.findByText('That message could not be sent. Try again.');
+    // RETRYABLE: the draft survives, so Send is still there to press.
+    expect(screen.getByTestId('group-composer')).toHaveValue('are we still on for thursday');
+    expect(screen.getByTestId('group-send')).toBeEnabled();
+  });
+
+  it('clears the draft only on a CONFIRMED send', async () => {
+    vi.mocked(groups.fetchGroupMessages).mockResolvedValue({ ok: true, value: [] } as never);
+    vi.mocked(groups.sendGroupMessage).mockResolvedValue({ ok: true } as never);
+
+    render(<GroupThread {...props()} />);
+    await screen.findByTestId('group-composer');
+    type('on for thursday');
+    fireEvent.click(screen.getByTestId('group-send'));
+
+    await waitFor(() => expect(screen.getByTestId('group-composer')).toHaveValue(''));
+    expect(groups.sendGroupMessage).toHaveBeenCalledWith(
+      expect.anything(), 'group-1', 'on for thursday',
+    );
   });
 });

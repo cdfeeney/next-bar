@@ -64,8 +64,6 @@ type Props = {
   viewerId: string;
   /** Mutual friends, for the administrator's add control (V8-R-GRP-005). */
   addable: readonly AddableFriend[];
-  /** Unread count for this group, from group_unread_counts. See the watermark note. */
-  unreadCount?: number;
   onClose: () => void;
   /** The group list re-reads: a rename, a leave or a deletion changed it. */
   onChanged: () => void;
@@ -80,7 +78,6 @@ export default function GroupThread({
   groupName,
   viewerId,
   addable,
-  unreadCount = 0,
   onClose,
   onChanged,
 }: Props): JSX.Element {
@@ -174,37 +171,22 @@ export default function GroupThread({
   // Read state advanced past messages that were never shown, and nothing could bring it back.
   // Gated on `ready` so the claim "you have seen these" is only ever made once they are on screen.
   //
-  // The ref keeps it to one call per group: `status` flips loading -> ready, and without it a
-  // re-render or a re-read from `run()` would mark read again on every pass.
+  // ROUND 9 SETTLES HOW OFTEN THIS FIRES. The ref used to hold the GROUP ID, so exactly one
+  // mark_group_read could ever fire per opened thread. Send a reply and `run()` re-reads: another
+  // member's message that arrived meanwhile is fetched, RENDERED, and then sits on screen still
+  // counted unread in the group list until the thread is closed and reopened (round-8 review,
+  // Claude, medium). That contradicts both V8-R-GRP-008's "clears on read" and this component's
+  // own rule that the watermark is the newest message the caller was SHOWN.
+  //
+  // The ref now holds that WATERMARK. It re-marks when, and only when, the newest rendered message
+  // is newer than the last one claimed, so an ordinary re-render still costs nothing and the
+  // sequence terminates by construction — the watermark only ever advances.
   //
   // A FAILURE here is still deliberately silent: an unread badge that stays up is a cosmetic
   // inaccuracy, and an error line above someone's conversation would be worse than the bug.
-  const readMarkedFor = useRef<string | null>(null);
+  const markedThrough = useRef<{ groupId: string; at: string } | null>(null);
   useEffect(() => {
     if (status !== 'ready') return;
-    if (readMarkedFor.current === groupId) return;
-    readMarkedFor.current = groupId;
-    // Read up to the NEWEST MESSAGE ACTUALLY LOADED, not the clock — see markGroupRead. A message
-    // that arrives between the fetch and this call was never on screen and must stay unread.
-    //
-    // ROUND 5, and the third attempt at this boundary. The first two each fixed one half and broke
-    // the other, so both halves are now pinned as a PAIR in GroupThread.test.tsx.
-    //
-    // ROUND 3 marked through the newest RETURNED row. get_group_thread caps at GROUP_THREAD_PAGE,
-    // so on a longer thread that also marked every OLDER message read — including ones beyond the
-    // page the viewer never saw — because unread is "newer than last_read_at".
-    //
-    // ROUND 4 refused to mark at all on a full page. Safe in direction, but any group that ever
-    // reached GROUP_THREAD_PAGE messages then froze last_read_at FOREVER: the badge never cleared
-    // again and grew without bound on exactly the active groups unread state exists for, which
-    // degrades the whole in-app half of V8-R-GRP-008.
-    //
-    // WHAT ACTUALLY DECIDES IT: unread messages are a NEWEST-SUFFIX of the thread, and the page is
-    // the newest GROUP_THREAD_PAGE rows. So if the unread COUNT fits inside the page, every unread
-    // message was rendered and the watermark may advance — however long the thread is. Only when
-    // unread meets or exceeds the page can unread messages exist above what was shown, and only
-    // then is marking unsafe. Page length ALONE can never tell those apart, which is why rounds 3
-    // and 4 both got it wrong with only the page in hand.
     // ROUND 8. OPENING THE THREAD READS IT — the contract's own semantics.
     //
     // V8-R-GRP-008 defines unread as a per-member state that "clears on read", with two states and
@@ -216,6 +198,15 @@ export default function GroupThread({
     // The one refusal left is not a heuristic: nothing rendered means there is no watermark to send.
     if (messages.length === 0) return;
     const watermark = messages[messages.length - 1].createdAt;
+    const claimed = markedThrough.current;
+    // Parsed, not compared as text: `createdAt` reaches this component as whatever ISO spelling the
+    // row carries, and two spellings of the same instant must not read as an advance.
+    if (
+      claimed !== null
+      && claimed.groupId === groupId
+      && Date.parse(claimed.at) >= Date.parse(watermark)
+    ) return;
+    markedThrough.current = { groupId, at: watermark };
     void markGroupRead(client, groupId, watermark).then((result) => {
       if (result.ok && result.value) onChanged();
     });

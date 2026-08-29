@@ -111,6 +111,27 @@ export type InvitableNightOut = {
   myRole: string;
 };
 
+/**
+ * One Night Out invitation notification addressed to the caller (V8-R-GRP-008).
+ *
+ * The requirement's inclusion half: "V8 PROVIDES IN-APP UNREAD STATE **and NIGHT OUT INVITATION
+ * NOTIFICATIONS**", with "invitation notification sent" among its states. 0067 built the durable
+ * recipient-addressed record and the read RPC; round 9 connects a READER to them, because a
+ * notification nothing in the product displays has not been delivered in-app either.
+ */
+export type NightOutInvitationNotification = {
+  id: number;
+  nightOutId: string;
+  night: string;
+  title: string | null;
+  /** The group the invitation came through, or null when it was a direct invite. */
+  groupName: string | null;
+  invitedBy: string;
+  createdAt: string;
+  /** Null until the recipient has seen it. */
+  readAt: string | null;
+};
+
 function isUuid(value: string | null | undefined): value is string {
   return typeof value === 'string' && UUID_RE.test(value);
 }
@@ -736,6 +757,89 @@ export async function fetchInvitableNightOuts(
         myRole: row.my_role,
       })),
     };
+  } catch {
+    return mediaUnavailable();
+  }
+}
+
+/**
+ * The caller's own Night Out invitation notifications (V8-R-GRP-008).
+ *
+ * WHY THIS EXISTS. 0067 created `night_out_invitation_notifications` and
+ * `get_my_night_out_invitation_notifications`, and nothing read either one: the row was written
+ * and no surface in the product showed it, so an invitee still became a plan member without being
+ * told (round-8 review, Codex, high — the second half of the round-1 finding). Push DELIVERY is
+ * genuinely outside this lane: APNs credentials, device tokens and the delivery worker are another
+ * lane's files, and `delivered_at` is the seam that sender writes. The IN-APP half is this lane's,
+ * and this is it.
+ *
+ * FAILS CLOSED AS A FAILURE, never as an empty list — the same rule as {@link fetchMyGroups}.
+ * "Nobody invited you" and "your invitations could not be loaded" must never render identically.
+ */
+export async function fetchNightOutInvitationNotifications(
+  client: SupabaseClient | null,
+): Promise<MediaResult<NightOutInvitationNotification[]>> {
+  if (client === null) return mediaUnavailable();
+
+  try {
+    const { data, error } = await client.rpc('get_my_night_out_invitation_notifications');
+
+    if (error) {
+      return mediaFailure('failed', 'Your night out invitations could not be loaded.');
+    }
+
+    const rows = (data ?? []) as {
+      id: number;
+      night_out_id: string;
+      night: string;
+      title: string | null;
+      group_name: string | null;
+      invited_by: string;
+      created_at: string;
+      read_at: string | null;
+    }[];
+
+    return {
+      ok: true,
+      value: rows.map((row) => ({
+        id: row.id,
+        nightOutId: row.night_out_id,
+        night: row.night,
+        title: row.title ?? null,
+        groupName: row.group_name ?? null,
+        invitedBy: row.invited_by,
+        createdAt: row.created_at,
+        readAt: row.read_at ?? null,
+      })),
+    };
+  } catch {
+    return mediaUnavailable();
+  }
+}
+
+/**
+ * Mark one invitation notification seen (V8-R-GRP-008's "invitation notification sent" -> read).
+ *
+ * `false` is the server declining because the row is not the caller's or was already read. That is
+ * a correct outcome, not an error, so it is reported rather than raised.
+ */
+export async function markInvitationNotificationRead(
+  client: SupabaseClient | null,
+  id: number,
+): Promise<MediaResult<boolean>> {
+  if (client === null) return mediaUnavailable();
+  if (!Number.isSafeInteger(id)) return rejected('That invitation could not be found.');
+
+  try {
+    const { data, error } = await client.rpc('mark_night_out_invitation_notification_read', {
+      p_id: id,
+    });
+
+    if (error) {
+      return mediaFailure('failed', 'That invitation could not be updated. Try again.');
+    }
+
+    return { ok: true, value: data === true };
   } catch {
     return mediaUnavailable();
   }

@@ -27,9 +27,12 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
   createGroup,
   fetchMyGroups,
+  fetchNightOutInvitationNotifications,
   fetchUnreadCounts,
+  markInvitationNotificationRead,
   MAX_GROUP_NAME_LENGTH,
   type Group,
+  type NightOutInvitationNotification,
 } from '@/lib/groups.server';
 import GroupThread, { type AddableFriend } from './GroupThread';
 
@@ -178,6 +181,8 @@ function GroupsSection({
   const client = useMemo(() => getBrowserSupabase(), []);
   const [groups, setGroups] = useState<Group[]>([]);
   const [unread, setUnread] = useState<Map<string, number>>(new Map());
+  const [invites, setInvites] = useState<NightOutInvitationNotification[]>([]);
+  const [invitesFailed, setInvitesFailed] = useState(false);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle');
   const [notice, setNotice] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -207,10 +212,16 @@ function GroupsSection({
     if (!isServer) return;
     setStatus((current) => (current === 'ready' ? current : 'loading'));
 
-    const [mine, counts] = await Promise.all([
+    const [mine, counts, notifications] = await Promise.all([
       fetchMyGroups(client),
       fetchUnreadCounts(client),
+      fetchNightOutInvitationNotifications(client),
     ]);
+
+    // V8-R-GRP-008's inclusion half. A FAILED read is its own state here too: an empty list would
+    // say "nobody invited you" to someone whose invitations could not be loaded.
+    setInvites(notifications.ok ? notifications.value : []);
+    setInvitesFailed(!notifications.ok);
 
     if (!mine.ok) {
       // FAILED IS ITS OWN STATE. An empty list would say "you have no groups"
@@ -249,6 +260,20 @@ function GroupsSection({
     } finally {
       setBusy(false);
     }
+  };
+
+  /**
+   * V8-R-GRP-008. Seeing the invitation IS the in-app notification, so dismissing it is what
+   * writes `read_at`. The row is removed from this list optimistically only after the server
+   * confirms — a notification that vanishes on a failed write is a notification never delivered.
+   */
+  const onDismissInvite = async (id: number): Promise<void> => {
+    const result = await markInvitationNotificationRead(client, id);
+    if (!result.ok) {
+      setNotice(result.message);
+      return;
+    }
+    setInvites((current) => current.filter((invite) => invite.id !== id));
   };
 
   const open = groups.find((group) => group.id === openId) ?? null;
@@ -291,10 +316,6 @@ function GroupsSection({
         groupName={open.name}
         viewerId={viewerId}
         addable={addable}
-        // The watermark needs to know whether a full page contained ALL the unread messages —
-        // unread is a newest-suffix, so a count that fits inside the page means everything unread
-        // was rendered. This list already has the count; GroupThread cannot get it otherwise.
-        unreadCount={unread.get(open.id) ?? 0}
         onClose={() => setOpenId(null)}
         onChanged={() => void load()}
       />
@@ -318,6 +339,44 @@ function GroupsSection({
         >
           {notice}
         </p>
+      ) : null}
+
+      {/*
+        V8-R-GRP-008, THE INCLUSION HALF: "V8 PROVIDES IN-APP UNREAD STATE **and NIGHT OUT
+        INVITATION NOTIFICATIONS**". 0067 wrote the recipient-addressed row and the read RPC, and
+        until round 9 nothing in the product displayed either, so an invitee became a plan member
+        and was never told (round-8 review, Codex, high). Push delivery is a different lane's file
+        and stays absent; `delivered_at` is the seam that sender writes. This is the in-app half.
+      */}
+      {invitesFailed ? (
+        <p data-testid="group-invites-failed" role="status" className="text-sm text-muted">
+          Your night out invitations could not be loaded.
+        </p>
+      ) : null}
+
+      {invites.length > 0 ? (
+        <ul data-testid="group-invite-notifications" className="space-y-2">
+          {invites.map((invite) => (
+            <li
+              key={invite.id}
+              data-testid="group-invite-notification"
+              className="flex items-center justify-between gap-3 rounded-2xl border border-accent bg-surface px-4 py-3"
+            >
+              <span className="min-w-0 text-sm">
+                You are invited to {invite.title ?? 'a night out'} on {invite.night}
+                {invite.groupName !== null ? ` via ${invite.groupName}` : ''}.
+              </span>
+              <button
+                type="button"
+                onClick={() => void onDismissInvite(invite.id)}
+                data-testid="group-invite-seen"
+                className="shrink-0 min-h-[44px] px-3 rounded-full border border-border text-sm font-display touch-manipulation"
+              >
+                Got it
+              </button>
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {status === 'failed' ? (

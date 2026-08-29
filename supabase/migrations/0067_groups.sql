@@ -1843,7 +1843,13 @@ begin
       return;
     end if;
 
-    return query select true, v_expiry;
+    -- ROUND 9. A LIVE GROUP MESSAGE OUTRANKS A STORY'S CLOCK. The two branches above already
+    -- answer with an unbounded window when the story side is dead or hidden, but this one handed
+    -- back the STORY's expiry whenever a live story also referenced the media -- so an owner whose
+    -- story copy had half a second left got a near-zero TTL on the photo in their own thread, and
+    -- it rendered as unavailable (round-8 review, Codex, medium). The group destination has no
+    -- expiry of its own and null is how that is spelled here.
+    return query select true, case when v_group_readable then null::timestamptz else v_expiry end;
     return;
   end if;
 
@@ -1869,7 +1875,13 @@ begin
   -- READABILITY IS A BOOLEAN, NOT `expiry is not null`. A group photo authorises
   -- a read with NO expiry of its own, so deriving the answer from the timestamp
   -- would refuse exactly the case this section exists to allow.
-  return query select (v_expiry is not null) or v_group_readable, v_expiry;
+  --
+  -- ROUND 9, and the same defect as the owner branch: the boolean was already right and the
+  -- TIMESTAMP was not. Returning the story's expiry alongside a group-granted read caps the signed
+  -- URL at whatever the story had left, which is zero once the story is about to lapse.
+  return query select
+    (v_expiry is not null) or v_group_readable,
+    case when v_group_readable then null::timestamptz else v_expiry end;
 end;
 $$;
 

@@ -99,6 +99,10 @@ test.describe('Social · Groups', () => {
     await expect(page.getByTestId('group-invite-plan')).toHaveCount(0);
     await expect(page.getByTestId('group-unread')).toHaveCount(0);
     await expect(page.getByTestId('group-invite-send')).toHaveCount(0);
+    // Round 9: the in-app invitation notification reads an auth-scoped RPC, so signed out it is
+    // another control that could only fail.
+    await expect(page.getByTestId('group-invite-notifications')).toHaveCount(0);
+    await expect(page.getByTestId('group-invite-seen')).toHaveCount(0);
   });
 
   test('tapping sign-in from Groups goes to /auth and nowhere else', async ({
@@ -242,6 +246,12 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     members?: unknown[];
     /** X4: the viewer's invitable plans. `null` fulfils a FAILURE, which is its own state. */
     plans?: unknown[] | null;
+    /**
+     * Round 9, GRP-008's inclusion half: the viewer's own Night Out invitation notifications.
+     * `null` fulfils a FAILURE, because "nobody invited you" and "that could not be loaded" must
+     * not render the same.
+     */
+    invites?: unknown[] | null;
   } = {}): Promise<void> {
     const marked: string[] = [];
     (page as unknown as { __marked: string[] }).__marked = marked;
@@ -257,6 +267,16 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       }
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(opts.plans ?? []) });
     });
+    // Round 9. The Groups surface's own load() now reads this too, so leaving it unrouted would
+    // let a real request escape to the network — the same trap the plans read documents above.
+    await page.route('**/rest/v1/rpc/get_my_night_out_invitation_notifications', async (route) => {
+      if (opts.invites === null) {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'boom' }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(opts.invites ?? []) });
+    });
+    await page.route('**/rest/v1/rpc/mark_night_out_invitation_notification_read', json(true));
     await page.route('**/rest/v1/rpc/mark_group_read', async (route) => {
       marked.push(route.request().postData() ?? '');
       await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
@@ -297,6 +317,70 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await page.goto('/friends');
     await page.getByRole('button', { name: /groups & people/i }).click();
     await expect(page.getByTestId('group-unread')).toContainText('3');
+  });
+
+  test('a night out invitation is DELIVERED IN-APP, not only recorded (GRP-008, round 9)', async ({ page }) => {
+    // The round-8 finding: 0067 wrote night_out_invitation_notifications and the read RPC, and
+    // nothing in the product displayed either — so an invitee became a plan member and was never
+    // told. Push delivery is another lane's file and is still absent by design; this is the
+    // in-app half the requirement includes by name, and it is the half this lane owns.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
+      invites: [{
+        id: 7,
+        night_out_id: '44444444-4444-4444-8444-444444444444',
+        night: '2026-09-04',
+        title: 'Sam-s birthday',
+        group_id: GROUP_ID,
+        group_name: 'Thursday Crew',
+        invited_by: OTHER_ID,
+        created_at: '2026-09-01T00:00:00Z',
+        read_at: null,
+      }],
+    });
+    await page.goto('/friends');
+    await page.getByRole('button', { name: /groups & people/i }).click();
+
+    const notice = page.getByTestId('group-invite-notification');
+    await expect(notice).toContainText('Sam-s birthday');
+    // "via <group>" is what makes it a GROUP invitation rather than an anonymous one.
+    await expect(notice).toContainText('Thursday Crew');
+
+    // Seeing it IS the notification, so dismissing writes read_at and the row leaves the surface.
+    await page.getByTestId('group-invite-seen').click();
+    await expect(page.getByTestId('group-invite-notification')).toHaveCount(0);
+  });
+
+  test('a FAILED invitation read says so rather than saying nobody invited you (round 9)', async ({ page }) => {
+    // The same collapse fetchMyGroups and the plan picker each refuse: an empty list and an
+    // unreachable backend must never render identically.
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
+      invites: null,
+    });
+    await page.goto('/friends');
+    await page.getByRole('button', { name: /groups & people/i }).click();
+
+    await expect(page.getByTestId('group-invites-failed')).toBeVisible();
+    await expect(page.getByTestId('group-invite-notification')).toHaveCount(0);
+    // The group list itself is unaffected: one failed read does not blank the surface.
+    await expect(page.getByTestId('group-row').first()).toContainText('Thursday Crew');
+  });
+
+  test('no invitations renders no notification block at all (round 9)', async ({ page }) => {
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [{ id: GROUP_ID, name: 'Thursday Crew', created_at: '2026-08-01T00:00:00Z' }],
+      invites: [],
+    });
+    await page.goto('/friends');
+    await page.getByRole('button', { name: /groups & people/i }).click();
+
+    await expect(page.getByTestId('group-list')).toBeVisible();
+    await expect(page.getByTestId('group-invite-notifications')).toHaveCount(0);
+    await expect(page.getByTestId('group-invites-failed')).toHaveCount(0);
   });
 
   test('a failed thread load states the failure and does NOT clear unread state', async ({ page }) => {
