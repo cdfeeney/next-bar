@@ -553,17 +553,32 @@ describe('FeedComments — a confirmed write is not undone by a failed read', ()
     // including where feed_comments RLS would refuse that row outright.
     const held = deferred<Result<FeedComment>>();
     addResult = held.promise;
-    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+    const view = render(<FeedSection entries={[]} onOpenStory={() => {}} />);
 
     await user.click(await screen.findByTestId('feed-reply'));
     await user.type(screen.getByTestId('feed-comment-input'), 'account A words');
     await user.click(screen.getByTestId('feed-comment-submit'));
 
-    // Account B signs in while A's write is still open, then A's write lands.
+    // Account B signs in while A's write is STILL OPEN. The render-time reset runs
+    // here and clears the overlay — which is precisely why it cannot help: the
+    // write has not returned yet.
     viewer = OTHER_VIEWER;
     epoch = 2;
+    view.rerender(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    // NOW A's write lands, into B's component, and the re-read it triggers FAILS.
+    // That last part is load-bearing rather than incidental: a successful comment
+    // read supersedes the overlay (setPending(EMPTY_PENDING)), so with it the
+    // staged row is gone before anything can look at it and the case proves
+    // nothing. A failed re-read is also the situation the overlay exists for.
+    commentPlan = [FAILED];
     held.resolve({ ok: true, value: makeComment({ id: 'late', body: 'account A words', authorId: VIEWER }) });
     await held.promise;
+
+    // B opens the thread. The switch closed it, so without this the overlay is
+    // never read and the case proves nothing — it was green against the unfixed
+    // component until this click was added.
+    await user.click(await screen.findByTestId('feed-reply'));
 
     await waitFor(() =>
       expect(
