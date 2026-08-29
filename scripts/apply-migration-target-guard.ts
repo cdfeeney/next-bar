@@ -230,6 +230,51 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   // connection string naming sslrootcert wins over this config and pg loads that
   // file itself. What this config RESOLVES to is checked below, after the target
   // refusals, because a wrong target is the more useful error to show first.
+  // THE CA PATH MAY ONLY COME FROM THE ENVIRONMENT, NEVER FROM THE URL.
+  //
+  // pg reads a `sslrootcert=` named in the connection string ITSELF, at Client construction — so
+  // the file is read a SECOND time, after this function has already authorized the first read. The
+  // authorization then describes one certificate and the socket authenticates with another, and a
+  // CA swapped between the two calls is authenticated by the real client while every check here
+  // still reports the certified host, user and port. Codex reproduced the double read on pg 8.20.0:
+  // two clients built from one config yielded CA-1 then CA-2.
+  //
+  // PGSSLROOTCERT does not have that seam, because THIS function reads the file once and puts the
+  // BYTES in the config. So the URL form is refused outright rather than parsed, and the config
+  // handed back is the one the connection is opened from.
+  // FAIL CLOSED WHEN THE STRING DOES NOT PARSE. Scanning the raw text was the first attempt and
+  // it was bypassable (round 7, HIGH, reproduced on pg 8.20.0):
+  // `postgresql://postgres.<ref>:pw@/postgres?host=<pooler>&%73slrootcert=<path>` is rejected by
+  // `new URL()` for its empty authority, misses a literal `sslrootcert=` match because the key is
+  // percent-encoded, and is then REPAIRED by pg — which decodes the key, honours the host=
+  // override, and reads the file. Anything this guard cannot parse is something it cannot
+  // certify, so it is refused rather than scanned. `resolveIdentity` already refuses unparseable
+  // strings for the same reason.
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(databaseUrl);
+  } catch {
+    return refuse(
+      'DATABASE_URL is not a parseable URL, so its parameters cannot be inspected and what pg '
+      + 'would do with it cannot be certified. Supply a standard postgresql:// URL.',
+    );
+  }
+  // Percent-encoding in the KEY is decoded by pg but not by URLSearchParams, so compare decoded
+  // keys rather than asking for one spelling.
+  const namesSslRootCert = [...parsedUrl.searchParams.keys()].some((key) => {
+    let decoded = key;
+    try { decoded = decodeURIComponent(key); } catch { decoded = key; }
+    return decoded.trim().toLowerCase() === 'sslrootcert';
+  });
+  if (namesSslRootCert) {
+    return refuse(
+      'DATABASE_URL names sslrootcert, and pg would read that file again when it builds the client '
+      + '- after this check has already authorized a different read of it. Put the CA path in '
+      + 'PGSSLROOTCERT instead, which is read once here and travels as bytes in the authorized '
+      + 'config.',
+    );
+  }
+
   const caPath = (process.env.PGSSLROOTCERT ?? '').trim();
   let ca = '';
   if (caPath) {
@@ -323,8 +368,9 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   if (!resolvedSsl.ca) {
     return refuse('the connection carries no CA certificate for the pooler, whose chain is '
       + "self-signed. Set PGSSLROOTCERT to Supabase's CA file (dashboard - Settings - Database - "
-      + 'SSL configuration). If DATABASE_URL names sslmode or any other ssl parameter, it REPLACES '
-      + 'that CA, so the path has to go there too: ?sslmode=verify-full&sslrootcert=<path>.');
+      + 'SSL configuration). If DATABASE_URL names sslmode or any other ssl parameter it REPLACES '
+      + 'that CA, and the answer is to remove the parameter - NOT to add sslrootcert to the URL, '
+      + 'which is refused above because pg would then re-read the file after this authorization.');
   }
 
   return { refusal: null, target: { clientConfig, env: actualEnv, effective, ref } };

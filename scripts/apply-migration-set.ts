@@ -55,8 +55,10 @@
  * TLS: the connection must be encrypted AND the pooler's certificate verified.
  * Supabase's pooler presents a SELF-SIGNED chain, so verification needs their CA
  * (dashboard - Settings - Database - SSL configuration; one download, kept out of
- * the repo). Point PGSSLROOTCERT at that file, or put
- * `?sslmode=verify-full&sslrootcert=<path>` in DATABASE_URL. Without it this tool
+ * the repo). Point PGSSLROOTCERT at that file. NAMING sslrootcert IN DATABASE_URL IS NOW
+ * REFUSED: pg re-reads that file when it builds the client, after this tool has already
+ * authorized a different read of it, so the CA that was checked and the CA that authenticates
+ * can differ. PGSSLROOTCERT is read once here and travels as bytes. Without a CA this tool
  * refuses rather than falling back to an unauthenticated channel: every other link
  * in the target check is a string the operator wrote, and the certificate is the
  * only thing that proves the peer answering that hostname is really Supabase.
