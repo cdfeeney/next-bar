@@ -18,6 +18,8 @@ const setNightOutStart = vi.fn();
 const setNightOutArea = vi.fn();
 const setNightOutVotingDeadline = vi.fn();
 let presence: { barId: string | null } | null = null;
+/** Whether that read has RETURNED — the distinction round 9 added. */
+let presenceSettled = true;
 
 // PARTIAL: the three RPC writers are spied, `remainingLabel` is the real one.
 // It is a pure formatter that moved into this module in round-10 round 8 so the
@@ -42,6 +44,7 @@ vi.mock('@/lib/nightKey', () => ({
 }));
 vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
   useMyPresence: () => presence,
+  useMyPresenceRead: () => ({ presence, settled: presenceSettled }),
 }));
 
 import { useNightOutPlanFields, type PlanEditOutcome } from './NightOutPlanFields';
@@ -157,6 +160,7 @@ beforeEach(() => {
   // Mid-evening on the night of the 20th, well inside that night key.
   vi.setSystemTime(Date.parse('2026-08-21T01:30:00.000Z'));
   presence = null;
+  presenceSettled = true;
   setNightOutStart.mockResolvedValue(true);
   setNightOutArea.mockResolvedValue(true);
   setNightOutVotingDeadline.mockResolvedValue(true);
@@ -268,6 +272,46 @@ describe('the Area row (V8-R-NO-003)', () => {
     expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe(
       'Lower East Side',
     );
+  });
+
+  /**
+   * ROUND-10 ROUND 9, Codex. `useMyPresence` answered null for both "not read
+   * yet" and "no pin", so tapping Start before the read settled made the form
+   * treat a neighbourhood the app already knew as one it did not have: the plan
+   * was created without it and said nothing. Round 7 called the hook another
+   * lane's surface and stopped there; `usePinnedHandles.ts` is in this lane, so
+   * `useMyPresenceRead` now keeps the two apart.
+   *
+   * The plan is still created either way — that is the rule all three edits
+   * follow. What changed is that the Area is REPORTED as not saved rather than
+   * dropped in silence, and the draft is not pinned to a blank the owner never
+   * chose, so the row goes on offering the value when the read lands.
+   */
+  test('an area that is only empty because presence has not landed is reported, not dropped', async () => {
+    presence = null;
+    presenceSettled = false;
+    render(<Harness />);
+
+    screen.getByTestId('create').click();
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('refused').textContent,
+        'the plan silently lost a neighbourhood the app already knew',
+      ).toBe('the area'),
+    );
+    expect(setNightOutArea).not.toHaveBeenCalled();
+    // And the row is still following presence, not pinned to the blank.
+    expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe('');
+  });
+
+  test('a settled read with no pin is a real answer, and reports nothing', async () => {
+    presence = null;
+    presenceSettled = true;
+    render(<Harness />);
+
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutArea).not.toHaveBeenCalled();
   });
 
   test('the inherited area is a seed, not a lock — clearing it is a state', async () => {

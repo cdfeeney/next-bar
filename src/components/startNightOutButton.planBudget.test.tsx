@@ -31,6 +31,8 @@ vi.mock('@/lib/nightKey', () => ({ nycNightKey: () => '2026-08-17' }));
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
 vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
   useMyPresence: () => null,
+  // Settled with no pin — this suite is about the budget, not the Area.
+  useMyPresenceRead: () => ({ presence: null, settled: true }),
 }));
 /** When true, the invite phase alone outlasts the planning-edit budget. */
 let slowInvite = false;

@@ -209,9 +209,33 @@ export function usePinnedHandles(): PinnedHandlesState {
  * introduced to fix, and why removing the event as "dead" would have been the wrong repair.
  */
 export function useMyPresence(): MyPresence | null {
+  return useMyPresenceRead().presence;
+}
+
+/**
+ * The same read, plus WHETHER IT HAS HAPPENED YET.
+ *
+ * `useMyPresence` answers `null` for both "not read yet" and "no pin", and the
+ * comment on the read below justifies that by saying nothing downstream writes.
+ * That stopped being true when the Start-a-Night-Out form began SEEDING the
+ * plan's Area from this hook (V8-R-NO-003, "reuses the area already known from
+ * Tonight"): tapping Start before the read settles made the form treat a
+ * neighbourhood the app already knew as one it did not have, and the plan was
+ * created without it and said nothing (round-10 round 9, Codex).
+ *
+ * A writer needs the two apart, so this is the shape a writer asks for. The
+ * display callers keep the null-collapsing one above — for a badge the
+ * distinction genuinely does not matter — so no existing caller changes.
+ *
+ * `settled` means the read RETURNED, not that it succeeded: a failed read is
+ * still an answer of "no pin we can see", and the caller that cares can only
+ * act on the difference between "not yet" and "we asked".
+ */
+export function useMyPresenceRead(): { presence: MyPresence | null; settled: boolean } {
   const auth = useAuth();
   const isSignedIn = auth.status === 'signed-in';
   const [mine, setMine] = useState<MyPresence | null>(null);
+  const [settled, setSettled] = useState(false);
   const [nonce, setNonce] = useState(0);
   const bumpNonce = useCallback(() => setNonce((n) => n + 1), []);
   // Re-read at the 4:00 AM boundary: the night key changes and the server returns nothing
@@ -227,19 +251,23 @@ export function useMyPresence(): MyPresence | null {
 
   useEffect(() => {
     let cancelled = false;
-    if (!isSignedIn) { setMine(null); return () => { cancelled = true; }; }
+    // A signed-out viewer and a missing client are both SETTLED: there is no
+    // read coming, so a caller waiting on one would wait forever.
+    if (!isSignedIn) { setMine(null); setSettled(true); return () => { cancelled = true; }; }
     const supabase = getBrowserSupabase();
-    if (supabase === null) { setMine(null); return () => { cancelled = true; }; }
+    if (supabase === null) { setMine(null); setSettled(true); return () => { cancelled = true; }; }
     void (async () => {
       const read = await fetchMyPresence(supabase);
       // A failed read is NO BADGE here, and that is safe in a way it is not in
       // TonightPresence: this hook only DISPLAYS the pin. Nothing downstream of
       // it writes, so there is no audience for a missing read to widen — the
       // rail simply shows no pin until the next read lands.
-      if (!cancelled) setMine(read.kind === 'ok' ? read.presence : null);
+      if (cancelled) return;
+      setMine(read.kind === 'ok' ? read.presence : null);
+      setSettled(true);
     })();
     return () => { cancelled = true; };
   }, [isSignedIn, nonce]);
 
-  return mine;
+  return { presence: mine, settled };
 }

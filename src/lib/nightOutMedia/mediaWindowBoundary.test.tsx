@@ -183,6 +183,40 @@ describe('the media window re-asks the server at its own boundary', () => {
   });
 
   /**
+   * ROUND-10 ROUND 9, Codex — and the distinction the test above does NOT make.
+   * Never having read a window is not the same as having read one and then
+   * losing it. A single transport blip on a boundary refresh replaced a known
+   * window with null, the effect returned without re-arming, and both controls
+   * and every photo the server was serving stayed gone until a reload.
+   */
+  test('a window LOST to a failed refresh is asked for again', async () => {
+    vi.setSystemTime(Date.parse(OPENS_AT) - 30_000);
+    fetchNightOutMediaWindow
+      .mockResolvedValueOnce(BEFORE)
+      // The boundary refresh blips.
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(OPEN);
+
+    render(<NightOutMedia planId={PLAN} canAddPhoto />);
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(1));
+
+    // The boundary passes and the refresh fails: the window is now unknown.
+    await vi.advanceTimersByTimeAsync(31_000);
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('night-out-add-photo')).toBeNull();
+
+    // Nothing else re-reads on this side, so the floor has to. Before this fix
+    // the timer was disarmed here and the count stayed at 2 forever.
+    await vi.advanceTimersByTimeAsync(61_000);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('night-out-add-photo'),
+        'one failed read permanently disarmed the boundary timer',
+      ).toBeTruthy(),
+    );
+  });
+
+  /**
    * ROUND-7 PANEL, BOTH LANES — AND THIS TEST ASSERTED THE DEFECT.
    *
    * It used to demand that a boundary already behind this device arm NOTHING,
@@ -268,6 +302,34 @@ describe('the media window re-asks the server at its own boundary', () => {
     // ...and the approach still opens in time to absorb a ten-minute skew.
     await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1_000 + 21 * 60_000);
     expect(fetchNightOutMediaWindow.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * ROUND-10 ROUND 9, Codex. Round 8 slept the whole way to the window's edge
+   * in ONE wait, which made the tolerance a constant: a device thirty minutes
+   * slow was told the boundary was still twenty-one minutes off and hid media
+   * the server had already begun serving for twenty of them. Halving the
+   * remaining wait makes the lag scale with the error instead — at a
+   * logarithmic number of reads, not one a minute.
+   */
+  test('a boundary hours ahead is re-asked well before the approach window', async () => {
+    // Three hours by this device's clock; the server has ALREADY opened.
+    vi.setSystemTime(Date.parse(OPENS_AT) - 3 * 60 * 60 * 1_000);
+    fetchNightOutMediaWindow.mockResolvedValueOnce(BEFORE).mockResolvedValue(OPEN);
+
+    render(<NightOutMedia planId={PLAN} canAddPhoto />);
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('night-out-add-photo')).toBeNull();
+
+    // Halved: the next ask is at about 90 minutes, not at 2h50m. Round 8's
+    // single sleep would still have 80 minutes to run here.
+    await vi.advanceTimersByTimeAsync(91 * 60_000);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('night-out-add-photo'),
+        'the wait ran to the window edge in one go, so a large skew hid the window for its whole length',
+      ).toBeTruthy(),
+    );
   });
 
   /**

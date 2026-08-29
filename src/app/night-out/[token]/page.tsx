@@ -188,6 +188,25 @@ function deadlineLabel(instant: string): string {
  * the longest single wait before the timer re-arms, because `setTimeout`
  * silently fires immediately past ~24.8 days.
  */
+/**
+ * What a member load actually did — three outcomes, never a boolean.
+ *
+ * Round-10 round 9, Claude gate, and the round-4 comment in the Join handler
+ * had already written down why: `false` meant BOTH "the read failed" and "the
+ * view moved on and I refused to paint", and only the first is something to
+ * report. Every caller carried its own hand-patch that re-checked `viewEpoch`
+ * to tell them apart. Round 8 added a SECOND reason to refuse — a newer load of
+ * the same view had already painted — and those hand-patches, which knew only
+ * about the epoch, silently started reporting it as a failure: a double-tapped
+ * Join painted "You're in — but this page couldn't load" over a member board
+ * that had loaded correctly, and the resolve effect would paint the bearer
+ * PREVIEW over it.
+ *
+ * Patching each caller a second time would leave the same trap set for the
+ * third reason. The ambiguity is in the return type, so that is what changed.
+ */
+type MemberLoad = 'painted' | 'superseded' | 'failed';
+
 const DEADLINE_GRACE_MS = 1_000;
 const MIN_RECHECK_MS = 60_000;
 const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
@@ -207,8 +226,16 @@ const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
  * late" — it means "ask again every minute, forever". A plan opened hours
  * before its deadline re-ran `loadMemberView`'s FIVE RPCs every sixty seconds
  * for the whole wait. Ten minutes is the tolerance, the figure round 7's own
- * trigger named: outside the window one wait until it opens, inside it a read a
- * minute, about eleven per deadline in total.
+ * trigger named: inside the window, a read a minute.
+ *
+ * OUTSIDE IT WE HALVE, RATHER THAN SLEEP THROUGH (round-10 round 9, Codex).
+ * Round 8 waited to the window's edge in one go, which made the tolerance a
+ * CONSTANT: a device thirty minutes slow kept Suggest, Vote and Remove editable
+ * for twenty minutes past a deadline the server was already enforcing, and
+ * every tap in that window is refused. Halving makes the lag at the true
+ * crossing at most half the remaining wait, so it scales with the error, at a
+ * logarithmic number of reads. See `NightOutMedia`'s copy for the full
+ * reasoning and for the residual gap, which is reported rather than closed.
  */
 const SKEW_TOLERANCE_MS = 10 * 60_000;
 
@@ -242,8 +269,10 @@ function clampRecheck(delayMs: number): number {
   if (delayMs <= 0) return MIN_RECHECK_MS;
   const wait =
     delayMs > SKEW_TOLERANCE_MS
-      ? // Still outside the approach window: sleep until it opens, in ONE wait.
-        delayMs - SKEW_TOLERANCE_MS
+      ? // Outside the approach window: HALVE the remaining wait rather than
+        // sleeping through it, so the detection lag scales with the skew. See
+        // `SKEW_TOLERANCE_MS`.
+        Math.min(delayMs - SKEW_TOLERANCE_MS, Math.ceil(delayMs / 2))
       : // Inside it: a minute, or the exact remaining time when that is sooner,
         // so a deadline five seconds away is still not re-read after sixty.
         Math.min(delayMs, MIN_RECHECK_MS);
@@ -281,6 +310,23 @@ export default function NightOutPage({
   // Bumped by the voting-deadline timer itself, so the next one is armed
   // whether or not the answer that came back was different.
   const [deadlineTick, setDeadlineTick] = useState(0);
+  /**
+   * Re-renders the remaining-minutes WORDING, and nothing else.
+   *
+   * Deliberately not `deadlineTick`: that one is the server's asking schedule
+   * and now runs at most twice an hour outside the approach window, which left
+   * the sentence saying "in about 6 hours" four hours later (round-10 round 9,
+   * Codex). Recomputing a label costs a render, not a round trip, so the two
+   * cadences have no reason to be the same one.
+   *
+   * It holds the INSTANT rather than a counter, because `remainingLabel` takes
+   * a `now` and this is what that parameter is for: the label stays a function
+   * of its inputs instead of a value that happens to be recomputed by an
+   * unrelated re-render. Seeded at mount so the first paint is right; the
+   * member view only exists after an async load, so it is never in the
+   * prerendered HTML and there is no hydration mismatch to guard against.
+   */
+  const [wordsNow, setWordsNow] = useState(() => Date.now());
   const token = decodeURIComponent(params.token);
 
   /**
@@ -317,6 +363,13 @@ export default function NightOutPage({
    */
   const memberLoadSeq = useRef(0);
   const memberPaintedSeq = useRef(0);
+  /**
+   * Has this view's voting state EVER been read successfully? Separates "never
+   * known" from "knew, then a read failed" — states a null `voting` collapses
+   * into one. Only the second is a regression worth re-asking about; see the
+   * deadline effect.
+   */
+  const hadVoting = useRef(false);
   // Guards every withRefresh action against re-entrant taps. See withRefresh.
   const actionInFlight = useRef(false);
   /**
@@ -337,6 +390,9 @@ export default function NightOutPage({
    */
   useLayoutEffect(() => {
     viewEpoch.current += 1;
+    // The new view's voting state has never been read, whatever we knew about
+    // the previous one — so a null there is "not yet", not "we lost it".
+    hadVoting.current = false;
     // Blocking a stale load from painting is only half of it (cold panel 2,
     // Codex): on a sign-out the member view ALREADY on screen stayed rendered
     // until the anonymous preview settled, so accepted-member data sat in front
@@ -386,11 +442,11 @@ export default function NightOutPage({
    * sequence, not before the last one.
    */
   const loadMemberView = useCallback(
-    async (planId: string, startedAt?: number): Promise<boolean> => {
+    async (planId: string, startedAt?: number): Promise<MemberLoad> => {
       const supabase = getBrowserSupabase();
-      if (!supabase) return false;
+      if (!supabase) return 'failed';
       const epoch = startedAt ?? viewEpoch.current;
-      if (epoch !== viewEpoch.current) return false;
+      if (epoch !== viewEpoch.current) return 'superseded';
       memberLoadSeq.current += 1;
       const seq = memberLoadSeq.current;
       const [plan, members, board, voting, anonRsvps] = await Promise.all([
@@ -402,14 +458,16 @@ export default function NightOutPage({
         fetchNightOutVoting(supabase, planId),
         fetchAnonRsvpCounts(supabase, planId),
       ]);
-      if (plan === null) return false;
+      // The ONLY genuine failure: the plan itself could not be read.
+      if (plan === null) return 'failed';
       // The view moved while we were away: this answer belongs to a session, or
       // a plan, that is no longer the one on screen.
-      if (epoch !== viewEpoch.current) return false;
+      if (epoch !== viewEpoch.current) return 'superseded';
       // ...and a newer load of the SAME view has already painted. See
       // `memberLoadSeq`.
-      if (seq <= memberPaintedSeq.current) return false;
+      if (seq <= memberPaintedSeq.current) return 'superseded';
       memberPaintedSeq.current = seq;
+      if (voting !== null) hadVoting.current = true;
       setState({
         kind: 'member',
         plan,
@@ -418,7 +476,7 @@ export default function NightOutPage({
         voting,
         anonRsvps,
       });
-      return true;
+      return 'painted';
     },
     [],
   );
@@ -477,7 +535,12 @@ export default function NightOutPage({
         // their plan view. Joining is always the explicit button below.
         const planId = await resolveNightOutByToken(supabase, token);
         if (cancelled || startedAt !== viewEpoch.current) return;
-        if (planId !== null && (await loadMemberView(planId, startedAt))) return;
+        // Anything but a genuine read failure ends this effect. A `superseded`
+        // load must NOT fall through to the bearer preview below (round-10
+        // round 9): the seq axis does not move the epoch, so the guard on the
+        // next line would not have caught it, and the preview would have
+        // painted over a member board that had just loaded correctly.
+        if (planId !== null && (await loadMemberView(planId, startedAt)) !== 'failed') return;
         if (cancelled || startedAt !== viewEpoch.current) return;
       }
       // Signed-out, non-member, or the link is dead/cancelled: bearer
@@ -525,10 +588,45 @@ export default function NightOutPage({
    * `clampRecheck` above — this file and NightOutMedia each carry the rule,
    * and the panel filed the same defect against both copies.
    */
+  /**
+   * Keep the remaining-minutes wording honest while the page sits open. Armed
+   * only while there is an open deadline to describe, so a plan without one —
+   * or one whose vote has closed — runs no interval at all.
+   */
   useEffect(() => {
     if (state.kind !== 'member') return;
     const voting = state.voting;
     if (voting === null || !voting.votingOpen || voting.votingClosesAt == null) return;
+    const id = setInterval(() => setWordsNow(Date.now()), MIN_RECHECK_MS);
+    return () => clearInterval(id);
+  }, [state]);
+
+  useEffect(() => {
+    if (state.kind !== 'member') return;
+    const voting = state.voting;
+    if (voting === null) {
+      // A DEADLINE WE COULD NOT READ IS NOT A PLAN WITHOUT ONE (round-10 round
+      // 9, Codex). `fetchNightOutVoting` rides alongside `get_night_out` rather
+      // than through it, so it can fail on its own: the plan paints, `voting`
+      // becomes null, this effect returned, and `votingOpen` fell back to the
+      // plan's status. One transport blip on a refresh therefore left Vote,
+      // Suggest and Remove editable past a deadline the server was already
+      // enforcing, permanently — the exact state the whole timer exists to
+      // prevent, reached by the one path that disarmed it.
+      //
+      // No instant to wait for, so it asks again on the floor until an answer
+      // arrives; an answer that carries a deadline arms it properly below, and
+      // one that says voting is closed arms nothing, as before.
+      if (!hadVoting.current) return;
+      const planId = state.plan.id;
+      const startedAt = viewEpoch.current;
+      const timer = setTimeout(() => {
+        setDeadlineTick((n) => n + 1);
+        void loadMemberView(planId, startedAt);
+      }, MIN_RECHECK_MS);
+      return () => clearTimeout(timer);
+    }
+    if (!voting.votingOpen || voting.votingClosesAt == null) return;
     const at = Date.parse(voting.votingClosesAt);
     if (!Number.isFinite(at)) return;
     const planId = state.plan.id;
@@ -678,18 +776,17 @@ export default function NightOutPage({
                       ? 'This night out is full.'
                       : "Couldn't join — the link may have expired.",
                   );
-                } else if (!(await loadMemberView(planId, startedAt))) {
+                } else if ((await loadMemberView(planId, startedAt)) === 'failed') {
                   // The join SUCCEEDED and the membership is stored; only the
                   // follow-up read failed. Reporting "full" here contradicted
                   // the database when the join took the last seat (fresh-cycle
                   // review, Codex).
                   //
-                  // Round 4 (Codex): `loadMemberView` returning false is
-                  // AMBIGUOUS — it means either "the read failed" or "the view
-                  // moved on and I refused to paint". Only the first is a
-                  // failure to report. Without this, a stale abort announced
-                  // "You're in" over whatever plan is now on screen.
-                  if (startedAt !== viewEpoch.current) return;
+                  // Round 4 (Codex) hand-checked the epoch here, because `false`
+                  // meant both "the read failed" and "I refused to paint". Round
+                  // 9 moved that distinction into `MemberLoad` — see its comment
+                  // — so only a real failure reaches this branch and the epoch
+                  // re-check that used to sort them out is gone with it.
                   setActionError("You're in — but this page couldn't load. Refresh to see it.");
                 }
               })();
@@ -714,10 +811,13 @@ export default function NightOutPage({
                 setActionError(null);
                 const planId = await declineNightOutByToken(supabase, token);
                 if (startedAt !== viewEpoch.current) return;
-                if (planId === null || !(await loadMemberView(planId, startedAt))) {
-                  // Same ambiguity as the join branch above (round 4, Codex):
-                  // a refused paint is not a failed decline.
-                  if (startedAt !== viewEpoch.current) return;
+                if (
+                  planId === null
+                  || (await loadMemberView(planId, startedAt)) === 'failed'
+                ) {
+                  // Same distinction as the join branch above, and now carried
+                  // by the return type rather than re-derived here: a refused
+                  // paint is not a failed decline.
                   setActionError("Couldn't send that — the link may have expired.");
                 }
               })();
@@ -1016,15 +1116,21 @@ export default function NightOutPage({
 
               Only while voting is OPEN: once it has closed there is nothing
               remaining to state, and "in about 0 minutes" would be a countdown
-              to an event that has already happened. It is re-rendered by the
-              same `deadlineTick` that re-asks the server, so it is refreshed
-              through the approach window rather than frozen at load — the
-              wording is deliberately coarse ("about N hours") so that the one
-              long wait outside that window cannot make it wrong. */}
+              to an event that has already happened.
+
+              IT HAS ITS OWN CLOCK (round-10 round 9, Codex). Round 8 tied this
+              to `deadlineTick`, which only fires inside the ten-minute approach
+              window, and claimed the coarse wording made the long wait outside
+              it harmless. It does not: a page opened six hours early still said
+              "in about 6 hours" four hours later. Coarse is not the same as
+              stale, and this is the one sentence on the surface whose whole job
+              is to say how long is left. `wordsTick` re-renders it every minute
+              and costs no round trip — the server is asked on the boundary
+              schedule, exactly as before; only the arithmetic is redone. */}
           {voting?.votingClosesAt != null ? (
             <p className="mt-1 text-xs opacity-60" data-testid="night-out-deadline">
               {voting.votingOpen
-                ? `Voting closes ${deadlineLabel(voting.votingClosesAt)} — ${remainingLabel(voting.votingClosesAt)}.`
+                ? `Voting closes ${deadlineLabel(voting.votingClosesAt)} — ${remainingLabel(voting.votingClosesAt, wordsNow)}.`
                 : `Voting closed ${deadlineLabel(voting.votingClosesAt)}.`}
             </p>
           ) : null}

@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getBarById } from '@/lib/catalog';
 import { nycNightKey } from '@/lib/nightKey';
-import { useMyPresence } from '@/app/friends/_components/usePinnedHandles';
+import { useMyPresenceRead } from '@/app/friends/_components/usePinnedHandles';
 import {
   remainingLabel,
   setNightOutArea,
@@ -231,7 +231,7 @@ export function useNightOutPlanFields({
    * already knows — and it is a SEED, not a lock: the field is editable and
    * clearing it is one of the requirement's own three states.
    */
-  const mine = useMyPresence();
+  const { presence: mine, settled: presenceSettled } = useMyPresenceRead();
   const inherited =
     mine?.barId != null ? (getBarById(mine.barId)?.neighborhood ?? '') : '';
   const [areaEdit, setAreaEdit] = useState<string | null>(null);
@@ -303,8 +303,8 @@ export function useNightOutPlanFields({
    * and still skipped writing it. Each write reads this instead, so what is
    * sent is what the form shows when the write goes out.
    */
-  const live = useRef({ startEdit, start, startIso, startOffNight, area, deadlineIso });
-  live.current = { startEdit, start, startIso, startOffNight, area, deadlineIso };
+  const live = useRef({ startEdit, start, startIso, startOffNight, area, areaEdit, presenceSettled, deadlineIso });
+  live.current = { startEdit, start, startIso, startOffNight, area, areaEdit, presenceSettled, deadlineIso };
 
   const apply = useCallback(
     async (
@@ -353,15 +353,34 @@ export function useNightOutPlanFields({
        * empty — correct, since nothing was known yet — but when the read landed
        * a moment later the row began displaying a neighbourhood the plan does
        * not have, and then navigated. Pinning the draft to the value actually
-       * used makes the row show what was sent. `useMyPresence` returns null for
-       * both "not read yet" and "no pin", so waiting for it is not something
-       * this hook can do without changing that contract, which is another
-       * lane's surface; making the display honest is what is available here and
-       * is the half that was lying.
+       * used makes the row show what was sent.
+       *
+       * AND AN UNREAD PRESENCE IS NOT AN ABSENT ONE (round-10 round 9, Codex).
+       * Round 7 said waiting for the read was impossible because
+       * `useMyPresence` collapses "not read yet" and "no pin" into one `null`,
+       * and that the hook was another lane's surface. The first half was true;
+       * the second was wrong — `usePinnedHandles.ts` is in this lane — so the
+       * hook now offers `useMyPresenceRead`, which keeps the two apart, and the
+       * form no longer treats a neighbourhood the app already knows as one it
+       * does not have.
+       *
+       * It still does not BLOCK on the read: the plan is created either way,
+       * which is the rule every one of these three edits follows. What changes
+       * is that an empty Area the owner never chose — one that is empty only
+       * because the read had not landed — is REPORTED as not saved instead of
+       * being written off in silence, and the draft is not pinned to it, so the
+       * row goes on offering the value when it does arrive.
        */
+      const areaUnknownYet =
+        !live.current.presenceSettled && live.current.areaEdit === null;
       const trimmedArea = live.current.area.trim();
-      setAreaEdit((prev) => prev ?? live.current.area);
-      if (trimmedArea !== '') {
+      if (!areaUnknownYet) setAreaEdit((prev) => prev ?? live.current.area);
+      if (areaUnknownYet) {
+        // The same array the server refusals go into, because the sentence the
+        // owner needs is the same one: "we couldn't save the area". It did not
+        // land, and why it did not land is not their problem to parse.
+        failed.push('the area');
+      } else if (trimmedArea !== '') {
         if (stopped()) failed.push('the area');
         else if (!(await setNightOutArea(supabase, planId, trimmedArea))) failed.push('the area');
       }

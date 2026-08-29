@@ -982,6 +982,78 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
   });
 
+  /**
+   * ROUND-10 ROUND 9, Claude gate — the half of the round-8 fix that was
+   * missing. `epoch` is per-instance and an UNMOUNT never moves it, so the
+   * settle takes the LIVE branch and paints into a dead component. Round 8
+   * taught the STALE branch to paint the answer; a remount never reaches it.
+   * The controls came back, unpressed, on an invite the server had recorded.
+   */
+  test('a write that settles after a remount shows the answer, not just the buttons', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    let release: (value: 'sent') => void = () => undefined;
+    submitAnonRsvp.mockReturnValueOnce(
+      new Promise<'sent'>((resolve) => {
+        release = resolve;
+      }),
+    );
+    // The remounted instance's own read is still in flight and carries a
+    // snapshot from BEFORE the write committed — the second half of the defect.
+    let releaseRead: (value: { kind: 'none' }) => void = () => undefined;
+    fetchAnonRsvp.mockResolvedValueOnce({ kind: 'none' }).mockReturnValueOnce(
+      new Promise<{ kind: 'none' }>((resolve) => {
+        releaseRead = resolve;
+      }),
+    );
+
+    const first = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    first.unmount();
+    renderPreview();
+    await waitFor(() => expect(fetchAnonRsvp).toHaveBeenCalledTimes(2));
+
+    release('sent');
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('invite-rsvp-sent').textContent,
+        'the settle painted into the dead instance and the remount learned nothing',
+      ).toMatch(/going/i),
+    );
+
+    // ...and the older read may not undo it.
+    releaseRead({ kind: 'none' });
+    await waitFor(() => expect(screen.getByTestId('invite-rsvp-sent')).toBeTruthy());
+    expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/going/i);
+  });
+
+  /**
+   * ROUND-10 ROUND 9, Codex. The label rendered only when `rsvp === null`,
+   * which is right for a FIRST answer and silently wrong for a changed one: a
+   * recipient whose server answer is Maybe and who queues Going offline saw
+   * Maybe pressed and Going marked by a dashed border alone. V8-R-INV-003 wants
+   * it "explicitly labelled as not yet sent", and a border is not a label.
+   */
+  test('a queued answer that REPLACES one on record is still labelled as unsent', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    fetchAnonRsvp.mockResolvedValue({ kind: 'ok', choice: 'maybe' });
+    readQueuedRsvp.mockReturnValue('going');
+    submitAnonRsvp.mockResolvedValue('unreachable');
+
+    renderPreview();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/maybe/i),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('invite-rsvp-queued').textContent,
+        'the held answer differed from the one on record and nothing said it was unsent',
+      ).toMatch(/not sent yet/i),
+    );
+  });
+
   test('says the answer was not sent when the queue itself could not be written', async () => {
     submitAnonRsvp.mockResolvedValue('unreachable');
     queueRsvp.mockReturnValue(false);

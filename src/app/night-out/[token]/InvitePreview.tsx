@@ -71,6 +71,30 @@ import {
 const rsvpWritesInFlight = new Set<string>();
 
 /**
+ * The answer this JS context has SEEN LAND, per invite.
+ *
+ * Round-10 round 9, Claude gate — and this is the half of round 8's fix that
+ * was missing rather than a new defect. `epoch` is a per-instance ref and an
+ * UNMOUNT never moves it, so a write settling after the recipient left and came
+ * back compares equal and takes the LIVE branch, where every `setState` belongs
+ * to the dead instance and does nothing. Round 8 taught the STALE branch to
+ * paint the answer and mark it answered; a remount never reaches that branch.
+ * The listener set restored `rsvpBusy` and nothing else, so the recipient got
+ * their controls back with every choice unpressed while the server held
+ * `going` — and the remounted instance's own mount read, carrying a pre-commit
+ * snapshot, then confirmed the lie.
+ *
+ * A settled answer belongs to the invite, not to whichever instance happened to
+ * ask for it, so it lives beside the lock at the same scope. Every live
+ * instance adopts it through the same notification the lock uses; there is one
+ * mechanism, not two that must agree.
+ *
+ * Bounded by the invites visited in one page life, exactly like the lock above,
+ * and cleared for the same reason by `resetRsvpWritesInFlight`.
+ */
+const rsvpSettled = new Map<string, RsvpChoice>();
+
+/**
  * Live instances have to be TOLD when a hold is taken or released.
  *
  * Round-10 round 8, BOTH lanes. Moving the lock to module scope fixed the
@@ -122,6 +146,17 @@ function releaseRsvpWrite(inviteToken: string): void {
 }
 
 /**
+ * Record what actually landed, and wake whoever is on screen to adopt it.
+ * Called from every branch that learns a write was accepted — live or stale,
+ * tap or automatic delivery — because which branch runs depends only on where
+ * the recipient happens to be standing, and the answer does not.
+ */
+function noteRsvpLanded(inviteToken: string, choice: RsvpChoice): void {
+  rsvpSettled.set(inviteToken, choice);
+  markRsvpFlightChanged();
+}
+
+/**
  * Empty the lock. For TESTS, and the reason it has to exist is the same reason
  * the lock is module-scoped: a hold is released when its write settles, and a
  * suite that deliberately leaves a write hanging — which is most of the ones
@@ -131,6 +166,7 @@ function releaseRsvpWrite(inviteToken: string): void {
  */
 export function resetRsvpWritesInFlight(): void {
   rsvpWritesInFlight.clear();
+  rsvpSettled.clear();
   markRsvpFlightChanged();
 }
 
@@ -347,6 +383,18 @@ export default function InvitePreview({
   );
   useEffect(() => {
     setRsvpBusy(rsvpWritesInFlight.has(token));
+    // AND THE ANSWER, not only the controls (round-10 round 9, Claude gate).
+    // Adopting it here is what makes a remount whole: the instance that sent
+    // the write may be gone, but what it learned is not. `answered` goes with
+    // it for the same reason it does in the stale branch — the mount read of
+    // this very instance may still be in the air with a pre-commit snapshot,
+    // and it must not be allowed to paint over a write that has landed.
+    const landed = rsvpSettled.get(token);
+    if (landed !== undefined) {
+      answered.current = true;
+      setRsvp(landed);
+      setRsvpUnreadable(false);
+    }
   }, [rsvpFlightTick, token]);
 
   const answer = useCallback(
@@ -420,7 +468,10 @@ export default function InvitePreview({
         // same older-answer-lands-last defect the queue lock exists to stop,
         // reached through the stale door. A sent answer is sent whoever is on
         // screen, so the queue it satisfies is spent here too.
-        if (result === 'sent') clearQueuedRsvp(heldToken);
+        if (result === 'sent') {
+          clearQueuedRsvp(heldToken);
+          noteRsvpLanded(heldToken, choice);
+        }
         // AND AN OFFLINE ANSWER IS STILL QUEUED (round-10 round 8, Codex).
         // "An offline response is QUEUED and explicitly labelled as not yet
         // sent" (V8-R-INV-003) is a property of the ANSWER, not of what happens
@@ -459,6 +510,9 @@ export default function InvitePreview({
       releaseRsvpWrite(heldToken);
       if (result === 'sent') {
         answered.current = true;
+        // Recorded for the JS context, not just this instance — an unmount
+        // between the tap and the settle lands here, not in the stale branch.
+        noteRsvpLanded(heldToken, choice);
         clearQueuedRsvp(token);
         setQueued(null);
         setRsvp(choice);
@@ -571,7 +625,10 @@ export default function InvitePreview({
             setQueued(null);
           }
         }
-        if (result === 'sent') clearQueuedRsvp(heldToken);
+        if (result === 'sent') {
+          clearQueuedRsvp(heldToken);
+          noteRsvpLanded(heldToken, pending);
+        }
         // A refusal is durable here too, so the held answer is spent rather
         // than left promising a delivery that cannot happen — the same rule the
         // live branch below applies, which this one skipped.
@@ -597,6 +654,7 @@ export default function InvitePreview({
       }
       if (result === 'sent') {
         answered.current = true;
+        noteRsvpLanded(heldToken, pending);
         clearQueuedRsvp(token);
         setQueued(null);
         setRsvp(pending);
@@ -730,8 +788,18 @@ export default function InvitePreview({
 
         {/* HELD, AND SAID SO IN WORDS. V8-R-INV-003's failure clause is that an
             offline response is "queued and explicitly labelled as not yet
-            sent" — the label is the requirement, not a nicety. */}
-        {queued !== null && rsvp === null ? (
+            sent" — the label is the requirement, not a nicety.
+
+            IT IS SHOWN WHENEVER THE HELD ANSWER DIFFERS FROM THE ONE ON RECORD,
+            not only when there is none (round-10 round 9, Codex). The condition
+            was `rsvp === null`, which is right for a first answer and silently
+            wrong for a CHANGED one: a recipient whose server answer is Maybe
+            and who then queues Going offline saw Maybe pressed, Going marked by
+            a dashed border alone, and no words anywhere saying Going had not
+            been sent. "Explicitly labelled" is not satisfied by a border, and
+            colour-or-shape alone is exactly what the requirement rules out.
+            When the two agree there is nothing outstanding to narrate. */}
+        {queued !== null && queued !== rsvp ? (
           <p
             className="mt-3 text-center text-sm opacity-70"
             role="status"

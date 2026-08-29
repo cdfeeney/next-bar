@@ -66,8 +66,11 @@ vi.mock('@/lib/supabase/client', () => ({
 
 /** The bar this account has pinned tonight, or null. Seeds the Area row. */
 let presence: { barId: string | null } | null = null;
+/** Whether that read has RETURNED. Default true: every case here has. */
+let presenceSettled = true;
 vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
   useMyPresence: () => presence,
+  useMyPresenceRead: () => ({ presence, settled: presenceSettled }),
 }));
 // Spread the real module: the plan rows only need getBarById, and replacing the
 // whole of `catalog` would leave every other consumer in this tree undefined.

@@ -46,11 +46,27 @@ const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
  * sentence was false and the cost was real.
  *
  * A skew tolerance has to be a stated number rather than an unbounded one, so
- * here it is: ten minutes, the figure round 7's own trigger named. Outside the
- * window we sleep until it opens; inside it we ask every minute. Cost per
- * boundary is bounded at about eleven reads instead of one per minute for the
- * whole ahead period, and a server that crosses up to ten minutes early is
- * still noticed within a minute.
+ * here it is: ten minutes, the figure round 7's own trigger named. Inside the
+ * window we ask every minute.
+ *
+ * OUTSIDE IT WE HALVE, RATHER THAN SLEEP THROUGH (round-10 round 9, Codex).
+ * Round 8 waited the whole way to the window's edge in one go, which made the
+ * tolerance a CONSTANT: a device thirty minutes slow was told the window was
+ * still twenty-one minutes off, slept, and hid media the server had already
+ * begun serving for twenty of those minutes. V8-R-NO-008's failure clause — "a
+ * skewed device clock must not hide media the server still serves" — is written
+ * with no bound at all, and nothing of bounded cost can satisfy it literally,
+ * because only a poll notices an arbitrarily wrong clock arbitrarily fast.
+ *
+ * What halving buys is the right SHAPE: the lag at the true crossing is at most
+ * half the remaining wait, so it scales with the error instead of ignoring it,
+ * and it costs a logarithmic number of reads. A 24-hour window is about fifteen
+ * reads rather than 1,440; a ten-minute skew is caught inside the window at a
+ * minute; a thirty-minute skew is caught in roughly fifteen. The residual gap —
+ * a very large skew is still noticed late, not immediately — is REPORTED to the
+ * operator rather than closed here, because closing it means either restoring
+ * the poll round 8 filed as a defect or having the server return its own clock,
+ * and choosing between those is a product decision, not a reviewer's.
  */
 const SKEW_TOLERANCE_MS = 10 * 60_000;
 
@@ -84,8 +100,12 @@ function clampRecheck(delayMs: number): number {
   if (delayMs <= 0) return MIN_RECHECK_MS;
   const wait =
     delayMs > SKEW_TOLERANCE_MS
-      ? // Still outside the approach window: sleep until it opens, in ONE wait.
-        delayMs - SKEW_TOLERANCE_MS
+      ? // Outside the approach window: HALVE the remaining wait rather than
+        // sleeping through it. See `SKEW_TOLERANCE_MS` — this is what makes the
+        // detection lag proportional to the skew instead of capped at a
+        // constant, and it costs a logarithmic number of reads rather than one
+        // a minute.
+        Math.min(delayMs - SKEW_TOLERANCE_MS, Math.ceil(delayMs / 2))
       : // Inside it: a minute, or the exact remaining time when that is sooner,
         // so a boundary five seconds away is still not re-read after sixty.
         Math.min(delayMs, MIN_RECHECK_MS);
@@ -196,6 +216,14 @@ export default function NightOutMedia({
    */
   const readSeq = useRef(0);
   const paintedSeq = useRef(0);
+  /**
+   * Has this plan's window EVER been read successfully?
+   *
+   * It separates "we have never known which side we are on" from "we knew, and
+   * then a read failed" — states the `null` window collapses into one. Only the
+   * second is a regression worth re-asking about; see the boundary effect.
+   */
+  const hadWindow = useRef(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     const startedAt = epoch.current;
@@ -217,6 +245,7 @@ export default function NightOutMedia({
     ]);
     if (startedAt !== epoch.current || seq <= paintedSeq.current) return;
     paintedSeq.current = seq;
+    if (nextWindow !== null) hadWindow.current = true;
     setItems(nextItems);
     setMediaWindow(nextWindow);
     setLoading(false);
@@ -226,6 +255,9 @@ export default function NightOutMedia({
     // Synchronously, before `refresh` captures it: any read still in flight
     // belongs to the plan that is leaving.
     epoch.current += 1;
+    // The new plan's window has never been read, whatever we knew about the
+    // previous one — so a null here is "not yet", not "we lost it".
+    hadWindow.current = false;
     // ...and so does what is on screen. Back to loading rather than to another
     // plan's photos.
     setItems(null);
@@ -282,7 +314,31 @@ export default function NightOutMedia({
    * `setTimeout` whole, which silently fires immediately past ~24.8 days.
    */
   useEffect(() => {
-    if (mediaWindow === null) return;
+    if (mediaWindow === null) {
+      // A WINDOW WE COULD NOT READ IS NOT A WINDOW THAT DOES NOT EXIST
+      // (round-10 round 9, Codex). This returned, on the reasoning that an
+      // unreadable window has no instant to arm from — true of the FIRST read,
+      // and false of every one after it. A single transport blip on a boundary
+      // refresh replaced a known window with null, disarmed the timer, and
+      // nothing re-read it again: both controls and every photo the server was
+      // about to serve stayed gone until a reload. That is the same
+      // stranded-on-the-stale-side harm V8-R-NO-008's failure clause names,
+      // reached through a failed read rather than a skewed clock.
+      //
+      // There is no instant to wait for, so it asks again on the floor — the
+      // disagreement rate — until an answer arrives. An answer that names a
+      // side arms its own boundary and this branch stops running.
+      // Only once a side has actually been known. A window that was null on
+      // the FIRST read is the case this branch used to be written for and it
+      // stays as it was: nothing has ever named an instant, so there is nothing
+      // to recover to and no reason to poll.
+      if (!hadWindow.current) return;
+      const timer = setTimeout(() => {
+        setBoundaryTick((n) => n + 1);
+        void refresh();
+      }, MIN_RECHECK_MS);
+      return () => clearTimeout(timer);
+    }
     const boundary =
       mediaWindow.state === 'before'
         ? mediaWindow.opensAt

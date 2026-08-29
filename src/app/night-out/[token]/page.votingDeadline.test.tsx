@@ -339,4 +339,67 @@ describe('the plan page reaches its own voting deadline', () => {
       'a participant got a clock time in a zone that may not be theirs, and no remaining minutes',
     ).toMatch(/in about 40 minutes/);
   });
+
+  /**
+   * ROUND-10 ROUND 9, Codex. Round 8 tied the wording to `deadlineTick`, which
+   * only fires inside the ten-minute approach window, and argued the coarse
+   * phrasing made the long wait outside it harmless. Coarse is not stale: a
+   * page opened six hours early still said "in about 6 hours" hours later.
+   */
+  test('the remaining-time wording keeps up while the page sits open', async () => {
+    vi.setSystemTime(Date.parse(CLOSES_AT) - 40 * 60_000);
+    fetchNightOutVoting.mockResolvedValue({
+      votingClosesAt: CLOSES_AT,
+      votingOpen: true,
+    });
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-deadline').textContent).toMatch(
+        /in about 40 minutes/,
+      ),
+    );
+
+    // Twenty minutes pass with no server round trip due.
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('night-out-deadline').textContent,
+        'the sentence whose whole job is to say how long is left was frozen at load',
+      ).toMatch(/in about 20 minutes/),
+    );
+  });
+
+  /**
+   * ROUND-10 ROUND 9, Codex. `fetchNightOutVoting` rides alongside
+   * `get_night_out` rather than through it, so it fails on its own: the plan
+   * painted, `voting` became null, the effect returned, and `votingOpen` fell
+   * back to the plan status. One blip left the vote editable past a deadline
+   * the server was already enforcing, permanently.
+   */
+  test('a voting read LOST to a failed refresh is asked for again', async () => {
+    vi.setSystemTime(Date.parse(CLOSES_AT) - 30_000);
+    fetchNightOutVoting
+      .mockResolvedValueOnce({ votingClosesAt: CLOSES_AT, votingOpen: true })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ votingClosesAt: CLOSES_AT, votingOpen: false });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('member-board')).toBeTruthy());
+    expect(screen.queryByTestId('night-out-voting-closed')).toBeNull();
+
+    // The deadline passes and the refresh blips: voting state is now unknown.
+    await vi.advanceTimersByTimeAsync(31_000);
+    await waitFor(() => expect(fetchNightOutVoting).toHaveBeenCalledTimes(2));
+
+    // The floor has to keep asking; before this fix the timer was disarmed and
+    // Suggest, Vote and Remove stayed live for good.
+    await vi.advanceTimersByTimeAsync(61_000);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('night-out-voting-closed'),
+        'one failed voting read permanently disarmed the deadline timer',
+      ).toBeTruthy(),
+    );
+  });
 });
