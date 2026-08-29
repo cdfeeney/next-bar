@@ -83,55 +83,189 @@ describe('0069 — a block is judged between the READER and the COMMENTER', () =
   });
 });
 
-describe('0069 — the reporter hide reaches every surface of the post', () => {
-  it('the posts policy vetoes on the caller-scoped report', () => {
-    const policy = policyBody('feed_posts: audience reads');
-    expect(policy).toMatch(/not public\.feed_post_reported_by_caller\(/);
-  });
-
-  it('the tag policy vetoes on it too, so tags do not answer for a hidden post', () => {
-    const policy = policyBody('feed_post_tags: readable with post');
-    expect(policy).toMatch(/not public\.feed_post_reported_by_caller\(post_id\)/);
-  });
-
-  it('a tagged person still reads their OWN tag row, because that is the consent they revoke', () => {
-    // The report veto must sit INSIDE the can_view branch, never over the whole
-    // policy: hiding your own tag row takes away the control, not the content.
-    // Asserted as the whole normalised expression, because the grouping IS the
-    // requirement — see `sqlShape`.
-    expect(sqlShape(policyBody('feed_post_tags: readable with post'))).toContain(
-      'auth.uid() = profile_id'
-      + ' or ( public.can_view_feed_post(post_id)'
-      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_tags.profile_id)'
-      + ' and not public.feed_post_reported_by_caller(post_id) )',
+/**
+ * ROUND 9 — the audience rule is written ONCE and every surface asks it.
+ *
+ * Round 8 returned three CRITICALs against three different Feed surfaces, and the
+ * operator's directive named them as one defect: access was checked per-policy, so
+ * each policy re-derived who may see a post and the copies drifted. This block
+ * pins the consolidation itself — not three patched instances.
+ */
+describe('0069 — one definition of the Feed audience gate', () => {
+  it('the gate takes the VIEWER as a parameter, which is what let the copies collapse', () => {
+    // Every one of the three CRITICALs came from a surface that needed to know
+    // whether somebody OTHER than auth.uid() could still see the post, against a
+    // predicate that could only answer about auth.uid(). Without the parameter the
+    // consolidation is not expressible and the inline copies come back.
+    expect(sqlShape(functionBody('public.feed_post_visible_to('))).toContain(
+      'create or replace function public.feed_post_visible_to( p_viewer uuid, p_post_id uuid )',
     );
   });
 
-  it('the AUDIENCE rows carry both gates too, over both of their arms', () => {
+  it('mutuality, the audience and both liveness terms live in that one function', () => {
+    const body = sqlShape(functionBody('public.feed_post_visible_to('));
+    expect(body).toContain('p.deleted_at is null');
+    expect(body).toContain('public.feed_post_destination_is_live(p.id)');
+    expect(body).toContain('public.is_mutual_friend(p_viewer, p.author_id)');
+    expect(body).toContain("p.audience = 'friends'");
+    expect(body).toContain('from public.feed_post_audience fa where fa.post_id = p.id and fa.profile_id = p_viewer');
+  });
+
+  it('the hide is added by can_view_feed_post, on top of the same gate', () => {
+    // The two-argument form is defined first, so this signature resolves to it.
+    expect(sqlShape(functionBody('public.can_view_feed_post('))).toContain(
+      'select public.feed_post_visible_to(p_viewer, p_post_id)'
+      + ' and not public.feed_post_reported_by(p_viewer, p_post_id);',
+    );
+  });
+
+  it('the caller-scoped spelling is the two-argument one with auth.uid(), so the overload cannot mean two things', () => {
+    expect(sqlShape(functionBody('public.can_view_feed_post(p_post_id uuid)'))).toContain(
+      'select public.can_view_feed_post(auth.uid(), p_post_id);',
+    );
+  });
+
+  it('NO policy re-implements any part of the rule inline', () => {
+    // The actual requirement of the round-9 directive, and the only assertion here
+    // that fails on the shape the three CRITICALs shared: a policy that reaches for
+    // mutuality, the audience table, or the hide on its own has started a fourth
+    // copy of the gate. Two things are deliberately NOT on this list because they
+    // are different facts rather than restatements: `is_blocked_between`, where the
+    // comment and tag policies judge a THIRD party the post gate never sees, and
+    // `feed_comments.deleted_at`, which is the COMMENT's own liveness — no
+    // post-level gate can know it.
+    for (const name of [
+      'feed_posts: audience reads',
+      'feed_post_audience: parties read',
+      'feed_post_tags: readable with post',
+      'feed_post_tags: subject removes own',
+      'feed_comments: post audience reads',
+    ]) {
+      const policy = sqlShape(policyBody(name));
+      expect(policy, `${name} re-derives mutuality instead of asking the gate`)
+        .not.toContain('public.is_mutual_friend(');
+      expect(policy, `${name} reads the audience table instead of asking the gate`)
+        .not.toContain('public.feed_post_audience fa');
+      expect(policy, `${name} restates the post-level reporter hide instead of asking the gate`)
+        .not.toContain('public.feed_post_reported_by_caller(');
+      expect(policy, `${name} restates the POST's liveness instead of asking the gate`)
+        .not.toContain('public.feed_posts p');
+      expect(policy, `${name} restates destination liveness instead of asking the gate`)
+        .not.toContain('public.feed_post_destination_is_live(');
+    }
+  });
+
+  it('the arbitrary-viewer functions are executable by NO application role', () => {
+    // An RLS policy expression runs with the CALLER's privileges, so anything a
+    // policy names has to be granted to `authenticated`. That is exactly why the
+    // viewer-parametrised pair must NOT be: a grant would let any account ask
+    // whether any other account can see, or has reported, any post whose uuid it
+    // holds — a strictly worse oracle than the one round 8 found.
+    for (const signature of [
+      'public.feed_post_visible_to(uuid, uuid)',
+      'public.can_view_feed_post(uuid, uuid)',
+      'public.feed_post_reported_by(uuid, uuid)',
+    ]) {
+      expect(SQL, `${signature} is not revoked from authenticated`).toContain(
+        `revoke all on function ${signature} from public, anon, authenticated;`,
+      );
+      expect(SQL, `${signature} is granted to authenticated, making it an oracle`).not.toContain(
+        `grant execute on function ${signature} to authenticated;`,
+      );
+    }
+  });
+
+  it('is_feed_post_recipient is GONE, not merely un-granted', () => {
+    // Round 8 (CRITICAL, codex): SECURITY DEFINER, granted to authenticated, guarded
+    // only by "answer about your own id" — so a recipient who kept a post uuid could
+    // still read their audience membership after unfollowing, being blocked,
+    // reporting the post, or the author deleting it. Its job moved inside the gate,
+    // so the function itself is dropped: what does not exist cannot be granted back.
+    expect(SQL).toContain('drop function if exists public.is_feed_post_recipient(uuid, uuid);');
+    expect(SQL, 'the retired audience oracle has been redefined').not.toContain(
+      'create or replace function public.is_feed_post_recipient(',
+    );
+    expect(SQL, 'the retired audience oracle has been granted again').not.toContain(
+      'grant execute on function public.is_feed_post_recipient',
+    );
+  });
+});
+
+describe('0069 — the reporter hide reaches every surface of the post', () => {
+  it('the posts policy is exactly the gate, and the gate carries the hide', () => {
+    // The veto used to be a second term in this policy. It is inside
+    // `can_view_feed_post` as of round 9, so the requirement is now that this policy
+    // asks the gate and nothing else — asserted as the whole normalised expression,
+    // because "and nothing else" is the part that can silently regress.
+    expect(sqlShape(policyBody('feed_posts: audience reads'))).toContain(
+      'using ( public.can_view_feed_post(public.feed_posts.id) )',
+    );
+  });
+
+  it('a tagged person still reads their OWN tag row, because that is the consent they revoke', () => {
+    // The hide must not reach the own-row arm: hiding your own tag row takes away
+    // the control, not the content. That is why this arm asks the PARTY spelling
+    // (the rule without the hide) rather than `can_view_feed_post`.
+    //
+    // Round 8 (CRITICAL, codex): the arm was a bare `auth.uid() = profile_id` and
+    // asked nothing else, so identity stood in for entitlement — the row stayed
+    // readable after a block, after the two stopped being mutual friends, and after
+    // the post was deleted or its destination retired.
+    //
+    // Asserted as the whole normalised expression, because the grouping IS the
+    // requirement — see `sqlShape`.
+    expect(sqlShape(policyBody('feed_post_tags: readable with post'))).toContain(
+      '(auth.uid() = profile_id and public.feed_post_visible_to_party(post_id, auth.uid()))'
+      + ' or ( public.can_view_feed_post(post_id)'
+      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_tags.profile_id) )',
+    );
+  });
+
+  it('the tag WITHDRAWAL carries the same gate, on both USING and WITH CHECK', () => {
+    // The write half of the same CRITICAL: identity alone let a tagged person keep
+    // patching removed_at on a post they could no longer see. WITH CHECK as well as
+    // USING, or the update could move the row out of the gate it just passed.
+    expect(sqlShape(policyBody('feed_post_tags: subject removes own'))).toContain(
+      'using ( auth.uid() = profile_id'
+      + ' and public.feed_post_visible_to_party(post_id, auth.uid()) )'
+      + ' with check ( auth.uid() = profile_id'
+      + ' and public.feed_post_visible_to_party(post_id, auth.uid()) )',
+    );
+  });
+
+  it('the AUDIENCE rows ask the gate once for the caller, and again for the recipient the row names', () => {
     // Round 7 (MEDIUM, codex): feed_post_audience was the one Feed surface with
-    // neither gate. After P and R blocked each other, or after either reported the
-    // post, the post row became unreadable while R could still read "I am in the
-    // audience of P's post" and P could still read R's row. Whole-expression, so
-    // the grouping — both gates OVER the two arms, not inside one — is pinned.
-    // Round 8 (CRITICAL, codex; MEDIUM, claude): the first version of this fix put
-    // the pair term over BOTH arms, and on the recipient's own-row arm the two
-    // sides are the same person — is_blocked_between(R, R) is false, so it gated
-    // nothing and R kept reading their membership of a post they could no longer
-    // see. Each arm now carries the question that is meaningful FOR THAT ARM: the
-    // recipient's row is gated by the post itself, the author's read of a
-    // recipient's row by the pair. Whole-expression, because the grouping IS the
+    // neither gate. Round 8 (CRITICAL, codex): the author arm then asked only "am I
+    // the author, and have we not blocked each other" — a partial, inline copy of an
+    // audience rule that lives elsewhere — so after R merely UNFOLLOWED P, with no
+    // block at all, P kept receiving R's row for a post R could no longer see.
+    //
+    // The caller's gate is hoisted over both arms (one call, not one per arm), and
+    // the author arm asks the rule about R through the PARTY spelling so that R's own
+    // reporter hide never leaks to P. Whole-expression, because the grouping IS the
     // requirement.
     expect(sqlShape(policyBody('feed_post_audience: parties read'))).toContain(
-      '( (auth.uid() = profile_id and public.can_view_feed_post(post_id))'
+      'using ( public.can_view_feed_post(post_id)'
+      + ' and ( auth.uid() = public.feed_post_audience.profile_id'
       + ' or ( public.is_feed_post_author(post_id, auth.uid())'
-      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id) ) )'
-      + ' and not public.feed_post_reported_by_caller(post_id)',
+      + ' and public.feed_post_visible_to_party(post_id, public.feed_post_audience.profile_id) ) ) )',
+    );
+  });
+
+  it('the author arm is not gated by the pair term alone', () => {
+    // The round-8 defect, named so a revert to it is caught by its own case rather
+    // than only by the whole-expression check above.
+    expect(
+      sqlShape(policyBody('feed_post_audience: parties read')),
+      'the audience author arm is back to judging only the block, which unfollowing walks past',
+    ).not.toContain(
+      'public.is_feed_post_author(post_id, auth.uid())'
+      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id)',
     );
   });
 
   it('the recipient arm is not gated by a self-comparison', () => {
-    // The defect, named so a revert to it is caught by its own case rather than
-    // only by the whole-expression check above.
+    // The round-7 defect, kept for the same reason.
     expect(
       sqlShape(policyBody('feed_post_audience: parties read')),
       'the audience policy is back to comparing the caller with itself',
@@ -204,12 +338,13 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     expect(sqlShape(body)).toContain(
       'if v_prior.readable and v_prior.expires_at is null and not v_feed_readable and exists (',
     );
-    // ...and that term has to mean the FEED answer, not a constant.
+    // ...and that term has to mean the FEED answer, not a constant. The separate
+    // `and not feed_post_reported_by_caller(p.id)` this line used to carry is gone
+    // because the gate carries the hide as of round 9 — same meaning, one spelling.
     expect(sqlShape(body)).toContain(
       'v_feed_readable := exists ( select 1 from public.feed_posts p'
       + ' join public.media_objects m on m.id = p.media_id where m.storage_path = p_name'
-      + ' and m.bytes_removed_at is null and public.can_view_feed_post(p.id)'
-      + ' and not public.feed_post_reported_by_caller(p.id) );',
+      + ' and m.bytes_removed_at is null and public.can_view_feed_post(p.id) );',
     );
   });
 
@@ -441,8 +576,7 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
     expect(sqlShape(body)).toContain(
       'insert into public.feed_comments (post_id, author_id, body)'
       + ' select p_post_id, v_author, v_body'
-      + ' where public.can_view_feed_post(p_post_id)'
-      + ' and not public.feed_post_reported_by_caller(p_post_id)',
+      + ' where public.can_view_feed_post(p_post_id)',
     );
     expect(
       sqlShape(body),
@@ -486,13 +620,47 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
     ).toBeGreaterThan(wrote);
     // And the branch sense ON BOTH ARMS: dropping either `not` makes every
     // permitted report of that kind write and immediately roll back, with both
-    // messages still present and in order. Round 8 (MEDIUM, codex) found the
-    // comment arm unconstrained after the post arm had been pinned.
-    expect(body).toContain('if not public.can_view_feed_post(v_ref::uuid) then raise exception');
+    // messages still present and in order.
+    //
+    // Round 9 (MEDIUM, claude): the previous version of this pair searched the WHOLE
+    // body, and the pre-write check at the top of the function is the identical text
+    // — so flipping the `not` on the POST-write arm, or deleting the parent-post term
+    // from the post-write COMMENT arm, left both assertions matching the pre-write
+    // occurrences and the suite green. That is the same shape as the round-7 defect
+    // it was written to close: an assertion satisfied by a copy of the thing it meant
+    // to pin. Search from `wrote` onward, so only the post-write occurrence can
+    // satisfy it.
+    const afterWrite = body.slice(wrote);
+    expect(
+      afterWrite,
+      'the post-write feed_post arm is inverted, so every permitted post report rolls back',
+    ).toContain('if not public.feed_post_visible_to_party(v_ref::uuid, auth.uid()) then raise exception');
+    expect(
+      afterWrite,
+      'the post-write comment arm is inverted, so every permitted comment report rolls back',
+    ).toContain('elsif not public.can_view_feed_comment(v_ref::uuid)');
+    expect(
+      afterWrite,
+      'the post-write comment arm no longer refuses a caller who has hidden the PARENT post',
+    ).toContain(
+      'or exists ( select 1 from public.feed_comments c where c.id = v_ref::uuid'
+      + ' and public.feed_post_reported_by_caller(c.post_id) )',
+    );
+  });
+
+  it('the post-write re-check asks the HIDE-FREE gate, or every first report rolls itself back', () => {
+    // Round 9: `can_view_feed_post` gained the caller's reporter hide, and the
+    // post-write re-check runs AFTER this caller's own report has been written. Ask
+    // the hide-carrying spelling there and the check fails on the row the same
+    // transaction just inserted — every first feed_post report would roll back. The
+    // party spelling is hide-free for exactly this reason, and the pre-write check
+    // asks it too so that a REPEAT report stays idempotent.
+    const body = sqlShape(functionBody('public.report_content('));
     expect(
       body,
-      'the comment arm of the post-write re-check is inverted, so every permitted comment report rolls back',
-    ).toContain('elsif not public.can_view_feed_comment(v_ref::uuid)');
+      'the report path asks the hide-carrying gate, so a report undoes itself',
+    ).not.toContain('public.can_view_feed_post(v_ref::uuid)');
+    expect(body).toContain('public.feed_post_visible_to_party(v_ref::uuid, auth.uid())');
   });
 });
 
@@ -507,10 +675,17 @@ describe('0069 — you may only report what you can still see', () => {
     // keeps a REPEAT report idempotent — so the report path has to add the
     // parent-post term itself, or it accepts a fresh accusation about content the
     // accuser can no longer see.
-    expect(sqlShape(body)).toContain(
-      'or exists ( select 1 from public.feed_comments c where c.id = v_ref::uuid'
-      + ' and public.feed_post_reported_by_caller(c.post_id) )',
-    );
+    // TWICE, and the count is the assertion. The re-check after the write carries
+    // the identical text, so a `toContain` on the whole body stays green with the
+    // PRE-write arm deleted — the same satisfiable-by-a-copy shape round 9 fixed in
+    // the case above, pointing the other way.
+    const term = 'or exists ( select 1 from public.feed_comments c where c.id = v_ref::uuid'
+      + ' and public.feed_post_reported_by_caller(c.post_id) )';
+    expect(sqlShape(body)).toContain(term);
+    expect(
+      sqlShape(body).split(term).length - 1,
+      'the parent-post term is missing from either the pre-write or the post-write comment arm',
+    ).toBe(2);
   });
 
   it('the comment’s OWN hide stays out of that term, so a repeat report is still idempotent', () => {

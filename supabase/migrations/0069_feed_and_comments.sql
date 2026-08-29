@@ -93,35 +93,31 @@ comment on function public.is_feed_post_author(uuid, uuid) is
 revoke all on function public.is_feed_post_author(uuid, uuid) from public, anon;
 grant execute on function public.is_feed_post_author(uuid, uuid) to authenticated;
 
-create or replace function public.is_feed_post_recipient(
-  p_post_id uuid,
-  p_profile_id uuid
-)
-returns boolean
-language plpgsql
-stable
-security definer
-set search_path = public
-as $$
-begin
-  if p_post_id is null
-     or p_profile_id is null
-     or auth.uid() is null
-     or p_profile_id <> auth.uid() then
-    return false;
-  end if;
-  return exists (
-    select 1 from public.feed_post_audience fa
-     where fa.post_id = p_post_id and fa.profile_id = p_profile_id
-  );
-end;
-$$;
-
-comment on function public.is_feed_post_recipient(uuid, uuid) is
-  'Is this profile a materialised recipient of this Feed post? SECURITY DEFINER so the feed_posts SELECT policy can read feed_post_audience without expanding that table''s own policy. Answers only for the caller''s own id and fails closed.';
-
-revoke all on function public.is_feed_post_recipient(uuid, uuid) from public, anon;
-grant execute on function public.is_feed_post_recipient(uuid, uuid) to authenticated;
+-- `is_feed_post_recipient` IS GONE, and removing it is the fix rather than a
+-- tidy-up (round 8, CRITICAL, codex).
+--
+-- It was SECURITY DEFINER, granted to `authenticated`, took a caller-supplied
+-- post id, and its only guard was "answer about your own id". Own-id is not a
+-- sufficient guard for a MEMBERSHIP question: a recipient who saw a post while
+-- authorised keeps its uuid, and after unfollowing the author, being blocked,
+-- reporting the post, or the author deleting it, could still call
+-- `is_feed_post_recipient(postId, self)` over PostgREST and read `true` off a
+-- materialised row no other surface would show them any more. That is the same
+-- oracle shape 0066 closed for the story helper and this file closed again for
+-- `feed_post_destination_is_live` — a definer function answering a question the
+-- caller is no longer entitled to ask.
+--
+-- Patching it would have meant a fourth copy of the audience rule. The audience
+-- lookup now lives INSIDE `public.feed_post_visible_to` (section 3), which is
+-- SECURITY DEFINER and reads `feed_post_audience` directly with RLS bypassed —
+-- so the recursion this helper existed to cut is still cut, by the same
+-- mechanism, in the one place the rule is written.
+--
+-- Dropped BEFORE anything in this file redefines the gate, and `if exists` so a
+-- first apply and a re-apply behave identically. No policy references it (the
+-- policies ask the gate function), and PostgreSQL does not record dependencies
+-- from function bodies, so nothing blocks the drop.
+drop function if exists public.is_feed_post_recipient(uuid, uuid);
 
 -- THE FEED DESTINATION IS PART OF THE READ GATE (V8-R-CMP-015 / V8-R-FEED-008).
 --
@@ -160,7 +156,7 @@ comment on function public.feed_post_destination_is_live(uuid) is
 
 -- NOT GRANTED TO `authenticated`, and the omission is the point.
 --
--- This is an internal helper with exactly one caller: `can_view_feed_post`, which is
+-- This is an internal helper with exactly one caller: `feed_post_visible_to`, which is
 -- SECURITY DEFINER and therefore executes as the owner, who holds EXECUTE regardless.
 -- No application role needs it, and granting it made it a LIVENESS ORACLE: it is
 -- SECURITY DEFINER, takes a caller-supplied post id, and applies no party guard, so any
@@ -190,7 +186,19 @@ revoke all on function public.feed_post_destination_is_live(uuid) from public, a
 --
 -- Compared against `p_id::text`, which PostgreSQL renders lowercase, matching
 -- the normalised `subject_ref` `record_content_report` stores.
-create or replace function public.feed_post_reported_by_caller(p_post_id uuid)
+-- THE HIDE, WRITTEN ONCE, VIEWER-PARAMETRISED. `can_view_feed_post` (section 3)
+-- has to ask it about a viewer who is not always `auth.uid()`, and the
+-- caller-scoped spelling below is now just this function with the caller's id
+-- filled in — so the two can no longer disagree.
+--
+-- NOT GRANTED TO ANY APPLICATION ROLE, for the same reason `feed_post_visible_to`
+-- is not: it takes an arbitrary viewer, so a grant would let one account read
+-- whether ANOTHER account has reported a post. Its only callers are SECURITY
+-- DEFINER functions, which execute as the owner.
+create or replace function public.feed_post_reported_by(
+  p_viewer uuid,
+  p_post_id uuid
+)
 returns boolean
 language sql
 stable
@@ -200,11 +208,27 @@ as $$
   select exists (
     select 1
       from public.content_reports cr
-     where auth.uid() is not null
-       and cr.reporter_id = auth.uid()
+     where p_viewer is not null
+       and p_post_id is not null
+       and cr.reporter_id = p_viewer
        and cr.subject_kind = 'feed_post'
        and cr.subject_ref = p_post_id::text
   );
+$$;
+
+comment on function public.feed_post_reported_by(uuid, uuid) is
+  'V8-R-FEED-010. The one definition of "this viewer hid this Feed post". Viewer-parametrised because the audience gate asks it about a viewer who is not always the caller; granted to nobody, because an arbitrary-viewer answer would be a cross-account oracle.';
+
+revoke all on function public.feed_post_reported_by(uuid, uuid) from public, anon, authenticated;
+
+create or replace function public.feed_post_reported_by_caller(p_post_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.feed_post_reported_by(auth.uid(), p_post_id);
 $$;
 
 comment on function public.feed_post_reported_by_caller(uuid) is
@@ -364,61 +388,168 @@ comment on table public.feed_comments is
 -- without a shared predicate they would each carry their own copy of the
 -- audience gate, and the copies would drift.
 --
--- IT DELIBERATELY DOES NOT CARRY THE REPORTER HIDE. "May I see this?" and "have
--- I hidden this?" are different questions and collapsing them breaks reporting:
--- re-reporting is idempotent by design ("a repeat report changes NOTHING about
--- the stored row"), and a caller who reported a post must still pass the
--- visibility check on the second attempt or the idempotent path raises instead
--- of returning the existing id. 0066's `report_content` reads `public.stories`
--- without the hide term for exactly this reason. The hide is applied ON TOP, by
--- the policy and by `add_feed_comment`.
+-- ROUND 9: THE VIEWER IS A PARAMETER NOW, AND THAT IS THE WHOLE FIX.
 --
--- Not an oracle: it answers only about `auth.uid()`, which is precisely what the
--- caller is entitled to know. The block is inherited from `is_mutual_friend`
--- (0066 moved it there so every call site gets it) rather than restated.
-create or replace function public.can_view_feed_post(p_post_id uuid)
+-- Round 8 returned three CRITICALs against three different surfaces — the granted
+-- recipient helper, the audience policy's author arm, and the own-tag policy arm —
+-- and they were ONE defect. Each of those places needed to know whether SOMEBODY
+-- ELSE (or the caller, under a different question) could still see the post, this
+-- function could only answer about `auth.uid()`, so each surface re-derived its own
+-- partial answer inline and the three answers drifted apart. Adding a `p_viewer`
+-- parameter is what lets every one of them ask the same question here instead.
+--
+-- FOUR FUNCTIONS, ONE RULE. `feed_post_visible_to` is the rule. `can_view_feed_post`
+-- is the rule plus that viewer's own hide. The two granted spellings below fill in
+-- an identity a party guard has already checked. Nothing re-implements a term.
+--
+-- WHY THE VIEWER-PARAMETRISED PAIR IS GRANTED TO NOBODY. An RLS policy expression
+-- is evaluated with the CALLER's privileges, so anything a policy names must be
+-- executable by `authenticated` — and a function taking an arbitrary viewer, if it
+-- were, would be a far worse oracle than the one round 8 found: any account could
+-- enumerate whether any other account can see, or has reported, any post whose uuid
+-- it holds. So the arbitrary-viewer pair stays internal (its callers are SECURITY
+-- DEFINER and execute as the owner), and the two granted entry points each carry a
+-- party guard that pins the viewer to somebody the caller is entitled to ask about.
+--
+-- The block is inherited from `is_mutual_friend` (0066 moved it there so every call
+-- site gets it) rather than restated. The audience lookup is a direct read of
+-- `feed_post_audience`: this function is SECURITY DEFINER, so it reads with RLS
+-- bypassed and expands no policy — the same cycle-cutting mechanism the retired
+-- `is_feed_post_recipient` provided, without the grant that made it an oracle.
+create or replace function public.feed_post_visible_to(
+  p_viewer uuid,
+  p_post_id uuid
+)
 returns boolean
-language plpgsql
+language sql
 stable
 security definer
 set search_path = public
 as $$
-declare
-  v_caller uuid := auth.uid();
-begin
-  -- A null caller is NOT trusted infrastructure here. This predicate answers a
+  -- A null viewer is NOT trusted infrastructure here. This predicate answers a
   -- per-viewer question; with no viewer there is no audience to be inside, and
   -- returning true would hand the anonymous role a public Feed — the one thing
   -- V8-R-FEED-006 forbids outright.
-  if v_caller is null or p_post_id is null then
-    return false;
-  end if;
+  select p_viewer is not null
+     and p_post_id is not null
+     and exists (
+       select 1
+         from public.feed_posts p
+        where p.id = p_post_id
+          and p.deleted_at is null
+          and public.feed_post_destination_is_live(p.id)
+          and (
+            p.author_id = p_viewer
+            or (
+              public.is_mutual_friend(p_viewer, p.author_id)
+              and (
+                p.audience = 'friends'
+                or exists (
+                  select 1
+                    from public.feed_post_audience fa
+                   where fa.post_id = p.id
+                     and fa.profile_id = p_viewer
+                )
+              )
+            )
+          )
+     );
+$$;
 
-  return exists (
-    select 1
-      from public.feed_posts p
-     where p.id = p_post_id
-       and p.deleted_at is null
-       and public.feed_post_destination_is_live(p.id)
-       and (
-         p.author_id = v_caller
-         or (
-           public.is_mutual_friend(v_caller, p.author_id)
-           and (
-             p.audience = 'friends'
-             or public.is_feed_post_recipient(p.id, v_caller)
-           )
-         )
-       )
-  );
-end;
+comment on function public.feed_post_visible_to(uuid, uuid) is
+  'V8-R-FEED-006. THE definition of the Feed audience gate: live post, live media destination, and the viewer is the author or a mutual friend inside the audience. Excludes the reporter hide, which is a per-viewer preference rather than an access rule — can_view_feed_post adds it. Granted to nobody: an arbitrary-viewer answer would be a cross-account oracle.';
+
+revoke all on function public.feed_post_visible_to(uuid, uuid) from public, anon, authenticated;
+
+-- THE GATE PROPER: the audience rule plus that viewer's own hide. Every SELECT
+-- policy in section 4 asks this (through the caller-scoped spelling below), so
+-- "may I see this post" has exactly one answer on every Feed surface.
+create or replace function public.can_view_feed_post(
+  p_viewer uuid,
+  p_post_id uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.feed_post_visible_to(p_viewer, p_post_id)
+     and not public.feed_post_reported_by(p_viewer, p_post_id);
+$$;
+
+comment on function public.can_view_feed_post(uuid, uuid) is
+  'V8-R-FEED-006 + V8-R-FEED-010. The one Feed read gate: the audience rule AND this viewer''s own reporter hide. Granted to nobody — the caller-scoped one-argument spelling is the grantable form.';
+
+revoke all on function public.can_view_feed_post(uuid, uuid) from public, anon, authenticated;
+
+-- CALLER-SCOPED SPELLING, and the only one an application role may execute. Same
+-- semantics as the two-argument form with the viewer fixed to `auth.uid()`, so the
+-- overload can never mean two different things.
+create or replace function public.can_view_feed_post(p_post_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.can_view_feed_post(auth.uid(), p_post_id);
 $$;
 
 comment on function public.can_view_feed_post(uuid) is
-  'V8-R-FEED-006. The single definition of the Feed audience gate: live post, live media destination, and the caller is the author or a mutual friend inside the audience. Excludes the reporter hide on purpose — see the header — which the RLS policy and add_feed_comment apply on top.';
+  'V8-R-FEED-006. can_view_feed_post(auth.uid(), post) — the caller-scoped spelling the RLS policies and the definer verbs ask. Carries the caller''s reporter hide; the hide-free question is feed_post_visible_to_party.';
 
 revoke all on function public.can_view_feed_post(uuid) from public, anon;
 grant execute on function public.can_view_feed_post(uuid) to authenticated;
+
+-- THE HIDE-FREE QUESTION, PARTY-GUARDED — the second and last grantable entry
+-- point, and it exists because two callers genuinely need the rule WITHOUT the
+-- reporter hide:
+--
+--   * `report_content`, because re-reporting is idempotent by design ("a repeat
+--     report changes NOTHING about the stored row"). A caller who reported a post
+--     must still pass the visibility check on the second attempt, or the idempotent
+--     path raises instead of returning the existing id. 0066's `report_content`
+--     reads `public.stories` without the hide term for exactly this reason.
+--   * the own-tag policy arms, because your tag row is the consent you revoke and a
+--     row you cannot read is a consent you cannot withdraw. Reporting a post must
+--     not take that control away — only the content.
+--
+-- AND ONE CALLER NEEDS IT ABOUT SOMEBODY ELSE: the audience policy's author arm has
+-- to ask whether the RECIPIENT this row names can still see the post, which is what
+-- round 8's second CRITICAL was about, and it must not learn whether that recipient
+-- reported it. Hence `p_profile_id` rather than a caller-only form.
+--
+-- THE PARTY GUARD IS WHAT KEEPS IT FROM BEING AN ORACLE: you may ask about yourself,
+-- or — if you authored the post — about anybody. An author already knows who they
+-- published to, so no fact crosses an account boundary that was not already the
+-- author's. Every other pairing is refused before the rule is consulted.
+create or replace function public.feed_post_visible_to_party(
+  p_post_id uuid,
+  p_profile_id uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select (
+           auth.uid() is not null
+           and p_profile_id is not null
+           and (
+             p_profile_id = auth.uid()
+             or public.is_feed_post_author(p_post_id, auth.uid())
+           )
+         )
+     and public.feed_post_visible_to(p_profile_id, p_post_id);
+$$;
+
+comment on function public.feed_post_visible_to_party(uuid, uuid) is
+  'V8-R-FEED-006. feed_post_visible_to, without the reporter hide, for a profile the caller is entitled to ask about: themselves, or — when the caller authored the post — any profile. The hide is left out because the two callers that need this question are the idempotent repeat report and the tagged person''s own consent surface, both of which must survive that caller''s own report.';
+
+revoke all on function public.feed_post_visible_to_party(uuid, uuid) from public, anon;
+grant execute on function public.feed_post_visible_to_party(uuid, uuid) to authenticated;
 
 -- The same question for a comment: a comment is visible exactly while its post
 -- is, and while the comment itself is live. Reporting asks through this.
@@ -434,7 +565,12 @@ as $$
       from public.feed_comments c
      where c.id = p_comment_id
        and c.deleted_at is null
-       and public.can_view_feed_post(c.post_id)
+       -- HIDE-FREE ON PURPOSE, which is why this is the party spelling and not
+       -- `can_view_feed_post`: the report path asks through here, and a caller who
+       -- has already reported the parent post must still pass so that a REPEAT
+       -- report returns the existing id instead of raising. `report_content` adds
+       -- the parent-post hide itself, where it belongs.
+       and public.feed_post_visible_to_party(c.post_id, auth.uid())
        -- THE BLOCK IS BETWEEN THE READER AND THE COMMENTER, and it is a SECOND
        -- pair from the one the post gate judges. `can_view_feed_post` asks about
        -- the caller and the post's AUTHOR; a comment introduces a third party.
@@ -449,7 +585,7 @@ as $$
 $$;
 
 comment on function public.can_view_feed_comment(uuid) is
-  'V8-R-FEED-003 + V8-R-FEED-009. A comment is visible exactly while it is live, its post is visible to this caller, AND neither the caller nor the commenter has blocked the other — the post gate judges the caller against the post author, so the reader/commenter pair needs its own term. Like can_view_feed_post it omits the reporter hide, so a repeat report stays idempotent.';
+  'V8-R-FEED-003 + V8-R-FEED-009. A comment is visible exactly while it is live, its post is visible to this caller, AND neither the caller nor the commenter has blocked the other — the post gate judges the caller against the post author, so the reader/commenter pair needs its own term. It asks the post gate through feed_post_visible_to_party, so it omits the reporter hide and a repeat report stays idempotent.';
 
 revoke all on function public.can_view_feed_comment(uuid) from public, anon;
 grant execute on function public.can_view_feed_comment(uuid) to authenticated;
@@ -472,8 +608,10 @@ create policy "feed_posts: audience reads"
   on public.feed_posts for select
   to authenticated
   using (
+    -- ONE CALL. The hide used to be a second term here; it is inside the gate now
+    -- (round 9), so this policy states the rule exactly once and cannot drift from
+    -- the audience, tag and comment policies that ask the same function.
     public.can_view_feed_post(public.feed_posts.id)
-    and not public.feed_post_reported_by_caller(public.feed_posts.id)
   );
 
 -- No INSERT / UPDATE / DELETE policy anywhere in this section: publication and
@@ -486,40 +624,35 @@ create policy "feed_post_audience: parties read"
   on public.feed_post_audience for select
   to authenticated
   using (
-    -- BOTH GATES, ON BOTH ARMS, and this table was the one Feed surface that had
-    -- neither. The posts, comments and tags policies all veto on the caller's own
-    -- report and judge the relevant pair for a block; the audience rows kept
-    -- answering regardless — so after P and R blocked each other, or after either
-    -- reported the post, R could still read "I am in the audience of P's post" and
-    -- P could still read R's row. The post itself is unreadable by then, which is
-    -- what makes the leftover row a leak rather than a duplicate.
-    (
-      -- THE RECIPIENT'S OWN ROW, gated by the POST, not by a self-comparison.
+    -- THE CALLER'S OWN GATE, HOISTED. Whoever is reading, they must still be able
+    -- to see the post these rows belong to; that is one call, not a term repeated
+    -- down each arm. Asking it here does not recurse: `feed_post_visible_to` reads
+    -- feed_post_audience directly and is SECURITY DEFINER, so RLS is bypassed and
+    -- this policy is not re-entered.
+    public.can_view_feed_post(post_id)
+    and (
+      -- THE RECIPIENT'S OWN ROW. Nothing further to ask: the hoisted gate already
+      -- judged R against the post, which is exactly the question. An earlier shape
+      -- put `is_blocked_between(auth.uid(), profile_id)` here, where the two sides
+      -- are the SAME PERSON — is_blocked_between(R, R) is false, so it gated
+      -- nothing.
+      auth.uid() = public.feed_post_audience.profile_id
+      -- THE AUTHOR READING A RECIPIENT'S ROW. Round 8 (CRITICAL, codex): this arm
+      -- asked only "am I the author, and have we not blocked each other", so after
+      -- R merely UNFOLLOWED P — no block at all — P kept receiving R's audience
+      -- row for a post R can no longer see. The pair term was a partial, inline
+      -- restatement of an audience rule that lives somewhere else, and it fell
+      -- behind it. It now asks the rule itself, about R: mutuality, the block
+      -- inside it, post liveness and destination liveness, in one call.
       --
-      -- The previous shape put `is_blocked_between(auth.uid(), profile_id)` over
-      -- both arms, and on this arm those two are the SAME PERSON: the term
-      -- evaluated to is_blocked_between(R, R), which is false, so it gated
-      -- nothing. R kept reading their membership of P's post after unfollowing P
-      -- or after either account blocked the other — a row naming a post R can no
-      -- longer see, and a deletion oracle for it.
-      --
-      -- `can_view_feed_post` is the right question and already carries mutuality,
-      -- the block, and audience membership. Asking it here does not recurse: it
-      -- reaches this table only through `is_feed_post_recipient`, which is
-      -- SECURITY DEFINER and therefore reads with RLS bypassed.
-      (auth.uid() = profile_id and public.can_view_feed_post(post_id))
-      -- THE AUTHOR READING A RECIPIENT'S ROW. Here the two ARE different people,
-      -- so the pair term is the one that belongs: the author against the
-      -- recipient this row names. Definer helper rather than a bare subquery on
-      -- public.feed_posts, because that table's SELECT policy reads
-      -- feed_post_audience and a plain subquery closes the cycle — PostgreSQL
-      -- then refuses BOTH tables.
+      -- The PARTY spelling, so R's own reporter hide is NOT consulted — whether R
+      -- hid the post is R's business and must not leak to P through the presence
+      -- or absence of this row. P's own hide is the hoisted gate above.
       or (
         public.is_feed_post_author(post_id, auth.uid())
-        and not public.is_blocked_between(auth.uid(), public.feed_post_audience.profile_id)
+        and public.feed_post_visible_to_party(post_id, public.feed_post_audience.profile_id)
       )
     )
-    and not public.feed_post_reported_by_caller(post_id)
   );
 
 drop policy if exists "feed_post_tags: readable with post" on public.feed_post_tags;
@@ -530,8 +663,17 @@ create policy "feed_post_tags: readable with post"
     -- YOUR OWN TAG ROW IS YOUR OWN CONSENT SURFACE, and it stays readable even
     -- after you report the post: the UPDATE policy below is how a tagged person
     -- withdraws the tag, and a row you cannot read is a consent you cannot
-    -- revoke. Hiding it would take away the control, not the content.
-    auth.uid() = profile_id
+    -- revoke. Hiding it would take away the control, not the content. That is why
+    -- this arm asks the PARTY spelling — the audience rule without the hide — and
+    -- not `can_view_feed_post`.
+    --
+    -- Round 8 (CRITICAL, codex): the arm used to be a bare `auth.uid() = profile_id`
+    -- and asked NOTHING else, so a tagged person kept reading — and, through the
+    -- UPDATE policy below, writing — their row after the post was soft-deleted, its
+    -- Feed destination retired, the two accounts blocked each other, or they simply
+    -- stopped being mutual friends. "Your own row" is an identity, not an
+    -- entitlement, and it was standing in for one.
+    (auth.uid() = profile_id and public.feed_post_visible_to_party(post_id, auth.uid()))
     or (
       public.can_view_feed_post(post_id)
       -- THE READER/TAGGED-PERSON BLOCK, and it is the SECOND pair on this path
@@ -550,25 +692,34 @@ create policy "feed_post_tags: readable with post"
       -- NOT on the `auth.uid() = profile_id` arm above: your own tag row is your
       -- own consent surface, and a row you cannot read is a consent you cannot
       -- revoke.
+      --
+      -- THE REPORTER HIDE is no longer a separate term here either: it lives inside
+      -- `can_view_feed_post` as of round 9, so this arm still hides the tag rows of
+      -- a post the caller reported ("reporting IMMEDIATELY HIDES the reported
+      -- content", V8-R-FEED-010) without restating the veto.
       and not public.is_blocked_between(auth.uid(), public.feed_post_tags.profile_id)
-      -- THE REPORTER HIDE REACHES THE TAGS. The post row and every comment
-      -- beneath it already disappear for the reporter; without this term the tag
-      -- rows — and the tagged people's profile ids — kept answering for a post
-      -- the reporter can no longer see, so "reporting IMMEDIATELY HIDES the
-      -- reported content" (V8-R-FEED-010) held for the card and leaked round the
-      -- side. Same veto, same predicate, as the posts and comments policies.
-      and not public.feed_post_reported_by_caller(post_id)
     )
   );
 
 -- A tagged person withdraws THEIR OWN tag. Never the author's call, and never
 -- anyone else's. Mirrors `story_tags: subject removes own` (0065).
+--
+-- Round 8 (CRITICAL, codex) named the WRITE half of the same defect as the read
+-- arm above: identity alone let a tagged person keep patching `removed_at` on a
+-- post they could no longer see. The gate is the same one, on both USING and WITH
+-- CHECK, so the row cannot be moved out of visibility by the update either.
 drop policy if exists "feed_post_tags: subject removes own" on public.feed_post_tags;
 create policy "feed_post_tags: subject removes own"
   on public.feed_post_tags for update
   to authenticated
-  using (auth.uid() = profile_id)
-  with check (auth.uid() = profile_id);
+  using (
+    auth.uid() = profile_id
+    and public.feed_post_visible_to_party(post_id, auth.uid())
+  )
+  with check (
+    auth.uid() = profile_id
+    and public.feed_post_visible_to_party(post_id, auth.uid())
+  );
 
 -- V8-R-FEED-003: "the right to comment is exactly the right to view, and nothing
 -- wider" — so the comment gate is the post gate, asked through the same
@@ -585,7 +736,9 @@ create policy "feed_comments: post audience reads"
     -- asks the POST gate, which compares the caller with the post's author and
     -- never with the person who wrote this row.
     and not public.is_blocked_between(auth.uid(), public.feed_comments.author_id)
-    and not public.feed_post_reported_by_caller(post_id)
+    -- The post's own hide is inside `can_view_feed_post` as of round 9; only the
+    -- COMMENT's hide is this policy's to add, because no post-level gate can know
+    -- about it.
     and not public.feed_comment_reported_by_caller(public.feed_comments.id)
   );
 
@@ -1072,8 +1225,9 @@ begin
       using errcode = '22001';
   end if;
 
-  if not public.can_view_feed_post(p_post_id)
-     or public.feed_post_reported_by_caller(p_post_id) then
+  -- The caller's own hide is inside the gate as of round 9, so the second term
+  -- this check used to carry is gone rather than lost.
+  if not public.can_view_feed_post(p_post_id) then
     raise exception 'add_feed_comment: that post is not yours to reply to'
       using errcode = '42501';
   end if;
@@ -1117,7 +1271,6 @@ begin
   insert into public.feed_comments (post_id, author_id, body)
     select p_post_id, v_author, v_body
      where public.can_view_feed_post(p_post_id)
-       and not public.feed_post_reported_by_caller(p_post_id)
   returning * into v_comment;
 
   if not found then
@@ -1130,7 +1283,7 @@ end;
 $$;
 
 comment on function public.add_feed_comment(uuid, text) is
-  'V8-R-FEED-003 / V8-R-FEED-005. The right to comment is exactly the right to view: the write gate is can_view_feed_post plus the caller''s own report hide, and nothing wider.';
+  'V8-R-FEED-003 / V8-R-FEED-005. The right to comment is exactly the right to view: the write gate is can_view_feed_post, which carries the caller''s own report hide, and nothing wider.';
 
 revoke all on function public.add_feed_comment(uuid, text) from public, anon;
 grant execute on function public.add_feed_comment(uuid, text) to authenticated;
@@ -1410,7 +1563,11 @@ begin
   -- against a named account attached to a durable, non-withdrawable operator
   -- record, so a caller who cannot reach the content has no business filing one.
   if p_subject_kind = 'feed_post' then
-    if not public.can_view_feed_post(v_ref::uuid) then
+    -- THE HIDE-FREE SPELLING, and it has to be: `can_view_feed_post` carries the
+    -- caller's own reporter hide as of round 9, so asking it here would make the
+    -- SECOND report of the same post raise instead of returning the existing id,
+    -- and the caller — which hides only on a returned id — would fail to hide it.
+    if not public.feed_post_visible_to_party(v_ref::uuid, auth.uid()) then
       raise exception 'report_content: that post is not yours to report'
         using errcode = '42501';
     end if;
@@ -1453,7 +1610,10 @@ begin
   -- check and COMMIT is inherent to READ COMMITTED; what it removes is the long
   -- window, the one with a lock wait in it.
   if p_subject_kind = 'feed_post' then
-    if not public.can_view_feed_post(v_ref::uuid) then
+    -- Hide-free for the same idempotency reason as the pre-write check: the row
+    -- this transaction just wrote is the caller's OWN report, and consulting the
+    -- hide here would make every first report roll itself back.
+    if not public.feed_post_visible_to_party(v_ref::uuid, auth.uid()) then
       raise exception 'report_content: that post stopped being yours to report'
         using errcode = '42501';
     end if;
@@ -1546,8 +1706,10 @@ begin
       join public.media_objects m on m.id = p.media_id
      where m.storage_path = p_name
        and m.bytes_removed_at is null
+       -- "Visible AND unreported to this caller" is what `can_view_feed_post` now
+       -- means on its own (round 9). The second term this line used to carry was
+       -- the same predicate spelled again.
        and public.can_view_feed_post(p.id)
-       and not public.feed_post_reported_by_caller(p.id)
   );
 
   if to_regprocedure('public.media_read_window_before_0069(text)') is not null then
