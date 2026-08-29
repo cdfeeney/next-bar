@@ -612,6 +612,63 @@ describe('the offline queue (V8-R-INV-003)', () => {
     ).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Round-10 round 6, BOTH lanes. The round-5 fix derived `rsvpBusy` from the
+   * lock at the moment of a token change, which fixed "enabled but inert" — and
+   * created its mirror image. A write settling AFTER the recipient came back to
+   * its own invite takes the stale branch, releases the hold, and used to
+   * return without touching `rsvpBusy`. The token had not changed, so nothing
+   * re-derived it: three buttons disabled for good.
+   */
+  test('a write settling after you return re-enables the invite it was blocking', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    let releaseA: (value: 'sent') => void = () => undefined;
+    submitAnonRsvp.mockReturnValueOnce(
+      new Promise<'sent'>((resolve) => {
+        releaseA = resolve;
+      }),
+    );
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    // A → B → A, with A's write still out the whole way.
+    rerender(
+      <InvitePreview
+        token={OTHER_TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+    rerender(
+      <InvitePreview
+        token={TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-maybe')).toBeDisabled(),
+    );
+
+    // Now it answers. The hold goes, and so must the disabled state.
+    releaseA('sent');
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('invite-rsvp-maybe'),
+        'the invite stayed disabled after the write it was waiting for settled',
+      ).not.toBeDisabled(),
+    );
+
+    // And it is genuinely answerable again, not merely repainted.
+    submitAnonRsvp.mockResolvedValue('sent');
+    screen.getByTestId('invite-rsvp-maybe').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(2));
+  });
+
   test('a hung write for ANOTHER invite is still remembered when you come back to it', async () => {
     readRsvpKey.mockReturnValue(KEY);
     // A's write never settles. B's does.

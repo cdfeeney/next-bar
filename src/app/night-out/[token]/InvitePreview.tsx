@@ -141,6 +141,19 @@ export default function InvitePreview({
    * genuinely overlap, so the lock has to be able to say so.
    */
   const rsvpInFlight = useRef<Set<string>>(new Set());
+  /**
+   * The invite ON SCREEN right now, readable from a settling write's closure.
+   *
+   * A write that settles after the recipient has come BACK to its own invite
+   * takes the stale branch — the epoch moved twice, so it may not paint — but
+   * it is releasing the very hold that is disabling the buttons in front of
+   * them. Without re-deriving `rsvpBusy` there, the set empties and the state
+   * stays true, and all three controls are disabled with no message until a
+   * reload (round-10 round 6, both lanes). The token-change effect cannot help:
+   * the token did not change.
+   */
+  const liveToken = useRef(token);
+  liveToken.current = token;
 
   useEffect(() => {
     epoch.current += 1;
@@ -255,6 +268,9 @@ export default function InvitePreview({
         // allow — and holds for other invites are untouched, which is why the
         // lock is a set rather than one slot.
         rsvpInFlight.current.delete(heldToken);
+        // If the invite it belonged to is the one back on screen, the buttons
+        // it was disabling have to come back with it.
+        if (liveToken.current === heldToken) setRsvpBusy(false);
         // ...AND IT STILL SPENDS THE QUEUE (round-10 round 5, Claude). This
         // branch returned before the `sent` handling below, so a successful
         // write that settled after a token change left an OLDER queued answer
@@ -368,8 +384,10 @@ export default function InvitePreview({
       // the invite now on screen may be holding.
       if (cancelled || startedAt !== epoch.current) {
         rsvpInFlight.current.delete(heldToken);
-        // A delivered answer spends its queue wherever the viewer has gone —
-        // same rule, and same reason, as the stale branch in `answer()`.
+        // Same two rules as the stale branch in `answer()`: give the controls
+        // back if this invite is the one on screen, and spend the queue a sent
+        // answer satisfied wherever the viewer has gone.
+        if (liveToken.current === heldToken) setRsvpBusy(false);
         if (result === 'sent') clearQueuedRsvp(heldToken);
         return;
       }

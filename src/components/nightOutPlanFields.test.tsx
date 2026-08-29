@@ -67,7 +67,11 @@ function Harness({
       <button
         type="button"
         data-testid="create"
-        onClick={() => void planFields.apply(supabase, PLAN, planNight).then(setOutcome)}
+        onClick={() =>
+          void planFields
+            .apply(supabase, PLAN, planNight, hasInvitees)
+            .then(setOutcome)
+        }
       >
         Start
       </button>
@@ -78,6 +82,37 @@ function Harness({
           </p>
           <p data-testid="night-moved">{outcome.nightMoved ?? 'none'}</p>
         </>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The rows believe there ARE invitees — so the deadline row renders and can be
+ * filled — while the CALLER passes the tap-time answer that there are none.
+ * That is exactly the divergence a mid-create deselect produces.
+ */
+function HarnessWithInviteeMismatch(): JSX.Element {
+  const planFields = useNightOutPlanFields({ hasInvitees: true });
+  const [outcome, setOutcome] = useState<PlanEditOutcome | null>(null);
+  return (
+    <div>
+      {planFields.fields}
+      <button
+        type="button"
+        data-testid="create"
+        onClick={() =>
+          void planFields
+            .apply(supabase, PLAN, '2026-08-20', false)
+            .then(setOutcome)
+        }
+      >
+        Start
+      </button>
+      {outcome !== null ? (
+        <p data-testid="refused">
+          {outcome.refused.length === 0 ? 'none' : outcome.refused.join(' or ')}
+        </p>
       ) : null}
     </div>
   );
@@ -95,7 +130,7 @@ function HarnessWithSignal({ signal }: { signal: AbortSignal }): JSX.Element {
         data-testid="create"
         onClick={() =>
           void planFields
-            .apply(supabase, PLAN, '2026-08-20', signal)
+            .apply(supabase, PLAN, '2026-08-20', true, signal)
             .then(setOutcome)
         }
       >
@@ -465,6 +500,48 @@ describe('an abandoned apply stops writing (round-10 round 4, Codex)', () => {
     expect(setNightOutStart).toHaveBeenCalledTimes(1);
     expect(setNightOutArea).toHaveBeenCalledTimes(1);
     expect(setNightOutVotingDeadline).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the guest list is one decision, read once', () => {
+  /**
+   * Round-10 round 6, Codex. The rows read `hasInvitees` LIVE while the invite
+   * loop used the selection captured at the tap, so deselecting the last friend
+   * mid-create skipped the voting deadline while still inviting them: a plan
+   * with an invitee, no deadline, and no notice. `apply` takes the caller's
+   * tap-time answer as an argument now, so the two cannot disagree.
+   */
+  test('the deadline follows the guest list the PLAN got, not the one on screen', async () => {
+    // The rows are told there are no invitees, so the deadline row is hidden…
+    const view = render(<Harness hasInvitees={false} />);
+    expect(screen.queryByText('No deadline')).toBeNull();
+
+    // …but the caller passes the tap-time answer, which says there ARE. The
+    // deadline is simply unset here, so nothing is written and nothing is
+    // claimed — the point is that `apply` obeys its argument, not the prop.
+    view.unmount();
+
+    render(<Harness hasInvitees />);
+    fireEvent.click(screen.getByLabelText('Pick a time'));
+    fireEvent.change(screen.getByLabelText('Voting closes at'), {
+      target: { value: '2026-08-20T23:00' },
+    });
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(setNightOutVotingDeadline).toHaveBeenCalledTimes(1));
+  });
+
+  test('a plan with nobody to vote never writes a deadline, whatever the rows hold', async () => {
+    render(<HarnessWithInviteeMismatch />);
+    fireEvent.click(screen.getByLabelText('Pick a time'));
+    fireEvent.change(screen.getByLabelText('Voting closes at'), {
+      target: { value: '2026-08-20T23:00' },
+    });
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(
+      setNightOutVotingDeadline,
+      'the deadline was written for a plan the caller said has no invitees',
+    ).not.toHaveBeenCalled();
   });
 });
 

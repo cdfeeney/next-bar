@@ -84,6 +84,17 @@ export type NightOutPlanFields = {
     /** The night `create_night_out` actually used, read once at submit. */
     planNight: string,
     /**
+     * Whether the plan being created HAS invitees, from the caller's own
+     * tap-time list — not from this hook's live prop.
+     *
+     * The two disagreed (round-10 round 6, Codex): the rows read `hasInvitees`
+     * live while the invite loop used the selection captured at the tap, so
+     * deselecting the last friend mid-create skipped the voting deadline while
+     * still inviting them. One decision, one source: the guest list the plan
+     * actually got.
+     */
+    planHasInvitees: boolean,
+    /**
      * Aborts the REMAINING writes. Checked before each one, so a caller that
      * has stopped waiting also stops the work — see the budget in
      * `StartNightOutButton`. Without it, telling the owner an edit did not save
@@ -308,6 +319,7 @@ export function useNightOutPlanFields({
       supabase: SupabaseClient,
       planId: string,
       planNight: string,
+      planHasInvitees: boolean,
       signal?: AbortSignal,
     ): Promise<PlanEditOutcome> => {
       const failed: string[] = [];
@@ -350,7 +362,7 @@ export function useNightOutPlanFields({
       // thing and is narrated by `deadlineMissing` above, not reported here:
       // an edit that never reached the server was never refused by it.
       const closesAt = live.current.deadlineIso;
-      if (hasInvitees && closesAt !== null) {
+      if (planHasInvitees && closesAt !== null) {
         if (stopped()) failed.push('the voting deadline');
         else if (!(await setNightOutVotingDeadline(supabase, planId, closesAt))) {
           failed.push('the voting deadline');
@@ -358,9 +370,10 @@ export function useNightOutPlanFields({
       }
       return { refused: failed, nightMoved };
     },
-    // Every field is read through `live`, so this callback is stable and the
-    // caller's ref to it never goes stale in the first place.
-    [hasInvitees],
+    // Every field is read through `live` and the guest list now arrives as an
+    // argument, so this callback has NO dependencies at all: it is stable for
+    // the life of the component and the caller's ref to it cannot go stale.
+    [],
   );
 
   const fields = (

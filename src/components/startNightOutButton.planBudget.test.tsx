@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 const pushed: string[] = [];
 const PLAN_ID = '99999999-9999-4999-8999-999999999999';
 const USER = '11111111-1111-4111-8111-111111111111';
+const FRIEND = '22222222-2222-4222-8222-222222222222';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => pushed.push(href) }),
@@ -31,22 +32,37 @@ vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
 vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
   useMyPresence: () => null,
 }));
+/** When true, the invite phase alone outlasts the planning-edit budget. */
+let slowInvite = false;
 vi.mock('@/lib/nightOuts.server', () => ({
   createNightOut: async () => PLAN_ID,
   getNightOut: async () => ({ id: PLAN_ID, shareToken: 'tok-1', status: 'open' }),
-  inviteToNightOut: async () => true,
+  inviteToNightOut: async () => {
+    if (slowInvite) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 15_000);
+      });
+    }
+    return true;
+  },
 }));
-// The write that never answers. This is the whole point of the file.
+/** When true the plan RPCs never answer. Reset per test. */
+let planRpcsHang = true;
 vi.mock('@/lib/nightOutPlan', () => ({
-  setNightOutStart: () => new Promise<boolean>(() => undefined),
-  setNightOutArea: () => new Promise<boolean>(() => undefined),
-  setNightOutVotingDeadline: () => new Promise<boolean>(() => undefined),
+  setNightOutStart: () =>
+    planRpcsHang ? new Promise<boolean>(() => undefined) : Promise.resolve(true),
+  setNightOutArea: () =>
+    planRpcsHang ? new Promise<boolean>(() => undefined) : Promise.resolve(true),
+  setNightOutVotingDeadline: () =>
+    planRpcsHang ? new Promise<boolean>(() => undefined) : Promise.resolve(true),
 }));
 
 import StartNightOutButton from './StartNightOutButton';
 
 beforeEach(() => {
   pushed.length = 0;
+  planRpcsHang = true;
+  slowInvite = false;
   window.localStorage.clear();
   window.sessionStorage.clear();
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -78,5 +94,34 @@ describe('a planning edit that never answers', () => {
     // ...and still offers the real plan.
     screen.getByRole('button', { name: /open it/i }).click();
     await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+  });
+
+  /**
+   * Round-10 round 6, BOTH lanes. `withBudget` raced but never cancelled the
+   * loser, and `editsTimedOut` is not read until after the sequential invite
+   * loop and the follow-up read. So edits that answered in a second were
+   * reported as having taken too long the moment the INVITES pushed the total
+   * past ten — the uncertainty sentence about work that was already done, and
+   * navigation withheld on a create where everything landed.
+   */
+  test('a slow invite phase does not retroactively time out edits that already answered', async () => {
+    planRpcsHang = false;
+    slowInvite = true;
+
+    render(<StartNightOutButton inviteeIds={[FRIEND]} />);
+    fireEvent.change(screen.getByLabelText(/^Area/), {
+      target: { value: 'East Village' },
+    });
+    screen.getByRole('button', { name: /Start the official Night Out/i }).click();
+
+    // The edits answer immediately; the invite takes 15s all by itself.
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
+    expect(
+      screen.queryByTestId('plan-edits-uncertain'),
+      'a completed edit was reported as having timed out because the invites were slow',
+    ).toBeNull();
+    expect(screen.queryByTestId('plan-fields-refused')).toBeNull();
   });
 });

@@ -87,10 +87,23 @@ function withBudget<T>(
   onExpiry: () => void,
 ): Promise<T> {
   const controller = new AbortController();
+  // THE TIMER IS CANCELLED WHEN THE WORK WINS (round-10 round 6, both lanes).
+  // A race alone leaves the loser running: the edits settled in a second, the
+  // caller then spent longer on the sequential invites and the follow-up read,
+  // and the abandoned timeout fired anyway — reporting a timeout for work that
+  // had already answered, rendering the uncertainty sentence beside a genuine
+  // refusal, and withholding navigation on a create where everything landed.
+  // A budget must stop measuring when the thing it is measuring is done.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
-    start(controller.signal).catch(() => fallback),
+    start(controller.signal)
+      .catch(() => fallback)
+      .then((value) => {
+        clearTimeout(timer);
+        return value;
+      }),
     new Promise<T>((resolve) => {
-      setTimeout(() => {
+      timer = setTimeout(() => {
         controller.abort();
         onExpiry();
         resolve(fallback);
@@ -775,6 +788,26 @@ export default function StartNightOutButton({
     };
     setBusy(true);
     setError(false);
+    /**
+     * THE GUEST LIST IS THE ONE FROM THE TAP, deliberately (round-10 round 5,
+     * Codex HIGH; the Claude lane read the same code and ruled tap-time intent
+     * defensible). Start acts on what was on screen when it was pressed, which
+     * is both what a button means and the only deterministic choice —
+     * re-reading the selection as the loop walks it would make the guest list
+     * depend on when each RPC happened to return.
+     *
+     * Captured HERE, once, at the top, because two things downstream need the
+     * same answer: the invitations, and whether the plan has anyone to vote,
+     * which decides the voting deadline. Reading them from different places is
+     * what let a deselect mid-create invite a friend and drop their deadline.
+     *
+     * The remaining mismatch is real and lives elsewhere: the people picker is
+     * rendered by `/friends/consensus`, which this lane does not own, and it
+     * stays enabled while the create is in flight, so the screen can show a
+     * selection the plan does not have. Disabling it while `busy` is the fix
+     * and belongs to that page's owner.
+     */
+    const invitedAtTap = inviteeIds;
     try {
       // ONE reading of the clock for this whole attempt (cycle 1, Codex). The
       // night key was read again when parking, so a 6am NYC rollover landing
@@ -864,7 +897,17 @@ export default function StartNightOutButton({
         //
         // `nightKey` is the ONE reading of the clock this attempt used, and the
         // rows compare their displayed night against it — see `nightMoved`.
-        (signal) => applyRef.current(supabase, planId, nightKey, signal),
+        // `invitedAtTap` is the SAME list the invite loop below walks, so the
+        // deadline row and the invitations can no longer disagree about whether
+        // this plan has anyone to vote (round-10 round 6, Codex).
+        (signal) =>
+          applyRef.current(
+            supabase,
+            planId,
+            nightKey,
+            invitedAtTap.some((id) => UUID_RE.test(id)),
+            signal,
+          ),
         PLAN_EDIT_BUDGET_MS,
         PLAN_EDIT_TIMED_OUT,
         () => {
@@ -893,7 +936,6 @@ export default function StartNightOutButton({
       // a selection the plan does not have. Disabling it while `busy` is the
       // fix, and it belongs to that page's owner. Snapshotting here at least
       // makes the semantic explicit rather than an accident of closure capture.
-      const invitedAtTap = inviteeIds;
       const accounts = invitedAtTap.filter((id) => UUID_RE.test(id));
       let failed = 0;
       for (const id of accounts) {
