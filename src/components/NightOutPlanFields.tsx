@@ -43,6 +43,25 @@ const AREA_MAX_LENGTH = 60;
 
 type DeadlineMode = 'none' | 'time';
 
+export type PlanEditOutcome = {
+  /** The edits the server declined, named for the owner. */
+  refused: readonly string[];
+  /**
+   * The plan's own night, when it is NOT the night these rows were showing.
+   *
+   * The rows derive their default from the clock at render time and
+   * `create_night_out` reads it again at submit, so a 4:00 AM rollover landing
+   * between the last render and the tap creates a plan for the NEXT night while
+   * the form still says tonight (round-10 round 3, Codex). Nothing is written
+   * wrongly — an untouched row writes nothing and the server's own default is
+   * 9:00 PM on the plan's own night, which is right for the plan — but the
+   * owner was shown a different date, and no write can reconcile that, because
+   * `set_night_out_start` bounds the start to the plan's night. So it is
+   * reported instead of quietly differing.
+   */
+  nightMoved: string | null;
+};
+
 export type NightOutPlanFields = {
   /** The rows, ready to render above the CTA. */
   fields: JSX.Element;
@@ -59,7 +78,12 @@ export type NightOutPlanFields = {
    * account B's view, where nothing could clear it. Both are the caller's
    * business: it owns the epoch guard and it decides whether to navigate.
    */
-  apply: (supabase: SupabaseClient, planId: string) => Promise<readonly string[]>;
+  apply: (
+    supabase: SupabaseClient,
+    planId: string,
+    /** The night `create_night_out` actually used, read once at submit. */
+    planNight: string,
+  ) => Promise<PlanEditOutcome>;
 };
 
 /** 'YYYY-MM-DDTHH:mm' — what `<input type="datetime-local">` reads and writes. */
@@ -123,7 +147,24 @@ function isoOf(value: string): string | null {
   if (Number.isNaN(naive)) return null;
   const firstGuess = naive - nycOffsetMs(naive);
   const at = new Date(naive - nycOffsetMs(firstGuess));
-  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+  if (Number.isNaN(at.getTime())) return null;
+  /**
+   * THE ROUND TRIP IS THE VALIDATION (round-10 round 3, Codex).
+   *
+   * On the spring-forward night New York has no 2:30 AM — the clock goes
+   * straight from 1:59 to 3:00 — and the conversion above resolves such an
+   * input to 1:30 AM instead. That is the standard normalisation of a time no
+   * wall clock has, but doing it SILENTLY is the defect: the owner picked one
+   * time and the plan saved another an hour earlier with nothing said.
+   *
+   * So the instant is formatted back to New York and compared with what was
+   * typed. They differ only when the input does not exist, which is exactly the
+   * case the caller has to narrate. The fall-back hour, where a wall time
+   * happens TWICE, round-trips successfully to the first occurrence — that is a
+   * real instant and needs no warning, and picking the earlier one is the
+   * conventional resolution.
+   */
+  return nycOffsetMs(at.getTime()) === naive - at.getTime() ? at.toISOString() : null;
 }
 
 /** "in about 40 minutes" / "in about 2 hours", for NO-005's words-not-colour rule. */
@@ -218,7 +259,16 @@ export function useNightOutPlanFields({
    * round 2, Codex). The default is still what happens, because a Night Out
    * must have a start; the row now says so before the tap instead of after.
    */
-  const startMissing = startEdit !== null && startIso === null;
+  const startMissing =
+    startEdit !== null && startEdit.trim() === '' && startIso === null;
+  /**
+   * A time New York's clocks skip. Kept apart from the cleared case because the
+   * two need different sentences: one is "you left it blank", the other is "the
+   * time you picked does not happen". Both land on the 9:00 PM default, and
+   * saying which is which is the whole point of narrating them at all.
+   */
+  const startImpossible =
+    startEdit !== null && startEdit.trim() !== '' && startIso === null;
 
   const deadlineIso = deadlineMode === 'time' ? isoOf(deadline) : null;
   /**
@@ -233,8 +283,17 @@ export function useNightOutPlanFields({
   const deadlineMissing = deadlineMode === 'time' && deadlineIso === null;
 
   const apply = useCallback(
-    async (supabase: SupabaseClient, planId: string): Promise<readonly string[]> => {
+    async (
+      supabase: SupabaseClient,
+      planId: string,
+      planNight: string,
+    ): Promise<PlanEditOutcome> => {
       const failed: string[] = [];
+      // The night these rows were SHOWING, against the night the plan is for.
+      // Only an untouched row can differ silently: an edited one that lands on
+      // another night is already narrated by `startOffNight` and not sent.
+      const nightMoved =
+        startEdit === null && start.slice(0, 10) !== planNight ? planNight : null;
       // UNCHANGED IS NOT UNSET. An untouched row is already the server's own
       // default, so there is nothing to write and no way for that write to
       // fail; an edited one is written, and an off-night one is not attempted.
@@ -254,9 +313,9 @@ export function useNightOutPlanFields({
           failed.push('the voting deadline');
         }
       }
-      return failed;
+      return { refused: failed, nightMoved };
     },
-    [startEdit, startIso, startOffNight, area, deadlineIso, hasInvitees],
+    [startEdit, start, startIso, startOffNight, area, deadlineIso, hasInvitees],
   );
 
   const fields = (
@@ -282,6 +341,12 @@ export function useNightOutPlanFields({
         {startMissing ? (
           <p className="mt-1 text-sm text-red-400" data-testid="when-missing">
             Pick a time, or your night out starts at 9:00 PM.
+          </p>
+        ) : null}
+        {startImpossible ? (
+          <p className="mt-1 text-sm text-red-400" data-testid="when-impossible">
+            New York&apos;s clocks skip that time — pick another, or your night
+            out starts at 9:00 PM.
           </p>
         ) : null}
       </div>

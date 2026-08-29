@@ -38,7 +38,7 @@ vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
   useMyPresence: () => presence,
 }));
 
-import { useNightOutPlanFields } from './NightOutPlanFields';
+import { useNightOutPlanFields, type PlanEditOutcome } from './NightOutPlanFields';
 
 const PLAN = '11111111-1111-4111-8111-111111111111';
 const supabase = {} as never;
@@ -52,24 +52,32 @@ const supabase = {} as never;
 function Harness({
   hasInvitees = true,
   identity = null,
+  planNight = '2026-08-20',
 }: {
   hasInvitees?: boolean;
   identity?: string | null;
+  /** The night `create_night_out` used — see `nightMoved`. */
+  planNight?: string;
 }): JSX.Element {
   const planFields = useNightOutPlanFields({ hasInvitees, identity });
-  const [refused, setRefused] = useState<readonly string[] | null>(null);
+  const [outcome, setOutcome] = useState<PlanEditOutcome | null>(null);
   return (
     <div>
       {planFields.fields}
       <button
         type="button"
         data-testid="create"
-        onClick={() => void planFields.apply(supabase, PLAN).then(setRefused)}
+        onClick={() => void planFields.apply(supabase, PLAN, planNight).then(setOutcome)}
       >
         Start
       </button>
-      {refused !== null ? (
-        <p data-testid="refused">{refused.length === 0 ? 'none' : refused.join(' or ')}</p>
+      {outcome !== null ? (
+        <>
+          <p data-testid="refused">
+            {outcome.refused.length === 0 ? 'none' : outcome.refused.join(' or ')}
+          </p>
+          <p data-testid="night-moved">{outcome.nightMoved ?? 'none'}</p>
+        </>
       ) : null}
     </div>
   );
@@ -252,6 +260,85 @@ describe('the Voting closes row (V8-R-NO-005)', () => {
       PLAN,
       '2026-08-21T02:00:00.000Z',
     );
+  });
+});
+
+describe('the two defects the round-3 panel found by triggering them', () => {
+  /**
+   * Codex. New York has no 2:30 AM on the spring-forward night — the clock goes
+   * 1:59 straight to 3:00 — and the two-pass conversion resolved that input to
+   * 1:30 AM and saved it. Normalising is standard; doing it silently is the
+   * defect. The round trip through the NY formatter is what detects it.
+   */
+  test('a time New York’s clocks skip is refused in the row, not silently moved', async () => {
+    render(<Harness />);
+    fireEvent.change(screen.getByLabelText('When'), {
+      target: { value: '2026-03-08T02:30' },
+    });
+    expect(screen.getByTestId('when-impossible')).toBeTruthy();
+    // Not confused with an empty field — the two say different things.
+    expect(screen.queryByTestId('when-missing')).toBeNull();
+
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutStart).not.toHaveBeenCalled();
+  });
+
+  test('3:30 AM the same night is a real time and is written', async () => {
+    // The other side of the same gap: 3:30 EDT exists, at 07:30Z.
+    render(<Harness planNight="2026-03-07" />);
+    fireEvent.change(screen.getByLabelText('When'), {
+      target: { value: '2026-03-08T03:30' },
+    });
+    expect(screen.queryByTestId('when-impossible')).toBeNull();
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(setNightOutStart).toHaveBeenCalledTimes(1));
+    expect(setNightOutStart).toHaveBeenCalledWith(
+      supabase,
+      PLAN,
+      '2026-03-08T07:30:00.000Z',
+    );
+  });
+
+  /**
+   * Codex. The rows derive their default from the clock at render and
+   * `create_night_out` reads it again at submit, so a rollover landing between
+   * the two creates a plan for the next night while the form still says
+   * tonight. Nothing is written wrongly — an untouched row writes nothing and
+   * the server's default is right FOR THE PLAN — but the owner saw another
+   * date, and no write can reconcile it, so it is reported.
+   */
+  test('a rollover between render and submit is reported, not silently absorbed', async () => {
+    render(<Harness planNight="2026-08-21" />);
+    // Untouched: the rows are showing 2026-08-20, the plan is for the 21st.
+    screen.getByTestId('create').click();
+    await waitFor(() =>
+      expect(screen.getByTestId('night-moved').textContent).toBe('2026-08-21'),
+    );
+    // And it is not dressed up as a refusal — nothing was refused.
+    expect(screen.getByTestId('refused').textContent).toBe('none');
+    expect(setNightOutStart).not.toHaveBeenCalled();
+  });
+
+  test('the ordinary case reports no move at all', async () => {
+    render(<Harness />);
+    screen.getByTestId('create').click();
+    await waitFor(() =>
+      expect(screen.getByTestId('night-moved').textContent).toBe('none'),
+    );
+  });
+
+  test('an EDITED row that lands on another night is the off-night row, never a move', async () => {
+    render(<Harness planNight="2026-08-21" />);
+    fireEvent.change(screen.getByLabelText('When'), {
+      target: { value: '2026-08-22T22:00' },
+    });
+    expect(screen.getByTestId('when-off-night')).toBeTruthy();
+    screen.getByTestId('create').click();
+    await waitFor(() =>
+      expect(screen.getByTestId('night-moved').textContent).toBe('none'),
+    );
+    expect(setNightOutStart).not.toHaveBeenCalled();
   });
 });
 

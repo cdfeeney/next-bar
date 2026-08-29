@@ -6,7 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { nycNightKey } from '@/lib/nightKey';
 import { createNightOut, getNightOut, inviteToNightOut } from '@/lib/nightOuts.server';
-import { useNightOutPlanFields } from './NightOutPlanFields';
+import { useNightOutPlanFields, type PlanEditOutcome } from './NightOutPlanFields';
 
 /**
  * A plan that was CREATED but never opened, parked where a route change cannot
@@ -59,7 +59,10 @@ const UUID_RE =
  */
 const PLAN_EDIT_BUDGET_MS = 10_000;
 /** What the owner is told when that budget expires. We do not know they landed. */
-const PLAN_EDIT_TIMED_OUT: readonly string[] = ['the planning details'];
+const PLAN_EDIT_TIMED_OUT: PlanEditOutcome = {
+  refused: ['the planning details'],
+  nightMoved: null,
+};
 
 /** Resolve `fallback` if `work` has not settled within `ms`. Never rejects. */
 function withBudget<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -438,6 +441,8 @@ export default function StartNightOutButton({
    */
   const [refusedEdits, setRefusedEdits] = useState<readonly string[]>([]);
   const [openToken, setOpenToken] = useState<string | null>(null);
+  /** The plan's night, when the rollover moved it out from under the form. */
+  const [nightMoved, setNightMoved] = useState<string | null>(null);
   /**
    * Minted once per attempt and REUSED across retries. That is the whole point:
    * a create whose response never arrived may already have made the plan, and
@@ -598,6 +603,7 @@ export default function StartNightOutButton({
     // cleared.
     setRefusedEdits([]);
     setOpenToken(null);
+    setNightMoved(null);
     // And the invite-failure count, for exactly the same reason (round-10
     // round 2, Codex). It was survivable before only because navigation always
     // followed it; now that a failure HOLDS the screen, an in-place account
@@ -801,11 +807,14 @@ export default function StartNightOutButton({
       // reported as not landed, which is true: we do not know that they did,
       // and a late settle can no longer paint anything because `apply` returns
       // its answer instead of rendering it.
-      const refusedEdits = await withBudget(
-        planFields.apply(supabase, planId),
+      const planEdits = await withBudget(
+        // `nightKey` is the ONE reading of the clock this attempt used, and the
+        // rows compare their displayed night against it — see `nightMoved`.
+        planFields.apply(supabase, planId, nightKey),
         PLAN_EDIT_BUDGET_MS,
         PLAN_EDIT_TIMED_OUT,
       );
+      const refusedEdits = planEdits.refused;
       if (owner !== liveUserId.current) return;
 
       // Invitations are sent AFTER the plan exists and BEFORE navigating, so the
@@ -836,6 +845,7 @@ export default function StartNightOutButton({
         // successful `retryOpen` navigated with nothing ever having said so.
         // The recovery panel below renders both.
         setRefusedEdits(refusedEdits);
+        setNightMoved(planEdits.nightMoved);
         return;
       }
       if (!mounted.current) return;
@@ -852,9 +862,13 @@ export default function StartNightOutButton({
       // land — and holding one while letting the other navigate would just move
       // the defect. Start is already disabled by `createdPlanId`, so this
       // cannot become a second plan, and Open it goes to the real plan.
-      if (refusedEdits.length > 0 || failed > 0) {
+      // A rollover that landed between the form's last render and this tap is
+      // held for the same reason: the owner was shown one night and the plan is
+      // for another, and that is not something to discover on the plan page.
+      if (refusedEdits.length > 0 || failed > 0 || planEdits.nightMoved !== null) {
         setBusy(false);
         setRefusedEdits(refusedEdits);
+        setNightMoved(planEdits.nightMoved);
         setOpenToken(plan.shareToken);
         return;
       }
@@ -917,9 +931,17 @@ export default function StartNightOutButton({
           ) : null}
         </div>
       ) : null}
-      {/* An invite failure with no refusal alongside it also holds the screen
-          now, so it needs the same way onward. */}
-      {refusedEdits.length === 0 && inviteFailures > 0 && openToken !== null ? (
+      {nightMoved !== null ? (
+        <p className="mt-2 text-sm text-red-400" role="status" data-testid="night-moved">
+          It just turned into a new night — your night out is for {nightMoved} at
+          9:00 PM, not the night the form was showing.
+        </p>
+      ) : null}
+      {/* An invite failure or a rollover with no refusal alongside it also holds
+          the screen now, so each needs the same way onward. */}
+      {refusedEdits.length === 0
+      && (inviteFailures > 0 || nightMoved !== null)
+      && openToken !== null ? (
         <button
           type="button"
           onClick={() => router.push(`/night-out/${openToken}`)}
