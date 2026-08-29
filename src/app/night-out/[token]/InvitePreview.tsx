@@ -133,8 +133,14 @@ export default function InvitePreview({
    * is outstanding, so a different invite is never blocked by it; and a release
    * only ever clears the holder's own hold, so a settling write for A cannot
    * unlock B.
+   *
+   * A SET, not one token (round-10 round 5, Codex). A single slot could only
+   * remember the most recent holder, so taking B's lock FORGOT that A's write
+   * was still out — and returning to A then started a second one, which is the
+   * defect the token was introduced to stop. Writes for different invites can
+   * genuinely overlap, so the lock has to be able to say so.
    */
-  const rsvpInFlightFor = useRef<string | null>(null);
+  const rsvpInFlight = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     epoch.current += 1;
@@ -159,16 +165,21 @@ export default function InvitePreview({
     // without a full reload. Next reuses this component across
     // /night-out/A → /night-out/B without remounting, so that path is the
     // ordinary one, not an edge.
-    setRsvpBusy(false);
-    // THE LOCK ITSELF IS NOT CLEARED HERE ANY MORE (round-10 round 4, Codex).
-    // Round 9 cleared it, because as a boolean it was the same lock for every
-    // invite and a stuck one made the next invite unanswerable. Now that it
-    // names its invite, clearing on a token change is exactly the bug: coming
-    // back to A while A's write is still out would start a second one. It holds
-    // until the write it belongs to settles — and a hold for the PREVIOUS
-    // invite does not block this one, because the guard compares tokens.
-    // `rsvpBusy` is still reset, because that is only what paints `disabled`
-    // and it belongs to the invite on screen.
+    // THE LOCK ITSELF IS NOT CLEARED HERE (round-10 round 4, Codex). Round 9
+    // cleared it, because as a boolean it was the same lock for every invite
+    // and a stuck one made the next invite unanswerable. Now that it names its
+    // invites, clearing on a token change is exactly the bug: coming back to A
+    // while A's write is still out would start a second one. Each hold lasts
+    // until the write it belongs to settles, and a hold for another invite does
+    // not block this one.
+    //
+    // BUT `rsvpBusy` IS DERIVED FROM IT, not blindly cleared (round-10 round 5,
+    // Claude). Setting it false while this invite's write was still outstanding
+    // rendered three enabled buttons whose every tap the guard swallowed in
+    // silence — no disable, no message, nothing — which is precisely what this
+    // component says elsewhere must never be offered. Returning to an invite
+    // that is still busy now looks busy.
+    setRsvpBusy(rsvpInFlight.current.has(token));
 
     const supabase = getBrowserSupabase();
     if (supabase === null) return;
@@ -210,7 +221,7 @@ export default function InvitePreview({
       // The REF, not the state: an automatic queued delivery holds the same
       // lock and does not go through a render to take it. Compared against THIS
       // invite, so a write still out for a different one never blocks this.
-      if (rsvpBusy || rsvpInFlightFor.current === token) return;
+      if (rsvpBusy || rsvpInFlight.current.has(token)) return;
       const heldToken = token;
       const startedAt = epoch.current;
       const supabase = getBrowserSupabase();
@@ -229,7 +240,7 @@ export default function InvitePreview({
       // when the tap's round trip returns — or the delivery can start in
       // between and overwrite what the recipient just asked for.
       answered.current = true;
-      rsvpInFlightFor.current = heldToken;
+      rsvpInFlight.current.add(heldToken);
       setRsvpBusy(true);
       setRsvpError(null);
       const result =
@@ -241,14 +252,21 @@ export default function InvitePreview({
       if (startedAt !== epoch.current) {
         // A STALE WRITE RELEASES ONLY ITS OWN HOLD, and paints nothing. It has
         // genuinely settled, so a later write for the SAME invite is safe to
-        // allow — but the lock may since have been taken by the invite now on
-        // screen, and clearing that one from here is what would let two writes
-        // overlap. The token comparison is the whole difference (round-9 kept
-        // the hold, which was right for a boolean and wrong for this).
-        if (rsvpInFlightFor.current === heldToken) rsvpInFlightFor.current = null;
+        // allow — and holds for other invites are untouched, which is why the
+        // lock is a set rather than one slot.
+        rsvpInFlight.current.delete(heldToken);
+        // ...AND IT STILL SPENDS THE QUEUE (round-10 round 5, Claude). This
+        // branch returned before the `sent` handling below, so a successful
+        // write that settled after a token change left an OLDER queued answer
+        // in storage. Coming back to that invite auto-delivered it, and the
+        // last-write-wins upsert replaced the recipient's newer answer — the
+        // same older-answer-lands-last defect the queue lock exists to stop,
+        // reached through the stale door. A sent answer is sent whoever is on
+        // screen, so the queue it satisfies is spent here too.
+        if (result === 'sent') clearQueuedRsvp(heldToken);
         return;
       }
-      rsvpInFlightFor.current = null;
+      rsvpInFlight.current.delete(heldToken);
       if (result === 'sent') {
         answered.current = true;
         clearQueuedRsvp(token);
@@ -331,7 +349,7 @@ export default function InvitePreview({
       // overwritten, never appended), so delivering whatever is in it is
       // correct; what was missing is that the two writers must not overlap, and
       // that a delivery must not paint a value the recipient has since changed.
-      if (rsvpInFlightFor.current === token) return;
+      if (rsvpInFlight.current.has(token)) return;
       const pending = readQueuedRsvp(token);
       if (pending === null) return;
       const supabase = getBrowserSupabase();
@@ -339,7 +357,7 @@ export default function InvitePreview({
       if (supabase === null || key === null) return;
       const heldToken = token;
       const startedAt = epoch.current;
-      rsvpInFlightFor.current = heldToken;
+      rsvpInFlight.current.add(heldToken);
       // Visibly in flight, exactly as a tap is: the controls disable for the
       // moment the delivery holds the lock, so the recipient is never offered a
       // tap that the guard would silently swallow.
@@ -349,10 +367,13 @@ export default function InvitePreview({
       // changed paints nothing and releases only its OWN hold, never whatever
       // the invite now on screen may be holding.
       if (cancelled || startedAt !== epoch.current) {
-        if (rsvpInFlightFor.current === heldToken) rsvpInFlightFor.current = null;
+        rsvpInFlight.current.delete(heldToken);
+        // A delivered answer spends its queue wherever the viewer has gone —
+        // same rule, and same reason, as the stale branch in `answer()`.
+        if (result === 'sent') clearQueuedRsvp(heldToken);
         return;
       }
-      rsvpInFlightFor.current = null;
+      rsvpInFlight.current.delete(heldToken);
       setRsvpBusy(false);
       // The queue moved on while we were away — the recipient answered again,
       // and that newer choice is the one that must be sent and shown.

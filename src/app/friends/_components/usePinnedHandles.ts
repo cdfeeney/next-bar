@@ -114,9 +114,26 @@ export function usePinnedHandles(): PinnedHandlesState {
    * watch: if fifteen minutes ago was a different night, we are inside it.
    */
   const nightRef = useRef(night);
-  const [mountedInsideSettle] = useState(
-    () => nycNightKey(new Date(Date.now() - ROLLOVER_SETTLE_MS)) !== night,
-  );
+  /**
+   * BOTH SIDES OF THE BOUNDARY, because clock skew has two signs (round-10
+   * round 5, Codex). Looking only BACKWARDS — "was fifteen minutes ago a
+   * different night?" — arms a device whose clock runs FAST, which has already
+   * rolled over while the server has not. A device running SLOW has the
+   * opposite problem and the worse one: the server rolls over at real 4:00 and
+   * expires the pins, while this device still reads 3:50, sees no change, and
+   * keeps showing rows the server has already dropped until it catches up.
+   *
+   * Looking forwards as well arms that case: if fifteen minutes from now is a
+   * different night, the server may have rolled already. The window is a
+   * property of how close the clock is to the boundary, in either direction.
+   */
+  const [mountedInsideSettle] = useState(() => {
+    const now = Date.now();
+    return (
+      nycNightKey(new Date(now - ROLLOVER_SETTLE_MS)) !== night
+      || nycNightKey(new Date(now + ROLLOVER_SETTLE_MS)) !== night
+    );
+  });
   const rolledAt = useRef<number | null>(
     mountedInsideSettle ? Date.now() : null,
   );
@@ -126,6 +143,12 @@ export function usePinnedHandles(): PinnedHandlesState {
       nightRef.current = key;
       rolledAt.current = Date.now();
       setNight(key);
+    }
+    // The APPROACH to the boundary re-arms too, so a session that was open long
+    // before 4:00 AM is inside the window when it arrives — on a slow clock the
+    // server rolls over first, and there is no local change to notice.
+    if (nycNightKey(new Date(Date.now() + ROLLOVER_SETTLE_MS)) !== nightRef.current) {
+      rolledAt.current = Date.now();
     }
     if (rolledAt.current !== null && Date.now() - rolledAt.current < ROLLOVER_SETTLE_MS) {
       setNonce((n) => n + 1);

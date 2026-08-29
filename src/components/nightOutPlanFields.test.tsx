@@ -411,6 +411,41 @@ describe('an abandoned apply stops writing (round-10 round 4, Codex)', () => {
     expect(setNightOutStart).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Round-10 round 5, Codex. `applyRef` in the caller stopped `handleStart`
+   * calling a callback captured at the tap, but the callback it DID call still
+   * froze every field for its whole sequence of awaited writes. A presence
+   * resolve landing while `set_night_out_start` was in flight put the inherited
+   * Area on screen and still skipped writing it. Each write reads the rows as
+   * they stand when it goes out.
+   */
+  test('a field that changes mid-apply is written as it stands, not as it was', async () => {
+    let releaseStart: (value: boolean) => void = () => undefined;
+    setNightOutStart.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        releaseStart = resolve;
+      }),
+    );
+
+    render(<Harness />);
+    fireEvent.change(screen.getByLabelText('When'), {
+      target: { value: '2026-08-20T22:30' },
+    });
+    // Tapped with the Area still empty.
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(setNightOutStart).toHaveBeenCalledTimes(1));
+    expect(setNightOutArea).not.toHaveBeenCalled();
+
+    // The Area arrives while the first write is still out.
+    fireEvent.change(screen.getByLabelText(/^Area/), {
+      target: { value: 'East Village' },
+    });
+    releaseStart(true);
+
+    await waitFor(() => expect(setNightOutArea).toHaveBeenCalledTimes(1));
+    expect(setNightOutArea).toHaveBeenCalledWith(supabase, PLAN, 'East Village');
+  });
+
   test('an un-aborted apply still writes all three', async () => {
     const controller = new AbortController();
     render(<HarnessWithSignal signal={controller.signal} />);

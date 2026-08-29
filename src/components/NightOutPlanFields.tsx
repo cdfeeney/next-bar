@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getBarById } from '@/lib/catalog';
 import { nycNightKey } from '@/lib/nightKey';
@@ -289,6 +289,20 @@ export function useNightOutPlanFields({
    */
   const deadlineMissing = deadlineMode === 'time' && deadlineIso === null;
 
+  /**
+   * The rows as they stand RIGHT NOW, readable from inside a running `apply`.
+   *
+   * `applyRef` in the caller fixed the outer half of this — `handleStart` no
+   * longer calls the callback its closure captured at the tap — but the
+   * callback it does call still froze every field for its whole sequence of
+   * awaited writes (round-10 round 5, Codex). So a presence resolve landing
+   * while `set_night_out_start` was in flight put the inherited Area on screen
+   * and still skipped writing it. Each write reads this instead, so what is
+   * sent is what the form shows when the write goes out.
+   */
+  const live = useRef({ startEdit, start, startIso, startOffNight, area, deadlineIso });
+  live.current = { startEdit, start, startIso, startOffNight, area, deadlineIso };
+
   const apply = useCallback(
     async (
       supabase: SupabaseClient,
@@ -313,15 +327,20 @@ export function useNightOutPlanFields({
       // Only an untouched row can differ silently: an edited one that lands on
       // another night is already narrated by `startOffNight` and not sent.
       const nightMoved =
-        startEdit === null && start.slice(0, 10) !== planNight ? planNight : null;
+        live.current.startEdit === null && live.current.start.slice(0, 10) !== planNight
+          ? planNight
+          : null;
       // UNCHANGED IS NOT UNSET. An untouched row is already the server's own
       // default, so there is nothing to write and no way for that write to
       // fail; an edited one is written, and an off-night one is not attempted.
-      if (startEdit !== null && startIso !== null && !startOffNight) {
+      const whenNow = live.current;
+      if (whenNow.startEdit !== null && whenNow.startIso !== null && !whenNow.startOffNight) {
         if (stopped()) failed.push('the time');
-        else if (!(await setNightOutStart(supabase, planId, startIso))) failed.push('the time');
+        else if (!(await setNightOutStart(supabase, planId, whenNow.startIso))) {
+          failed.push('the time');
+        }
       }
-      const trimmedArea = area.trim();
+      const trimmedArea = live.current.area.trim();
       if (trimmedArea !== '') {
         if (stopped()) failed.push('the area');
         else if (!(await setNightOutArea(supabase, planId, trimmedArea))) failed.push('the area');
@@ -330,15 +349,18 @@ export function useNightOutPlanFields({
       // null, which is what "No deadline" means. A blank field is the same
       // thing and is narrated by `deadlineMissing` above, not reported here:
       // an edit that never reached the server was never refused by it.
-      if (hasInvitees && deadlineIso !== null) {
+      const closesAt = live.current.deadlineIso;
+      if (hasInvitees && closesAt !== null) {
         if (stopped()) failed.push('the voting deadline');
-        else if (!(await setNightOutVotingDeadline(supabase, planId, deadlineIso))) {
+        else if (!(await setNightOutVotingDeadline(supabase, planId, closesAt))) {
           failed.push('the voting deadline');
         }
       }
       return { refused: failed, nightMoved };
     },
-    [startEdit, start, startIso, startOffNight, area, deadlineIso, hasInvitees],
+    // Every field is read through `live`, so this callback is stable and the
+    // caller's ref to it never goes stale in the first place.
+    [hasInvitees],
   );
 
   const fields = (

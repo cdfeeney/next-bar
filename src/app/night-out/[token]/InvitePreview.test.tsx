@@ -595,10 +595,14 @@ describe('the offline queue (V8-R-INV-003)', () => {
       expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
     );
 
-    // ...then B → A, where A's first write is still in flight.
+    // ...then B → A, where A's first write is still in flight. The controls
+    // must LOOK busy, not merely behave as if they were: this assertion was
+    // written the other way round in round 4 and the round-5 panel filed
+    // exactly that — enabled buttons whose every tap the guard swallowed in
+    // silence, which the component elsewhere says must never be offered.
     rerender(toA);
     await waitFor(() =>
-      expect(screen.getByTestId('invite-rsvp-maybe')).not.toBeDisabled(),
+      expect(screen.getByTestId('invite-rsvp-maybe')).toBeDisabled(),
     );
     screen.getByTestId('invite-rsvp-maybe').click();
 
@@ -606,6 +610,98 @@ describe('the offline queue (V8-R-INV-003)', () => {
       submitAnonRsvp,
       'a second write for the same invite started while the first was still out',
     ).toHaveBeenCalledTimes(1);
+  });
+
+  test('a hung write for ANOTHER invite is still remembered when you come back to it', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    // A's write never settles. B's does.
+    submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    // B, answered and settled — this is what a single-slot lock forgot A for.
+    submitAnonRsvp.mockResolvedValue('sent');
+    rerender(
+      <InvitePreview
+        token={OTHER_TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
+    );
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(2));
+
+    // Back to A, whose write is STILL out. A set remembers it; one slot did not.
+    rerender(
+      <InvitePreview
+        token={TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-maybe')).toBeDisabled(),
+    );
+    screen.getByTestId('invite-rsvp-maybe').click();
+    expect(
+      submitAnonRsvp,
+      'taking a second invite’s lock forgot the first invite’s outstanding write',
+    ).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Round-10 round 5, Claude. The stale-settle branch returned BEFORE the
+   * `sent` handling, so a successful write that landed after a token change
+   * left an older queued answer in storage. Returning to that invite
+   * auto-delivered it, and the last-write-wins upsert replaced the recipient's
+   * newer answer — the older-answer-lands-last defect, reached through the
+   * stale door. A sent answer is sent whoever is on screen.
+   */
+  test('a successful write that settles after navigation still spends its queue', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    // An older answer is already held for A.
+    readQueuedRsvp.mockReturnValue('maybe');
+
+    let releaseA: (value: 'sent') => void = () => undefined;
+    submitAnonRsvp.mockReturnValueOnce(
+      new Promise<'sent'>((resolve) => {
+        releaseA = resolve;
+      }),
+    );
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    // Away to B before A's write answers.
+    rerender(
+      <InvitePreview
+        token={OTHER_TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
+    );
+
+    clearQueuedRsvp.mockClear();
+    releaseA('sent');
+
+    await waitFor(() =>
+      expect(
+        clearQueuedRsvp,
+        'the stale branch returned before spending the queue, so the older answer survived',
+      ).toHaveBeenCalledWith(TOKEN),
+    );
   });
 
   test('says the answer was not sent when the queue itself could not be written', async () => {

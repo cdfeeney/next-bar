@@ -58,11 +58,17 @@ const UUID_RE =
  * them — so they must never hold the invitations or the owner's route to it.
  */
 const PLAN_EDIT_BUDGET_MS = 10_000;
-/** What the owner is told when that budget expires. We do not know they landed. */
-const PLAN_EDIT_TIMED_OUT: PlanEditOutcome = {
-  refused: ['the planning details'],
-  nightMoved: null,
-};
+/**
+ * What the owner is told when that budget expires — flagged as UNCERTAIN, not
+ * refused (round-10 round 5, both lanes).
+ *
+ * A write dispatched before the abort can still reach the server and commit, so
+ * "we couldn't save it" is a stronger claim than we are entitled to make: the
+ * plan may well carry the time the owner typed while the screen says it does
+ * not. Both files' comments already promised uncertainty language; the rendered
+ * sentence did not deliver it. This is the separate state that does.
+ */
+const PLAN_EDIT_TIMED_OUT: PlanEditOutcome = { refused: [], nightMoved: null };
 
 /**
  * Run `start(signal)` with a deadline. On expiry the signal is ABORTED and
@@ -78,6 +84,7 @@ function withBudget<T>(
   start: (signal: AbortSignal) => Promise<T>,
   ms: number,
   fallback: T,
+  onExpiry: () => void,
 ): Promise<T> {
   const controller = new AbortController();
   return Promise.race([
@@ -85,6 +92,7 @@ function withBudget<T>(
     new Promise<T>((resolve) => {
       setTimeout(() => {
         controller.abort();
+        onExpiry();
         resolve(fallback);
       }, ms);
     }),
@@ -461,6 +469,12 @@ export default function StartNightOutButton({
   /** The plan's night, when the rollover moved it out from under the form. */
   const [nightMoved, setNightMoved] = useState<string | null>(null);
   /**
+   * The planning edits ran out of time. NOT the same as refused: a write
+   * dispatched before the abort may still have landed, so this gets its own
+   * sentence rather than borrowing the refusal's.
+   */
+  const [editsUncertain, setEditsUncertain] = useState(false);
+  /**
    * Minted once per attempt and REUSED across retries. That is the whole point:
    * a create whose response never arrived may already have made the plan, and
    * without a stable key the retry makes a second one (cold panel, Codex).
@@ -633,6 +647,7 @@ export default function StartNightOutButton({
     setRefusedEdits([]);
     setOpenToken(null);
     setNightMoved(null);
+    setEditsUncertain(false);
     // And the invite-failure count, for exactly the same reason (round-10
     // round 2, Codex). It was survivable before only because navigation always
     // followed it; now that a failure HOLDS the screen, an in-place account
@@ -836,6 +851,7 @@ export default function StartNightOutButton({
       // reported as not landed, which is true: we do not know that they did,
       // and a late settle can no longer paint anything because `apply` returns
       // its answer instead of rendering it.
+      let editsTimedOut = false;
       const planEdits = await withBudget(
         // `applyRef`, not the `apply` this closure captured (round-10 round 4,
         // Codex). `handleStart` runs across several awaits, and the rows can
@@ -851,6 +867,9 @@ export default function StartNightOutButton({
         (signal) => applyRef.current(supabase, planId, nightKey, signal),
         PLAN_EDIT_BUDGET_MS,
         PLAN_EDIT_TIMED_OUT,
+        () => {
+          editsTimedOut = true;
+        },
       );
       const refusedEdits = planEdits.refused;
       if (owner !== liveUserId.current) return;
@@ -860,7 +879,22 @@ export default function StartNightOutButton({
       // reaching the plan — the plan is real either way — but it is never silent
       // either: an invitation nobody sent and nobody mentioned is the whole
       // defect this wiring exists to fix.
-      const accounts = inviteeIds.filter((id) => UUID_RE.test(id));
+      //
+      // THE GUEST LIST IS THE ONE FROM THE TAP, deliberately (round-10 round 5,
+      // Codex HIGH; the Claude lane read the same code and ruled tap-time
+      // intent defensible). Start acts on what was on screen when it was
+      // pressed, which is both what a button means and the only deterministic
+      // choice — re-reading the selection as the loop walks it would make the
+      // guest list depend on when each RPC happened to return.
+      //
+      // The mismatch Codex names is real but lives elsewhere: the people picker
+      // is rendered by `/friends/consensus`, which this lane does not own, and
+      // it stays enabled while the create is in flight, so the screen can show
+      // a selection the plan does not have. Disabling it while `busy` is the
+      // fix, and it belongs to that page's owner. Snapshotting here at least
+      // makes the semantic explicit rather than an accident of closure capture.
+      const invitedAtTap = inviteeIds;
+      const accounts = invitedAtTap.filter((id) => UUID_RE.test(id));
       let failed = 0;
       for (const id of accounts) {
         // Sequential on purpose: invite_to_night_out serialises on a per-plan
@@ -884,6 +918,7 @@ export default function StartNightOutButton({
         // The recovery panel below renders both.
         setRefusedEdits(refusedEdits);
         setNightMoved(planEdits.nightMoved);
+        setEditsUncertain(editsTimedOut);
         return;
       }
       if (!mounted.current) return;
@@ -903,10 +938,16 @@ export default function StartNightOutButton({
       // A rollover that landed between the form's last render and this tap is
       // held for the same reason: the owner was shown one night and the plan is
       // for another, and that is not something to discover on the plan page.
-      if (refusedEdits.length > 0 || failed > 0 || planEdits.nightMoved !== null) {
+      if (
+        refusedEdits.length > 0
+        || failed > 0
+        || planEdits.nightMoved !== null
+        || editsTimedOut
+      ) {
         setBusy(false);
         setRefusedEdits(refusedEdits);
         setNightMoved(planEdits.nightMoved);
+        setEditsUncertain(editsTimedOut);
         setOpenToken(plan.shareToken);
         return;
       }
@@ -969,6 +1010,12 @@ export default function StartNightOutButton({
           ) : null}
         </div>
       ) : null}
+      {editsUncertain ? (
+        <p className="mt-2 text-sm text-red-400" role="status" data-testid="plan-edits-uncertain">
+          Your night out was created, but the details you set took too long to
+          answer — open it to see whether they saved.
+        </p>
+      ) : null}
       {nightMoved !== null ? (
         <p className="mt-2 text-sm text-red-400" role="status" data-testid="night-moved">
           It just turned into a new night — your night out is for {nightMoved} at
@@ -978,7 +1025,7 @@ export default function StartNightOutButton({
       {/* An invite failure or a rollover with no refusal alongside it also holds
           the screen now, so each needs the same way onward. */}
       {refusedEdits.length === 0
-      && (inviteFailures > 0 || nightMoved !== null)
+      && (inviteFailures > 0 || nightMoved !== null || editsUncertain)
       && openToken !== null ? (
         <button
           type="button"
