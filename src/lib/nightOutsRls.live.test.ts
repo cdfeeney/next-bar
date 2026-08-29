@@ -151,7 +151,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     }
   });
 
-  it('anon is denied the night_out write RPCs, and holds exactly the six deliberate grants (criterion 6)', async () => {
+  it('anon is denied the night_out write RPCs, and holds exactly the seven deliberate grants (criterion 6)', async () => {
     // The ten write RPCs, plus 0047's authenticated-only definer READ
     // (night_out_is_full_by_token) which anon must also not execute. An
     // earlier round caught this list claiming "all" while omitting
@@ -221,12 +221,29 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     // surface keyed by plan id opened. `night_out_media_expires_at` and
     // `night_out_media_window` carry the same uuid/date pair.
     //
-    // The six below are each deliberate, and five of them are reads. The sixth,
-    // `rsvp_night_out_by_token`, is a genuine anon WRITE — 0068 grants it for
-    // token-gated anonymous RSVP, served by `public.night_out_anon_rsvps` — so
-    // this test's title is about the writes it enumerates, never a claim that
-    // no anon write exists.
+    // The seven below are each deliberate, and six of them are reads. The
+    // seventh, `rsvp_night_out_by_token`, is a genuine anon WRITE — 0068 grants
+    // it for token-gated anonymous RSVP, served by
+    // `public.night_out_anon_rsvps` — so this test's title is about the writes
+    // it enumerates, never a claim that no anon write exists. Verified against
+    // every `to anon` line in 0068: 779, 2221, 2252, 2379, 2433, 2469, 2506.
+    //
+    // THE UNIVERSE IS THE FEATURE, NOT ONE SUBSTRING (round-10 round 2,
+    // Claude). `like '%night_out%'` alone could not see 0068's own
+    // `get_anon_rsvp_by_token(uuid, uuid)` grant at line 2252 — a seventh
+    // deliberate anon grant on this same bearer-invite surface whose name
+    // simply lacks the substring. The assertion claimed "exactly the six" over
+    // a universe that had already dropped a seventh, so any future anon grant
+    // on a function of this feature named without `night_out` would have been
+    // invisible to it. Both name shapes are in scope now.
+    //
+    // The signature comes from `format_type` over `proargtypes` rather than
+    // `pg_get_function_identity_arguments`, whose exact rendering — whether it
+    // carries argument names — is not something this lane can settle without a
+    // database, and a guard that might not match is not a guard. `format_type`
+    // is unambiguous: canonical type names, nothing else.
     const ANON_EXECUTABLE = [
+      'get_anon_rsvp_by_token(uuid, uuid)',
       'night_out_scheduled_start(date)',
       'preview_night_out(uuid)',
       'preview_night_out_attendees(uuid)',
@@ -235,10 +252,16 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       'rsvp_night_out_by_token(uuid, uuid, text)',
     ];
     const { rows } = await db.query(`
-      select p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as signature,
+      select p.proname || '('
+               || coalesce(
+                    (select string_agg(format_type(t, null), ', ' order by o)
+                       from unnest(p.proargtypes) with ordinality as u(t, o)),
+                    '')
+               || ')' as signature,
              has_function_privilege('anon', p.oid, 'EXECUTE') as anon_execute
         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.proname like '%night_out%'`);
+       where n.nspname = 'public'
+         and (p.proname like '%night_out%' or p.proname like '%anon_rsvp%')`);
     // A read that returned nothing would make every assertion below vacuous.
     expect(rows.length, 'no %night_out% routines found; the read itself failed').toBeGreaterThan(
       ANON_EXECUTABLE.length,

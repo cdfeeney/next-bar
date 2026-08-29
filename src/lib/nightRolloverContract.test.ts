@@ -1,6 +1,13 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { NIGHT_ROLLOVER_HOUR } from './nightKey';
-import { committedFunctionBody, definingMigration, sqlView } from './effectiveMigration';
+import {
+  MIGRATIONS_DIR,
+  committedFunctionBody,
+  definingMigration,
+  sqlView,
+} from './effectiveMigration';
 
 /**
  * ONE ROLLOVER HOUR, ASSERTED IN THE LOCAL GATE.
@@ -32,6 +39,31 @@ describe('the night rollover has exactly one hour on both sides', () => {
   it('the last migration to define nyc_night_key subtracts the same 4 hours', () => {
     const file = definingMigration('nyc_night_key');
     expect(file, 'no migration defines nyc_night_key').not.toBeNull();
+
+    /**
+     * EXACTLY ONE DEFINITION, AND IT IS THE timestamptz ONE (round-10 round 2,
+     * Codex). `committedFunctionBody` returns the LAST definition of the name
+     * in the file, and `definingMigration` resolves by NAME, not by signature.
+     * So a migration that first moved `nyc_night_key(timestamptz)` to six hours
+     * and then added a `date` overload carrying the expected four-hour body
+     * would satisfy the expression check below while every real call — which
+     * passes a timestamptz or no argument at all — used the wrong boundary.
+     *
+     * Asserting the count rather than trying to parse overloads is deliberate:
+     * this function has exactly one signature today, a second one is a decision
+     * somebody should have to make on purpose, and a test that fails and says
+     * why is a better answer here than a resolver that tries to be clever.
+     */
+    const raw = readFileSync(path.join(MIGRATIONS_DIR, file as string), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const headers = sqlView(raw).skeleton.match(
+      /create\s+(or\s+replace\s+)?function\s+public\.nyc_night_key\s*\(/g,
+    ) ?? [];
+    expect(headers.length, `${file} must define nyc_night_key exactly once`).toBe(1);
+    expect(
+      sqlView(raw).skeleton,
+      `${file} must define the timestamptz signature, not another overload`,
+    ).toMatch(/public\.nyc_night_key\s*\(\s*p_at\s+timestamptz/);
 
     const body = committedFunctionBody(file as string, 'nyc_night_key');
     expect(body, `could not read the nyc_night_key body out of ${file}`).not.toBeNull();

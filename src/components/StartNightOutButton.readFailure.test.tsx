@@ -35,6 +35,8 @@ let heldRead: Promise<unknown> | null = null;
 /** When set, createNightOut hands back this promise instead of resolving. */
 let heldCreate: Promise<unknown> | null = null;
 let nightKey = '2026-08-17';
+/** When set, every idempotency key createNightOut receives is appended here. */
+let createKeys: Array<string | undefined> | null = null;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => pushed.push(href) }),
@@ -63,8 +65,14 @@ vi.mock('@/lib/supabase/client', () => ({
 }));
 
 vi.mock('@/lib/nightOuts.server', () => ({
-  createNightOut: async () => {
+  createNightOut: async (
+    _s: unknown,
+    _night: string,
+    _title: unknown,
+    key?: string,
+  ) => {
     createCalls += 1;
+    if (createKeys !== null) createKeys.push(key);
     if (heldCreate !== null) return heldCreate;
     return createResult;
   },
@@ -92,6 +100,7 @@ beforeEach(() => {
   currentUser = USER_A;
   authStatus = 'signed-in';
   nightKey = '2026-08-17';
+  createKeys = null;
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
@@ -617,6 +626,56 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     expect(pushed).toEqual(['/night-out/tok-1']);
   });
 
+  /**
+   * Round-10 round 2, Claude. `attemptKey` was minted once and never expired,
+   * and 0054's idempotency lookup matches on (owner_id, idempotency_key) with
+   * NO night column — so a key held across the rollover made tonight's Start
+   * return LAST night's plan, send tonight's invitees to it, and navigate the
+   * owner there.
+   */
+  test('the idempotency key expires with the night, so tomorrow is not yesterday’s plan', async () => {
+    const user = userEvent.setup();
+    const keys: Array<string | undefined> = [];
+    createKeys = keys;
+
+    // Night 1: the create commits server-side but the response is lost.
+    createResult = null;
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+    expect(await screen.findByText(/Couldn't start it/i)).toBeTruthy();
+
+    // The tab stays open past 4:00 AM.
+    nightKey = '2026-08-18';
+    createResult = PLAN_ID;
+    view.rerender(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(createCalls).toBe(2));
+
+    expect(keys.length).toBe(2);
+    expect(
+      keys[1],
+      'the second night reused the first night’s idempotency key, so 0054 would return yesterday’s plan',
+    ).not.toBe(keys[0]);
+  });
+
+  test('a retry on the SAME night still reuses the key, which is what stops a duplicate plan', async () => {
+    const user = userEvent.setup();
+    const keys: Array<string | undefined> = [];
+    createKeys = keys;
+
+    createResult = null;
+    render(<StartNightOutButton />);
+    const start = screen.getByRole('button', { name: /Start the official Night Out/i });
+    await user.click(start);
+    await waitFor(() => expect(createCalls).toBe(1));
+    await user.click(start);
+    await waitFor(() => expect(createCalls).toBe(2));
+
+    expect(keys.length).toBe(2);
+    expect(keys[1], 'a same-night retry minted a new key and could double-create').toBe(keys[0]);
+  });
+
   test("a refused edit for A is not shown as B's after an in-place account switch", async () => {
     // The other half of the same finding (Claude): while the rows hook owned
     // this message, the reset effect could not reach it, so B kept a claim
@@ -1008,15 +1067,36 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
     ]);
   });
 
-  test('a failed invite is reported and does NOT block reaching the plan', async () => {
+  /**
+   * REWRITTEN, and the old assertion is worth explaining because it was passing
+   * for a reason that does not exist outside this file.
+   *
+   * It used to assert that navigation still happened AND that the owner was
+   * told, in that order. The second half only held because `useRouter` is
+   * mocked here to push a string onto an array — nothing unmounts, so the
+   * notice stayed on screen for the assertion to find. In a browser
+   * `router.push` replaces the creation form, and the round-10 panel filed
+   * exactly that: the warning is destroyed by the navigation that follows it.
+   * A test that cannot observe the defect it claims to cover is not coverage.
+   *
+   * The intent behind it survives and is what this asserts instead: a failed
+   * invite must never leave the owner unable to reach the plan. It does not —
+   * the plan exists, it is named, and Open it goes there in one tap. What
+   * changed is that the report is READ first rather than flashed past.
+   */
+  test('a failed invite is reported on a screen that survives, and the plan is one tap away', async () => {
     inviteFails = true;
     const user = userEvent.setup();
     render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
     await user.click(screen.getByRole('button'));
-    // The plan is real either way, so navigation still happens...
-    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
-    // ...but the owner is told, rather than believing two people were invited.
+
+    // The owner is told, on a screen no route change has taken away.
     expect(await screen.findByText(/2 invites didn't send/)).toBeTruthy();
+    expect(pushed, 'navigated away from the invite-failure report').toEqual([]);
+
+    // And the plan is real and reachable — never a dead end.
+    await user.click(screen.getByRole('button', { name: /open it/i }));
+    expect(pushed).toEqual(['/night-out/tok-1']);
   });
 
   test('creating with nobody selected invites nobody and still works', async () => {

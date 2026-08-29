@@ -49,8 +49,14 @@ const supabase = {} as never;
  * The hook used to paint it itself, which is how it came to be rendered into
  * the wrong account's view and then destroyed by navigation.
  */
-function Harness({ hasInvitees = true }: { hasInvitees?: boolean }): JSX.Element {
-  const planFields = useNightOutPlanFields({ hasInvitees });
+function Harness({
+  hasInvitees = true,
+  identity = null,
+}: {
+  hasInvitees?: boolean;
+  identity?: string | null;
+}): JSX.Element {
+  const planFields = useNightOutPlanFields({ hasInvitees, identity });
   const [refused, setRefused] = useState<readonly string[] | null>(null);
   return (
     <div>
@@ -97,7 +103,14 @@ describe('the When row (V8-R-NO-002)', () => {
     expect(setNightOutStart).not.toHaveBeenCalled();
   });
 
-  test('an edited time is written as an instant', async () => {
+  /**
+   * The instant is pinned ABSOLUTELY, not recomputed with the same rule the
+   * code uses, and not with `new Date(value)` — which reads the naive string in
+   * whatever zone the test runner happens to sit in and would therefore pass on
+   * a New York machine and fail everywhere else, while asserting nothing about
+   * the zone at all. 22:30 on 2026-08-20 in New York is EDT, UTC-4.
+   */
+  test('an edited time is written as an instant read in America/New_York', async () => {
     render(<Harness />);
     fireEvent.change(screen.getByLabelText('When'), {
       target: { value: '2026-08-20T22:30' },
@@ -107,8 +120,46 @@ describe('the When row (V8-R-NO-002)', () => {
     expect(setNightOutStart).toHaveBeenCalledWith(
       supabase,
       PLAN,
-      new Date('2026-08-20T22:30').toISOString(),
+      '2026-08-21T02:30:00.000Z',
     );
+  });
+
+  /**
+   * The EDT case above and this EST one together are what make the assertion
+   * discriminating: a device-zone parse answers 22:30 in the RUNNER's zone for
+   * both, and a fixed-offset implementation answers the same offset for both.
+   * Only a real America/New_York conversion gets UTC-4 in August and UTC-5 in
+   * January. Stated plainly: on a runner that is itself in New York these two
+   * would also pass against the old device-zone parse — the zone this suite
+   * runs in is not something the lane can read under its command guard — so
+   * they are a correct pin everywhere and a regression catcher everywhere but
+   * there.
+   */
+  test('a winter time is read in EST, so the offset is not hardcoded', async () => {
+    // 2026-01-15 is EST, UTC-5. Same wall clock, a different instant.
+    render(<Harness />);
+    fireEvent.change(screen.getByLabelText('When'), {
+      target: { value: '2026-01-15T22:30' },
+    });
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(setNightOutStart).toHaveBeenCalledTimes(1));
+    expect(setNightOutStart).toHaveBeenCalledWith(
+      supabase,
+      PLAN,
+      '2026-01-16T03:30:00.000Z',
+    );
+  });
+
+  test('clearing the When row says the 9:00 PM default will be used', async () => {
+    render(<Harness />);
+    fireEvent.change(screen.getByLabelText('When'), { target: { value: '' } });
+    expect(screen.getByTestId('when-missing')).toBeTruthy();
+
+    // The default IS what happens — a night out must start somewhere — so the
+    // row states it rather than the owner discovering it on the plan.
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutStart).not.toHaveBeenCalled();
   });
 
   /**
@@ -195,11 +246,45 @@ describe('the Voting closes row (V8-R-NO-005)', () => {
     );
     screen.getByTestId('create').click();
     await waitFor(() => expect(setNightOutVotingDeadline).toHaveBeenCalledTimes(1));
+    // America/New_York, EDT: 22:00 on the 20th is 02:00Z on the 21st.
     expect(setNightOutVotingDeadline).toHaveBeenCalledWith(
       supabase,
       PLAN,
-      new Date('2026-08-20T22:00').toISOString(),
+      '2026-08-21T02:00:00.000Z',
     );
+  });
+});
+
+describe('the drafts belong to an account', () => {
+  /**
+   * Round-10 round 2, Codex. `useAuth` updates IN PLACE on a cross-tab
+   * sign-out and sign-in, with no unmount, so the rows kept A's edits and
+   * `apply` wrote A's When and Area onto B's plan.
+   */
+  test('an in-place identity change clears every row', async () => {
+    const view = render(<Harness identity="user-a" />);
+    fireEvent.change(screen.getByLabelText('When'), {
+      target: { value: '2026-08-20T23:45' },
+    });
+    fireEvent.change(screen.getByLabelText(/^Area/), {
+      target: { value: 'East Village' },
+    });
+    fireEvent.click(screen.getByLabelText('Pick a time'));
+
+    view.rerender(<Harness identity="user-b" />);
+
+    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe(
+      '2026-08-20T21:00',
+    );
+    expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('No deadline') as HTMLInputElement).checked).toBe(true);
+
+    // And nothing of A's reaches B's plan.
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutStart).not.toHaveBeenCalled();
+    expect(setNightOutArea).not.toHaveBeenCalled();
+    expect(setNightOutVotingDeadline).not.toHaveBeenCalled();
   });
 });
 

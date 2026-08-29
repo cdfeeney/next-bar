@@ -67,16 +67,62 @@ function defaultStartValue(): string {
   return `${nycNightKey()}T${DEFAULT_START_TIME}`;
 }
 
+const NYC_PARTS = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+/** New York's UTC offset in milliseconds at the instant `at`. DST-aware. */
+function nycOffsetMs(at: number): number {
+  const parts = NYC_PARTS.formatToParts(new Date(at));
+  const get = (type: string): number =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const asIfUtc = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour') % 24,
+    get('minute'),
+    get('second'),
+  );
+  return asIfUtc - at;
+}
+
 /**
- * A datetime-local value as an ISO instant, or null when it is not a time.
+ * A datetime-local value as an ISO instant, READ IN AMERICA/NEW_YORK — or null
+ * when it is not a time.
  *
- * `new Date('2026-08-28T21:00')` is read in the DEVICE's zone, which is what
- * the owner typed. The night it lands in is then the server's question, asked
- * below with the same `nycNightKey` the database uses.
+ * NOT `new Date(value)` (round-10 round 2, Codex). That reads the naive string
+ * in the DEVICE's zone, and every other clock in this feature is New York's:
+ * the default this field is seeded with is NYC 9:00 PM, `nycNightKey` decides
+ * which night the instant lands in, and the plan page formats it back in
+ * America/New_York. On a device outside New York the owner therefore typed one
+ * time and the plan showed another — off by the zone difference, and capable of
+ * crossing the night boundary on its own.
+ *
+ * Offset-correct rather than offset-assumed: guess with the offset at the naive
+ * instant, then re-measure at the guess. The second pass is what makes the two
+ * DST edges right, where the offset before and after the guess differ.
  */
 function isoOf(value: string): string | null {
-  if (value === '') return null;
-  const at = new Date(value);
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (m === null) return null;
+  const naive = Date.UTC(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+  );
+  if (Number.isNaN(naive)) return null;
+  const firstGuess = naive - nycOffsetMs(naive);
+  const at = new Date(naive - nycOffsetMs(firstGuess));
   return Number.isNaN(at.getTime()) ? null : at.toISOString();
 }
 
@@ -95,8 +141,17 @@ const LABEL = 'block font-display text-xs uppercase tracking-[0.2em] text-muted 
 export function useNightOutPlanFields({
   disabled = false,
   hasInvitees = false,
+  identity = null,
 }: {
   disabled?: boolean;
+  /**
+   * The account these drafts belong to. A change RESETS every row.
+   *
+   * `useAuth` updates in place on a cross-tab sign-out and sign-in, with no
+   * unmount, so without this the rows kept account A's When, Area and deadline
+   * and `apply` wrote A's values onto B's plan (round-10 round 2, Codex).
+   */
+  identity?: string | null;
   /**
    * NO-005: "the row appears once at least one person or group is selected."
    * A solo plan has nobody to vote, so a deadline for that vote is not a state
@@ -133,6 +188,19 @@ export function useNightOutPlanFields({
   const [deadlineMode, setDeadlineMode] = useState<DeadlineMode>('none');
   const [deadline, setDeadline] = useState('');
 
+  // Reset DURING render on an identity change, not in an effect: an effect
+  // would let one commit render B's screen holding A's drafts, and `apply`
+  // reads these values, not the DOM. This is React's documented shape for
+  // "adjust state when a prop changes" and it re-renders before paint.
+  const [draftOwner, setDraftOwner] = useState<string | null>(identity);
+  if (identity !== draftOwner) {
+    setDraftOwner(identity);
+    setStartEdit(null);
+    setAreaEdit(null);
+    setDeadlineMode('none');
+    setDeadline('');
+  }
+
   /**
    * The night this device believes it is, checked BEFORE the write rather than
    * after a refusal: `set_night_out_start` bounds the start to the plan's own
@@ -142,6 +210,15 @@ export function useNightOutPlanFields({
   const startIso = isoOf(start);
   const startOffNight =
     startIso !== null && nycNightKey(new Date(startIso)) !== nycNightKey();
+  /**
+   * Edited to something that is not a time — in practice, cleared.
+   *
+   * It silently fell through to the server's 9:00 PM default while the field
+   * showed nothing, so the owner submitted a blank and got a time (round-10
+   * round 2, Codex). The default is still what happens, because a Night Out
+   * must have a start; the row now says so before the tap instead of after.
+   */
+  const startMissing = startEdit !== null && startIso === null;
 
   const deadlineIso = deadlineMode === 'time' ? isoOf(deadline) : null;
   /**
@@ -200,6 +277,11 @@ export function useNightOutPlanFields({
           <p className="mt-1 text-sm text-red-400" data-testid="when-off-night">
             That&apos;s a different night — pick a time on tonight, or leave it
             at 9:00 PM.
+          </p>
+        ) : null}
+        {startMissing ? (
+          <p className="mt-1 text-sm text-red-400" data-testid="when-missing">
+            Pick a time, or your night out starts at 9:00 PM.
           </p>
         ) : null}
       </div>
