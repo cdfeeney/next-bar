@@ -290,3 +290,61 @@ describe('R3-4 — a ref in staging AND development is a refusal, not a preceden
     })).toThrow(TargetRefusal);
   });
 });
+
+describe('WHICH DATABASE — ported from the home branches, where this branch never had it', () => {
+  /**
+   * Rounds 4 and 5 hardened the project ref, the endpoint host and port, startup options, the libpq
+   * environment and the certified object. NOBODY CHECKED THE DATABASE NAME. One cluster serves many
+   * databases, so a URL whose path simply says `/shadow` is self-consistent with every check above
+   * it: the ref is the allowlisted one, the host is the right pooler, the port matches, there are no
+   * options. If that database happens to carry the ledger, an apply would record itself against a
+   * database nobody named. Importing the home branches' tooling is what surfaced the gap.
+   */
+  const SHADOW = `postgresql://postgres.${STAGING}:pw@aws-0-ca-central-1.pooler.supabase.com:5432/shadow`;
+  const HONEST = `postgresql://postgres.${STAGING}:pw@aws-0-ca-central-1.pooler.supabase.com:5432/postgres`;
+  const lists = { productionRef: PROD, stagingRefs: [STAGING] };
+  const target = (databaseUrl: string) => ({
+    env: 'staging',
+    shellDatabaseUrl: undefined,
+    shellDeclaredEnv: undefined,
+    databaseUrl,
+    apiUrl: `https://${STAGING}.supabase.co`,
+    actualEnv: undefined,
+    classification: lists,
+  });
+
+  it('pg really does resolve the path as the database (the premise)', () => {
+    expect(resolveIdentity(SHADOW).database).toBe('shadow');
+    expect(resolveIdentity(HONEST).database).toBe('postgres');
+  });
+
+  it('every check ABOVE this one passes for the shadow URL — that is why it needs its own rule', () => {
+    const identity = resolveIdentity(SHADOW);
+    expect(identity.ref).toBe(STAGING);
+    expect(identity.host).toBe('aws-0-ca-central-1.pooler.supabase.com');
+    expect(identity.port).toBe(5432);
+  });
+
+  it('REFUSES a second database inside the allowlisted project', () => {
+    expect(() => resolveTarget(target(SHADOW))).toThrow(TargetRefusal);
+    expect(() => resolveTarget(target(SHADOW))).toThrow(/reaches the database "shadow"/);
+  });
+
+  it('accepts the Supabase default, which is what every real project uses', () => {
+    expect(() => resolveTarget(target(HONEST))).not.toThrow();
+  });
+
+  it('an explicitly EMPTY NEXT_BAR_DATABASE_NAME is refused, not treated as "no expectation"', () => {
+    expect(() => resolveTarget({
+      ...target(HONEST),
+      classification: { ...lists, expectedDatabase: '' },
+    })).toThrow(/cannot be verified/);
+  });
+
+  it('honours an operator override for a project that genuinely uses another database', () => {
+    expect(() => resolveTarget({
+      ...target(SHADOW),
+      classification: { ...lists, expectedDatabase: 'shadow' },
+    })).not.toThrow();
+  });
+});

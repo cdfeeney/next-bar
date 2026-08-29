@@ -26,7 +26,8 @@ import pg from 'pg';
 
 import { readClassification } from './classification';
 import {
-  deriveLabel, parseApiRef, parseRef, resolveIdentity, TargetRefusal, type CertifiedTarget,
+  checkDatabaseName, DEFAULT_DATABASE, deriveLabel, parseApiRef, parseRef, resolveIdentity,
+  TargetRefusal, type CertifiedTarget,
 } from './migration-target-guard';
 
 /**
@@ -131,6 +132,16 @@ export async function certify(secretsFile: string | null): Promise<CertifiedIden
       + 'NEXT_BAR_PRODUCTION_PROJECT_REF or NEXT_BAR_STAGING_PROJECT_REFS',
     );
   }
+
+  // RULE 4 — which DATABASE. certify() reaches resolveIdentity directly rather than through
+  // resolveTarget, so the check is stated here too; a tool that answers "which database is this"
+  // must not be the one entry point that cannot tell two databases in a cluster apart.
+  const databaseRefusal = checkDatabaseName(
+    certified.database ?? '',
+    classification.expectedDatabase ?? DEFAULT_DATABASE,
+    label ?? 'unknown',
+  );
+  if (databaseRefusal) refusals.push(databaseRefusal);
 
   // RULE 3 — the environment may not contradict the ref. It does not get to NAME the database; its
   // only power is to be wrong, and being wrong is a refusal.

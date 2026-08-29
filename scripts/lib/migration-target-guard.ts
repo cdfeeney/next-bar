@@ -50,6 +50,16 @@ export interface Classification {
   stagingRefs: string[];
   /** `NEXT_BAR_DEVELOPMENT_PROJECT_REFS`, optional — bootstrap has always permitted development. */
   developmentRefs?: string[];
+  /**
+   * `NEXT_BAR_DATABASE_NAME` from the same FILE, defaulting to `postgres`.
+   *
+   * THE ONE DELIBERATE DEPARTURE FROM THE VERBATIM PORT, and it is a sourcing choice rather than a
+   * logic change: the home branch reads this from `process.env`, where a `--secrets-file` (loaded
+   * with override:true) could set it and thereby choose the expectation it is then measured
+   * against. That is the exact defect class rounds 3 and 5 closed for the project lists and for
+   * HARNESS_DB_WRITE_OK, so it is read from the operator's file here for the same reason.
+   */
+  expectedDatabase?: string;
 }
 
 export interface TargetInput {
@@ -119,6 +129,8 @@ export interface CertifiedTarget {
   user: string | null;
   host: string | null;
   port: number | null;
+  /** The database pg will actually open. One cluster serves many. */
+  database: string | null;
   /** Derived from the operator's classification. Null until `resolveTarget` fills it in. */
   label: string | null;
 }
@@ -139,6 +151,48 @@ const POOLER_HOST_SUFFIX = '.pooler.supabase.com';
 
 /** libpq's default when the connection string names no port. */
 const DEFAULT_PG_PORT = '5432';
+
+/** Supabase serves every project from `postgres`; NEXT_BAR_DATABASE_NAME overrides it. */
+export const DEFAULT_DATABASE = 'postgres';
+
+/**
+ * WHICH DATABASE, decided by CONFIGURATION rather than by the URL being asked
+ * about. `checkConnectionEndpoint` proves pg resolved the database the URL's
+ * path names — self-consistency, which is necessary and not sufficient: a URL
+ * whose path simply says `/shadow` agrees with itself, and every other check
+ * passes because the project ref, the host and the port are all still the
+ * allowlisted ones. If that database carries the pinned migration row, an
+ * --execute would downgrade and unrecord an unintended database (round-3 panel,
+ * Codex, HIGH). One cluster serves many databases; naming which one is expected
+ * is the only thing that can tell them apart.
+ *
+ * `postgres` is Supabase's database for every project, so it is the default
+ * rather than a required variable — a check nobody can run because it needs new
+ * configuration is a check that gets deleted. NEXT_BAR_DATABASE_NAME overrides
+ * it for a project that genuinely uses another.
+ *
+ * PORTED VERBATIM on 2026-08-29 from scripts/apply-migration-target-guard.ts as it stands on the
+ * home branches (2290e41). It was never carried onto the release branch, so rounds 4 and 5 hardened
+ * the project ref, the endpoint, the options, the libpq environment and the certified object while
+ * NOBODY CHECKED THE DATABASE NAME. The import of that branch's tooling is what surfaced it.
+ */
+export function checkDatabaseName(
+  database: string,
+  expectedDatabase: string,
+  env: string,
+): string | null {
+  const actual = database.trim();
+  const expected = expectedDatabase.trim();
+  if (!expected) {
+    return `NEXT_BAR_DATABASE_NAME is set but empty, so --env ${env}'s database cannot be verified`;
+  }
+  if (!actual) return 'could not determine which database DATABASE_URL reaches';
+  if (actual !== expected) {
+    return `--env ${env}, but DATABASE_URL reaches the database ${JSON.stringify(actual)} `
+      + `rather than the expected ${JSON.stringify(expected)}`;
+  }
+  return null;
+}
 
 /**
  * WHICH SERVER — as opposed to WHICH PROJECT. Moved here from apply-migration-target-guard.ts,
@@ -259,13 +313,14 @@ export function resolveIdentity(connectionString: string | undefined): Certified
   // `connectionParameters` is populated by the constructor and is not in pg's public types. No
   // network call happens here — this is parameter resolution, the step that decides the target.
   let resolved: {
-    user?: string | null; host?: string | null; port?: number | string | null; options?: string | null;
+    user?: string | null; host?: string | null; port?: number | string | null;
+    options?: string | null; database?: string | null;
   };
   try {
     resolved = (new Client({ connectionString }) as unknown as {
       connectionParameters: {
         user?: string | null; host?: string | null; port?: number | string | null;
-        options?: string | null;
+        options?: string | null; database?: string | null;
       };
     }).connectionParameters;
   } catch (error) {
@@ -347,6 +402,7 @@ export function resolveIdentity(connectionString: string | undefined): Certified
     user: resolvedUser,
     host: resolvedHost,
     port: resolvedPort ? Number(resolvedPort) : null,
+    database: resolved.database ?? null,
     label: null,
   };
 }
@@ -511,6 +567,16 @@ export function resolveTarget(input: TargetInput): CertifiedTarget {
       );
     }
   }
+
+  // RULE 4 — WHICH DATABASE. Every check above answers "which project" or "which server"; a
+  // cluster serves many databases, and a URL whose path says `/shadow` is self-consistent with
+  // every one of them. Ported from the home branches, where this release branch never had it.
+  const databaseRefusal = checkDatabaseName(
+    certified.database ?? '',
+    classification.expectedDatabase ?? DEFAULT_DATABASE,
+    derived,
+  );
+  if (databaseRefusal) refuse(databaseRefusal);
 
   // AND `--env` must equal the DERIVED label — not the declared one. This is the check that used to
   // compare `--env` against `NEXT_BAR_DATABASE_ENVIRONMENT`, which made the guard only as truthful

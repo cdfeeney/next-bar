@@ -15,7 +15,9 @@ import { join } from 'node:path';
 
 import { parse as parseEnv } from 'dotenv';
 
-import { assertCoherentClassification, TargetRefusal, type Classification } from './migration-target-guard';
+import {
+  assertCoherentClassification, DEFAULT_DATABASE, TargetRefusal, type Classification,
+} from './migration-target-guard';
 
 const split = (value: string | undefined): string[] => (value ?? '')
   .split(/[,\s]+/)
@@ -38,6 +40,11 @@ export function readClassification(cwd: string = process.cwd()): Classification 
     productionRef: (parsed.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '').trim().toLowerCase() || null,
     stagingRefs: split(parsed.NEXT_BAR_STAGING_PROJECT_REFS),
     developmentRefs: split(parsed.NEXT_BAR_DEVELOPMENT_PROJECT_REFS),
+    // Absent means the Supabase default; present-but-empty is refused downstream rather than
+    // silently treated as "no expectation".
+    expectedDatabase: parsed.NEXT_BAR_DATABASE_NAME === undefined
+      ? DEFAULT_DATABASE
+      : parsed.NEXT_BAR_DATABASE_NAME,
   };
   assertCoherentClassification(classification);
   return classification;

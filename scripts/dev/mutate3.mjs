@@ -212,6 +212,12 @@ const MUTATIONS = [
     from: '  const consent = SHELL_WRITE_CONSENT;',
     to: "  const consent = (process.env.HARNESS_DB_WRITE_OK ?? '').trim().toLowerCase();",
   },
+  {
+    name: 'RULE: the DATABASE name is certified (ported 2026-08-29, never on this branch before)',
+    file: GUARD,
+    from: '  if (databaseRefusal) refuse(databaseRefusal);',
+    to: '  void databaseRefusal;',
+  },
 ];
 
 function run() {
