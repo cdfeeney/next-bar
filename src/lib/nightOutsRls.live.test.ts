@@ -4,8 +4,10 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 import {
-  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
+  checkMigrationTarget, resolveProjectRef,
 } from '../../scripts/apply-migration-target-guard';
+// The endpoint rules moved to the shared guard, where every entry point reaches them.
+import { checkConnectionEndpoint } from '../../scripts/lib/migration-target-guard';
 
 import {
   GUARDED_FUNCTIONS,

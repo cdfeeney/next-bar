@@ -50,8 +50,8 @@
  * Safety: aborts on the first error and names the file that failed.
  */
 
-import { config as loadEnv } from 'dotenv';
-import { readdirSync, readFileSync } from 'node:fs';
+import { config as loadEnv, parse as parseEnv } from 'dotenv';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from 'pg';
 import {
@@ -77,6 +77,9 @@ import {
   type CatalogBootstrapRow,
 } from './lib/catalogBootstrap';
 import { MIGRATION_LEDGER_DDL } from './lib/migrationLedger';
+import { deriveLabel, parseRef, resolveTarget } from './lib/migration-target-guard';
+import { readClassification } from './lib/classification';
+
 
 // Hard gate: never write the live DB with the service-role/pooler creds
 // during the unattended overnight loop (DeepSeek security review). This
@@ -89,6 +92,39 @@ if (process.env.LOOP_UNATTENDED === '1') {
   process.exit(1);
 }
 
+// A separate --secrets-file is how you reach a NON-default target without editing .env.local.
+// Repointing .env.local at another project is the obvious workaround and it is a trap: it silently
+// redirects every other tool in the repo, including the live RLS suite, and it stays repointed
+// until someone remembers to undo it. Mirrors scripts/apply-migration-set.ts exactly — same flag
+// name, override:true, loaded BEFORE .env.local, existence checked by hand.
+//
+// NOTE: deliberately NOT called --env-file. That name is a reserved Node flag; node consumes it
+// before the script is reached and the failure looks like a missing file rather than a collision.
+const secretsFileIndex = process.argv.indexOf('--secrets-file');
+const SECRETS_FILE = secretsFileIndex >= 0 ? process.argv[secretsFileIndex + 1] ?? '' : null;
+
+// Snapshot BEFORE any dotenv load. dotenv defaults to override:false, so a DATABASE_URL exported in
+// the shell survives every load below and is afterwards indistinguishable from one a file supplied.
+const shellDatabaseUrl = process.env.DATABASE_URL;
+// The LABEL is snapshotted for the opposite reason: a --secrets-file loads with override:true, so a
+// label in that file REPLACES one exported in the shell, and a human who exported a contradicting
+// label would be silently corrected instead of refused.
+const shellDeclaredEnv = process.env.NEXT_BAR_DATABASE_ENVIRONMENT;
+
+if (SECRETS_FILE !== null) {
+  if (SECRETS_FILE === '') {
+    console.error('--secrets-file needs a path');
+    process.exit(1);
+  }
+  // Checked by hand: dotenv does not reliably surface a missing file as an error, so a typo'd path
+  // would fall through to .env.local and point this at whatever THAT names. A guard that does not
+  // guard is worse than no guard, because it is trusted.
+  if (!existsSync(SECRETS_FILE)) {
+    console.error(`--secrets-file ${SECRETS_FILE} does not exist`);
+    process.exit(1);
+  }
+  loadEnv({ path: SECRETS_FILE, override: true });
+}
 loadEnv({ path: '.env.local' });
 loadEnv({ path: '.env' });
 
@@ -112,16 +148,68 @@ if (!databaseUrl) {
   process.exit(1);
 }
 
-if (BOOTSTRAP) {
+/**
+ * THE GUARD RUNS IN EVERY MODE. It used to sit inside `if (BOOTSTRAP)`, so a plain
+ * `npm run db:migrate` — the most ordinary command in this file — reached `new Client` and wrote
+ * the ledger having checked no ref, no API pair, no classification, no label, no endpoint and no
+ * libpq environment (round 4, CRITICAL). A guard that covers one flag of one script is not a guard;
+ * it is a guard-shaped thing next to three unguarded doors, which is exactly how this repo already
+ * lost a database. The bootstrap-specific reasoning below is unchanged; only its scope is.
+ */
+const GUARD_TAG = BOOTSTRAP ? '[bootstrap-guard]' : '[migrate-guard]';
+let derivedLabel: string;
+let certifiedUrl: string;
+{
+  // ONE CLASSIFICATION RULE, NOT TWO. The label is DERIVED from the project ref by the same guard
+  // apply-migration-set.ts uses; this script used to read NEXT_BAR_DATABASE_ENVIRONMENT and trust
+  // it. That is the defect class that destroyed staging on 2026-08-28: `.env.staging.local` carries
+  // a connection string and (until it was fixed) no label, dotenv's override:false let `.env.local`
+  // supply the word, and a STAGING connection string wore the label "production". Trusting the label
+  // here would refuse the honest staging bootstrap and accept a mislabelled one.
+  //
+  // resolveTarget also refuses a URL/API pair naming different projects, an unclassified project,
+  // and any label that CONTRADICTS the ref — from the shell or from a loaded file.
+  // ITEM 3: the bootstrap has no --env flag, so the label it asks for is the one the TARGET already
+  // derives to. Hard-coding 'staging' regressed DEVELOPMENT, which assertNonProductionBootstrapTarget
+  // still permits — a development ref would be refused as a contradiction or misread as staging.
+  // Asking for whatever the ref derives keeps resolveTarget's real work (pair agreement,
+  // classification, contradiction) while leaving the production refusal to the guard below, which
+  // is the check that actually protects the live data.
   try {
-    assertNonProductionBootstrapTarget({
-      environmentLabel: process.env.NEXT_BAR_DATABASE_ENVIRONMENT,
-      publicSupabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      databaseUrl,
-      productionProjectRef: process.env.NEXT_BAR_PRODUCTION_PROJECT_REF,
+    // Inside the try: an incoherent classification file (no declared production ref, or a ref in
+    // two lists) is a refusal like any other and must print as one, not as a stack trace.
+    const bootstrapClassification = readClassification();
+    const targetRef = parseRef(process.env.DATABASE_URL);
+    const targetLabel = deriveLabel(targetRef, bootstrapClassification);
+    const resolved = resolveTarget({
+      env: targetLabel ?? 'unknown',
+      shellDatabaseUrl,
+      shellDeclaredEnv,
+      databaseUrl: process.env.DATABASE_URL,
+      apiUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+      actualEnv: process.env.NEXT_BAR_DATABASE_ENVIRONMENT,
+      // Read from the repo-root .env.local FILE, never process.env: a --secrets-file must not be
+      // able to supply or shadow the operator's classification of which project is which.
+      classification: bootstrapClassification,
     });
+    derivedLabel = resolved.label as string;
+    // THE STRING THE GUARD CERTIFIED — not `process.env.DATABASE_URL` read a second time. The
+    // connection below is opened from this and nothing else (round 4: certify one snapshot,
+    // connect from another).
+    certifiedUrl = resolved.connectionString;
   } catch (error) {
-    console.error(`[bootstrap-guard] ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`${GUARD_TAG} ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+
+  try {
+    // KEPT, and now fed the DERIVED label. It is a second, independent statement of the one rule
+    // that protects live data — only staging and development may be written by THIS script, in any
+    // mode. Production is reached exclusively through apply-migration-set.ts, which carries the
+    // channel-security layer, the --env agreement and the ledger checks this script does not.
+    assertNonProductionBootstrapTarget({ environmentLabel: derivedLabel });
+  } catch (error) {
+    console.error(`${GUARD_TAG} ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
 }
@@ -340,12 +428,13 @@ async function finishBootstrap(client: Client): Promise<void> {
 }
 
 async function main() {
-  const client = new Client({ connectionString: databaseUrl });
+  const client = new Client({ connectionString: certifiedUrl });
   await client.connect();
 
   try {
     console.log(
-      `Migrations: ${files.length} file${files.length === 1 ? '' : 's'} → ${redactUrl(databaseUrl!)}`,
+      `Migrations: ${files.length} file${files.length === 1 ? '' : 's'} → ${redactUrl(certifiedUrl)}`
+      + ` [${derivedLabel}]`,
     );
 
     // One parameterless query message: on a fresh database CREATE, ENABLE RLS,

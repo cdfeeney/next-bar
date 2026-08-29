@@ -17,6 +17,14 @@
  * read-only pre-count and step 2's output IS the dump path, and both are printed before step 3 can
  * run. There is no ordering in which a destructive statement executes before its evidence exists.
  *
+ * ONE CERTIFICATION, ONE CONNECTION. Steps 1 and 2 used to run in CHILD PROCESSES — `db-whoami.mts`
+ * and `db-dump.mts` — whose answers came back as text, after which this script re-read the secrets
+ * file to build the client that ran the five statements. Round 4 (CRITICAL): those are two
+ * independent resolutions of a mutable file, so the pre-count and the dump could describe staging
+ * while the destructive connection went somewhere else. Everything now happens in this process
+ * against the single `CertifiedTarget` that step 1 produced, and step 3 connects with that exact
+ * string. There is no re-read left to disagree with.
+ *
  * PRODUCTION IS REFUSED AT STEP 1 REGARDLESS OF CONSENT. `HARNESS_DB_WRITE_OK` set to the
  * production ref does not unlock this script — a tool whose entire purpose is to empty a database
  * must not be pointable at the one holding the only surviving data. Consent is necessary here, not
@@ -29,12 +37,15 @@
  *
  * Exit codes: 0 planned or completed · 1 a step failed · 2 refused (identity, consent, or target)
  */
-import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { config as loadEnv, parse as parseEnv } from 'dotenv';
 import pg from 'pg';
+
+import { readClassification } from './lib/classification';
+import { dumpDatabase, DumpFailure, DumpRefusal, formatDumpSummary } from './lib/dbDump';
+import { TargetRefusal } from './lib/migration-target-guard';
+import { whoami, WhoamiConnectionError } from './lib/whoami';
 
 const BACKUPS = 'D:\\harness-handoffs\\db-backups';
 
@@ -64,14 +75,6 @@ const RESET_STATEMENTS = [
   'delete from auth.users',
 ];
 
-function runTsx(script: string, args: string[]): string {
-  return execFileSync(
-    process.execPath,
-    [path.join('node_modules', 'tsx', 'dist', 'cli.mjs'), script, ...args],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-  );
-}
-
 /** The newest production dump in the backups directory. */
 function latestProdDump(productionRef: string): string | null {
   if (!existsSync(BACKUPS)) return null;
@@ -82,31 +85,37 @@ function latestProdDump(productionRef: string): string | null {
 }
 
 async function main(): Promise<void> {
+  // BEFORE ANYTHING ELSE, INCLUDING THE CONNECTION. A pure file read, so an incoherent
+  // classification is caught without a database — which is also what makes the rule testable. It
+  // sat after step 1 and was therefore only reachable when a database happened to answer.
+  //
+  // THE SHARED READER, not a private copy. This script had its own, and its own copy carried the
+  // round-2 defect in its worst possible location: `if (productionRef && ...)` meant an ABSENT
+  // NEXT_BAR_PRODUCTION_PROJECT_REF silently disabled the production refusal below — in the one
+  // tool whose whole purpose is to empty a database. readClassification() makes the declaration
+  // mandatory and refuses a ref that appears in two lists.
+  let productionRef: string;
+  try {
+    productionRef = readClassification().productionRef as string;
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error), 2);
+  }
+
   // ── STEP 1 ────────────────────────────────────────────────────────────────────────────────────
   step(1, 'identify the target (read-only) — this output IS the mandatory pre-count');
-  const whoamiArgs = secretsFile !== null ? ['--secrets-file', secretsFile] : [];
-  let whoami: string;
-  try {
-    whoami = runTsx('scripts/db-whoami.mts', whoamiArgs);
-  } catch (error) {
-    const e = error as { stdout?: string; stderr?: string };
-    process.stderr.write(`${e.stdout ?? ''}${e.stderr ?? ''}`);
+  const identified = await whoami(secretsFile);
+  process.stdout.write(`${identified.line}\n`);
+  if (identified.refusals.length > 0) {
+    for (const reason of identified.refusals) process.stderr.write(`[db:reset-staging] ${reason}\n`);
     fail('db:whoami refused — nothing is emptied against an unidentified database', 2);
   }
-  const refLine = whoami.split(/\r?\n/).map((l) => l.trim())
-    .find((l) => /^[a-z0-9]{16,}\s+(production|staging|unknown)\b/.test(l));
-  if (!refLine) fail('could not read the project ref from db:whoami output', 2);
-  process.stdout.write(`${refLine}\n`);
-  const [ref, label] = refLine.split(/\s+/);
-
-  const envLocal = path.join(process.cwd(), '.env.local');
-  if (!existsSync(envLocal)) fail(`${envLocal} does not exist`, 2);
-  const classification = parseEnv(readFileSync(envLocal));
-  const productionRef = (classification.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '').trim().toLowerCase();
+  const { certified } = identified;
+  const ref = identified.ref;
+  const label = identified.label;
 
   // THE REFUSAL THAT CANNOT BE OVERRIDDEN. Consent is necessary, never sufficient: a tool for
   // emptying a database must not be pointable at the one holding the only surviving data.
-  if (productionRef && ref === productionRef) {
+  if (ref === productionRef) {
     fail(
       `REFUSED: ${ref} is the PRODUCTION project (NEXT_BAR_PRODUCTION_PROJECT_REF). This script `
       + 'empties a database and will not run against production under any circumstances — '
@@ -133,12 +142,18 @@ async function main(): Promise<void> {
   step(2, 'dump the target before touching it — free, and it is the rule');
   let dumpPath = '(dry run — no dump taken)';
   if (EXECUTE) {
-    const out = runTsx('scripts/db-dump.mts', whoamiArgs);
-    process.stdout.write(out);
-    dumpPath = out.split(/\r?\n/).find((l) => l.startsWith('wrote '))?.slice(6).trim() ?? '(unknown)';
+    // The SAME certified target step 1 identified. Not a child process, not a second read.
+    try {
+      const dumped = await dumpDatabase(certified, BACKUPS);
+      process.stdout.write(formatDumpSummary(dumped));
+      dumpPath = dumped.outFile;
+    } catch (error) {
+      if (error instanceof DumpRefusal) fail(error.message, 2);
+      if (error instanceof DumpFailure) fail(error.message, 1);
+      throw error;
+    }
   } else {
-    process.stdout.write(`would run: npm run db:dump${secretsFile ? ` -- --secrets-file ${secretsFile}` : ''}\n`);
-    process.stdout.write(`would write into: ${BACKUPS}\\${ref}-<ISO>.json\n`);
+    process.stdout.write(`would dump ${ref} into: ${BACKUPS}\\${ref}-<ISO>.json\n`);
   }
 
   // ── STEP 3 ────────────────────────────────────────────────────────────────────────────────────
@@ -188,10 +203,10 @@ async function main(): Promise<void> {
   }
 
   // ── EXECUTION ─────────────────────────────────────────────────────────────────────────────────
-  if (secretsFile !== null && secretsFile !== '') loadEnv({ path: secretsFile, override: true });
-  loadEnv({ path: '.env.local' });
-  loadEnv({ path: '.env' });
-  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  // THE CERTIFIED STRING. No dotenv reload here: this script used to re-read the secrets file at
+  // this exact point, which meant the five statements below could run against a target nothing had
+  // certified — the evidence above describing one project and the socket opening on another.
+  const client = new pg.Client({ connectionString: certified.connectionString });
   await client.connect();
   try {
     process.stdout.write(`\nexecuting against ${ref} (dump at ${dumpPath})\n`);
@@ -208,4 +223,10 @@ async function main(): Promise<void> {
   );
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  if (error instanceof WhoamiConnectionError) fail(error.message, 1);
+  if (error instanceof TargetRefusal) fail(`REFUSED: ${error.message}`, 2);
+  throw error;
+}

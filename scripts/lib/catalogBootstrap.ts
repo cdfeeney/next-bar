@@ -57,16 +57,12 @@ export type BootstrapResumeState = {
 };
 
 export type BootstrapTarget = {
-  environmentLabel: string | undefined;
-  publicSupabaseUrl: string | undefined;
-  databaseUrl: string;
   /**
-   * The Supabase project reference that must NEVER be bootstrapped. Required,
-   * because the environment label alone is an operator-supplied honour system:
-   * a stale `NEXT_BAR_DATABASE_ENVIRONMENT=staging` in a shell pointed at
-   * Production would otherwise pass every other check. (Codex review, 2026-07-31.)
+   * The label DERIVED from the project ref by the caller's guard. The two URL fields that used to
+   * sit beside it fed the deleted denylist comparison; keeping them would advertise an inspection
+   * this function no longer performs.
    */
-  productionProjectRef: string | undefined;
+  environmentLabel: string | undefined;
 };
 
 const SHARED_DOMINIES_PLACE_ID = 'ChIJUzyXVUdfwokRYzS5v4AZpYw';
@@ -83,70 +79,38 @@ export function isAfterCatalogSchemaMigration(migrationName: string): boolean {
   return migrationName > CATALOG_SCHEMA_MIGRATION;
 }
 
-function publicProjectRef(value: string): string | null {
-  try {
-    return /^([a-z0-9]+)\.supabase\.co$/i.exec(new URL(value).hostname)?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function databaseProjectRef(value: string): string | null {
-  try {
-    const url = new URL(value);
-    const pooled = /^postgres\.([a-z0-9]+)$/i.exec(decodeURIComponent(url.username))?.[1];
-    if (pooled) return pooled;
-    return /^db\.([a-z0-9]+)\.supabase\.co$/i.exec(url.hostname)?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Bootstrap is intentionally unavailable to an unclassified target. The label
- * is the operator's explicit acknowledgement; matching project references stop
- * a staging browser URL from masking a Production database connection string.
+ * Bootstrap is unavailable to any target whose DERIVED label is not staging or development.
+ *
+ * WHICH PROJECT IS PRODUCTION COMES FROM THE REPO-ROOT `.env.local` ONLY; THE LABEL IS DERIVED FROM
+ * THE REF; THERE IS NO SECOND LIST.
+ *
+ * This function used to take `environmentLabel` from `NEXT_BAR_DATABASE_ENVIRONMENT` and carry its
+ * own production denylist. Both are gone. The caller now derives the label from the project ref
+ * using the operator-set lists in `.env.local` (see scripts/lib/migration-target-guard.ts), so the
+ * classification file IS the denylist and a second copy could only ever disagree with it.
+ *
+ * THE DENYLIST COMPARISON WAS DELETED BECAUSE IT WAS UNREACHABLE, and that was proved rather than
+ * assumed: a production ref always derives to the label "production", which this function refuses
+ * at the check below, so the ref comparison that followed could never run for the case it was
+ * written for. Mutation testing exposed it — swapping the caller's file-sourced value for
+ * `process.env` changed no test outcome, because no input reached the line. Dead code that reads
+ * like a safety check is worse than no code: it invites a reader to trust a guard that never fires.
+ *
+ * What remains is the one live rule, and it is enough: a target the operator's own file classifies
+ * as production derives the label "production" and is refused here.
  */
 export function assertNonProductionBootstrapTarget(target: BootstrapTarget): void {
   if (!['staging', 'development'].includes(target.environmentLabel ?? '')) {
     throw new Error(
-      'bootstrap refused: set NEXT_BAR_DATABASE_ENVIRONMENT to staging or development',
-    );
-  }
-  // Normalise before every comparison. Supabase issues lowercase project refs and
-  // WHATWG URL parsing lowercases hostnames, but the pooled-username branch and
-  // the operator-supplied denylist value are neither parsed nor lowercased — so
-  // NEXT_BAR_PRODUCTION_PROJECT_REF=PRODREF silently disabled the guard against
-  // the very project it names. (Codex review, 2026-07-31.)
-  const publicRef = target.publicSupabaseUrl
-    ? publicProjectRef(target.publicSupabaseUrl)?.toLowerCase() ?? null
-    : null;
-  const databaseRef = databaseProjectRef(target.databaseUrl)?.toLowerCase() ?? null;
-  if (!publicRef || !databaseRef) {
-    throw new Error('bootstrap refused: could not derive both Supabase project references');
-  }
-  if (publicRef !== databaseRef) {
-    throw new Error('bootstrap refused: public URL and DATABASE_URL target different projects');
-  }
-  // Declaring the forbidden project is mandatory, not optional: an undeclared
-  // denylist would silently degrade back to trusting the label.
-  const productionRef = target.productionProjectRef?.trim().toLowerCase();
-  if (!productionRef) {
-    throw new Error(
-      'bootstrap refused: set NEXT_BAR_PRODUCTION_PROJECT_REF to the Supabase project ' +
-        'reference that must never be bootstrapped. It is the <ref> in the Production ' +
-        'project URL https://<ref>.supabase.co (Supabase dashboard → Project Settings → ' +
-        'General, or `supabase projects list`). It is an identifier, not a secret — put ' +
-        'it in .env.local so the guard is not one forgotten shell variable away from absent',
-    );
-  }
-  if (productionRef === publicRef || productionRef === databaseRef) {
-    throw new Error(
-      'bootstrap refused: this target IS the declared Production project ' +
-        `(${productionRef}) regardless of the environment label`,
+      `bootstrap refused: this target derives to ${JSON.stringify(target.environmentLabel ?? null)}`
+      + ' and only staging or development may be bootstrapped. The label comes from the project'
+      + ' REF via the lists in the repo-root .env.local — setting NEXT_BAR_DATABASE_ENVIRONMENT'
+      + ' will not change it, and contradicting it is itself a refusal.',
     );
   }
 }
+
 
 /**
  * A bootstrap may start from empty, resume after its own marker was committed,

@@ -70,7 +70,8 @@ import { authorizeMigrationTarget, redactUrl } from './apply-migration-target-gu
 
 import { checksumOfSql, normalisedSql } from '../src/lib/effectiveMigration';
 
-import { resolveTarget, TargetRefusal } from './lib/migration-target-guard';
+import { resolveTarget, TargetRefusal, type CertifiedTarget } from './lib/migration-target-guard';
+import { readClassification } from './lib/classification';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'supabase', 'migrations');
 
@@ -104,26 +105,6 @@ function parseArgs(argv: string[]): {
   return { env, execute, files, secretsFile };
 }
 
-/**
- * The operator-set project classification, read from the repo-root `.env.local` FILE.
- *
- * Deliberately NOT from process.env: a `--secrets-file` loads with override:true and could
- * otherwise supply or shadow these, which would let the file being pointed at decide what it is
- * allowed to be. The guard stays pure — this is the caller's I/O, as its header requires.
- */
-function readClassification(envLocalPath: string): { productionRef: string | null; stagingRefs: string[] } {
-  if (!existsSync(envLocalPath)) {
-    fail(`${envLocalPath} does not exist; the operator-set project lists live only there`);
-  }
-  const parsed = parseEnv(readFileSync(envLocalPath));
-  return {
-    productionRef: (parsed.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '').trim().toLowerCase() || null,
-    stagingRefs: (parsed.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
-      .split(/[,\s]+/)
-      .map((r) => r.trim().toLowerCase())
-      .filter(Boolean),
-  };
-}
 
 async function main(): Promise<void> {
   const { env, execute, files, secretsFile } = parseArgs(process.argv.slice(2));
@@ -179,10 +160,10 @@ async function main(): Promise<void> {
   const authorized = authorizeMigrationTarget(env);
   if (authorized.refusal !== null) fail(authorized.refusal);
   const { clientConfig, effective, env: actualEnv } = authorized.target;
-  const databaseUrl = clientConfig.connectionString;
 
+  let certified: CertifiedTarget;
   try {
-    resolveTarget({
+    certified = resolveTarget({
       env,
       shellDatabaseUrl,
       shellDeclaredEnv,
@@ -191,12 +172,24 @@ async function main(): Promise<void> {
       actualEnv: process.env.NEXT_BAR_DATABASE_ENVIRONMENT,
       // Read from the repo-root .env.local FILE, never process.env: a --secrets-file must not be
       // able to supply or shadow the operator's classification of which project is which.
-      classification: readClassification(join(process.cwd(), '.env.local')),
+      classification: readClassification(),
     });
   } catch (error) {
     if (error instanceof TargetRefusal) fail(error.message);
     throw error;
   }
+
+  // THE TWO LAYERS MUST BE TALKING ABOUT THE SAME CONNECTION. They read process.env.DATABASE_URL
+  // independently, one before the other, so this is the seam where a value that changed between
+  // them would go unnoticed — the round-4 defect, stated as an assertion instead of a hope. The
+  // connection below is opened from the CERTIFIED string with the authorized TLS settings.
+  if (clientConfig.connectionString !== certified.connectionString) {
+    fail(
+      'DATABASE_URL changed between the channel check and the target certification, so neither '
+      + 'result describes the connection that would be opened',
+    );
+  }
+  const databaseUrl = certified.connectionString;
 
   // Read and hash first: a missing or unreadable file must stop us before we
   // open a transaction on anything.

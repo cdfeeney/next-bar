@@ -16,6 +16,9 @@
 import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 
+import { readClassification } from './lib/classification';
+import type { Classification } from './lib/migration-target-guard';
+
 /**
  * A Supabase project ref is exactly 20 lowercase alphanumeric characters.
  * Accepting any alphanumeric string let a placeholder like `production` sit in
@@ -101,9 +104,6 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
   return null;
 }
 
-/** libpq's default when the connection string names no port. */
-const DEFAULT_PG_PORT = '5432';
-
 /**
  * The Supabase pooler carries the project ref in the USERNAME as
  * `<role>.<project-ref>`, because the hostname is shared. Taking the last
@@ -123,57 +123,14 @@ export function resolveProjectRef(effectiveUser: string): string {
 }
 
 /**
- * Refuses when pg's effective endpoint is not the one the connection string's
- * authority names. pg gives query parameters precedence over the authority, so
- * `?host=` / `?port=` (or PGHOST / PGPORT) silently redirect a connection whose
- * username — and therefore whose project ref — still looks allowlisted. The ref
- * check answers "which project", this answers "which endpoint"; verifying the
- * ref for an endpoint nobody inspected is the same fail-open by another route.
+ * THE ENDPOINT RULES MOVED TO scripts/lib/migration-target-guard.ts.
  *
- * Empty on either side is UNVERIFIABLE, not "no objection": a host-less
- * authority (`postgres:///db?host=elsewhere`) parses cleanly and would
- * otherwise skip the comparison entirely.
+ * They lived here, and only here, which is why the shared guard certified a project ref for an
+ * endpoint nobody had inspected — round 4's two CRITICALs and its HIGH, all reachable through
+ * `apply-migrations.ts` and `db-reset-staging.mts`, neither of which comes through this file.
+ * `checkConnectionEndpoint` is now exported from the shared guard and called by `resolveIdentity`,
+ * so every entry point gets it. Re-adding a copy here is how the divergence happened the first time.
  */
-export function checkConnectionEndpoint(
-  effective: { host: string; port: string; options: string },
-  authority: { host: string; port: string },
-): string | null {
-  const effectiveHost = effective.host.trim();
-  const authorityHost = authority.host.trim();
-  if (!authorityHost) return 'DATABASE_URL has no host, so the connection target cannot be verified';
-  if (!effectiveHost) return 'the effective connection host could not be resolved from DATABASE_URL';
-  if (effectiveHost !== authorityHost) {
-    return "the effective connection host does not match DATABASE_URL's authority, "
-      + 'so the target was overridden by a query parameter';
-  }
-
-  if (!effectiveHost.toLowerCase().endsWith(POOLER_HOST_SUFFIX)) {
-    return `DATABASE_URL's host is not a Supabase pooler host (${POOLER_HOST_SUFFIX}), so the `
-      + 'project ref in its username cannot identify the target';
-  }
-
-  // libpq `options` reaches the server in the startup packet, and Supabase's
-  // shared pooler documents `options=reference=<project-ref>` as a way to name
-  // the tenant. That is a second target selector the ref check never sees - the
-  // same channel class as the `?user=` precedence this guard already closed -
-  // and PGOPTIONS supplies it without touching DATABASE_URL at all. This tool
-  // needs no startup options, so any value is refused rather than parsed.
-  if (effective.options.trim()) {
-    return 'the connection carries libpq startup options (from DATABASE_URL or PGOPTIONS), which can '
-      + 'name a different pooler tenant than the username, so the target cannot be verified';
-  }
-
-  const effectivePort = effective.port.trim();
-  // An omitted port is not an unknown one: libpq resolves it to 5432, so that
-  // is what the operator reading the URL is entitled to assume.
-  const authorityPort = authority.port.trim() || DEFAULT_PG_PORT;
-  if (!effectivePort) return 'the effective connection port could not be resolved from DATABASE_URL';
-  if (effectivePort !== authorityPort) {
-    return "the effective connection port does not match DATABASE_URL's authority, "
-      + 'so the target was overridden by a query parameter';
-  }
-  return null;
-}
 
 /**
  * The whole target decision, wired: read the environment the caller just
@@ -283,28 +240,28 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
     host: probe.connectionParameters?.host ?? '',
     port: String(probe.connectionParameters?.port ?? ''),
   };
-  const effectiveOptions = probe.connectionParameters?.options ?? '';
   const ref = resolveProjectRef(effective.user);
 
-  // The ref says WHICH PROJECT; the endpoint says WHICH SERVER. Checking only
-  // the ref verifies a target the tool never inspected, because pg lets
-  // `?host=` / `?port=` override the authority the operator reads.
-  let authority: { host: string; port: string };
-  try {
-    const parsed = new URL(databaseUrl);
-    authority = { host: parsed.hostname, port: parsed.port };
-  } catch {
-    return refuse('DATABASE_URL is not a parsable URL, so the connection target cannot be verified');
-  }
-  const endpointRefusal = checkConnectionEndpoint(
-    { host: effective.host, port: effective.port, options: effectiveOptions }, authority,
-  );
-  if (endpointRefusal) return refuse(endpointRefusal);
+  // THE ENDPOINT CHECK IS NOT HERE ANY MORE. resolveTarget() runs it for every entry point via the
+  // shared guard, including the two that never call this function. What remains below is the
+  // CHANNEL-SECURITY layer — TLS and certificate verification — which is this file's own job.
 
-  const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
-  const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
-    .split(',').map((value) => value.trim()).filter(Boolean);
-  const refusal = checkMigrationTarget({ env, ref, productionRef, stagingRefs });
+  // FROM THE .env.local FILE, NOT process.env. A `--secrets-file` loads with `override: true`,
+  // so reading the lists from the environment let the very file being pointed at supply the
+  // classification that decides whether it may be written to. The shared reader also refuses a
+  // malformed or double-listed declaration, which this layer never checked at all.
+  let classification: Classification;
+  try {
+    classification = readClassification();
+  } catch (error) {
+    return refuse(error instanceof Error ? error.message : String(error));
+  }
+  const refusal = checkMigrationTarget({
+    env,
+    ref,
+    productionRef: classification.productionRef ?? '',
+    stagingRefs: classification.stagingRefs,
+  });
   if (refusal) return refuse(refusal);
 
   // Node's global kill switch turns tls.connect's default verification off, and

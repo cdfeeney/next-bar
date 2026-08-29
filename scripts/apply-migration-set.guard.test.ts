@@ -36,11 +36,41 @@ function secretsFile(name: string, lines: Record<string, string>): string {
 const caFile = join(dir, 'pooler-ca.crt');
 writeFileSync(caFile, ['-----BEGIN CERTIFICATE-----', 'not-a-real-certificate', '-----END CERTIFICATE-----', ''].join('\n'));
 
+/**
+ * A cwd carrying its OWN `.env.local`, because THE CLASSIFICATION IS READ FROM THAT FILE — never
+ * from `process.env`, and never from the `--secrets-file`. The legacy layer this file drives still
+ * read `process.env` until round 3, which let the very file being pointed at declare which project
+ * it was allowed to be.
+ *
+ * The fixtures below deliberately KEEP their classification lines in the secrets file. Those lines
+ * are inert now, and that is the point of leaving them: every case here passes or fails on the
+ * cwd's lists alone, so a regression that re-reads the environment turns this file red.
+ */
+function cwdWith(envLocal: Record<string, string>): string {
+  const cwd = mkdtempSync(join(tmpdir(), 'apply-set-cwd-'));
+  mkdirSync(join(cwd, 'supabase', 'migrations'), { recursive: true });
+  copyFileSync(
+    join(process.cwd(), 'supabase', 'migrations', MIGRATION),
+    join(cwd, 'supabase', 'migrations', MIGRATION),
+  );
+  const lines = Object.entries(envLocal).map(([k, v]) => `${k}=${v}`);
+  writeFileSync(join(cwd, '.env.local'), [...lines, ''].join(String.fromCharCode(10)));
+  return cwd;
+}
+
+/** REF_B is production, REF_A is the one staging project. Every case shares these unless it says so. */
+const LISTS = {
+  NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
+  NEXT_BAR_STAGING_PROJECT_REFS: REF_A,
+  NEXT_PUBLIC_SUPABASE_URL: `https://${REF_A}.supabase.co`,
+};
+const DEFAULT_CWD = cwdWith(LISTS);
+
 /** Runs the real script and returns what an operator would see. */
 function runApplySet(
   file: string,
   env: Record<string, string> = {},
-  cwd: string = process.cwd(),
+  cwd: string = DEFAULT_CWD,
 ): { status: number; output: string } {
   const repo = process.cwd();
   try {
@@ -74,7 +104,7 @@ describe('apply-migration-set CLI target guard', () => {
       NEXT_BAR_PRODUCTION_PROJECT_REF: REF_B,
       NEXT_BAR_STAGING_PROJECT_REFS: '',
       DATABASE_URL: url(REF_A),
-    }));
+    }), {}, cwdWith({ ...LISTS, NEXT_BAR_STAGING_PROJECT_REFS: '' }));
     expect(result.status).toBe(1);
     expect(result.output).toContain('NEXT_BAR_STAGING_PROJECT_REFS is not set');
     expect(result.output).not.toContain('ECONNREFUSED');
@@ -191,6 +221,26 @@ describe('apply-migration-set CLI target guard', () => {
     expect(result.output).not.toContain('ECONNREFUSED');
   }, 120_000);
 
+  /**
+   * THE SECRETS FILE MAY NOT DECLARE WHAT PROJECT IT IS ALLOWED TO BE.
+   *
+   * This layer read `process.env` for the lists until round 3, and a `--secrets-file` loads with
+   * `override: true` — so the file naming the target also supplied the classification that judged
+   * it. Here the secrets file swears REF_B is staging; the cwd's .env.local says REF_B is
+   * production, and the cwd is the only source that counts.
+   */
+  it('refuses a production target that the secrets file relabels as staging', () => {
+    const result = runApplySet(secretsFile('secrets-file-lies', {
+      NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
+      NEXT_BAR_PRODUCTION_PROJECT_REF: REF_A,
+      NEXT_BAR_STAGING_PROJECT_REFS: REF_B,
+      DATABASE_URL: url(REF_B),
+    }));
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('PRODUCTION project ref');
+    expect(result.output).not.toContain('ECONNREFUSED');
+  }, 120_000);
+
   // The other half of the same proof: a verified target must get PAST the guard,
   // so a guard that refused everything could not pass this file either. The host
   // is a pooler name that does not resolve, so the run dies in DNS instead of
@@ -205,18 +255,7 @@ describe('apply-migration-set CLI target guard', () => {
     // The API URL lives there too. Left to fall through from the real .env.local it would name the
     // production project while DATABASE_URL named the fixture's, and the URL/API pair rule would
     // refuse — correctly, and for a reason that has nothing to do with what this test is about.
-    const cwd = mkdtempSync(join(tmpdir(), 'apply-set-cwd-'));
-    mkdirSync(join(cwd, 'supabase', 'migrations'), { recursive: true });
-    copyFileSync(
-      join(process.cwd(), 'supabase', 'migrations', MIGRATION),
-      join(cwd, 'supabase', 'migrations', MIGRATION),
-    );
-    writeFileSync(join(cwd, '.env.local'), [
-      `NEXT_BAR_PRODUCTION_PROJECT_REF=${REF_B}`,
-      `NEXT_BAR_STAGING_PROJECT_REFS=${REF_A}`,
-      `NEXT_PUBLIC_SUPABASE_URL=https://${REF_A}.supabase.co`,
-      '',
-    ].join(String.fromCharCode(10)));
+    const cwd = cwdWith(LISTS);
 
     const result = runApplySet(secretsFile('configured-staging', {
       NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',

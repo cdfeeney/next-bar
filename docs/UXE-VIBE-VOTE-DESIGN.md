@@ -2,7 +2,7 @@
 
 **Status: AUTHORED, NOT APPLIED.** Migration `0017_vibe_votes.sql` is
 written and adversarially reviewed but **must not be applied overnight**
-(standing rule). Morning: attended `apply-one-migration` ×2 + an
+(standing rule). Morning: attended `apply-migration-set` ×2 + an
 rpc-smoke-style behavioral cycle, then the UI lights up on its own (dark
 pattern below).
 
@@ -80,7 +80,9 @@ Five findings; four applied, one refuted:
 
 ## Morning checklist (operator / attended session)
 
-1. `npx tsx scripts/apply-one-migration.mts supabase/migrations/0017_vibe_votes.sql` ×2 (re-runnable proof).
+1. `npx tsx scripts/apply-migration-set.ts --env staging --execute 0017_vibe_votes.sql` ×2 (re-runnable proof).
+   (`apply-one-migration.mts` was DELETED on 2026-08-28: it was a third database write path that trusted a
+   self-classifying secrets file, and one file is a list of one.)
 2. Behavioral cycle (rpc-smoke pattern, throwaway confirmed user): cast →
    read shows it → re-cast different tag (MOVE — old gone) → rescind →
    read empty. Function existence ≠ function works (42702 lesson).

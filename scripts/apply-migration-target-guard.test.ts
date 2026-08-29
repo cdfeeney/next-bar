@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
+  checkMigrationTarget, resolveProjectRef,
 } from './apply-migration-target-guard';
+import { checkConnectionEndpoint } from './lib/migration-target-guard';
 
 const PROD = 'prodrefaaaaaaaaaaaaa';
 const STAGING = 'stagingrefbbbbbbbbbb';
