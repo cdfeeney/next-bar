@@ -181,15 +181,18 @@ export function checkDatabaseName(
   expectedDatabase: string,
   env: string,
 ): string | null {
-  const actual = database.trim();
-  const expected = expectedDatabase.trim();
-  if (!expected) {
+  // TRIM ONLY TO DECIDE WHETHER A VALUE IS PRESENT — never to compare (round 6, HIGH).
+  // Postgres treats " postgres " as a DIFFERENT database from "postgres", so comparing trimmed
+  // names accepted a database nobody configured: a path of /%20postgres%20 resolves to
+  // " postgres " and passed against the expected "postgres", after which the destructive callers
+  // connect with that certified string. The names are now compared exactly.
+  if (!expectedDatabase.trim()) {
     return `NEXT_BAR_DATABASE_NAME is set but empty, so --env ${env}'s database cannot be verified`;
   }
-  if (!actual) return 'could not determine which database DATABASE_URL reaches';
-  if (actual !== expected) {
-    return `--env ${env}, but DATABASE_URL reaches the database ${JSON.stringify(actual)} `
-      + `rather than the expected ${JSON.stringify(expected)}`;
+  if (!database.trim()) return 'could not determine which database DATABASE_URL reaches';
+  if (database !== expectedDatabase) {
+    return `--env ${env}, but DATABASE_URL reaches the database ${JSON.stringify(database)} `
+      + `rather than the expected ${JSON.stringify(expectedDatabase)}`;
   }
   return null;
 }

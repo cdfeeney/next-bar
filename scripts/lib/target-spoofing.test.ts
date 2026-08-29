@@ -2,7 +2,8 @@ import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 
 import {
-  assertCoherentClassification, deriveLabel, parseApiRef, parseRef, resolveIdentity, resolveTarget, TargetRefusal,
+  assertCoherentClassification, checkDatabaseName, deriveLabel, parseApiRef, parseRef, resolveIdentity,
+  resolveTarget, TargetRefusal,
 } from './migration-target-guard';
 
 /**
@@ -346,5 +347,44 @@ describe('WHICH DATABASE — ported from the home branches, where this branch ne
       ...target(SHADOW),
       classification: { ...lists, expectedDatabase: 'shadow' },
     })).not.toThrow();
+  });
+});
+
+describe('R6-1 — a whitespace-bearing database name is a DIFFERENT database', () => {
+  /**
+   * Round 6, HIGH. `checkDatabaseName` trimmed both sides before comparing, so `/%20postgres%20`
+   * resolved to the database `" postgres "` — which Postgres treats as distinct, quoting and all —
+   * and was accepted against the configured `postgres`. The destructive callers then connect with
+   * that certified string. Trimming is now only ever used to ask "is this value present".
+   */
+  const padded = `postgresql://postgres.${STAGING}:pw@aws-0-ca-central-1.pooler.supabase.com:5432/%20postgres%20`;
+  const lists = { productionRef: PROD, stagingRefs: [STAGING] };
+  const target = (databaseUrl: string) => ({
+    env: 'staging',
+    shellDatabaseUrl: undefined,
+    shellDeclaredEnv: undefined,
+    databaseUrl,
+    apiUrl: `https://${STAGING}.supabase.co`,
+    actualEnv: undefined,
+    classification: lists,
+  });
+
+  it('pg really does resolve the padded path to a padded name (the premise)', () => {
+    expect(resolveIdentity(padded).database).toBe(' postgres ');
+  });
+
+  it('REFUSES it — the trimmed forms are equal, the names are not', () => {
+    expect(() => resolveTarget(target(padded))).toThrow(TargetRefusal);
+    expect(() => resolveTarget(target(padded))).toThrow(/reaches the database " postgres "/);
+  });
+
+  it('still accepts the exact configured name', () => {
+    const honest = `postgresql://postgres.${STAGING}:pw@aws-0-ca-central-1.pooler.supabase.com:5432/postgres`;
+    expect(() => resolveTarget(target(honest))).not.toThrow();
+  });
+
+  it('an expected value that is only whitespace still reads as EMPTY, not as a name', () => {
+    // The one thing trim is still for: telling "not configured" from "configured as something".
+    expect(checkDatabaseName('postgres', '   ', 'staging')).toMatch(/set but empty/);
   });
 });
