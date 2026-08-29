@@ -257,6 +257,22 @@ describe('checkContract', () => {
           },
         },
         ...overrides,
+        // THE CAST CARRIES ONLY A TYPE, NEVER A VALUE. Six cases below assign
+        // product_bindings onto this fixture to break exactly one binding rule each, but the
+        // literal does not declare the field, so TypeScript refused the assignment. The checker
+        // reads it as `ledger.product_bindings ?? []`, so an absent field and an undefined one
+        // are the same to it — declaring the shape here changes nothing at runtime and lets the
+        // cases say what they mean.
+      } as ReturnType<typeof cleanLedger> & {
+        ledger_status: string;
+        last_owner_approval: {
+          approver: string;
+          approved_on: string;
+          contract_version: string;
+          decisions_approved: string[];
+          approved_contract_identity: Record<string, string>;
+        };
+        product_bindings?: Array<Record<string, unknown>>;
       };
     };
 

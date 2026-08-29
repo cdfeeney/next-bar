@@ -3,8 +3,11 @@ import path from 'node:path';
 import { Client } from 'pg';
 
 import {
-  checkConnectionEndpoint, checkMigrationTarget, resolveProjectRef,
+  checkMigrationTarget, resolveProjectRef,
 } from '../../scripts/apply-migration-target-guard';
+// checkConnectionEndpoint moved into the shared guard so every entry point reaches it, and was
+// deleted from the old layer; the endpoint question is now asked in one place.
+import { checkConnectionEndpoint } from '../../scripts/lib/migration-target-guard';
 
 /**
  * The staging-only gate every LIVE vitest suite connects through.
